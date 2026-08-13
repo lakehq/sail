@@ -296,3 +296,1130 @@ fn offsets_to_indices<O: OffsetSizeTrait>(
     }
     Ok(Arc::new(Int32Array::from(out)) as ArrayRef)
 }
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::array::{Int32Array, ListArray};
+    use datafusion::arrow::buffer::OffsetBuffer;
+    // FieldRef is needed for type annotations
+    use datafusion::arrow::datatypes::FieldRef;
+
+    use super::*;
+
+    fn build_test_list_array(values: &[i32], offsets: &[i32]) -> Arc<ListArray> {
+        let values_array = Arc::new(Int32Array::from(values.to_vec()));
+        let offset_buffer = OffsetBuffer::new(offsets.to_vec().into());
+        let field: FieldRef = Arc::new(Field::new("item", DataType::Int32, true));
+        Arc::new(ListArray::new(field, offset_buffer, values_array, None))
+    }
+
+    #[test]
+    fn test_normalize_list_array_pass_through() -> Result<()> {
+        let list: ArrayRef = build_test_list_array(&[1, 2, 3, 4], &[0, 2, 4]);
+        let result = normalize_list_array(list)?;
+        assert_eq!(result.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_coerce_single_list_arg_with_non_list() {
+        let result = coerce_single_list_arg("test", &[DataType::Int32]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_coerce_single_list_arg_empty_input() {
+        let result = coerce_single_list_arg("test", &[]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_value_lambda_pair_error_empty_args() {
+        let args: Vec<ValueOrLambda<ColumnarValue, ()>> = vec![];
+        let result = value_lambda_pair::<ColumnarValue, ()>("test", &args);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_value_lambda_pair_error_single_arg() {
+        let value = ValueOrLambda::Value(ColumnarValue::Scalar(ScalarValue::Int32(Some(42))));
+        let args: Vec<ValueOrLambda<ColumnarValue, ()>> = vec![value];
+        let result = value_lambda_pair::<ColumnarValue, ()>("test", &args);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_value_lambda_pair_error_too_many_args() {
+        let v1 = ValueOrLambda::Value(ColumnarValue::Scalar(ScalarValue::Int32(Some(1))));
+        let v2 = ValueOrLambda::Value(ColumnarValue::Scalar(ScalarValue::Int32(Some(2))));
+        let v3 = ValueOrLambda::Value(ColumnarValue::Scalar(ScalarValue::Int32(Some(3))));
+        let args: Vec<ValueOrLambda<ColumnarValue, ()>> = vec![v1, v2, v3];
+        let result = value_lambda_pair::<ColumnarValue, ()>("test", &args);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_index_array_error_non_list_array() {
+        let non_list: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let result = index_array("test", &non_list);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_offsets_to_indices_single_element() -> Result<()> {
+        let offsets = OffsetBuffer::new(vec![0i32, 1, 2].into());
+        let result = offsets_to_indices("test", &offsets)?;
+        let expected = Int32Array::from(vec![0, 0]);
+        let Some(actual) = result.as_any().downcast_ref::<Int32Array>() else {
+            return Err(datafusion_common::DataFusionError::Internal(
+                "offset conversion should return Int32Array".to_string(),
+            ));
+        };
+        assert_eq!(actual, &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_offsets_to_indices_empty_arrays() -> Result<()> {
+        let offsets = OffsetBuffer::new(vec![0i32, 0, 2].into());
+        let result = offsets_to_indices("test", &offsets)?;
+        let expected = Int32Array::from(vec![0, 1]);
+        let Some(actual) = result.as_any().downcast_ref::<Int32Array>() else {
+            return Err(datafusion_common::DataFusionError::Internal(
+                "offset conversion should return Int32Array".to_string(),
+            ));
+        };
+        assert_eq!(actual, &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_offsets_to_indices_varied_lengths() -> Result<()> {
+        let offsets = OffsetBuffer::new(vec![0i32, 3, 5, 6].into());
+        let result = offsets_to_indices("test", &offsets)?;
+        let expected = Int32Array::from(vec![0, 1, 2, 0, 1, 0]);
+        let Some(actual) = result.as_any().downcast_ref::<Int32Array>() else {
+            return Err(datafusion_common::DataFusionError::Internal(
+                "offset conversion should return Int32Array".to_string(),
+            ));
+        };
+        assert_eq!(actual, &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_normalize_list_array_empty_lists() -> Result<()> {
+        let values = Arc::new(Int32Array::from(vec![1, 2]));
+        let offsets = OffsetBuffer::new(vec![0i32, 0, 2].into());
+        let field: FieldRef = Arc::new(Field::new("item", DataType::Int32, true));
+        let list: ArrayRef = Arc::new(ListArray::new(field, offsets, values, None));
+        let result = normalize_list_array(list)?;
+        assert_eq!(result.len(), 2);
+        Ok(())
+    }
+}
+
+#[cfg(any())]
+mod tests {
+    use datafusion::arrow::array::{Int32Array, ListArray};
+    use datafusion::arrow::buffer::OffsetBuffer;
+
+    use super::*;
+
+    // Helper to create a simple list array for testing
+    fn build_test_list_array(values: &[i32], offsets: &[i32]) -> Arc<ListArray> {
+        let values_array = Arc::new(Int32Array::from(values.to_vec()));
+        let offset_buffer = OffsetBuffer::new(offsets.to_vec().into());
+        let field: FieldRef = Arc::new(Field::new("item", DataType::Int32, true));
+        Arc::new(ListArray::new(field, offset_buffer, values_array, None))
+    }
+
+    #[test]
+    fn test_normalize_list_array_pass_through() {
+        // Test that a regular ListArray is returned as-is
+        let list: ArrayRef = build_test_list_array(&[1, 2, 3, 4], &[0, 2, 4]);
+        let result = normalize_list_array_for_lambda("test", &list).unwrap();
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_coerce_single_list_arg_error_not_array() {
+        let value = ColumnarValue::Scalar(ScalarValue::Int32(Some(42)));
+        let result = coerce_single_list_arg_for_lambda("test", &[value]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_coerce_single_list_arg_empty_input() {
+        let result = coerce_single_list_arg_for_lambda("test", &[]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_value_lambda_pair_error_empty_args() {
+        let args: Vec<ValueOrLambda<ColumnarValue, ()>> = vec![];
+        let result = value_lambda_pair::<ColumnarValue, ()>("test", &args);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_value_lambda_pair_error_single_arg() {
+        let value = ValueOrLambda::Value(ColumnarValue::Scalar(ScalarValue::Int32(Some(42))));
+        let args: Vec<ValueOrLambda<ColumnarValue, ()>> = vec![value];
+        let result = value_lambda_pair::<ColumnarValue, ()>("test", &args);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_value_lambda_pair_error_too_many_args() {
+        let v1 = ValueOrLambda::Value(ColumnarValue::Scalar(ScalarValue::Int32(Some(1))));
+        let v2 = ValueOrLambda::Value(ColumnarValue::Scalar(ScalarValue::Int32(Some(2))));
+        let v3 = ValueOrLambda::Value(ColumnarValue::Scalar(ScalarValue::Int32(Some(3))));
+        let args: Vec<ValueOrLambda<ColumnarValue, ()>> = vec![v1, v2, v3];
+        let result = value_lambda_pair::<ColumnarValue, ()>("test", &args);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_index_array_error_non_list_array() {
+        let non_list: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let result = index_array("test", &non_list);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_offsets_to_indices_with_single_element_arrays() {
+        // Arrays with single element each: offsets [0, 1, 2]
+        let offsets = OffsetBuffer::new(vec![0i32, 1, 2].into());
+        let result = offsets_to_indices("test", &offsets).unwrap();
+        let expected = Int32Array::from(vec![0, 0]);
+        assert_eq!(
+            result.as_any().downcast_ref::<Int32Array>().unwrap(),
+            &expected
+        );
+    }
+
+    #[test]
+    fn test_offsets_to_indices_with_empty_arrays() {
+        // Array with empty subarray followed by elements: offsets [0, 0, 2]
+        let offsets = OffsetBuffer::new(vec![0i32, 0, 2].into());
+        let result = offsets_to_indices("test", &offsets).unwrap();
+        let expected = Int32Array::from(vec![0, 1]);
+        assert_eq!(
+            result.as_any().downcast_ref::<Int32Array>().unwrap(),
+            &expected
+        );
+    }
+
+    #[test]
+    fn test_offsets_to_indices_with_varied_lengths() {
+        // Arrays of varying lengths: offsets [0, 3, 5, 6]
+        let offsets = OffsetBuffer::new(vec![0i32, 3, 5, 6].into());
+        let result = offsets_to_indices("test", &offsets).unwrap();
+        // First: 0, 1, 2 (3 elements)
+        // Second: 0, 1 (2 elements)
+        // Third: 0 (1 element)
+        let expected = Int32Array::from(vec![0, 1, 2, 0, 1, 0]);
+        assert_eq!(
+            result.as_any().downcast_ref::<Int32Array>().unwrap(),
+            &expected
+        );
+    }
+
+    #[test]
+    fn test_normalize_list_array_extracts_empty_list() {
+        // Create a regular list array with some empty lists
+        let values = Arc::new(Int32Array::from(vec![1, 2]));
+        let offsets = OffsetBuffer::new(vec![0i32, 0, 2].into()); // First list is empty
+        let field: FieldRef = Arc::new(Field::new("item", DataType::Int32, true));
+        let list: ArrayRef = Arc::new(ListArray::new(field, offsets, values, None));
+
+        let result = normalize_list_array_for_lambda("test", &list).unwrap();
+        assert_eq!(result.len(), 2);
+    }
+}
+
+#[cfg(any())]
+mod tests {
+    use datafusion::arrow::array::{Int32Array, ListArray};
+    use datafusion::arrow::buffer::OffsetBuffer;
+
+    use super::*;
+
+    // Helper to create a simple list array for testing
+    fn build_test_list_array(values: &[i32], offsets: &[i32]) -> Arc<ListArray> {
+        let values_array = Arc::new(Int32Array::from(values.to_vec()));
+        let offset_buffer = OffsetBuffer::new(offsets.to_vec().into());
+        let field: FieldRef = Arc::new(Field::new("item", DataType::Int32, true));
+        Arc::new(ListArray::new(field, offset_buffer, values_array, None))
+    }
+
+    #[test]
+    fn test_normalize_list_array_pass_through() {
+        // Test that a regular ListArray is returned as-is
+        let list: ArrayRef = build_test_list_array(&[1, 2, 3, 4], &[0, 2, 4]);
+        let result = normalize_list_array_for_lambda("test", &list).unwrap();
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_coerce_single_list_arg_error_not_array() {
+        let value = ColumnarValue::Scalar(ScalarValue::Int32(Some(42)));
+        let result = coerce_single_list_arg_for_lambda("test", &[value]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_coerce_single_list_arg_error_missing_field_type() {
+        // Create a list array reference with explicit type
+        let list_array: ArrayRef = Arc::new(ListArray::new_null(
+            Arc::new(Field::new("item", DataType::Int32, true)),
+            1,
+        ));
+        let value = ColumnarValue::Array(list_array);
+        let result = coerce_single_list_arg_for_lambda("test", &[value]);
+        // Should succeed with normalized array
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_value_lambda_pair_error_empty_args() {
+        let args: Vec<ValueOrLambda<ColumnarValue, ()>> = vec![];
+        let result = value_lambda_pair::<ColumnarValue, ()>("test", &args);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_value_lambda_pair_error_single_arg() {
+        let value = ValueOrLambda::Value(ColumnarValue::Scalar(ScalarValue::Int32(Some(42))));
+        let args: Vec<ValueOrLambda<ColumnarValue, ()>> = vec![value];
+        let result = value_lambda_pair::<ColumnarValue, ()>("test", &args);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_value_lambda_pair_error_too_many_args() {
+        let v1 = ValueOrLambda::Value(ColumnarValue::Scalar(ScalarValue::Int32(Some(1))));
+        let v2 = ValueOrLambda::Value(ColumnarValue::Scalar(ScalarValue::Int32(Some(2))));
+        let v3 = ValueOrLambda::Value(ColumnarValue::Scalar(ScalarValue::Int32(Some(3))));
+        let args: Vec<ValueOrLambda<ColumnarValue, ()>> = vec![v1, v2, v3];
+        let result = value_lambda_pair::<ColumnarValue, ()>("test", &args);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_index_array_error_non_list_array() {
+        let non_list: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let result = index_array("test", &non_list);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_offsets_to_indices_with_single_element_arrays() {
+        // Arrays with single element each: offsets [0, 1, 2]
+        let offsets = OffsetBuffer::new(vec![0i32, 1, 2].into());
+        let result = offsets_to_indices("test", &offsets).unwrap();
+        let expected = Int32Array::from(vec![0, 0]);
+        assert_eq!(
+            result.as_any().downcast_ref::<Int32Array>().unwrap(),
+            &expected
+        );
+    }
+
+    #[test]
+    fn test_offsets_to_indices_with_empty_arrays() {
+        // Array with empty subarray followed by elements: offsets [0, 0, 2]
+        let offsets = OffsetBuffer::new(vec![0i32, 0, 2].into());
+        let result = offsets_to_indices("test", &offsets).unwrap();
+        let expected = Int32Array::from(vec![0, 1]);
+        assert_eq!(
+            result.as_any().downcast_ref::<Int32Array>().unwrap(),
+            &expected
+        );
+    }
+
+    #[test]
+    fn test_offsets_to_indices_with_varied_lengths() {
+        // Arrays of varying lengths: offsets [0, 3, 5, 6]
+        let offsets = OffsetBuffer::new(vec![0i32, 3, 5, 6].into());
+        let result = offsets_to_indices("test", &offsets).unwrap();
+        // First: 0, 1, 2 (3 elements)
+        // Second: 0, 1 (2 elements)
+        // Third: 0 (1 element)
+        let expected = Int32Array::from(vec![0, 1, 2, 0, 1, 0]);
+        assert_eq!(
+            result.as_any().downcast_ref::<Int32Array>().unwrap(),
+            &expected
+        );
+    }
+
+    #[test]
+    fn test_normalize_list_array_extracts_empty_list() {
+        // Create a regular list array with some empty lists
+        let values = Arc::new(Int32Array::from(vec![1, 2]));
+        let offsets = OffsetBuffer::new(vec![0i32, 0, 2].into()); // First list is empty
+        let field: FieldRef = Arc::new(Field::new("item", DataType::Int32, true));
+        let list: ArrayRef = Arc::new(ListArray::new(field, offsets, values, None));
+
+        let result = normalize_list_array_for_lambda("test", &list).unwrap();
+        assert_eq!(result.len(), 2);
+    }
+}
+
+#[cfg(any())]
+mod tests {
+    use datafusion::arrow::array::{Int32Array, ListArray};
+    use datafusion::arrow::buffer::OffsetBuffer;
+    use datafusion::arrow::datatypes::Field;
+    use datafusion_common::FieldRef;
+
+    use super::*;
+
+    /// Creates a test list array with the given values and offsets
+    fn create_test_list(values: Vec<i32>, offsets: Vec<i32>) -> ArrayRef {
+        let list_field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        Arc::new(ListArray::new(
+            list_field,
+            OffsetBuffer::new(offsets.into()),
+            Arc::new(Int32Array::from(values)),
+            None,
+        ))
+    }
+
+    /// Creates a FixedSizeList array with the given values
+    fn create_fixed_size_list(values: Vec<i32>, size: i32) -> ArrayRef {
+        let values = Arc::new(Int32Array::from(values)) as ArrayRef;
+        Arc::new(FixedSizeListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            size,
+            values,
+            None,
+        ))
+    }
+
+    #[test]
+    fn test_normalize_list_array_pass_through() {
+        // Regular ListArray should pass through unchanged
+        let list = create_test_list(vec![1, 2, 3, 4, 5], vec![0, 3, 5]);
+        let normalized = normalize_list_array(list.clone()).unwrap();
+        assert!(Arc::ptr_eq(&normalized, &list));
+    }
+
+    #[test]
+    fn test_normalize_fixed_size_list() {
+        // FixedSizeList should be converted to List
+        let fixed = create_fixed_size_list(vec![1, 2, 3, 4, 5, 6], 3);
+        let normalized = normalize_list_array(fixed).unwrap();
+        assert_eq!(
+            normalized.data_type(),
+            &DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)))
+        );
+        // Verify it can be used as a ListArray
+        let list = normalized.as_list::<i32>();
+        assert_eq!(list.len(), 2); // Two rows with 3 elements each
+        assert_eq!(list.value_lengths().values(), &[3, 3]);
+    }
+
+    #[test]
+    fn test_normalize_list_error_for_non_list() {
+        // Non-list types should error
+        let int_array = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let result = normalize_list_array(int_array);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("expected a list array")
+        );
+    }
+
+    #[test]
+    fn test_extract_list_values_all_null() {
+        // All-null array should return EarlyReturn with null scalar
+        let list = Arc::new(ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::new(vec![0, 0, 0].into()),
+            Arc::new(Int32Array::from(Vec::<i32>::new())),
+            Some(NullBuffer::from(vec![false, false])),
+        ));
+        let return_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
+        match extract_list_values(&list, &return_type).unwrap() {
+            ListValuesResult::EarlyReturn(ColumnarValue::Scalar(scalar)) => {
+                assert!(scalar.is_null());
+            }
+            _ => panic!("Expected EarlyReturn with null scalar"),
+        }
+    }
+
+    #[test]
+    fn test_extract_list_values_empty_sublists() {
+        // All sublists empty should return EarlyReturn with default empty list scalar
+        let list = Arc::new(ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::new(vec![0, 0, 0].into()),
+            Arc::new(Int32Array::from(Vec::<i32>::new())),
+            None,
+        ));
+        let return_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
+        match extract_list_values(&list, &return_type).unwrap() {
+            ListValuesResult::EarlyReturn(ColumnarValue::Scalar(scalar)) => {
+                // Should be an empty list
+                assert!(!scalar.is_null());
+            }
+            _ => panic!("Expected EarlyReturn with default empty list"),
+        }
+    }
+
+    #[test]
+    fn test_extract_list_values_normal() {
+        // Normal case should return Values
+        let list = create_test_list(vec![1, 2, 3, 4, 5], vec![0, 3, 5]);
+        let return_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
+        match extract_list_values(&list, &return_type).unwrap() {
+            ListValuesResult::Values(values) => {
+                assert_eq!(values.len(), 5);
+                let ints = values.as_any().downcast_ref::<Int32Array>().unwrap();
+                assert_eq!(ints.values(), &[1, 2, 3, 4, 5]);
+            }
+            _ => panic!("Expected Values"),
+        }
+    }
+
+    #[test]
+    fn test_coerce_single_list_arg_errors() {
+        // Wrong number of arguments
+        let result = coerce_single_list_arg("filter", &[]);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("requires 1 value argument")
+        );
+
+        let result = coerce_single_list_arg("filter", &[DataType::Int32, DataType::Int32]);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("requires 1 value argument")
+        );
+
+        // Non-list type
+        let result = coerce_single_list_arg("filter", &[DataType::Int32]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("expected a list"));
+    }
+
+    #[test]
+    fn test_coerce_single_list_arg_fixed_size() {
+        // FixedSizeList should be coerced to List
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let result =
+            coerce_single_list_arg("filter", &[DataType::FixedSizeList(field.clone(), 3)]).unwrap();
+        assert_eq!(result, vec![DataType::List(field)]);
+    }
+
+    #[test]
+    fn test_coerce_single_list_arg_list_view() {
+        // ListView should be coerced to List
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let result =
+            coerce_single_list_arg("filter", &[DataType::ListView(field.clone())]).unwrap();
+        assert_eq!(result, vec![DataType::List(field)]);
+    }
+
+    #[test]
+    fn test_coerce_single_list_arg_large_list_view() {
+        // LargeListView should be coerced to LargeList
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let result =
+            coerce_single_list_arg("filter", &[DataType::LargeListView(field.clone())]).unwrap();
+        assert_eq!(result, vec![DataType::LargeList(field)]);
+    }
+
+    #[test]
+    fn test_index_array() {
+        // Test that index_array generates correct indices
+        let list = create_test_list(vec![1, 2, 3, 4, 5], vec![0, 3, 5]);
+        let result = index_array("transform", &list).unwrap();
+        let indices = result.as_any().downcast_ref::<Int32Array>().unwrap();
+        // First row has 3 elements: indices 0, 1, 2
+        // Second row has 2 elements: indices 0, 1
+        assert_eq!(indices.values(), &[0, 1, 2, 0, 1]);
+    }
+
+    #[test]
+    fn test_index_array_empty() {
+        // Empty list should have no indices
+        let list = Arc::new(ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::new(vec![0, 0].into()),
+            Arc::new(Int32Array::from(Vec::<i32>::new())),
+            None,
+        ));
+        let result = index_array("transform", &list).unwrap();
+        let indices = result.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert!(indices.is_empty());
+    }
+
+    #[test]
+    fn test_value_lambda_pair_error_cases() {
+        use datafusion::arrow::datatypes::DataType;
+
+        // Create test fields for ValueOrLambda
+        let field1 = Arc::new(Field::new("f1", DataType::Int32, true));
+        let field2 = Arc::new(Field::new("f2", DataType::Int32, true));
+
+        // Wrong number of arguments - empty
+        let result = value_lambda_pair::<FieldRef, Option<FieldRef>>("filter", &[]);
+        assert!(result.is_err());
+
+        // Wrong number of arguments - only one arg
+        let result = value_lambda_pair::<FieldRef, Option<FieldRef>>(
+            "filter",
+            &[ValueOrLambda::Value(Arc::clone(&field1))],
+        );
+        assert!(result.is_err());
+
+        // Value in lambda position (two values instead of value + lambda)
+        let result = value_lambda_pair::<FieldRef, Option<FieldRef>>(
+            "filter",
+            &[
+                ValueOrLambda::Value(Arc::clone(&field1)),
+                ValueOrLambda::Value(Arc::clone(&field2)),
+            ],
+        );
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("expects a value followed by a lambda")
+        );
+
+        // Lambda in value position
+        let result = value_lambda_pair::<FieldRef, Option<FieldRef>>(
+            "filter",
+            &[
+                ValueOrLambda::Lambda(Some(Arc::clone(&field1))),
+                ValueOrLambda::Value(Arc::clone(&field2)),
+            ],
+        );
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("expects a value followed by a lambda")
+        );
+    }
+}
+
+#[cfg(any())]
+mod tests {
+    use datafusion::arrow::array::{FixedSizeListArray, Int32Array, ListArray};
+    use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
+    use datafusion::arrow::datatypes::Field;
+
+    use super::*;
+
+    /// Creates a test list array with the given values and offsets
+    fn create_test_list(values: Vec<i32>, offsets: Vec<i32>) -> ArrayRef {
+        let list_field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        Arc::new(ListArray::new(
+            list_field,
+            OffsetBuffer::new(offsets.into()),
+            Arc::new(Int32Array::from(values)),
+            None,
+        ))
+    }
+
+    /// Creates a FixedSizeList array with the given values
+    fn create_fixed_size_list(values: Vec<i32>, size: i32) -> ArrayRef {
+        let values = Arc::new(Int32Array::from(values)) as ArrayRef;
+        Arc::new(FixedSizeListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            size,
+            values,
+            None,
+        ))
+    }
+
+    #[test]
+    fn test_normalize_list_array_pass_through() {
+        // Regular ListArray should pass through unchanged
+        let list = create_test_list(vec![1, 2, 3, 4, 5], vec![0, 3, 5]);
+        let normalized = normalize_list_array(list.clone()).unwrap();
+        assert!(Arc::ptr_eq(&normalized, &list));
+    }
+
+    #[test]
+    fn test_normalize_fixed_size_list() {
+        // FixedSizeList should be converted to List
+        let fixed = create_fixed_size_list(vec![1, 2, 3, 4, 5, 6], 3);
+        let normalized = normalize_list_array(fixed).unwrap();
+        assert_eq!(
+            normalized.data_type(),
+            &DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)))
+        );
+        // Verify it can be used as a ListArray
+        let list = normalized.as_list::<i32>();
+        assert_eq!(list.len(), 2); // Two rows with 3 elements each
+        assert_eq!(list.value_lengths().values(), &[3, 3]);
+    }
+
+    #[test]
+    fn test_normalize_list_error_for_non_list() {
+        // Non-list types should error
+        let int_array = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let result = normalize_list_array(int_array);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("expected a list array")
+        );
+    }
+
+    #[test]
+    fn test_extract_list_values_all_null() {
+        // All-null array should return EarlyReturn with null scalar
+        let list = Arc::new(ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::new(vec![0, 0, 0].into()),
+            Arc::new(Int32Array::from(Vec::<i32>::new())),
+            Some(NullBuffer::from(vec![false, false])),
+        ));
+        let return_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
+        match extract_list_values(&list, &return_type).unwrap() {
+            ListValuesResult::EarlyReturn(ColumnarValue::Scalar(scalar)) => {
+                assert!(scalar.is_null());
+            }
+            _ => panic!("Expected EarlyReturn with null scalar"),
+        }
+    }
+
+    #[test]
+    fn test_extract_list_values_empty_sublists() {
+        // All sublists empty should return EarlyReturn with default empty list scalar
+        let list = Arc::new(ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::new(vec![0, 0, 0].into()),
+            Arc::new(Int32Array::from(Vec::<i32>::new())),
+            None,
+        ));
+        let return_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
+        match extract_list_values(&list, &return_type).unwrap() {
+            ListValuesResult::EarlyReturn(ColumnarValue::Scalar(scalar)) => {
+                // Should be an empty list
+                assert!(!scalar.is_null());
+            }
+            _ => panic!("Expected EarlyReturn with default empty list"),
+        }
+    }
+
+    #[test]
+    fn test_extract_list_values_normal() {
+        // Normal case should return Values
+        let list = create_test_list(vec![1, 2, 3, 4, 5], vec![0, 3, 5]);
+        let return_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
+        match extract_list_values(&list, &return_type).unwrap() {
+            ListValuesResult::Values(values) => {
+                assert_eq!(values.len(), 5);
+                let ints = values.as_any().downcast_ref::<Int32Array>().unwrap();
+                assert_eq!(ints.values(), &[1, 2, 3, 4, 5]);
+            }
+            _ => panic!("Expected Values"),
+        }
+    }
+
+    #[test]
+    fn test_coerce_single_list_arg_errors() {
+        // Wrong number of arguments
+        let result = coerce_single_list_arg("filter", &[]);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("requires 1 value argument")
+        );
+
+        let result = coerce_single_list_arg("filter", &[DataType::Int32, DataType::Int32]);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("requires 1 value argument")
+        );
+
+        // Non-list type
+        let result = coerce_single_list_arg("filter", &[DataType::Int32]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("expected a list"));
+    }
+
+    #[test]
+    fn test_coerce_single_list_arg_fixed_size() {
+        // FixedSizeList should be coerced to List
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let result =
+            coerce_single_list_arg("filter", &[DataType::FixedSizeList(field.clone(), 3)]).unwrap();
+        assert_eq!(result, vec![DataType::List(field)]);
+    }
+
+    #[test]
+    fn test_coerce_single_list_arg_list_view() {
+        // ListView should be coerced to List
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let result =
+            coerce_single_list_arg("filter", &[DataType::ListView(field.clone())]).unwrap();
+        assert_eq!(result, vec![DataType::List(field)]);
+    }
+
+    #[test]
+    fn test_coerce_single_list_arg_large_list_view() {
+        // LargeListView should be coerced to LargeList
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let result =
+            coerce_single_list_arg("filter", &[DataType::LargeListView(field.clone())]).unwrap();
+        assert_eq!(result, vec![DataType::LargeList(field)]);
+    }
+
+    #[test]
+    fn test_index_array() {
+        // Test that index_array generates correct indices
+        let list = create_test_list(vec![1, 2, 3, 4, 5], vec![0, 3, 5]);
+        let result = index_array("transform", &list).unwrap();
+        let indices = result.as_any().downcast_ref::<Int32Array>().unwrap();
+        // First row has 3 elements: indices 0, 1, 2
+        // Second row has 2 elements: indices 0, 1
+        assert_eq!(indices.values(), &[0, 1, 2, 0, 1]);
+    }
+
+    #[test]
+    fn test_index_array_empty() {
+        // Empty list should have no indices
+        let list = Arc::new(ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::new(vec![0, 0].into()),
+            Arc::new(Int32Array::from(Vec::<i32>::new())),
+            None,
+        ));
+        let result = index_array("transform", &list).unwrap();
+        let indices = result.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert!(indices.is_empty());
+    }
+
+    #[test]
+    fn test_value_lambda_pair_error_cases() {
+        use datafusion::arrow::datatypes::DataType;
+
+        // Create test fields for ValueOrLambda
+        let field1 = Arc::new(Field::new("f1", DataType::Int32, true));
+        let field2 = Arc::new(Field::new("f2", DataType::Int32, true));
+
+        // Wrong number of arguments - empty
+        let result = value_lambda_pair::<FieldRef, Option<FieldRef>>("filter", &[]);
+        assert!(result.is_err());
+
+        // Wrong number of arguments - only one arg
+        let result = value_lambda_pair::<FieldRef, Option<FieldRef>>(
+            "filter",
+            &[ValueOrLambda::Value(Arc::clone(&field1))],
+        );
+        assert!(result.is_err());
+
+        // Value in lambda position (two values instead of value + lambda)
+        let result = value_lambda_pair::<FieldRef, Option<FieldRef>>(
+            "filter",
+            &[
+                ValueOrLambda::Value(Arc::clone(&field1)),
+                ValueOrLambda::Value(Arc::clone(&field2)),
+            ],
+        );
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("expects a value followed by a lambda")
+        );
+
+        // Lambda in value position
+        let result = value_lambda_pair::<FieldRef, Option<FieldRef>>(
+            "filter",
+            &[
+                ValueOrLambda::Lambda(Some(Arc::clone(&field1))),
+                ValueOrLambda::Value(Arc::clone(&field2)),
+            ],
+        );
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("expects a value followed by a lambda")
+        );
+    }
+}
+
+#[cfg(any())]
+mod tests {
+    use datafusion::arrow::array::{
+        BooleanArray, FixedSizeListArray, Int32Array, ListArray, NullArray,
+    };
+    use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
+    use datafusion::arrow::datatypes::Field;
+    use datafusion_expr::Expr;
+    use datafusion_expr::expr::{LambdaVariable, Literal};
+
+    use super::*;
+
+    /// Creates a test list array with the given values and offsets
+    fn create_test_list(values: Vec<i32>, offsets: Vec<i32>) -> ArrayRef {
+        let list_field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        Arc::new(ListArray::new(
+            list_field,
+            OffsetBuffer::new(offsets.into()),
+            Arc::new(Int32Array::from(values)),
+            None,
+        ))
+    }
+
+    /// Creates a FixedSizeList array with the given values
+    fn create_fixed_size_list(values: Vec<i32>, size: i32) -> ArrayRef {
+        let values = Arc::new(Int32Array::from(values)) as ArrayRef;
+        Arc::new(FixedSizeListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            size,
+            values,
+            None,
+        ))
+    }
+
+    #[test]
+    fn test_normalize_list_array_pass_through() {
+        // Regular ListArray should pass through unchanged
+        let list = create_test_list(vec![1, 2, 3, 4, 5], vec![0, 3, 5]);
+        let normalized = normalize_list_array(list.clone()).unwrap();
+        assert!(Arc::ptr_eq(&normalized, &list));
+    }
+
+    #[test]
+    fn test_normalize_fixed_size_list() {
+        // FixedSizeList should be converted to List
+        let fixed = create_fixed_size_list(vec![1, 2, 3, 4, 5, 6], 3);
+        let normalized = normalize_list_array(fixed).unwrap();
+        assert_eq!(
+            normalized.data_type(),
+            &DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)))
+        );
+        // Verify it can be used as a ListArray
+        let list = normalized.as_list::<i32>();
+        assert_eq!(list.len(), 2); // Two rows with 3 elements each
+        assert_eq!(list.value_lengths().values(), &[3, 3]);
+    }
+
+    #[test]
+    fn test_normalize_list_error_for_non_list() {
+        // Non-list types should error
+        let int_array = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let result = normalize_list_array(int_array);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("expected a list array")
+        );
+    }
+
+    #[test]
+    fn test_extract_list_values_all_null() {
+        // All-null array should return EarlyReturn with null scalar
+        let list = Arc::new(ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::new(vec![0, 0, 0].into()),
+            Arc::new(Int32Array::from(Vec::<i32>::new())),
+            Some(NullBuffer::from(vec![false, false])),
+        ));
+        let return_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
+        match extract_list_values(&list, &return_type).unwrap() {
+            ListValuesResult::EarlyReturn(ColumnarValue::Scalar(scalar)) => {
+                assert!(scalar.is_null());
+            }
+            _ => panic!("Expected EarlyReturn with null scalar"),
+        }
+    }
+
+    #[test]
+    fn test_extract_list_values_empty_sublists() {
+        // All sublists empty should return EarlyReturn with default empty list scalar
+        let list = Arc::new(ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::new(vec![0, 0, 0].into()),
+            Arc::new(Int32Array::from(Vec::<i32>::new())),
+            None,
+        ));
+        let return_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
+        match extract_list_values(&list, &return_type).unwrap() {
+            ListValuesResult::EarlyReturn(ColumnarValue::Scalar(scalar)) => {
+                // Should be an empty list
+                assert!(!scalar.is_null());
+            }
+            _ => panic!("Expected EarlyReturn with default empty list"),
+        }
+    }
+
+    #[test]
+    fn test_extract_list_values_normal() {
+        // Normal case should return Values
+        let list = create_test_list(vec![1, 2, 3, 4, 5], vec![0, 3, 5]);
+        let return_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
+        match extract_list_values(&list, &return_type).unwrap() {
+            ListValuesResult::Values(values) => {
+                assert_eq!(values.len(), 5);
+                let ints = values.as_any().downcast_ref::<Int32Array>().unwrap();
+                assert_eq!(ints.values(), &[1, 2, 3, 4, 5]);
+            }
+            _ => panic!("Expected Values"),
+        }
+    }
+
+    #[test]
+    fn test_coerce_single_list_arg_errors() {
+        // Wrong number of arguments
+        let result = coerce_single_list_arg("filter", &[]);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("requires 1 value argument")
+        );
+
+        let result = coerce_single_list_arg("filter", &[DataType::Int32, DataType::Int32]);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("requires 1 value argument")
+        );
+
+        // Non-list type
+        let result = coerce_single_list_arg("filter", &[DataType::Int32]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("expected a list"));
+    }
+
+    #[test]
+    fn test_coerce_single_list_arg_fixed_size() {
+        // FixedSizeList should be coerced to List
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let result =
+            coerce_single_list_arg("filter", &[DataType::FixedSizeList(field.clone(), 3)]).unwrap();
+        assert_eq!(result, vec![DataType::List(field)]);
+    }
+
+    #[test]
+    fn test_coerce_single_list_arg_list_view() {
+        // ListView should be coerced to List
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let result =
+            coerce_single_list_arg("filter", &[DataType::ListView(field.clone())]).unwrap();
+        assert_eq!(result, vec![DataType::List(field)]);
+    }
+
+    #[test]
+    fn test_coerce_single_list_arg_large_list_view() {
+        // LargeListView should be coerced to LargeList
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let result =
+            coerce_single_list_arg("filter", &[DataType::LargeListView(field.clone())]).unwrap();
+        assert_eq!(result, vec![DataType::LargeList(field)]);
+    }
+
+    #[test]
+    fn test_index_array() {
+        // Test that index_array generates correct indices
+        let list = create_test_list(vec![1, 2, 3, 4, 5], vec![0, 3, 5]);
+        let result = index_array("transform", &list).unwrap();
+        let indices = result.as_any().downcast_ref::<Int32Array>().unwrap();
+        // First row has 3 elements: indices 0, 1, 2
+        // Second row has 2 elements: indices 0, 1
+        assert_eq!(indices.values(), &[0, 1, 2, 0, 1]);
+    }
+
+    #[test]
+    fn test_index_array_empty() {
+        // Empty list should have no indices
+        let list = Arc::new(ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::new(vec![0, 0].into()),
+            Arc::new(Int32Array::from(Vec::<i32>::new())),
+            None,
+        ));
+        let result = index_array("transform", &list).unwrap();
+        let indices = result.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert!(indices.is_empty());
+    }
+
+    #[test]
+    fn test_value_lambda_pair_error_cases() {
+        use datafusion::arrow::datatypes::DataType;
+
+        // Create test fields for ValueOrLambda
+        let field1 = Arc::new(Field::new("f1", DataType::Int32, true));
+        let field2 = Arc::new(Field::new("f2", DataType::Int32, true));
+
+        // Wrong number of arguments - empty
+        let result = value_lambda_pair::<FieldRef, Option<FieldRef>>("filter", &[]);
+        assert!(result.is_err());
+
+        // Wrong number of arguments - only one arg
+        let result = value_lambda_pair::<FieldRef, Option<FieldRef>>(
+            "filter",
+            &[ValueOrLambda::Value(Arc::clone(&field1))],
+        );
+        assert!(result.is_err());
+
+        // Value in lambda position (two values instead of value + lambda)
+        let result = value_lambda_pair::<FieldRef, Option<FieldRef>>(
+            "filter",
+            &[
+                ValueOrLambda::Value(Arc::clone(&field1)),
+                ValueOrLambda::Value(Arc::clone(&field2)),
+            ],
+        );
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("expects a value followed by a lambda")
+        );
+
+        // Lambda in value position
+        let result = value_lambda_pair::<FieldRef, Option<FieldRef>>(
+            "filter",
+            &[
+                ValueOrLambda::Lambda(Some(Arc::clone(&field1))),
+                ValueOrLambda::Value(Arc::clone(&field2)),
+            ],
+        );
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("expects a value followed by a lambda")
+        );
+    }
+}
