@@ -268,6 +268,23 @@ Feature: sequence output schema
         | 2  | NULL      |
         | 3  | [1, 2, 3] |
 
+    Scenario: sequence does not consume random values after a NULL boundary
+      When query
+        """
+        SELECT id, sequence(start, CAST(rand(1) * 10 AS BIGINT)) AS result
+        FROM VALUES
+          (1, CAST(NULL AS BIGINT)),
+          (2, 1L),
+          (3, 1L)
+          AS t(id, start)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | result              |
+        | 1  | NULL                |
+        | 2  | [1, 2, 3, 4, 5, 6] |
+        | 3  | [1, 2, 3, 4, 5]    |
+
     Scenario: sequence reports an earlier row's boundary error before evaluating later rows
       When query
         """

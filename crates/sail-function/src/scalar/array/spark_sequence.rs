@@ -155,28 +155,32 @@ impl HigherOrderUDFImpl for SparkSequenceLazy {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        // Fast path: evaluate every argument lambda over the whole batch and invoke the
-        // sequence kernel once. The kernels already reproduce Spark's per-row null
-        // propagation and report boundary errors in row order, so this is observably
-        // identical to row-at-a-time evaluation unless an argument expression itself
-        // errors. In that case fall back to the per-row loop below, which reproduces
-        // Spark's short-circuit semantics (a null start suppresses errors from the stop
-        // and step expressions of that row) and its error ordering.
-        let batch_args = lambdas
-            .iter()
-            .map(|lambda| evaluate_sequence_lambda_batch(lambda, args.number_rows))
-            .collect::<Result<Vec<_>>>();
-        if let Ok(values) = batch_args {
-            return ScalarUDFImpl::invoke_with_args(
+        // Evaluate each child only for rows whose preceding children were non-null.
+        // This preserves Spark's short-circuiting while retaining batched evaluation.
+        let batch_args = evaluate_sequence_lambdas_batch(&lambdas, args.number_rows);
+        if let Ok((values, active_rows)) = batch_args {
+            if active_rows.is_empty() {
+                return Ok(ColumnarValue::Array(new_null_array(
+                    args.return_type(),
+                    args.number_rows,
+                )));
+            }
+            let value = ScalarUDFImpl::invoke_with_args(
                 &self.sequence,
                 ScalarFunctionArgs {
                     args: values.into_iter().map(ColumnarValue::Array).collect(),
                     arg_fields: arg_fields.clone(),
-                    number_rows: args.number_rows,
+                    number_rows: active_rows.len(),
                     return_field: Arc::clone(&args.return_field),
                     config_options: Arc::clone(&args.config_options),
                 },
-            );
+            )?
+            .into_array(active_rows.len())?;
+            return Ok(ColumnarValue::Array(scatter_sequence_rows(
+                value,
+                &active_rows,
+                args.number_rows,
+            )?));
         }
 
         let row_count = u64::try_from(args.number_rows)
@@ -250,11 +254,66 @@ fn evaluate_sequence_lambda(lambda: &LambdaArgument, rows: &[u64]) -> Result<Arr
         .into_array(rows.len())
 }
 
-fn evaluate_sequence_lambda_batch(lambda: &LambdaArgument, number_rows: usize) -> Result<ArrayRef> {
-    let dummy = || Ok(Arc::new(NullArray::new(number_rows)) as ArrayRef);
-    lambda
-        .evaluate(&[&dummy], |arrays| Ok(arrays.to_vec()))?
-        .into_array(number_rows)
+fn evaluate_sequence_lambdas_batch(
+    lambdas: &[&LambdaArgument],
+    number_rows: usize,
+) -> Result<(Vec<ArrayRef>, Vec<u64>)> {
+    let row_count = u64::try_from(number_rows)
+        .map_err(|_| exec_datafusion_err!("sequence row count does not fit in u64"))?;
+    let mut active_rows = (0..row_count).collect::<Vec<_>>();
+    let mut values = Vec::with_capacity(lambdas.len());
+
+    for lambda in lambdas {
+        if active_rows.is_empty() {
+            break;
+        }
+        let value = evaluate_sequence_lambda(lambda, &active_rows)?;
+        let mut retained_positions = Vec::with_capacity(value.len());
+        let mut retained_rows = Vec::with_capacity(value.len());
+        for (position, row) in active_rows.iter().copied().enumerate() {
+            if !value.is_null(position) {
+                retained_positions.push(
+                    u64::try_from(position).map_err(|_| {
+                        exec_datafusion_err!("sequence row index does not fit in u64")
+                    })?,
+                );
+                retained_rows.push(row);
+            }
+        }
+
+        values.push(value);
+        if retained_rows.len() != active_rows.len() {
+            let indices = UInt64Array::from(retained_positions);
+            values = take_arrays(&values, &indices, None)?;
+            active_rows = retained_rows;
+        }
+    }
+    Ok((values, active_rows))
+}
+
+fn scatter_sequence_rows(
+    value: ArrayRef,
+    active_rows: &[u64],
+    number_rows: usize,
+) -> Result<ArrayRef> {
+    if active_rows.len() == number_rows {
+        return Ok(value);
+    }
+
+    let mut indices = vec![None::<u64>; number_rows];
+    for (compact_index, row) in active_rows.iter().copied().enumerate() {
+        let row = usize::try_from(row)
+            .map_err(|_| exec_datafusion_err!("sequence row index does not fit in usize"))?;
+        let compact_index = u64::try_from(compact_index)
+            .map_err(|_| exec_datafusion_err!("sequence row index does not fit in u64"))?;
+        let index = indices
+            .get_mut(row)
+            .ok_or_else(|| exec_datafusion_err!("sequence row index is out of bounds"))?;
+        *index = Some(compact_index);
+    }
+    take_arrays(&[value], &UInt64Array::from(indices), None)?
+        .pop()
+        .ok_or_else(|| exec_datafusion_err!("sequence take returned no arrays"))
 }
 
 impl ScalarUDFImpl for SparkSequence {
