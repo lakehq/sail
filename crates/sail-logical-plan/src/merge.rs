@@ -33,6 +33,9 @@ pub const SOURCE_PRESENT_COLUMN: &str = "__sail_merge_source_row_present";
 pub const TARGET_PRESENT_COLUMN: &str = "__sail_merge_target_row_present";
 pub const TARGET_ROW_ID_COLUMN: &str = "__sail_merge_target_row_id";
 
+type GeneratedAssignmentMarker = (String, String);
+type MergeProjection = (Vec<Expr>, Vec<GeneratedAssignmentMarker>);
+
 use sail_common_datafusion::datasource::RowLevelOperationType;
 pub use sail_common_datafusion::datasource::{
     DeltaCheckConstraintExpr, MERGE_SOURCE_METRIC_COLUMN, MergeAssignment, MergeInfo,
@@ -936,7 +939,7 @@ fn insert_only_insert_filter(options: &MergeIntoOptions) -> Expr {
 fn apply_generation_projection(
     plan: LogicalPlan,
     generated_column_exprs: &[(String, Expr)],
-    generated_assignment_markers: &[(String, String)],
+    generated_assignment_markers: &[GeneratedAssignmentMarker],
 ) -> Result<LogicalPlan> {
     if generated_column_exprs.is_empty() {
         return Ok(plan);
@@ -1504,7 +1507,7 @@ fn build_merge_projection(
     path_column: &str,
     row_index_column: Option<&str>,
     row_delete_metadata_columns: &[&str],
-) -> Result<(Vec<Expr>, Vec<(String, String)>)> {
+) -> Result<MergeProjection> {
     let matched_base = col(TARGET_PRESENT_COLUMN)
         .is_not_null()
         .and(col(SOURCE_PRESENT_COLUMN).is_not_null());
