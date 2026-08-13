@@ -14,6 +14,9 @@ use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::logical_expr::utils::format_state_name;
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility, function};
 use datafusion::prelude::Expr;
+use sail_common_datafusion::ordering::is_orderable;
+
+use crate::error::generic_exec_err;
 
 #[derive(Debug)]
 struct MaxMinByAccumulator {
@@ -108,7 +111,18 @@ impl MaxByFunction {
     }
 }
 
-fn get_min_max_by_result_type(input_types: &[DataType]) -> Result<Vec<DataType>, DataFusionError> {
+fn get_min_max_by_result_type(
+    function_name: &str,
+    input_types: &[DataType],
+) -> Result<Vec<DataType>, DataFusionError> {
+    if let Some(ordering_type) = input_types.get(1)
+        && !is_orderable(ordering_type)
+    {
+        return Err(generic_exec_err(
+            function_name,
+            &format!("does not support ordering on type {ordering_type}"),
+        ));
+    }
     match &input_types[0] {
         DataType::Dictionary(_, dict_value_type) => {
             // TODO add checker, if the value type is complex data type
@@ -172,7 +186,11 @@ impl AggregateUDFImpl for MaxByFunction {
                 None => Some(Box::new(null_filter)),
             };
 
-            order_by.push(Sort::new(second_arg, true, true)); // ASC,  NULLS FIRST
+            // Sorting by a literal is a no-op, and a constant sort key makes DataFusion's
+            // ordered `last_value` panic on a global aggregate.
+            if !matches!(second_arg, Expr::Literal(_, _)) {
+                order_by.push(Sort::new(second_arg, true, true)); // ASC,  NULLS FIRST
+            }
 
             Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
                 last_value_udaf(),
@@ -187,7 +205,7 @@ impl AggregateUDFImpl for MaxByFunction {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>, DataFusionError> {
-        get_min_max_by_result_type(arg_types)
+        get_min_max_by_result_type(self.name(), arg_types)
     }
 }
 
@@ -274,7 +292,11 @@ impl AggregateUDFImpl for MinByFunction {
                 None => Some(Box::new(null_filter)),
             };
 
-            order_by.push(Sort::new(second_arg, false, true)); // DESC, NULLS FIRST
+            // Sorting by a literal is a no-op, and a constant sort key makes DataFusion's
+            // ordered `last_value` panic on a global aggregate.
+            if !matches!(second_arg, Expr::Literal(_, _)) {
+                order_by.push(Sort::new(second_arg, false, true)); // DESC, NULLS FIRST
+            }
 
             Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
                 last_value_udaf(),
@@ -289,6 +311,6 @@ impl AggregateUDFImpl for MinByFunction {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>, DataFusionError> {
-        get_min_max_by_result_type(arg_types)
+        get_min_max_by_result_type(self.name(), arg_types)
     }
 }

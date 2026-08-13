@@ -9,6 +9,7 @@ pub mod formatter;
 pub mod literal;
 pub mod logical_expr;
 pub mod logical_rewriter;
+pub mod ordering;
 pub mod rename;
 pub mod schema_evolution;
 pub mod session;
