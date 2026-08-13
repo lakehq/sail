@@ -626,7 +626,7 @@ def test_merge_advances_rest_catalog_metadata_location_with_position_delete(
     ]
 
 
-def test_stale_merge_catalog_conflict_cleans_uncommitted_artifacts(
+def test_stale_merge_catalog_conflict_cleans_attempt_metadata_and_preserves_task_files(
     spark: SparkSession,
     gated_remote: str,
     commit_gate_proxy: tuple[str, _CommitGate],
@@ -717,10 +717,15 @@ def test_stale_merge_catalog_conflict_cleans_uncommitted_artifacts(
     while True:
         after_keys = _s3_object_keys(seaweedfs_host_endpoint, table_location)
         remaining_slow_keys = slow_created_keys & after_keys
-        if not remaining_slow_keys or time.monotonic() >= cleanup_deadline:
+        remaining_attempt_metadata = {
+            key for key in remaining_slow_keys if "/metadata/manifest-" in key or "/metadata/snap-" in key
+        }
+        if not remaining_attempt_metadata or time.monotonic() >= cleanup_deadline:
             break
         time.sleep(0.05)
-    assert not remaining_slow_keys
+    assert not remaining_attempt_metadata
+    assert remaining_slow_keys
+    assert all(key.endswith(".parquet") for key in remaining_slow_keys)
 
     after = _load_table(iceberg_rest_endpoint, table_name)
     after_metadata = after["metadata"]
@@ -729,7 +734,8 @@ def test_stale_merge_catalog_conflict_cleans_uncommitted_artifacts(
     assert after_metadata["metadata-log"][-1]["metadata-file"] == before["metadata-location"]
     assert after_snapshot["parent-snapshot-id"] == before_snapshot_id
     assert proposed_snapshot["snapshot-id"] not in {snapshot["snapshot-id"] for snapshot in after_metadata["snapshots"]}
-    assert sum(key.endswith(".parquet") for key in after_keys) == int(after_snapshot["summary"]["total-data-files"])
+    live_keys = after_keys - remaining_slow_keys
+    assert sum(key.endswith(".parquet") for key in live_keys) == int(after_snapshot["summary"]["total-data-files"])
 
     rows = spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()  # noqa: S608
     assert [(row.id, row.name) for row in rows] == [(1, "base"), (2, "fast")]
