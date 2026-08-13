@@ -6,7 +6,7 @@ use datafusion::physical_expr::Partitioning;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::WorkerId;
+use crate::id::{JobId, TaskStreamKey, WorkerId};
 use crate::plan::ShufflePartitioning;
 use crate::proto::{decode_remote_partitioning, decode_remote_physical_expr};
 use crate::task::r#gen;
@@ -35,6 +35,9 @@ pub enum TaskInputLocator {
     Storage {
         keys: Vec<Vec<TaskInputKey>>,
     },
+    ShuffleService {
+        channels: Vec<Vec<usize>>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -42,6 +45,18 @@ pub struct TaskInputKey {
     pub partition: usize,
     pub attempt: usize,
     pub channel: usize,
+}
+
+impl TaskInputKey {
+    pub fn task_stream_key(&self, job_id: JobId, stage: usize) -> TaskStreamKey {
+        TaskStreamKey {
+            job_id,
+            stage,
+            partition: self.partition,
+            attempt: self.attempt,
+            channel: self.channel,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -161,6 +176,18 @@ impl From<TaskInputLocator> for r#gen::TaskInputLocator {
                     keys: keys.into_iter().map(|x| x.into()).collect(),
                 })
             }
+            TaskInputLocator::ShuffleService { channels } => {
+                r#gen::task_input_locator::Kind::ShuffleService(
+                    r#gen::TaskInputShuffleServiceLocator {
+                        channels: channels
+                            .into_iter()
+                            .map(|channels| r#gen::TaskInputChannelList {
+                                channels: channels.into_iter().map(|x| x as u64).collect(),
+                            })
+                            .collect(),
+                    },
+                )
+            }
         };
         r#gen::TaskInputLocator { kind: Some(kind) }
     }
@@ -198,6 +225,14 @@ impl TryFrom<r#gen::TaskInputLocator> for TaskInputLocator {
                     .collect::<ExecutionResult<Vec<_>>>()?;
                 Ok(TaskInputLocator::Storage { keys })
             }
+            Some(r#gen::task_input_locator::Kind::ShuffleService(
+                r#gen::TaskInputShuffleServiceLocator { channels },
+            )) => Ok(TaskInputLocator::ShuffleService {
+                channels: channels
+                    .into_iter()
+                    .map(|x| x.channels.into_iter().map(|x| x as usize).collect())
+                    .collect(),
+            }),
             None => Err(ExecutionError::InvalidArgument(
                 "cannot decode empty task input locator".to_string(),
             )),

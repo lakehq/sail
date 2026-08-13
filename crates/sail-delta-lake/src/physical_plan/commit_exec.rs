@@ -44,14 +44,12 @@ use crate::delta_log::{LogStoreRef, StorageConfig, get_object_store_from_context
 use crate::physical_plan::action_schema::ExecCommitMeta;
 use crate::physical_plan::{COL_ACTION, DeltaCommitContext, decode_actions_and_meta_from_batch};
 use crate::schema::{
-    metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
-    schema_has_column_defaults, schema_has_generated_columns, schema_has_identity_columns,
+    metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_metadata,
 };
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
     ColumnMetadataKey, CommitAction, DeltaError, DeltaOperation, Metadata, MetadataValue, SaveMode,
     StatValue, Stats, StructField, StructType, TableFeature, commit_path,
-    contains_timestampntz_arrow, contains_variant_arrow,
 };
 use crate::table::{
     create_delta_table_with_object_store, load_catalog_managed_commits_for_snapshot,
@@ -685,18 +683,6 @@ impl ExecutionPlan for DeltaCommitExec {
                     let normalized_sink = normalize_delta_schema(&sink_schema);
                     let kernel_schema = StructType::try_from(normalized_sink.as_ref())
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                    let protocol = protocol_for_create(
-                        false,
-                        contains_timestampntz_arrow(normalized_sink.as_ref()),
-                        false,
-                        schema_has_generated_columns(&kernel_schema),
-                        schema_has_column_defaults(&kernel_schema),
-                        schema_has_identity_columns(&kernel_schema),
-                        contains_variant_arrow(normalized_sink.as_ref()),
-                        &HashMap::new(),
-                    )
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
                     let metadata = metadata_for_create_with_struct_type(
                         kernel_schema,
                         partition_columns.to_vec(),
@@ -704,6 +690,8 @@ impl ExecutionPlan for DeltaCommitExec {
                         HashMap::new(),
                     )
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    let protocol = protocol_for_metadata(&metadata)
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                     // Insert in order: Protocol, then Metadata
                     create_actions.insert(0, CommitAction::Metadata(metadata));

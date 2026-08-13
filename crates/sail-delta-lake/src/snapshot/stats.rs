@@ -35,6 +35,9 @@ use datafusion::physical_plan::Accumulator;
 use log::warn;
 
 use super::DeltaSnapshot;
+use crate::datasource::pruning::{
+    arrow_type_contains_timestamp, widen_timestamp_max_scalar, widen_timestamp_max_stat,
+};
 use crate::schema::arrow_field_physical_name;
 use crate::spec::fields::{
     FIELD_NAME_PARTITION_VALUES_PARSED, FIELD_NAME_SIZE, FIELD_NAME_STATS_PARSED,
@@ -187,12 +190,12 @@ impl<'a> SnapshotPruningStats<'a> {
     }
 
     fn build_column_stats(&self, name: impl AsRef<str>) -> DeltaResult<ColumnStatistics> {
-        let null_count_col = format!("{STATS_FIELD_NULL_COUNT}.{}", name.as_ref());
+        let name = name.as_ref();
+        let null_count_col = format!("{STATS_FIELD_NULL_COUNT}.{name}");
         let null_count = self.collect_count(&null_count_col);
 
-        let min_value =
-            self.column_bounds(STATS_FIELD_MIN_VALUES, name.as_ref(), AccumulatorType::Min);
-        let min_value = match &min_value {
+        let min_value = self.column_bounds(STATS_FIELD_MIN_VALUES, name, AccumulatorType::Min);
+        let mut min_value = match &min_value {
             Precision::Exact(value) if value.is_null() => Precision::Absent,
             // TODO this is a hack, we should not be casting here but rather when we read the checkpoint data.
             // it seems sometimes the min/max values are stored as nanoseconds and sometimes as microseconds?
@@ -202,15 +205,30 @@ impl<'a> SnapshotPruningStats<'a> {
             _ => min_value,
         };
 
-        let max_value =
-            self.column_bounds(STATS_FIELD_MAX_VALUES, name.as_ref(), AccumulatorType::Max);
-        let max_value = match &max_value {
+        let max_value = self.column_bounds(STATS_FIELD_MAX_VALUES, name, AccumulatorType::Max);
+        let mut max_value = match &max_value {
             Precision::Exact(value) if value.is_null() => Precision::Absent,
             Precision::Exact(ScalarValue::TimestampNanosecond(a, b)) => Precision::Exact(
                 ScalarValue::TimestampMicrosecond(a.map(|v| v / 1000), b.clone()),
             ),
             _ => max_value,
         };
+
+        let is_partition = self
+            .snapshot
+            .metadata()
+            .partition_columns()
+            .iter()
+            .any(|partition| partition == name);
+        let contains_timestamp = self
+            .snapshot
+            .schema()
+            .field_with_name(name)
+            .is_ok_and(|field| arrow_type_contains_timestamp(field.data_type()));
+        if !is_partition && contains_timestamp {
+            min_value = min_value.to_inexact();
+            max_value = max_value.map(widen_timestamp_max_scalar).to_inexact();
+        }
 
         Ok(ColumnStatistics {
             null_count,
@@ -334,7 +352,17 @@ impl PruningStatistics for SnapshotPruningStats<'_> {
     /// return the maximum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows.
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        self.pick_stats(column, STATS_FIELD_MAX_VALUES)
+        let values = self.pick_stats(column, STATS_FIELD_MAX_VALUES)?;
+        if self
+            .snapshot
+            .metadata()
+            .partition_columns()
+            .contains(&column.name)
+        {
+            Some(values)
+        } else {
+            Some(widen_timestamp_max_stat(values))
+        }
     }
 
     /// return the number of containers (e.g. row groups) being

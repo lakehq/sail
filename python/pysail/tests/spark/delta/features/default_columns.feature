@@ -141,7 +141,7 @@ Feature: Delta Lake Default Columns
       Then delta log first commit protocol and metadata contains
         | path                                                 | value                   |
         | protocol.minWriterVersion                            | 7                       |
-        | protocol.writerFeatures                              | ["allowColumnDefaults"] |
+        | protocol.writerFeatures                              | ["allowColumnDefaults", "appendOnly", "invariants"] |
         | metaData.schemaString.fields[1].metadata.CURRENT_DEFAULT | "10"                    |
 
   Rule: DEFAULT is restricted to standalone INSERT values

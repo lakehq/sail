@@ -109,6 +109,18 @@ pub struct TaskKey {
     pub attempt: usize,
 }
 
+impl TaskKey {
+    pub fn task_stream_key(&self, channel: usize) -> TaskStreamKey {
+        TaskStreamKey {
+            job_id: self.job_id,
+            stage: self.stage,
+            partition: self.partition,
+            attempt: self.attempt,
+            channel,
+        }
+    }
+}
+
 pub struct TaskKeyDisplay<'a>(pub &'a TaskKey);
 
 impl fmt::Display for TaskKeyDisplay<'_> {

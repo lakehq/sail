@@ -18,6 +18,7 @@ message TaskInputLocator {
     TaskInputDriverLocator driver = 1;
     TaskInputWorkerLocator worker = 2;
     TaskInputStorageLocator storage = 3;
+    TaskInputShuffleServiceLocator shuffle_service = 4;
   }
 }
 
@@ -52,6 +53,14 @@ message TaskInputWorkerKeyList {
 
 message TaskInputStorageLocator {
   repeated TaskInputRemoteKeyList keys = 1;
+}
+
+message TaskInputShuffleServiceLocator {
+  repeated TaskInputChannelList channels = 1;
+}
+
+message TaskInputChannelList {
+  repeated uint64 channels = 1;
 }
 
 message TaskInputRemoteKey {

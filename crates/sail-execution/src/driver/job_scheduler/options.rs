@@ -3,12 +3,13 @@
 use std::time::Duration;
 
 use crate::driver::DriverOptions;
+use crate::shuffle::ShuffleBackendKind;
 
 #[readonly::make]
 pub struct JobSchedulerOptions {
     pub task_launch_timeout: Duration,
     pub task_max_attempts: usize,
-    pub use_blocking_shuffle: bool,
+    pub shuffle_backend: ShuffleBackendKind,
 }
 
 impl From<&DriverOptions> for JobSchedulerOptions {
@@ -16,10 +17,7 @@ impl From<&DriverOptions> for JobSchedulerOptions {
         Self {
             task_launch_timeout: options.task_launch_timeout,
             task_max_attempts: options.task_max_attempts,
-            use_blocking_shuffle: matches!(
-                &options.shuffle_backend,
-                crate::shuffle::ShuffleBackendKind::Storage { .. }
-            ),
+            shuffle_backend: options.shuffle_backend.clone(),
         }
     }
 }

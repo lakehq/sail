@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::sync::{Arc, OnceLock};
 
 use base64::Engine;
@@ -43,11 +44,13 @@ macro_rules! downcast_and_convert {
 struct ToJsonOptions {
     timestamp_format: DateTimeFormat,
     date_format: DateTimeFormat,
+    sort_keys: bool,
 }
 
 impl ToJsonOptions {
     pub const TIMESTAMP_FORMAT_OPTION: &'static str = "timestampFormat";
     pub const DATE_FORMAT_OPTION: &'static str = "dateFormat";
+    pub const SORT_KEYS_OPTION: &'static str = "sortKeys";
     // Default ISO 8601 format with timezone offset (not Z)
     // Using Java DateTimeFormatter patterns
     pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX";
@@ -75,9 +78,16 @@ impl ToJsonOptions {
                     .expect("default date format should be valid")
             });
 
+        let sort_keys = find_key_value(map, Self::SORT_KEYS_OPTION)
+            .as_deref()
+            .map(parse_boolean_option)
+            .transpose()?
+            .unwrap_or(false);
+
         Ok(Self {
             timestamp_format,
             date_format,
+            sort_keys,
         })
     }
 }
@@ -90,6 +100,7 @@ impl Default for ToJsonOptions {
                 .expect("default timestamp format should be valid"),
             date_format: DateTimeFormat::for_formatting(Self::DATE_FORMAT_DEFAULT)
                 .expect("default date format should be valid"),
+            sort_keys: false,
         }
     }
 }
@@ -381,17 +392,31 @@ fn array_value_to_json(array: &ArrayRef, index: usize, options: &ToJsonOptions) 
 
 fn struct_to_json(
     struct_array: &StructArray,
-    index: usize,
+    row_index: usize,
     options: &ToJsonOptions,
 ) -> Result<Value> {
     let fields = struct_array.fields();
     let columns = struct_array.columns();
+    let sorted_indices = if options.sort_keys {
+        let mut indices = (0..fields.len()).collect::<Vec<_>>();
+        indices.sort_by(|left, right| {
+            compare_spark_json_keys(fields[*left].name(), fields[*right].name())
+        });
+        Some(indices)
+    } else {
+        None
+    };
 
     let mut map = Map::new();
-    for (field, column) in fields.iter().zip(columns.iter()) {
+    for position in 0..fields.len() {
+        let field_index = sorted_indices
+            .as_ref()
+            .map_or(position, |indices| indices[position]);
+        let field = &fields[field_index];
+        let column = &columns[field_index];
         // Skip NULL values - PySpark doesn't include them in JSON output
-        if !column.is_null(index) {
-            let value = array_value_to_json(column, index, options)?;
+        if !column.is_null(row_index) {
+            let value = array_value_to_json(column, row_index, options)?;
             map.insert(field.name().clone(), value);
         }
     }
@@ -426,20 +451,49 @@ fn map_to_json(map_array: &MapArray, index: usize, options: &ToJsonOptions) -> R
     let values = struct_array.column(1);
 
     let mut map = Map::new();
-    for i in 0..keys.len() {
-        // For map keys, Spark serializes structs as arrays of values (without field names)
-        // e.g., named_struct('a', 1) becomes [1] instead of {"a":1}
-        let key = map_key_to_json(keys, i, options)?;
-        let key_str = match key {
-            Value::String(s) => s,
-            other => serde_json::to_string(&other)
-                .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?,
-        };
-        let value = array_value_to_json(values, i, options)?;
-        map.insert(key_str, value);
+    if options.sort_keys {
+        let mut entries = (0..keys.len())
+            .map(|index| Ok((map_key_to_string(keys, index, options)?, index)))
+            .collect::<Result<Vec<_>>>()?;
+        entries.sort_by(|(left, _), (right, _)| compare_spark_json_keys(left, right));
+        for (key, index) in entries {
+            insert_json_map_value(&mut map, key, values, index, options)?;
+        }
+    } else {
+        for index in 0..keys.len() {
+            let key = map_key_to_string(keys, index, options)?;
+            insert_json_map_value(&mut map, key, values, index, options)?;
+        }
     }
 
     Ok(Value::Object(map))
+}
+
+fn map_key_to_string(array: &ArrayRef, index: usize, options: &ToJsonOptions) -> Result<String> {
+    // For map keys, Spark serializes structs as arrays of values (without field names)
+    // e.g., named_struct('a', 1) becomes [1] instead of {"a":1}
+    match map_key_to_json(array, index, options)? {
+        Value::String(value) => Ok(value),
+        value => serde_json::to_string(&value)
+            .map_err(|error| datafusion_common::DataFusionError::External(Box::new(error))),
+    }
+}
+
+fn insert_json_map_value(
+    map: &mut Map<String, Value>,
+    key: String,
+    values: &ArrayRef,
+    index: usize,
+    options: &ToJsonOptions,
+) -> Result<()> {
+    let value = array_value_to_json(values, index, options)?;
+    map.insert(key, value);
+    Ok(())
+}
+
+// Spark orders JSON keys with Java String ordering, which compares UTF-16 code units.
+fn compare_spark_json_keys(left: &str, right: &str) -> Ordering {
+    left.encode_utf16().cmp(right.encode_utf16())
 }
 
 /// Converts a map key to JSON. For struct keys, Spark serializes them as arrays
@@ -583,6 +637,14 @@ fn number_from_f64(value: f64) -> Value {
         .unwrap_or_else(|| Value::String(value.to_string()))
 }
 
+fn parse_boolean_option(value: &str) -> Result<bool> {
+    match value.to_lowercase().as_str() {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => datafusion_common::exec_err!("For input string: \"{value}\""),
+    }
+}
+
 /// Finds the index of a specified key in a MapArray.
 fn find_key_index(options: &MapArray, search_key: &str) -> Option<usize> {
     options
@@ -607,5 +669,140 @@ fn find_key_value(options: &MapArray, search_key: &str) -> Option<String> {
             .map(|values| values.value(index).to_string())
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::buffer::{OffsetBuffer, ScalarBuffer};
+    use datafusion::arrow::datatypes::{Field, Fields};
+    use sail_common::spec::SAIL_MAP_FIELD_NAME;
+
+    use super::*;
+
+    fn make_map_array(keys: ArrayRef, values: ArrayRef, offsets: Vec<i32>) -> Result<MapArray> {
+        let fields = Fields::from(vec![
+            Field::new(SAIL_MAP_KEY_FIELD_NAME, keys.data_type().clone(), false),
+            Field::new(SAIL_MAP_VALUE_FIELD_NAME, values.data_type().clone(), true),
+        ]);
+        let entries = StructArray::try_new(fields.clone(), vec![keys, values], None)?;
+        let entries_field = Arc::new(Field::new(
+            SAIL_MAP_FIELD_NAME,
+            DataType::Struct(fields),
+            false,
+        ));
+        Ok(MapArray::try_new(
+            entries_field,
+            OffsetBuffer::new(ScalarBuffer::from(offsets)),
+            entries,
+            None,
+            false,
+        )?)
+    }
+
+    fn json_string(value: &Value) -> Result<String> {
+        serde_json::to_string(value)
+            .map_err(|error| datafusion_common::DataFusionError::External(Box::new(error)))
+    }
+
+    #[test]
+    fn sort_keys_recursively_orders_structs_inside_arrays() -> Result<()> {
+        let nested_fields = Fields::from(vec![
+            Field::new("zeta_inner", DataType::Utf8, false),
+            Field::new("alpha_inner", DataType::Utf8, false),
+        ]);
+        let nested = StructArray::try_new(
+            nested_fields,
+            vec![
+                Arc::new(StringArray::from(vec!["z"])),
+                Arc::new(StringArray::from(vec!["a"])),
+            ],
+            None,
+        )?;
+        let list = ListArray::new(
+            Arc::new(Field::new("element", nested.data_type().clone(), false)),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 1])),
+            Arc::new(nested),
+            None,
+        );
+        let outer_fields = Fields::from(vec![
+            Field::new("zeta", list.data_type().clone(), false),
+            Field::new("alpha", DataType::Utf8, false),
+            Field::new("mid", DataType::Utf8, false),
+        ]);
+        let outer = StructArray::try_new(
+            outer_fields,
+            vec![
+                Arc::new(list),
+                Arc::new(StringArray::from(vec!["a"])),
+                Arc::new(StringArray::from(vec!["m"])),
+            ],
+            None,
+        )?;
+
+        let default_json = struct_to_json(&outer, 0, &ToJsonOptions::default())?;
+        assert_eq!(
+            json_string(&default_json)?,
+            r#"{"zeta":[{"zeta_inner":"z","alpha_inner":"a"}],"alpha":"a","mid":"m"}"#
+        );
+
+        let sorted_json = struct_to_json(
+            &outer,
+            0,
+            &ToJsonOptions {
+                sort_keys: true,
+                ..ToJsonOptions::default()
+            },
+        )?;
+        assert_eq!(
+            json_string(&sorted_json)?,
+            r#"{"alpha":"a","mid":"m","zeta":[{"alpha_inner":"a","zeta_inner":"z"}]}"#
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sort_keys_recursively_orders_maps() -> Result<()> {
+        let nested = make_map_array(
+            Arc::new(StringArray::from(vec![
+                "zeta_inner",
+                "alpha_inner",
+                "zeta_inner",
+                "alpha_inner",
+            ])),
+            Arc::new(StringArray::from(vec!["z", "a", "Z", "A"])),
+            vec![0, 2, 4],
+        )?;
+        let outer = make_map_array(
+            Arc::new(StringArray::from(vec!["zeta", "alpha"])),
+            Arc::new(nested),
+            vec![0, 2],
+        )?;
+
+        let default_json = map_to_json(&outer, 0, &ToJsonOptions::default())?;
+        assert_eq!(
+            json_string(&default_json)?,
+            r#"{"zeta":{"zeta_inner":"z","alpha_inner":"a"},"alpha":{"zeta_inner":"Z","alpha_inner":"A"}}"#
+        );
+
+        let option_map = make_map_array(
+            Arc::new(StringArray::from(vec![ToJsonOptions::SORT_KEYS_OPTION])),
+            Arc::new(StringArray::from(vec!["TRUE"])),
+            vec![0, 1],
+        )?;
+        let sorted_json = map_to_json(&outer, 0, &ToJsonOptions::from_map(&option_map)?)?;
+        assert_eq!(
+            json_string(&sorted_json)?,
+            r#"{"alpha":{"alpha_inner":"A","zeta_inner":"Z"},"zeta":{"alpha_inner":"a","zeta_inner":"z"}}"#
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sort_keys_uses_java_utf16_order() {
+        assert_eq!(
+            compare_spark_json_keys("\u{10000}", "\u{e000}"),
+            Ordering::Less
+        );
     }
 }

@@ -59,31 +59,19 @@ pub(crate) fn catalog_managed_delta_table(kind: TableKind) -> Option<CatalogMana
 }
 
 pub(crate) fn protocol_with_catalog_managed(protocol: &Protocol) -> Protocol {
-    let mut reader_features = protocol
-        .reader_features()
-        .map(|features| features.to_vec())
-        .unwrap_or_default();
-    let mut writer_features = protocol
-        .writer_features()
-        .map(|features| features.to_vec())
-        .unwrap_or_default();
-    if !reader_features.contains(&TableFeature::CatalogManaged) {
-        reader_features.push(TableFeature::CatalogManaged);
-    }
-    for feature in [
-        TableFeature::CatalogManaged,
-        TableFeature::InCommitTimestamp,
-    ] {
-        if !writer_features.contains(&feature) {
-            writer_features.push(feature);
-        }
-    }
-    Protocol::new(
-        protocol.min_reader_version().max(3),
-        protocol.min_writer_version().max(7),
-        Some(reader_features),
-        Some(writer_features),
-    )
+    protocol.merge_upgrade_requirements(&Protocol::new(
+        3,
+        7,
+        Some(vec![
+            TableFeature::CatalogManaged,
+            TableFeature::VacuumProtocolCheck,
+        ]),
+        Some(vec![
+            TableFeature::CatalogManaged,
+            TableFeature::InCommitTimestamp,
+            TableFeature::VacuumProtocolCheck,
+        ]),
+    ))
 }
 
 pub(crate) fn metadata_with_catalog_managed(metadata: Metadata, table_id: &str) -> Metadata {

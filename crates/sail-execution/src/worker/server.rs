@@ -1,3 +1,6 @@
+use std::sync::Arc;
+
+use datafusion::execution::TaskContext;
 use log::debug;
 use prost::Message;
 use sail_common::actor::ActorHandle;
@@ -6,21 +9,31 @@ use tonic::{Request, Response, Status};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::TaskKey;
 use crate::task::definition::TaskDefinition;
-use crate::worker::WorkerMessage;
-use crate::worker::actor::WorkerActor;
+use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage};
 use crate::worker::r#gen::worker_service_server::WorkerService;
 use crate::worker::r#gen::{
     CleanUpJobRequest, CleanUpJobResponse, RunTaskRequest, RunTaskResponse, StopTaskRequest,
     StopTaskResponse, StopWorkerRequest, StopWorkerResponse,
 };
+use crate::worker::{WorkerActor, WorkerMessage};
 
 pub struct WorkerServer {
-    handle: ActorHandle<WorkerActor>,
+    worker: ActorHandle<WorkerActor>,
+    task_runner: ActorHandle<TaskRunnerActor>,
+    context: Arc<TaskContext>,
 }
 
 impl WorkerServer {
-    pub fn new(handle: ActorHandle<WorkerActor>) -> Self {
-        Self { handle }
+    pub fn new(
+        worker: ActorHandle<WorkerActor>,
+        task_runner: ActorHandle<TaskRunnerActor>,
+        context: Arc<TaskContext>,
+    ) -> Self {
+        Self {
+            worker,
+            task_runner,
+            context,
+        }
     }
 }
 
@@ -46,18 +59,18 @@ impl WorkerService for WorkerServer {
             .collect::<ExecutionResult<Vec<_>>>()?;
         let definition = crate::task::r#gen::TaskDefinition::decode(definition.as_slice())
             .map_err(|e| Status::invalid_argument(format!("invalid task definition: {e}")))?;
-        let message = WorkerMessage::RunTask {
-            key: TaskKey {
-                job_id: job_id.into(),
-                stage: stage as usize,
-                partition: partition as usize,
-                attempt: attempt as usize,
-            },
-            definition: TaskDefinition::try_from(definition)?,
-            peers,
-        };
-        self.handle
-            .send(message)
+        self.task_runner
+            .send(TaskRunnerMessage::RunTask {
+                key: TaskKey {
+                    job_id: job_id.into(),
+                    stage: stage as usize,
+                    partition: partition as usize,
+                    attempt: attempt as usize,
+                },
+                definition: TaskDefinition::try_from(definition)?,
+                context: self.context.clone(),
+                peers,
+            })
             .await
             .map_err(ExecutionError::from)?;
         let response = RunTaskResponse {};
@@ -77,16 +90,15 @@ impl WorkerService for WorkerServer {
             partition,
             attempt,
         } = request;
-        let message = WorkerMessage::StopTask {
-            key: TaskKey {
-                job_id: job_id.into(),
-                stage: stage as usize,
-                partition: partition as usize,
-                attempt: attempt as usize,
-            },
-        };
-        self.handle
-            .send(message)
+        self.task_runner
+            .send(TaskRunnerMessage::StopTask {
+                key: TaskKey {
+                    job_id: job_id.into(),
+                    stage: stage as usize,
+                    partition: partition as usize,
+                    attempt: attempt as usize,
+                },
+            })
             .await
             .map_err(ExecutionError::from)?;
         let response = StopTaskResponse {};
@@ -101,12 +113,14 @@ impl WorkerService for WorkerServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let CleanUpJobRequest { job_id, stage } = request;
-        let message = WorkerMessage::CleanUpJob {
-            job_id: job_id.into(),
-            stage: stage.map(|x| x as usize),
-        };
-        self.handle
-            .send(message)
+        let job_id = job_id.into();
+        let stage = stage.map(|x| x as usize);
+        self.task_runner
+            .send(TaskRunnerMessage::CleanUpLocalStreams { job_id, stage })
+            .await
+            .map_err(ExecutionError::from)?;
+        self.task_runner
+            .send(TaskRunnerMessage::CleanUpCelebornStreams { job_id, stage })
             .await
             .map_err(ExecutionError::from)?;
         let response = CleanUpJobResponse {};
@@ -121,7 +135,7 @@ impl WorkerService for WorkerServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let StopWorkerRequest {} = request;
-        self.handle
+        self.worker
             .send(WorkerMessage::Shutdown)
             .await
             .map_err(ExecutionError::from)?;

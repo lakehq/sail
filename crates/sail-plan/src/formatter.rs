@@ -514,9 +514,14 @@ impl PlanFormatter for SparkPlanFormatter {
             "theta_union" => Ok(format_function_with_default_argument(
                 name, arguments, 2, "12",
             )),
-            "dateadd" => {
+            "date_add" | "dateadd" => {
+                let name = match arguments.len() {
+                    2 => "date_add",
+                    3 => "timestampadd",
+                    _ => name,
+                };
                 let arguments = arguments.join(", ");
-                Ok(format!("date_add({arguments})"))
+                Ok(format!("{name}({arguments})"))
             }
             "sum" => {
                 let mut args = arguments.join(", ");
