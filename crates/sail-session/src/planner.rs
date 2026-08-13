@@ -9,12 +9,10 @@ use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::execution::context::QueryPlanner;
 use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::physical_expr::expressions::Column;
-use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion::physical_expr::{
     LexOrdering, OrderingRequirements, PhysicalExpr, PhysicalSortExpr,
 };
 use datafusion::physical_optimizer::output_requirements::OutputRequirementExec;
-use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
@@ -106,58 +104,8 @@ impl QueryPlanner for ExtensionQueryPlanner {
             Arc::new(ExtensionPhysicalPlanner),
         ];
         let planner = DefaultPhysicalPlanner::with_extension_planners(extension_planners);
-        let plan = planner.create_physical_plan(&logical_plan, session).await?;
-        ensure_scalar_subquery_nullability(plan)
+        planner.create_physical_plan(&logical_plan, session).await
     }
-}
-
-#[expect(deprecated)]
-fn ensure_scalar_subquery_nullability(
-    plan: Arc<dyn ExecutionPlan>,
-) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
-    plan.transform_up(|plan| {
-        let Some(projection) = plan.downcast_ref::<ProjectionExec>() else {
-            return Ok(Transformed::no(plan));
-        };
-
-        let mut changed = false;
-        let expressions = projection
-            .expr()
-            .iter()
-            .map(|projection_expr| {
-                let transformed = Arc::clone(&projection_expr.expr).transform_up(|expression| {
-                    let Some(scalar) = expression.downcast_ref::<ScalarSubqueryExpr>() else {
-                        return Ok(Transformed::no(expression));
-                    };
-                    if scalar.nullable() {
-                        return Ok(Transformed::no(expression));
-                    }
-                    Ok(Transformed::yes(Arc::new(ScalarSubqueryExpr::new(
-                        scalar.data_type().clone(),
-                        true,
-                        scalar.index(),
-                        scalar.results().clone(),
-                    ))
-                        as Arc<dyn PhysicalExpr>))
-                })?;
-                changed |= transformed.transformed;
-                Ok(ProjectionExpr::new(
-                    transformed.data,
-                    projection_expr.alias.clone(),
-                ))
-            })
-            .collect::<datafusion_common::Result<Vec<_>>>()?;
-
-        if changed {
-            Ok(Transformed::yes(Arc::new(ProjectionExec::try_new(
-                expressions,
-                Arc::clone(projection.input()),
-            )?) as Arc<dyn ExecutionPlan>))
-        } else {
-            Ok(Transformed::no(plan))
-        }
-    })
-    .data()
 }
 
 pub struct ExtensionPhysicalPlanner;
@@ -685,37 +633,6 @@ mod tests {
 
     fn schema() -> Arc<Schema> {
         Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]))
-    }
-
-    #[test]
-    fn scalar_subquery_projection_allows_zero_row_null() -> datafusion_common::Result<()> {
-        use datafusion::logical_expr::physical_planning_context::{
-            ScalarSubqueryResults, SubqueryIndex,
-        };
-        use datafusion::physical_expr::expressions::BinaryExpr;
-
-        let input_schema = schema();
-        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&input_schema)));
-        let scalar = Arc::new(ScalarSubqueryExpr::new(
-            DataType::Int64,
-            false,
-            SubqueryIndex::new(0),
-            ScalarSubqueryResults::new(1),
-        ));
-        let shifted = Arc::new(BinaryExpr::new(
-            Arc::new(Column::new("id", 0)),
-            datafusion_expr::Operator::Plus,
-            scalar,
-        ));
-        let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
-            [ProjectionExpr::new(shifted, "shifted")],
-            input,
-        )?);
-
-        assert!(!projection.schema().field(0).is_nullable());
-        let projection = ensure_scalar_subquery_nullability(projection)?;
-        assert!(projection.schema().field(0).is_nullable());
-        Ok(())
     }
 
     #[test]

@@ -3209,15 +3209,15 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 1010
+    numAddedBytes: 966
     numAddedFiles: 2
     numFiles: 1
-    numOutputBytes: 1010
+    numOutputBytes: 966
     numOutputFiles: 1
     numOutputRows: 1
     numRemovedFiles: 1
     numSourceRows: 2
-    numTargetBytesAdded: 1010
+    numTargetBytesAdded: 966
     numTargetChangeFilesAdded: 0
     numTargetDeletionVectorsAdded: 1
     numTargetDeletionVectorsRemoved: 0

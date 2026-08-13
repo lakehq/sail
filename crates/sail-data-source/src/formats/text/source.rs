@@ -4,9 +4,11 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::error::ArrowError;
+use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::projection::ProjectionExprs;
-use datafusion::physical_plan::DisplayFormatType;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
+use datafusion::physical_plan::{DisplayFormatType, apply_expression_roots};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::boundary_stream::AlignedBoundaryStream;
 use datafusion_datasource::decoder::{Decoder, DecoderDeserializer, deserialize_stream};
@@ -146,6 +148,13 @@ impl FileSource for TextSource {
 
     fn projection(&self) -> Option<&ProjectionExprs> {
         Some(&self.projection.source)
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        apply_expression_roots(self.projection.source.iter(), f)
     }
 
     fn file_type(&self) -> &str {

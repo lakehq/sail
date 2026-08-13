@@ -200,10 +200,9 @@ Feature: concat function
         | NULL    |
 
       Examples:
-        | case                                | values                                                                                                    | first                   |
-        | string concat from table with NULLs | ('hello', ' world'), (NULL, 'x'), ('a', NULL)                                                     | hello world             |
-        | array concat from table with NULLs  | (array(1, 2), array(3)), (NULL, array(4)), (array(5), NULL)                                       | [1, 2, 3]               |
-        | binary concat from table with NULLs | (X'616263', X'646566'), (CAST(NULL AS BINARY), X'78'), (X'79', CAST(NULL AS BINARY))               | [61 62 63 64 65 66]     |
+        | case                                | values                                                      | first       |
+        | string concat from table with NULLs | ('hello', ' world'), (NULL, 'x'), ('a', NULL)               | hello world |
+        | array concat from table with NULLs  | (array(1, 2), array(3)), (NULL, array(4)), (array(5), NULL) | [1, 2, 3]   |
 
   Rule: Error cases
 

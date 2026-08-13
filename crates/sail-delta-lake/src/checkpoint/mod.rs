@@ -19,6 +19,7 @@
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/protocol/checkpoints.rs>
 
 use std::collections::{BTreeMap, HashMap};
+use std::ops::Range;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -26,13 +27,16 @@ use chrono::Utc;
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, FieldRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::runtime::SpawnedTask;
-use futures::TryStreamExt;
+use futures::future::BoxFuture;
+use futures::{FutureExt, TryFutureExt, TryStreamExt};
 use log::debug;
+use object_store::buffered::BufWriter;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
-use parquet::arrow::async_writer::ParquetObjectWriter;
+use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
+use parquet::arrow::async_reader::{AsyncFileReader, ParquetRecordBatchStreamBuilder};
 use parquet::arrow::{AsyncArrowWriter, ProjectionMask};
+use parquet::errors::{ParquetError, Result as ParquetResult};
+use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use serde_json::Deserializer as JsonDeserializer;
 use uuid::Uuid;
 
@@ -411,7 +415,7 @@ async fn write_checkpoint_batches(
     let mut row_count = i64::try_from(first_batch.num_rows())
         .map_err(|_| DeltaTableError::generic("checkpoint action count overflow"))?;
 
-    let object_store_writer = ParquetObjectWriter::new(store.clone(), path.clone());
+    let object_store_writer = BufWriter::new(store.clone(), path.clone());
     let mut writer = AsyncArrowWriter::try_new(object_store_writer, first_batch.schema(), None)
         .map_err(DeltaTableError::generic_err)?;
     writer
@@ -432,6 +436,64 @@ async fn write_checkpoint_batches(
     }
     let _ = writer.close().await.map_err(DeltaTableError::generic_err)?;
     Ok(Some((store.head(&path).await?, row_count)))
+}
+
+fn parquet_object_store_error(error: object_store::Error) -> ParquetError {
+    ParquetError::External(Box::new(error))
+}
+
+#[derive(Debug, Clone)]
+struct CheckpointObjectStoreReader {
+    store: Arc<dyn ObjectStore>,
+    path: object_store::path::Path,
+    file_size: u64,
+}
+
+impl CheckpointObjectStoreReader {
+    fn new(store: Arc<dyn ObjectStore>, path: object_store::path::Path, file_size: u64) -> Self {
+        Self {
+            store,
+            path,
+            file_size,
+        }
+    }
+}
+
+impl AsyncFileReader for CheckpointObjectStoreReader {
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, ParquetResult<Bytes>> {
+        self.store
+            .get_range(&self.path, range)
+            .map_err(parquet_object_store_error)
+            .boxed()
+    }
+
+    fn get_byte_ranges(
+        &mut self,
+        ranges: Vec<Range<u64>>,
+    ) -> BoxFuture<'_, ParquetResult<Vec<Bytes>>> {
+        async move {
+            self.store
+                .get_ranges(&self.path, &ranges)
+                .await
+                .map_err(parquet_object_store_error)
+        }
+        .boxed()
+    }
+
+    fn get_metadata<'a>(
+        &'a mut self,
+        options: Option<&'a ArrowReaderOptions>,
+    ) -> BoxFuture<'a, ParquetResult<Arc<ParquetMetaData>>> {
+        async move {
+            let file_size = self.file_size;
+            let metadata = ParquetMetaDataReader::new()
+                .with_arrow_reader_options(options)
+                .load_and_finish(self, file_size)
+                .await?;
+            Ok(Arc::new(metadata))
+        }
+        .boxed()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -928,8 +990,7 @@ pub(crate) async fn inspect_checkpoint_main_file(
     }
 
     let uuid_named = is_uuid_checkpoint_filename(filename);
-    let reader =
-        ParquetObjectReader::new(root_store, meta.location.clone()).with_file_size(meta.size);
+    let reader = CheckpointObjectStoreReader::new(root_store, meta.location.clone(), meta.size);
     let builder = ParquetRecordBatchStreamBuilder::new(reader)
         .await
         .map_err(DeltaTableError::generic_err)?;
@@ -1471,7 +1532,6 @@ mod tests {
     use object_store::path::Path;
     use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
     use parquet::arrow::AsyncArrowWriter;
-    use parquet::arrow::async_writer::ParquetObjectWriter;
     use url::Url;
     use uuid::Uuid;
 

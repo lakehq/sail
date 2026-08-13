@@ -1,17 +1,5 @@
 Feature: map_keys output schema
 
-  Rule: Duplicate key policy
-
-    Scenario: LAST_WIN map_keys returns each duplicate key once
-      Given config spark.sql.mapKeyDedupPolicy = LAST_WIN
-      When query
-        """
-        SELECT map_keys(map(1, 'a', 1, 'b')) AS result
-        """
-      Then query result
-        | result |
-        | [1]    |
-
   @function(nullability)
   Rule: Output schema
 

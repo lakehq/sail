@@ -275,11 +275,11 @@ data:
                                         DataSourceExec: partitions=1, partition_sizes=[1]
                                 RepartitionExec: partitioning=Hash([#24@1], 4), input_partitions=5
                                   UnionExec
-                                    ProjectionExec: expr=[#30@1 as #23, #23@0 as #24, #38@2 as #25, CAST(#45@3 AS Decimal128(7, 2)) as #26, 0.00 as #27, 0.00 as #28]
+                                    ProjectionExec: expr=[#30@1 as #23, #23@0 as #24, #38@2 as #25, CAST(#45@3 AS Decimal128(7, 2)) as #26, CAST(0.00 AS Decimal128(7, 2)) as #27, CAST(0.00 AS Decimal128(7, 2)) as #28]
                                       RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                         ProjectionExec: expr=[_0@0 as #23, _7@1 as #30, _15@2 as #38, _22@3 as #45]
                                           DataSourceExec: partitions=1, partition_sizes=[1]
-                                    ProjectionExec: expr=[_7@1 as #23, _0@0 as #24, 0.00 as #25, 0.00 as #26, _11@2 as #27, CAST(_19@3 AS Decimal128(7, 2)) as #28]
+                                    ProjectionExec: expr=[_7@1 as #23, _0@0 as #24, CAST(0.00 AS Decimal128(7, 2)) as #25, CAST(0.00 AS Decimal128(7, 2)) as #26, _11@2 as #27, CAST(_19@3 AS Decimal128(7, 2)) as #28]
                                       DataSourceExec: partitions=1, partition_sizes=[1]
                     ProjectionExec: expr=[catalog channel as #395, spark_concat(catalog_page, #219@0) as #396, sum(salesreturns.#153)@1 as #397, sum(salesreturns.#155)@3 as #398, sum(salesreturns.#154)@2 - sum(salesreturns.#156)@4 as #399]
                       AggregateExec: mode=FinalPartitioned, gby=[#219@0 as #219], aggr=[sum(salesreturns.#153), sum(salesreturns.#154), sum(salesreturns.#155), sum(salesreturns.#156)]
@@ -293,11 +293,13 @@ data:
                                       FilterExec: _2@1 >= 2001-08-04 AND _2@1 <= 2001-08-18, projection=[_0@0]
                                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                           DataSourceExec: partitions=1, partition_sizes=[1]
-                                  RepartitionExec: partitioning=Hash([#152@1], 4), input_partitions=2
+                                  RepartitionExec: partitioning=Hash([#152@1], 4), input_partitions=5
                                     UnionExec
-                                      ProjectionExec: expr=[_12@1 as #151, _0@0 as #152, _23@2 as #153, _33@3 as #154, 0.00 as #155, 0.00 as #156]
-                                        DataSourceExec: partitions=1, partition_sizes=[1]
-                                      ProjectionExec: expr=[_12@1 as #151, CAST(_0@0 AS Float64) as #152, 0.00 as #153, 0.00 as #154, _18@2 as #155, CAST(_26@3 AS Decimal128(7, 2)) as #156]
+                                      ProjectionExec: expr=[#151@0 as #151, #152@1 as #152, #153@2 as #153, #154@3 as #154, CAST(#155@4 AS Decimal128(7, 2)) as #155, CAST(#156@5 AS Decimal128(7, 2)) as #156]
+                                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                          ProjectionExec: expr=[_12@1 as #151, _0@0 as #152, _23@2 as #153, _33@3 as #154, 0.00 as #155, 0.00 as #156]
+                                            DataSourceExec: partitions=1, partition_sizes=[1]
+                                      ProjectionExec: expr=[_12@1 as #151, CAST(_0@0 AS Float64) as #152, CAST(0.00 AS Decimal128(7, 2)) as #153, CAST(0.00 AS Decimal128(7, 2)) as #154, _18@2 as #155, CAST(_26@3 AS Decimal128(7, 2)) as #156]
                                         DataSourceExec: partitions=1, partition_sizes=[1]
                               RepartitionExec: partitioning=Hash([CAST(catalog_page.#218 AS Float64)@2], 4), input_partitions=4
                                 ProjectionExec: expr=[#218@0 as #218, #219@1 as #219, CAST(#218@0 AS Float64) as CAST(catalog_page.#218 AS Float64)]
@@ -314,9 +316,9 @@ data:
                               HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#267@1, CAST(date_dim.#336 AS Float64)@1)], projection=[#266@0, #268@2, #269@3, #270@4, #271@5]
                                 CoalescePartitionsExec
                                   UnionExec
-                                    ProjectionExec: expr=[_13@1 as #266, _0@0 as #267, _23@2 as #268, _33@3 as #269, 0.00 as #270, 0.00 as #271]
+                                    ProjectionExec: expr=[_13@1 as #266, _0@0 as #267, _23@2 as #268, _33@3 as #269, CAST(0.00 AS Decimal128(7, 2)) as #270, CAST(0.00 AS Decimal128(7, 2)) as #271]
                                       DataSourceExec: partitions=1, partition_sizes=[1]
-                                    ProjectionExec: expr=[#309@6 as #266, #272@0 as #267, 0.00 as #268, 0.00 as #269, #287@3 as #270, CAST(#295@4 AS Decimal128(7, 2)) as #271]
+                                    ProjectionExec: expr=[#309@6 as #266, #272@0 as #267, CAST(0.00 AS Decimal128(7, 2)) as #268, CAST(0.00 AS Decimal128(7, 2)) as #269, #287@3 as #270, CAST(#295@4 AS Decimal128(7, 2)) as #271]
                                       RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                         HashJoinExec: mode=CollectLeft, join_type=Left, on=[(#274@1, #299@0), (#285@2, #313@2)]
                                           ProjectionExec: expr=[_0@0 as #272, _2@1 as #274, _13@2 as #285, _15@3 as #287, _23@4 as #295]
@@ -5090,7 +5092,7 @@ data:
               RepartitionExec: partitioning=Hash([#434@0, #435@1, __grouping_id@2], 4), input_partitions=12
                 AggregateExec: mode=Partial, gby=[(NULL as #434, NULL as #435), (#434@0 as #434, NULL as #435), (#434@0 as #434, #435@1 as #435)], aggr=[sum(x.#436), sum(x.#437), sum(x.#438)]
                   UnionExec
-                    ProjectionExec: expr=[store channel as #434, CAST(#80@0 AS Float64) as #435, #81@1 as #436, CASE WHEN #161@2 IS NOT NULL THEN #161@2 ELSE 0.00 END as #437, CAST(#82@3 - CASE WHEN #162@4 IS NOT NULL THEN #162@4 ELSE 0.00 END AS Decimal128(18, 2)) as #438]
+                    ProjectionExec: expr=[store channel as #434, CAST(#80@0 AS Float64) as #435, #81@1 as #436, CAST(CASE WHEN #161@2 IS NOT NULL THEN #161@2 ELSE 0.00 END AS Decimal128(17, 2)) as #437, CAST(#82@3 - CASE WHEN #162@4 IS NOT NULL THEN #162@4 ELSE 0.00 END AS Decimal128(18, 2)) as #438]
                       HashJoinExec: mode=CollectLeft, join_type=Left, on=[(#80@0, #160@0)], projection=[#80@0, #81@1, #161@4, #82@2, #162@5]
                         CoalescePartitionsExec
                           ProjectionExec: expr=[#51@0 as #80, sum(store_sales.#15)@1 as #81, sum(store_sales.#22)@2 as #82]
@@ -5148,7 +5150,7 @@ data:
                                     FilterExec: _2@1 >= 2001-08-11 AND _2@1 <= 2001-09-10, projection=[_0@0]
                                       RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                         DataSourceExec: partitions=1, partition_sizes=[1]
-                    ProjectionExec: expr=[web channel as #434, CAST(#362@0 AS Float64) as #435, #363@1 as #436, CASE WHEN #432@2 IS NOT NULL THEN #432@2 ELSE 0.00 END as #437, #364@3 - CASE WHEN #433@4 IS NOT NULL THEN #433@4 ELSE 0.00 END as #438]
+                    ProjectionExec: expr=[web channel as #434, CAST(#362@0 AS Float64) as #435, #363@1 as #436, CAST(CASE WHEN #432@2 IS NOT NULL THEN #432@2 ELSE 0.00 END AS Decimal128(17, 2)) as #437, #364@3 - CASE WHEN #433@4 IS NOT NULL THEN #433@4 ELSE 0.00 END as #438]
                       HashJoinExec: mode=CollectLeft, join_type=Left, on=[(#362@0, #431@0)], projection=[#362@0, #363@1, #432@4, #364@2, #433@5]
                         CoalescePartitionsExec
                           ProjectionExec: expr=[#348@0 as #362, sum(web_sales.#309)@1 as #363, sum(web_sales.#319)@2 as #364]

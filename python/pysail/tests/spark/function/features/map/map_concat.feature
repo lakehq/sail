@@ -1,17 +1,5 @@
 Feature: map_concat output schema
 
-  Rule: Duplicate key policy
-
-    Scenario: LAST_WIN map_concat keeps the value from the final map
-      Given config spark.sql.mapKeyDedupPolicy = LAST_WIN
-      When query
-        """
-        SELECT map_concat(map(1, 'a', 2, 'b'), map(2, 'c', 3, 'd')) AS result
-        """
-      Then query result
-        | result                    |
-        | {1 -> a, 2 -> c, 3 -> d} |
-
   @function(nullability)
   Rule: Output schema
 

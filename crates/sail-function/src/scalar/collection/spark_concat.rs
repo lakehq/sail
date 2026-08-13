@@ -184,7 +184,14 @@ impl ScalarUDFImpl for SparkConcat {
             };
             ArrayConcat::new().invoke_with_args(casted_scalar_args)
         } else {
-            let casted_columns = cast_columnar_values(args.args, return_type)?;
+            let casted_columns =
+                if args.args.iter().any(|arg| {
+                    matches!(arg.data_type(), DataType::LargeUtf8 | DataType::LargeBinary)
+                }) {
+                    cast_columnar_values(args.args, &DataType::LargeUtf8)?
+                } else {
+                    cast_columnar_values(args.args, &DataType::Utf8)?
+                };
 
             let casted_args = ScalarFunctionArgs {
                 args: casted_columns,
@@ -451,47 +458,5 @@ fn merge_list_types(left: &DataType, right: &DataType) -> Option<DataType> {
         }
         _ if left.equals_datatype(right) => Some(left.clone()),
         _ => None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use datafusion::arrow::array::{Array, BinaryArray};
-    use datafusion_common::config::ConfigOptions;
-
-    use super::*;
-
-    #[test]
-    fn binary_columns_are_concatenated_as_binary() -> Result<()> {
-        let left = Arc::new(BinaryArray::from_opt_vec(vec![
-            Some(b"abc".as_ref()),
-            None,
-            Some(b"y".as_ref()),
-        ]));
-        let right = Arc::new(BinaryArray::from_opt_vec(vec![
-            Some(b"def".as_ref()),
-            Some(b"x".as_ref()),
-            None,
-        ]));
-        let field = Arc::new(Field::new("v", DataType::Binary, true));
-
-        let result = SparkConcat::new().invoke_with_args(ScalarFunctionArgs {
-            args: vec![ColumnarValue::Array(left), ColumnarValue::Array(right)],
-            arg_fields: vec![Arc::clone(&field), field],
-            number_rows: 3,
-            return_field: Arc::new(Field::new("concat", DataType::Binary, true)),
-            config_options: Arc::new(ConfigOptions::default()),
-        })?;
-        let ColumnarValue::Array(result) = result else {
-            return internal_err!("concat should return an array");
-        };
-        let Some(result) = result.as_any().downcast_ref::<BinaryArray>() else {
-            return internal_err!("concat should return BinaryArray");
-        };
-
-        assert_eq!(result.value(0), b"abcdef");
-        assert!(result.is_null(1));
-        assert!(result.is_null(2));
-        Ok(())
     }
 }

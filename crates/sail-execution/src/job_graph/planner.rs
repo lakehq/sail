@@ -21,7 +21,7 @@ use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion::physical_plan::{
-    ExecutionPlan, ExecutionPlanProperties, PlanProperties, with_new_children_if_necessary,
+    ExecutionPlan, ExecutionPlanProperties, PlanProperties, replace_children_if_necessary,
 };
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -154,14 +154,17 @@ fn ensure_partitioned_hash_join_if_build_side_emits_unmatched_rows(
             .map(|(l, r)| (Arc::clone(l), Arc::clone(r)))
             .unzip();
 
-        let left = repartition(Arc::clone(&join.left), left_exprs, partition_count)?;
-        let right = repartition(Arc::clone(&join.right), right_exprs, partition_count)?;
-        let join = join
-            .builder()
-            .with_new_children(vec![left, right])?
-            .with_partition_mode(PartitionMode::Partitioned)
-            .build_exec()?;
-        Ok(Transformed::yes(join))
+        Ok(Transformed::yes(Arc::new(HashJoinExec::try_new(
+            repartition(Arc::clone(&join.left), left_exprs, partition_count)?,
+            repartition(Arc::clone(&join.right), right_exprs, partition_count)?,
+            join.on.clone(),
+            join.filter.clone(),
+            &join.join_type,
+            join.projection.as_deref().map(|p| p.to_vec()),
+            PartitionMode::Partitioned,
+            join.null_equality,
+            false,
+        )?)))
     })?;
 
     Ok(result.data)
@@ -453,10 +456,10 @@ fn plan_job_graph_stages(
         }
     } else if subtree.plan.is::<SortPreservingMergeExec>() {
         let child = subtree.only_child()?;
-        let plan = subtree
-            .plan
-            .clone()
-            .with_new_children(vec![create_merge_input(child, graph, scalar_context)?])?;
+        let plan = replace_children_if_necessary(
+            subtree.plan.clone(),
+            vec![create_merge_input(child, graph, scalar_context)?],
+        )?;
         PlannedSubtree::new(plan, subtree.node_has_scalar_subquery_expr)
     } else if let Some(coalesce) = subtree.plan.downcast_ref::<CoalesceExec>() {
         let child = subtree.only_child()?;
@@ -494,7 +497,7 @@ fn rebuild_subtree(
         .into_iter()
         .map(|child| child.plan)
         .collect::<Vec<_>>();
-    let plan = with_new_children_if_necessary(plan, children)?;
+    let plan = replace_children_if_necessary(plan, children)?;
     let node_has_scalar_subquery_expr = plan_node_has_scalar_subquery_expr(&plan);
     let subtree_has_pending_scalar_subquery_expr =
         node_has_scalar_subquery_expr || child_has_pending_scalar_subquery_expr.iter().any(|x| *x);
@@ -1096,9 +1099,12 @@ mod tests {
             vec![SplitPoint::new(vec![ScalarValue::Int32(Some(10))])],
         )
         .unwrap();
-        let graph = job_graph(Arc::new(
-            RepartitionExec::try_new(empty_plan(), Partitioning::Range(range.clone())).unwrap(),
-        ))
+        let graph = JobGraph::try_new(
+            Arc::new(
+                RepartitionExec::try_new(empty_plan(), Partitioning::Range(range.clone())).unwrap(),
+            ),
+            flight_shuffle_options(),
+        )
         .unwrap();
 
         assert_eq!(graph.stages().len(), 2);
@@ -1109,7 +1115,7 @@ mod tests {
         let OutputDistribution::Range { partitioning } = &graph.stages()[0].distribution else {
             return;
         };
-        assert_eq!(partitioning, &range);
+        assert_eq!((*partitioning).clone(), range);
         assert_eq!(graph.stages()[0].distribution.channels(), 2);
     }
 

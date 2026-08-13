@@ -256,6 +256,9 @@ data:
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
   
+    physical_plan after WindowTopN:
+    SAME TEXT AS ABOVE
+  
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       DeltaCommitExec(table_path=file://<tmp>/distributed_delta_commit/)
@@ -270,9 +273,6 @@ data:
     SAME TEXT AS ABOVE
   
     physical_plan after OptimizeAggregateOrder:
-    SAME TEXT AS ABOVE
-  
-    physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
   
     physical_plan after ProjectionPushdown:
@@ -620,6 +620,9 @@ data:
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
   
+    physical_plan after WindowTopN:
+    SAME TEXT AS ABOVE
+  
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       IcebergCommitExec(table_path=file://<tmp>/distributed_iceberg_commit/)
@@ -633,9 +636,6 @@ data:
     SAME TEXT AS ABOVE
   
     physical_plan after OptimizeAggregateOrder:
-    SAME TEXT AS ABOVE
-  
-    physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
   
     physical_plan after ProjectionPushdown:

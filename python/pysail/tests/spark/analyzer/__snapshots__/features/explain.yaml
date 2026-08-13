@@ -268,6 +268,9 @@ data:
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
   
+    physical_plan after WindowTopN:
+    SAME TEXT AS ABOVE
+  
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[#2@0 as #4, sum(t.#3)@1 as #5]
@@ -282,9 +285,6 @@ data:
     SAME TEXT AS ABOVE
   
     physical_plan after OptimizeAggregateOrder:
-    SAME TEXT AS ABOVE
-  
-    physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
   
     physical_plan after ProjectionPushdown:

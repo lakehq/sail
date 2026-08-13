@@ -323,6 +323,9 @@ data:
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
   
+    physical_plan after WindowTopN:
+    SAME TEXT AS ABOVE
+  
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[(#13@0, asc)], dist_by=SinglePartition
       SortPreservingMergeExec: [#13@0 ASC]
@@ -345,9 +348,6 @@ data:
     SAME TEXT AS ABOVE
   
     physical_plan after OptimizeAggregateOrder:
-    SAME TEXT AS ABOVE
-  
-    physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
   
     physical_plan after ProjectionPushdown:

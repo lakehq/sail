@@ -50,13 +50,13 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(JoinSelection::new()));
     rules.push(Arc::new(LimitedDistinctAggregation::new()));
     rules.push(Arc::new(FilterPushdown::new()));
-    rules.push(Arc::new(EnsureRequirements::new()));
-    rules.push(Arc::new(CombinePartialFinalAggregate::new()));
-    rules.push(Arc::new(OptimizeAggregateOrder::new()));
     // TODO: Support opt-in WindowTopN in distributed mode once `PartitionedTopKExec`
     // can cross the remote physical-plan codec. Keep the optimizer disabled by
     // default because per-partition state can regress high-cardinality workloads.
     rules.push(Arc::new(WindowTopN::new()));
+    rules.push(Arc::new(EnsureRequirements::new()));
+    rules.push(Arc::new(CombinePartialFinalAggregate::new()));
+    rules.push(Arc::new(OptimizeAggregateOrder::new()));
     rules.push(Arc::new(ProjectionPushdown::new()));
     rules.push(Arc::new(OutputRequirements::new_remove_mode()));
     rules.push(Arc::new(TopKAggregation::new()));

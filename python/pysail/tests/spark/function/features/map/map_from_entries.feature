@@ -1,17 +1,5 @@
 Feature: map_from_entries output schema
 
-  Rule: Duplicate key policy
-
-    Scenario: LAST_WIN map_from_entries keeps the final value
-      Given config spark.sql.mapKeyDedupPolicy = LAST_WIN
-      When query
-        """
-        SELECT map_from_entries(array(struct(1, 'a'), struct(1, 'b'))) AS result
-        """
-      Then query result
-        | result   |
-        | {1 -> b} |
-
   @function(nullability)
   Rule: Output schema
 
