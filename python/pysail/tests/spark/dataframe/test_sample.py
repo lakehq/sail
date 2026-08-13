@@ -92,3 +92,32 @@ def test_dataframe_sample_rejects_individual_bounds(spark):
         match=r"Upper bound .* must be <= 1\.0",
     ):
         _sample_with_bounds(spark, 1.000002, 1.000002, with_replacement=False).collect()
+
+
+def test_dataframe_sample_error_formats_doubles_like_scala(spark):
+    with pytest.raises(
+        Exception,
+        match=r"Sampling fraction \(2\.0\) must be on interval \[0, 1\] without replacement",
+    ):
+        _sample_with_bounds(spark, 0.0, 2.0, with_replacement=False).collect()
+
+    with pytest.raises(
+        Exception,
+        match=r"Sampling fraction \(-1\.0\) must be nonnegative with replacement",
+    ):
+        _sample_with_bounds(spark, 1.0, 0.0).collect()
+
+    with pytest.raises(
+        Exception,
+        match=r"Lower bound \(-2\.0E-6\) must be >= 0\.0",
+    ):
+        _sample_with_bounds(spark, -0.000002, -0.000002, with_replacement=False).collect()
+
+
+@pytest.mark.xfail(reason="Known issue: seeded sampling repeats its pattern every batch", strict=True)
+def test_seeded_sample_pattern_differs_across_batches(spark):
+    sampled = spark.range(16384, numPartitions=1).sample(True, 0.5, 42)
+    picked = [row.id for row in sampled.collect()]
+    first_batch = {i for i in picked if i < 8192}
+    second_batch = {i - 8192 for i in picked if i >= 8192}
+    assert first_batch != second_batch

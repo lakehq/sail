@@ -155,6 +155,30 @@ impl HigherOrderUDFImpl for SparkSequenceLazy {
             })
             .collect::<Result<Vec<_>>>()?;
 
+        // Fast path: evaluate every argument lambda over the whole batch and invoke the
+        // sequence kernel once. The kernels already reproduce Spark's per-row null
+        // propagation and report boundary errors in row order, so this is observably
+        // identical to row-at-a-time evaluation unless an argument expression itself
+        // errors. In that case fall back to the per-row loop below, which reproduces
+        // Spark's short-circuit semantics (a null start suppresses errors from the stop
+        // and step expressions of that row) and its error ordering.
+        let batch_args = lambdas
+            .iter()
+            .map(|lambda| evaluate_sequence_lambda_batch(lambda, args.number_rows))
+            .collect::<Result<Vec<_>>>();
+        if let Ok(values) = batch_args {
+            return ScalarUDFImpl::invoke_with_args(
+                &self.sequence,
+                ScalarFunctionArgs {
+                    args: values.into_iter().map(ColumnarValue::Array).collect(),
+                    arg_fields: arg_fields.clone(),
+                    number_rows: args.number_rows,
+                    return_field: Arc::clone(&args.return_field),
+                    config_options: Arc::clone(&args.config_options),
+                },
+            );
+        }
+
         let row_count = u64::try_from(args.number_rows)
             .map_err(|_| exec_datafusion_err!("sequence row count does not fit in u64"))?;
         let mut output = Vec::with_capacity(args.number_rows);
@@ -224,6 +248,13 @@ fn evaluate_sequence_lambda(lambda: &LambdaArgument, rows: &[u64]) -> Result<Arr
     lambda
         .evaluate(&[&dummy], |arrays| Ok(take_arrays(arrays, &indices, None)?))?
         .into_array(rows.len())
+}
+
+fn evaluate_sequence_lambda_batch(lambda: &LambdaArgument, number_rows: usize) -> Result<ArrayRef> {
+    let dummy = || Ok(Arc::new(NullArray::new(number_rows)) as ArrayRef);
+    lambda
+        .evaluate(&[&dummy], |arrays| Ok(arrays.to_vec()))?
+        .into_array(number_rows)
 }
 
 impl ScalarUDFImpl for SparkSequence {

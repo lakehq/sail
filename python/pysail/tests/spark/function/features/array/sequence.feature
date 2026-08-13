@@ -194,6 +194,15 @@ Feature: sequence output schema
         | false | sequence(1, '3')                                            |
         | true  | sequence('2018-01-01', '2018-01-02')                        |
 
+    @sail-bug
+    Scenario: ANSI sequence string bounds report Spark's cast error class
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT sequence(1, 'abc') AS result
+        """
+      Then query error CAST_INVALID_INPUT
+
   Rule: Integral execution semantics
 
     Scenario: sequence chooses its default step from the boundary direction
@@ -321,3 +330,12 @@ Feature: sequence output schema
         ) AS result
         """
       Then query error \[INTERNAL_ERROR\] Unreachable code reached\.
+
+    Scenario: sequence composes inside another higher-order function lambda
+      When query
+        """
+        SELECT transform(array(1, 3), x -> sequence(1, x)) AS result
+        """
+      Then query result
+        | result           |
+        | [[1], [1, 2, 3]] |

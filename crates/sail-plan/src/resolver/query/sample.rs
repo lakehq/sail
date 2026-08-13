@@ -19,6 +19,39 @@ use crate::resolver::state::PlanResolverState;
 
 const SAMPLE_ROUNDING_EPSILON: f64 = 1e-6;
 
+/// Format an `f64` the way `java.lang.Double.toString` does, so the sampling error messages
+/// match Spark's byte for byte: `2.0` rather than `2`, and `-2.0E-6` rather than `-0.000002`
+/// (Java switches to scientific notation outside `[1e-3, 1e7)`).
+fn format_spark_double(value: f64) -> String {
+    if value.is_nan() {
+        return "NaN".to_string();
+    }
+    if value.is_infinite() {
+        return if value > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
+    }
+    let magnitude = value.abs();
+    if magnitude != 0.0 && !(1e-3..1e7).contains(&magnitude) {
+        let formatted = format!("{value:e}");
+        let (mantissa, exponent) = match formatted.split_once('e') {
+            Some(parts) => parts,
+            None => (formatted.as_str(), "0"),
+        };
+        let mantissa = if mantissa.contains('.') {
+            mantissa.to_string()
+        } else {
+            format!("{mantissa}.0")
+        };
+        format!("{mantissa}E{exponent}")
+    } else {
+        let formatted = format!("{value}");
+        if formatted.contains('.') {
+            formatted
+        } else {
+            format!("{formatted}.0")
+        }
+    }
+}
+
 /// Copied from `arrow_ord::rank::can_rank` (private in arrow-ord).
 fn can_rank(data_type: &DataType) -> bool {
     data_type.is_primitive()
@@ -160,24 +193,29 @@ impl PlanResolver<'_> {
                 "on interval [0, 1] without replacement"
             };
             return Err(PlanError::invalid(format!(
-                "Sampling fraction ({fraction}) must be {requirement}"
+                "Sampling fraction ({}) must be {requirement}",
+                format_spark_double(fraction)
             )));
         }
 
         if !with_replacement {
             if lower_bound > upper_bound + SAMPLE_ROUNDING_EPSILON {
                 return Err(PlanError::invalid(format!(
-                    "Lower bound ({lower_bound}) must be <= upper bound ({upper_bound})"
+                    "Lower bound ({}) must be <= upper bound ({})",
+                    format_spark_double(lower_bound),
+                    format_spark_double(upper_bound)
                 )));
             }
             if lower_bound < -SAMPLE_ROUNDING_EPSILON {
                 return Err(PlanError::invalid(format!(
-                    "Lower bound ({lower_bound}) must be >= 0.0"
+                    "Lower bound ({}) must be >= 0.0",
+                    format_spark_double(lower_bound)
                 )));
             }
             if upper_bound > 1.0 + SAMPLE_ROUNDING_EPSILON {
                 return Err(PlanError::invalid(format!(
-                    "Upper bound ({upper_bound}) must be <= 1.0"
+                    "Upper bound ({}) must be <= 1.0",
+                    format_spark_double(upper_bound)
                 )));
             }
         }
