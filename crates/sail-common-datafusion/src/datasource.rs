@@ -653,11 +653,10 @@ mod tests {
         let registry = SourceRegistry::new();
         registry.register_lake_source(Arc::new(TestLakeSource))?;
 
-        let error = registry
-            .register_data_source(Arc::new(TestLakeSource))
-            .expect_err("a generic source must not replace a lake source");
-
-        assert!(matches!(error, datafusion_common::DataFusionError::Plan(_)));
+        assert!(matches!(
+            registry.register_data_source(Arc::new(TestLakeSource)),
+            Err(datafusion_common::DataFusionError::Plan(_))
+        ));
         assert!(registry.get_data_source("test").is_ok());
         assert!(registry.get_lake_source("test").is_ok());
         Ok(())
