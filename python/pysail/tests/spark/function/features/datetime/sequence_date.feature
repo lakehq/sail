@@ -184,7 +184,6 @@ Feature: sequence() over DATE returns expected arrays
         | exact_values |
         | true         |
 
-    @sail-bug
     Scenario: timestamp_ntz sequence values convert to timestamp across Spark's full microsecond domain
       Given config spark.sql.session.timeZone = UTC
       When query
@@ -461,7 +460,6 @@ Feature: sequence() over DATE returns expected arrays
         | INTERVAL '0-0' YEAR TO MONTH        | interval year to month |
         | INTERVAL '0 03:00:00' DAY TO SECOND | interval day to second |
 
-    @sail-bug
     Scenario: mixed LTZ and NTZ sequences support timestamps outside the nanosecond range
       Given config spark.sql.session.timeZone = UTC
       When query
