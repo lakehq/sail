@@ -8098,6 +8098,7 @@ dependencies = [
  "fastrace",
  "futures",
  "log",
+ "mimalloc",
  "pyo3",
  "sail-celeborn",
  "sail-cli",
