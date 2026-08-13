@@ -1,6 +1,5 @@
-import pandas as pd
+import pyspark.sql.functions as F  # noqa: N812
 import pytest
-from pandas.testing import assert_frame_equal
 
 from pysail.testing.spark.utils.common import is_jvm_spark
 
@@ -12,14 +11,39 @@ def _sample_with_bounds(spark, lower_bound, upper_bound, *, with_replacement=Tru
     return sampled
 
 
-def test_dataframe_sample_replazement_seed(spark):
-    df = spark.createDataFrame([(0), (1), (2), (3), (4), (5), (6), (7), (8), (9)], ["id"])
-    df2 = df.sample(True, 0.5, 1)
+@pytest.mark.xfail(
+    not is_jvm_spark(),
+    reason="Known issue: sampling RNG and partition seeding differ from Spark",
+    strict=True,
+)
+def test_dataframe_sample_with_replacement_matches_spark_seed(spark):
+    sampled = spark.range(10, numPartitions=1).sample(True, 0.5, 1)
+    assert [row.id for row in sampled.collect()] == [0, 2, 3, 4, 7, 9]
 
-    assert_frame_equal(
-        df2.toPandas(),
-        pd.DataFrame({"id": [0, 0, 3, 4, 8]}),
-    )
+
+@pytest.mark.xfail(
+    not is_jvm_spark(),
+    reason="Known issue: sampling RNG and partition seeding differ from Spark",
+    strict=True,
+)
+@pytest.mark.parametrize(
+    ("with_replacement", "expected"),
+    [
+        (False, [[2, 3], [6, 7, 8]]),
+        (True, [[0, 2, 3, 4], []]),
+    ],
+)
+def test_seeded_sample_matches_spark_partition_seeds(
+    spark,
+    with_replacement,
+    expected,
+):
+    sampled = spark.range(10, numPartitions=2).sample(with_replacement, 0.5, 1)
+    rows = sampled.select(F.spark_partition_id().alias("partition"), "id").collect()
+    actual = [[], []]
+    for row in rows:
+        actual[row.partition].append(row.id)
+    assert actual == expected
 
 
 def test_dataframe_sample_with_replacement_zero_fraction(spark):

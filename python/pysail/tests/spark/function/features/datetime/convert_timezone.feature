@@ -65,6 +65,19 @@ Feature: convert_timezone
         | '2025-03-09 10:30:00' | 'Europe/Amsterdam'    | 'America/Los_Angeles' | 2025-03-09 01:30:00 |
         | '2025-03-09 11:30:00' | 'Europe/Amsterdam'    | 'America/Los_Angeles' | 2025-03-09 03:30:00 |
 
+    Scenario: `convert_timezone` resolves a nonexistent local time when the zones match
+      When query
+        """
+        SELECT convert_timezone(
+          'America/Los_Angeles',
+          'America/Los_Angeles',
+          TIMESTAMP_NTZ '2021-03-14 02:30:00'
+        ) AS result
+        """
+      Then query result
+        | result              |
+        | 2021-03-14 03:30:00 |
+
   @function(nullability)
   Rule: Output schema
 

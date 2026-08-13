@@ -259,10 +259,11 @@ fn disambiguate_local_datetime(local: NaiveDateTime, tz: &Tz) -> Option<DateTime
 /// Reference:
 ///   `org.apache.spark.sql.catalyst.util.DateTimeUtils#convertTimestampNtzToAnotherTz`
 fn convert_tz_classic(ts_micros: i64, from_zone: &Tz, to_zone: &Tz) -> Option<i64> {
-    if from_zone == to_zone {
-        return Some(ts_micros);
-    }
-    let local = DateTime::<Utc>::from_timestamp_micros(ts_micros)?.naive_utc();
+    let local = match DateTime::<Utc>::from_timestamp_micros(ts_micros) {
+        Some(datetime) => datetime.naive_utc(),
+        None if from_zone == to_zone => return Some(ts_micros),
+        None => return None,
+    };
     let dt = disambiguate_local_datetime(local, from_zone)?;
     Some(
         dt.with_timezone(to_zone)
@@ -275,10 +276,11 @@ fn convert_tz_classic(ts_micros: i64, from_zone: &Tz, to_zone: &Tz) -> Option<i6
 /// Reference:
 ///   `org.apache.spark.sql.catalyst.util.SparkDateTimeUtils#convertTz`
 fn convert_tz_non_classic(ts_micros: i64, from_zone: &Tz, to_zone: &Tz) -> Option<i64> {
-    if from_zone == to_zone {
-        return Some(ts_micros);
-    }
-    let local = to_zone.timestamp_micros(ts_micros).single()?.naive_local();
+    let local = match to_zone.timestamp_micros(ts_micros).single() {
+        Some(datetime) => datetime.naive_local(),
+        None if from_zone == to_zone => return Some(ts_micros),
+        None => return None,
+    };
     let dt = disambiguate_local_datetime(local, from_zone)?;
     Some(dt.timestamp_micros())
 }
