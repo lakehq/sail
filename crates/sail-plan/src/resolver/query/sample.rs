@@ -17,7 +17,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
-const SAMPLE_ROUNDING_EPSILON: f64 = 1e-6;
+pub(super) const SAMPLE_ROUNDING_EPSILON: f64 = 1e-6;
 
 /// Copied from `arrow_ord::rank::can_rank` (private in arrow-ord).
 fn can_rank(data_type: &DataType) -> bool {

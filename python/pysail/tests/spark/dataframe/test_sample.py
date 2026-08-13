@@ -1,6 +1,9 @@
+from collections import Counter
+
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 
+from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 from pysail.testing.spark.utils.common import is_jvm_spark
 
 
@@ -9,6 +12,20 @@ def _sample_with_bounds(spark, lower_bound, upper_bound, *, with_replacement=Tru
     sampled._plan.lower_bound = lower_bound  # noqa: SLF001
     sampled._plan.upper_bound = upper_bound  # noqa: SLF001
     return sampled
+
+
+@pytest.fixture
+def single_partition_spark(spark):
+    if is_jvm_spark():
+        yield spark
+        return
+
+    envs = {
+        "SAIL_EXECUTION__BATCH_SIZE": "1024",
+        "SAIL_EXECUTION__DEFAULT_PARALLELISM": "1",
+    }
+    with spark_connect_server(envs=envs) as server, spark_session_factory(server.remote) as sessions:
+        yield sessions.create()
 
 
 @pytest.mark.xfail(
@@ -125,9 +142,9 @@ def test_dataframe_sample_rejects_individual_bounds(spark):
     reason="Known issue: seeded sampling repeats its pattern every batch",
     strict=True,
 )
-def test_seeded_sample_pattern_differs_across_batches(spark):
-    sampled = spark.range(2048, numPartitions=1).sample(True, 0.5, 42)
+def test_seeded_sample_pattern_differs_across_batches(single_partition_spark):
+    sampled = single_partition_spark.range(2048, numPartitions=1).sample(True, 0.5, 42)
     picked = [row.id for row in sampled.collect()]
-    first_batch = {i for i in picked if i < 1024}  # noqa: PLR2004
-    second_batch = {i - 1024 for i in picked if i >= 1024}  # noqa: PLR2004
+    first_batch = Counter(i for i in picked if i < 1024)  # noqa: PLR2004
+    second_batch = Counter(i - 1024 for i in picked if i >= 1024)  # noqa: PLR2004
     assert first_batch != second_batch

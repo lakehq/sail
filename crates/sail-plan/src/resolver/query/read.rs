@@ -18,6 +18,7 @@ use sail_common_datafusion::rename::table_provider::RenameTableProvider;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
+use super::sample::SAMPLE_ROUNDING_EPSILON;
 use crate::error::{PlanError, PlanResult};
 use crate::function::{get_built_in_table_function, is_built_in_generator_function};
 use crate::resolver::PlanResolver;
@@ -244,7 +245,7 @@ impl PlanResolver<'_> {
             spec::TableSampleMethod::Percent { value } => {
                 let percent = self.evaluate_sample_expr_to_f64(value, state).await?;
                 let fraction = percent / 100.0;
-                if !(0.0..=1.0).contains(&fraction) {
+                if !(-SAMPLE_ROUNDING_EPSILON..=1.0 + SAMPLE_ROUNDING_EPSILON).contains(&fraction) {
                     return Err(PlanError::invalid(format!(
                         "Sampling fraction ({fraction}) must be on interval [0, 1]"
                     )));

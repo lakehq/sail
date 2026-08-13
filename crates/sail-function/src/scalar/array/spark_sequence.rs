@@ -919,14 +919,16 @@ fn estimated_temporal_step(months: i32, days: i32, micros: i64) -> i64 {
         .wrapping_add(i64::from(days).wrapping_mul(MICROS_PER_DAY))
 }
 
-fn scaled_i32(value: i32, index: usize, component: &str) -> Result<i32> {
-    i32::try_from(i128::from(value) * index as i128)
-        .map_err(|_| exec_datafusion_err!("sequence {component} interval component overflow"))
+fn scaled_i32(value: i32, index: usize) -> Result<i32> {
+    let index = i32::try_from(index)
+        .map_err(|_| exec_datafusion_err!("sequence index does not fit in i32"))?;
+    Ok(value.wrapping_mul(index))
 }
 
-fn scaled_i64(value: i64, index: usize, component: &str) -> Result<i64> {
-    i64::try_from(i128::from(value) * index as i128)
-        .map_err(|_| exec_datafusion_err!("sequence {component} interval component overflow"))
+fn scaled_i64(value: i64, index: usize) -> Result<i64> {
+    let index = i64::try_from(index)
+        .map_err(|_| exec_datafusion_err!("sequence index does not fit in i64"))?;
+    Ok(value.wrapping_mul(index))
 }
 
 fn checked_add_months(datetime: NaiveDateTime, months: i32) -> Option<NaiveDateTime> {
@@ -1088,7 +1090,7 @@ fn add_ltz_interval(start: i64, months: i32, days: i32, micros: i64, timezone: T
 
 fn add_ntz_interval(start: i64, months: i32, days: i32, micros: i64) -> Result<i64> {
     let result = add_wide_calendar_interval(i128::from(start), months, days, micros)?;
-    i64::try_from(result).map_err(|_| exec_datafusion_err!("cannot add interval to {start}"))
+    i64::try_from(result).map_err(|_| exec_datafusion_err!("long overflow"))
 }
 
 fn add_temporal_interval(
@@ -1100,9 +1102,9 @@ fn add_temporal_interval(
     timezone: Tz,
     timestamp_ntz: bool,
 ) -> Result<i64> {
-    let months = scaled_i32(months, index, "month")?;
-    let days = scaled_i32(days, index, "day")?;
-    let micros = scaled_i64(micros, index, "microsecond")?;
+    let months = scaled_i32(months, index)?;
+    let days = scaled_i32(days, index)?;
+    let micros = scaled_i64(micros, index)?;
     if timestamp_ntz {
         add_ntz_interval(start, months, days, micros)
     } else {

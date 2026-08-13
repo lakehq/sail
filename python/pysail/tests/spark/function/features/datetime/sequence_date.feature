@@ -444,6 +444,17 @@ Feature: sequence() over DATE returns expected arrays
         | result                |
         | [1970-01-01 00:00:00] |
 
+    Scenario: sequence wraps scaled calendar interval components like Spark
+      When query
+        """
+        SELECT size(sequence(
+          TIMESTAMP_NTZ '1970-01-01 00:00:00',
+          TIMESTAMP_NTZ '1970-01-01 00:18:20',
+          make_interval(0, 0, 0, 100000, 0, 0, -8639999999)
+        )) AS result
+        """
+      Then query error long overflow
+
     Scenario: date sequence boundary errors show the original interval
       Given config spark.sql.session.timeZone = UTC
       When query
