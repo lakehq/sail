@@ -126,8 +126,8 @@ def test_dataframe_sample_rejects_individual_bounds(spark):
     strict=True,
 )
 def test_seeded_sample_pattern_differs_across_batches(spark):
-    sampled = spark.range(16384, numPartitions=1).sample(True, 0.5, 42)
+    sampled = spark.range(2048, numPartitions=1).sample(True, 0.5, 42)
     picked = [row.id for row in sampled.collect()]
-    first_batch = {i for i in picked if i < 8192}  # noqa: PLR2004
-    second_batch = {i - 8192 for i in picked if i >= 8192}  # noqa: PLR2004
+    first_batch = {i for i in picked if i < 1024}  # noqa: PLR2004
+    second_batch = {i - 1024 for i in picked if i >= 1024}  # noqa: PLR2004
     assert first_batch != second_batch
