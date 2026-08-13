@@ -5,7 +5,18 @@ pub use access::LocalLifecycleManager;
 pub use actor::{LifecycleManagerActor, LifecycleManagerMessage, LifecycleManagerOptions};
 
 use crate::error::CelebornResult;
-use crate::master::SlotReservation;
+use crate::master::{PartitionLocation, SlotReservation};
+
+/// A failed push that needs a newer partition location.
+#[derive(Debug, Clone)]
+pub struct ReviveRequest {
+    pub shuffle_id: i32,
+    pub partition_id: i32,
+    pub map_id: i32,
+    pub attempt_id: i32,
+    pub old_location: PartitionLocation,
+    pub cause: i32,
+}
 
 /// Operations supported by a shuffle lifecycle manager.
 #[tonic::async_trait]
@@ -23,6 +34,9 @@ pub trait LifecycleManager: Send + Sync + 'static {
         should_replicate: bool,
         max_workers: i32,
     ) -> CelebornResult<SlotReservation>;
+
+    /// Allocate and reserve a higher-epoch location for a failed push.
+    async fn revive(&self, request: ReviveRequest) -> CelebornResult<PartitionLocation>;
 
     async fn mapper_end(
         &self,

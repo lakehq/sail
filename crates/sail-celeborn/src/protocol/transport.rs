@@ -263,9 +263,9 @@ impl TransportConnection {
             {
                 Ok(())
             }
-            Some(status) => Err(CelebornError::Application(format!(
-                "worker requested push recovery with status {status}"
-            ))),
+            Some(status) => Err(CelebornError::Worker {
+                status: i32::from(status),
+            }),
         }
     }
 

@@ -16,6 +16,7 @@ pub struct ShuffleClientActor {
     options: ShuffleClientOptions,
     shuffle_ids: HashMap<(u64, u64), i32>,
     locations: HashMap<(i32, i32), PartitionLocation>,
+    location_history: HashMap<(i32, i32), Vec<PartitionLocation>>,
     worker_clients: HashMap<(i32, i32), WorkerClient>,
     batch_ids: HashMap<(i32, i32, i32), i32>,
 }

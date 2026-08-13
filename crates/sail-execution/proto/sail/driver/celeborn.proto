@@ -48,6 +48,21 @@ message CelebornPartitionLocation {
 
 message CelebornRegisterShuffleResponse {
   repeated CelebornPartitionLocation primary_locations = 1;
+  repeated CelebornPartitionLocation all_primary_locations = 2;
+}
+
+message CelebornReviveRequest {
+  uint64 driver_id = 1;
+  int32 shuffle_id = 2;
+  int32 partition_id = 3;
+  int32 map_id = 4;
+  int32 attempt_id = 5;
+  CelebornPartitionLocation old_location = 6;
+  int32 cause = 7;
+}
+
+message CelebornReviveResponse {
+  CelebornPartitionLocation location = 1;
 }
 
 message CelebornMapperEndRequest {
@@ -71,6 +86,7 @@ service CelebornLifecycleManagerService {
   rpc GetShuffleId(CelebornGetShuffleIdRequest) returns (CelebornGetShuffleIdResponse) {}
   rpc GetJobShuffleIds(CelebornGetJobShuffleIdsRequest) returns (CelebornGetJobShuffleIdsResponse) {}
   rpc RegisterShuffle(CelebornRegisterShuffleRequest) returns (CelebornRegisterShuffleResponse) {}
+  rpc Revive(CelebornReviveRequest) returns (CelebornReviveResponse) {}
   rpc MapperEnd(CelebornMapperEndRequest) returns (CelebornMapperEndResponse) {}
   rpc UnregisterShuffle(CelebornUnregisterShuffleRequest) returns (CelebornUnregisterShuffleResponse) {}
 }
