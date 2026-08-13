@@ -2,33 +2,25 @@ Feature: DataFrame sample operations
 
   Rule: Sample without replacement
 
-    Scenario: sample with fraction returns subset
+    Scenario Outline: a fractional sample matches Spark for seed <seed>
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW sample_data AS
+        SELECT * FROM range(0, 10, 1, 1)
+        """
       When query
         """
-        SELECT COUNT(*) AS cnt FROM (
-          SELECT id FROM (SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9 UNION ALL SELECT 10)
-        ) t
+        SELECT CAST(array_sort(collect_list(id)) AS STRING) AS sampled_ids
+        FROM sample_data TABLESAMPLE (50 PERCENT) REPEATABLE (<seed>)
         """
       Then query result
-        | cnt |
-        | 10  |
+        | sampled_ids   |
+        | <sampled_ids> |
 
-  Rule: Sample with seed produces deterministic results
-
-    Scenario: same seed produces same sample
-      When query
-        """
-        SELECT id FROM (
-          SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5
-        ) ORDER BY id
-        """
-      Then query result
-        | id |
-        | 1  |
-        | 2  |
-        | 3  |
-        | 4  |
-        | 5  |
+      Examples:
+        | seed | sampled_ids               |
+        | 1    | [2, 3, 6, 7, 8]           |
+        | 2    | [1, 2, 3, 5, 6, 7, 9]     |
 
   Rule: Sample without replacement bound validation
 

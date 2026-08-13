@@ -59,7 +59,6 @@ Feature: sequence output schema
          |    |-- element: timestamp_ntz (containsNull = false)
         """
 
-    @sail-bug
     Scenario: a mixed temporal sequence is non-nullable after timestamp widening
       Given config spark.sql.session.timeZone = UTC
       When query

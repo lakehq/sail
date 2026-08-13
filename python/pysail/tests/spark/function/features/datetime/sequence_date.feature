@@ -329,6 +329,19 @@ Feature: sequence() over DATE returns expected arrays
         """
       Then query error CAST_INVALID_INPUT
 
+    Scenario Outline: malformed DATE casts escape values like Spark
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST(<value> AS DATE)
+        """
+      Then query error \[CAST_INVALID_INPUT\] The value '<escaped_value>' of the type "STRING" cannot be cast to "DATE"
+
+      Examples:
+        | value                     | escaped_value |
+        | concat('a', chr(39), 'b') | a\\'b         |
+        | concat('a', chr(92), 'b') | a\\\\b        |
+
     Scenario: timestamp sequence crosses daylight-saving transitions
       Given config spark.sql.session.timeZone = Europe/Prague
       When query
