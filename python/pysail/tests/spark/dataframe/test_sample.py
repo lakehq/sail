@@ -2,6 +2,8 @@ import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
 
+from pysail.testing.spark.utils.common import is_jvm_spark
+
 
 def _sample_with_bounds(spark, lower_bound, upper_bound, *, with_replacement=True):
     sampled = spark.range(10, numPartitions=1).sample(with_replacement, 0.0, 1)
@@ -114,7 +116,11 @@ def test_dataframe_sample_error_formats_doubles_like_scala(spark):
         _sample_with_bounds(spark, -0.000002, -0.000002, with_replacement=False).collect()
 
 
-@pytest.mark.xfail(reason="Known issue: seeded sampling repeats its pattern every batch", strict=True)
+@pytest.mark.xfail(
+    not is_jvm_spark(),
+    reason="Known issue: seeded sampling repeats its pattern every batch",
+    strict=True,
+)
 def test_seeded_sample_pattern_differs_across_batches(spark):
     sampled = spark.range(16384, numPartitions=1).sample(True, 0.5, 42)
     picked = [row.id for row in sampled.collect()]
