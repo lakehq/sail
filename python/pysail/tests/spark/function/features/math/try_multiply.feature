@@ -60,3 +60,25 @@ Feature: try_multiply output schema
         | try_multiply doctest #9 (result)  | make_interval(0, 0, 0, 1, 0, 90, 0), 2                | 2 days 3 hours               |
         | try_multiply doctest #10 (result) | make_ym_interval(1, 6), 2                             | INTERVAL '3-0' YEAR TO MONTH |
         | try_multiply doctest #11 (result) | make_ym_interval(1, 6), 2                             | INTERVAL '3-0' YEAR TO MONTH |
+
+  Rule: Day-time interval argument
+
+    # The doctests above cover calendar and year-month intervals, which work. A DAY TO SECOND
+    # interval (Arrow `Duration`) does not: Sail fails with "Function 'try_multiply' user-defined
+    # coercion failed". Note the gap is the mirror image of the `*` operator, which handles
+    # day-time intervals but not year-month ones.
+    @sail-bug
+    Scenario Outline: try_multiply on a DAY TO SECOND interval by a <case>
+      When query
+        """
+        SELECT CAST(try_multiply(INTERVAL '1' DAY, <multiplier>) AS STRING) AS result
+        FROM VALUES (2) AS t(y)
+        """
+      Then query result
+        | result                              |
+        | INTERVAL '2 00:00:00' DAY TO SECOND |
+
+      Examples:
+        | case    | multiplier |
+        | literal | 2          |
+        | column  | y          |
