@@ -26,11 +26,13 @@ use crate::collect_left::RewriteCollectLeftHashJoin;
 use crate::explicit_repartition::RewriteExplicitRepartition;
 use crate::join_reorder::JoinReorder;
 pub use crate::join_reorder::JoinReorderOptions;
+use crate::wrap_higher_order::WrapHigherOrderFunctions;
 
 mod barrier;
 mod collect_left;
 mod explicit_repartition;
 mod join_reorder;
+mod wrap_higher_order;
 
 #[derive(Debug, Clone, Default)]
 pub struct PhysicalOptimizerOptions {
@@ -70,6 +72,10 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(RewriteExplicitRepartition::new()));
     rules.push(Arc::new(RewriteCollectLeftHashJoin::new()));
     rules.push(Arc::new(EnforceBarrierPartitioning::new()));
+    // Wrap higher-order function expressions so they can be serialized for
+    // distributed execution. Runs after SanityCheckPlan-relevant rewrites but
+    // before the final sanity check validates the wrapped plan.
+    rules.push(Arc::new(WrapHigherOrderFunctions::new()));
     rules.push(Arc::new(SanityCheckPlan::new()));
 
     rules
@@ -99,5 +105,145 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_optimizer_with_join_reorder_enabled() {
+        let options = PhysicalOptimizerOptions {
+            enable_join_reorder: true,
+            join_reorder: Default::default(),
+        };
+        let optimizers = get_physical_optimizers(options);
+
+        // Check that JoinReorder is included when enabled
+        let rule_names: Vec<&str> = optimizers.iter().map(|opt| opt.name()).collect();
+        let has_join_reorder = rule_names.contains(&"JoinReorder");
+        assert!(
+            has_join_reorder,
+            "JoinReorder should be present when enabled, got rules: {:?}",
+            rule_names
+        );
+        assert_eq!(
+            optimizers.len(),
+            27,
+            "Expected 27 rules with join reorder enabled"
+        );
+    }
+
+    #[test]
+    fn test_optimizer_without_join_reorder() {
+        let options = PhysicalOptimizerOptions {
+            enable_join_reorder: false,
+            join_reorder: Default::default(),
+        };
+        let optimizers = get_physical_optimizers(options);
+
+        // Check that JoinReorder is not included when disabled
+        let has_join_reorder = optimizers.iter().any(|opt| opt.name() == "JoinReorder");
+        assert!(
+            !has_join_reorder,
+            "JoinReorder should not be present when disabled"
+        );
+        assert_eq!(
+            optimizers.len(),
+            26,
+            "Expected 26 rules without join reorder"
+        );
+    }
+
+    #[test]
+    fn test_optimizer_rules_order() -> datafusion::common::Result<()> {
+        let optimizers = get_physical_optimizers(Default::default());
+        let rule_names: Vec<&str> = optimizers.iter().map(|opt| opt.name()).collect();
+
+        // Verify specific expected rules are present
+        // Note: Using exact rule names as they appear in DataFusion
+        assert!(
+            rule_names.contains(&"OutputRequirements"),
+            "OutputRequirements should be present, got: {:?}",
+            rule_names
+        );
+        assert!(
+            rule_names.contains(&"aggregate_statistics"),
+            "aggregate_statistics should be present, got: {:?}",
+            rule_names
+        );
+        assert!(
+            rule_names.contains(&"join_selection"),
+            "join_selection should be present, got: {:?}",
+            rule_names
+        );
+        assert!(
+            rule_names.contains(&"EnforceDistribution"),
+            "EnforceDistribution should be present, got: {:?}",
+            rule_names
+        );
+        assert!(
+            rule_names.contains(&"EnforceSorting"),
+            "EnforceSorting should be present, got: {:?}",
+            rule_names
+        );
+        assert!(
+            rule_names.contains(&"wrap_higher_order_functions"),
+            "wrap_higher_order_functions should be present, got: {:?}",
+            rule_names
+        );
+        assert!(
+            rule_names.contains(&"SanityCheckPlan"),
+            "SanityCheckPlan should be present, got: {:?}",
+            rule_names
+        );
+
+        // Verify WrapHigherOrderFunctions comes before SanityCheckPlan
+        let wrap_idx = rule_names
+            .iter()
+            .position(|&n| n == "wrap_higher_order_functions")
+            .ok_or_else(|| {
+                datafusion::error::DataFusionError::Internal(
+                    "WrapHigherOrderFunctions rule is missing".to_string(),
+                )
+            })?;
+        let sanity_idx = rule_names
+            .iter()
+            .position(|&n| n == "SanityCheckPlan")
+            .ok_or_else(|| {
+                datafusion::error::DataFusionError::Internal(
+                    "SanityCheckPlan rule is missing".to_string(),
+                )
+            })?;
+        assert!(
+            wrap_idx < sanity_idx,
+            "WrapHigherOrderFunctions should come before SanityCheckPlan"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_join_reorder_options_default() {
+        let options = PhysicalOptimizerOptions::default();
+        assert!(!options.enable_join_reorder);
+        // Just verify it compiles and has default implementation
+        let _ = options.join_reorder;
+    }
+
+    #[test]
+    fn test_physical_optimizer_options_clone() {
+        let options = PhysicalOptimizerOptions {
+            enable_join_reorder: true,
+            join_reorder: Default::default(),
+        };
+        let cloned = options.clone();
+        assert_eq!(cloned.enable_join_reorder, options.enable_join_reorder);
+    }
+
+    #[test]
+    fn test_physical_optimizer_options_debug() {
+        let options = PhysicalOptimizerOptions {
+            enable_join_reorder: true,
+            join_reorder: Default::default(),
+        };
+        let debug_str = format!("{:?}", options);
+        assert!(debug_str.contains("enable_join_reorder"));
+        assert!(debug_str.contains("true"));
     }
 }

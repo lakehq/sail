@@ -15,12 +15,13 @@ use datafusion_proto::protobuf::{
     PhysicalExprNode, PhysicalExtensionExprNode, PhysicalPlanNode, physical_expr_node,
 };
 use prost::Message;
+use sail_physical_plan::higher_order::DistributedHigherOrderExpr;
 
 use crate::plan::r#gen::extended_physical_expr_node::ExprKind;
 use crate::plan::r#gen::{
     ExtendedPhysicalExprNode, HigherOrderUdfExprNode, LambdaExprNode, LambdaVariableExprNode,
 };
-use crate::proto::decode::{try_decode_field_ref, try_decode_higher_order_udf};
+use crate::proto::decode::{try_decode_field_ref, try_decode_higher_order_udf, try_decode_schema};
 use crate::proto::encode::{try_encode_field_ref, try_encode_higher_order_udf};
 
 pub(super) struct RemotePhysicalProtoConverter;
@@ -55,7 +56,7 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
         ctx: &PhysicalPlanDecodeContext<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         match decode_remote_expr_kind(proto)? {
-            Some((ExprKind::HigherOrderUdf(node), inputs)) => {
+            Some((ExprKind::HigherOrderFunction(node), inputs)) => {
                 self.higher_order_proto_to_expr(node, inputs, input_schema, ctx)
             }
             Some((ExprKind::LambdaVariable(node), _)) => {
@@ -91,8 +92,8 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
             return self.lambda_expr_to_proto(expr, lambda, codec);
         }
         if let Some(var) = expr.downcast_ref::<LambdaVariable>() {
-            let index = u32::try_from(var.index()).map_err(|_| {
-                plan_datafusion_err!("LambdaVariable index {} does not fit in u32", var.index())
+            let index = u64::try_from(var.index()).map_err(|_| {
+                plan_datafusion_err!("LambdaVariable index {} does not fit in u64", var.index())
             })?;
             return extension_expr_to_proto(
                 expr,
@@ -121,7 +122,12 @@ impl RemotePhysicalProtoConverter {
             .collect::<Result<_>>()?;
         extension_expr_to_proto(
             expr,
-            ExprKind::HigherOrderUdf(HigherOrderUdfExprNode {
+            ExprKind::HigherOrderFunction(HigherOrderUdfExprNode {
+                // This converter's encode callback has no schema parameter. The
+                // decoder receives that schema, so leave this optional payload
+                // empty and use it there. Distributed encoding uses the schema-
+                // carrying wrapper handled by `RemoteExecutionCodec` instead.
+                input_schema: vec![],
                 udf: Some(try_encode_higher_order_udf(hof)?),
             }),
             inputs,
@@ -159,6 +165,11 @@ impl RemotePhysicalProtoConverter {
             .udf
             .ok_or_else(|| plan_datafusion_err!("missing higher-order function UDF"))?;
         let fun = try_decode_higher_order_udf(&udf)?;
+        let input_schema = if node.input_schema.is_empty() {
+            input_schema.clone()
+        } else {
+            try_decode_schema(&node.input_schema)?
+        };
         let mut decoded_values = Vec::with_capacity(inputs.len());
         let mut value_or_lambda = Vec::with_capacity(inputs.len());
 
@@ -167,8 +178,8 @@ impl RemotePhysicalProtoConverter {
                 decoded_values.push(None);
                 value_or_lambda.push(ValueOrLambda::Lambda(None));
             } else {
-                let expr = self.proto_to_physical_expr(input, input_schema, ctx)?;
-                value_or_lambda.push(ValueOrLambda::Value(expr.return_field(input_schema)?));
+                let expr = self.proto_to_physical_expr(input, &input_schema, ctx)?;
+                value_or_lambda.push(ValueOrLambda::Value(expr.return_field(&input_schema)?));
                 decoded_values.push(Some(expr));
             }
         }
@@ -191,7 +202,7 @@ impl RemotePhysicalProtoConverter {
                     })?;
                     lambda_index += 1;
 
-                    let schema = extend_lambda_schema(input_schema, &params, fields);
+                    let schema = extend_lambda_schema(&input_schema, &params, fields);
                     let body = self.proto_to_physical_expr(body, &schema, ctx)?;
                     Ok(Arc::new(LambdaExpr::try_new(params, body)?) as Arc<dyn PhysicalExpr>)
                 } else {
@@ -202,12 +213,16 @@ impl RemotePhysicalProtoConverter {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(Arc::new(HigherOrderFunctionExpr::try_new_with_schema(
+        let inner = HigherOrderFunctionExpr::try_new_with_schema(
             fun,
             args,
-            input_schema,
+            &input_schema,
             Arc::clone(ctx.task_ctx().session_config().options()),
-        )?))
+        )?;
+        Ok(Arc::new(DistributedHigherOrderExpr::new(
+            Arc::new(inner),
+            Arc::new(input_schema),
+        )))
     }
 }
 

@@ -16,6 +16,8 @@ use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
 use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
+use sail_function::scalar::array::spark_array_zip_with::SparkArrayZipWith;
+use sail_function::scalar::map::spark_map_zip_with::{MapZipWithParameterOrder, SparkMapZipWith};
 use sail_physical_plan::data_source::RemoteDataSourceExec;
 
 use crate::plan::r#gen;
@@ -119,10 +121,27 @@ pub(super) fn try_encode_higher_order_udf(
         HigherOrderUdfKind::Sort(r#gen::SparkArraySortUdf {
             swapped: sort.is_swapped(),
         })
+    } else if let Some(map_zip_with) = udf_inner.downcast_ref::<SparkMapZipWith>() {
+        HigherOrderUdfKind::MapZipWith(r#gen::SparkMapZipWithUdf {
+            parameter_order: encode_map_zip_with_parameter_order(map_zip_with.parameter_order()),
+        })
+    } else if let Some(zip_with) = udf_inner.downcast_ref::<SparkArrayZipWith>() {
+        HigherOrderUdfKind::ZipWith(r#gen::SparkArrayZipWithUdf {
+            right_first: zip_with.right_first(),
+        })
     } else {
         return plan_err!("unsupported higher-order function: {}", hof.name());
     };
     Ok(r#gen::HigherOrderUdf {
         higher_order_udf_kind: Some(udf_kind),
     })
+}
+
+fn encode_map_zip_with_parameter_order(order: MapZipWithParameterOrder) -> u32 {
+    match order {
+        MapZipWithParameterOrder::KeyValue1Value2 => 0,
+        MapZipWithParameterOrder::KeyValue2Value1 => 1,
+        MapZipWithParameterOrder::Value1Value2Key => 2,
+        MapZipWithParameterOrder::Value2KeyValue1 => 3,
+    }
 }

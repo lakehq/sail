@@ -94,7 +94,7 @@ message RemoteCheckpointCommitExecNode {
 message ExtendedPhysicalExprNode {
   oneof ExprKind {
     CastColumnExprNode schema_evolution_cast = 1;
-    HigherOrderUdfExprNode higher_order_udf = 2;
+    HigherOrderUdfExprNode higher_order_function = 2;
     LambdaExprNode lambda = 3;
     LambdaVariableExprNode lambda_variable = 4;
     IcebergPartitionTransformExprNode iceberg_partition_transform = 5;
@@ -123,17 +123,14 @@ message CastColumnExprNode {
   SchemaEvolutionTimezoneMode timezone_mode = 4;
 }
 
-message LambdaExprNode {
-  repeated string params = 1;
-}
-
-message LambdaVariableExprNode {
-  uint32 index = 1;
-  bytes field = 2;
-}
-
+// A Spark higher-order function (e.g. `filter`). The argument expressions
+// (including the lambda) are carried as the extension node's `inputs`.
+// `input_schema` is the schema the inner expression was planned against,
+// needed to rebuild it. `udf` identifies the concrete higher-order function,
+// following the same one-variant-per-function pattern as `ExtendedScalarUdf`.
 message HigherOrderUdfExprNode {
   HigherOrderUdf udf = 1;
+  bytes input_schema = 2;
 }
 
 message HigherOrderUdf {
@@ -144,16 +141,10 @@ message HigherOrderUdf {
     SparkArrayForallUdf forall = 4;
     SparkArrayAggregateUdf aggregate = 5;
     SparkArraySortUdf sort = 6;
+    SparkMapZipWithUdf map_zip_with = 7;
+    SparkArrayZipWithUdf zip_with = 8;
   }
 }
-
-message SparkArrayAggregateUdf {
-  bool element_first = 1;
-}
-
-message SparkArrayExistsUdf {}
-
-message SparkArrayForallUdf {}
 
 message SparkArrayFilterUdf {
   // True when the lambda parameters are `[index, element]` (an index-only
@@ -172,12 +163,44 @@ message SparkArrayFilterUdf {
   bool index_first = 1;
 }
 
+// A lambda function. Its body is carried as the extension node's single input.
+message LambdaExprNode {
+  repeated string params = 1;
+}
+
+// A reference to a lambda parameter, resolved to a position in the (extended)
+// schema with its field type.
+message LambdaVariableExprNode {
+  uint64 index = 1;
+  bytes field = 2;
+}
+
 message SparkArrayTransformUdf {
   // True when the lambda parameters are `[index, element]` (an index-only
   // lambda rewritten by the planner) instead of `[element, index]`. See the
   // identical workaround documented on `SparkArrayFilterUdf.index_first`.
   bool index_first = 1;
 }
+
+message SparkMapZipWithUdf {
+  // Encoded `MapZipWithParameterOrder` ordinal. Zero preserves the original
+  // `(key, value1, value2)` order for older plans that used the empty message.
+  uint32 parameter_order = 1;
+}
+
+message SparkArrayZipWithUdf {
+  // Whether the lambda receives the right array element before the left one.
+  // False preserves the original `(left, right)` order.
+  bool right_first = 1;
+}
+
+message SparkArrayAggregateUdf {
+  bool element_first = 1;
+}
+
+message SparkArrayExistsUdf {}
+
+message SparkArrayForallUdf {}
 
 message SparkArraySortUdf {
   // True when the comparator columns are fed in `[right, left]` order (a
