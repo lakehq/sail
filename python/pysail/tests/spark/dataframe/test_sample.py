@@ -118,6 +118,6 @@ def test_dataframe_sample_error_formats_doubles_like_scala(spark):
 def test_seeded_sample_pattern_differs_across_batches(spark):
     sampled = spark.range(16384, numPartitions=1).sample(True, 0.5, 42)
     picked = [row.id for row in sampled.collect()]
-    first_batch = {i for i in picked if i < 8192}
-    second_batch = {i - 8192 for i in picked if i >= 8192}
+    first_batch = {i for i in picked if i < 8192}  # noqa: PLR2004
+    second_batch = {i - 8192 for i in picked if i >= 8192}  # noqa: PLR2004
     assert first_batch != second_batch
