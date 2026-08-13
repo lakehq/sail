@@ -68,7 +68,6 @@ Feature: convert_timezone
   @function(nullability)
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null literal input to convert_timezone yields the schema Spark declares
       When query
         """
@@ -80,7 +79,6 @@ Feature: convert_timezone
          |-- result: timestamp_ntz (nullable = false)
         """
 
-    @sail-bug
     Scenario: a non-null column input to convert_timezone yields the schema Spark declares
       When query
         """
