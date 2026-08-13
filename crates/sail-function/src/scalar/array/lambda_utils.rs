@@ -111,9 +111,10 @@ pub(crate) fn normalize_list_array(array: ArrayRef) -> Result<ArrayRef> {
             let size = fixed_list.value_length() as usize;
             let num_rows = fixed_list.len();
             let mut offsets: Vec<i32> = Vec::with_capacity(num_rows + 1);
-            offsets.push(0);
+            let mut next = 0i32;
+            offsets.push(next);
             for _ in 0..num_rows {
-                let next = offsets.last().unwrap() + size as i32;
+                next += size as i32;
                 offsets.push(next);
             }
 
