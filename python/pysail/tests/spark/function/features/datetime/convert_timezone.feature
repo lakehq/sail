@@ -43,6 +43,57 @@ Feature: convert_timezone
         | '2024-06-15 14:30:00+07:00'           | 2024-06-15 08:30:00 |
         | DATE '2024-06-15'                     | 2024-06-14 18:00:00 |
 
+  Rule: Null propagation
+
+    Scenario: scalar time zones are not parsed when another argument is null
+      When query
+        """
+        SELECT
+          convert_timezone(
+            CAST(NULL AS STRING),
+            'Not/AZone',
+            TIMESTAMP_NTZ '2024-01-01 00:00:00'
+          ) AS null_source,
+          convert_timezone(
+            'Not/AZone',
+            CAST(NULL AS STRING),
+            TIMESTAMP_NTZ '2024-01-01 00:00:00'
+          ) AS null_target,
+          convert_timezone(
+            'Not/AZone',
+            'UTC',
+            CAST(NULL AS TIMESTAMP_NTZ)
+          ) AS null_timestamp
+        """
+      Then query result
+        | null_source | null_target | null_timestamp |
+        | NULL        | NULL        | NULL           |
+
+    Scenario: per-row time zones are not parsed when another value is null
+      When query
+        """
+        SELECT
+          label,
+          convert_timezone(source_tz, target_tz, source_ts) AS result
+        FROM VALUES
+          ('null_source', CAST(NULL AS STRING), 'Not/AZone',
+            TIMESTAMP_NTZ '2024-01-01 00:00:00'),
+          ('null_target', 'Not/AZone', CAST(NULL AS STRING),
+            TIMESTAMP_NTZ '2024-01-01 00:00:00'),
+          ('null_timestamp', 'Not/AZone', 'UTC',
+            CAST(NULL AS TIMESTAMP_NTZ)),
+          ('valid', 'UTC', 'UTC',
+            TIMESTAMP_NTZ '2024-01-01 00:00:00')
+          AS t(label, source_tz, target_tz, source_ts)
+        ORDER BY label
+        """
+      Then query result ordered
+        | label          | result              |
+        | null_source    | NULL                |
+        | null_target    | NULL                |
+        | null_timestamp | NULL                |
+        | valid          | 2024-01-01 00:00:00 |
+
   Rule: Daylight saving time handling
 
   Background:

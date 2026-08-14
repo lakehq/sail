@@ -25,6 +25,8 @@ pub struct ConvertTz {
     /// while the "non-classic" algorithm is used by the `from_utc_timestamp` and
     /// `to_utc_timestamp` functions in Spark.
     classic: bool,
+    /// Whether NULL rows short-circuit before parsing their time zones.
+    null_short_circuit: bool,
     signature: Signature,
 }
 
@@ -33,11 +35,21 @@ impl ConvertTz {
         Self {
             signature: Signature::any(3, Volatility::Immutable),
             classic,
+            null_short_circuit: false,
         }
+    }
+
+    pub fn with_null_short_circuit(mut self) -> Self {
+        self.null_short_circuit = true;
+        self
     }
 
     pub fn classic(&self) -> bool {
         self.classic
+    }
+
+    pub fn null_short_circuit(&self) -> bool {
+        self.null_short_circuit
     }
 }
 
@@ -73,13 +85,17 @@ impl ScalarUDFImpl for ConvertTz {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(
-            |args| convert_tz_inner(args, self.classic),
+            |args| convert_tz_inner(args, self.classic, self.null_short_circuit),
             [Hint::AcceptsSingular].repeat(args.args.len()),
         )(args.args.as_slice())
     }
 }
 
-fn convert_tz_inner(args: &[ArrayRef], classic: bool) -> Result<ArrayRef> {
+fn convert_tz_inner(
+    args: &[ArrayRef],
+    classic: bool,
+    null_short_circuit: bool,
+) -> Result<ArrayRef> {
     let legacy_timezones = HashMap::from([
         ("ACT", "Australia/Darwin"),
         ("AET", "Australia/Sydney"),
@@ -147,9 +163,20 @@ fn convert_tz_inner(args: &[ArrayRef], classic: bool) -> Result<ArrayRef> {
     };
 
     let from_to_utc_timestamp_func =
+        |inputs: (Option<i64>, Option<&str>, Option<&str>)| match inputs {
+            (Some(ts_micros), Some(from_tz), Some(to_tz)) => {
+                match (parse_tz(Some(from_tz))?, parse_tz(Some(to_tz))?) {
+                    (Some(from_tz), Some(to_tz)) => Ok(convert(ts_micros, &from_tz, &to_tz)),
+                    _ => Ok(None),
+                }
+            }
+            _ => Ok(None),
+        };
+
+    let eager_from_to_utc_timestamp_func =
         |inputs: (Option<i64>, Result<Option<Tz>>, Result<Option<Tz>>)| match inputs {
-            (Some(ts_nanos), Ok(Some(from_tz)), Ok(Some(to_tz))) => {
-                Ok(convert(ts_nanos, &from_tz, &to_tz))
+            (Some(ts_micros), Ok(Some(from_tz)), Ok(Some(to_tz))) => {
+                Ok(convert(ts_micros, &from_tz, &to_tz))
             }
             (_, Err(e), _) | (_, _, Err(e)) => Err(e),
             _ => Ok(None),
@@ -189,46 +216,92 @@ fn convert_tz_inner(args: &[ArrayRef], classic: bool) -> Result<ArrayRef> {
 
         let micros_arr = timestamp_to_microseconds(&ts_arr)?;
 
-        let first = |iter: &mut dyn Iterator<Item = Result<Option<Tz>>>| {
-            iter.next().transpose().map(|opt| opt.flatten())
-        };
-        // lazy evaluated iterators
-        let mut from_tzs = from_tz_strs.iter().map(parse_tz);
-        let mut to_tzs = to_tz_strs.iter().map(parse_tz);
+        if null_short_circuit {
+            // Time zones are parsed only after all three row values pass null checks.
+            let mut from_tzs = from_tz_strs.iter();
+            let mut to_tzs = to_tz_strs.iter();
 
-        match (arr_lens[0] == 1, arr_lens[1] == 1) {
-            (true, true) => {
-                let from_tz = first(&mut from_tzs)?;
-                let to_tz = first(&mut to_tzs)?;
+            match (arr_lens[0] == 1, arr_lens[1] == 1) {
+                (true, true) => {
+                    let from_tz = from_tzs.next().flatten();
+                    let to_tz = to_tzs.next().flatten();
 
-                micros_arr
-                    .iter()
-                    .map(|ts| from_to_utc_timestamp_func((ts, Ok(from_tz), Ok(to_tz))))
-                    .collect::<Result<Int64Array>>()
-            }
-            (true, false) => {
-                let from_tz = first(&mut from_tzs)?;
-                micros_arr
-                    .iter()
-                    .zip(to_tzs)
-                    .map(|(ts, to_tz)| from_to_utc_timestamp_func((ts, Ok(from_tz), to_tz)))
-                    .collect::<Result<Int64Array>>()
-            }
-            (false, true) => {
-                let to_tz = first(&mut to_tzs)?;
+                    micros_arr
+                        .iter()
+                        .map(|ts| from_to_utc_timestamp_func((ts, from_tz, to_tz)))
+                        .collect::<Result<Int64Array>>()
+                }
+                (true, false) => {
+                    let from_tz = from_tzs.next().flatten();
+                    micros_arr
+                        .iter()
+                        .zip(to_tzs)
+                        .map(|(ts, to_tz)| from_to_utc_timestamp_func((ts, from_tz, to_tz)))
+                        .collect::<Result<Int64Array>>()
+                }
+                (false, true) => {
+                    let to_tz = to_tzs.next().flatten();
 
-                micros_arr
+                    micros_arr
+                        .iter()
+                        .zip(from_tzs)
+                        .map(|(ts, from_tz)| from_to_utc_timestamp_func((ts, from_tz, to_tz)))
+                        .collect::<Result<Int64Array>>()
+                }
+                (false, false) => micros_arr
                     .iter()
-                    .zip(from_tzs)
-                    .map(|(ts, from_tz)| from_to_utc_timestamp_func((ts, from_tz, Ok(to_tz))))
-                    .collect::<Result<Int64Array>>()
+                    .zip(from_tzs.zip(to_tzs))
+                    .map(|(a, (b, c))| (a, b, c))
+                    .map(|(ts, from_tz, to_tz)| from_to_utc_timestamp_func((ts, from_tz, to_tz)))
+                    .collect::<Result<Int64Array>>(),
             }
-            (false, false) => micros_arr
-                .iter()
-                .zip(from_tzs.zip(to_tzs))
-                .map(|(a, (b, c))| (a, b, c))
-                .map(|(ts, from_tz, to_tz)| from_to_utc_timestamp_func((ts, from_tz, to_tz)))
-                .collect::<Result<Int64Array>>(),
+        } else {
+            let first = |iter: &mut dyn Iterator<Item = Result<Option<Tz>>>| {
+                iter.next().transpose().map(|opt| opt.flatten())
+            };
+            let mut from_tzs = from_tz_strs.iter().map(parse_tz);
+            let mut to_tzs = to_tz_strs.iter().map(parse_tz);
+
+            match (arr_lens[0] == 1, arr_lens[1] == 1) {
+                (true, true) => {
+                    let from_tz = first(&mut from_tzs)?;
+                    let to_tz = first(&mut to_tzs)?;
+
+                    micros_arr
+                        .iter()
+                        .map(|ts| eager_from_to_utc_timestamp_func((ts, Ok(from_tz), Ok(to_tz))))
+                        .collect::<Result<Int64Array>>()
+                }
+                (true, false) => {
+                    let from_tz = first(&mut from_tzs)?;
+                    micros_arr
+                        .iter()
+                        .zip(to_tzs)
+                        .map(|(ts, to_tz)| {
+                            eager_from_to_utc_timestamp_func((ts, Ok(from_tz), to_tz))
+                        })
+                        .collect::<Result<Int64Array>>()
+                }
+                (false, true) => {
+                    let to_tz = first(&mut to_tzs)?;
+
+                    micros_arr
+                        .iter()
+                        .zip(from_tzs)
+                        .map(|(ts, from_tz)| {
+                            eager_from_to_utc_timestamp_func((ts, from_tz, Ok(to_tz)))
+                        })
+                        .collect::<Result<Int64Array>>()
+                }
+                (false, false) => micros_arr
+                    .iter()
+                    .zip(from_tzs.zip(to_tzs))
+                    .map(|(a, (b, c))| (a, b, c))
+                    .map(|(ts, from_tz, to_tz)| {
+                        eager_from_to_utc_timestamp_func((ts, from_tz, to_tz))
+                    })
+                    .collect::<Result<Int64Array>>(),
+            }
         }
     }?;
 

@@ -357,16 +357,25 @@ impl ScalarUDFImpl for SparkSequence {
             Some(DataType::Int64) => make_scalar_function(gen_sequence_i64)(&args),
             Some(DataType::Date32) => {
                 let timezone = self.parse_session_timezone()?;
-                make_scalar_function(move |arrays| gen_sequence_date(arrays, timezone))(&args)
+                let fixed_utc = self.session_timezone.as_ref() == "UTC";
+                make_scalar_function(move |arrays| gen_sequence_date(arrays, timezone, fixed_utc))(
+                    &args,
+                )
             }
             Some(DataType::Timestamp(TimeUnit::Microsecond, output_timezone)) => {
                 let arithmetic_timezone = match output_timezone {
                     Some(_) => self.parse_session_timezone()?,
                     None => "UTC".parse()?,
                 };
+                let fixed_utc = self.session_timezone.as_ref() == "UTC";
                 let output_timezone = output_timezone.clone();
                 make_scalar_function(move |arrays| {
-                    gen_sequence_timestamp(arrays, arithmetic_timezone, output_timezone.clone())
+                    gen_sequence_timestamp(
+                        arrays,
+                        arithmetic_timezone,
+                        output_timezone.clone(),
+                        fixed_utc,
+                    )
                 })(&args)
             }
             Some(other) => wrong_sequence_input_types(&[other]),
@@ -1155,14 +1164,25 @@ fn temporal_timestamp_row(
     Ok(values)
 }
 
-fn date_to_micros(date: i32, timezone: Tz) -> Result<i64> {
+fn date_to_micros(date: i32, timezone: Tz, fixed_utc: bool) -> Result<i64> {
+    if fixed_utc {
+        return i64::from(date)
+            .checked_mul(MICROS_PER_DAY)
+            .ok_or_else(|| exec_datafusion_err!("cannot convert sequence date {date}"));
+    }
+
     let datetime = Date32Type::to_naive_date_opt(date)
         .and_then(|date| date.and_hms_opt(0, 0, 0))
         .ok_or_else(|| exec_datafusion_err!("cannot convert sequence date {date}"))?;
     Ok(localize_with_fallback(&timezone, &datetime)?.timestamp_micros())
 }
 
-fn micros_to_date(micros: i64, timezone: Tz) -> Result<i32> {
+fn micros_to_date(micros: i64, timezone: Tz, fixed_utc: bool) -> Result<i32> {
+    if fixed_utc {
+        return i32::try_from(micros.div_euclid(MICROS_PER_DAY))
+            .map_err(|_| exec_datafusion_err!("cannot convert sequence timestamp {micros}"));
+    }
+
     let date = as_datetime::<TimestampMicrosecondType>(micros)
         .map(|value| {
             Utc.from_utc_datetime(&value)
@@ -1178,6 +1198,7 @@ fn temporal_date_row(
     stop: i32,
     step: TemporalStep,
     timezone: Tz,
+    fixed_utc: bool,
     max_values: usize,
 ) -> Result<Vec<i32>> {
     let (months, days, micros) = step.parts()?;
@@ -1191,8 +1212,8 @@ fn temporal_date_row(
         return integral_row(start, stop, days, max_values);
     }
 
-    let start_micros = date_to_micros(start, timezone)?;
-    let stop_micros = date_to_micros(stop, timezone)?;
+    let start_micros = date_to_micros(start, timezone, fixed_utc)?;
+    let stop_micros = date_to_micros(stop, timezone, fixed_utc)?;
     let estimated_step = estimated_temporal_step(months, days, micros);
     let estimated_length =
         sequence_length_with_display_step(start_micros, stop_micros, estimated_step, step)?;
@@ -1202,8 +1223,15 @@ fn temporal_date_row(
     let exclusive_item = stop_micros.wrapping_add(step_sign);
     let mut index = 0_usize;
     loop {
-        let value =
-            add_temporal_interval(start_micros, index, months, days, micros, timezone, false)?;
+        let value = add_temporal_interval(
+            start_micros,
+            index,
+            months,
+            days,
+            micros,
+            timezone,
+            fixed_utc,
+        )?;
         if !((value < exclusive_item) ^ (step_sign < 0)) {
             break;
         }
@@ -1216,7 +1244,7 @@ fn temporal_date_row(
         if values.len() == values.capacity() {
             reserve(&mut values, 1)?;
         }
-        values.push(micros_to_date(value, timezone)?);
+        values.push(micros_to_date(value, timezone, fixed_utc)?);
         index = index
             .checked_add(1)
             .ok_or_else(|| exec_datafusion_err!("sequence index overflow"))?;
@@ -1224,7 +1252,7 @@ fn temporal_date_row(
     Ok(values)
 }
 
-fn gen_sequence_date(args: &[ArrayRef], timezone: Tz) -> Result<ArrayRef> {
+fn gen_sequence_date(args: &[ArrayRef], timezone: Tz, fixed_utc: bool) -> Result<ArrayRef> {
     let (start_array, stop_array, step_array) = match args {
         [start, stop] => (
             start.as_primitive::<Date32Type>(),
@@ -1262,7 +1290,7 @@ fn gen_sequence_date(args: &[ArrayRef], timezone: Tz) -> Result<ArrayRef> {
             None => TemporalStep::default_for(i64::from(start), i64::from(stop)),
         };
         let remaining = i32::MAX as usize - values.len();
-        let row = temporal_date_row(start, stop, step, timezone, remaining)?;
+        let row = temporal_date_row(start, stop, step, timezone, fixed_utc, remaining)?;
         append_row(&mut values, row, &mut offsets, &mut validity)?;
     }
 
@@ -1278,6 +1306,7 @@ fn gen_sequence_timestamp(
     args: &[ArrayRef],
     timezone: Tz,
     output_timezone: Option<Arc<str>>,
+    fixed_utc: bool,
 ) -> Result<ArrayRef> {
     let (start_array, stop_array, step_array) = match args {
         [start, stop] => (
@@ -1293,7 +1322,7 @@ fn gen_sequence_timestamp(
         _ => return invalid_sequence_arity(args.len()),
     };
 
-    let timestamp_ntz = output_timezone.is_none();
+    let timestamp_ntz = output_timezone.is_none() || fixed_utc;
     let mut values = Vec::new();
     let mut offsets = Vec::with_capacity(start_array.len() + 1);
     offsets.push(0);

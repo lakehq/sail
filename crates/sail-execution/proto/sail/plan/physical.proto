@@ -419,6 +419,7 @@ message SparkMakeTimestampNtzUdf {
 
 message ConvertTzUdf {
   bool classic = 1;
+  bool null_short_circuit = 2;
 }
 
 message StandardUdaf {}

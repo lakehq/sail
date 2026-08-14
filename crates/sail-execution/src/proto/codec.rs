@@ -2708,8 +2708,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     is_try,
                 ))));
             }
-            UdfKind::ConvertTz(r#gen::ConvertTzUdf { classic }) => {
-                return Ok(Arc::new(ScalarUDF::from(ConvertTz::new(classic))));
+            UdfKind::ConvertTz(r#gen::ConvertTzUdf {
+                classic,
+                null_short_circuit,
+            }) => {
+                let func = ConvertTz::new(classic);
+                let func = if null_short_circuit {
+                    func.with_null_short_circuit()
+                } else {
+                    func
+                };
+                return Ok(Arc::new(ScalarUDF::from(func)));
             }
             UdfKind::SparkParseJson(r#gen::SparkParseJsonUdf { safe }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkParseJson::new(safe))));
@@ -3200,7 +3209,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkMakeTimestampNtz(r#gen::SparkMakeTimestampNtzUdf { is_try })
         } else if let Some(func) = node.inner().downcast_ref::<ConvertTz>() {
             let classic = func.classic();
-            UdfKind::ConvertTz(r#gen::ConvertTzUdf { classic })
+            let null_short_circuit = func.null_short_circuit();
+            UdfKind::ConvertTz(r#gen::ConvertTzUdf {
+                classic,
+                null_short_circuit,
+            })
         } else if let Some(func) = node.inner().downcast_ref::<SparkStructRename>() {
             let target_type = self.try_encode_data_type(func.target_type())?;
             UdfKind::SparkStructRename(r#gen::SparkStructRenameUdf { target_type })
@@ -6186,6 +6199,18 @@ mod tests {
 
         let decoded = downcast_udf::<SparkDate>(&decoded, "SparkDate")?;
         assert!(decoded.is_try());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_convert_tz_preserves_null_short_circuit() -> Result<()> {
+        let udf = ConvertTz::new(true).with_null_short_circuit();
+        let decoded = round_trip_udf(ScalarUDF::from(udf))?;
+
+        let decoded = downcast_udf::<ConvertTz>(&decoded, "ConvertTz")?;
+        assert!(decoded.classic());
+        assert!(decoded.null_short_circuit());
 
         Ok(())
     }

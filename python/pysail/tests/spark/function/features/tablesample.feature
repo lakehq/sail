@@ -89,6 +89,26 @@ Feature: TABLESAMPLE clause
         | 4  |
         | 5  |
 
+    Scenario Outline: TABLESAMPLE BUCKET uses numerator as the sample fraction
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW ts_data AS
+        SELECT * FROM range(0, 10, 1, 1)
+        """
+      When query
+        """
+        SELECT COUNT(*) AS cnt
+        FROM ts_data TABLESAMPLE (BUCKET <numerator> OUT OF 4) REPEATABLE (1)
+        """
+      Then query result
+        | cnt   |
+        | <cnt> |
+
+      Examples:
+        | numerator | cnt |
+        | 0         | 0   |
+        | 4         | 10  |
+
   Rule: TABLESAMPLE error cases
 
     Scenario: TABLESAMPLE with percent greater than 100

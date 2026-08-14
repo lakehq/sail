@@ -259,15 +259,13 @@ impl PlanResolver<'_> {
                 numerator,
                 denominator,
             } => {
-                if numerator == 0 || numerator > denominator {
+                let fraction = numerator as f64 / denominator as f64;
+                if !(-SAMPLE_ROUNDING_EPSILON..=1.0 + SAMPLE_ROUNDING_EPSILON).contains(&fraction) {
                     return Err(PlanError::invalid(format!(
-                        "invalid TABLESAMPLE bucket: {numerator} out of {denominator}"
+                        "Sampling fraction ({fraction}) must be on interval [0, 1]"
                     )));
                 }
-                let fraction = 1.0 / denominator as f64;
-                let lower = (numerator - 1) as f64 * fraction;
-                let upper = numerator as f64 * fraction;
-                (lower, upper)
+                (0.0, fraction)
             }
         };
 

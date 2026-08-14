@@ -785,7 +785,10 @@ fn convert_timezone(input: ScalarFunctionInput) -> PlanResult<Expr> {
         input.function_context.schema,
         input.function_context.plan_config.ansi_mode,
     )?;
-    Ok(convert_tz(from_tz, to_tz, ts, true))
+    Ok(
+        ScalarUDF::from(ConvertTz::new(true).with_null_short_circuit())
+            .call(vec![from_tz, to_tz, ts]),
+    )
 }
 
 /// A helper function for processing the input timestamp for

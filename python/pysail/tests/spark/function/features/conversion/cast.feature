@@ -18,6 +18,26 @@ Feature: cast output schema
         | gap     | 1615717800000000 |
         | overlap | 1636273800000000 |
 
+  Rule: DATE cast ANSI behavior
+
+    Scenario: casting a malformed string to DATE returns null when ANSI mode is disabled
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST('not-a-date' AS DATE) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: casting a malformed string to DATE fails when ANSI mode is enabled
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST('not-a-date' AS DATE) AS result
+        """
+      Then query error CAST_INVALID_INPUT
+
   @function(nullability)
   Rule: Output schema
 

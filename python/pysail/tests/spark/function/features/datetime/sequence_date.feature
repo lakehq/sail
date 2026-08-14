@@ -138,7 +138,6 @@ Feature: sequence() over DATE returns expected arrays
         | result                                                             |
         | [-9223372036854775808, -9223371950454775808, -9223371864054775808] |
 
-    @sail-bug
     Scenario: mixed timestamp sequence coercion preserves the full microsecond range
       Given config spark.sql.session.timeZone = UTC
       When query
@@ -201,7 +200,6 @@ Feature: sequence() over DATE returns expected arrays
         | result                                                             |
         | [-9223372036854775808, -9223371950454775808, -9223371864054775808] |
 
-    @sail-bug
     Scenario: timestamp sequence supports Spark's full microsecond domain in a fixed zone
       Given config spark.sql.session.timeZone = UTC
       When query
@@ -219,7 +217,6 @@ Feature: sequence() over DATE returns expected arrays
         | result                                                          |
         | [9000000000000000000, 9000000086400000000, 9000000172800000000] |
 
-    @sail-bug
     Scenario: date sequence supports Spark dates outside Chrono's range in a fixed zone
       Given config spark.sql.session.timeZone = UTC
       When query
