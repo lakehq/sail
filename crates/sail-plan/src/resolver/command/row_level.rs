@@ -5,7 +5,9 @@ use datafusion_expr::{Expr, LogicalPlan, SubqueryAlias};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::{LakehouseOperation, TableKind};
-use sail_common_datafusion::datasource::{OptionLayer, RowLevelTarget, SourceInfo, SourceRegistry};
+use sail_common_datafusion::datasource::{
+    DataSourceRegistry, OptionLayer, RowLevelTarget, SourceInfo,
+};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 
 use crate::error::{PlanError, PlanResult};
@@ -63,7 +65,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<RowLevelTarget> {
         if let [format, path] = table.parts() {
             let format = format.as_ref().to_ascii_lowercase();
-            let registry = self.ctx.extension::<SourceRegistry>()?;
+            let registry = self.ctx.extension::<DataSourceRegistry>()?;
             if let Ok(lake_source) = registry.get_lake_source(&format) {
                 let location = path.as_ref().to_string();
                 let metadata = lake_source
