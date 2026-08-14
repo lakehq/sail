@@ -53,3 +53,11 @@ def test_postgres_writer_streams_arrow_batches(monkeypatch):
         ("events", [2], {"mode": "append", "db_schema_name": "analytics"}),
         "commit",
     ]
+
+    calls.clear()
+    assert writer.write(iter([])) is None
+    assert calls == [
+        ("connect", "postgresql://localhost:5432/db"),
+        ("events", [], {"mode": "append", "db_schema_name": "analytics"}),
+        "commit",
+    ]

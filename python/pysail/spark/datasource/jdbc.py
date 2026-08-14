@@ -262,20 +262,30 @@ def _build_where(filters: list[str]) -> str:
 
 
 class _PostgresJdbcWriter(DataSourceArrowWriter):
-    def __init__(self, conn_str: str, dbtable: str):
+    def __init__(self, conn_str: str, dbtable: str, input_schema: pa.Schema):
         schema, _, table = dbtable.rpartition(".")
         self.conn_str = conn_str
         self.schema = schema or None
         self.table = table
+        self.input_schema = input_schema
 
     def write(self, iterator: Iterator[pa.RecordBatch]):
         import adbc_driver_postgresql.dbapi as pg_dbapi  # noqa: PLC0415
 
         with pg_dbapi.connect(self.conn_str) as connection, connection.cursor() as cursor:
+            empty = True
             for batch in iterator:
+                empty = False
                 cursor.adbc_ingest(
                     self.table,
                     pa.Table.from_batches([batch]),
+                    mode="append",
+                    db_schema_name=self.schema,
+                )
+            if empty:
+                cursor.adbc_ingest(
+                    self.table,
+                    pa.Table.from_batches([], schema=self.input_schema),
                     mode="append",
                     db_schema_name=self.schema,
                 )
@@ -487,7 +497,7 @@ class JdbcDataSource(DataSource):
         resolved = self._resolve_options()
         return JdbcDataSourceReader(**resolved)
 
-    def writer(self, schema: pa.Schema, overwrite: bool) -> DataSourceArrowWriter:  # noqa: ARG002, FBT001
+    def writer(self, schema: pa.Schema, overwrite: bool) -> DataSourceArrowWriter:  # noqa: FBT001
         if overwrite:
             msg = "JDBC writes currently support only append mode"
             raise ValueError(msg)
@@ -502,7 +512,7 @@ class JdbcDataSource(DataSource):
             msg = "JDBC writes currently support only PostgreSQL"
             raise ValueError(msg)
 
-        return _PostgresJdbcWriter(conn_str, resolved["dbtable"])
+        return _PostgresJdbcWriter(conn_str, resolved["dbtable"], schema)
 
 
 # ============================================================================
