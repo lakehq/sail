@@ -48,7 +48,7 @@ pub enum TaskRunnerMessage {
     },
     CreateCelebornStream {
         key: TaskKey,
-        num_mappers: usize,
+        mappers: usize,
         channels: usize,
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,

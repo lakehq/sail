@@ -8,16 +8,21 @@ workspace = true
 
 [dependencies]
 sail-common = { path = "../sail-common" }
+sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-telemetry = { path = "../sail-telemetry" }
 sail-flight = { path = "../sail-flight" }
 sail-spark-connect = { path = "../sail-spark-connect" }
 sail-cli = { path = "../sail-cli" }
 sail-celeborn = { path = "../sail-celeborn" }
+sail-catalog = { path = "../sail-catalog" }
+sail-catalog-hms = { path = "../sail-catalog-hms" }
 
+arrow-schema = { workspace = true }
 pyo3 = { workspace = true }
 tokio = { workspace = true }
 log = { workspace = true }
 fastrace = { workspace = true }
+futures = { workspace = true }
 
 [lib]
 crate-type = ["cdylib"]

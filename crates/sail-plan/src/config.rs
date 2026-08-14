@@ -19,6 +19,13 @@ pub enum StoreAssignmentPolicy {
     Legacy,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd)]
+pub enum MapKeyDedupPolicy {
+    #[default]
+    Exception,
+    LastWin,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
 pub struct PlanConfig {
     /// The time zone of the session.
@@ -39,6 +46,8 @@ pub struct PlanConfig {
     pub ansi_mode: bool,
     /// Type coercion policy for values written into table columns.
     pub store_assignment_policy: StoreAssignmentPolicy,
+    /// Policy for duplicate keys created by map functions.
+    pub map_key_dedup_policy: MapKeyDedupPolicy,
     /// Whether to allow cartesian products (cross joins) without explicit `CROSS JOIN` syntax.
     pub cross_join_enabled: bool,
     /// Whether identifiers (e.g. column names) are matched case-sensitively.
@@ -75,6 +84,7 @@ impl Default for PlanConfig {
             session_user_id: "".to_string(),
             ansi_mode: true,
             store_assignment_policy: StoreAssignmentPolicy::Ansi,
+            map_key_dedup_policy: MapKeyDedupPolicy::Exception,
             cross_join_enabled: true,
             case_sensitive: false,
             pivot_max_values: 10000,

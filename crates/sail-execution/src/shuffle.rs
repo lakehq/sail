@@ -41,11 +41,11 @@ impl From<&sail_common::config::ShuffleBackend> for ShuffleBackendKind {
                 endpoint_overrides: celeborn
                     .endpoint_overrides
                     .iter()
-                    .map(|override_| ShuffleEndpointOverride {
-                        internal_host: override_.internal_host.clone(),
-                        internal_port: override_.internal_port,
-                        external_host: override_.external_host.clone(),
-                        external_port: override_.external_port,
+                    .map(|r#override| ShuffleEndpointOverride {
+                        internal_host: r#override.internal_host.clone(),
+                        internal_port: r#override.internal_port,
+                        external_host: r#override.external_host.clone(),
+                        external_port: r#override.external_port,
                     })
                     .collect(),
             },
@@ -86,10 +86,10 @@ impl ShuffleBackendKind {
         }
         let overrides = endpoint_overrides
             .iter()
-            .map(|override_| {
+            .map(|r#override| {
                 (
-                    (override_.internal_host.clone(), override_.internal_port),
-                    (override_.external_host.clone(), override_.external_port),
+                    (r#override.internal_host.clone(), r#override.internal_port),
+                    (r#override.external_host.clone(), r#override.external_port),
                 )
             })
             .collect::<HashMap<_, _>>();

@@ -360,7 +360,7 @@ impl JobScheduler {
                     OutputMode::Blocking => match job.graph.shuffle_backend() {
                         ShuffleBackendKind::Storage { .. } => TaskOutputKind::Storage,
                         ShuffleBackendKind::Celeborn { .. } => TaskOutputKind::External,
-                        ShuffleBackendKind::Flight => TaskOutputKind::Local,
+                        ShuffleBackendKind::Flight => unreachable!(),
                     },
                 };
                 let key = StageGroupKey {

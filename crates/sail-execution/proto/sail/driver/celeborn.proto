@@ -2,17 +2,31 @@ syntax = "proto3";
 
 package sail.driver;
 
-message CelebornCreateShuffleIdRequest {
+message CelebornGetShuffleIdRequest {
   uint64 driver_id = 1;
   uint64 job_id = 2;
   uint64 stage = 3;
 }
 
-message CelebornCreateShuffleIdResponse {
+message CelebornGetShuffleIdResponse {
   int32 shuffle_id = 1;
 }
 
-message CelebornRequestSlotsRequest {
+message CelebornGetJobShuffleIdsRequest {
+  uint64 driver_id = 1;
+  uint64 job_id = 2;
+}
+
+message CelebornShuffleId {
+  uint64 stage = 1;
+  int32 shuffle_id = 2;
+}
+
+message CelebornGetJobShuffleIdsResponse {
+  repeated CelebornShuffleId shuffle_ids = 1;
+}
+
+message CelebornRegisterShuffleRequest {
   uint64 driver_id = 1;
   int32 shuffle_id = 2;
   repeated int32 partition_ids = 3;
@@ -32,8 +46,23 @@ message CelebornPartitionLocation {
   int32 mode = 9;
 }
 
-message CelebornRequestSlotsResponse {
+message CelebornRegisterShuffleResponse {
   repeated CelebornPartitionLocation primary_locations = 1;
+  repeated CelebornPartitionLocation all_primary_locations = 2;
+}
+
+message CelebornReviveRequest {
+  uint64 driver_id = 1;
+  int32 shuffle_id = 2;
+  int32 partition_id = 3;
+  int32 map_id = 4;
+  int32 attempt_id = 5;
+  CelebornPartitionLocation old_location = 6;
+  int32 cause = 7;
+}
+
+message CelebornReviveResponse {
+  CelebornPartitionLocation location = 1;
 }
 
 message CelebornMapperEndRequest {
@@ -54,8 +83,10 @@ message CelebornUnregisterShuffleRequest {
 message CelebornUnregisterShuffleResponse {}
 
 service CelebornLifecycleManagerService {
-  rpc CreateShuffleId(CelebornCreateShuffleIdRequest) returns (CelebornCreateShuffleIdResponse) {}
-  rpc RequestSlots(CelebornRequestSlotsRequest) returns (CelebornRequestSlotsResponse) {}
+  rpc GetShuffleId(CelebornGetShuffleIdRequest) returns (CelebornGetShuffleIdResponse) {}
+  rpc GetJobShuffleIds(CelebornGetJobShuffleIdsRequest) returns (CelebornGetJobShuffleIdsResponse) {}
+  rpc RegisterShuffle(CelebornRegisterShuffleRequest) returns (CelebornRegisterShuffleResponse) {}
+  rpc Revive(CelebornReviveRequest) returns (CelebornReviveResponse) {}
   rpc MapperEnd(CelebornMapperEndRequest) returns (CelebornMapperEndResponse) {}
   rpc UnregisterShuffle(CelebornUnregisterShuffleRequest) returns (CelebornUnregisterShuffleResponse) {}
 }
