@@ -6,6 +6,11 @@ import pytest
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 from pysail.testing.spark.utils.common import is_jvm_spark
 
+jvm_spark_only = pytest.mark.skipif(
+    not is_jvm_spark(),
+    reason="Seeded sampling RNG semantics differ from Spark",
+)
+
 
 def _sample_with_bounds(spark, lower_bound, upper_bound, *, with_replacement=True):
     sampled = spark.range(10, numPartitions=1).sample(with_replacement, 0.0, 1)
@@ -28,21 +33,13 @@ def single_partition_spark(spark):
         yield sessions.create()
 
 
-@pytest.mark.xfail(
-    not is_jvm_spark(),
-    reason="Known issue: sampling RNG and partition seeding differ from Spark",
-    strict=True,
-)
+@jvm_spark_only
 def test_dataframe_sample_with_replacement_matches_spark_seed(spark):
     sampled = spark.range(10, numPartitions=1).sample(True, 0.5, 1)
     assert [row.id for row in sampled.collect()] == [0, 2, 3, 4, 7, 9]
 
 
-@pytest.mark.xfail(
-    not is_jvm_spark(),
-    reason="Known issue: sampling RNG and partition seeding differ from Spark",
-    strict=True,
-)
+@jvm_spark_only
 @pytest.mark.parametrize(
     ("with_replacement", "expected"),
     [
@@ -137,13 +134,17 @@ def test_dataframe_sample_rejects_individual_bounds(spark):
         _sample_with_bounds(spark, 1.000002, 1.000002, with_replacement=False).collect()
 
 
-@pytest.mark.xfail(
-    not is_jvm_spark(),
-    reason="Known issue: seeded sampling repeats its pattern every batch",
-    strict=True,
-)
-def test_seeded_sample_pattern_differs_across_batches(single_partition_spark):
-    sampled = single_partition_spark.range(2048, numPartitions=1).sample(True, 0.5, 42)
+@jvm_spark_only
+@pytest.mark.parametrize("with_replacement", [False, True])
+def test_seeded_sample_pattern_differs_across_batches(
+    single_partition_spark,
+    with_replacement,
+):
+    sampled = single_partition_spark.range(2048, numPartitions=1).sample(
+        with_replacement,
+        0.5,
+        42,
+    )
     picked = [row.id for row in sampled.collect()]
     first_batch = Counter(i for i in picked if i < 1024)  # noqa: PLR2004
     second_batch = Counter(i - 1024 for i in picked if i >= 1024)  # noqa: PLR2004

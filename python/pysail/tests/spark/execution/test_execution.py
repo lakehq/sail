@@ -40,6 +40,26 @@ def test_basic_query_execution(spark):
 
 
 @pytest.mark.timeout(30)
+@pytest.mark.parametrize(
+    ("with_replacement", "expected"),
+    [
+        (False, [2, 3]),
+        pytest.param(
+            True,
+            [0, 2, 3, 4],
+            marks=pytest.mark.xfail(
+                reason="Replacement sampling RNG differs from Spark",
+                strict=True,
+            ),
+        ),
+    ],
+)
+def test_seeded_sample_in_cluster_mode(spark, with_replacement, expected):
+    sampled = spark.range(5, numPartitions=1).sample(with_replacement, 0.5, 1)
+    assert [row.id for row in sampled.collect()] == expected
+
+
+@pytest.mark.timeout(30)
 def test_sequence_with_column_bound_in_cluster_mode(spark):
     assert spark.sql("SELECT sequence(1, 3) AS s").collect()[0]["s"] == [1, 2, 3]
 
