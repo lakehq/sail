@@ -59,19 +59,18 @@ impl WorkerService for WorkerServer {
             .collect::<ExecutionResult<Vec<_>>>()?;
         let definition = crate::task::r#gen::TaskDefinition::decode(definition.as_slice())
             .map_err(|e| Status::invalid_argument(format!("invalid task definition: {e}")))?;
-        let message = TaskRunnerMessage::RunTask {
-            key: TaskKey {
-                job_id: job_id.into(),
-                stage: stage as usize,
-                partition: partition as usize,
-                attempt: attempt as usize,
-            },
-            definition: TaskDefinition::try_from(definition)?,
-            context: self.context.clone(),
-            peers,
-        };
         self.task_runner
-            .send(message)
+            .send(TaskRunnerMessage::RunTask {
+                key: TaskKey {
+                    job_id: job_id.into(),
+                    stage: stage as usize,
+                    partition: partition as usize,
+                    attempt: attempt as usize,
+                },
+                definition: TaskDefinition::try_from(definition)?,
+                context: self.context.clone(),
+                peers,
+            })
             .await
             .map_err(ExecutionError::from)?;
         let response = RunTaskResponse {};
@@ -91,16 +90,15 @@ impl WorkerService for WorkerServer {
             partition,
             attempt,
         } = request;
-        let message = TaskRunnerMessage::StopTask {
-            key: TaskKey {
-                job_id: job_id.into(),
-                stage: stage as usize,
-                partition: partition as usize,
-                attempt: attempt as usize,
-            },
-        };
         self.task_runner
-            .send(message)
+            .send(TaskRunnerMessage::StopTask {
+                key: TaskKey {
+                    job_id: job_id.into(),
+                    stage: stage as usize,
+                    partition: partition as usize,
+                    attempt: attempt as usize,
+                },
+            })
             .await
             .map_err(ExecutionError::from)?;
         let response = StopTaskResponse {};
@@ -115,12 +113,14 @@ impl WorkerService for WorkerServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let CleanUpJobRequest { job_id, stage } = request;
-        let message = TaskRunnerMessage::CleanUpLocalStreams {
-            job_id: job_id.into(),
-            stage: stage.map(|x| x as usize),
-        };
+        let job_id = job_id.into();
+        let stage = stage.map(|x| x as usize);
         self.task_runner
-            .send(message)
+            .send(TaskRunnerMessage::CleanUpLocalStreams { job_id, stage })
+            .await
+            .map_err(ExecutionError::from)?;
+        self.task_runner
+            .send(TaskRunnerMessage::CleanUpCelebornStreams { job_id, stage })
             .await
             .map_err(ExecutionError::from)?;
         let response = CleanUpJobResponse {};

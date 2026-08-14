@@ -8,9 +8,11 @@ use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
+use crate::shuffle::ShuffleBackendKind;
+
 #[derive(Debug, Clone)]
 pub struct JobGraphOptions {
-    pub use_blocking_shuffle: bool,
+    pub shuffle_backend: ShuffleBackendKind,
 }
 
 /// A job graph represents a distributed execution plan for a job.
@@ -36,6 +38,10 @@ impl JobGraph {
 
     pub fn schema(&self) -> &SchemaRef {
         &self.schema
+    }
+
+    pub(crate) fn shuffle_backend(&self) -> &ShuffleBackendKind {
+        &self.options.shuffle_backend
     }
 
     /// Get the required number of output replicas for the given stage.

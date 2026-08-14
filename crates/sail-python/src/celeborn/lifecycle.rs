@@ -89,7 +89,7 @@ impl PyLifecycleManager {
         Ok(())
     }
 
-    fn request_slots(
+    fn register_shuffle(
         &self,
         py: Python<'_>,
         shuffle_id: i32,
@@ -100,7 +100,7 @@ impl PyLifecycleManager {
         let manager = self.manager()?;
         let runtime = self.runtime.clone();
         let response = py.detach(move || {
-            runtime.primary().block_on(manager.request_slots(
+            runtime.primary().block_on(manager.register_shuffle(
                 shuffle_id,
                 partition_ids,
                 should_replicate,

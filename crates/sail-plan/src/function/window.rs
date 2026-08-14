@@ -41,6 +41,7 @@ use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::window::{spark_first_value_udwf, spark_last_value_udwf, spark_ntile_udwf};
 
 use crate::error::{PlanError, PlanResult};
+use crate::function::aggregate::coerce_string_sum_arguments;
 use crate::function::common::{
     WinFunction, WinFunctionInput, count_min_sketch_args, get_arguments_and_null_treatment,
     get_null_treatment, hll_args_with_default_lg, hll_union_args_with_default_allow_different_lg,
@@ -119,6 +120,36 @@ fn avg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
             window_frame,
             filter: None,
             null_treatment,
+            distinct,
+        },
+    })))
+}
+
+fn spark_sum(input: WinFunctionInput) -> PlanResult<expr::Expr> {
+    let WinFunctionInput {
+        arguments,
+        partition_by,
+        order_by,
+        window_frame,
+        ignore_nulls,
+        distinct,
+        function_context,
+    } = input;
+    let arguments = coerce_string_sum_arguments(
+        arguments,
+        None,
+        function_context.schema.as_ref(),
+        function_context.plan_config.ansi_mode,
+    )?;
+    Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
+        fun: WindowFunctionDefinition::AggregateUDF(sum::sum_udaf()),
+        params: WindowFunctionParams {
+            args: arguments,
+            partition_by,
+            order_by,
+            window_frame,
+            filter: None,
+            null_treatment: get_null_treatment(ignore_nulls),
             distinct,
         },
     })))
@@ -801,7 +832,7 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
         ("stddev_pop", F::aggregate(stddev::stddev_pop_udaf)),
         ("stddev_samp", F::aggregate(stddev::stddev_udaf)),
         ("string_agg", F::custom(listagg)),
-        ("sum", F::aggregate(sum::sum_udaf)),
+        ("sum", F::custom(spark_sum)),
         (
             "try_avg",
             F::aggregate(|| Arc::new(AggregateUDF::from(TryAvgFunction::new()))),
@@ -825,4 +856,72 @@ pub(crate) fn get_built_in_window_function(name: &str) -> PlanResult<WinFunction
 
 pub(crate) fn list_built_in_window_function_names() -> impl Iterator<Item = &'static str> {
     BUILT_IN_WINDOW_FUNCTIONS.keys().copied()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow::datatypes::Schema;
+    use datafusion::prelude::SessionContext;
+    use datafusion_common::DFSchema;
+    use datafusion_expr::{ExprSchemable, col, try_cast};
+
+    use super::*;
+    use crate::config::PlanConfig;
+    use crate::function::common::FunctionContextInput;
+
+    #[test]
+    fn string_sum_window_reuses_mode_specific_coercion_and_window_spec() -> PlanResult<()> {
+        let schema = Arc::new(DFSchema::try_from(Schema::new(vec![
+            Field::new("group_name", DataType::Utf8, false),
+            Field::new("id", DataType::Int32, false),
+            Field::new("value", DataType::Utf8, false),
+        ]))?);
+        let session_context = SessionContext::new();
+        let argument_display_names = ["value".to_string()];
+
+        for ansi_mode in [false, true] {
+            let plan_config = Arc::new(PlanConfig {
+                ansi_mode,
+                ..PlanConfig::default()
+            });
+            let partition_by = vec![col("group_name")];
+            let order_by = vec![col("id").sort(true, true)];
+            let window_frame = WindowFrame::new(Some(true));
+            let function = get_built_in_window_function("sum")?;
+            let expression = function(WinFunctionInput {
+                arguments: vec![col("value")],
+                partition_by: partition_by.clone(),
+                order_by: order_by.clone(),
+                window_frame: window_frame.clone(),
+                ignore_nulls: None,
+                distinct: false,
+                function_context: FunctionContextInput {
+                    argument_display_names: &argument_display_names,
+                    plan_config: &plan_config,
+                    session_context: &session_context,
+                    schema: &schema,
+                },
+            })?;
+
+            assert_eq!(expression.get_type(schema.as_ref())?, DataType::Float64);
+            assert!(expression.nullable(schema.as_ref())?);
+            let expr::Expr::WindowFunction(sum) = expression else {
+                return Err(PlanError::internal("expected window SUM expression"));
+            };
+            let expected_argument = if ansi_mode {
+                cast(col("value"), DataType::Float64)
+            } else {
+                try_cast(col("value"), DataType::Float64)
+            };
+            assert_eq!(sum.params.args, vec![expected_argument]);
+            assert_eq!(sum.params.partition_by, partition_by);
+            assert_eq!(sum.params.order_by, order_by);
+            assert_eq!(sum.params.window_frame, window_frame);
+            assert_eq!(sum.params.filter, None);
+            assert!(!sum.params.distinct);
+        }
+        Ok(())
+    }
 }

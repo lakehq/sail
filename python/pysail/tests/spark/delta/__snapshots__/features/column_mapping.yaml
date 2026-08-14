@@ -43,6 +43,8 @@ data:
     - columnMapping
     writerFeatures:
     - columnMapping
+    - appendOnly
+    - invariants
 ---
 name: "test_create_table_with_column_mapping_id_mode_ddl_and_first_write_materializes_mapping"
 data:
@@ -86,6 +88,8 @@ data:
     - columnMapping
     writerFeatures:
     - columnMapping
+    - appendOnly
+    - invariants
 ---
 name: "test_create_table_with_column_mapping_name_mode_ddl_and_first_write_materializes_mapping"
 data:
@@ -129,6 +133,8 @@ data:
     - columnMapping
     writerFeatures:
     - columnMapping
+    - appendOnly
+    - invariants
 ---
 name: "test_create_table_with_nested_struct_in_column_mapping_name_mode_ddl"
 data:
@@ -189,6 +195,8 @@ data:
     - columnMapping
     writerFeatures:
     - columnMapping
+    - appendOnly
+    - invariants
 ---
 name: "test_mergeschema_allocates_a_new_id_after_array_of_array_of_struct"
 data:
@@ -240,6 +248,8 @@ data:
     - columnMapping
     writerFeatures:
     - columnMapping
+    - appendOnly
+    - invariants
 ---
 name: "test_writing_a_scalar_idmapped_table_strips_physical_read_metadata"
 data:
