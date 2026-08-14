@@ -45,6 +45,7 @@ use datafusion::physical_plan::joins::SortMergeJoinExec;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion::physical_plan::sorts::partial_sort::PartialSortExec;
+use datafusion::physical_plan::sorts::partitioned_topk::PartitionedTopKExec;
 use datafusion::physical_plan::work_table::WorkTableExec;
 use datafusion::physical_plan::{ExecutionPlan, PlanProperties};
 use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
@@ -179,6 +180,7 @@ use sail_function::scalar::geo::st_geomfromwkb::StGeomFromWKB;
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
 use sail_function::scalar::json::{SparkFromJson, SparkSchemaOfJson, SparkToJson};
 use sail_function::scalar::map::map_entries::SparkMapEntries;
+use sail_function::scalar::map::map_from::{SparkMapFromArrays, SparkMapFromEntries};
 use sail_function::scalar::map::str_to_map::StrToMap;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
@@ -323,7 +325,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     fn try_decode(
         &self,
         buf: &[u8],
-        _inputs: &[Arc<dyn ExecutionPlan>],
+        inputs: &[Arc<dyn ExecutionPlan>],
         ctx: &TaskContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let node = ExtendedPhysicalPlanNode::decode(buf)
@@ -799,6 +801,45 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     join_type,
                     sort_options,
                     null_equality,
+                )?))
+            }
+            NodeKind::PartitionedTopK(r#gen::PartitionedTopKExecNode {
+                expr,
+                partition_prefix_len,
+                fetch,
+            }) => {
+                let [input] = inputs else {
+                    return plan_err!(
+                        "PartitionedTopKExec requires exactly one input, got {}",
+                        inputs.len()
+                    );
+                };
+                let expr = expr.ok_or_else(|| {
+                    plan_datafusion_err!("PartitionedTopKExec is missing its sort ordering")
+                })?;
+                let expr = self.try_decode_lex_ordering(&expr, input.schema().as_ref(), ctx)?;
+                let partition_prefix_len = usize::try_from(partition_prefix_len).map_err(|_| {
+                    plan_datafusion_err!(
+                        "PartitionedTopKExec partition prefix length is too large: {partition_prefix_len}"
+                    )
+                })?;
+                let fetch = usize::try_from(fetch).map_err(|_| {
+                    plan_datafusion_err!("PartitionedTopKExec fetch is too large: {fetch}")
+                })?;
+                if fetch == 0 {
+                    return plan_err!("PartitionedTopKExec fetch must be greater than zero");
+                }
+                if partition_prefix_len == 0 || partition_prefix_len >= expr.len() {
+                    return plan_err!(
+                        "PartitionedTopKExec partition prefix length must be between 1 and {}, got {partition_prefix_len}",
+                        expr.len().saturating_sub(1)
+                    );
+                }
+                Ok(Arc::new(PartitionedTopKExec::try_new(
+                    Arc::clone(input),
+                    expr,
+                    partition_prefix_len,
+                    fetch,
                 )?))
             }
             NodeKind::DeltaWriter(delta_writer) => {
@@ -1796,6 +1837,23 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 common_prefix_length,
             })
+        } else if let Some(top_k) = node.downcast_ref::<PartitionedTopKExec>() {
+            let expr = Some(self.try_encode_lex_ordering(top_k.expr())?);
+            let partition_prefix_len =
+                u64::try_from(top_k.partition_prefix_len()).map_err(|_| {
+                    plan_datafusion_err!(
+                        "PartitionedTopKExec partition prefix length is too large: {}",
+                        top_k.partition_prefix_len()
+                    )
+                })?;
+            let fetch = u64::try_from(top_k.fetch()).map_err(|_| {
+                plan_datafusion_err!("PartitionedTopKExec fetch is too large: {}", top_k.fetch())
+            })?;
+            NodeKind::PartitionedTopK(r#gen::PartitionedTopKExecNode {
+                expr,
+                partition_prefix_len,
+                fetch,
+            })
         } else if let Some(data_source) = node.downcast_ref::<RemoteDataSourceExec>() {
             let data_source = data_source.data_source();
             let (source, output_partitioning) =
@@ -2602,6 +2660,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkDateFormat::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::SparkMapFromArrays(r#gen::SparkMapFromArraysUdf { last_value_wins }) => {
+                let udf = SparkMapFromArrays::new(last_value_wins);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::SparkMapFromEntries(r#gen::SparkMapFromEntriesUdf { last_value_wins }) => {
+                let udf = SparkMapFromEntries::new(last_value_wins);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::StrToMap(r#gen::StrToMapUdf { last_value_wins }) => {
+                let udf = StrToMap::new(last_value_wins);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
             UdfKind::StructFunction(r#gen::StructFunctionUdf { field_names }) => {
                 let udf = StructFunction::new(field_names);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
@@ -2893,7 +2963,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_width_bucket" | "width_bucket" => {
                 Ok(Arc::new(ScalarUDF::from(SparkWidthBucket::new())))
             }
-            "str_to_map" => Ok(Arc::new(ScalarUDF::from(StrToMap::new()))),
             "parse_url" => Ok(Arc::new(ScalarUDF::from(ParseUrl::new()))),
             "try_parse_url" | "spark_try_parse_url" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryParseUrl::new())))
@@ -3020,7 +3089,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkWidthBucket>()
             || node_inner.is::<SparkXxhash64>()
             || node_inner.is::<SparkYearMonthInterval>()
-            || node_inner.is::<StrToMap>()
             || node_inner.is::<SparkToJson>()
             || node_inner.is::<TryUrlDecode>()
             || node_inner.is::<UrlDecode>()
@@ -3032,6 +3100,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.name() == "json_length"
         {
             UdfKind::Standard(r#gen::StandardUdf {})
+        } else if let Some(func) = node_inner.downcast_ref::<SparkMapFromArrays>() {
+            UdfKind::SparkMapFromArrays(r#gen::SparkMapFromArraysUdf {
+                last_value_wins: func.last_value_wins(),
+            })
+        } else if let Some(func) = node_inner.downcast_ref::<SparkMapFromEntries>() {
+            UdfKind::SparkMapFromEntries(r#gen::SparkMapFromEntriesUdf {
+                last_value_wins: func.last_value_wins(),
+            })
+        } else if let Some(func) = node_inner.downcast_ref::<StrToMap>() {
+            UdfKind::StrToMap(r#gen::StrToMapUdf {
+                last_value_wins: func.last_value_wins(),
+            })
         } else if let Some(func) = node.inner().downcast_ref::<PySparkUDF>() {
             let kind = self.try_encode_pyspark_udf_kind(func.kind())?;
             let input_types = func
