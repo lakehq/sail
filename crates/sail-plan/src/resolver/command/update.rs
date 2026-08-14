@@ -6,7 +6,7 @@ use datafusion_common::{DFSchema, DFSchemaRef, ScalarValue};
 use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, lit};
 use sail_common::spec;
 use sail_common_datafusion::column_features::ColumnFeatures;
-use sail_common_datafusion::datasource::{SourceRegistry, UpdateAssignment, UpdateInfo};
+use sail_common_datafusion::datasource::{DataSourceRegistry, UpdateAssignment, UpdateInfo};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakesource::RowLevelOperation;
 use sail_common_datafusion::logical_expr::ExprWithSource;
@@ -162,7 +162,7 @@ impl PlanResolver<'_> {
             )
             .await?;
 
-        let registry = self.ctx.extension::<SourceRegistry>()?;
+        let registry = self.ctx.extension::<DataSourceRegistry>()?;
         registry
             .get_lake_source(&target_format)?
             .plan_row_level_operation(
