@@ -78,6 +78,10 @@ impl DataSource for DeltaLakeSource {
         "delta"
     }
 
+    fn as_lake_source(self: Arc<Self>) -> Option<Arc<dyn LakeSource>> {
+        Some(self)
+    }
+
     async fn create_source(
         &self,
         ctx: &dyn Session,

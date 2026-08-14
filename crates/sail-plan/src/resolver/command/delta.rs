@@ -14,7 +14,7 @@ use sail_common::spec;
 use sail_common_datafusion::catalog::{TableColumnStatus, TableKind};
 use sail_common_datafusion::column_features::ColumnFeatures;
 use sail_common_datafusion::datasource::{
-    OptionLayer, SinkInfo, SourceInfo, SourceRegistry, find_path_in_options,
+    DataSourceRegistry, OptionLayer, SinkInfo, SourceInfo, find_path_in_options,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_function::scalar::misc::raise_error::RaiseError;
@@ -108,7 +108,7 @@ impl PlanResolver<'_> {
             return Ok(input);
         };
 
-        let registry = self.ctx.extension::<SourceRegistry>().map_err(|e| {
+        let registry = self.ctx.extension::<DataSourceRegistry>().map_err(|e| {
             PlanError::invalid(format!(
                 "failed to access lake source registry for Delta path `{path}`: {e}",
             ))
@@ -521,7 +521,7 @@ impl PlanResolver<'_> {
         let Some(location) = info.location.as_ref() else {
             return Ok(None);
         };
-        let registry = self.ctx.extension::<SourceRegistry>().map_err(|e| {
+        let registry = self.ctx.extension::<DataSourceRegistry>().map_err(|e| {
             PlanError::invalid(format!(
                 "failed to access lake source registry for Delta table `{location}`: {e}"
             ))

@@ -413,6 +413,14 @@ pub trait DataSource: Send + Sync {
     /// Returns the name of the data source.
     fn name(&self) -> &str;
 
+    /// Returns this data source's lake capability, if supported.
+    ///
+    /// The owned receiver keeps the source alive while callers use the
+    /// capability across asynchronous operations.
+    fn as_lake_source(self: Arc<Self>) -> Option<Arc<dyn LakeSource>> {
+        None
+    }
+
     /// Creates a logical [`TableSource`] for read.
     async fn create_source(
         &self,
@@ -429,18 +437,13 @@ pub trait DataSource: Send + Sync {
     async fn create_writer(&self, ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan>;
 }
 
-struct SourceEntry {
-    data_source: Arc<dyn DataSource>,
-    lake_source: Option<Arc<dyn LakeSource>>,
-}
-
 /// Thread-safe registry of named data and lake sources.
 #[derive(Default)]
-pub struct SourceRegistry {
-    sources: RwLock<HashMap<String, SourceEntry>>,
+pub struct DataSourceRegistry {
+    sources: RwLock<HashMap<String, Arc<dyn DataSource>>>,
 }
 
-impl SourceRegistry {
+impl DataSourceRegistry {
     pub fn new() -> Self {
         Self {
             sources: RwLock::new(HashMap::new()),
@@ -448,43 +451,23 @@ impl SourceRegistry {
     }
 
     pub fn register_data_source(&self, source: Arc<dyn DataSource>) -> Result<()> {
+        let source_is_lake = source.clone().as_lake_source().is_some();
         let mut sources = self
             .sources
             .write()
-            .map_err(|_| plan_datafusion_err!("source registry poisoned"))?;
+            .map_err(|_| plan_datafusion_err!("data source registry poisoned"))?;
         let name = source.name().to_lowercase();
         if sources
             .get(&name)
-            .is_some_and(|entry| entry.lake_source.is_some())
+            .is_some_and(|registered| registered.clone().as_lake_source().is_some())
+            && !source_is_lake
         {
             return plan_err!(
                 "Data source '{}' is already registered as a lake source",
                 source.name()
             );
         }
-        sources.insert(
-            name,
-            SourceEntry {
-                data_source: source,
-                lake_source: None,
-            },
-        );
-        Ok(())
-    }
-
-    pub fn register_lake_source(&self, source: Arc<dyn LakeSource>) -> Result<()> {
-        let data_source: Arc<dyn DataSource> = source.clone();
-        let mut sources = self
-            .sources
-            .write()
-            .map_err(|_| plan_datafusion_err!("source registry poisoned"))?;
-        sources.insert(
-            source.name().to_lowercase(),
-            SourceEntry {
-                data_source,
-                lake_source: Some(source),
-            },
-        );
+        sources.insert(name, source);
         Ok(())
     }
 
@@ -492,28 +475,27 @@ impl SourceRegistry {
         let sources = self
             .sources
             .read()
-            .map_err(|_| plan_datafusion_err!("source registry poisoned"))?;
+            .map_err(|_| plan_datafusion_err!("data source registry poisoned"))?;
         sources
             .get(&name.to_lowercase())
-            .map(|entry| entry.data_source.clone())
+            .cloned()
             .ok_or_else(|| missing_data_source_error(name))
     }
 
     pub fn get_lake_source(&self, name: &str) -> Result<Arc<dyn LakeSource>> {
-        let sources = self
-            .sources
-            .read()
-            .map_err(|_| plan_datafusion_err!("source registry poisoned"))?;
-        match sources.get(&name.to_lowercase()) {
-            Some(SourceEntry {
-                lake_source: Some(source),
-                ..
-            }) => Ok(source.clone()),
-            Some(_) => Err(not_impl_datafusion_err!(
-                "Data source '{name}' does not support lake operations"
-            )),
-            None => Err(missing_lake_source_error(name)),
-        }
+        let source = {
+            let sources = self
+                .sources
+                .read()
+                .map_err(|_| plan_datafusion_err!("data source registry poisoned"))?;
+            sources
+                .get(&name.to_lowercase())
+                .cloned()
+                .ok_or_else(|| missing_lake_source_error(name))?
+        };
+        source.as_lake_source().ok_or_else(|| {
+            not_impl_datafusion_err!("Data source '{name}' does not support lake operations")
+        })
     }
 
     /// Returns the optional lakehouse capability for a registered data source.
@@ -521,10 +503,11 @@ impl SourceRegistry {
         let sources = self
             .sources
             .read()
-            .map_err(|_| plan_datafusion_err!("source registry poisoned"))?;
+            .map_err(|_| plan_datafusion_err!("data source registry poisoned"))?;
         Ok(sources
             .get(&name.to_lowercase())
-            .and_then(|entry| entry.lake_source.clone()))
+            .cloned()
+            .and_then(|source| source.as_lake_source()))
     }
 }
 
@@ -545,9 +528,9 @@ fn missing_lake_source_error(name: &str) -> datafusion::common::DataFusionError 
     plan_datafusion_err!("No lake source found for: {name}")
 }
 
-impl SessionExtension for SourceRegistry {
+impl SessionExtension for DataSourceRegistry {
     fn name() -> &'static str {
-        "SourceRegistry"
+        "DataSourceRegistry"
     }
 }
 
@@ -611,12 +594,37 @@ mod tests {
 
     use super::*;
 
+    struct TestDataSource;
+
+    #[async_trait]
+    impl DataSource for TestDataSource {
+        fn name(&self) -> &str {
+            "test"
+        }
+
+        async fn create_source(
+            &self,
+            _ctx: &dyn Session,
+            _info: SourceInfo,
+        ) -> Result<Arc<dyn TableSource>> {
+            plan_err!("test source does not create tables")
+        }
+
+        async fn create_writer(&self, _ctx: &dyn Session, _info: SinkInfo) -> Result<LogicalPlan> {
+            plan_err!("test source does not create writers")
+        }
+    }
+
     struct TestLakeSource;
 
     #[async_trait]
     impl DataSource for TestLakeSource {
         fn name(&self) -> &str {
             "test"
+        }
+
+        fn as_lake_source(self: Arc<Self>) -> Option<Arc<dyn LakeSource>> {
+            Some(self)
         }
 
         async fn create_source(
@@ -636,13 +644,13 @@ mod tests {
 
     #[test]
     fn lake_source_registration_replaces_an_ordinary_source() -> Result<()> {
-        let registry = SourceRegistry::new();
+        let registry = DataSourceRegistry::new();
 
-        registry.register_data_source(Arc::new(TestLakeSource))?;
+        registry.register_data_source(Arc::new(TestDataSource))?;
         assert!(registry.get_data_source("test").is_ok());
         assert!(registry.get_lake_source("test").is_err());
 
-        registry.register_lake_source(Arc::new(TestLakeSource))?;
+        registry.register_data_source(Arc::new(TestLakeSource))?;
         assert!(registry.get_data_source("test").is_ok());
         assert!(registry.get_lake_source("test").is_ok());
         Ok(())
@@ -650,11 +658,11 @@ mod tests {
 
     #[test]
     fn ordinary_registration_cannot_replace_a_lake_source() -> Result<()> {
-        let registry = SourceRegistry::new();
-        registry.register_lake_source(Arc::new(TestLakeSource))?;
+        let registry = DataSourceRegistry::new();
+        registry.register_data_source(Arc::new(TestLakeSource))?;
 
         assert!(matches!(
-            registry.register_data_source(Arc::new(TestLakeSource)),
+            registry.register_data_source(Arc::new(TestDataSource)),
             Err(datafusion_common::DataFusionError::Plan(_))
         ));
         assert!(registry.get_data_source("test").is_ok());
@@ -664,8 +672,8 @@ mod tests {
 
     #[test]
     fn ordinary_data_source_has_no_lake_capability() -> Result<()> {
-        let registry = SourceRegistry::new();
-        registry.register_data_source(Arc::new(TestLakeSource))?;
+        let registry = DataSourceRegistry::new();
+        registry.register_data_source(Arc::new(TestDataSource))?;
 
         assert!(registry.get_data_source("test").is_ok());
         assert!(registry.get_lake_source_if_supported("test")?.is_none());
@@ -679,7 +687,7 @@ mod tests {
     #[test]
     fn missing_jdbc_data_source_error_includes_registration_hint() -> std::result::Result<(), String>
     {
-        let registry = SourceRegistry::new();
+        let registry = DataSourceRegistry::new();
         let error = match registry.get_data_source("jdbc") {
             Ok(_) => return Err("expected missing jdbc data source error".to_string()),
             Err(error) => error.to_string(),
@@ -693,7 +701,7 @@ mod tests {
 
     #[test]
     fn missing_non_jdbc_data_source_error_stays_generic() -> std::result::Result<(), String> {
-        let registry = SourceRegistry::new();
+        let registry = DataSourceRegistry::new();
         let error = match registry.get_data_source("unknown") {
             Ok(_) => return Err("expected missing unknown data source error".to_string()),
             Err(error) => error.to_string(),
@@ -708,7 +716,7 @@ mod tests {
 
     #[test]
     fn missing_lake_source_error_stays_generic() -> std::result::Result<(), String> {
-        let registry = SourceRegistry::new();
+        let registry = DataSourceRegistry::new();
         let error = match registry.get_lake_source("unknown") {
             Ok(_) => return Err("expected missing unknown lake source error".to_string()),
             Err(error) => error.to_string(),

@@ -670,15 +670,15 @@ pub(crate) async fn handle_execute_register_datasource(
         }
     };
 
-    // Register in the session-scoped SourceRegistry with embedded pickled bytes.
+    // Register in the session-scoped DataSourceRegistry with embedded pickled bytes.
     {
         use std::sync::Arc;
 
-        use sail_common_datafusion::datasource::SourceRegistry;
+        use sail_common_datafusion::datasource::DataSourceRegistry;
         use sail_data_source::formats::python::PythonDataSourceAdapter;
 
         // The embedded class keeps the source isolated to this session.
-        match ctx.extension::<SourceRegistry>() {
+        match ctx.extension::<DataSourceRegistry>() {
             Ok(registry) => {
                 let source = Arc::new(PythonDataSourceAdapter::with_pickled_class(
                     name.clone(),
@@ -689,7 +689,7 @@ pub(crate) async fn handle_execute_register_datasource(
             }
             _ => {
                 return Err(SparkError::internal(
-                    "SourceRegistry not found in session context",
+                    "DataSourceRegistry not found in session context",
                 ));
             }
         }
