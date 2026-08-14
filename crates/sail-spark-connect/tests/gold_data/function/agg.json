@@ -1917,7 +1917,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Error during planning: Execution error: Function 'max_by' user-defined coercion failed with: Execution error: Spark `max_by` function requires 2 arguments, got 3. No function matches the given name and argument types 'max_by(Utf8, Int32, Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tmax_by(UserDefined)"
       }
     },
     {
@@ -2075,7 +2075,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Error during planning: Execution error: Function 'min_by' user-defined coercion failed with: Execution error: Spark `min_by` function requires 2 arguments, got 3. No function matches the given name and argument types 'min_by(Utf8, Int32, Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tmin_by(UserDefined)"
       }
     },
     {

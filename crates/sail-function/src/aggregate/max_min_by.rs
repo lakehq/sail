@@ -16,7 +16,7 @@ use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatil
 use datafusion::prelude::Expr;
 use sail_common_datafusion::ordering::is_orderable;
 
-use crate::error::generic_exec_err;
+use crate::error::{generic_exec_err, invalid_arg_count_exec_err};
 
 #[derive(Debug)]
 struct MaxMinByAccumulator {
@@ -115,15 +115,22 @@ fn get_min_max_by_result_type(
     function_name: &str,
     input_types: &[DataType],
 ) -> Result<Vec<DataType>, DataFusionError> {
-    if let Some(ordering_type) = input_types.get(1)
-        && !is_orderable(ordering_type)
-    {
+    // Spark's `MaxMinBy` is `BinaryLike`. The 4.2 top-k form `max_by(x, y, k)` returns an array
+    // and is not implemented here, so a third argument is rejected rather than silently dropped.
+    let [value_type, ordering_type] = input_types else {
+        return Err(invalid_arg_count_exec_err(
+            function_name,
+            (2, 2),
+            input_types.len(),
+        ));
+    };
+    if !is_orderable(ordering_type) {
         return Err(generic_exec_err(
             function_name,
             &format!("does not support ordering on type {ordering_type}"),
         ));
     }
-    match &input_types[0] {
+    match value_type {
         DataType::Dictionary(_, dict_value_type) => {
             // TODO add checker, if the value type is complex data type
             Ok(vec![dict_value_type.deref().clone()])

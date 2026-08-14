@@ -135,6 +135,42 @@ Feature: min_by function
         """
       Then query error does not support ordering on type
 
+    # The rejections above only discriminate if the accepted types are pinned too: a check that
+    # rejected every type would satisfy every scenario in this Rule. These are the orderable
+    # counterparts, including the ANSI intervals the calendar one above is contrasted with.
+    Scenario Outline: min_by accepts an orderable <case> ordering column
+      When query
+        """
+        SELECT min_by(x, <ordering>) AS result
+        FROM VALUES ('lo', 1), ('hi', 2) AS t(x, y)
+        """
+      Then query result
+        | result |
+        | lo     |
+
+      Examples:
+        | case          | ordering                                                       |
+        | STRUCT<INT>   | struct(y)                                                      |
+        | ARRAY<INT>    | array(y)                                                       |
+        | INTERVAL DAY  | make_dt_interval(0, 0, 0, y)                                   |
+        | INTERVAL YEAR | make_ym_interval(0, y)                                         |
+        | BINARY        | CAST(CAST(y AS STRING) AS BINARY)                              |
+        | DATE          | date_add(DATE '2024-01-01', y)                                 |
+        | TIMESTAMP     | TIMESTAMP '2024-01-01 00:00:00' + make_dt_interval(0, 0, 0, y) |
+
+    # VOID is orderable in Spark: OrderUtils.isOrderable matches `case NullType => true` before
+    # the AtomicType case. So the call is accepted, and every row is then skipped for having a
+    # NULL ordering value, which is what makes the result NULL rather than an error.
+    Scenario: min_by accepts a VOID ordering column and returns NULL
+      When query
+        """
+        SELECT min_by(x, CAST(NULL AS VOID)) AS result
+        FROM VALUES ('lo', 1), ('hi', 2) AS t(x, y)
+        """
+      Then query result
+        | result |
+        | NULL   |
+
   Rule: Orderable ordering types are accepted
 
     Scenario Outline: min_by accepts a <case> ordering column
