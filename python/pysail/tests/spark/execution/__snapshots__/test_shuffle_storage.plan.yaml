@@ -13,7 +13,7 @@ data:
         Aggregate: groupBy=[[#12]], aggr=[[count(Int64(1)), sum(#10), sum(#11)]]
           Projection: #8 AS #9, #2 AS #10, #5 AS #11, #8 % CASE WHEN Int32(4) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(4) END AS #12
             Projection: #8, #2, #5
-              Projection: coalesce(#1, #4) AS #8, #1 AS #6, #2, #4 AS #7, #5
+              Projection: #1 AS #8, #1 AS #6, #2, #4 AS #7, #5
                 Inner Join: #1 = #4
                   ExplicitRepartition: kind=hash, n=Some(8), expr=[#1]
                     Projection: #0 AS k AS #1, #0 * Int32(2) AS v1 AS #2
@@ -34,7 +34,7 @@ data:
         Aggregate: groupBy=[[#12]], aggr=[[count(Int64(1)), sum(#10), sum(#11)]]
           Projection: #8 AS #9, #2 AS #10, #5 AS #11, #8 % CAST(CASE WHEN Int32(4) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(4) END AS Int64) AS #12
             Projection: #8, #2, #5
-              Projection: coalesce(#1, #4) AS #8, #1 AS #6, #2, #4 AS #7, #5
+              Projection: #1 AS #8, #1 AS #6, #2, #4 AS #7, #5
                 Inner Join: #1 = #4
                   ExplicitRepartition: kind=hash, n=Some(8), expr=[#1]
                     Projection: #0 AS k AS #1, #0 * CAST(Int32(2) AS Int64) AS v1 AS #2

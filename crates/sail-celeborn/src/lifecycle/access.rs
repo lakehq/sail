@@ -2,8 +2,10 @@ use sail_common::actor::ActorHandle;
 use tokio::sync::oneshot;
 
 use crate::error::{CelebornError, CelebornResult};
-use crate::lifecycle::{LifecycleManager, LifecycleManagerActor, LifecycleManagerMessage};
-use crate::master::SlotReservation;
+use crate::lifecycle::{
+    LifecycleManager, LifecycleManagerActor, LifecycleManagerMessage, ReviveRequest,
+};
+use crate::master::{PartitionLocation, SlotReservation};
 
 /// A lifecycle manager backed by a local actor.
 #[derive(Debug, Clone)]
@@ -15,11 +17,37 @@ impl LocalLifecycleManager {
     pub fn new(handle: ActorHandle<LifecycleManagerActor>) -> Self {
         Self { handle }
     }
+
+    pub fn handle(&self) -> ActorHandle<LifecycleManagerActor> {
+        self.handle.clone()
+    }
 }
 
 #[tonic::async_trait]
 impl LifecycleManager for LocalLifecycleManager {
-    async fn request_slots(
+    async fn get_shuffle_id(&self, job_id: u64, stage: u64) -> CelebornResult<i32> {
+        let (result, receiver) = oneshot::channel();
+        self.handle
+            .send(LifecycleManagerMessage::GetShuffleId {
+                job_id,
+                stage,
+                result,
+            })
+            .await
+            .map_err(|_| CelebornError::ActorStopped)?;
+        receiver.await.map_err(|_| CelebornError::ActorStopped)?
+    }
+
+    async fn get_job_shuffle_ids(&self, job_id: u64) -> CelebornResult<Vec<(u64, i32)>> {
+        let (result, receiver) = oneshot::channel();
+        self.handle
+            .send(LifecycleManagerMessage::GetJobShuffleIds { job_id, result })
+            .await
+            .map_err(|_| CelebornError::ActorStopped)?;
+        receiver.await.map_err(|_| CelebornError::ActorStopped)?
+    }
+
+    async fn register_shuffle(
         &self,
         shuffle_id: i32,
         partition_ids: Vec<i32>,
@@ -28,7 +56,7 @@ impl LifecycleManager for LocalLifecycleManager {
     ) -> CelebornResult<SlotReservation> {
         let (result, receiver) = oneshot::channel();
         self.handle
-            .send(LifecycleManagerMessage::RequestSlotsBegin {
+            .send(LifecycleManagerMessage::RegisterShuffle {
                 shuffle_id,
                 partition_ids,
                 should_replicate,
@@ -40,10 +68,19 @@ impl LifecycleManager for LocalLifecycleManager {
         receiver.await.map_err(|_| CelebornError::ActorStopped)?
     }
 
+    async fn revive(&self, request: ReviveRequest) -> CelebornResult<PartitionLocation> {
+        let (result, receiver) = oneshot::channel();
+        self.handle
+            .send(LifecycleManagerMessage::Revive { request, result })
+            .await
+            .map_err(|_| CelebornError::ActorStopped)?;
+        receiver.await.map_err(|_| CelebornError::ActorStopped)?
+    }
+
     async fn unregister_shuffle(&self, shuffle_id: i32) -> CelebornResult<()> {
         let (result, receiver) = oneshot::channel();
         self.handle
-            .send(LifecycleManagerMessage::UnregisterShuffleBegin { shuffle_id, result })
+            .send(LifecycleManagerMessage::UnregisterShuffle { shuffle_id, result })
             .await
             .map_err(|_| CelebornError::ActorStopped)?;
         receiver.await.map_err(|_| CelebornError::ActorStopped)?
@@ -58,7 +95,7 @@ impl LifecycleManager for LocalLifecycleManager {
     ) -> CelebornResult<()> {
         let (result, receiver) = oneshot::channel();
         self.handle
-            .send(LifecycleManagerMessage::MapperEndBegin {
+            .send(LifecycleManagerMessage::MapperEnd {
                 shuffle_id,
                 map_id,
                 attempt_id,

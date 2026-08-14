@@ -1,4 +1,5 @@
 pub(crate) mod accessor;
+pub(crate) mod celeborn;
 pub mod error;
 pub(crate) mod local;
 pub mod merge;

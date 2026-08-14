@@ -11,7 +11,7 @@ from pysail import _native
 if TYPE_CHECKING:
     from collections.abc import Generator
 
-    from pysail.tests.celeborn.conftest import MasterService, WorkerService
+    from pysail.testing.containers.celeborn import MasterService, WorkerService
 
 
 LifecycleManager = _native._celeborn.LifecycleManager  # noqa: SLF001
@@ -20,26 +20,28 @@ LifecycleManager = _native._celeborn.LifecycleManager  # noqa: SLF001
 @pytest.fixture(scope="module")
 def lifecycle_manager(
     celeborn_master: MasterService,
-    celeborn_worker: WorkerService,
-    endpoint_resolver: object,
+    celeborn_workers: dict[str, WorkerService],
+    celeborn_endpoint_resolver: object,
 ) -> Generator[LifecycleManager, None, None]:
-    assert celeborn_worker.rpc_port > 0
+    assert celeborn_workers["celeborn-worker-1"].rpc_port > 0
     with LifecycleManager(
         celeborn_master.host,
         celeborn_master.port,
         "sail-celeborn-integration",
-        endpoint_resolver,
+        celeborn_endpoint_resolver,
     ) as manager:
         yield manager
 
 
-def test_lifecycle_manager_registers_requests_slots_and_unregisters(
+def test_lifecycle_manager_registers_shuffles_and_unregisters(
     lifecycle_manager: LifecycleManager,
 ) -> None:
     assert lifecycle_manager.running
-    workers = lifecycle_manager.request_slots(1, [0, 1], False, 1)
-    assert len(workers) == 1
-    assert workers == ["celeborn-worker:12000:12001:12002:12003"]
+    workers = lifecycle_manager.register_shuffle(1, [0, 1], False, 1)
+    assert sorted(workers) == [
+        "celeborn-worker-1:12000:12001:12002:12003",
+        "celeborn-worker-2:12000:12001:12002:12003",
+    ]
     lifecycle_manager.unregister_shuffle(1)
 
 
@@ -48,4 +50,4 @@ def test_lifecycle_manager_returns_registration_failure() -> None:
         LifecycleManager("127.0.0.1", 0, "sail-celeborn-unavailable") as manager,
         pytest.raises(RuntimeError, match="application error: registration failed: I/O error"),
     ):
-        manager.request_slots(1, [0], False, 1)
+        manager.register_shuffle(1, [0], False, 1)

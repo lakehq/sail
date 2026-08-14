@@ -22,6 +22,8 @@ flags:
     carryforward: true
   ibis-tests:
     carryforward: true
+  catalog-integration-tests:
+    carryforward: true
 
 coverage:
   status:

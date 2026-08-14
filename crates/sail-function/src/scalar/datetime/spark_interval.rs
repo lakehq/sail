@@ -5,7 +5,7 @@ use datafusion::arrow::datatypes::{
     DataType, DurationMicrosecondType, IntervalMonthDayNano, IntervalUnit, IntervalYearMonthType,
     TimeUnit,
 };
-use datafusion_common::arrow::array::PrimitiveArray;
+use datafusion_common::arrow::array::{AsArray, PrimitiveArray};
 use datafusion_common::arrow::datatypes::IntervalMonthDayNanoType;
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::types::logical_string;
@@ -117,6 +117,77 @@ define_interval_udf!(
     ScalarValue::IntervalMonthDayNano,
 );
 
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct SparkDayTimeIntervalToCalendarInterval {
+    signature: Signature,
+}
+
+impl Default for SparkDayTimeIntervalToCalendarInterval {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SparkDayTimeIntervalToCalendarInterval {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::exact(
+                vec![DataType::Duration(TimeUnit::Microsecond)],
+                Volatility::Immutable,
+            ),
+        }
+    }
+}
+
+impl ScalarUDFImpl for SparkDayTimeIntervalToCalendarInterval {
+    fn name(&self) -> &str {
+        "spark_day_time_interval_to_calendar_interval"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Interval(IntervalUnit::MonthDayNano))
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+        let arg = args.one()?;
+        match arg {
+            ColumnarValue::Array(array) => {
+                let array = match array.data_type() {
+                    DataType::Duration(TimeUnit::Microsecond) => array
+                        .as_primitive::<DurationMicrosecondType>()
+                        .iter()
+                        .map(|value| {
+                            value
+                                .map(day_time_interval_to_calendar_interval)
+                                .transpose()
+                        })
+                        .collect::<Result<PrimitiveArray<IntervalMonthDayNanoType>>>()?,
+                    data_type => {
+                        return exec_err!(
+                            "expected microsecond day-time interval, got {data_type}"
+                        );
+                    }
+                };
+                Ok(ColumnarValue::Array(Arc::new(array)))
+            }
+            ColumnarValue::Scalar(ScalarValue::DurationMicrosecond(value)) => {
+                let value = value
+                    .map(day_time_interval_to_calendar_interval)
+                    .transpose()?;
+                Ok(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(
+                    value,
+                )))
+            }
+            value => exec_err!("expected microsecond day-time interval, got {value:?}"),
+        }
+    }
+}
+
 // TODO: support alternative form of interval strings
 //   In Spark, interval strings can be specified in two forms.
 //   For example, the `INTERVAL HOUR` type can have the following string representations.
@@ -155,15 +226,7 @@ fn string_to_calendar_interval(value: &str) -> Result<IntervalMonthDayNano> {
             nanoseconds: 0,
         }),
         IntervalValue::Microsecond { microseconds } => {
-            // We do not take into account daylight saving days here.
-            let days = i32::try_from(microseconds / (24 * 60 * 60 * 1_000_000)).map_err(|_| {
-                exec_datafusion_err!("microseconds overflow for calendar interval: {value}")
-            })?;
-            Ok(IntervalMonthDayNano {
-                months: 0,
-                days,
-                nanoseconds: microseconds % (24 * 60 * 60 * 1_000_000) * 1_000,
-            })
+            day_time_interval_to_calendar_interval(microseconds)
         }
         IntervalValue::MonthDayNanosecond {
             months,
@@ -174,5 +237,38 @@ fn string_to_calendar_interval(value: &str) -> Result<IntervalMonthDayNano> {
             days,
             nanoseconds,
         }),
+    }
+}
+
+fn day_time_interval_to_calendar_interval(microseconds: i64) -> Result<IntervalMonthDayNano> {
+    const MICROSECONDS_PER_DAY: i64 = 24 * 60 * 60 * 1_000_000;
+
+    let days = i32::try_from(microseconds / MICROSECONDS_PER_DAY).map_err(|_| {
+        exec_datafusion_err!("microseconds overflow for calendar interval: {microseconds}")
+    })?;
+    Ok(IntervalMonthDayNano {
+        months: 0,
+        days,
+        nanoseconds: microseconds % MICROSECONDS_PER_DAY * 1_000,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn day_time_interval_preserves_calendar_days_and_microsecond_remainder() -> Result<()> {
+        const MICROSECONDS_PER_DAY: i64 = 24 * 60 * 60 * 1_000_000;
+
+        assert_eq!(
+            day_time_interval_to_calendar_interval(MICROSECONDS_PER_DAY + 5)?,
+            IntervalMonthDayNano::new(0, 1, 5_000)
+        );
+        assert_eq!(
+            day_time_interval_to_calendar_interval(-MICROSECONDS_PER_DAY - 5)?,
+            IntervalMonthDayNano::new(0, -1, -5_000)
+        );
+        Ok(())
     }
 }
