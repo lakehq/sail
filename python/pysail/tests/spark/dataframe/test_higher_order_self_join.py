@@ -1,6 +1,8 @@
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 
+from pysail.testing.spark.steps.plan import normalize_plan_text
+
 
 @pytest.mark.parametrize(
     ("higher_order_expression", "expected"),
@@ -46,7 +48,8 @@ def test_higher_order_lambda_survives_self_join(spark, higher_order_expression, 
     assert actual == expected
 
 
-def test_higher_order_lambda_survives_nested_loop_join_filter(spark):
+@pytest.mark.yamlsnapshot(group="plan")
+def test_higher_order_lambda_survives_nested_loop_join_filter(spark, snapshot):
     left = spark.createDataFrame(
         [
             (1, [1], 10, 20),
@@ -62,7 +65,6 @@ def test_higher_order_lambda_survives_nested_loop_join_filter(spark):
         "inner",
     ).select("l.id", "r.k")
 
-    plan = result._explain_string()  # noqa: SLF001
-    assert "NestedLoopJoinExec" in plan
-    assert "join_proj_push_down" not in plan
+    plan = normalize_plan_text(result._explain_string())  # noqa: SLF001
+    assert plan == snapshot
     assert [tuple(row) for row in result.orderBy("id", "k").collect()] == [(1, 0), (2, 2)]
