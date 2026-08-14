@@ -128,7 +128,7 @@ impl ServerSessionFactory {
             .with_extension(Arc::new(DeltaTableCache::default()));
         self.apply_execution_config(&mut config);
         self.apply_execution_parquet_config(&mut config);
-        self.apply_optimizer_config(&mut config)?;
+        self.apply_optimizer_config(&mut config);
         let config = self.mutator.mutate_config(config, info)?;
         Ok(config)
     }
@@ -175,10 +175,15 @@ impl ServerSessionFactory {
         execution.listing_table_ignore_subdirectory = false;
     }
 
-    fn apply_optimizer_config(&mut self, config: &mut SessionConfig) -> Result<()> {
+    fn apply_optimizer_config(&mut self, config: &mut SessionConfig) {
         let optimizer = &mut config.options_mut().optimizer;
         optimizer.expand_views_at_output = self.config.optimizer.expand_views_at_output;
-        disable_dynamic_filter_pushdown_for_cluster(config, &self.config.mode)
+        match &self.config.mode {
+            ExecutionMode::Local => {}
+            ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster => {
+                optimizer.enable_dynamic_filter_pushdown = false;
+            }
+        }
     }
 
     fn apply_execution_parquet_config(&mut self, config: &mut SessionConfig) {
@@ -230,20 +235,4 @@ impl ServerSessionFactory {
         parquet.content_defined_chunking.norm_level =
             self.config.parquet.content_defined_chunking.norm_level;
     }
-}
-
-fn disable_dynamic_filter_pushdown_for_cluster(
-    config: &mut SessionConfig,
-    mode: &ExecutionMode,
-) -> Result<()> {
-    if matches!(
-        mode,
-        ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster
-    ) {
-        config.options_mut().set(
-            "datafusion.optimizer.enable_dynamic_filter_pushdown",
-            "false",
-        )?;
-    }
-    Ok(())
 }

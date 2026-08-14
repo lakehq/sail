@@ -2963,7 +2963,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_width_bucket" | "width_bucket" => {
                 Ok(Arc::new(ScalarUDF::from(SparkWidthBucket::new())))
             }
-            "str_to_map" => Ok(Arc::new(ScalarUDF::from(StrToMap::default()))),
             "parse_url" => Ok(Arc::new(ScalarUDF::from(ParseUrl::new()))),
             "try_parse_url" | "spark_try_parse_url" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryParseUrl::new())))

@@ -25,12 +25,6 @@ pub struct StrToMap {
     last_value_wins: bool,
 }
 
-impl Default for StrToMap {
-    fn default() -> Self {
-        Self::new(false)
-    }
-}
-
 impl StrToMap {
     pub fn new(last_value_wins: bool) -> Self {
         Self {
