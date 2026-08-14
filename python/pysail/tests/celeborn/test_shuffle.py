@@ -8,17 +8,24 @@ from typing import TYPE_CHECKING
 import pytest
 
 from pysail import _native
+from pysail.testing.proxy import (
+    Close,
+    ConnectionAccepted,
+    ConnectionClosed,
+    ConnectionOpened,
+    ConnectionRule,
+    ProxyEvent,
+    RuleApplied,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
     from pysail.testing.containers.celeborn import (
-        FaultInjectingTcpProxy,
         MasterService,
-        PushFaultController,
-        PushFaultSnapshot,
         WorkerService,
     )
+    from pysail.testing.proxy import EndpointProxy
 
 
 ShuffleClient = _native._celeborn.ShuffleClient  # noqa: SLF001
@@ -29,10 +36,27 @@ _MAX_RECOVERY_TIME_SECONDS = 2
 _MULTI_EPOCH_WORKER_COUNT = 2
 
 
-def _assert_revive_route(snapshot: PushFaultSnapshot) -> None:
-    assert len(snapshot.dropped_workers) == 1
-    assert len(snapshot.forwarded_workers) == 1
-    assert snapshot.dropped_workers[0] != snapshot.forwarded_workers[0]
+def _add_drop_next_connection(proxies: dict[str, EndpointProxy]) -> None:
+    """Install one shared one-shot rule across every worker push endpoint."""
+    rule = ConnectionRule(action=lambda _: Close("injected dropped connection"))
+    for proxy in proxies.values():
+        proxy.rules.add(rule)
+
+
+def _event_count(
+    proxies: dict[str, EndpointProxy],
+    event_type: type[ProxyEvent],
+    **attributes: object,
+) -> int:
+    return sum(proxy.events.count(event_type, **attributes) for proxy in proxies.values())
+
+
+def _event_workers(
+    proxies: dict[str, EndpointProxy],
+    event_type: type[ProxyEvent],
+    **attributes: object,
+) -> tuple[str, ...]:
+    return tuple(worker for worker, proxy in proxies.items() if proxy.events.count(event_type, **attributes))
 
 
 @pytest.fixture(scope="module")
@@ -139,8 +163,8 @@ def test_shuffle_client_stop_does_not_stop_lifecycle_manager(
 
 def test_shuffle_client_revives_a_dropped_push_connection(
     celeborn_master: MasterService,
-    celeborn_push_fault_endpoint_resolver: object,
-    celeborn_push_fault_controller: PushFaultController,
+    celeborn_push_endpoint_resolver: object,
+    celeborn_push_proxies: dict[str, EndpointProxy],
 ) -> None:
     """A failed first push is retried on the other already-running worker."""
     with (
@@ -148,19 +172,20 @@ def test_shuffle_client_revives_a_dropped_push_connection(
             celeborn_master.host,
             celeborn_master.port,
             "sail-celeborn-revive-first-push",
-            celeborn_push_fault_endpoint_resolver,
+            celeborn_push_endpoint_resolver,
         ) as manager,
         ShuffleClient(manager) as client,
     ):
         workers = client.register_shuffle(1, [0], False, 1)
         assert workers
-        celeborn_push_fault_controller.reset()
-        celeborn_push_fault_controller.drop_next_connection()
+        _add_drop_next_connection(celeborn_push_proxies)
 
         started = time.monotonic()
         assert client.push_data(1, 0, 0, 0, _DATA) == len(_DATA) + 16
         assert time.monotonic() - started < _MAX_RECOVERY_TIME_SECONDS
-        _assert_revive_route(celeborn_push_fault_controller.snapshot())
+        assert _event_count(celeborn_push_proxies, ConnectionAccepted) == _MULTI_EPOCH_WORKER_COUNT
+        assert _event_count(celeborn_push_proxies, RuleApplied) == 1
+        assert len(_event_workers(celeborn_push_proxies, ConnectionOpened)) == 1
         client.mapper_end(1, 0, 0, 1)
 
         assert b"".join(client.read_partition_stream(1, 0)) == _DATA
@@ -168,9 +193,8 @@ def test_shuffle_client_revives_a_dropped_push_connection(
 
 def test_shuffle_client_reads_data_from_epochs_before_and_after_revive(
     celeborn_master: MasterService,
-    celeborn_push_fault_endpoint_resolver: object,
-    celeborn_push_fault_controller: PushFaultController,
-    celeborn_push_fault_proxies: dict[str, FaultInjectingTcpProxy],
+    celeborn_push_endpoint_resolver: object,
+    celeborn_push_proxies: dict[str, EndpointProxy],
 ) -> None:
     """A recoverable location change must preserve earlier committed epoch data."""
     before_revive = b"epoch zero"
@@ -180,29 +204,27 @@ def test_shuffle_client_reads_data_from_epochs_before_and_after_revive(
             celeborn_master.host,
             celeborn_master.port,
             "sail-celeborn-revive-multi-epoch",
-            celeborn_push_fault_endpoint_resolver,
+            celeborn_push_endpoint_resolver,
         ) as manager,
         ShuffleClient(manager) as client,
     ):
         workers = client.register_shuffle(2, [0], False, 1)
         assert workers
-        celeborn_push_fault_controller.reset()
 
         assert client.push_data(2, 0, 0, 0, before_revive) == len(before_revive) + 16
-        before_revive_faults = celeborn_push_fault_controller.snapshot()
-        assert len(before_revive_faults.forwarded_workers) == 1
-        first_worker = before_revive_faults.forwarded_workers[0]
-        for proxy in celeborn_push_fault_proxies.values():
-            proxy.disconnect_clients()
+        (first_worker,) = _event_workers(celeborn_push_proxies, ConnectionOpened)
+        assert sum(proxy.disconnect_active_connections() for proxy in celeborn_push_proxies.values()) == 1
 
         started = time.monotonic()
         assert client.push_data(2, 0, 0, 0, after_revive) == len(after_revive) + 16
         assert time.monotonic() - started < _MAX_RECOVERY_TIME_SECONDS
-        after_revive_faults = celeborn_push_fault_controller.snapshot()
-        assert after_revive_faults.disconnected_workers == (first_worker,)
-        assert len(after_revive_faults.forwarded_workers) == _MULTI_EPOCH_WORKER_COUNT
-        assert after_revive_faults.forwarded_workers[0] == first_worker
-        assert after_revive_faults.forwarded_workers[1] != first_worker
+        assert _event_workers(
+            celeborn_push_proxies,
+            ConnectionClosed,
+            reason="test requested disconnect",
+        ) == (first_worker,)
+        assert _event_count(celeborn_push_proxies, ConnectionOpened) == _MULTI_EPOCH_WORKER_COUNT
+        assert len(_event_workers(celeborn_push_proxies, ConnectionOpened)) == _MULTI_EPOCH_WORKER_COUNT
         client.mapper_end(2, 0, 0, 1)
 
         assert b"".join(client.read_partition_stream(2, 0)) == before_revive + after_revive
@@ -210,9 +232,8 @@ def test_shuffle_client_reads_data_from_epochs_before_and_after_revive(
 
 def test_shuffle_client_does_not_reuse_a_worker_that_failed_in_an_earlier_epoch(
     celeborn_master: MasterService,
-    celeborn_push_fault_endpoint_resolver: object,
-    celeborn_push_fault_controller: PushFaultController,
-    celeborn_push_fault_proxies: dict[str, FaultInjectingTcpProxy],
+    celeborn_push_endpoint_resolver: object,
+    celeborn_push_proxies: dict[str, EndpointProxy],
 ) -> None:
     """A second revive must not route data back to the worker that failed first."""
     with (
@@ -220,36 +241,35 @@ def test_shuffle_client_does_not_reuse_a_worker_that_failed_in_an_earlier_epoch(
             celeborn_master.host,
             celeborn_master.port,
             "sail-celeborn-revive-worker-exclusion",
-            celeborn_push_fault_endpoint_resolver,
+            celeborn_push_endpoint_resolver,
         ) as manager,
         ShuffleClient(manager) as client,
     ):
         client.register_shuffle(3, [0], False, 1)
-        celeborn_push_fault_controller.reset()
 
         assert client.push_data(3, 0, 0, 0, b"epoch zero") == len(b"epoch zero") + 16
-        for proxy in celeborn_push_fault_proxies.values():
-            proxy.disconnect_clients()
+        assert sum(proxy.disconnect_active_connections() for proxy in celeborn_push_proxies.values()) == 1
         assert client.push_data(3, 0, 0, 0, b"epoch one") == len(b"epoch one") + 16
-        celeborn_push_fault_controller.drop_next_connection()
+        _add_drop_next_connection(celeborn_push_proxies)
         with pytest.raises(RuntimeError, match="master error: status 27"):
             client.push_data(3, 0, 0, 0, b"epoch two")
 
-        faults = celeborn_push_fault_controller.snapshot()
-        assert len(faults.disconnected_workers) == 1
-        assert len(faults.dropped_workers) == 1
-        assert len(faults.forwarded_workers) == 2  # noqa: PLR2004
-        assert faults.forwarded_workers == (
-            *faults.disconnected_workers,
-            *faults.dropped_workers,
+        assert (
+            _event_count(
+                celeborn_push_proxies,
+                ConnectionClosed,
+                reason="test requested disconnect",
+            )
+            == 1
         )
+        assert _event_count(celeborn_push_proxies, RuleApplied) == 1
+        assert _event_count(celeborn_push_proxies, ConnectionOpened) == 2  # noqa: PLR2004
 
 
 def test_shuffle_client_reader_discovers_epochs_revived_by_another_client(
     celeborn_master: MasterService,
-    celeborn_push_fault_endpoint_resolver: object,
-    celeborn_push_fault_controller: PushFaultController,
-    celeborn_push_fault_proxies: dict[str, FaultInjectingTcpProxy],
+    celeborn_push_endpoint_resolver: object,
+    celeborn_push_proxies: dict[str, EndpointProxy],
 ) -> None:
     """A pre-registered reader must include epochs created by a different writer."""
     before_revive = b"epoch zero"
@@ -259,27 +279,29 @@ def test_shuffle_client_reader_discovers_epochs_revived_by_another_client(
             celeborn_master.host,
             celeborn_master.port,
             "sail-celeborn-revive-reader-location-update",
-            celeborn_push_fault_endpoint_resolver,
+            celeborn_push_endpoint_resolver,
         ) as manager,
         ShuffleClient(manager) as writer,
         ShuffleClient(manager) as reader,
     ):
         writer.register_shuffle(4, [0], False, 1)
         reader.register_shuffle(4, [0], False, 1)
-        celeborn_push_fault_controller.reset()
 
         assert writer.push_data(4, 0, 0, 0, before_revive) == len(before_revive) + 16
-        for proxy in celeborn_push_fault_proxies.values():
-            proxy.disconnect_clients()
+        assert sum(proxy.disconnect_active_connections() for proxy in celeborn_push_proxies.values()) == 1
         assert writer.push_data(4, 0, 0, 0, after_revive) == len(after_revive) + 16
         writer.mapper_end(4, 0, 0, 1)
 
-        faults = celeborn_push_fault_controller.snapshot()
-        assert len(faults.disconnected_workers) == 1
-        assert len(faults.forwarded_workers) == 2  # noqa: PLR2004
-        first_epoch_worker, second_epoch_worker = faults.forwarded_workers
-        assert first_epoch_worker == faults.disconnected_workers[0]
-        assert second_epoch_worker != first_epoch_worker
+        assert (
+            _event_count(
+                celeborn_push_proxies,
+                ConnectionClosed,
+                reason="test requested disconnect",
+            )
+            == 1
+        )
+        assert _event_count(celeborn_push_proxies, ConnectionOpened) == 2  # noqa: PLR2004
+        assert len(_event_workers(celeborn_push_proxies, ConnectionOpened)) == 2  # noqa: PLR2004
 
         # Replication is disabled, so the two payloads live on different workers.
         # Reading their concatenation proves the reader opens both epoch streams.
