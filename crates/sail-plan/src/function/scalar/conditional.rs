@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
@@ -8,23 +10,35 @@ use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
 
 use crate::error::PlanResult;
-use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+use crate::function::common::{FunctionContextInput, ScalarFunction, ScalarFunctionInput};
 
 fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let ScalarFunctionInput { arguments, .. } = input;
-    let mut when_then_expr = Vec::new();
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let mut conditions = Vec::new();
+    let mut branch_values = Vec::new();
     let mut iter = arguments.into_iter();
     while let Some(condition) = iter.next() {
         match iter.next() {
             Some(result) => {
-                when_then_expr.push((Box::new(condition), Box::new(result)));
+                conditions.push(condition);
+                branch_values.push(result);
             }
             _ => {
-                when_then_expr.push((Box::new(lit(true)), Box::new(condition)));
+                conditions.push(lit(true));
+                branch_values.push(condition);
                 break;
             }
         }
     }
+    let branch_values = coerce_string_temporal_values(branch_values, &function_context)?;
+    let when_then_expr = conditions
+        .into_iter()
+        .zip(branch_values)
+        .map(|(condition, value)| (Box::new(condition), Box::new(value)))
+        .collect();
     Ok(expr::Expr::Case(expr::Case {
         expr: None, // Expr::Case in from_ast_expression incorporates into when_then_expr
         when_then_expr,
@@ -33,8 +47,13 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn if_expr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let ScalarFunctionInput { arguments, .. } = input;
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
     let (when_expr, then_expr, else_expr) = arguments.three()?;
+    let (then_expr, else_expr) =
+        coerce_string_temporal_values(vec![then_expr, else_expr], &function_context)?.two()?;
     Ok(expr::Expr::Case(expr::Case {
         expr: None,
         when_then_expr: vec![(Box::new(when_expr), Box::new(then_expr))],
@@ -47,12 +66,21 @@ fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         arguments,
         function_context,
     } = input;
+    let arguments = coerce_string_temporal_values(arguments, &function_context)?;
+    Ok(expr_fn::coalesce(arguments))
+}
+
+fn coerce_string_temporal_values(
+    arguments: Vec<expr::Expr>,
+    function_context: &FunctionContextInput<'_>,
+) -> PlanResult<Vec<expr::Expr>> {
     let data_types = arguments
         .iter()
         .map(|arg| arg.get_type(function_context.schema))
         .collect::<Result<Vec<_>, _>>()?;
     let has_string = data_types.iter().any(is_string_type);
-    let temporal_type = common_temporal_type(&data_types);
+    let temporal_type =
+        common_temporal_type(&data_types, &function_context.plan_config.session_timezone);
     let arguments = if has_string {
         if let Some(temporal_type) = temporal_type {
             if function_context.plan_config.ansi_mode {
@@ -80,7 +108,7 @@ fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     } else {
         arguments
     };
-    Ok(expr_fn::coalesce(arguments))
+    Ok(arguments)
 }
 
 fn coerce_to_temporal(
@@ -94,7 +122,7 @@ fn coerce_to_temporal(
     if is_string_type(data_type) {
         match target_type {
             DataType::Date32 => Ok(ScalarUDF::from(SparkDate::new(false)).call(vec![arg])),
-            // Only reached on the ANSI-enabled coalesce path, so strict parsing.
+            // This is only reached when ANSI mode requires a temporal common type.
             DataType::Timestamp(_, timezone) => {
                 Ok(
                     ScalarUDF::from(SparkTimestamp::try_new(timezone.clone(), true, false)?)
@@ -110,21 +138,26 @@ fn coerce_to_temporal(
     }
 }
 
-fn common_temporal_type(data_types: &[DataType]) -> Option<DataType> {
-    data_types
+fn common_temporal_type(data_types: &[DataType], session_timezone: &Arc<str>) -> Option<DataType> {
+    if data_types
         .iter()
-        .find_map(|data_type| match data_type {
-            DataType::Timestamp(_, timezone) => {
-                Some(DataType::Timestamp(TimeUnit::Microsecond, timezone.clone()))
-            }
-            _ => None,
-        })
-        .or_else(|| {
-            data_types
-                .iter()
-                .any(is_date_type)
-                .then_some(DataType::Date32)
-        })
+        .any(|data_type| matches!(data_type, DataType::Timestamp(_, Some(_))))
+    {
+        Some(DataType::Timestamp(
+            TimeUnit::Microsecond,
+            Some(Arc::clone(session_timezone)),
+        ))
+    } else if data_types
+        .iter()
+        .any(|data_type| matches!(data_type, DataType::Timestamp(_, None)))
+    {
+        Some(DataType::Timestamp(TimeUnit::Microsecond, None))
+    } else {
+        data_types
+            .iter()
+            .any(is_date_type)
+            .then_some(DataType::Date32)
+    }
 }
 
 fn is_string_type(data_type: &DataType) -> bool {
