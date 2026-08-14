@@ -61,3 +61,37 @@ def test_postgres_writer_streams_arrow_batches(monkeypatch):
         ("events", [], {"mode": "append", "db_schema_name": "analytics"}),
         "commit",
     ]
+
+
+@pytest.mark.parametrize(
+    ("dbtable", "expected"),
+    [
+        ("Events", (None, "events")),
+        ('"events.log"', (None, "events.log")),
+        ('"analytics.data"."events""log"', ("analytics.data", 'events"log')),
+    ],
+)
+def test_postgres_writer_parses_dbtable(dbtable, expected):
+    datasource = JdbcDataSource(
+        options={
+            "url": "jdbc:postgresql://localhost:5432/db",
+            "dbtable": dbtable,
+        }
+    )
+
+    writer = datasource.writer(pa.schema({"id": pa.int64()}), overwrite=False)
+
+    assert (writer.schema, writer.table) == expected
+
+
+@pytest.mark.parametrize("dbtable", ["analytics.events.extra", '"unterminated'])
+def test_postgres_writer_rejects_invalid_dbtable(dbtable):
+    datasource = JdbcDataSource(
+        options={
+            "url": "jdbc:postgresql://localhost:5432/db",
+            "dbtable": dbtable,
+        }
+    )
+
+    with pytest.raises(ValueError, match=r"PostgreSQL.*identifier"):
+        datasource.writer(pa.schema({"id": pa.int64()}), overwrite=False)

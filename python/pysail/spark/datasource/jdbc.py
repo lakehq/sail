@@ -11,6 +11,7 @@ Install the optional dependency before use::
 from __future__ import annotations
 
 import datetime
+import re
 from urllib.parse import quote
 
 try:
@@ -90,6 +91,22 @@ def _jdbc_url_to_dsn(url: str, user: str | None, password: str | None) -> str:
 def _quote_identifier(name: str) -> str:
     """Double-quote a SQL identifier, escaping any embedded double quotes."""
     return '"' + name.replace('"', '""') + '"'
+
+
+_POSTGRES_IDENTIFIER = r'"(?:[^"]|"")+"|[^\W\d][\w$]*'
+_POSTGRES_DBTABLE = re.compile(rf"\s*({_POSTGRES_IDENTIFIER})(?:\s*\.\s*({_POSTGRES_IDENTIFIER}))?\s*")
+
+
+def _parse_postgres_dbtable(dbtable: str) -> tuple[str | None, str]:
+    """Parse a PostgreSQL ``[schema.]table`` identifier for ADBC."""
+    match = _POSTGRES_DBTABLE.fullmatch(dbtable)
+    if match is None:
+        msg = f"JDBC writes require 'dbtable' to be a PostgreSQL identifier in [schema.]table form; got {dbtable!r}"
+        raise ValueError(msg)
+
+    parts = [part for part in match.groups() if part is not None]
+    names = [part[1:-1].replace('""', '"') if part.startswith('"') else part.lower() for part in parts]
+    return (None, names[0]) if len(names) == 1 else (names[0], names[1])
 
 
 # ============================================================================
@@ -263,9 +280,9 @@ def _build_where(filters: list[str]) -> str:
 
 class _PostgresJdbcWriter(DataSourceArrowWriter):
     def __init__(self, conn_str: str, dbtable: str, input_schema: pa.Schema):
-        schema, _, table = dbtable.rpartition(".")
+        schema, table = _parse_postgres_dbtable(dbtable)
         self.conn_str = conn_str
-        self.schema = schema or None
+        self.schema = schema
         self.table = table
         self.input_schema = input_schema
 
