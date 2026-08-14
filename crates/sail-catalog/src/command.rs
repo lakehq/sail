@@ -2,7 +2,7 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use sail_common_datafusion::array::serde::ArrowSerializer;
 use sail_common_datafusion::catalog::{FunctionStatus, LakehouseOperation};
-use sail_common_datafusion::datasource::{SourceRegistry, is_lakehouse_format};
+use sail_common_datafusion::datasource::{DataSourceRegistry, is_lakehouse_format};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakesource::{
     LakeSourceAlterTableOperation, LakeSourceCreateTableColumn, LakeSourceCreateTableInfo,
@@ -480,9 +480,9 @@ impl CatalogCommand {
                         manager.alter_table(&table, options).await?;
                         return Ok(display.bools().to_record_batch(vec![true])?);
                     }
-                    let registry = ctx.extension::<SourceRegistry>().map_err(|e| {
+                    let registry = ctx.extension::<DataSourceRegistry>().map_err(|e| {
                         CatalogError::External(format!(
-                            "missing SourceRegistry for storage-backed ALTER TABLE on format '{format}': {e}"
+                            "missing DataSourceRegistry for storage-backed ALTER TABLE on format '{format}': {e}"
                         ))
                     })?;
                     let lake_source = registry.get_lake_source(&format).map_err(|e| {
@@ -869,9 +869,9 @@ async fn materialize_lake_source_create_metadata<C: SessionExtensionAccessor>(
     replace: bool,
     lakehouse_table: Option<sail_common_datafusion::catalog::LakehouseExecutionContext>,
 ) -> CatalogResult<LakeSourceCreateTableResult> {
-    let registry = ctx.extension::<SourceRegistry>().map_err(|e| {
+    let registry = ctx.extension::<DataSourceRegistry>().map_err(|e| {
         CatalogError::External(format!(
-            "missing SourceRegistry for CREATE TABLE on format '{format}': {e}"
+            "missing DataSourceRegistry for CREATE TABLE on format '{format}': {e}"
         ))
     })?;
     let lake_source = registry.get_lake_source(format).map_err(|e| {
@@ -1311,6 +1311,10 @@ mod tests {
             "delta"
         }
 
+        fn as_lake_source(self: Arc<Self>) -> Option<Arc<dyn LakeSource>> {
+            Some(self)
+        }
+
         async fn create_source(
             &self,
             _ctx: &dyn Session,
@@ -1342,8 +1346,8 @@ mod tests {
     }
 
     fn test_session_context() -> SessionContext {
-        let registry = Arc::new(SourceRegistry::new());
-        let register_result = registry.register_lake_source(Arc::new(TestLakeSource));
+        let registry = Arc::new(DataSourceRegistry::new());
+        let register_result = registry.register_data_source(Arc::new(TestLakeSource));
         assert!(
             register_result.is_ok(),
             "failed to register test lake source: {register_result:?}"

@@ -28,7 +28,7 @@ use sail_common_datafusion::column_features::{
     ColumnFeatures, ColumnFeaturesBuilder, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
 };
 use sail_common_datafusion::datasource::{
-    BucketBy, OptionLayer, SinkInfo, SinkMode, SourceInfo, SourceRegistry, find_path_in_options,
+    BucketBy, DataSourceRegistry, OptionLayer, SinkInfo, SinkMode, SourceInfo, find_path_in_options,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
@@ -524,7 +524,7 @@ impl PlanResolver<'_> {
             .rewrite_delta_check_constraints_from_options(input, &write_format, &sink_info, state)
             .await?;
         sink_info.input = input;
-        let registry = self.ctx.extension::<SourceRegistry>()?;
+        let registry = self.ctx.extension::<DataSourceRegistry>()?;
         let plan = registry
             .get_data_source(&write_format)?
             .create_writer(&self.ctx.state(), sink_info)
@@ -629,7 +629,7 @@ impl PlanResolver<'_> {
                 // Discover the schema from the data source so that write operations
                 // (INSERT INTO) can validate the input schema correctly.
                 if columns.is_empty() {
-                    let registry = self.ctx.extension::<SourceRegistry>().map_err(|e| {
+                    let registry = self.ctx.extension::<DataSourceRegistry>().map_err(|e| {
                         PlanError::invalid(format!(
                             "failed to access source registry for table `{table:?}`: {e}",
                         ))
@@ -682,7 +682,7 @@ impl PlanResolver<'_> {
                         columns = Self::table_columns_from_format_schema(schema.as_ref());
                     }
                 } else if format.eq_ignore_ascii_case("delta") && location.is_some() {
-                    let registry = self.ctx.extension::<SourceRegistry>().map_err(|e| {
+                    let registry = self.ctx.extension::<DataSourceRegistry>().map_err(|e| {
                         PlanError::invalid(format!(
                             "failed to access lake source registry for table `{table:?}`: {e}",
                         ))

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::common::Result;
-use sail_common_datafusion::datasource::SourceRegistry;
+use sail_common_datafusion::datasource::DataSourceRegistry;
 use sail_data_source::formats::arrow::ArrowDataSource;
 use sail_data_source::formats::avro::AvroDataSource;
 use sail_data_source::formats::binary::BinaryDataSource;
@@ -17,15 +17,15 @@ use sail_data_source::formats::text::TextDataSource;
 use sail_delta_lake::DeltaLakeSource;
 use sail_iceberg::IcebergLakeSource;
 
-pub(crate) fn create_source_registry() -> Result<Arc<SourceRegistry>> {
-    let registry = Arc::new(SourceRegistry::new());
+pub(crate) fn create_source_registry() -> Result<Arc<DataSourceRegistry>> {
+    let registry = Arc::new(DataSourceRegistry::new());
     register_builtin_data_sources(&registry)?;
     register_lake_sources(&registry)?;
     register_external_data_sources(&registry)?;
     Ok(registry)
 }
 
-fn register_builtin_data_sources(registry: &SourceRegistry) -> Result<()> {
+fn register_builtin_data_sources(registry: &DataSourceRegistry) -> Result<()> {
     registry.register_data_source(Arc::new(ArrowDataSource::default()))?;
     registry.register_data_source(Arc::new(AvroDataSource::default()))?;
     registry.register_data_source(Arc::new(BinaryDataSource::default()))?;
@@ -40,13 +40,13 @@ fn register_builtin_data_sources(registry: &SourceRegistry) -> Result<()> {
     Ok(())
 }
 
-fn register_lake_sources(registry: &SourceRegistry) -> Result<()> {
-    registry.register_lake_source(Arc::new(DeltaLakeSource))?;
-    registry.register_lake_source(Arc::new(IcebergLakeSource))?;
+fn register_lake_sources(registry: &DataSourceRegistry) -> Result<()> {
+    registry.register_data_source(Arc::new(DeltaLakeSource))?;
+    registry.register_data_source(Arc::new(IcebergLakeSource))?;
     Ok(())
 }
 
-fn register_external_data_sources(registry: &SourceRegistry) -> Result<()> {
+fn register_external_data_sources(registry: &DataSourceRegistry) -> Result<()> {
     // Register Python data sources
     {
         discover_data_sources()?;
@@ -62,7 +62,7 @@ mod tests {
 
     #[test]
     fn separates_data_sources_from_lake_sources() -> Result<()> {
-        let registry = SourceRegistry::new();
+        let registry = DataSourceRegistry::new();
         register_builtin_data_sources(&registry)?;
         register_lake_sources(&registry)?;
 

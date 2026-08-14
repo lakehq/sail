@@ -7,7 +7,7 @@ use sail_common::spec;
 use sail_common_datafusion::catalog::{
     LakehouseExecutionContext, LakehouseOperation, TableKind, TableStatus,
 };
-use sail_common_datafusion::datasource::{DeleteInfo, OptionLayer, SourceInfo, SourceRegistry};
+use sail_common_datafusion::datasource::{DataSourceRegistry, DeleteInfo, OptionLayer, SourceInfo};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::rename::expression::expression_before_rename;
@@ -74,7 +74,7 @@ impl PlanResolver<'_> {
             }],
         };
 
-        let registry = self.ctx.extension::<SourceRegistry>()?;
+        let registry = self.ctx.extension::<DataSourceRegistry>()?;
         registry
             .get_lake_source(&info.format)?
             .create_deleter(&self.ctx.state(), delete_info)
@@ -131,7 +131,7 @@ impl PlanResolver<'_> {
                 options: vec![],
                 read_case_sensitive: self.config.case_sensitive,
             };
-            let registry = self.ctx.extension::<SourceRegistry>()?;
+            let registry = self.ctx.extension::<DataSourceRegistry>()?;
             let lake_source = registry.get_lake_source(&format)?;
             let source = lake_source
                 .create_source(&self.ctx.state(), source_info)

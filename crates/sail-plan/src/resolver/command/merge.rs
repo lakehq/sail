@@ -10,7 +10,7 @@ use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::{LakehouseOperation, TableKind};
 use sail_common_datafusion::column_features::ColumnFeatures;
-use sail_common_datafusion::datasource::{MergeInfo, OptionLayer, SourceInfo, SourceRegistry};
+use sail_common_datafusion::datasource::{DataSourceRegistry, MergeInfo, OptionLayer, SourceInfo};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_logical_plan::merge::{
@@ -203,7 +203,7 @@ impl PlanResolver<'_> {
             check_constraint_exprs,
         };
 
-        let registry = self.ctx.extension::<SourceRegistry>()?;
+        let registry = self.ctx.extension::<DataSourceRegistry>()?;
         let format = registry.get_lake_source(&target_format)?;
         let session_state = self.ctx.state();
         Ok(format
@@ -903,7 +903,7 @@ impl PlanResolver<'_> {
         // where the first part is a registered lake source name.
         if let [format, path] = table.parts() {
             let format = format.as_ref().to_ascii_lowercase();
-            let registry = self.ctx.extension::<SourceRegistry>()?;
+            let registry = self.ctx.extension::<DataSourceRegistry>()?;
             if let Ok(lake_source) = registry.get_lake_source(&format) {
                 let location = path.as_ref().to_string();
                 let metadata = lake_source

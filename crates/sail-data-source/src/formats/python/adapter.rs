@@ -1,7 +1,7 @@
 /// DataSource implementation for Python data sources.
 ///
 /// This enables Python data sources to be used with `spark.read.format("name")` syntax
-/// by integrating with the SourceRegistry.
+/// by integrating with the DataSourceRegistry.
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -16,7 +16,7 @@ use datafusion_common::{DFSchema, DFSchemaRef, Result, internal_err};
 use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
 use educe::Educe;
 use sail_common_datafusion::datasource::{
-    DataSource, OptionLayer, SinkInfo, SinkMode, SourceInfo, SourceRegistry,
+    DataSource, DataSourceRegistry, OptionLayer, SinkInfo, SinkMode, SourceInfo,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
 
@@ -63,11 +63,11 @@ impl PythonDataSourceAdapter {
         }
     }
 
-    /// Register all discovered Python data sources with the SourceRegistry.
+    /// Register all discovered Python data sources with the DataSourceRegistry.
     ///
     /// This should be called during session initialization after calling
     /// `discover_data_sources()`.
-    pub fn register_all(registry: &SourceRegistry) -> Result<()> {
+    pub fn register_all(registry: &DataSourceRegistry) -> Result<()> {
         for name in DATA_SOURCE_REGISTRY.list() {
             if registry.get_lake_source_if_supported(&name)?.is_some() {
                 continue;

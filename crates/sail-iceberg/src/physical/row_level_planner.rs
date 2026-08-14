@@ -128,7 +128,7 @@ async fn plan_iceberg_delete(
         .await?;
 
     let writer_options = resolve_row_level_writer_options(session_state, node)?;
-    let partition_columns = IcebergTableFormat::partition_columns_from_metadata(&table)?;
+    let partition_columns = IcebergLakeSource::partition_columns_from_metadata(&table)?;
     let current_schema = table.metadata().current_schema().ok_or_else(|| {
         DataFusionError::Plan("Iceberg table metadata is missing current schema".to_string())
     })?;

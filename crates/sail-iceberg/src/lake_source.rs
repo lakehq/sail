@@ -84,6 +84,10 @@ impl DataSource for IcebergLakeSource {
         "iceberg"
     }
 
+    fn as_lake_source(self: Arc<Self>) -> Option<Arc<dyn LakeSource>> {
+        Some(self)
+    }
+
     async fn create_source(
         &self,
         ctx: &dyn Session,
@@ -169,7 +173,7 @@ impl LakeSource for IcebergLakeSource {
             bucket_by: None,
             sort_order: vec![],
             options: options.clone(),
-            // TODO: Thread resolver session case-sensitivity into TableFormat::create_deleter.
+            // TODO: Thread resolver session case-sensitivity into LakeSource::create_deleter.
             read_case_sensitive: true,
         };
         let provider = build_iceberg_provider(ctx, source_info).await?;
