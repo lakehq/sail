@@ -17,6 +17,7 @@ impl Actor for ShuffleClientActor {
             options,
             shuffle_ids: Default::default(),
             locations: Default::default(),
+            location_history: Default::default(),
             worker_clients: Default::default(),
             batch_ids: Default::default(),
         }
@@ -78,6 +79,13 @@ impl Actor for ShuffleClientActor {
                 data,
                 result,
             ),
+            ShuffleClientMessage::PushDataComplete {
+                shuffle_id,
+                partition_id,
+                location,
+                result,
+                reply,
+            } => self.handle_push_data_complete(shuffle_id, partition_id, location, result, reply),
             ShuffleClientMessage::MapperEnd {
                 shuffle_id,
                 map_id,
@@ -101,6 +109,18 @@ impl Actor for ShuffleClientActor {
                 partition_id,
                 result,
             } => self.handle_read_partition_stream(ctx, shuffle_id, partition_id, result),
+            ShuffleClientMessage::ReadPartitionStreamComplete {
+                shuffle_id,
+                partition_id,
+                result,
+                reply,
+            } => self.handle_read_partition_stream_complete(
+                ctx,
+                shuffle_id,
+                partition_id,
+                result,
+                reply,
+            ),
             ShuffleClientMessage::Stop { result } => self.handle_stop(result),
         }
     }

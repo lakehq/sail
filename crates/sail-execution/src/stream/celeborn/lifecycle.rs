@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 
 use sail_celeborn::error::{CelebornError, CelebornResult};
-use sail_celeborn::lifecycle::LifecycleManager;
+use sail_celeborn::lifecycle::{LifecycleManager, ReviveRequest};
 use sail_celeborn::master::{PartitionLocation, SlotReservation};
 
 use crate::driver::CelebornLifecycleManagerClient;
+use crate::driver::r#gen::CelebornPartitionLocation;
 
 #[derive(Clone)]
 pub(crate) struct RemoteLifecycleManager {
@@ -49,30 +50,47 @@ impl LifecycleManager for RemoteLifecycleManager {
             .primary_locations
             .into_iter()
             .map(|location| {
-                let location = PartitionLocation {
-                    mode: location.mode,
-                    id: location.id,
-                    epoch: location.epoch,
-                    host: location.host,
-                    rpc_port: u16::try_from(location.rpc_port)
-                        .map_err(|_| CelebornError::Protocol("invalid RPC port".to_string()))?,
-                    push_port: u16::try_from(location.push_port)
-                        .map_err(|_| CelebornError::Protocol("invalid push port".to_string()))?,
-                    fetch_port: u16::try_from(location.fetch_port)
-                        .map_err(|_| CelebornError::Protocol("invalid fetch port".to_string()))?,
-                    replicate_port: u16::try_from(location.replicate_port).map_err(|_| {
-                        CelebornError::Protocol("invalid replication port".to_string())
-                    })?,
-                    peer: None,
-                };
+                let location = PartitionLocation::try_from(location)?;
                 Ok((location.id, location))
             })
             .collect::<CelebornResult<HashMap<_, _>>>()?;
+        let mut worker_locations =
+            HashMap::<String, sail_celeborn::master::WorkerSlotLocations>::new();
+        for location in response.all_primary_locations {
+            let location = PartitionLocation::try_from(location)?;
+            let worker_id = location.worker_id();
+            worker_locations
+                .entry(worker_id)
+                .or_insert_with(|| sail_celeborn::master::WorkerSlotLocations {
+                    primary_locations: Vec::new(),
+                    replica_locations: Vec::new(),
+                })
+                .primary_locations
+                .push(location);
+        }
         Ok(SlotReservation {
             worker_ids: vec![],
             primary_locations,
-            worker_locations: HashMap::new(),
+            worker_locations,
         })
+    }
+
+    async fn revive(&self, request: ReviveRequest) -> CelebornResult<PartitionLocation> {
+        let response = self
+            .client
+            .revive(
+                request.shuffle_id,
+                request.partition_id,
+                request.map_id,
+                request.attempt_id,
+                CelebornPartitionLocation::from(request.old_location),
+                request.cause,
+            )
+            .await
+            .map_err(|error| CelebornError::Application(error.to_string()))?;
+        PartitionLocation::try_from(response.location.ok_or_else(|| {
+            CelebornError::Protocol("missing revived partition location".to_string())
+        })?)
     }
 
     async fn mapper_end(

@@ -1,7 +1,7 @@
 use std::fmt::Display;
 use std::sync::Arc;
 
-use sail_celeborn::lifecycle::{LifecycleManagerActor, LifecycleManagerMessage};
+use sail_celeborn::lifecycle::{LifecycleManagerActor, LifecycleManagerMessage, ReviveRequest};
 use sail_celeborn::master::PartitionLocation;
 use sail_common::actor::ActorHandle;
 use tokio::sync::oneshot;
@@ -12,18 +12,19 @@ use crate::driver::r#gen::celeborn_lifecycle_manager_service_server::CelebornLif
 use crate::driver::r#gen::{
     CelebornGetJobShuffleIdsRequest, CelebornGetJobShuffleIdsResponse, CelebornGetShuffleIdRequest,
     CelebornGetShuffleIdResponse, CelebornMapperEndRequest, CelebornMapperEndResponse,
-    CelebornPartitionLocation, CelebornRegisterShuffleRequest, CelebornRegisterShuffleResponse,
-    CelebornShuffleId, CelebornUnregisterShuffleRequest, CelebornUnregisterShuffleResponse,
+    CelebornRegisterShuffleRequest, CelebornRegisterShuffleResponse, CelebornReviveRequest,
+    CelebornReviveResponse, CelebornShuffleId, CelebornUnregisterShuffleRequest,
+    CelebornUnregisterShuffleResponse,
 };
 use crate::error::ExecutionError;
 use crate::id::DriverId;
 
-pub struct CelebornLifecycleManagerServer {
+pub(crate) struct CelebornLifecycleManagerServer {
     registry: Arc<dyn DriverRegistryAccessor>,
 }
 
 impl CelebornLifecycleManagerServer {
-    pub fn new(registry: Arc<dyn DriverRegistryAccessor>) -> Self {
+    pub(crate) fn new(registry: Arc<dyn DriverRegistryAccessor>) -> Self {
         Self { registry }
     }
 
@@ -47,20 +48,6 @@ fn status(error: impl Display) -> Status {
     Status::internal(error.to_string())
 }
 
-fn location(partition: PartitionLocation) -> CelebornPartitionLocation {
-    CelebornPartitionLocation {
-        id: partition.id,
-        epoch: partition.epoch,
-        host: partition.host,
-        rpc_port: partition.rpc_port as u32,
-        push_port: partition.push_port as u32,
-        fetch_port: partition.fetch_port as u32,
-        replicate_port: partition.replicate_port as u32,
-        peer: partition.peer.map(|peer| Box::new(location(*peer))),
-        mode: partition.mode,
-    }
-}
-
 #[tonic::async_trait]
 impl CelebornLifecycleManagerService for CelebornLifecycleManagerServer {
     async fn get_shuffle_id(
@@ -82,6 +69,31 @@ impl CelebornLifecycleManagerService for CelebornLifecycleManagerServer {
             .map_err(ExecutionError::from)?;
         let shuffle_id = receiver.await.map_err(status)?.map_err(status)?;
         Ok(Response::new(CelebornGetShuffleIdResponse { shuffle_id }))
+    }
+
+    async fn get_job_shuffle_ids(
+        &self,
+        request: Request<CelebornGetJobShuffleIdsRequest>,
+    ) -> Result<Response<CelebornGetJobShuffleIdsResponse>, Status> {
+        let request = request.into_inner();
+        let manager = self
+            .celeborn_lifecycle_manager(DriverId::from(request.driver_id))
+            .await?;
+        let (result, receiver) = oneshot::channel();
+        manager
+            .send(LifecycleManagerMessage::GetJobShuffleIds {
+                job_id: request.job_id,
+                result,
+            })
+            .await
+            .map_err(ExecutionError::from)?;
+        let shuffle_ids = receiver.await.map_err(status)?.map_err(status)?;
+        Ok(Response::new(CelebornGetJobShuffleIdsResponse {
+            shuffle_ids: shuffle_ids
+                .into_iter()
+                .map(|(stage, shuffle_id)| CelebornShuffleId { stage, shuffle_id })
+                .collect(),
+        }))
     }
 
     async fn register_shuffle(
@@ -108,33 +120,48 @@ impl CelebornLifecycleManagerService for CelebornLifecycleManagerServer {
             primary_locations: reservation
                 .primary_locations
                 .into_values()
-                .map(location)
+                .map(Into::into)
+                .collect(),
+            all_primary_locations: reservation
+                .worker_locations
+                .into_values()
+                .flat_map(|locations| locations.primary_locations)
+                .map(Into::into)
                 .collect(),
         }))
     }
 
-    async fn get_job_shuffle_ids(
+    async fn revive(
         &self,
-        request: Request<CelebornGetJobShuffleIdsRequest>,
-    ) -> Result<Response<CelebornGetJobShuffleIdsResponse>, Status> {
+        request: Request<CelebornReviveRequest>,
+    ) -> Result<Response<CelebornReviveResponse>, Status> {
         let request = request.into_inner();
         let manager = self
             .celeborn_lifecycle_manager(DriverId::from(request.driver_id))
             .await?;
+        let old_location: PartitionLocation = request
+            .old_location
+            .ok_or_else(|| Status::invalid_argument("missing old Celeborn partition location"))?
+            .try_into()
+            .map_err(status)?;
         let (result, receiver) = oneshot::channel();
         manager
-            .send(LifecycleManagerMessage::GetJobShuffleIds {
-                job_id: request.job_id,
+            .send(LifecycleManagerMessage::Revive {
+                request: ReviveRequest {
+                    shuffle_id: request.shuffle_id,
+                    partition_id: request.partition_id,
+                    map_id: request.map_id,
+                    attempt_id: request.attempt_id,
+                    old_location,
+                    cause: request.cause,
+                },
                 result,
             })
             .await
             .map_err(ExecutionError::from)?;
-        let shuffle_ids = receiver.await.map_err(status)?.map_err(status)?;
-        Ok(Response::new(CelebornGetJobShuffleIdsResponse {
-            shuffle_ids: shuffle_ids
-                .into_iter()
-                .map(|(stage, shuffle_id)| CelebornShuffleId { stage, shuffle_id })
-                .collect(),
+        let new_location = receiver.await.map_err(status)?.map_err(status)?;
+        Ok(Response::new(CelebornReviveResponse {
+            location: Some(new_location.into()),
         }))
     }
 

@@ -437,9 +437,16 @@ fn declare_nullable_result(expr: Expr, nullable: bool, schema: &DFSchemaRef) -> 
 }
 
 fn to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let null_on_error = !input.function_context.plan_config.ansi_mode;
     if input.arguments.len() == 1 {
         // If format is not supplied, the function is a synonym for cast(expr AS DATE).
-        crate::function::scalar::conversion::cast_to_date(input)
+        let expr = input.arguments[0].clone();
+        let data_type = expr.get_type(input.function_context.schema)?;
+        if data_type.is_string() {
+            Ok(ScalarUDF::from(SparkDate::new(null_on_error)).call(vec![expr]))
+        } else {
+            Ok(cast(expr, DataType::Date32))
+        }
     } else if input.arguments.len() == 2 {
         let expr = input.arguments[0].clone();
         let format = coerce_datetime_format(
@@ -467,7 +474,7 @@ fn to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
             Ok(_other) => expr,
             Err(_) => cast(expr, DataType::Utf8), // In case of error, cast to string
         };
-        Ok(ScalarUDF::from(SparkDate::new(false)).call(vec![expr, format]))
+        Ok(ScalarUDF::from(SparkDate::new(null_on_error)).call(vec![expr, format]))
     } else {
         Err(PlanError::invalid("to_date requires 1 or 2 arguments"))
     }

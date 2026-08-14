@@ -55,6 +55,20 @@ impl PartitionLocation {
     pub fn unique_id(&self) -> String {
         format!("{}-{}", self.id, self.epoch)
     }
+
+    pub fn worker_id(&self) -> String {
+        format!(
+            "{}:{}:{}:{}:{}",
+            self.host, self.rpc_port, self.push_port, self.fetch_port, self.replicate_port,
+        )
+    }
+
+    pub fn set_epoch(&mut self, epoch: i32) {
+        self.epoch = epoch;
+        if let Some(peer) = &mut self.peer {
+            peer.set_epoch(epoch);
+        }
+    }
 }
 
 impl From<PartitionLocation> for PbPartitionLocation {
