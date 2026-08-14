@@ -111,32 +111,59 @@ impl MaxByFunction {
     }
 }
 
+/// The accepted argument count, which governs both the user-facing call surface and the
+/// partial-aggregation state, always a `(value, ordering)` pair.
+///
+/// Spark 4.2 resolves `max_by` through `MaxByBuilder`, which accepts 2 or 3 arguments and
+/// dispatches the 3-argument top-k form to `MaxMinByK`. Only the 2-argument form is
+/// implemented here, so a third argument is rejected rather than silently dropped. Adding
+/// top-k means widening this to `(2, 3)` and splitting off a separate constant for the
+/// accumulator, which stays a pair regardless of the form.
+const MAX_MIN_BY_ARG_COUNT: (i32, i32) = (2, 2);
+
+/// Splits the arguments into the value and the ordering.
+///
+/// The signature is `user_defined`, so DataFusion runs no arity check of its own. Every
+/// hook that reaches for the ordering argument must go through here, or it indexes a
+/// short slice and panics instead of reporting an error.
+fn max_min_by_args<'a, T>(
+    function_name: &str,
+    args: &'a [T],
+) -> Result<(&'a T, &'a T), DataFusionError> {
+    match args {
+        [value, ordering] => Ok((value, ordering)),
+        _ => Err(invalid_arg_count_exec_err(
+            function_name,
+            MAX_MIN_BY_ARG_COUNT,
+            args.len(),
+        )),
+    }
+}
+
 fn get_min_max_by_result_type(
     function_name: &str,
     input_types: &[DataType],
 ) -> Result<Vec<DataType>, DataFusionError> {
-    // Spark's `MaxMinBy` is `BinaryLike`. The 4.2 top-k form `max_by(x, y, k)` returns an array
-    // and is not implemented here, so a third argument is rejected rather than silently dropped.
-    let [value_type, ordering_type] = input_types else {
-        return Err(invalid_arg_count_exec_err(
-            function_name,
-            (2, 2),
-            input_types.len(),
-        ));
-    };
+    let (value_type, ordering_type) = max_min_by_args(function_name, input_types)?;
     if !is_orderable(ordering_type) {
         return Err(generic_exec_err(
             function_name,
             &format!("does not support ordering on type {ordering_type}"),
         ));
     }
-    match value_type {
-        DataType::Dictionary(_, dict_value_type) => {
-            // TODO add checker, if the value type is complex data type
-            Ok(vec![dict_value_type.deref().clone()])
+    // Answering a shorter list than it was given makes DataFusion reject the call with a
+    // `Failed to coerce arguments` planning error before any hook below runs, so every
+    // argument is carried over and only the ones that need rewriting are replaced.
+    let mut coerced = input_types.to_vec();
+    // The value type is unwrapped from a dictionary so that the accumulator stores the plain
+    // value. Not covered by a scenario because a `Dictionary` column cannot be built from SQL.
+    if let DataType::Dictionary(_, dict_value_type) = value_type {
+        // TODO add checker, if the value type is complex data type
+        if let Some(first) = coerced.first_mut() {
+            *first = dict_value_type.deref().clone();
         }
-        _ => Ok(input_types.to_vec()),
     }
+    Ok(coerced)
 }
 
 impl AggregateUDFImpl for MaxByFunction {
@@ -149,7 +176,8 @@ impl AggregateUDFImpl for MaxByFunction {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType, DataFusionError> {
-        Ok(arg_types[0].to_owned())
+        let (value_type, _) = max_min_by_args(self.name(), arg_types)?;
+        Ok(value_type.to_owned())
     }
 
     fn accumulator(
@@ -157,7 +185,8 @@ impl AggregateUDFImpl for MaxByFunction {
         acc_args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>, DataFusionError> {
         let value_type = acc_args.return_field.data_type().clone();
-        let ordering_type = acc_args.exprs[1].data_type(acc_args.schema)?;
+        let (_, ordering) = max_min_by_args(self.name(), acc_args.exprs)?;
+        let ordering_type = ordering.data_type(acc_args.schema)?;
         Ok(Box::new(MaxMinByAccumulator::new(
             &value_type,
             &ordering_type,
@@ -167,7 +196,8 @@ impl AggregateUDFImpl for MaxByFunction {
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>, DataFusionError> {
         let value_type = args.return_field.data_type().clone();
-        let ordering_type = args.input_fields[1].data_type().clone();
+        let (_, ordering) = max_min_by_args(self.name(), args.input_fields)?;
+        let ordering_type = ordering.data_type().clone();
         Ok(vec![
             Field::new(format_state_name(args.name, "value"), value_type, true).into(),
             Field::new(
@@ -180,7 +210,9 @@ impl AggregateUDFImpl for MaxByFunction {
     }
 
     fn simplify(&self) -> Option<function::AggregateFunctionSimplification> {
-        let simplify = |mut aggr_func: AggregateFunction, _: &SimplifyContext| {
+        let function_name = self.name().to_string();
+        let simplify = move |mut aggr_func: AggregateFunction, _: &SimplifyContext| {
+            max_min_by_args(&function_name, &aggr_func.params.args)?;
             let mut order_by = aggr_func.params.order_by;
             let (second_arg, first_arg) = (
                 aggr_func.params.args.remove(1),
@@ -193,8 +225,11 @@ impl AggregateUDFImpl for MaxByFunction {
                 None => Some(Box::new(null_filter)),
             };
 
-            // Sorting by a literal is a no-op, and a constant sort key makes DataFusion's
-            // ordered `last_value` panic on a global aggregate.
+            // `NullType` is orderable in Spark, so the orderability check above now lets
+            // `max_by(x, NULL)` and `max_by(x, CAST(NULL AS VOID))` through to here. Sorting by
+            // a literal is a no-op, and a constant sort key makes DataFusion's ordered
+            // `last_value` panic on a global aggregate, so the key is only pushed when it is
+            // not one. Foldable arguments reach this point already reduced to a literal.
             if !matches!(second_arg, Expr::Literal(_, _)) {
                 order_by.push(Sort::new(second_arg, true, true)); // ASC,  NULLS FIRST
             }
@@ -255,7 +290,8 @@ impl AggregateUDFImpl for MinByFunction {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType, DataFusionError> {
-        Ok(arg_types[0].to_owned())
+        let (value_type, _) = max_min_by_args(self.name(), arg_types)?;
+        Ok(value_type.to_owned())
     }
 
     fn accumulator(
@@ -263,7 +299,8 @@ impl AggregateUDFImpl for MinByFunction {
         acc_args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>, DataFusionError> {
         let value_type = acc_args.return_field.data_type().clone();
-        let ordering_type = acc_args.exprs[1].data_type(acc_args.schema)?;
+        let (_, ordering) = max_min_by_args(self.name(), acc_args.exprs)?;
+        let ordering_type = ordering.data_type(acc_args.schema)?;
         Ok(Box::new(MaxMinByAccumulator::new(
             &value_type,
             &ordering_type,
@@ -273,7 +310,8 @@ impl AggregateUDFImpl for MinByFunction {
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>, DataFusionError> {
         let value_type = args.return_field.data_type().clone();
-        let ordering_type = args.input_fields[1].data_type().clone();
+        let (_, ordering) = max_min_by_args(self.name(), args.input_fields)?;
+        let ordering_type = ordering.data_type().clone();
         Ok(vec![
             Field::new(format_state_name(args.name, "value"), value_type, true).into(),
             Field::new(
@@ -286,7 +324,9 @@ impl AggregateUDFImpl for MinByFunction {
     }
 
     fn simplify(&self) -> Option<function::AggregateFunctionSimplification> {
-        let simplify = |mut aggr_func: AggregateFunction, _: &SimplifyContext| {
+        let function_name = self.name().to_string();
+        let simplify = move |mut aggr_func: AggregateFunction, _: &SimplifyContext| {
+            max_min_by_args(&function_name, &aggr_func.params.args)?;
             let mut order_by = aggr_func.params.order_by;
             let (second_arg, first_arg) = (
                 aggr_func.params.args.remove(1),
@@ -299,8 +339,11 @@ impl AggregateUDFImpl for MinByFunction {
                 None => Some(Box::new(null_filter)),
             };
 
-            // Sorting by a literal is a no-op, and a constant sort key makes DataFusion's
-            // ordered `last_value` panic on a global aggregate.
+            // `NullType` is orderable in Spark, so the orderability check above now lets
+            // `min_by(x, NULL)` and `min_by(x, CAST(NULL AS VOID))` through to here. Sorting by
+            // a literal is a no-op, and a constant sort key makes DataFusion's ordered
+            // `last_value` panic on a global aggregate, so the key is only pushed when it is
+            // not one. Foldable arguments reach this point already reduced to a literal.
             if !matches!(second_arg, Expr::Literal(_, _)) {
                 order_by.push(Sort::new(second_arg, false, true)); // DESC, NULLS FIRST
             }

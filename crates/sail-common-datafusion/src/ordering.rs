@@ -4,19 +4,28 @@ use crate::variant::is_marked_variant_storage_type;
 
 /// Spark's `RowOrdering.isOrderable`, which delegates to `OrderUtils.isOrderable`.
 ///
-/// This mirrors the Scala definition arm by arm, including its shape: everything atomic is
-/// orderable, `STRUCT` and `ARRAY` recurse, and anything else is *not* orderable. Keeping the
-/// final arm `false` is what makes the port fail closed the way Spark does — a type nobody
-/// thought about is rejected rather than silently sorted by its physical bytes.
+/// Everything atomic is orderable, `STRUCT` and the list family recurse, and anything else is
+/// not. Spark fails closed on the types it does not name (`case _ => false`); this port has no
+/// wildcard arm at all, so a new *Arrow* variant fails the build and has to be classified
+/// deliberately. That guarantee does not extend to a new *Spark* type carried inside an existing
+/// Arrow variant — such a type is silently treated as orderable, which is exactly the GEOMETRY
+/// case described below.
+///
+/// Beyond Spark's own arms this also recurses through `Dictionary` and `RunEndEncoded`, which
+/// have no Spark counterpart. Spark's `UserDefinedType` arm has none here because a Sail UDT
+/// already presents as its underlying storage type.
 ///
 /// Two Spark types map onto Arrow in a way that is easy to get wrong here: `DayTimeIntervalType`
 /// becomes [`DataType::Duration`] and `YearMonthIntervalType` becomes
 /// [`IntervalUnit::YearMonth`], both orderable because Spark's ANSI interval types are
 /// `AtomicType`s, while `CalendarIntervalType` becomes [`IntervalUnit::MonthDayNano`] and is not,
-/// because it extends `DataType` directly.
+/// because it extends `DataType` directly. [`IntervalUnit::DayTime`] is accepted for the same
+/// reason even though Sail never produces it for a Spark type, so no scenario can reach it: the
+/// arm exists so that a day-time interval arriving from outside the resolver is not rejected.
 ///
-/// `GEOMETRY` and `GEOGRAPHY` are unorderable in Spark too, but in Sail their identity lives in
-/// the field metadata rather than in the [`DataType`], so they cannot be recognized here.
+/// `GEOMETRY` and `GEOGRAPHY` are unorderable in Spark too, but in Sail they are lowered to plain
+/// `Binary` and their identity lives in the field metadata, which `coerce_types` never receives.
+/// Catching them would mean moving the check to a hook that takes `FieldRef`s.
 pub fn is_orderable(data_type: &DataType) -> bool {
     match data_type {
         DataType::Null => true,
@@ -66,6 +75,8 @@ pub fn is_orderable(data_type: &DataType) -> bool {
         DataType::Dictionary(_, value_type) => is_orderable(value_type),
         // `MapType` and `CalendarIntervalType` are not `AtomicType`s in Spark, so they reach its
         // final `case _ => false`, as does everything else with no Spark counterpart.
-        DataType::Map(_, _) | DataType::Interval(IntervalUnit::MonthDayNano) | DataType::Union(_, _) => false,
+        DataType::Map(_, _)
+        | DataType::Interval(IntervalUnit::MonthDayNano)
+        | DataType::Union(_, _) => false,
     }
 }

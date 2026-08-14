@@ -86,7 +86,14 @@ Feature: min_by function
         SELECT min_by(v, o) AS result
         FROM VALUES ('lo', map('a', 1)), ('hi', map('b', 2)) AS t(v, o)
         """
-      Then query error does not support ordering on type
+      Then query error (?s)min_by.*does not support ordering on type
+
+    Scenario: min_by rejects a MAP ordering literal
+      When query
+        """
+        SELECT min_by(1, map('a', 1)) AS result
+        """
+      Then query error (?s)min_by.*does not support ordering on type
 
     Scenario: min_by rejects a MAP ordering column as a window function
       When query
@@ -94,7 +101,7 @@ Feature: min_by function
         SELECT min_by(v, map('a', i)) OVER (ORDER BY i ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS result
         FROM VALUES ('lo', 1), ('hi', 2) AS t(v, i)
         """
-      Then query error does not support ordering on type
+      Then query error (?s)min_by.*does not support ordering on type
 
     Scenario: min_by rejects a VARIANT ordering column
       When query
@@ -102,7 +109,7 @@ Feature: min_by function
         SELECT min_by(x, parse_json(j)) AS result
         FROM VALUES ('a', '"aaa"'), ('b', '"b"') AS t(x, j)
         """
-      Then query error does not support ordering on type
+      Then query error (?s)min_by.*does not support ordering on type
 
     Scenario: min_by rejects an ARRAY<MAP> ordering column
       When query
@@ -110,7 +117,7 @@ Feature: min_by function
         SELECT min_by(x, array(map('k', y))) AS result
         FROM VALUES ('a', 1), ('b', 2) AS t(x, y)
         """
-      Then query error does not support ordering on type
+      Then query error (?s)min_by.*does not support ordering on type
 
     # The check is recursive, so a MAP or VARIANT buried at any depth also fails.
     Scenario Outline: min_by rejects a nested <case> ordering column
@@ -119,7 +126,7 @@ Feature: min_by function
         SELECT min_by(x, <ordering>) AS result
         FROM VALUES ('{"v":1}', 1), ('{"v":2}', 2) AS t(x, y)
         """
-      Then query error does not support ordering on type
+      Then query error (?s)min_by.*does not support ordering on type
 
       Examples:
         | case            | ordering              |
@@ -133,30 +140,37 @@ Feature: min_by function
         SELECT min_by(x, make_interval(0, 0, 0, y)) AS result
         FROM VALUES ('a', 1), ('b', 2) AS t(x, y)
         """
-      Then query error does not support ordering on type
+      Then query error (?s)min_by.*does not support ordering on type
 
     # The rejections above only discriminate if the accepted types are pinned too: a check that
     # rejected every type would satisfy every scenario in this Rule. These are the orderable
     # counterparts, including the ANSI intervals the calendar one above is contrasted with.
+    # The winning row is deliberately in the MIDDLE of the input: Sail rewrites min_by to an
+    # ordered `last_value(x)`, so a fixture whose minimum is also its first or last row would
+    # stay green even if the ordering key were dropped entirely.
     Scenario Outline: min_by accepts an orderable <case> ordering column
       When query
         """
         SELECT min_by(x, <ordering>) AS result
-        FROM VALUES ('lo', 1), ('hi', 2) AS t(x, y)
+        FROM VALUES ('hi', 3), ('lo', 1), ('mid', 2) AS t(x, y)
         """
       Then query result
         | result |
         | lo     |
 
       Examples:
-        | case          | ordering                                                       |
-        | STRUCT<INT>   | struct(y)                                                      |
-        | ARRAY<INT>    | array(y)                                                       |
-        | INTERVAL DAY  | make_dt_interval(0, 0, 0, y)                                   |
-        | INTERVAL YEAR | make_ym_interval(0, y)                                         |
-        | BINARY        | CAST(CAST(y AS STRING) AS BINARY)                              |
-        | DATE          | date_add(DATE '2024-01-01', y)                                 |
-        | TIMESTAMP     | TIMESTAMP '2024-01-01 00:00:00' + make_dt_interval(0, 0, 0, y) |
+        | case                   | ordering                                                       |
+        | STRUCT<INT>            | struct(y)                                                      |
+        | STRUCT<STRUCT>         | struct(struct(y))                                              |
+        | ARRAY<INT>             | array(y)                                                       |
+        | ARRAY<STRUCT>          | array(struct(y))                                               |
+        | STRUCT<ARRAY<INT>>     | struct(array(y))                                               |
+        | INTERVAL DAY TO SECOND | make_dt_interval(0, 0, 0, y)                                   |
+        | INTERVAL YEAR          | make_ym_interval(0, y)                                         |
+        | BINARY                 | CAST(CAST(y AS STRING) AS BINARY)                              |
+        | DECIMAL                | CAST(y AS DECIMAL(10,2))                                       |
+        | DATE                   | date_add(DATE '2024-01-01', y)                                 |
+        | TIMESTAMP              | TIMESTAMP '2024-01-01 00:00:00' + make_dt_interval(0, 0, 0, y) |
 
     # VOID is orderable in Spark: OrderUtils.isOrderable matches `case NullType => true` before
     # the AtomicType case. So the call is accepted, and every row is then skipped for having a
@@ -171,38 +185,73 @@ Feature: min_by function
         | result |
         | NULL   |
 
-  Rule: Orderable ordering types are accepted
+    # OrderUtils.isOrderable rejects GEOMETRY and GEOGRAPHY explicitly, before the AtomicType
+    # case, because they are opaque WKB bytes with no meaningful ordering. Sail cannot see this
+    # from `coerce_types`: it lowers both to plain BINARY and keeps the geo identity in the
+    # field metadata, which the hook never receives. So Sail answers by ordering the raw bytes,
+    # which is why it returns a value here instead of failing.
+    @sail-bug @spark-4.2
+    Scenario: min_by rejects a GEOMETRY ordering column
+      When query
+        """
+        SELECT min_by(v, st_geomfromwkb(w)) AS result
+        FROM VALUES ('a', X'0101000000000000000000F03F0000000000000040'),
+                    ('b', X'010100000000000000000000400000000000000040') AS t(v, w)
+        """
+      Then query error (?s)min_by.*does not support ordering on type
 
-    Scenario Outline: min_by accepts a <case> ordering column
+  Rule: Arity
+
+    # Spark's MaxMinBy is BinaryLike. Sail used to panic here and kill the RPC, because
+    # Signature::user_defined skips DataFusion's arity gate and coerce_types is the only one.
+    Scenario Outline: min_by rejects a call with <case>
+      When query
+        """
+        SELECT min_by(<args>)
+        """
+      Then query error (?si)min_by.*requires
+
+      Examples:
+        | case            | args       |
+        | no arguments    |            |
+        | one argument    | 1          |
+        | four arguments  | 1, 2, 3, 4 |
+
+    # Spark 4.2 added the top-k form, which returns an array of the k values
+    # (MaxMinByK.scala). Sail does not implement it; it now rejects the third argument
+    # instead of silently dropping it and returning a scalar.
+    @sail-bug @spark-4.2
+    Scenario: min_by supports the three-argument top-k form
+      When query
+        """
+        SELECT min_by(x, y, 2) AS result
+        FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y)
+        """
+      Then query result
+        | result   |
+        | [a, c]   |
+
+  Rule: Constant and untyped ordering keys
+
+    # A constant ordering key makes every row tie. Spark keeps the newer row on a tie
+    # (MaxByAndMinBy.scala: `If(old < new, old, new)` is false when they are equal), so the
+    # answer is the last one, the same as for max_by. Foldable arguments are constant-folded
+    # to the same literal.
+    Scenario Outline: min_by accepts the constant ordering key <case>
       When query
         """
         SELECT min_by(x, <ordering>) AS result
-        FROM VALUES ('a', 1), ('b', 2) AS t(x, y)
+        FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y)
         """
       Then query result
         | result |
-        | a      |
+        | c      |
 
       Examples:
-        | case                | ordering              |
-        | STRUCT              | struct(y, x)          |
-        | ARRAY<INT>          | array(y)              |
-        | day-time INTERVAL   | INTERVAL '1' DAY * y  |
-        | year-month INTERVAL | make_ym_interval(y)   |
-
-    # Same orderable year-month type as above, but built by multiplication:
-    # Sail cannot type `Interval(YearMonth) * Int32` and fails before it ever
-    # gets to the orderability check.
-    @sail-bug
-    Scenario: min_by accepts a multiplied year-month INTERVAL ordering column
-      When query
-        """
-        SELECT min_by(x, INTERVAL '1' YEAR * y) AS result
-        FROM VALUES ('a', 1), ('b', 2) AS t(x, y)
-        """
-      Then query result
-        | result |
-        | a      |
+        | case            | ordering         |
+        | literal         | 1                |
+        | foldable sum    | 1 + 1            |
+        | foldable concat | concat('a', 'b') |
 
     # NullType is orderable in Spark, which returns NULL here.
     Scenario: min_by accepts an untyped NULL ordering argument
@@ -214,3 +263,26 @@ Feature: min_by function
       Then query result
         | result |
         | NULL   |
+
+  Rule: The value argument has no orderability restriction
+
+    # This is the other half of "only the ordering argument is restricted", claimed by the
+    # header of the orderability Rule above: `MaxMinBy.checkInputDataTypes` only looks at
+    # `orderingExpr`, and `dataType` is `valueExpr.dataType` whatever that is. Winning row in
+    # the middle again, for the reason given on the orderable table above.
+    Scenario Outline: min_by accepts a <case> value argument
+      When query
+        """
+        SELECT <value> AS result
+        FROM VALUES ('{"v":3}', 3), ('{"v":1}', 1), ('{"v":2}', 2) AS t(j, y)
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case        | value                                      | result  |
+        | MAP         | min_by(map('a', y), y)['a']                | 1       |
+        | VARIANT     | to_json(min_by(parse_json(j), y))          | {"v":1} |
+        | ARRAY<MAP>  | min_by(array(map('k', y)), y)[0]['k']      | 1       |
+        | STRUCT<MAP> | min_by(struct(map('k', y) AS m), y).m['k'] | 1       |

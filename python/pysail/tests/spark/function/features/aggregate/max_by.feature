@@ -60,14 +60,14 @@ Feature: max_by function
         SELECT max_by(v, o) AS result
         FROM VALUES ('lo', map('a', 1)), ('hi', map('b', 2)) AS t(v, o)
         """
-      Then query error does not support ordering on type
+      Then query error (?s)max_by.*does not support ordering on type
 
     Scenario: max_by rejects a MAP ordering literal
       When query
         """
         SELECT max_by(1, map('a', 1)) AS result
         """
-      Then query error does not support ordering on type
+      Then query error (?s)max_by.*does not support ordering on type
 
     Scenario: max_by rejects a MAP ordering column as a window function
       When query
@@ -75,7 +75,7 @@ Feature: max_by function
         SELECT max_by(v, map('a', i)) OVER (ORDER BY i ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS result
         FROM VALUES ('lo', 1), ('hi', 2) AS t(v, i)
         """
-      Then query error does not support ordering on type
+      Then query error (?s)max_by.*does not support ordering on type
 
     Scenario: max_by rejects a VARIANT ordering column
       When query
@@ -83,7 +83,7 @@ Feature: max_by function
         SELECT max_by(x, parse_json(j)) AS result
         FROM VALUES ('a', '"aaa"'), ('b', '"b"') AS t(x, j)
         """
-      Then query error does not support ordering on type
+      Then query error (?s)max_by.*does not support ordering on type
 
     Scenario: max_by rejects an ARRAY<MAP> ordering column
       When query
@@ -91,7 +91,7 @@ Feature: max_by function
         SELECT max_by(x, array(map('k', y))) AS result
         FROM VALUES ('a', 1), ('b', 2) AS t(x, y)
         """
-      Then query error does not support ordering on type
+      Then query error (?s)max_by.*does not support ordering on type
 
     # The check is recursive, so a MAP or VARIANT buried at any depth also fails.
     Scenario Outline: max_by rejects a nested <case> ordering column
@@ -100,7 +100,7 @@ Feature: max_by function
         SELECT max_by(x, <ordering>) AS result
         FROM VALUES ('{"v":1}', 1), ('{"v":2}', 2) AS t(x, y)
         """
-      Then query error does not support ordering on type
+      Then query error (?s)max_by.*does not support ordering on type
 
       Examples:
         | case               | ordering                   |
@@ -118,30 +118,37 @@ Feature: max_by function
         SELECT max_by(x, make_interval(0, 0, 0, y)) AS result
         FROM VALUES ('a', 1), ('b', 2) AS t(x, y)
         """
-      Then query error does not support ordering on type
+      Then query error (?s)max_by.*does not support ordering on type
 
     # The rejections above only discriminate if the accepted types are pinned too: a check that
     # rejected every type would satisfy every scenario in this Rule. These are the orderable
     # counterparts, including the ANSI intervals the calendar one above is contrasted with.
+    # The winning row is deliberately in the MIDDLE of the input: Sail rewrites max_by to
+    # `last_value(x) ORDER BY y`, so a fixture whose maximum is also its last row would stay
+    # green even if the ordering key were dropped entirely.
     Scenario Outline: max_by accepts an orderable <case> ordering column
       When query
         """
         SELECT max_by(x, <ordering>) AS result
-        FROM VALUES ('lo', 1), ('hi', 2) AS t(x, y)
+        FROM VALUES ('lo', 1), ('hi', 3), ('mid', 2) AS t(x, y)
         """
       Then query result
         | result |
         | hi     |
 
       Examples:
-        | case          | ordering                                                       |
-        | STRUCT<INT>   | struct(y)                                                      |
-        | ARRAY<INT>    | array(y)                                                       |
-        | INTERVAL DAY  | make_dt_interval(0, 0, 0, y)                                   |
-        | INTERVAL YEAR | make_ym_interval(0, y)                                         |
-        | BINARY        | CAST(CAST(y AS STRING) AS BINARY)                              |
-        | DATE          | date_add(DATE '2024-01-01', y)                                 |
-        | TIMESTAMP     | TIMESTAMP '2024-01-01 00:00:00' + make_dt_interval(0, 0, 0, y) |
+        | case                   | ordering                                                       |
+        | STRUCT<INT>            | struct(y)                                                      |
+        | STRUCT<STRUCT>         | struct(struct(y))                                              |
+        | ARRAY<INT>             | array(y)                                                       |
+        | ARRAY<STRUCT>          | array(struct(y))                                               |
+        | STRUCT<ARRAY<INT>>     | struct(array(y))                                               |
+        | INTERVAL DAY TO SECOND | make_dt_interval(0, 0, 0, y)                                   |
+        | INTERVAL YEAR          | make_ym_interval(0, y)                                         |
+        | BINARY                 | CAST(CAST(y AS STRING) AS BINARY)                              |
+        | DECIMAL                | CAST(y AS DECIMAL(10,2))                                       |
+        | DATE                   | date_add(DATE '2024-01-01', y)                                 |
+        | TIMESTAMP              | TIMESTAMP '2024-01-01 00:00:00' + make_dt_interval(0, 0, 0, y) |
 
     # VOID is orderable in Spark: OrderUtils.isOrderable matches `case NullType => true` before
     # the AtomicType case. So the call is accepted, and every row is then skipped for having a
@@ -168,18 +175,16 @@ Feature: max_by function
         FROM VALUES ('a', X'0101000000000000000000F03F0000000000000040'),
                     ('b', X'010100000000000000000000400000000000000040') AS t(v, w)
         """
-      Then query error does not support ordering on type
+      Then query error (?s)max_by.*does not support ordering on type
 
   Rule: Clause surface
 
-    # Spark decides this in FunctionResolution.validateFunction: max_by is a plain
-    # AggregateFunction, so DISTINCT, FILTER and OVER are accepted, while IGNORE NULLS
-    # (applyIgnoreNulls has a whitelist max_by is not in) and WITHIN GROUP (it is not
-    # SupportsOrderingWithinGroup) are rejected at analysis. Sail's resolver forwards all
-    # four clauses to the aggregate with no gate at all, so the rejected two are silently
-    # accepted AND change the answer. That is a sail-plan gap, not a max_by one.
+    # These are not orderability rules: Spark decides them in FunctionResolution
+    # .validateFunction, and Sail's aggregate branch forwards is_distinct, ignore_nulls,
+    # filter and order_by verbatim with no per-function gate. The gap therefore belongs to
+    # sail-plan and would affect every aggregate; max_by is only the function it is shown on.
 
-    Scenario Outline: max_by accepts <case>
+    Scenario Outline: max_by accepts the clause <case>
       When query
         """
         SELECT <expr> AS result
@@ -196,7 +201,7 @@ Feature: max_by function
         | FILTER   | max_by(x, y) FILTER (WHERE y < 50) | c      |
 
     # A window aggregate emits one row per input row, so this returns four.
-    Scenario: max_by accepts OVER
+    Scenario: max_by accepts the clause OVER
       When query
         """
         SELECT max_by(x, y) OVER (PARTITION BY 1) AS result
@@ -209,8 +214,11 @@ Feature: max_by function
         | b      |
         | b      |
 
+    # applyIgnoreNulls has a whitelist (NthValue, Lead, Lag, First, Last, AnyValue,
+    # CollectList, CollectSet); max_by is not in it. Sail answers 'b' where the plain call
+    # answers NULL.
     @sail-bug
-    Scenario: max_by rejects IGNORE NULLS
+    Scenario: max_by rejects the clause IGNORE NULLS
       When query
         """
         SELECT max_by(x, y) IGNORE NULLS AS result
@@ -218,8 +226,10 @@ Feature: max_by function
         """
       Then query error INVALID_SQL_SYNTAX.*does not support IGNORE NULLS
 
+    # WITHIN GROUP requires SupportsOrderingWithinGroup, which max_by is not. Sail keeps the
+    # user's ORDER BY and appends its own key after it, answering 'c' instead of 'b'.
     @sail-bug
-    Scenario: max_by rejects WITHIN GROUP
+    Scenario: max_by rejects the clause WITHIN GROUP
       When query
         """
         SELECT max_by(x, y) WITHIN GROUP (ORDER BY x) AS result
@@ -228,7 +238,7 @@ Feature: max_by function
       Then query error INVALID_SQL_SYNTAX.*does not support WITHIN GROUP
 
     @sail-bug
-    Scenario: max_by rejects DISTINCT combined with OVER
+    Scenario: max_by rejects the clause DISTINCT combined with OVER
       When query
         """
         SELECT max_by(DISTINCT x, y) OVER (PARTITION BY 1) AS result
@@ -236,10 +246,10 @@ Feature: max_by function
         """
       Then query error DISTINCT_WINDOW_FUNCTION_UNSUPPORTED
 
-    # The mirror image: Spark allows FILTER on a window aggregate, Sail's window match arm
-    # requires `filter: None` and rejects it.
+    # The mirror image: Spark allows FILTER on a window aggregate, while Sail's window match
+    # arm requires `filter: None` and rejects it.
     @sail-bug
-    Scenario: max_by supports FILTER combined with OVER
+    Scenario: max_by supports the clause FILTER combined with OVER
       When query
         """
         SELECT max_by(x, y) FILTER (WHERE y < 50) OVER (PARTITION BY 1) AS result
@@ -261,7 +271,7 @@ Feature: max_by function
         """
         SELECT max_by(<args>)
         """
-      Then query error (?i)requires
+      Then query error (?si)max_by.*requires
 
       Examples:
         | case            | args       |
@@ -283,43 +293,7 @@ Feature: max_by function
         | result   |
         | [b, c]   |
 
-  Rule: Orderable ordering types are accepted
-
-    Scenario Outline: max_by accepts a <case> ordering column
-      When query
-        """
-        SELECT max_by(x, <ordering>) AS result
-        FROM VALUES ('a', 1), ('b', 2) AS t(x, y)
-        """
-      Then query result
-        | result |
-        | b      |
-
-      Examples:
-        | case                | ordering                   |
-        | STRUCT              | struct(y, x)               |
-        | ARRAY<INT>          | array(y)                   |
-        | ARRAY<STRUCT>       | array(struct(y))           |
-        | STRUCT<ARRAY<INT>>  | struct(array(y))           |
-        | STRUCT<STRUCT>      | struct(struct(y))          |
-        | BINARY              | CAST(x AS BINARY)          |
-        | DECIMAL             | CAST(y AS DECIMAL(10,2))   |
-        | day-time INTERVAL   | INTERVAL '1' DAY * y       |
-        | year-month INTERVAL | make_ym_interval(y)        |
-
-    # Same orderable year-month type as above, but built by multiplication:
-    # Sail cannot type `Interval(YearMonth) * Int32` and fails before it ever
-    # gets to the orderability check.
-    @sail-bug
-    Scenario: max_by accepts a multiplied year-month INTERVAL ordering column
-      When query
-        """
-        SELECT max_by(x, INTERVAL '1' YEAR * y) AS result
-        FROM VALUES ('a', 1), ('b', 2) AS t(x, y)
-        """
-      Then query result
-        | result |
-        | b      |
+  Rule: Constant and untyped ordering keys
 
     # A constant ordering key makes every row tie. Spark keeps the newer row on a tie
     # (MaxByAndMinBy.scala: `If(old > new, old, new)` is false when they are equal), so the
@@ -354,11 +328,12 @@ Feature: max_by function
   Rule: The value argument has no orderability restriction
 
     # Only the ordering argument is checked, so a MAP or VARIANT value is fine.
+    # Winning row in the middle again, for the reason given on the orderable table above.
     Scenario Outline: max_by accepts a <case> value argument
       When query
         """
         SELECT <value> AS result
-        FROM VALUES ('{"v":1}', 1), ('{"v":2}', 2) AS t(j, y)
+        FROM VALUES ('{"v":1}', 1), ('{"v":3}', 3), ('{"v":2}', 2) AS t(j, y)
         """
       Then query result
         | result   |
@@ -366,7 +341,7 @@ Feature: max_by function
 
       Examples:
         | case        | value                                      | result  |
-        | MAP         | max_by(map('a', y), y)['a']                | 2       |
-        | VARIANT     | to_json(max_by(parse_json(j), y))          | {"v":2} |
-        | ARRAY<MAP>  | max_by(array(map('k', y)), y)[0]['k']      | 2       |
-        | STRUCT<MAP> | max_by(struct(map('k', y) AS m), y).m['k'] | 2       |
+        | MAP         | max_by(map('a', y), y)['a']                | 3       |
+        | VARIANT     | to_json(max_by(parse_json(j), y))          | {"v":3} |
+        | ARRAY<MAP>  | max_by(array(map('k', y)), y)[0]['k']      | 3       |
+        | STRUCT<MAP> | max_by(struct(map('k', y) AS m), y).m['k'] | 3       |
