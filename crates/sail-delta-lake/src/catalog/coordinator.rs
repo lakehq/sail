@@ -5,7 +5,7 @@ use sail_catalog::lakehouse::{
     LakehouseCommitRequest,
 };
 use sail_catalog::manager::CatalogManager;
-use sail_common::spec::{SAIL_SPARK_UDT_METADATA_KEY, SPARK_METADATA_JSON_KEY};
+use sail_common::spec::{SPARK_METADATA_JSON_KEY, is_sail_internal_metadata_key};
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 
@@ -415,7 +415,7 @@ fn unity_field_metadata(field: &StructField) -> Result<serde_json::Value> {
     };
 
     for (key, value) in field.metadata() {
-        if key == SPARK_METADATA_JSON_KEY || key == SAIL_SPARK_UDT_METADATA_KEY {
+        if key == SPARK_METADATA_JSON_KEY || is_sail_internal_metadata_key(key) {
             continue;
         }
         out.entry(key.clone())

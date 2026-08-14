@@ -64,6 +64,26 @@ fn validate_geography_srid(srid: i32) -> PlanResult<()> {
     Ok(())
 }
 
+/// Serializes the leading and trailing fields of a Spark interval type, which Arrow interval types
+/// cannot represent. The value is stored under [`spec::SAIL_SPARK_INTERVAL_METADATA_KEY`] in the
+/// Arrow field metadata so that the Spark interval type can be reconstructed for the client.
+/// Returns `None` when no field is declared, in which case Spark's default range applies.
+pub(super) fn interval_field_metadata(
+    start_field: Option<spec::IntervalFieldType>,
+    end_field: Option<spec::IntervalFieldType>,
+) -> PlanResult<Option<String>> {
+    if start_field.is_none() && end_field.is_none() {
+        return Ok(None);
+    }
+    let interval = spec::SparkIntervalMetadata {
+        start_field,
+        end_field,
+    };
+    let value = serde_json::to_string(&interval)
+        .map_err(|e| PlanError::internal(format!("failed to serialize interval metadata: {e}")))?;
+    Ok(Some(value))
+}
+
 impl PlanResolver<'_> {
     fn arrow_binary_type(&self, state: &mut PlanResolverState) -> adt::DataType {
         if self.config.arrow_use_large_var_types && state.config().arrow_allow_large_var_types {
@@ -364,6 +384,16 @@ impl PlanResolver<'_> {
                     EXTENSION_TYPE_NAME_KEY.to_string(),
                     VariantType::NAME.to_string(),
                 );
+                data_type
+            }
+            spec::DataType::Interval {
+                interval_unit: _,
+                start_field,
+                end_field,
+            } => {
+                if let Some(value) = interval_field_metadata(*start_field, *end_field)? {
+                    metadata.insert(spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(), value);
+                }
                 data_type
             }
             x => x,

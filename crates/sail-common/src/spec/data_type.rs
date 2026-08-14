@@ -34,6 +34,27 @@ pub struct SparkUdtMetadata {
     pub serialized_python_class: Option<String>,
 }
 
+/// Sail metadata key for the fields of a Spark interval type stored in Arrow field metadata.
+///
+/// Arrow interval types do not have a notion of leading and trailing fields, so the Spark
+/// interval fields would be lost without this. Like [`SAIL_SPARK_UDT_METADATA_KEY`], this is
+/// internal to Sail and should not be exposed as Spark column metadata.
+pub const SAIL_SPARK_INTERVAL_METADATA_KEY: &str = "SAIL::spark::interval";
+
+/// Returns whether the Arrow field metadata key is internal to Sail, and must therefore not be
+/// exposed as Spark column metadata.
+pub fn is_sail_internal_metadata_key(key: &str) -> bool {
+    key == SAIL_SPARK_UDT_METADATA_KEY || key == SAIL_SPARK_INTERVAL_METADATA_KEY
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SparkIntervalMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_field: Option<IntervalFieldType>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_field: Option<IntervalFieldType>,
+}
+
 /// Field name for list type.
 pub const SAIL_LIST_FIELD_NAME: &str = "item";
 /// Field name for map type's entries.

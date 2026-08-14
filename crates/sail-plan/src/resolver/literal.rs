@@ -81,13 +81,19 @@ impl PlanResolver<'_> {
             Literal::DurationMillisecond { milliseconds } => {
                 Ok(ScalarValue::DurationMillisecond(milliseconds))
             }
-            Literal::DurationMicrosecond { microseconds } => {
-                Ok(ScalarValue::DurationMicrosecond(microseconds))
-            }
+            Literal::DurationMicrosecond {
+                microseconds,
+                start_field: _,
+                end_field: _,
+            } => Ok(ScalarValue::DurationMicrosecond(microseconds)),
             Literal::DurationNanosecond { nanoseconds } => {
                 Ok(ScalarValue::DurationNanosecond(nanoseconds))
             }
-            Literal::IntervalYearMonth { months } => Ok(ScalarValue::IntervalYearMonth(months)),
+            Literal::IntervalYearMonth {
+                months,
+                start_field: _,
+                end_field: _,
+            } => Ok(ScalarValue::IntervalYearMonth(months)),
             Literal::IntervalDayTime { value } => {
                 if let Some(value) = value {
                     Ok(ScalarValue::IntervalDayTime(Some(

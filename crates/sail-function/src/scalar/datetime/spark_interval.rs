@@ -129,7 +129,7 @@ define_interval_udf!(
 fn string_to_year_month_interval(value: &str) -> Result<i32> {
     let interval = parse_interval(value).map_err(|e| exec_datafusion_err!("{e}"))?;
     match interval {
-        IntervalValue::YearMonth { months } => Ok(months),
+        IntervalValue::YearMonth { months, .. } => Ok(months),
         IntervalValue::Microsecond { .. } | IntervalValue::MonthDayNanosecond { .. } => {
             exec_err!("expected year month interval, but got: {value}")
         }
@@ -139,7 +139,7 @@ fn string_to_year_month_interval(value: &str) -> Result<i32> {
 fn string_to_day_time_interval(value: &str) -> Result<i64> {
     let interval = parse_interval(value).map_err(|e| exec_datafusion_err!("{e}"))?;
     match interval {
-        IntervalValue::Microsecond { microseconds } => Ok(microseconds),
+        IntervalValue::Microsecond { microseconds, .. } => Ok(microseconds),
         IntervalValue::YearMonth { .. } | IntervalValue::MonthDayNanosecond { .. } => {
             exec_err!("expected day time interval, but got: {value}")
         }
@@ -149,12 +149,12 @@ fn string_to_day_time_interval(value: &str) -> Result<i64> {
 fn string_to_calendar_interval(value: &str) -> Result<IntervalMonthDayNano> {
     let interval = parse_interval(value).map_err(|e| exec_datafusion_err!("{e}"))?;
     match interval {
-        IntervalValue::YearMonth { months } => Ok(IntervalMonthDayNano {
+        IntervalValue::YearMonth { months, .. } => Ok(IntervalMonthDayNano {
             months,
             days: 0,
             nanoseconds: 0,
         }),
-        IntervalValue::Microsecond { microseconds } => {
+        IntervalValue::Microsecond { microseconds, .. } => {
             // We do not take into account daylight saving days here.
             let days = i32::try_from(microseconds / (24 * 60 * 60 * 1_000_000)).map_err(|_| {
                 exec_datafusion_err!("microseconds overflow for calendar interval: {value}")
