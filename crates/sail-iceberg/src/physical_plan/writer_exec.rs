@@ -813,8 +813,9 @@ mod tests {
                 .await
                 .expect("writer output")
                 .expect("writer batch");
-            let (_, _, commit_meta) =
-                decode_actions_and_meta_from_batch(&batch).expect("commit metadata");
+            let commit_meta = decode_actions_and_meta_from_batch(&batch)
+                .expect("commit metadata")
+                .commit_meta;
             assert_eq!(
                 commit_meta.expect("commit metadata action").requirements,
                 expected_requirements
