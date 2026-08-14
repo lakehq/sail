@@ -13,6 +13,7 @@ pub mod math;
 pub mod misc;
 pub mod multi_expr;
 pub mod predicate;
+pub mod spark_cast_string_to_int32;
 pub mod spark_struct_rename;
 pub mod spark_to_string;
 pub mod string;
