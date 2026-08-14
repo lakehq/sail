@@ -2,8 +2,10 @@ use sail_common::actor::ActorHandle;
 use tokio::sync::oneshot;
 
 use crate::error::{CelebornError, CelebornResult};
-use crate::lifecycle::{LifecycleManager, LifecycleManagerActor, LifecycleManagerMessage};
-use crate::master::SlotReservation;
+use crate::lifecycle::{
+    LifecycleManager, LifecycleManagerActor, LifecycleManagerMessage, ReviveRequest,
+};
+use crate::master::{PartitionLocation, SlotReservation};
 
 /// A lifecycle manager backed by a local actor.
 #[derive(Debug, Clone)]
@@ -61,6 +63,15 @@ impl LifecycleManager for LocalLifecycleManager {
                 max_workers,
                 result,
             })
+            .await
+            .map_err(|_| CelebornError::ActorStopped)?;
+        receiver.await.map_err(|_| CelebornError::ActorStopped)?
+    }
+
+    async fn revive(&self, request: ReviveRequest) -> CelebornResult<PartitionLocation> {
+        let (result, receiver) = oneshot::channel();
+        self.handle
+            .send(LifecycleManagerMessage::Revive { request, result })
             .await
             .map_err(|_| CelebornError::ActorStopped)?;
         receiver.await.map_err(|_| CelebornError::ActorStopped)?

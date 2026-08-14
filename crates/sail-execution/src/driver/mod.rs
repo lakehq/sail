@@ -10,7 +10,7 @@ mod task_assigner;
 pub(super) mod worker_pool;
 
 #[expect(clippy::allow_attributes)]
-mod r#gen {
+pub(crate) mod r#gen {
     tonic::include_proto!("sail.driver");
 
     pub const FILE_DESCRIPTOR_SET: &[u8] =
