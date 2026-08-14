@@ -261,7 +261,7 @@ use sail_iceberg::physical_plan::{
     IcebergPartitionTransformExpr, IcebergScanByDataFilesExec, IcebergWriterExec,
 };
 use sail_iceberg::spec::Transform as IcebergTransform;
-use sail_iceberg::{IcebergWriterExecOptions, SnapshotUpdateKind};
+use sail_iceberg::{IcebergWriteContext, IcebergWriterExecOptions, SnapshotUpdateKind};
 use sail_logical_plan::range::Range;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
 use sail_physical_plan::barrier::BarrierExec;
@@ -1377,9 +1377,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 sink_mode,
                 table_exists,
                 options,
-                logical_input_schema,
                 lakehouse_table_json,
                 merge_row_intents,
+                write_context_json,
             }) => {
                 let input = try_decode_physical_plan(ctx, self, &input)?;
                 let sink_mode = match sink_mode {
@@ -1405,11 +1405,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 {
                     options.lakehouse_table = Some(lakehouse_table);
                 }
-                let logical_input_schema = if logical_input_schema.is_empty() {
-                    None
-                } else {
-                    Some(Arc::new(try_decode_schema(&logical_input_schema)?))
-                };
+                if write_context_json.is_empty() {
+                    return plan_err!("Missing write_context for IcebergWriterExec");
+                }
+                let write_context: IcebergWriteContext = serde_json::from_str(&write_context_json)
+                    .map_err(|error| {
+                        plan_datafusion_err!("failed to decode Iceberg write context: {error}")
+                    })?;
 
                 let writer = if merge_row_intents {
                     IcebergWriterExec::new_merge(
@@ -1419,7 +1421,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         sink_mode,
                         table_exists,
                         options,
-                        logical_input_schema,
+                        write_context,
                     )?
                 } else {
                     IcebergWriterExec::new(
@@ -1429,8 +1431,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         sink_mode,
                         table_exists,
                         options,
-                        logical_input_schema,
-                    )
+                        write_context,
+                    )?
                 };
                 Ok(Arc::new(writer))
             }
@@ -1569,6 +1571,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 write_data_path,
                 write_folder_storage_path,
                 lakehouse_table_json,
+                write_context_json,
             }) => {
                 let input = try_decode_physical_plan(ctx, self, &input)?;
                 let table_url = Url::parse(&table_url)
@@ -1576,14 +1579,22 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let table_properties =
                     self.try_decode_json(&table_properties_json, "Iceberg table properties")?;
                 let lakehouse_table = self.try_decode_lakehouse_table(&lakehouse_table_json)?;
+                if write_context_json.is_empty() {
+                    return plan_err!("Missing write_context for IcebergEqualityDeleteWriterExec");
+                }
+                let write_context: IcebergWriteContext = serde_json::from_str(&write_context_json)
+                    .map_err(|error| {
+                        plan_datafusion_err!("failed to decode Iceberg write context: {error}")
+                    })?;
                 Ok(Arc::new(IcebergEqualityDeleteWriterExec::new(
                     input,
                     table_url,
                     table_properties,
                     write_data_path,
                     write_folder_storage_path,
+                    write_context,
                     lakehouse_table,
-                )))
+                )?))
             }
             NodeKind::PythonDataSource(r#gen::PythonDataSourceExecNode {
                 pickled_reader,
@@ -2345,11 +2356,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let sink_mode = self.try_encode_physical_sink_mode(iceberg_writer_exec.sink_mode())?;
             let options = serde_json::to_string(iceberg_writer_exec.options())
                 .map_err(|e| plan_datafusion_err!("failed to encode Iceberg options: {e}"))?;
-            let logical_input_schema = iceberg_writer_exec
-                .logical_input_schema()
-                .map(|schema| try_encode_schema(schema.as_ref()))
-                .transpose()?
-                .unwrap_or_default();
+            let write_context_json = serde_json::to_string(iceberg_writer_exec.write_context())
+                .map_err(|error| {
+                    plan_datafusion_err!("failed to encode Iceberg write context: {error}")
+                })?;
             NodeKind::IcebergWriter(r#gen::IcebergWriterExecNode {
                 input,
                 table_url: iceberg_writer_exec.table_url().to_string(),
@@ -2361,10 +2371,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 sink_mode: Some(sink_mode),
                 table_exists: iceberg_writer_exec.table_exists(),
                 options,
-                logical_input_schema,
                 lakehouse_table_json: self
                     .try_encode_lakehouse_table(iceberg_writer_exec.lakehouse_table())?,
                 merge_row_intents: iceberg_writer_exec.reads_merge_row_intents(),
+                write_context_json,
             })
         } else if let Some(iceberg_commit_exec) = node.downcast_ref::<IcebergCommitExec>() {
             let input = try_encode_physical_plan(self, iceberg_commit_exec.input().clone())?;
@@ -2445,6 +2455,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 equality_writer.table_properties(),
                 "Iceberg table properties",
             )?;
+            let write_context_json = serde_json::to_string(equality_writer.write_context())
+                .map_err(|error| {
+                    plan_datafusion_err!("failed to encode Iceberg write context: {error}")
+                })?;
             NodeKind::IcebergEqualityDeleteWriter(r#gen::IcebergEqualityDeleteWriterExecNode {
                 input,
                 table_url: equality_writer.table_url().to_string(),
@@ -2455,6 +2469,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map(ToString::to_string),
                 lakehouse_table_json: self
                     .try_encode_lakehouse_table(equality_writer.lakehouse_table())?,
+                write_context_json,
             })
         } else if let Some(python_exec) = node.downcast_ref::<PythonDataSourceExec>() {
             let schema = try_encode_schema(python_exec.schema().as_ref())?;
@@ -4979,6 +4994,158 @@ mod tests {
         assert_eq!(recursive_query.schema(), output_schema);
         assert_eq!(recursive_query.static_term().schema(), output_schema);
         assert_eq!(recursive_query.recursive_term().schema(), output_schema);
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_iceberg_writer_preserves_write_context() -> Result<()> {
+        use datafusion::arrow::datatypes::{DataType, Field};
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let input_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+        let table_url = Url::parse("file:///tmp/iceberg-codec-context/")
+            .map_err(|error| plan_datafusion_err!("{error}"))?;
+        let options = IcebergWriterExecOptions {
+            write_data_path: Some("pinned-data".to_string()),
+            ..Default::default()
+        };
+        let write_context = sail_iceberg::physical_plan::prepare_iceberg_write_context(
+            &table_url,
+            None,
+            &options,
+            &[],
+            &PhysicalSinkMode::Append,
+            input_schema.as_ref(),
+        )?;
+        let expected_data_location = write_context.data_location.clone();
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(IcebergWriterExec::new(
+            Arc::new(EmptyExec::new(input_schema)),
+            table_url,
+            vec![],
+            PhysicalSinkMode::Append,
+            false,
+            options,
+            write_context,
+        )?);
+
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, plan)?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let writer = decoded
+            .downcast_ref::<IcebergWriterExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not an IcebergWriterExec"))?;
+
+        assert!(writer.write_context().base_table.is_none());
+        assert_eq!(writer.write_context().data_location, expected_data_location);
+        assert!(writer.write_context().commit_writer_schema);
+        assert!(writer.write_context().commit_writer_partition_spec);
+        assert!(
+            writer
+                .write_context()
+                .writer_schema
+                .field_id_by_name("id")
+                .is_some()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_iceberg_equality_delete_writer_preserves_write_context() -> Result<()> {
+        use datafusion::arrow::datatypes::{DataType, Field};
+        use datafusion::physical_plan::empty::EmptyExec;
+        use sail_iceberg::IcebergBaseWriteContext;
+        use sail_iceberg::spec::FormatVersion;
+
+        let input_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+        let table_url = Url::parse("file:///tmp/iceberg-equality-codec-context/")
+            .map_err(|error| plan_datafusion_err!("{error}"))?;
+        let options = IcebergWriterExecOptions::default();
+        let mut write_context = sail_iceberg::physical_plan::prepare_iceberg_write_context(
+            &table_url,
+            None,
+            &options,
+            &[],
+            &PhysicalSinkMode::Append,
+            input_schema.as_ref(),
+        )?;
+        let writer_partition_spec = write_context
+            .writer_partition_spec
+            .clone()
+            .ok_or_else(|| plan_datafusion_err!("missing writer partition spec"))?;
+        write_context.base_table = Some(IcebergBaseWriteContext {
+            format_version: FormatVersion::V2,
+            partition_specs: vec![writer_partition_spec],
+            default_spec_id: 0,
+            properties: HashMap::new(),
+            last_column_id: 1,
+            current_schema_id: 0,
+            last_partition_id: 999,
+            current_snapshot_id: Some(7),
+        });
+        write_context.commit_writer_schema = false;
+        write_context.commit_writer_partition_spec = false;
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(IcebergEqualityDeleteWriterExec::new(
+            Arc::new(EmptyExec::new(input_schema)),
+            table_url,
+            vec![],
+            None,
+            None,
+            write_context,
+            None,
+        )?);
+
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, plan)?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let writer = decoded
+            .downcast_ref::<IcebergEqualityDeleteWriterExec>()
+            .ok_or_else(|| {
+                plan_datafusion_err!("decoded plan is not an IcebergEqualityDeleteWriterExec")
+            })?;
+
+        let base_table = writer
+            .write_context()
+            .base_table
+            .as_ref()
+            .ok_or_else(|| plan_datafusion_err!("missing decoded base table context"))?;
+        assert_eq!(base_table.current_snapshot_id, Some(7));
+        assert!(!writer.write_context().commit_writer_schema);
+        assert!(!writer.write_context().commit_writer_partition_spec);
+        assert_eq!(
+            writer.write_context().data_location,
+            "file:///tmp/iceberg-equality-codec-context/data/"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_decode_iceberg_writer_rejects_missing_write_context() -> Result<()> {
+        use datafusion::arrow::datatypes::{DataType, Field};
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+        let codec = RemoteExecutionCodec;
+        let input = try_encode_physical_plan(&codec, Arc::new(EmptyExec::new(schema)))?;
+        let sink_mode = codec.try_encode_physical_sink_mode(&PhysicalSinkMode::Append)?;
+        let node = ExtendedPhysicalPlanNode {
+            node_kind: Some(NodeKind::IcebergWriter(r#gen::IcebergWriterExecNode {
+                input,
+                table_url: "file:///tmp/missing-iceberg-context/".to_string(),
+                partition_columns: vec![],
+                sink_mode: Some(sink_mode),
+                table_exists: false,
+                options: String::new(),
+                lakehouse_table_json: String::new(),
+                merge_row_intents: false,
+                write_context_json: String::new(),
+            })),
+        };
+
+        let error = match codec.try_decode(&node.encode_to_vec(), &[], &TaskContext::default()) {
+            Ok(_) => return plan_err!("missing Iceberg write context should be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("Missing write_context"));
         Ok(())
     }
 

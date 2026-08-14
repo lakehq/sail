@@ -985,7 +985,7 @@ message IcebergWriterExecNode {
   PhysicalSinkMode sink_mode = 4;
   bool table_exists = 5;
   string options = 6;
-  bytes logical_input_schema = 7;
+  string write_context_json = 7;
   string lakehouse_table_json = 8;
   bool merge_row_intents = 9;
 }
@@ -1052,6 +1052,7 @@ message IcebergEqualityDeleteWriterExecNode {
   optional string write_data_path = 4;
   optional string write_folder_storage_path = 5;
   string lakehouse_table_json = 6;
+  string write_context_json = 7;
 }
 
 message DeltaLogReplayExecNode {
