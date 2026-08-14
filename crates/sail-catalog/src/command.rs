@@ -1,9 +1,17 @@
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::execution::TaskContext;
 use sail_common_datafusion::array::serde::ArrowSerializer;
-use sail_common_datafusion::catalog::{FunctionStatus, LakehouseOperation};
-use sail_common_datafusion::datasource::{DataSourceRegistry, is_lakehouse_format};
+use sail_common_datafusion::catalog::{
+    FunctionStatus, LakehouseFormat, LakehouseOperation, TableKind,
+};
+use sail_common_datafusion::datasource::{
+    DataSourceRegistry, OptionLayer, SourceInfo, is_lakehouse_format,
+};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::lakeprocedure::{
+    LakeProcedureAccess, LakeProcedureInvocation, LakeProcedureResolution,
+};
 use sail_common_datafusion::lakesource::{
     LakeSourceAlterTableOperation, LakeSourceCreateTableColumn, LakeSourceCreateTableInfo,
     LakeSourceCreateTableResult,
@@ -13,7 +21,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::lakehouse::{
-    LakehouseCreateMaterialization, LakehouseCreatePlan, LakehouseCreateRequest,
+    BeginTableAccessRequest, LakehouseCreateMaterialization, LakehouseCreatePlan,
+    LakehouseCreateRequest, ResolveLakehouseTableRequest, TableAccessPurpose,
 };
 use crate::manager::CatalogManager;
 use crate::manager::tracker::{CatalogFunctionId, CatalogLogicalPlanId};
@@ -156,6 +165,10 @@ pub enum CatalogCommand {
         database: Vec<String>,
         extended: bool,
     },
+    CallProcedure {
+        table: Vec<String>,
+        invocation: LakeProcedureInvocation,
+    },
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
@@ -201,6 +214,7 @@ impl CatalogCommand {
             CatalogCommand::CreateView { .. } => "CreateView",
             CatalogCommand::DescribeTable { .. } => "DescribeTable",
             CatalogCommand::DescribeDatabase { .. } => "DescribeDatabase",
+            CatalogCommand::CallProcedure { .. } => "CallProcedure",
         }
     }
 
@@ -244,6 +258,7 @@ impl CatalogCommand {
             CatalogCommand::DescribeDatabase { .. } => {
                 ArrowSerializer::default().schema::<DescribeDatabaseRow>()?
             }
+            CatalogCommand::CallProcedure { invocation, .. } => invocation.procedure.schema(),
             CatalogCommand::DatabaseExists { .. }
             | CatalogCommand::TableExists { .. }
             | CatalogCommand::FunctionExists { .. }
@@ -265,6 +280,25 @@ impl CatalogCommand {
         self,
         ctx: &C,
         manager: &CatalogManager,
+    ) -> CatalogResult<RecordBatch> {
+        self.execute_with_optional_task_context(ctx, manager, None)
+            .await
+    }
+
+    pub async fn execute_on_task(
+        self,
+        ctx: &TaskContext,
+        manager: &CatalogManager,
+    ) -> CatalogResult<RecordBatch> {
+        self.execute_with_optional_task_context(ctx, manager, Some(ctx))
+            .await
+    }
+
+    async fn execute_with_optional_task_context<C: SessionExtensionAccessor>(
+        self,
+        ctx: &C,
+        manager: &CatalogManager,
+        task_context: Option<&TaskContext>,
     ) -> CatalogResult<RecordBatch> {
         // TODO: make sure we return the same schema as Spark for each command
         let service = ctx.extension::<PlanService>()?;
@@ -727,9 +761,121 @@ impl CatalogCommand {
 
                 serializer.build_record_batch(&rows)?
             }
+            CatalogCommand::CallProcedure { table, invocation } => {
+                let task_context = task_context.ok_or_else(|| {
+                    CatalogError::Internal(
+                        "Lakehouse procedures require task-context execution".to_string(),
+                    )
+                })?;
+                execute_lake_procedure(task_context, manager, &table, invocation).await?
+            }
         };
         Ok(batch)
     }
+}
+
+async fn execute_lake_procedure(
+    ctx: &TaskContext,
+    manager: &CatalogManager,
+    table: &[String],
+    invocation: LakeProcedureInvocation,
+) -> CatalogResult<RecordBatch> {
+    let status = manager.get_table(table).await?;
+    let TableKind::Table {
+        location,
+        format,
+        properties,
+        ..
+    } = status.kind
+    else {
+        return Err(CatalogError::InvalidArgument(format!(
+            "Lakehouse procedure target is not a table: {}",
+            table.join(".")
+        )));
+    };
+    let registry = ctx.extension::<DataSourceRegistry>().map_err(|error| {
+        CatalogError::External(format!(
+            "missing DataSourceRegistry for lakehouse procedure: {error}"
+        ))
+    })?;
+    let lake_source = registry.get_lake_source(&format).map_err(|error| {
+        CatalogError::External(format!(
+            "unknown lake source '{format}' for lakehouse procedure: {error}"
+        ))
+    })?;
+    let provider = lake_source
+        .capabilities()
+        .procedure_provider
+        .ok_or_else(|| {
+            CatalogError::NotSupported(format!(
+                "Lake source '{format}' does not provide procedures"
+            ))
+        })?;
+    match provider.resolve_procedure(&invocation.procedure.name) {
+        LakeProcedureResolution::Supported(procedure) if procedure == invocation.procedure => {}
+        LakeProcedureResolution::Supported(_) => {
+            return Err(CatalogError::Conflict(format!(
+                "Lake procedure '{}' changed after planning",
+                invocation.procedure.name
+            )));
+        }
+        LakeProcedureResolution::Unsupported { reason } => {
+            return Err(CatalogError::NotSupported(reason));
+        }
+        LakeProcedureResolution::Unrecognized => {
+            return Err(CatalogError::NotFound(
+                CatalogObject::Function,
+                invocation.procedure.name.clone(),
+            ));
+        }
+    }
+
+    let resolved = manager
+        .resolve_lakehouse_table(
+            table,
+            ResolveLakehouseTableRequest {
+                catalog_table: table.to_vec(),
+                operation: LakehouseOperation::Maintenance,
+                requested_format: Some(LakehouseFormat::from_format_name(&format)),
+                options: vec![],
+            },
+        )
+        .await?;
+    let access_purpose = match invocation.procedure.access {
+        LakeProcedureAccess::MetadataRead => TableAccessPurpose::MetadataRead,
+        LakeProcedureAccess::MetadataCommit => TableAccessPurpose::Commit,
+    };
+    let lakehouse_table = match manager
+        .begin_table_access(
+            table,
+            BeginTableAccessRequest {
+                context: resolved.execution.clone(),
+                purpose: access_purpose,
+            },
+        )
+        .await
+    {
+        Ok(session) => session.context,
+        Err(CatalogError::NotSupported(_) | CatalogError::UnsupportedCapability(_)) => {
+            resolved.execution
+        }
+        Err(error) => return Err(error),
+    };
+    let info = SourceInfo {
+        paths: location.into_iter().collect(),
+        lakehouse_table: Some(lakehouse_table),
+        schema: None,
+        constraints: Default::default(),
+        partition_by: vec![],
+        bucket_by: None,
+        sort_order: vec![],
+        options: vec![OptionLayer::TablePropertyList { items: properties }],
+        read_case_sensitive: true,
+    };
+    provider
+        .execute_procedure(ctx, info, invocation)
+        .await
+        .map_err(|error| CatalogError::External(error.to_string()))
 }
 
 async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(

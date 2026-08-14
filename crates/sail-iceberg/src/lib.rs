@@ -21,6 +21,7 @@ pub mod operations;
 pub mod options;
 pub mod physical;
 pub mod physical_plan;
+mod procedure;
 pub(crate) mod properties;
 pub(crate) mod row_level_metadata;
 pub mod schema_evolution;

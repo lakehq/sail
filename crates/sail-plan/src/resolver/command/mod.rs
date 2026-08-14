@@ -20,6 +20,7 @@ mod explain;
 mod function;
 mod insert;
 mod merge;
+mod procedure;
 mod show;
 mod variable;
 mod with_relations;
@@ -43,6 +44,14 @@ impl PlanResolver<'_> {
             CommandNode::HtmlString(html) => self.resolve_command_html_string(html, state).await,
             CommandNode::WithRelations { root, references } => {
                 self.resolve_command_with_relations(*root, references, state)
+                    .await
+            }
+            CommandNode::CallProcedure {
+                procedure,
+                arguments,
+                named_arguments,
+            } => {
+                self.resolve_command_call_procedure(procedure, arguments, named_arguments, state)
                     .await
             }
             CommandNode::CurrentDatabase => {

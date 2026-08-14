@@ -9,6 +9,7 @@ use datafusion_common::{Result, not_impl_err};
 
 use crate::catalog::{CatalogPartitionField, LakehouseExecutionContext};
 use crate::datasource::{DataSource, DeleteInfo, MergeInfo, SourceInfo};
+use crate::lakeprocedure::LakeProcedureProvider;
 use crate::lakerelation::LakeRelationProvider;
 
 /// Optional format-owned capability providers exposed by a lake source.
@@ -18,6 +19,7 @@ use crate::lakerelation::LakeRelationProvider;
 #[derive(Clone, Default)]
 pub struct LakeSourceCapabilities {
     pub relation_provider: Option<Arc<dyn LakeRelationProvider>>,
+    pub procedure_provider: Option<Arc<dyn LakeProcedureProvider>>,
 }
 
 /// Metadata about an existing lake source needed during logical planning.

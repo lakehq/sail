@@ -191,7 +191,8 @@ impl LakeRelationProvider for IcebergLakeSource {
 impl LakeSource for IcebergLakeSource {
     fn capabilities(self: Arc<Self>) -> LakeSourceCapabilities {
         LakeSourceCapabilities {
-            relation_provider: Some(self),
+            relation_provider: Some(self.clone()),
+            procedure_provider: Some(self),
         }
     }
 
@@ -843,7 +844,7 @@ fn validate_iceberg_read_lakehouse_context(
     Ok(())
 }
 
-fn validate_iceberg_lakehouse_storage_access(
+pub(crate) fn validate_iceberg_lakehouse_storage_access(
     lakehouse_table: Option<&LakehouseExecutionContext>,
 ) -> Result<()> {
     let Some(context) = lakehouse_table else {

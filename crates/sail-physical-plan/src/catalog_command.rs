@@ -89,7 +89,7 @@ impl ExecutionPlan for CatalogCommandExec {
         let stream = futures::stream::once(async move {
             let manager = context.extension::<CatalogManager>()?;
             let batch = command
-                .execute(context.as_ref(), manager.as_ref())
+                .execute_on_task(context.as_ref(), manager.as_ref())
                 .await
                 .map_err(|e| datafusion_common::exec_datafusion_err!("{e}"))?;
             Ok(batch)
