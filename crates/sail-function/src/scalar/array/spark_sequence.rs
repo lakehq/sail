@@ -34,6 +34,20 @@ const MAX_ROUNDED_ARRAY_LENGTH: i64 = i32::MAX as i64 - 15;
 const MICROS_PER_DAY: i64 = 86_400_000_000;
 const MICROS_PER_MONTH: i64 = 28 * MICROS_PER_DAY;
 
+// TODO: Remove the `use_wide_utc_arithmetic` split once Sail has Spark-compatible
+// wide-range timezone arithmetic. Fixed-zero zones can bypass Chrono's narrower
+// datetime range today; full support requires Java `ZoneId`-compatible parsing and
+// wide-range offset/DST gap-overlap handling for calendar interval arithmetic.
+fn is_fixed_zero_offset_timezone(timezone: &str) -> bool {
+    matches!(
+        timezone,
+        "+00" | "-00" | "+0000" | "-0000" | "+00:00" | "-00:00"
+    ) || matches!(
+        timezone.strip_prefix("Etc/").unwrap_or(timezone),
+        "GMT" | "GMT+0" | "GMT-0" | "GMT0" | "Greenwich" | "UCT" | "UTC" | "Universal" | "Zulu"
+    )
+}
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkSequence {
     signature: Signature,
@@ -357,24 +371,26 @@ impl ScalarUDFImpl for SparkSequence {
             Some(DataType::Int64) => make_scalar_function(gen_sequence_i64)(&args),
             Some(DataType::Date32) => {
                 let timezone = self.parse_session_timezone()?;
-                let fixed_utc = self.session_timezone.as_ref() == "UTC";
-                make_scalar_function(move |arrays| gen_sequence_date(arrays, timezone, fixed_utc))(
-                    &args,
-                )
+                let use_wide_utc_arithmetic =
+                    is_fixed_zero_offset_timezone(self.session_timezone.as_ref());
+                make_scalar_function(move |arrays| {
+                    gen_sequence_date(arrays, timezone, use_wide_utc_arithmetic)
+                })(&args)
             }
             Some(DataType::Timestamp(TimeUnit::Microsecond, output_timezone)) => {
                 let arithmetic_timezone = match output_timezone {
                     Some(_) => self.parse_session_timezone()?,
                     None => "UTC".parse()?,
                 };
-                let fixed_utc = self.session_timezone.as_ref() == "UTC";
+                let use_wide_utc_arithmetic =
+                    is_fixed_zero_offset_timezone(self.session_timezone.as_ref());
                 let output_timezone = output_timezone.clone();
                 make_scalar_function(move |arrays| {
                     gen_sequence_timestamp(
                         arrays,
                         arithmetic_timezone,
                         output_timezone.clone(),
-                        fixed_utc,
+                        use_wide_utc_arithmetic,
                     )
                 })(&args)
             }
@@ -1164,8 +1180,8 @@ fn temporal_timestamp_row(
     Ok(values)
 }
 
-fn date_to_micros(date: i32, timezone: Tz, fixed_utc: bool) -> Result<i64> {
-    if fixed_utc {
+fn date_to_micros(date: i32, timezone: Tz, use_wide_utc_arithmetic: bool) -> Result<i64> {
+    if use_wide_utc_arithmetic {
         return i64::from(date)
             .checked_mul(MICROS_PER_DAY)
             .ok_or_else(|| exec_datafusion_err!("cannot convert sequence date {date}"));
@@ -1177,8 +1193,8 @@ fn date_to_micros(date: i32, timezone: Tz, fixed_utc: bool) -> Result<i64> {
     Ok(localize_with_fallback(&timezone, &datetime)?.timestamp_micros())
 }
 
-fn micros_to_date(micros: i64, timezone: Tz, fixed_utc: bool) -> Result<i32> {
-    if fixed_utc {
+fn micros_to_date(micros: i64, timezone: Tz, use_wide_utc_arithmetic: bool) -> Result<i32> {
+    if use_wide_utc_arithmetic {
         return i32::try_from(micros.div_euclid(MICROS_PER_DAY))
             .map_err(|_| exec_datafusion_err!("cannot convert sequence timestamp {micros}"));
     }
@@ -1198,7 +1214,7 @@ fn temporal_date_row(
     stop: i32,
     step: TemporalStep,
     timezone: Tz,
-    fixed_utc: bool,
+    use_wide_utc_arithmetic: bool,
     max_values: usize,
 ) -> Result<Vec<i32>> {
     let (months, days, micros) = step.parts()?;
@@ -1212,8 +1228,8 @@ fn temporal_date_row(
         return integral_row(start, stop, days, max_values);
     }
 
-    let start_micros = date_to_micros(start, timezone, fixed_utc)?;
-    let stop_micros = date_to_micros(stop, timezone, fixed_utc)?;
+    let start_micros = date_to_micros(start, timezone, use_wide_utc_arithmetic)?;
+    let stop_micros = date_to_micros(stop, timezone, use_wide_utc_arithmetic)?;
     let estimated_step = estimated_temporal_step(months, days, micros);
     let estimated_length =
         sequence_length_with_display_step(start_micros, stop_micros, estimated_step, step)?;
@@ -1230,7 +1246,7 @@ fn temporal_date_row(
             days,
             micros,
             timezone,
-            fixed_utc,
+            use_wide_utc_arithmetic,
         )?;
         if !((value < exclusive_item) ^ (step_sign < 0)) {
             break;
@@ -1244,7 +1260,7 @@ fn temporal_date_row(
         if values.len() == values.capacity() {
             reserve(&mut values, 1)?;
         }
-        values.push(micros_to_date(value, timezone, fixed_utc)?);
+        values.push(micros_to_date(value, timezone, use_wide_utc_arithmetic)?);
         index = index
             .checked_add(1)
             .ok_or_else(|| exec_datafusion_err!("sequence index overflow"))?;
@@ -1252,7 +1268,11 @@ fn temporal_date_row(
     Ok(values)
 }
 
-fn gen_sequence_date(args: &[ArrayRef], timezone: Tz, fixed_utc: bool) -> Result<ArrayRef> {
+fn gen_sequence_date(
+    args: &[ArrayRef],
+    timezone: Tz,
+    use_wide_utc_arithmetic: bool,
+) -> Result<ArrayRef> {
     let (start_array, stop_array, step_array) = match args {
         [start, stop] => (
             start.as_primitive::<Date32Type>(),
@@ -1290,7 +1310,14 @@ fn gen_sequence_date(args: &[ArrayRef], timezone: Tz, fixed_utc: bool) -> Result
             None => TemporalStep::default_for(i64::from(start), i64::from(stop)),
         };
         let remaining = i32::MAX as usize - values.len();
-        let row = temporal_date_row(start, stop, step, timezone, fixed_utc, remaining)?;
+        let row = temporal_date_row(
+            start,
+            stop,
+            step,
+            timezone,
+            use_wide_utc_arithmetic,
+            remaining,
+        )?;
         append_row(&mut values, row, &mut offsets, &mut validity)?;
     }
 
@@ -1306,7 +1333,7 @@ fn gen_sequence_timestamp(
     args: &[ArrayRef],
     timezone: Tz,
     output_timezone: Option<Arc<str>>,
-    fixed_utc: bool,
+    use_wide_utc_arithmetic: bool,
 ) -> Result<ArrayRef> {
     let (start_array, stop_array, step_array) = match args {
         [start, stop] => (
@@ -1322,7 +1349,7 @@ fn gen_sequence_timestamp(
         _ => return invalid_sequence_arity(args.len()),
     };
 
-    let timestamp_ntz = output_timezone.is_none() || fixed_utc;
+    let timestamp_ntz = output_timezone.is_none() || use_wide_utc_arithmetic;
     let mut values = Vec::new();
     let mut offsets = Vec::with_capacity(start_array.len() + 1);
     offsets.push(0);
@@ -1362,6 +1389,45 @@ fn gen_sequence_timestamp(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixed_zero_offset_timezone_matches_arrow_supported_aliases() {
+        for timezone in ["+00", "-00", "+0000", "-0000", "+00:00", "-00:00"] {
+            assert!(timezone.parse::<Tz>().is_ok(), "{timezone}");
+            assert!(is_fixed_zero_offset_timezone(timezone), "{timezone}");
+        }
+
+        for name in [
+            "GMT",
+            "GMT+0",
+            "GMT-0",
+            "GMT0",
+            "Greenwich",
+            "UCT",
+            "UTC",
+            "Universal",
+            "Zulu",
+        ] {
+            assert!(name.parse::<Tz>().is_ok(), "{name}");
+            assert!(is_fixed_zero_offset_timezone(name), "{name}");
+
+            let timezone = format!("Etc/{name}");
+            assert!(timezone.parse::<Tz>().is_ok(), "{timezone}");
+            assert!(is_fixed_zero_offset_timezone(&timezone), "{timezone}");
+        }
+
+        for timezone in [
+            "Z",
+            "UT",
+            "UTC+00:00",
+            "+01:00",
+            "Etc/GMT+1",
+            "Africa/Abidjan",
+            "Europe/London",
+        ] {
+            assert!(!is_fixed_zero_offset_timezone(timezone), "{timezone}");
+        }
+    }
 
     #[test]
     fn sequence_length_matches_spark_overflow_and_checked_limits() -> Result<()> {

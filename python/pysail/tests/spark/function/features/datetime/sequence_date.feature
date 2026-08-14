@@ -200,8 +200,8 @@ Feature: sequence() over DATE returns expected arrays
         | result                                                             |
         | [-9223372036854775808, -9223371950454775808, -9223371864054775808] |
 
-    Scenario: timestamp sequence supports Spark's full microsecond domain in a fixed zone
-      Given config spark.sql.session.timeZone = UTC
+    Scenario Outline: timestamp sequence supports Spark's full microsecond domain in a fixed zero-offset zone
+      Given config spark.sql.session.timeZone = <timezone>
       When query
         """
         SELECT transform(
@@ -217,8 +217,14 @@ Feature: sequence() over DATE returns expected arrays
         | result                                                          |
         | [9000000000000000000, 9000000086400000000, 9000000172800000000] |
 
-    Scenario: date sequence supports Spark dates outside Chrono's range in a fixed zone
-      Given config spark.sql.session.timeZone = UTC
+      Examples:
+        | timezone |
+        | UTC      |
+        | +00      |
+        | Etc/UTC  |
+
+    Scenario Outline: date sequence supports Spark dates outside Chrono's range in a fixed zero-offset zone
+      Given config spark.sql.session.timeZone = <timezone>
       When query
         """
         SELECT transform(
@@ -233,6 +239,12 @@ Feature: sequence() over DATE returns expected arrays
       Then query result
         | result                            |
         | [100000000, 100000030, 100000061] |
+
+      Examples:
+        | timezone |
+        | UTC      |
+        | -00:00   |
+        | Zulu     |
 
     Scenario: ANSI temporal sequence coercion trims Spark control whitespace
       Given config spark.sql.session.timeZone = UTC
