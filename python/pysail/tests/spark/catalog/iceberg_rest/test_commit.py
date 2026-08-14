@@ -353,6 +353,116 @@ def test_insert_advances_rest_catalog_metadata_location(
     assert [(row["id"], row["name"]) for row in rows] == [(1, "a"), (2, "b"), (3, "c")]
 
 
+def test_metadata_tables_follow_rest_catalog_pointer(
+    spark: SparkSession,
+    iceberg_rest_endpoint: str,
+) -> None:
+    table_name = "metadata_tables_t"
+    table_fqn = f"sail.{NAMESPACE}.{table_name}"
+    spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+    spark.sql(
+        f"""
+        CREATE TABLE {table_fqn} (
+          id INT,
+          name STRING
+        )
+        USING iceberg
+        """
+    )
+    spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a')")  # noqa: S608
+    spark.sql(f"INSERT INTO {table_fqn} VALUES (2, 'b')")  # noqa: S608
+
+    table = _load_table(iceberg_rest_endpoint, table_name)
+    metadata = table["metadata"]
+    expected_snapshots = sorted(
+        metadata["snapshots"],
+        key=lambda snapshot: (snapshot["timestamp-ms"], snapshot["snapshot-id"]),
+    )
+    snapshots = spark.sql(
+        f"""
+        SELECT snapshot_id, parent_id, operation
+        FROM {table_fqn}.snapshots
+        ORDER BY committed_at, snapshot_id
+        """  # noqa: S608
+    ).collect()
+    assert [(row.snapshot_id, row.parent_id, row.operation) for row in snapshots] == [
+        (
+            snapshot["snapshot-id"],
+            snapshot.get("parent-snapshot-id"),
+            snapshot["summary"]["operation"],
+        )
+        for snapshot in expected_snapshots
+    ]
+
+    references = spark.sql(
+        f"SELECT name, type, snapshot_id FROM {table_fqn}.refs"  # noqa: S608
+    ).collect()
+    main_reference = metadata["refs"]["main"]
+    assert [(row.name, row.type, row.snapshot_id) for row in references] == [
+        ("main", main_reference["type"].upper(), main_reference["snapshot-id"])
+    ]
+
+    metadata_log = spark.sql(
+        f"""
+        SELECT file, latest_snapshot_id
+        FROM {table_fqn}.metadata_log_entries
+        """  # noqa: S608
+    ).collect()
+    expected_metadata_files = {entry["metadata-file"] for entry in metadata["metadata-log"]} | {
+        table["metadata-location"]
+    }
+    assert {row.file for row in metadata_log} == expected_metadata_files
+    current_entry = next(row for row in metadata_log if row.file == table["metadata-location"])
+    assert current_entry.latest_snapshot_id == metadata["current-snapshot-id"]
+
+
+def test_snapshot_procedure_commits_through_rest_catalog(
+    spark: SparkSession,
+    iceberg_rest_endpoint: str,
+) -> None:
+    table_name = "snapshot_procedure_t"
+    table_fqn = f"sail.{NAMESPACE}.{table_name}"
+    spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+    spark.sql(f"CREATE TABLE {table_fqn} (id INT) USING iceberg")
+    spark.sql(f"INSERT INTO {table_fqn} VALUES (1)")  # noqa: S608
+    spark.sql(f"INSERT INTO {table_fqn} VALUES (2)")  # noqa: S608
+
+    before = _load_table(iceberg_rest_endpoint, table_name)
+    before_metadata = before["metadata"]
+    before_location = before["metadata-location"]
+    snapshots = sorted(
+        before_metadata["snapshots"],
+        key=lambda snapshot: (snapshot["timestamp-ms"], snapshot["snapshot-id"]),
+    )
+    target_snapshot_id = snapshots[0]["snapshot-id"]
+    previous_snapshot_id = before_metadata["current-snapshot-id"]
+
+    result = spark.sql(
+        f"""
+        CALL sail.system.rollback_to_snapshot(
+          table => '{table_fqn}',
+          snapshot_id => {target_snapshot_id}
+        )
+        """  # noqa: S608
+    ).first()
+    assert result.previous_snapshot_id == previous_snapshot_id
+    assert result.current_snapshot_id == target_snapshot_id
+
+    after = _load_table(iceberg_rest_endpoint, table_name)
+    after_metadata = after["metadata"]
+    assert after["metadata-location"] != before_location
+    _assert_uuid_metadata_location(after["metadata-location"], 3)
+    assert after_metadata["current-snapshot-id"] == target_snapshot_id
+    assert after_metadata["refs"]["main"]["snapshot-id"] == target_snapshot_id
+    assert after_metadata["metadata-log"][-1]["metadata-file"] == before_location
+    assert {snapshot["snapshot-id"] for snapshot in after_metadata["snapshots"]} == {
+        snapshot["snapshot-id"] for snapshot in snapshots
+    }
+
+    rows = spark.sql(f"SELECT id FROM {table_fqn} ORDER BY id").collect()  # noqa: S608
+    assert [row.id for row in rows] == [1]
+
+
 def test_rest_catalog_write_honors_absolute_data_path(
     spark: SparkSession,
     iceberg_rest_endpoint: str,
