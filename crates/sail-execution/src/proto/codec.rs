@@ -16,8 +16,8 @@ use datafusion::datasource::file_format::file_compression_type::FileCompressionT
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::{
-    ArrowSource, AvroSource, CsvSource, FileScanConfig, FileScanConfigBuilder, FileSink,
-    FileSinkConfig, FileSource, JsonSource, ParquetSource,
+    ArrowSource, AvroSource, FileScanConfig, FileScanConfigBuilder, FileSink, FileSinkConfig,
+    FileSource, JsonSource, ParquetSource,
 };
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::{DataSource, DataSourceExec};
@@ -45,6 +45,7 @@ use datafusion::physical_plan::joins::SortMergeJoinExec;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion::physical_plan::sorts::partial_sort::PartialSortExec;
+use datafusion::physical_plan::sorts::partitioned_topk::PartitionedTopKExec;
 use datafusion::physical_plan::work_table::WorkTableExec;
 use datafusion::physical_plan::{ExecutionPlan, PlanProperties};
 use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
@@ -95,6 +96,7 @@ use sail_common_datafusion::system::catalog::SystemTable;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_data_source::formats::binary::source::BinarySource;
 use sail_data_source::formats::console::ConsoleSinkExec;
+use sail_data_source::formats::csv::CsvSource;
 use sail_data_source::formats::noop::NoopSinkExec;
 use sail_data_source::formats::python::{
     InputPartition, PythonDataSourceExec, PythonDataSourceWriteCommitExec,
@@ -155,7 +157,8 @@ use sail_function::scalar::datetime::spark_date_format::SparkDateFormat;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
 use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_interval::{
-    SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
+    SparkCalendarInterval, SparkDayTimeInterval, SparkDayTimeIntervalToCalendarInterval,
+    SparkYearMonthInterval,
 };
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
 use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
@@ -179,6 +182,7 @@ use sail_function::scalar::geo::st_geomfromwkb::StGeomFromWKB;
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
 use sail_function::scalar::json::{SparkFromJson, SparkSchemaOfJson, SparkToJson};
 use sail_function::scalar::map::map_entries::SparkMapEntries;
+use sail_function::scalar::map::map_from::{SparkMapFromArrays, SparkMapFromEntries};
 use sail_function::scalar::map::str_to_map::StrToMap;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
@@ -211,6 +215,7 @@ use sail_function::scalar::misc::theta_sketch::{
 use sail_function::scalar::misc::version::SparkVersion;
 use sail_function::scalar::multi_expr::MultiExpr;
 use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
+use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 use sail_function::scalar::string::format_number::FormatNumber;
@@ -323,7 +328,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     fn try_decode(
         &self,
         buf: &[u8],
-        _inputs: &[Arc<dyn ExecutionPlan>],
+        inputs: &[Arc<dyn ExecutionPlan>],
         ctx: &TaskContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let node = ExtendedPhysicalPlanNode::decode(buf)
@@ -799,6 +804,45 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     join_type,
                     sort_options,
                     null_equality,
+                )?))
+            }
+            NodeKind::PartitionedTopK(r#gen::PartitionedTopKExecNode {
+                expr,
+                partition_prefix_len,
+                fetch,
+            }) => {
+                let [input] = inputs else {
+                    return plan_err!(
+                        "PartitionedTopKExec requires exactly one input, got {}",
+                        inputs.len()
+                    );
+                };
+                let expr = expr.ok_or_else(|| {
+                    plan_datafusion_err!("PartitionedTopKExec is missing its sort ordering")
+                })?;
+                let expr = self.try_decode_lex_ordering(&expr, input.schema().as_ref(), ctx)?;
+                let partition_prefix_len = usize::try_from(partition_prefix_len).map_err(|_| {
+                    plan_datafusion_err!(
+                        "PartitionedTopKExec partition prefix length is too large: {partition_prefix_len}"
+                    )
+                })?;
+                let fetch = usize::try_from(fetch).map_err(|_| {
+                    plan_datafusion_err!("PartitionedTopKExec fetch is too large: {fetch}")
+                })?;
+                if fetch == 0 {
+                    return plan_err!("PartitionedTopKExec fetch must be greater than zero");
+                }
+                if partition_prefix_len == 0 || partition_prefix_len >= expr.len() {
+                    return plan_err!(
+                        "PartitionedTopKExec partition prefix length must be between 1 and {}, got {partition_prefix_len}",
+                        expr.len().saturating_sub(1)
+                    );
+                }
+                Ok(Arc::new(PartitionedTopKExec::try_new(
+                    Arc::clone(input),
+                    expr,
+                    partition_prefix_len,
+                    fetch,
                 )?))
             }
             NodeKind::DeltaWriter(delta_writer) => {
@@ -1796,6 +1840,23 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 common_prefix_length,
             })
+        } else if let Some(top_k) = node.downcast_ref::<PartitionedTopKExec>() {
+            let expr = Some(self.try_encode_lex_ordering(top_k.expr())?);
+            let partition_prefix_len =
+                u64::try_from(top_k.partition_prefix_len()).map_err(|_| {
+                    plan_datafusion_err!(
+                        "PartitionedTopKExec partition prefix length is too large: {}",
+                        top_k.partition_prefix_len()
+                    )
+                })?;
+            let fetch = u64::try_from(top_k.fetch()).map_err(|_| {
+                plan_datafusion_err!("PartitionedTopKExec fetch is too large: {}", top_k.fetch())
+            })?;
+            NodeKind::PartitionedTopK(r#gen::PartitionedTopKExecNode {
+                expr,
+                partition_prefix_len,
+                fetch,
+            })
         } else if let Some(data_source) = node.downcast_ref::<RemoteDataSourceExec>() {
             let data_source = data_source.data_source();
             let (source, output_partitioning) =
@@ -1836,18 +1897,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         self,
                         &RemotePhysicalProtoConverter {},
                     )?)?;
-                    let csv_options = CsvOptions {
-                        has_header: Some(csv_source.has_header()),
-                        delimiter: csv_source.delimiter(),
-                        quote: csv_source.quote(),
-                        terminator: csv_source.terminator(),
-                        escape: csv_source.escape(),
-                        comment: csv_source.comment(),
-                        newlines_in_values: Some(csv_source.newlines_in_values()),
-                        truncated_rows: Some(csv_source.truncate_rows()),
-                        compression: file_scan.file_compression_type.into(),
-                        ..Default::default()
-                    };
+                    let mut csv_options = csv_source.options().clone();
+                    csv_options.compression = file_scan.file_compression_type.into();
                     let options = try_encode_message(gen_datafusion_common::CsvOptions::try_from(
                         &csv_options,
                     )?)?;
@@ -2602,6 +2653,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkDateFormat::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::SparkMapFromArrays(r#gen::SparkMapFromArraysUdf { last_value_wins }) => {
+                let udf = SparkMapFromArrays::new(last_value_wins);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::SparkMapFromEntries(r#gen::SparkMapFromEntriesUdf { last_value_wins }) => {
+                let udf = SparkMapFromEntries::new(last_value_wins);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::StrToMap(r#gen::StrToMapUdf { last_value_wins }) => {
+                let udf = StrToMap::new(last_value_wins);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
             UdfKind::StructFunction(r#gen::StructFunctionUdf { field_names }) => {
                 let udf = StructFunction::new(field_names);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
@@ -2728,6 +2791,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkArrayPosition::new())))
             }
             "spark_array_compact" => Ok(Arc::new(ScalarUDF::from(SparkArrayCompact::new()))),
+            "spark_cast_string_to_int32" => {
+                Ok(Arc::new(ScalarUDF::from(SparkCastStringToInt32::new())))
+            }
             "vector_inner_product" => Ok(Arc::new(ScalarUDF::from(VectorInnerProduct::new()))),
             "bitmap_count" => Ok(Arc::new(ScalarUDF::from(BitmapCount::new()))),
             "format_string" => Ok(Arc::new(ScalarUDF::from(FormatStringFunc::new()))),
@@ -2862,6 +2928,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkYearMonthInterval::new())))
             }
             "spark_day_time_interval" => Ok(Arc::new(ScalarUDF::from(SparkDayTimeInterval::new()))),
+            "spark_day_time_interval_to_calendar_interval" => Ok(Arc::new(ScalarUDF::from(
+                SparkDayTimeIntervalToCalendarInterval::new(),
+            ))),
             "spark_calendar_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkCalendarInterval::new())))
             }
@@ -2893,7 +2962,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_width_bucket" | "width_bucket" => {
                 Ok(Arc::new(ScalarUDF::from(SparkWidthBucket::new())))
             }
-            "str_to_map" => Ok(Arc::new(ScalarUDF::from(StrToMap::new()))),
             "parse_url" => Ok(Arc::new(ScalarUDF::from(ParseUrl::new()))),
             "try_parse_url" | "spark_try_parse_url" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryParseUrl::new())))
@@ -2915,6 +2983,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<ArrayIntersect>()
             || node_inner.is::<SparkArrayPosition>()
             || node_inner.is::<SparkArrayCompact>()
+            || node_inner.is::<SparkCastStringToInt32>()
             || node_inner.is::<VectorInnerProduct>()
             || node_inner.is::<BitmapCount>()
             || node_inner.is::<FormatStringFunc>()
@@ -2959,6 +3028,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkDatePart>()
             || node_inner.is::<SparkDateTrunc>()
             || node_inner.is::<SparkDayTimeInterval>()
+            || node_inner.is::<SparkDayTimeIntervalToCalendarInterval>()
             || node_inner.is::<SparkDecode>()
             || node_inner.is::<SparkElt>()
             || node_inner.is::<SparkEncode>()
@@ -3020,7 +3090,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkWidthBucket>()
             || node_inner.is::<SparkXxhash64>()
             || node_inner.is::<SparkYearMonthInterval>()
-            || node_inner.is::<StrToMap>()
             || node_inner.is::<SparkToJson>()
             || node_inner.is::<TryUrlDecode>()
             || node_inner.is::<UrlDecode>()
@@ -3032,6 +3101,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.name() == "json_length"
         {
             UdfKind::Standard(r#gen::StandardUdf {})
+        } else if let Some(func) = node_inner.downcast_ref::<SparkMapFromArrays>() {
+            UdfKind::SparkMapFromArrays(r#gen::SparkMapFromArraysUdf {
+                last_value_wins: func.last_value_wins(),
+            })
+        } else if let Some(func) = node_inner.downcast_ref::<SparkMapFromEntries>() {
+            UdfKind::SparkMapFromEntries(r#gen::SparkMapFromEntriesUdf {
+                last_value_wins: func.last_value_wins(),
+            })
+        } else if let Some(func) = node_inner.downcast_ref::<StrToMap>() {
+            UdfKind::StrToMap(r#gen::StrToMapUdf {
+                last_value_wins: func.last_value_wins(),
+            })
         } else if let Some(func) = node.inner().downcast_ref::<PySparkUDF>() {
             let kind = self.try_encode_pyspark_udf_kind(func.kind())?;
             let input_types = func
@@ -4982,6 +5063,54 @@ mod tests {
     }
 
     #[test]
+    fn test_round_trip_csv_source_preserves_sail_source_and_options() -> Result<()> {
+        let table_schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)]));
+        let csv_options = CsvOptions {
+            has_header: Some(false),
+            delimiter: b'|',
+            quote: b'\'',
+            terminator: Some(b';'),
+            escape: Some(b'\\'),
+            double_quote: Some(false),
+            newlines_in_values: Some(true),
+            compression_level: Some(7),
+            schema_infer_max_rec: Some(123),
+            date_format: Some("yyyy-MM-dd".to_string()),
+            null_regex: Some("^(NULL|-)$".to_string()),
+            comment: Some(b'#'),
+            truncated_rows: Some(true),
+            ignore_leading_whitespace: Some(true),
+            ignore_trailing_whitespace: Some(true),
+            ..Default::default()
+        };
+        let mut expected_options = csv_options.clone();
+        expected_options.compression = CompressionTypeVariant::GZIP;
+        let source = Arc::new(CsvSource::new(table_schema).with_csv_options(csv_options));
+        let file_scan = FileScanConfigBuilder::new(
+            datafusion::execution::object_store::ObjectStoreUrl::local_filesystem(),
+            source,
+        )
+        .with_file_compression_type(FileCompressionType::GZIP)
+        .build();
+        let plan = DataSourceExec::from_data_source(file_scan) as Arc<dyn ExecutionPlan>;
+        let codec = RemoteExecutionCodec;
+
+        let bytes = crate::proto::encode_remote_physical_plan(&codec, plan)?;
+        let decoded =
+            crate::proto::decode_remote_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<DataSourceExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not a data source"))?;
+        let (file_scan, csv_source) = decoded
+            .downcast_to_file_source::<CsvSource>()
+            .ok_or_else(|| plan_datafusion_err!("decoded file source is not Sail CSV"))?;
+
+        assert_eq!(file_scan.file_compression_type, FileCompressionType::GZIP);
+        assert_eq!(csv_source.options(), &expected_options);
+        Ok(())
+    }
+
+    #[test]
     fn test_round_trip_schema_evolution_cast_preserves_timezone_mode() -> Result<()> {
         let input_field = Arc::new(Field::new(
             "event_time",
@@ -5100,6 +5229,16 @@ mod tests {
                 .is_some()
         );
         assert_eq!(decoded.name(), "spark_variant_explode");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_cast_string_to_int32_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkCastStringToInt32::new()))?;
+
+        downcast_udf::<SparkCastStringToInt32>(&decoded, "SparkCastStringToInt32")?;
+        assert_eq!(decoded.name(), "spark_cast_string_to_int32");
 
         Ok(())
     }
@@ -6115,6 +6254,21 @@ mod tests {
         assert_eq!(decoded.timezone(), Some("America/Los_Angeles"));
         assert!(decoded.is_try());
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_day_time_interval_to_calendar_interval_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(
+            SparkDayTimeIntervalToCalendarInterval::new(),
+        ))?;
+
+        assert!(
+            decoded
+                .inner()
+                .downcast_ref::<SparkDayTimeIntervalToCalendarInterval>()
+                .is_some()
+        );
         Ok(())
     }
 

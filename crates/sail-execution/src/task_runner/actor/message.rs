@@ -11,7 +11,7 @@ use crate::driver::TaskStatus;
 use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
 use crate::stream::reader::TaskStreamSource;
-use crate::stream::writer::TaskStreamChannelSink;
+use crate::stream::writer::{TaskStreamChannelSink, TaskStreamSink};
 use crate::task::definition::TaskDefinition;
 use crate::worker::WorkerLocation;
 
@@ -46,6 +46,13 @@ pub enum TaskRunnerMessage {
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
     },
+    CreateCelebornStream {
+        key: TaskKey,
+        mappers: usize,
+        channels: usize,
+        schema: SchemaRef,
+        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
+    },
     FetchDriverStream {
         key: TaskStreamKey,
         schema: SchemaRef,
@@ -67,6 +74,13 @@ pub enum TaskRunnerMessage {
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     },
+    FetchCelebornStream {
+        job_id: JobId,
+        stage: usize,
+        channels: Vec<usize>,
+        schema: SchemaRef,
+        result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
+    },
     CleanUpLocalStreams {
         job_id: JobId,
         stage: Option<usize>,
@@ -75,6 +89,10 @@ pub enum TaskRunnerMessage {
         job_id: JobId,
         stage: Option<usize>,
         context: Arc<TaskContext>,
+    },
+    CleanUpCelebornStreams {
+        job_id: JobId,
+        stage: Option<usize>,
     },
     Shutdown,
 }
@@ -88,12 +106,15 @@ impl SpanAssociation for TaskRunnerMessage {
             Self::ProbePendingLocalStream { .. } => "ProbePendingLocalStream",
             Self::CreateLocalStream { .. } => "CreateLocalStream",
             Self::CreateStorageStream { .. } => "CreateStorageStream",
+            Self::CreateCelebornStream { .. } => "CreateCelebornStream",
             Self::FetchDriverStream { .. } => "FetchDriverStream",
             Self::FetchWorkerStream { .. } => "FetchWorkerStream",
             Self::FetchLocalStream { .. } => "FetchLocalStream",
             Self::FetchStorageStream { .. } => "FetchStorageStream",
+            Self::FetchCelebornStream { .. } => "FetchCelebornStream",
             Self::CleanUpLocalStreams { .. } => "CleanUpLocalStreams",
             Self::CleanUpStorageStreams { .. } => "CleanUpStorageStreams",
+            Self::CleanUpCelebornStreams { .. } => "CleanUpCelebornStreams",
             Self::Shutdown => "Shutdown",
         }
         .into()
@@ -169,6 +190,21 @@ impl SpanAssociation for TaskRunnerMessage {
                 properties.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 properties.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
             }
+            Self::CreateCelebornStream {
+                key:
+                    TaskKey {
+                        job_id,
+                        stage,
+                        partition,
+                        attempt,
+                    },
+                ..
+            } => {
+                properties.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                properties.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+                properties.push((SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
+                properties.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
+            }
             Self::FetchDriverStream {
                 key:
                     TaskStreamKey {
@@ -239,8 +275,13 @@ impl SpanAssociation for TaskRunnerMessage {
                 properties.push((SpanAttribute::EXECUTION_ATTEMPT, attempt.to_string()));
                 properties.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
             }
+            Self::FetchCelebornStream { job_id, stage, .. } => {
+                properties.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                properties.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
+            }
             Self::CleanUpLocalStreams { job_id, stage }
-            | Self::CleanUpStorageStreams { job_id, stage, .. } => {
+            | Self::CleanUpStorageStreams { job_id, stage, .. }
+            | Self::CleanUpCelebornStreams { job_id, stage } => {
                 properties.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
                 if let Some(stage) = stage {
                     properties.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));

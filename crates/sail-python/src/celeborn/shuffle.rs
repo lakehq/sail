@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use futures::StreamExt;
+use futures::stream::BoxStream;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use sail_celeborn::error::CelebornError;
@@ -24,6 +26,42 @@ pub(super) struct PyShuffleClient {
     lifecycle_manager: Py<PyLifecycleManager>,
     runtime: RuntimeHandle,
     state: ShuffleClientState,
+}
+
+#[pyclass(name = "ShufflePartitionStream", unsendable)]
+pub(super) struct PyShufflePartitionStream {
+    client: ShuffleClient,
+    runtime: RuntimeHandle,
+    shuffle_id: i32,
+    partition_id: i32,
+    stream: Option<BoxStream<'static, Result<Vec<u8>, CelebornError>>>,
+}
+
+#[pymethods]
+impl PyShufflePartitionStream {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<Vec<u8>>> {
+        let stream = self.stream.take();
+        let client = self.client.clone();
+        let runtime = self.runtime.clone();
+        let shuffle_id = self.shuffle_id;
+        let partition_id = self.partition_id;
+        let (result, stream) = py.detach(move || {
+            runtime.primary().block_on(async move {
+                let mut stream = match stream {
+                    Some(stream) => stream,
+                    None => client.read_partition_stream(shuffle_id, partition_id).await,
+                };
+                let result = stream.next().await.transpose();
+                (result, stream)
+            })
+        });
+        self.stream = Some(stream);
+        result.map_err(to_py_error)
+    }
 }
 
 #[pymethods]
@@ -140,20 +178,23 @@ impl PyShuffleClient {
         .map_err(to_py_error)
     }
 
-    fn read_partition(
+    fn read_partition_stream(
         &self,
         py: Python<'_>,
         shuffle_id: i32,
         partition_id: i32,
-    ) -> PyResult<Vec<u8>> {
+    ) -> PyResult<Py<PyShufflePartitionStream>> {
         let client = self.client()?;
-        let runtime = self.runtime.clone();
-        py.detach(move || {
-            runtime
-                .primary()
-                .block_on(client.read_partition(shuffle_id, partition_id))
-        })
-        .map_err(to_py_error)
+        Py::new(
+            py,
+            PyShufflePartitionStream {
+                client,
+                runtime: self.runtime.clone(),
+                shuffle_id,
+                partition_id,
+                stream: None,
+            },
+        )
     }
 
     fn stop(&mut self, py: Python<'_>) -> PyResult<()> {

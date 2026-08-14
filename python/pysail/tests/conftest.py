@@ -7,6 +7,7 @@ import pytest
 
 INTEGRATION_TEST_PATHS = [
     Path(__file__).parent / "celeborn",
+    Path(__file__).parent / "catalog" / "hms",
     Path(__file__).parent / "spark" / "catalog" / "glue",
     Path(__file__).parent / "spark" / "catalog" / "hms",
     Path(__file__).parent / "spark" / "catalog" / "iceberg_rest",
@@ -22,6 +23,9 @@ def pytest_configure(config: pytest.Config) -> None:
     We must customize the configuration here instead of using `pytest.ini` or `pyproject.toml`
     since these files are not part of the installed package.
     """
+
+    config.pluginmanager.import_plugin("pysail.testing.containers.celeborn")
+    config.pluginmanager.import_plugin("pysail.testing.containers.hms")
 
     # Note: configuration set via `config.inicfg` may not have an effect due to the cache used
     # in `config.getini()`. In such a case, we may have to clear the INI cache in `config`.
