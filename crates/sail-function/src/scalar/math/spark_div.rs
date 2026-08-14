@@ -50,10 +50,11 @@ impl ScalarUDFImpl for SparkIntervalDiv {
     }
 
     /// Spark: `div` between two intervals is `IntegralDivide` — its `inputType` admits
-    /// `YearMonthIntervalType` and `DayTimeIntervalType` and its `dataType` is `LongType`
-    /// (`arithmetic.scala:876-895`). It extends `DivModLike`, which declares
-    /// `override def nullable: Boolean = true` (`arithmetic.scala:658`) unconditionally — a
-    /// zero divisor yields NULL, and ANSI does not narrow the declared flag.
+    /// `YearMonthIntervalType` and `DayTimeIntervalType` and its `dataType` is `LongType`. It
+    /// extends `DivModLike`, whose `nullable = true` is unconditional: a zero divisor yields
+    /// NULL, and ANSI does not narrow the declared flag.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L890>
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L658>
     ///
     /// Declared here rather than left to DataFusion's default: the default happens to agree
     /// today, but nothing pins it, and a change upstream would break parity in silence.
