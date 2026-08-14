@@ -157,7 +157,8 @@ use sail_function::scalar::datetime::spark_date_format::SparkDateFormat;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
 use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_interval::{
-    SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
+    SparkCalendarInterval, SparkDayTimeInterval, SparkDayTimeIntervalToCalendarInterval,
+    SparkYearMonthInterval,
 };
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
 use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
@@ -2927,6 +2928,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkYearMonthInterval::new())))
             }
             "spark_day_time_interval" => Ok(Arc::new(ScalarUDF::from(SparkDayTimeInterval::new()))),
+            "spark_day_time_interval_to_calendar_interval" => Ok(Arc::new(ScalarUDF::from(
+                SparkDayTimeIntervalToCalendarInterval::new(),
+            ))),
             "spark_calendar_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkCalendarInterval::new())))
             }
@@ -3024,6 +3028,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkDatePart>()
             || node_inner.is::<SparkDateTrunc>()
             || node_inner.is::<SparkDayTimeInterval>()
+            || node_inner.is::<SparkDayTimeIntervalToCalendarInterval>()
             || node_inner.is::<SparkDecode>()
             || node_inner.is::<SparkElt>()
             || node_inner.is::<SparkEncode>()
@@ -6249,6 +6254,21 @@ mod tests {
         assert_eq!(decoded.timezone(), Some("America/Los_Angeles"));
         assert!(decoded.is_try());
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_day_time_interval_to_calendar_interval_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(
+            SparkDayTimeIntervalToCalendarInterval::new(),
+        ))?;
+
+        assert!(
+            decoded
+                .inner()
+                .downcast_ref::<SparkDayTimeIntervalToCalendarInterval>()
+                .is_some()
+        );
         Ok(())
     }
 

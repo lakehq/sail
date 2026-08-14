@@ -12,6 +12,8 @@ use half::f16;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::error::generic_exec_err;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
+use sail_function::scalar::datetime::spark_interval::SparkDayTimeIntervalToCalendarInterval;
+use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
 use sail_function::scalar::math::random::Random;
@@ -32,22 +34,50 @@ use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
 use sail_function::scalar::math::spark_unhex::SparkUnHex;
 use sail_function::scalar::math::spark_uniform::SparkUniform;
 use sail_function::scalar::misc::raise_error::RaiseError;
+use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
+fn add_day_time_interval_to_string(
+    string: Expr,
+    interval: Expr,
+    string_type: DataType,
+    session_timezone: Arc<str>,
+    ansi_mode: bool,
+) -> PlanResult<Expr> {
+    let timestamp = ScalarUDF::from(SparkTimestamp::try_new(
+        Some(session_timezone),
+        ansi_mode,
+        false,
+    )?)
+    .call(vec![string]);
+    let calendar_interval =
+        ScalarUDF::from(SparkDayTimeIntervalToCalendarInterval::new()).call(vec![interval]);
+    let shifted = timestamp + calendar_interval;
+    match string_type {
+        DataType::Utf8 => Ok(ScalarUDF::from(SparkToUtf8::new()).call(vec![shifted])),
+        DataType::LargeUtf8 => Ok(ScalarUDF::from(SparkToLargeUtf8::new()).call(vec![shifted])),
+        DataType::Utf8View => Ok(ScalarUDF::from(SparkToUtf8View::new()).call(vec![shifted])),
+        data_type => Err(PlanError::internal(format!(
+            "expected string type for interval arithmetic, got {data_type}"
+        ))),
+    }
+}
+
 /// Arguments:
-///   - left: A numeric, DATE, TIMESTAMP, or INTERVAL expression.
+///   - left: A numeric, STRING, DATE, TIMESTAMP, or INTERVAL expression.
 ///   - right: If left is a numeric right must be numeric expression, or an INTERVAL otherwise.
 ///
 /// Returns:
 ///   - If left is a numeric, the common maximum type of the arguments.
+///   - If one expression is a STRING and the other is a day-time interval, the result is a STRING.
 ///   - If left is a DATE and right is a day-time interval the result is a TIMESTAMP.
 ///   - If both expressions are interval they must be of the same class.
 ///   - Otherwise, the result type matches left.
 ///
-/// All of the above conditions should be handled by the DataFusion.
-/// If there is a discrepancy in parity, check the link below and adjust Sail's logic accordingly:
+/// Most of the above conditions are handled by DataFusion. Spark-specific coercion differences are
+/// rewritten here before constructing the DataFusion expression. For DataFusion's rules, see:
 ///   https://github.com/apache/datafusion/blob/a28f2834c6969a0c0eb26165031f8baa1e1156a5/datafusion/expr-common/src/type_coercion/binary.rs#L194
 fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let ScalarFunctionInput {
@@ -63,6 +93,26 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             right.get_type(function_context.schema),
         );
         Ok(match (left_type, right_type) {
+            (
+                Ok(string_type @ (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)),
+                Ok(DataType::Duration(TimeUnit::Microsecond)),
+            ) => add_day_time_interval_to_string(
+                left,
+                right,
+                string_type,
+                Arc::clone(&function_context.plan_config.session_timezone),
+                function_context.plan_config.ansi_mode,
+            )?,
+            (
+                Ok(DataType::Duration(TimeUnit::Microsecond)),
+                Ok(string_type @ (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)),
+            ) => add_day_time_interval_to_string(
+                right,
+                left,
+                string_type,
+                Arc::clone(&function_context.plan_config.session_timezone),
+                function_context.plan_config.ansi_mode,
+            )?,
             (Ok(DataType::Date32), Ok(DataType::Duration(TimeUnit::Microsecond))) => {
                 left + cast(right, DataType::Interval(IntervalUnit::MonthDayNano))
             }
