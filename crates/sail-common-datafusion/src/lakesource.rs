@@ -9,6 +9,16 @@ use datafusion_common::{Result, not_impl_err};
 
 use crate::catalog::{CatalogPartitionField, LakehouseExecutionContext};
 use crate::datasource::{DataSource, DeleteInfo, MergeInfo, SourceInfo};
+use crate::lakerelation::LakeRelationProvider;
+
+/// Optional format-owned capability providers exposed by a lake source.
+///
+/// New lakehouse surfaces can be added here without extending the generic
+/// [`DataSource`] contract or adding format-specific operations to it.
+#[derive(Clone, Default)]
+pub struct LakeSourceCapabilities {
+    pub relation_provider: Option<Arc<dyn LakeRelationProvider>>,
+}
 
 /// Metadata about an existing lake source needed during logical planning.
 #[derive(Debug, Clone)]
@@ -87,6 +97,11 @@ pub enum LakeSourceAlterTableOperation {
 /// A lakehouse data source with table metadata, DML, and DDL semantics.
 #[async_trait]
 pub trait LakeSource: DataSource {
+    /// Returns the optional capability providers implemented by this lake source.
+    fn capabilities(self: Arc<Self>) -> LakeSourceCapabilities {
+        LakeSourceCapabilities::default()
+    }
+
     /// Infers table metadata for planning without requiring callers to construct a read source.
     async fn infer_metadata(
         &self,

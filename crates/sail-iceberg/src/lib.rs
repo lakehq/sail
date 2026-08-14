@@ -16,6 +16,7 @@ pub mod error;
 pub mod io;
 pub mod lake_source;
 pub mod logical;
+pub(crate) mod metadata_table;
 pub mod operations;
 pub mod options;
 pub mod physical;
