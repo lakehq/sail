@@ -260,6 +260,7 @@ def kerberos_hms_service(
             kdc.copy_from_container("/artifacts/hms.service.keytab", hms_keytab)
             kdc.copy_from_container("/artifacts/client.keytab", client_keytab)
             kdc.copy_from_container("/artifacts/krb5.conf", hms_krb5_config)
+            hms_keytab.chmod(0o644)
             client_keytab.chmod(0o600)
 
             host_krb5_config = fixture_dir / "krb5-host.conf"

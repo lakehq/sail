@@ -1,4 +1,4 @@
-"""Kerberos-authenticated Hive Metastore integration tests."""
+"""Kerberos-authenticated native Hive Metastore integration tests."""
 
 from __future__ import annotations
 

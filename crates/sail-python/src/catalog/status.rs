@@ -1,3 +1,5 @@
+//! Python wrappers for catalog status types.
+
 use pyo3::prelude::*;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
 

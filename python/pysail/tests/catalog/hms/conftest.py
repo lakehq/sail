@@ -1,3 +1,5 @@
+"""Fixtures for native Hive Metastore catalog integration tests."""
+
 from __future__ import annotations
 
 import time

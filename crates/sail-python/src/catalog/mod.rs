@@ -3,7 +3,7 @@ use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use sail_catalog::error::{CatalogError, CatalogObject};
 
-mod catalog;
+mod hms;
 mod status;
 
 create_exception!(_hms, DatabaseNotFoundError, PyKeyError);
@@ -12,7 +12,7 @@ create_exception!(_hms, ViewNotFoundError, PyKeyError);
 
 pub(super) fn register_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     let module = PyModule::new(parent.py(), "_hms")?;
-    module.add_class::<catalog::PyHmsCatalog>()?;
+    module.add_class::<hms::PyHmsCatalog>()?;
     module.add_class::<status::PyDatabaseStatus>()?;
     module.add_class::<status::PyTableStatus>()?;
     module.add_class::<status::PyColumnStatus>()?;

@@ -9,9 +9,9 @@ use sail_catalog::provider::{
 use sail_catalog_hms::{HmsCatalogConfig, HmsCatalogProvider};
 use sail_common::runtime::RuntimeHandle;
 
+use crate::catalog::status::{PyDatabaseStatus, PyTableStatus};
+use crate::catalog::to_py_error;
 use crate::globals::GlobalState;
-use crate::hms::status::{PyDatabaseStatus, PyTableStatus};
-use crate::hms::to_py_error;
 
 type PyColumnDefinition = (String, String, bool);
 

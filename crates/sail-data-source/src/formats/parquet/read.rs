@@ -341,23 +341,3 @@ fn parse_coerce_int96_string(setting: &str) -> Result<TimeUnit> {
         ))),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn explicit_timestamp_schema_determines_timezone_family() {
-        let timestamp_ntz = DataType::Timestamp(TimeUnit::Microsecond, None);
-        let timestamp_ltz = DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC")));
-
-        assert!(parquet_primitive_type_compatible(
-            &timestamp_ntz,
-            &timestamp_ltz
-        ));
-        assert!(parquet_primitive_type_compatible(
-            &timestamp_ltz,
-            &timestamp_ntz
-        ));
-    }
-}

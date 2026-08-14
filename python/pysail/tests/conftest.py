@@ -7,7 +7,7 @@ import pytest
 
 INTEGRATION_TEST_PATHS = [
     Path(__file__).parent / "celeborn",
-    Path(__file__).parent / "hms",
+    Path(__file__).parent / "catalog" / "hms",
     Path(__file__).parent / "spark" / "catalog" / "glue",
     Path(__file__).parent / "spark" / "catalog" / "hms",
     Path(__file__).parent / "spark" / "catalog" / "iceberg_rest",

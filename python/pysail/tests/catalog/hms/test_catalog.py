@@ -1,4 +1,4 @@
-"""Direct integration tests for the native HMS catalog provider."""
+"""Native HMS catalog provider integration tests."""
 
 from __future__ import annotations
 
