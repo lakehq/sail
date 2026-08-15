@@ -81,6 +81,15 @@ Feature: DataFrame sample operations
         | -0.000002   | -0.000002   | Lower bound .* must be >= 0[.]0          |
         | 1.000002    | 1.000002    | Upper bound .* must be <= 1[.]0          |
 
+    @sail-bug
+    Scenario: invalid individual sample bounds are deferred until execution
+      When dataframe sample without replacement with bounds -0.000002 and -0.000001
+      Then dataframe schema
+        """
+        root
+         |-- id: long (nullable = false)
+        """
+
   Rule: Random function with seed
 
     Scenario: rand with same seed returns same value

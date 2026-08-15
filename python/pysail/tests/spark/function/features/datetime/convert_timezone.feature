@@ -114,6 +114,19 @@ Feature: convert_timezone
         | NULL                |
         | 2024-01-01 00:00:00 |
 
+    @sail-bug
+    Scenario: errors follow Spark's row-major evaluation order
+      When query
+        """
+        SELECT convert_timezone(
+          CASE WHEN id = 0 THEN 'Not/AZone' ELSE 'UTC' END,
+          CASE WHEN id = 1 THEN raise_error('later-row') ELSE 'UTC' END,
+          TIMESTAMP_NTZ '2024-01-01 00:00:00'
+        ) AS result
+        FROM VALUES (0), (1) AS t(id)
+        """
+      Then query error (INVALID_TIMEZONE|Unknown time-zone ID).*Not/AZone
+
     Scenario: the lazy wrapper does not shadow a surrounding lambda parameter
       When query
         """
@@ -129,6 +142,23 @@ Feature: convert_timezone
       Then query result
         | result                |
         | [2024-01-01 00:00:00] |
+
+  Rule: Wide timestamp range
+
+    @sail-bug
+    Scenario: `convert_timezone` preserves timestamps outside Chrono's range
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT convert_timezone(
+          'UTC',
+          'America/Los_Angeles',
+          CAST(timestamp_micros(9000000000000000000) AS TIMESTAMP_NTZ)
+        ) IS NOT NULL AS result
+        """
+      Then query result
+        | result |
+        | true   |
 
   Rule: Daylight saving time handling
 

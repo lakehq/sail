@@ -164,6 +164,10 @@ impl PlanResolver<'_> {
             )));
         }
 
+        // TODO: Move these individual-bound checks into the partition-scoped sampler
+        // described below. Spark constructs `BernoulliCellSampler` during execution, so
+        // schema-only analysis accepts fraction-valid bounds. Keep the eager checks until
+        // that sampler exists; removing them now would silently execute invalid ranges.
         if !with_replacement {
             if lower_bound > upper_bound + SAMPLE_ROUNDING_EPSILON {
                 return Err(PlanError::invalid(format!(

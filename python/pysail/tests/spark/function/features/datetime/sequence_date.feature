@@ -120,6 +120,23 @@ Feature: sequence() over DATE returns expected arrays
         | mixed_timestamp_types                                                                                                                 | string_stop                                                          |
         | [2021-11-07 01:00:00, 2021-11-07 01:30:00, 2021-11-07 01:00:00, 2021-11-07 01:30:00, 2021-11-07 02:00:00] | [2021-11-07 00:30:00, 2021-11-07 01:00:00, 2021-11-07 01:30:00] |
 
+    Scenario: mixed timestamp sequence coercion supports a fixed-offset session zone
+      Given config spark.sql.session.timeZone = +0130
+      When query
+        """
+        SELECT transform(
+          sequence(
+            TIMESTAMP_NTZ '1970-01-01 00:00:00',
+            TIMESTAMP '1970-01-01 02:00:00',
+            INTERVAL 1 HOUR
+          ),
+          value -> unix_micros(value)
+        ) AS result
+        """
+      Then query result
+        | result                                      |
+        | [-5400000000, -1800000000, 1800000000]      |
+
     @sail-bug
     Scenario: mixed timestamp sequence coercion accepts the minimum long literal
       Given config spark.sql.session.timeZone = UTC

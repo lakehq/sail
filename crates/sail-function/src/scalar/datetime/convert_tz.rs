@@ -151,6 +151,9 @@ impl HigherOrderUDFImpl for ConvertTzLazy {
             })
             .collect::<Result<Vec<_>>>()?;
 
+        // TODO: Add single-pass row-level lambda evaluation so errors follow Spark's row-major
+        // order. Replaying batches is not equivalent because it re-evaluates volatile/stateful
+        // bodies, which Spark requires to run at most once per row.
         let (values, active_rows) = evaluate_lambdas_until_null(&lambdas, args.number_rows)?;
         if active_rows.is_empty() {
             return Ok(ColumnarValue::Array(new_null_array(
@@ -455,6 +458,9 @@ fn convert_tz_inner(
     microseconds_to_timestamp(results, time_unit)
 }
 
+// TODO: Support Spark's full i64 microsecond range for conversions between
+// different zones. Chrono cannot represent every Spark timestamp, so this needs
+// wide-range zone-offset and DST arithmetic outside Chrono.
 fn disambiguate_local_datetime(local: NaiveDateTime, tz: &Tz) -> Option<DateTime<Tz>> {
     // Handle ambiguous or non-existent local date time
     // in the same way as `java.time.ZonedDateTime#atZone`.

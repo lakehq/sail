@@ -24,6 +24,7 @@ use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
 use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
 
 use crate::error::{PlanError, PlanResult};
+use crate::function::is_spark_compatible_arrow_fixed_offset;
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
@@ -107,15 +108,24 @@ impl PlanResolver<'_> {
             (
                 DataType::Timestamp(_, None),
                 DataType::Timestamp(TimeUnit::Microsecond, Some(timezone)),
-                _,
+                is_try,
             ) => {
-                let timestamp_ntz = cast(expr, DataType::Timestamp(TimeUnit::Microsecond, None));
-                let instant = ScalarUDF::from(ConvertTz::new(false)).call(vec![
-                    lit(timezone.to_string()),
-                    lit("UTC"),
-                    timestamp_ntz,
-                ]);
-                cast(cast(instant, DataType::Int64), cast_to_type)
+                if is_spark_compatible_arrow_fixed_offset(timezone.as_ref()) {
+                    if is_try {
+                        try_cast(expr, cast_to_type)
+                    } else {
+                        cast(expr, cast_to_type)
+                    }
+                } else {
+                    let timestamp_ntz =
+                        cast(expr, DataType::Timestamp(TimeUnit::Microsecond, None));
+                    let instant = ScalarUDF::from(ConvertTz::new(false)).call(vec![
+                        lit(timezone.to_string()),
+                        lit("UTC"),
+                        timestamp_ntz,
+                    ]);
+                    cast(cast(instant, DataType::Int64), cast_to_type)
+                }
             }
             (_, DataType::Utf8, _) if expr_is_variant => cast(
                 ScalarUDF::new_from_impl(SparkVariantToJsonUdf::new()).call(vec![expr]),

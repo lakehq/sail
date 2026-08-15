@@ -18,6 +18,30 @@ Feature: CAST expressions
         | gap     | 1615717800000000 |
         | overlap | 1636273800000000 |
 
+    Scenario Outline: casting TIMESTAMP_NTZ to TIMESTAMP supports fixed offset <timezone>
+      Given config spark.sql.session.timeZone = <timezone>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT
+          unix_micros(CAST(value AS TIMESTAMP)) AS cast_result,
+          unix_micros(TRY_CAST(value AS TIMESTAMP)) AS try_result,
+          CAST(CAST(NULL AS TIMESTAMP_NTZ) AS TIMESTAMP) IS NULL AS null_result
+        FROM VALUES (TIMESTAMP_NTZ '1970-01-01 00:00:00') AS t(value)
+        """
+      Then query result
+        | cast_result | try_result | null_result |
+        | <result>    | <result>   | true        |
+
+      Examples:
+        | timezone | ansi  | result       |
+        | +01      | true  | -3600000000  |
+        | +0130    | false | -5400000000  |
+        | +01:30   | true  | -5400000000  |
+        | -0130    | false | 5400000000   |
+        | -00:00   | true  | 0            |
+        | +18:00   | false | -64800000000 |
+
   Rule: DATE cast ANSI behavior
 
     Scenario: casting a malformed string to DATE returns null when ANSI mode is disabled

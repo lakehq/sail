@@ -852,6 +852,9 @@ fn utc_ntz_timestamp_and_unit(
     Ok((ts, unit))
 }
 
+// TODO: Match Spark's foldability-aware zone evaluation for `from_utc_timestamp`
+// and `to_utc_timestamp`: validate foldable zones eagerly, but skip a non-foldable
+// zone expression when the timestamp is NULL.
 fn from_utc_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let session_tz = input.function_context.plan_config.session_timezone.clone();
     let (ts, to_tz) = input.arguments.two()?;
