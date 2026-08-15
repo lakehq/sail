@@ -96,6 +96,13 @@ def statement(template, docstring, spark, variables):
     spark.sql(s)
 
 
+@given(parsers.parse("sample with replacement fraction {fraction} seed {seed} as temporary view {view}"))
+def sample_with_replacement_as_temporary_view(fraction, seed, view, spark):
+    """Create a seeded replacement sample for parity scenarios."""
+    sampled = spark.range(10, numPartitions=1).sample(True, float(fraction), int(seed))
+    sampled.createOrReplaceTempView(view)
+
+
 @given(parsers.re(r"statement(?P<template>( template)?) with error (?P<error>.*)"))
 def statement_with_error(template, error, docstring, spark, variables):
     """Executes a SQL statement that is expected to fail with an error."""

@@ -268,6 +268,20 @@ Feature: sequence output schema
         | 2  | NULL      |
         | 3  | [1, 2, 3] |
 
+    Scenario: sequence keeps common expressions behind a NULL boundary
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT sequence(
+          CASE WHEN id = 0 THEN CAST(NULL AS BIGINT) ELSE CAST(1 / id AS BIGINT) END,
+          CAST(1 / id AS BIGINT)
+        ) AS result
+        FROM range(1)
+        """
+      Then query result
+        | result |
+        | NULL   |
+
     Scenario: sequence does not consume random values after a NULL boundary
       When query
         """
@@ -284,6 +298,38 @@ Feature: sequence output schema
         | 1  | NULL                |
         | 2  | [1, 2, 3, 4, 5, 6] |
         | 3  | [1, 2, 3, 4, 5]    |
+
+    Scenario: sequence does not swallow a batched child error during row recovery
+      When query
+        """
+        SELECT id, sequence(
+          1L,
+          CASE
+            WHEN rand(1) > 0.62 THEN 2L
+            ELSE CAST(raise_error('random-error') AS BIGINT)
+          END
+        ) AS result
+        FROM VALUES (1), (2) AS t(id)
+        ORDER BY id
+        """
+      Then query error random-error
+
+    Scenario: sequence preserves seeded random positions while locating a row error
+      When query
+        """
+        SELECT sequence(
+          1L,
+          CASE
+            WHEN rand(1) > 0.62 AND id = 2
+              THEN CAST(raise_error('spurious-error') AS BIGINT)
+            WHEN id = 3
+              THEN CAST(raise_error('original-error') AS BIGINT)
+            ELSE 2L
+          END
+        ) AS result
+        FROM VALUES (1), (2), (3) AS t(id)
+        """
+      Then query error original-error
 
     Scenario: sequence reports an earlier row's boundary error before evaluating later rows
       When query
@@ -356,3 +402,12 @@ Feature: sequence output schema
       Then query result
         | result           |
         | [[1], [1, 2, 3]] |
+
+    Scenario: sequence does not shadow an enclosing lambda parameter
+      When query
+        """
+        SELECT transform(array(1, 2), _sequence -> sequence(_sequence, 3)) AS result
+        """
+      Then query result
+        | result               |
+        | [[1, 2, 3], [2, 3]] |

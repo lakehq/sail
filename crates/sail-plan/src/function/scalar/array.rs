@@ -25,6 +25,7 @@ use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::misc::raise_error::RaiseError;
 
+use super::lambda::lambda_with_fresh_parameter;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
@@ -397,10 +398,8 @@ fn sequence(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 
     let arguments = arguments
         .into_iter()
-        .map(|argument| {
-            expr::Expr::Lambda(expr::Lambda::new(vec!["_sequence".to_owned()], argument))
-        })
-        .collect::<Vec<_>>();
+        .map(|argument| lambda_with_fresh_parameter(argument, "_sequence"))
+        .collect::<PlanResult<Vec<_>>>()?;
 
     Ok(expr::Expr::HigherOrderFunction(
         expr::HigherOrderFunction::new(

@@ -8,11 +8,9 @@ use chrono::{
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, Date32Array, Int8Array, Int16Array, Int32Array, Int64Array,
-    ListArray, NullArray, NullBufferBuilder, TimestampMicrosecondArray, UInt64Array,
-    new_empty_array, new_null_array,
+    ListArray, NullBufferBuilder, TimestampMicrosecondArray, new_null_array,
 };
 use datafusion::arrow::buffer::OffsetBuffer;
-use datafusion::arrow::compute::{concat, take_arrays};
 use datafusion::arrow::datatypes::{
     DataType, Date32Type, DurationMicrosecondType, Field, FieldRef, Int8Type, Int16Type, Int32Type,
     Int64Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
@@ -22,13 +20,15 @@ use datafusion::arrow::temporal_conversions::as_datetime;
 use datafusion_common::{Result, exec_datafusion_err, exec_err};
 use datafusion_expr::{
     ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
-    HigherOrderUDFImpl, LambdaArgument, LambdaParametersProgress, ReturnFieldArgs,
-    ScalarFunctionArgs, ScalarUDFImpl, Signature, ValueOrLambda, Volatility,
+    HigherOrderUDFImpl, LambdaParametersProgress, ReturnFieldArgs, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, ValueOrLambda, Volatility,
 };
 use sail_common_datafusion::formatter::IntervalMonthDayNanoFormatter;
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 
-use crate::functions_nested_utils::make_scalar_function;
+use crate::functions_nested_utils::{
+    evaluate_lambda_rows, evaluate_lambdas_until_null, make_scalar_function, scatter_active_rows,
+};
 
 const MAX_ROUNDED_ARRAY_LENGTH: i64 = i32::MAX as i64 - 15;
 const MICROS_PER_DAY: i64 = 86_400_000_000;
@@ -83,9 +83,6 @@ impl SparkSequence {
 }
 
 /// Evaluates sequence arguments lazily while preserving Spark's optimizer behavior.
-///
-/// This intentionally keeps the default higher-order `short_circuits` metadata: Spark's
-/// `Sequence` is not a `ConditionalExpression`, so Catalyst can still apply CSE to its children.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkSequenceLazy {
     signature: HigherOrderSignature,
@@ -116,6 +113,10 @@ impl HigherOrderUDFImpl for SparkSequenceLazy {
 
     fn signature(&self) -> &HigherOrderSignature {
         &self.signature
+    }
+
+    fn short_circuits(&self) -> bool {
+        true
     }
 
     fn lambda_parameters(
@@ -171,43 +172,48 @@ impl HigherOrderUDFImpl for SparkSequenceLazy {
 
         // Evaluate each child only for rows whose preceding children were non-null.
         // This preserves Spark's short-circuiting while retaining batched evaluation.
-        let batch_args = evaluate_sequence_lambdas_batch(&lambdas, args.number_rows);
-        if let Ok((values, active_rows)) = batch_args {
-            if active_rows.is_empty() {
-                return Ok(ColumnarValue::Array(new_null_array(
-                    args.return_type(),
+        let batch_error = match evaluate_lambdas_until_null(&lambdas, args.number_rows) {
+            Ok((values, active_rows)) => {
+                if active_rows.is_empty() {
+                    return Ok(ColumnarValue::Array(new_null_array(
+                        args.return_type(),
+                        args.number_rows,
+                    )));
+                }
+                let value = ScalarUDFImpl::invoke_with_args(
+                    &self.sequence,
+                    ScalarFunctionArgs {
+                        args: values.into_iter().map(ColumnarValue::Array).collect(),
+                        arg_fields: arg_fields.clone(),
+                        number_rows: active_rows.len(),
+                        return_field: Arc::clone(&args.return_field),
+                        config_options: Arc::clone(&args.config_options),
+                    },
+                )?
+                .into_array(active_rows.len())?;
+                return Ok(ColumnarValue::Array(scatter_active_rows(
+                    value,
+                    &active_rows,
                     args.number_rows,
-                )));
+                )?));
             }
-            let value = ScalarUDFImpl::invoke_with_args(
-                &self.sequence,
-                ScalarFunctionArgs {
-                    args: values.into_iter().map(ColumnarValue::Array).collect(),
-                    arg_fields: arg_fields.clone(),
-                    number_rows: active_rows.len(),
-                    return_field: Arc::clone(&args.return_field),
-                    config_options: Arc::clone(&args.config_options),
-                },
-            )?
-            .into_array(active_rows.len())?;
-            return Ok(ColumnarValue::Array(scatter_sequence_rows(
-                value,
-                &active_rows,
-                args.number_rows,
-            )?));
-        }
+            Err(error) => error,
+        };
 
         let row_count = u64::try_from(args.number_rows)
             .map_err(|_| exec_datafusion_err!("sequence row count does not fit in u64"))?;
-        let mut output = Vec::with_capacity(args.number_rows);
+        let mut lambda_rows = vec![Vec::with_capacity(args.number_rows); lambdas.len()];
 
         for row in 0..row_count {
-            let row = [row];
             let mut values = Vec::with_capacity(lambdas.len());
             let mut is_null = false;
 
-            for lambda in &lambdas {
-                let value = evaluate_sequence_lambda(lambda, &row)?;
+            for (index, lambda) in lambdas.iter().enumerate() {
+                // Re-evaluate the active prefix so row-position-dependent expressions retain
+                // the same position they had in the failed batched evaluation.
+                lambda_rows[index].push(row);
+                let value = evaluate_lambda_rows(lambda, &lambda_rows[index])?;
+                let value = value.slice(value.len() - 1, 1);
                 if value.is_null(0) {
                     is_null = true;
                     break;
@@ -215,9 +221,7 @@ impl HigherOrderUDFImpl for SparkSequenceLazy {
                 values.push(ColumnarValue::Array(value));
             }
 
-            let value = if is_null {
-                new_null_array(args.return_type(), 1)
-            } else {
+            if !is_null {
                 ScalarUDFImpl::invoke_with_args(
                     &self.sequence,
                     ScalarFunctionArgs {
@@ -228,21 +232,11 @@ impl HigherOrderUDFImpl for SparkSequenceLazy {
                         config_options: Arc::clone(&args.config_options),
                     },
                 )?
-                .into_array(1)?
-            };
-            output.push(value);
+                .into_array(1)?;
+            }
         }
 
-        let output = if output.is_empty() {
-            new_empty_array(args.return_type())
-        } else {
-            let arrays = output
-                .iter()
-                .map(|array| array.as_ref())
-                .collect::<Vec<_>>();
-            concat(&arrays)?
-        };
-        Ok(ColumnarValue::Array(output))
+        Err(batch_error)
     }
 }
 
@@ -257,77 +251,6 @@ fn check_lazy_sequence_args<V, L>(args: &[ValueOrLambda<V, L>]) -> Result<()> {
         return exec_err!("spark_sequence expected lambda arguments");
     }
     Ok(())
-}
-
-fn evaluate_sequence_lambda(lambda: &LambdaArgument, rows: &[u64]) -> Result<ArrayRef> {
-    let indices = UInt64Array::from(rows.to_vec());
-    let dummy = || Ok(Arc::new(NullArray::new(rows.len())) as ArrayRef);
-
-    lambda
-        .evaluate(&[&dummy], |arrays| Ok(take_arrays(arrays, &indices, None)?))?
-        .into_array(rows.len())
-}
-
-fn evaluate_sequence_lambdas_batch(
-    lambdas: &[&LambdaArgument],
-    number_rows: usize,
-) -> Result<(Vec<ArrayRef>, Vec<u64>)> {
-    let row_count = u64::try_from(number_rows)
-        .map_err(|_| exec_datafusion_err!("sequence row count does not fit in u64"))?;
-    let mut active_rows = (0..row_count).collect::<Vec<_>>();
-    let mut values = Vec::with_capacity(lambdas.len());
-
-    for lambda in lambdas {
-        if active_rows.is_empty() {
-            break;
-        }
-        let value = evaluate_sequence_lambda(lambda, &active_rows)?;
-        let mut retained_positions = Vec::with_capacity(value.len());
-        let mut retained_rows = Vec::with_capacity(value.len());
-        for (position, row) in active_rows.iter().copied().enumerate() {
-            if !value.is_null(position) {
-                retained_positions.push(
-                    u64::try_from(position).map_err(|_| {
-                        exec_datafusion_err!("sequence row index does not fit in u64")
-                    })?,
-                );
-                retained_rows.push(row);
-            }
-        }
-
-        values.push(value);
-        if retained_rows.len() != active_rows.len() {
-            let indices = UInt64Array::from(retained_positions);
-            values = take_arrays(&values, &indices, None)?;
-            active_rows = retained_rows;
-        }
-    }
-    Ok((values, active_rows))
-}
-
-fn scatter_sequence_rows(
-    value: ArrayRef,
-    active_rows: &[u64],
-    number_rows: usize,
-) -> Result<ArrayRef> {
-    if active_rows.len() == number_rows {
-        return Ok(value);
-    }
-
-    let mut indices = vec![None::<u64>; number_rows];
-    for (compact_index, row) in active_rows.iter().copied().enumerate() {
-        let row = usize::try_from(row)
-            .map_err(|_| exec_datafusion_err!("sequence row index does not fit in usize"))?;
-        let compact_index = u64::try_from(compact_index)
-            .map_err(|_| exec_datafusion_err!("sequence row index does not fit in u64"))?;
-        let index = indices
-            .get_mut(row)
-            .ok_or_else(|| exec_datafusion_err!("sequence row index is out of bounds"))?;
-        *index = Some(compact_index);
-    }
-    take_arrays(&[value], &UInt64Array::from(indices), None)?
-        .pop()
-        .ok_or_else(|| exec_datafusion_err!("sequence take returned no arrays"))
 }
 
 impl ScalarUDFImpl for SparkSequence {

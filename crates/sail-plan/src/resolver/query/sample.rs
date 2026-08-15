@@ -182,6 +182,11 @@ impl PlanResolver<'_> {
             }
         }
 
+        // TODO: Replace these batch-local UDFs with partition-scoped samplers. Spark uses
+        // `seed + partition_index` for Bernoulli sampling and per-partition seeds derived
+        // from `java.util.Random(seed)` for replacement sampling, then advances one sampler
+        // across the whole partition. `Random` and `RandPoisson` currently restart from the
+        // same seed for every Arrow batch in every partition.
         let rand_column_name: String = state.register_field_name("rand_value");
         let rand_expr: Expr = if with_replacement {
             Expr::ScalarFunction(ScalarFunction {
