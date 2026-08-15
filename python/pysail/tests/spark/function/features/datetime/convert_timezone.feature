@@ -94,6 +94,42 @@ Feature: convert_timezone
         | null_timestamp | NULL                |
         | valid          | 2024-01-01 00:00:00 |
 
+    Scenario: expressions after a null argument are not evaluated
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT convert_timezone(
+          CASE
+            WHEN id = 0 THEN CAST(NULL AS STRING)
+            ELSE 'UTC'
+          END,
+          IF(id = 0, CAST(1 / id AS STRING), 'UTC'),
+          TIMESTAMP_NTZ '2024-01-01 00:00:00'
+        ) AS result
+        FROM range(0, 2, 1, 1)
+        ORDER BY id
+        """
+      Then query result ordered
+        | result              |
+        | NULL                |
+        | 2024-01-01 00:00:00 |
+
+    Scenario: the lazy wrapper does not shadow a surrounding lambda parameter
+      When query
+        """
+        SELECT transform(
+          array('UTC'),
+          _convert_tz -> convert_timezone(
+            _convert_tz,
+            'UTC',
+            TIMESTAMP_NTZ '2024-01-01 00:00:00'
+          )
+        ) AS result
+        """
+      Then query result
+        | result                |
+        | [2024-01-01 00:00:00] |
+
   Rule: Daylight saving time handling
 
   Background:

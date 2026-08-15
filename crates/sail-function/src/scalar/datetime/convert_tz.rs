@@ -3,17 +3,21 @@ use std::sync::Arc;
 
 use chrono::{DateTime, MappedLocalTime, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::{GapInfo, Tz};
-use datafusion::arrow::array::{Array, ArrayRef, AsArray, Int64Array, UInt64Array};
+use datafusion::arrow::array::{Array, ArrayRef, AsArray, Int64Array, UInt64Array, new_null_array};
 use datafusion::arrow::compute::kernels::{cast, numeric, take};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 use datafusion_common::error::DataFusionError;
 use datafusion_common::{Result, exec_err, plan_err};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Volatility,
+    ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
+    HigherOrderUDFImpl, LambdaParametersProgress, ReturnFieldArgs, ScalarFunctionArgs,
+    ScalarUDFImpl, ValueOrLambda, Volatility,
 };
 use datafusion_expr_common::signature::Signature;
 use datafusion_functions::utils::make_scalar_function;
+
+use crate::functions_nested_utils::{evaluate_lambdas_until_null, scatter_active_rows};
 
 /// A helper scalar UDF for converting time zones for timestamps.
 /// The timestamp must be NTZ timestamp, which should have [`None`] time zone
@@ -51,6 +55,144 @@ impl ConvertTz {
     pub fn null_short_circuit(&self) -> bool {
         self.null_short_circuit
     }
+}
+
+/// Evaluates `convert_timezone` arguments from left to right and stops at the first NULL.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct ConvertTzLazy {
+    signature: HigherOrderSignature,
+    convert_tz: ConvertTz,
+}
+
+impl ConvertTzLazy {
+    pub fn new(convert_tz: ConvertTz) -> Self {
+        Self {
+            signature: HigherOrderSignature::variadic_any(Volatility::Immutable),
+            convert_tz,
+        }
+    }
+
+    pub fn classic(&self) -> bool {
+        self.convert_tz.classic()
+    }
+
+    pub fn null_short_circuit(&self) -> bool {
+        self.convert_tz.null_short_circuit()
+    }
+}
+
+impl HigherOrderUDFImpl for ConvertTzLazy {
+    fn name(&self) -> &str {
+        "convert_tz_lazy"
+    }
+
+    fn signature(&self) -> &HigherOrderSignature {
+        &self.signature
+    }
+
+    fn lambda_parameters(
+        &self,
+        _step: usize,
+        fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
+    ) -> Result<LambdaParametersProgress> {
+        check_lazy_convert_tz_args(fields)?;
+        let dummy = Arc::new(Field::new("", DataType::Null, true));
+        Ok(LambdaParametersProgress::Complete(
+            fields.iter().map(|_| vec![Arc::clone(&dummy)]).collect(),
+        ))
+    }
+
+    fn return_field_from_args(&self, args: HigherOrderReturnFieldArgs) -> Result<FieldRef> {
+        check_lazy_convert_tz_args(args.arg_fields)?;
+        let fields = args
+            .arg_fields
+            .iter()
+            .map(|arg| match arg {
+                ValueOrLambda::Lambda(field) => Ok(Arc::clone(field)),
+                ValueOrLambda::Value(_) => {
+                    exec_err!("convert_timezone expected lambda arguments")
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        ScalarUDFImpl::return_field_from_args(
+            &self.convert_tz,
+            ReturnFieldArgs {
+                arg_fields: &fields,
+                scalar_arguments: args.scalar_arguments,
+            },
+        )
+    }
+
+    fn short_circuits(&self) -> bool {
+        true
+    }
+
+    fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
+        check_lazy_convert_tz_args(&args.args)?;
+        let lambdas = args
+            .args
+            .iter()
+            .map(|arg| match arg {
+                ValueOrLambda::Lambda(lambda) => Ok(lambda),
+                ValueOrLambda::Value(_) => {
+                    exec_err!("convert_timezone expected lambda arguments")
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let arg_fields = args
+            .arg_fields
+            .iter()
+            .map(|arg| match arg {
+                ValueOrLambda::Lambda(field) => Ok(Arc::clone(field)),
+                ValueOrLambda::Value(_) => {
+                    exec_err!("convert_timezone expected lambda arguments")
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let (values, active_rows) = evaluate_lambdas_until_null(&lambdas, args.number_rows)?;
+        if active_rows.is_empty() {
+            return Ok(ColumnarValue::Array(new_null_array(
+                args.return_type(),
+                args.number_rows,
+            )));
+        }
+
+        let value = ScalarUDFImpl::invoke_with_args(
+            &self.convert_tz,
+            ScalarFunctionArgs {
+                args: values.into_iter().map(ColumnarValue::Array).collect(),
+                arg_fields,
+                number_rows: active_rows.len(),
+                return_field: Arc::clone(&args.return_field),
+                config_options: Arc::clone(&args.config_options),
+            },
+        )?
+        .into_array(active_rows.len())?;
+
+        Ok(ColumnarValue::Array(scatter_active_rows(
+            value,
+            &active_rows,
+            args.number_rows,
+        )?))
+    }
+}
+
+fn check_lazy_convert_tz_args<V, L>(args: &[ValueOrLambda<V, L>]) -> Result<()> {
+    if args.len() != 3 {
+        return exec_err!(
+            "convert_timezone takes 3 internal arguments, got {}",
+            args.len()
+        );
+    }
+    if args
+        .iter()
+        .any(|arg| matches!(arg, ValueOrLambda::Value(_)))
+    {
+        return exec_err!("convert_timezone expected lambda arguments");
+    }
+    Ok(())
 }
 
 impl ScalarUDFImpl for ConvertTz {

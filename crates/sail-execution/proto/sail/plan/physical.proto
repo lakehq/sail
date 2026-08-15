@@ -145,7 +145,8 @@ message HigherOrderUdf {
     SparkArrayForallUdf forall = 4;
     SparkArrayAggregateUdf aggregate = 5;
     SparkArraySortUdf sort = 6;
-    SparkSequenceUdf sequence = 7;
+    SparkSequenceUdf spark_sequence_lazy = 7;
+    ConvertTzUdf convert_tz_lazy = 8;
   }
 }
 

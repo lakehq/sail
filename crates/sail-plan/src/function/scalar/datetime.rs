@@ -6,13 +6,15 @@ use datafusion::arrow::datatypes::{
 use datafusion::functions::expr_fn;
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::{self, Expr};
-use datafusion_expr::{BinaryExpr, ExprSchemable, Operator, ScalarUDF, cast, lit, try_cast, when};
+use datafusion_expr::{
+    BinaryExpr, ExprSchemable, HigherOrderUDF, Operator, ScalarUDF, cast, lit, try_cast, when,
+};
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
 use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
 use sail_common::utils::datetime::time_unit_to_multiplier;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::datetime::convert_tz::ConvertTz;
+use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzLazy};
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_format::SparkDateFormat;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
@@ -34,6 +36,7 @@ use sail_function::scalar::explode::{Explode, ExplodeKind};
 use sail_sql_analyzer::literal::interval::IntervalValue;
 use sail_sql_analyzer::parser::parse_interval;
 
+use super::lambda::lambda_with_fresh_parameter;
 use crate::config::DefaultTimestampType;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -744,14 +747,22 @@ fn convert_tz(
     ts: Expr,
     classic: bool,
     with_null_short_circuit: bool,
-) -> Expr {
+) -> PlanResult<Expr> {
     let func = ConvertTz::new(classic);
-    let func = if with_null_short_circuit {
-        func.with_null_short_circuit()
+    if with_null_short_circuit {
+        let arguments = [from_tz, to_tz, ts]
+            .into_iter()
+            .map(|argument| lambda_with_fresh_parameter(argument, "_convert_tz"))
+            .collect::<PlanResult<Vec<_>>>()?;
+        Ok(Expr::HigherOrderFunction(expr::HigherOrderFunction::new(
+            Arc::new(HigherOrderUDF::new_from_impl(ConvertTzLazy::new(
+                func.with_null_short_circuit(),
+            ))),
+            arguments,
+        )))
     } else {
-        func
-    };
-    ScalarUDF::from(func).call(vec![from_tz, to_tz, ts])
+        Ok(ScalarUDF::from(func).call(vec![from_tz, to_tz, ts]))
+    }
 }
 
 /// A helper function for processing the input NTZ timestamp.
@@ -797,7 +808,7 @@ fn convert_timezone(input: ScalarFunctionInput) -> PlanResult<Expr> {
         input.function_context.schema,
         input.function_context.plan_config.ansi_mode,
     )?;
-    Ok(convert_tz(from_tz, to_tz, ts, true, true))
+    convert_tz(from_tz, to_tz, ts, true, true)
 }
 
 /// A helper function for processing the input timestamp for
@@ -850,7 +861,7 @@ fn from_utc_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
         &session_tz,
         input.function_context.plan_config.ansi_mode,
     )?;
-    let ts = convert_tz(lit("UTC"), to_tz, ts, false, false);
+    let ts = convert_tz(lit("UTC"), to_tz, ts, false, false)?;
     let ts = cast(ts, DataType::Timestamp(unit, Some(Arc::from("UTC"))));
     Ok(cast(ts, DataType::Timestamp(unit, Some(session_tz))))
 }
@@ -864,7 +875,7 @@ fn to_utc_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
         &session_tz,
         input.function_context.plan_config.ansi_mode,
     )?;
-    let ts = convert_tz(from_tz, lit("UTC"), ts, false, false);
+    let ts = convert_tz(from_tz, lit("UTC"), ts, false, false)?;
     let ts = cast(ts, DataType::Timestamp(unit, Some(Arc::from("UTC"))));
     Ok(cast(ts, DataType::Timestamp(unit, Some(session_tz))))
 }
@@ -878,7 +889,7 @@ fn make_timestamp_ltz(args: Vec<Expr>, session_tz: &Arc<str>, is_try: bool) -> P
             unreachable!()
         };
         let ntz_ts = ScalarUDF::from(SparkMakeTimestampNtz::new(is_try)).call(args);
-        convert_tz(from_tz, lit(session_tz.to_string()), ntz_ts, true, false)
+        convert_tz(from_tz, lit(session_tz.to_string()), ntz_ts, true, false)?
     } else {
         return Err(PlanError::invalid(format!(
             "{}make_timestamp_ltz requires 2, 3, 6 or 7 arguments, got {:?}",

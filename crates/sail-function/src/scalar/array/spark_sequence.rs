@@ -108,7 +108,7 @@ impl SparkSequenceLazy {
 
 impl HigherOrderUDFImpl for SparkSequenceLazy {
     fn name(&self) -> &str {
-        "spark_sequence"
+        "spark_sequence_lazy"
     }
 
     fn signature(&self) -> &HigherOrderSignature {
