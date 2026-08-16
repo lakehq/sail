@@ -27,7 +27,7 @@ use sail_function::scalar::misc::raise_error::RaiseError;
 
 use super::lambda::lambda_with_fresh_parameter;
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+use crate::function::common::{ScalarFunction, ScalarFunctionInput, expr_contains_python_udf};
 use crate::function::is_spark_compatible_arrow_fixed_offset;
 
 fn array_repeat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -397,6 +397,17 @@ fn sequence(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             sequence_cast(argument, &source_type, &target_type, config.ansi_mode)
         })
         .collect::<PlanResult<Vec<_>>>()?;
+
+    let has_pyspark_udf = arguments.iter().try_fold(false, |found, argument| {
+        if found {
+            Ok(true)
+        } else {
+            expr_contains_python_udf(argument)
+        }
+    })?;
+    if has_pyspark_udf {
+        return Ok(ScalarUDF::from(udf).call(arguments));
+    }
 
     let arguments = arguments
         .into_iter()

@@ -214,7 +214,7 @@ impl HigherOrderUDFImpl for SparkSequenceLazy {
                 lambda_rows[index].push(row);
                 let value = evaluate_lambda_rows(lambda, &lambda_rows[index])?;
                 let value = value.slice(value.len() - 1, 1);
-                if value.is_null(0) {
+                if value.logical_nulls().is_some_and(|nulls| nulls.is_null(0)) {
                     is_null = true;
                     break;
                 }

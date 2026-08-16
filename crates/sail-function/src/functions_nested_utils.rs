@@ -81,10 +81,11 @@ pub(crate) fn evaluate_lambdas_until_null(
             break;
         }
         let value = evaluate_lambda_rows(lambda, &active_rows)?;
+        let nulls = value.logical_nulls();
         let mut retained_positions = Vec::with_capacity(value.len());
         let mut retained_rows = Vec::with_capacity(value.len());
         for (position, row) in active_rows.iter().copied().enumerate() {
-            if !value.is_null(position) {
+            if nulls.as_ref().is_none_or(|nulls| nulls.is_valid(position)) {
                 retained_positions.push(
                     u64::try_from(position).map_err(|_| {
                         exec_datafusion_err!("sequence row index does not fit in u64")

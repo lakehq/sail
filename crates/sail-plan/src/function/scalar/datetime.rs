@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use datafusion::arrow::compute::can_cast_types;
 use datafusion::arrow::datatypes::{
     DataType, IntervalDayTimeType, IntervalUnit, IntervalYearMonthType, TimeUnit,
 };
@@ -14,6 +15,7 @@ use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
 use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
 use sail_common::utils::datetime::time_unit_to_multiplier;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_common_datafusion::variant::is_variant_storage_field;
 use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzLazy};
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_format::SparkDateFormat;
@@ -39,7 +41,10 @@ use sail_sql_analyzer::parser::parse_interval;
 use super::lambda::lambda_with_fresh_parameter;
 use crate::config::DefaultTimestampType;
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+use crate::function::common::{
+    ScalarFunction, ScalarFunctionInput, expr_contains_python_udf,
+    expr_contains_spark_cast_to_variant,
+};
 
 fn integer_part(expr: Expr, part: &str) -> Expr {
     cast(
@@ -765,6 +770,19 @@ fn convert_tz(
     }
 }
 
+fn validate_convert_timezone_zone(expr: &Expr, schema: &DFSchemaRef) -> PlanResult<()> {
+    let field = expr.to_field(schema)?.1;
+    if !can_cast_types(field.data_type(), &DataType::Utf8)
+        && !is_variant_storage_field(field.as_ref())
+    {
+        return Err(PlanError::invalid(format!(
+            "convert_timezone time zone arguments must be castable to string, got {}",
+            field.data_type()
+        )));
+    }
+    Ok(())
+}
+
 /// A helper function for processing the input NTZ timestamp.
 fn ntz_timestamp_and_unit(
     ts: Expr,
@@ -774,6 +792,10 @@ fn ntz_timestamp_and_unit(
     match ts.get_type(schema)? {
         DataType::Timestamp(unit, Some(_)) => Ok((expr_fn::to_local_time(vec![ts]), unit)),
         DataType::Timestamp(unit, None) => Ok((ts, unit)),
+        DataType::Null => {
+            let unit = TimeUnit::Microsecond;
+            Ok((cast(ts, DataType::Timestamp(unit, None)), unit))
+        }
         DataType::Date32 | DataType::Date64 => {
             let unit = TimeUnit::Microsecond;
             Ok((cast(ts, DataType::Timestamp(unit, None)), unit))
@@ -803,12 +825,33 @@ fn convert_timezone(input: ScalarFunctionInput) -> PlanResult<Expr> {
             "convert_timezone takes 2 or 3 arguments, got {args:?}"
         ))),
     }?;
+    validate_convert_timezone_zone(&from_tz, input.function_context.schema)?;
+    validate_convert_timezone_zone(&to_tz, input.function_context.schema)?;
     let (ts, _unit) = ntz_timestamp_and_unit(
         ts,
         input.function_context.schema,
         input.function_context.plan_config.ansi_mode,
     )?;
-    convert_tz(from_tz, to_tz, ts, true, true)
+    let requires_scalar_evaluation =
+        [&from_tz, &to_tz, &ts]
+            .into_iter()
+            .try_fold(false, |found, argument| {
+                if found {
+                    PlanResult::Ok(true)
+                } else {
+                    Ok(expr_contains_python_udf(argument)?
+                        || expr_contains_spark_cast_to_variant(argument)?)
+                }
+            })?;
+
+    if requires_scalar_evaluation {
+        Ok(
+            ScalarUDF::from(ConvertTz::new(true).with_null_short_circuit())
+                .call(vec![from_tz, to_tz, ts]),
+        )
+    } else {
+        convert_tz(from_tz, to_tz, ts, true, true)
+    }
 }
 
 /// A helper function for processing the input timestamp for
