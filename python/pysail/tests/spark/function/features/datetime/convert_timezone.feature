@@ -43,7 +43,38 @@ Feature: convert_timezone
         | '2024-06-15 14:30:00+07:00'           | 2024-06-15 08:30:00 |
         | DATE '2024-06-15'                     | 2024-06-14 18:00:00 |
 
+    Scenario Outline: uncastable null time zones are rejected
+      When query
+        """
+        SELECT convert_timezone(
+          <source>,
+          <target>,
+          TIMESTAMP_NTZ '2024-01-01 00:00:00'
+        )
+        """
+      Then query error (?i)(DATATYPE_MISMATCH\.(UNEXPECTED_INPUT_TYPE|CAST_WITHOUT_SUGGESTION)|time zone arguments must be castable to string|cannot cast .* to VARIANT)
+
+      Examples:
+        | source                           | target                                           |
+        | CAST(NULL AS STRUCT<value: INT>) | 'UTC'                                            |
+        | CAST(NULL AS STRING)             | CAST(NULL AS MAP<STRING, INT>)                   |
+        | CAST(NULL AS STRING)             | CAST(CAST(NULL AS STRUCT<value: INT>) AS VARIANT) |
+        | CAST(NULL AS STRING)             | CAST(CAST(NULL AS MAP<STRING, INT>) AS VARIANT)   |
+
   Rule: Null propagation
+
+    Scenario: a raw NULL stops later expression evaluation
+      When query
+        """
+        SELECT convert_timezone(
+          NULL,
+          CAST(raise_error('raw-null-zone') AS STRING),
+          TIMESTAMP_NTZ '2024-01-01 00:00:00'
+        ) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
 
     Scenario: scalar time zones are not parsed when another argument is null
       When query
