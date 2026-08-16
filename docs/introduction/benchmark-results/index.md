@@ -16,7 +16,15 @@ The benchmark consists of 22 queries that cover a wide range of SQL operations, 
 - **Disk:** Separate EBS volumes for data and Spark temporary files (4000 IOPS, 1000 MB/s throughput)
 
 The experiments were run using Sail 0.7.0 and Spark 4.2.0.
-The data was generated using [tpchgen-cli](https://pypi.org/project/tpchgen-cli). Each table has 64 partitions (though we did not observe performance differences with other partition numbers).
+The data was generated using [`tpchgen-cli`](https://pypi.org/project/tpchgen-cli). The partition count is 64, though we did not observe performance differences with other partition counts.
+
+::: info
+
+- The `optimizer.enable_join_reorder` configuration option is turned on for Sail. This option is currently experimental, and we plan to enable this by default once the optimizer is more stable.
+- The Sail server is built from source as a [standalone binary](/development/recipes/standalone-binary).
+- Previously, the TPC-H data was generated using the `dbgen` tool followed by conversion to Parquet. We now use the `tpchgen-cli` tool, and we noticed that the dataset size in Parquet format is different. This is a reason why the baseline Spark query times are different from the previous benchmark results.
+
+:::
 
 ## Key Findings
 
