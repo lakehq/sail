@@ -7,6 +7,7 @@ edition = { workspace = true }
 workspace = true
 
 [dependencies]
+sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-physical-plan = { path = "../sail-physical-plan" }
 
 datafusion = { workspace = true }
