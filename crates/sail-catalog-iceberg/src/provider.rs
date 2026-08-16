@@ -601,9 +601,14 @@ impl IcebergRestCatalogProvider {
                                         crate::r#gen::SortDirection::Asc => true,
                                         crate::r#gen::SortDirection::Desc => false,
                                     };
+                                    let nulls_first = match sort_field.null_order {
+                                        crate::models::NullOrder::NullsFirst => true,
+                                        crate::models::NullOrder::NullsLast => false,
+                                    };
                                     CatalogTableSort {
                                         column: field.name.clone(),
                                         ascending,
+                                        nulls_first,
                                     }
                                 })
                         })
@@ -1954,7 +1959,11 @@ fn build_sort_order(
                 } else {
                     sail_iceberg::spec::sort::SortDirection::Descending
                 },
-                null_order: sail_iceberg::spec::sort::NullOrder::Last, // TODO: Use specified null order when supported by `resolve_catalog_table_sort` in @crates/sail-plan/src/resolver/command/catalog/table.rs
+                null_order: if sort.nulls_first {
+                    sail_iceberg::spec::sort::NullOrder::First
+                } else {
+                    sail_iceberg::spec::sort::NullOrder::Last
+                },
             });
         }
     }
