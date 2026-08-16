@@ -1,4 +1,4 @@
-"""JDBC data source for Sail, backed by connectorX.
+"""JDBC data source for Sail, backed by connectorX and ADBC.
 
 Supports ``spark.read.format("jdbc")`` and ``spark.read.jdbc()`` with options
 consistent with the PySpark JDBC API.
@@ -11,6 +11,7 @@ Install the optional dependency before use::
 from __future__ import annotations
 
 import datetime
+import re
 from urllib.parse import quote
 
 try:
@@ -29,6 +30,7 @@ if TYPE_CHECKING:
 try:
     from pyspark.sql.datasource import (
         DataSource,
+        DataSourceArrowWriter,
         DataSourceReader,
         EqualTo,
         Filter,
@@ -89,6 +91,22 @@ def _jdbc_url_to_dsn(url: str, user: str | None, password: str | None) -> str:
 def _quote_identifier(name: str) -> str:
     """Double-quote a SQL identifier, escaping any embedded double quotes."""
     return '"' + name.replace('"', '""') + '"'
+
+
+_POSTGRES_IDENTIFIER = r'"(?:[^"]|"")+"|[^\W\d][\w$]*'
+_POSTGRES_DBTABLE = re.compile(rf"\s*({_POSTGRES_IDENTIFIER})(?:\s*\.\s*({_POSTGRES_IDENTIFIER}))?\s*")
+
+
+def _parse_postgres_dbtable(dbtable: str) -> tuple[str | None, str]:
+    """Parse a PostgreSQL ``[schema.]table`` identifier for ADBC."""
+    match = _POSTGRES_DBTABLE.fullmatch(dbtable)
+    if match is None:
+        msg = f"JDBC writes require 'dbtable' to be a PostgreSQL identifier in [schema.]table form; got {dbtable!r}"
+        raise ValueError(msg)
+
+    parts = [part for part in match.groups() if part is not None]
+    names = [part[1:-1].replace('""', '"') if part.startswith('"') else part.lower() for part in parts]
+    return (None, names[0]) if len(names) == 1 else (names[0], names[1])
 
 
 # ============================================================================
@@ -260,6 +278,37 @@ def _build_where(filters: list[str]) -> str:
 # ============================================================================
 
 
+class _PostgresJdbcWriter(DataSourceArrowWriter):
+    def __init__(self, conn_str: str, dbtable: str, input_schema: pa.Schema):
+        schema, table = _parse_postgres_dbtable(dbtable)
+        self.conn_str = conn_str
+        self.schema = schema
+        self.table = table
+        self.input_schema = input_schema
+
+    def write(self, iterator: Iterator[pa.RecordBatch]):
+        import adbc_driver_postgresql.dbapi as pg_dbapi  # noqa: PLC0415
+
+        with pg_dbapi.connect(self.conn_str) as connection, connection.cursor() as cursor:
+            empty = True
+            for batch in iterator:
+                empty = False
+                cursor.adbc_ingest(
+                    self.table,
+                    pa.Table.from_batches([batch]),
+                    mode="append",
+                    db_schema_name=self.schema,
+                )
+            if empty:
+                cursor.adbc_ingest(
+                    self.table,
+                    pa.Table.from_batches([], schema=self.input_schema),
+                    mode="append",
+                    db_schema_name=self.schema,
+                )
+            connection.commit()
+
+
 class JdbcDataSource(DataSource):
     """JDBC data source backed by connectorX.
 
@@ -318,7 +367,9 @@ class JdbcDataSource(DataSource):
 
     * Exactly one of ``dbtable`` or ``query`` is required.
 
-    Not supported: ``driver``, ``predicates`` list, write operations,
+    Writes support PostgreSQL existing-table append only.
+
+    Not supported: ``driver``, ``predicates`` list, overwrite, table creation,
     ``queryTimeout``, ``isolationLevel``, ``sessionInitStatement``, Kerberos.
     """
 
@@ -461,6 +512,23 @@ class JdbcDataSource(DataSource):
     def reader(self, schema: pa.Schema) -> JdbcDataSourceReader:  # noqa: ARG002
         resolved = self._resolve_options()
         return JdbcDataSourceReader(**resolved)
+
+    def writer(self, schema: pa.Schema, overwrite: bool) -> DataSourceArrowWriter:  # noqa: FBT001
+        if overwrite:
+            msg = "JDBC writes currently support only append mode"
+            raise ValueError(msg)
+
+        resolved = self._resolve_options()
+        if resolved["query"] is not None:
+            msg = "Option 'query' is not supported for JDBC writes; use 'dbtable'"
+            raise ValueError(msg)
+
+        conn_str = resolved["conn_str"]
+        if not conn_str.startswith("postgresql://"):
+            msg = "JDBC writes currently support only PostgreSQL"
+            raise ValueError(msg)
+
+        return _PostgresJdbcWriter(conn_str, resolved["dbtable"], schema)
 
 
 # ============================================================================
