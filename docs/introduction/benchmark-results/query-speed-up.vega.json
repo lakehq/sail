@@ -47,7 +47,7 @@
       "name": "yscale",
       "type": "linear",
       "domain": { "data": "table-sail", "field": "speedup" },
-      "domainMax": 850,
+      "domainMax": 3300,
       "range": "height"
     }
   ],
