@@ -419,6 +419,14 @@ impl PlanResolver<'_> {
                         // ErrorIfExists or IgnoreIfExists
                         _ => CreateTableMode::Create,
                     };
+                    // We hardcode `nullable: true` instead of `f.is_nullable()` because
+                    // DataFusion's optimizer correctly marks literal expressions as non-nullable
+                    // (e.g. `SELECT 1` → nullable=false in the plan), but that would propagate
+                    // to the table schema and make the column permanently reject NULLs on future
+                    // inserts. Spark avoids this by calling `rawSchema.asNullable` when
+                    // `catalog.useNullableQuerySchema()` is true (the default for all catalogs).
+                    // Sail has no per-catalog opt-out yet, so we always use true.
+                    // See: https://github.com/apache/spark/blob/5949ab30b41860574ab57b94a8848464b5e127a7/sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/v2/WriteToDataSourceV2Exec.scala#L956-L960
                     let columns = input
                         .schema()
                         .inner()
@@ -427,7 +435,7 @@ impl PlanResolver<'_> {
                         .map(|f| CreateTableColumnOptions {
                             name: f.name().clone(),
                             data_type: f.data_type().clone(),
-                            nullable: f.is_nullable(),
+                            nullable: true,
                             comment: None,
                             default: None,
                             generated_always_as: None,
