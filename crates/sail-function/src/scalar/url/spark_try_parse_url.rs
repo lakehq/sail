@@ -51,16 +51,15 @@ impl ScalarUDFImpl for SparkTryParseUrl {
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/urlExpressions.scala#L184>
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/urlExpressions.scala#L221>
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/Expression.scala#L455>
-    ///
-    /// So both spellings land on the same constant, and unlike the `to_number` pair there is no
-    /// try-vs-strict split to encode here.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let arg_types = args
             .arg_fields
             .iter()
             .map(|f| f.data_type().clone())
             .collect::<Vec<_>>();
-        let data_type = parse_url_return_type(self.name(), &arg_types)?;
+        // Spark reports this expression as `try_parse_url` (`TryParseUrl.prettyName`,
+        // urlExpressions.scala:186); `self.name()` is the Sail registry name.
+        let data_type = parse_url_return_type("try_parse_url", &arg_types)?;
         Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
