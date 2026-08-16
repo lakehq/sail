@@ -1,3 +1,4 @@
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema;
@@ -28,7 +29,7 @@ use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{TaskStreamChannelSink, TaskStreamSink};
 use crate::task::definition::{TaskDefinition, TaskInput, TaskOutput};
 use crate::task_runner::monitor::TaskMonitor;
-use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage, TaskRunnerPlacement};
+use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage, TaskRunnerPlacement, panic_message};
 use crate::worker::{WorkerLocation, WorkerMessage};
 
 impl TaskRunnerActor {
@@ -61,14 +62,28 @@ impl TaskRunnerActor {
                 }
             });
         }
-        let stream = match self.execute_plan(ctx, &key, definition, context) {
-            Ok(stream) => stream,
-            Err(error) => {
+        // The workspace uses panic=unwind. The task runner actor is single-threaded, and
+        // execute_plan does not mutate lock-protected state, so it can continue after a panic.
+        let stream = match catch_unwind(AssertUnwindSafe(|| {
+            self.execute_plan(ctx, &key, definition, context)
+        })) {
+            Ok(Ok(stream)) => stream,
+            Ok(Err(error)) => {
                 ctx.send(TaskRunnerMessage::ReportTaskStatus {
                     key,
                     status: TaskStatus::Failed,
                     message: Some(format!("failed to execute plan: {error}")),
                     cause: Some(CommonErrorCause::new::<PyErrExtractor>(&error)),
+                });
+                return ActorAction::Continue;
+            }
+            Err(payload) => {
+                let message = format!("task panicked: {}", panic_message(payload));
+                ctx.send(TaskRunnerMessage::ReportTaskStatus {
+                    key,
+                    status: TaskStatus::Failed,
+                    message: Some(message.clone()),
+                    cause: Some(CommonErrorCause::Internal(message)),
                 });
                 return ActorAction::Continue;
             }
