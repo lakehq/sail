@@ -27,7 +27,6 @@ Feature: bitmap_bit_position output schema
          |-- result: long (nullable = false)
         """
 
-    @sail-bug
     Scenario: a nullable column input to bitmap_bit_position stays nullable
       When query
         """
@@ -38,3 +37,32 @@ Feature: bitmap_bit_position output schema
         root
          |-- result: long (nullable = true)
         """
+
+  Rule: 64-bit arithmetic
+
+    Scenario: negating the smallest 32-bit integer does not overflow
+      When query
+        """
+        SELECT bitmap_bit_position(CAST(-2147483648 AS INT)) AS result
+        """
+      Then query result
+        | result |
+        | 0 |
+
+    Scenario: an input beyond the 32-bit range does not overflow
+      When query
+        """
+        SELECT bitmap_bit_position(3000000000) AS result
+        """
+      Then query result
+        | result |
+        | 24063  |
+
+    Scenario: a negative input beyond the 32-bit range does not overflow
+      When query
+        """
+        SELECT bitmap_bit_position(-3000000000) AS result
+        """
+      Then query result
+        | result |
+        | 24064  |
