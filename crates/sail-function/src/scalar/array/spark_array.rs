@@ -274,10 +274,16 @@ fn array_array<O: OffsetSizeTrait>(
     let data_ref = data.iter().collect::<Vec<_>>();
     let mut mutable = MutableArrayData::with_capacities(data_ref, true, capacity);
 
+    // `NullArray`-ness is a per-column property; hoist it out of the row loop.
+    let is_null_array = args
+        .iter()
+        .map(|arg| arg.as_any().is::<NullArray>())
+        .collect::<Vec<_>>();
+
     let num_rows = args[0].len();
     for row_idx in 0..num_rows {
         for (arr_idx, arg) in args.iter().enumerate() {
-            if !arg.as_any().is::<NullArray>() && !arg.is_null(row_idx) && arg.is_valid(row_idx) {
+            if !is_null_array[arr_idx] && arg.is_valid(row_idx) {
                 mutable.extend(arr_idx, row_idx, row_idx + 1);
             } else {
                 mutable.extend_nulls(1);
