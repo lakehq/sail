@@ -406,9 +406,13 @@ fn sequence(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         }
     })?;
     if has_pyspark_udf {
+        // TODO: Extract only the Python UDF subtrees, as Spark does, while preserving
+        //  expression-local lazy evaluation around the extracted values.
         return Ok(ScalarUDF::from(udf).call(arguments));
     }
 
+    // TODO: Fold all-foldable arguments in Spark's left-to-right order.
+    //  Optimizing independent lambda bodies can change which NULL or error wins.
     let arguments = arguments
         .into_iter()
         .map(|argument| lambda_with_fresh_parameter(argument, "_sequence"))

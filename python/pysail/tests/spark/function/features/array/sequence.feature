@@ -237,6 +237,32 @@ Feature: sequence output schema
         | null-step  | NULL      |
         | null-stop  | NULL      |
 
+    @sail-bug
+    Scenario: an earlier foldable NULL suppresses a later foldable sequence error
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT sequence(
+          CAST(NULL AS BIGINT),
+          CAST(concat('b', 'ad') AS BIGINT)
+        ) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    @sail-bug
+    Scenario: sequence reports the first of two foldable errors
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT sequence(
+          CAST('bad-first' AS BIGINT),
+          CAST(1 / 0 AS BIGINT)
+        ) AS result
+        """
+      Then query error CAST_INVALID_INPUT
+
     Scenario: sequence stops evaluating arguments after a NULL boundary
       When query
         """
@@ -267,6 +293,21 @@ Feature: sequence output schema
         | 1  | NULL      |
         | 2  | NULL      |
         | 3  | [1, 2, 3] |
+
+    @sail-bug
+    Scenario: sequence extracts only the Python UDF subtree before short-circuiting
+      Given scalar Python UDF one_udf returns 1
+      When query
+        """
+        SELECT sequence(
+          CASE WHEN id = 0 THEN CAST(NULL AS BIGINT) ELSE id END,
+          one_udf(id) + CAST(raise_error('subtree-error') AS BIGINT)
+        ) AS result
+        FROM range(1)
+        """
+      Then query result
+        | result |
+        | NULL   |
 
     Scenario: sequence keeps common expressions behind a NULL boundary
       Given config spark.sql.ansi.enabled = true

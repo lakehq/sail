@@ -770,6 +770,8 @@ fn convert_tz(
     }
 }
 
+// TODO: Reject every non-atomic time-zone type during analysis, even when Arrow can cast
+//  it to Utf8 (for example, ARRAY). Spark's VariantType remains a supported atomic type.
 fn validate_convert_timezone_zone(expr: &Expr, schema: &DFSchemaRef) -> PlanResult<()> {
     let field = expr.to_field(schema)?.1;
     if !can_cast_types(field.data_type(), &DataType::Utf8)
@@ -895,9 +897,9 @@ fn utc_ntz_timestamp_and_unit(
     Ok((ts, unit))
 }
 
-// TODO: Match Spark's foldability-aware zone evaluation for `from_utc_timestamp`
-// and `to_utc_timestamp`: validate foldable zones eagerly, but skip a non-foldable
-// zone expression when the timestamp is NULL.
+// TODO: Match Spark's foldability-aware zone eval for `from_utc_timestamp` and `to_utc_timestamp`:
+//  a foldable NULL skips the timestamp, a non-NULL foldable zone is validated eagerly,
+//  and a dynamic zone is skipped for a NULL timestamp.
 fn from_utc_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let session_tz = input.function_context.plan_config.session_timezone.clone();
     let (ts, to_tz) = input.arguments.two()?;

@@ -510,6 +510,8 @@ pub fn expr_contains_python_udf(body: &expr::Expr) -> PlanResult<bool> {
     })?)
 }
 
+// TODO: Match Catalyst constant folding and NullPropagation before extracting opaque
+//  Python or Variant scalar calls, so a foldable NULL can eliminate them.
 pub fn expr_contains_spark_cast_to_variant(body: &expr::Expr) -> PlanResult<bool> {
     Ok(body.exists(|expression| {
         Ok(matches!(

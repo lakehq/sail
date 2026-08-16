@@ -77,6 +77,8 @@ impl PlanResolver<'_> {
             rng.random::<i64>()
         });
 
+        // TODO: Separate child construction from analysis so Spark's fraction check
+        //  runs between them; child-construction errors must still win.
         let mut input: LogicalPlan = self
             .resolve_query_plan_with_hidden_fields(*input, state)
             .await?;
@@ -191,6 +193,8 @@ impl PlanResolver<'_> {
         // from `java.util.Random(seed)` for replacement sampling, then advances one sampler
         // across the whole partition. `Random` and `RandPoisson` currently restart from the
         // same seed for every Arrow batch in every partition.
+        // TODO: Use a physical sampling boundary. At replacement fraction zero,
+        //  Spark's `SampleExec` skips a child's deferred projection evaluation.
         let rand_column_name: String = state.register_field_name("rand_value");
         let rand_expr: Expr = if with_replacement {
             Expr::ScalarFunction(ScalarFunction {

@@ -69,7 +69,25 @@ Feature: DataFrame sample operations
         | sampled_ids        |
         | [0, 2, 3, 4, 7, 9] |
 
+    @sail-bug
+    Scenario: a zero replacement sample skips a child projection
+      When dataframe replacement sample fraction 0.0 over failing projection
+      Then dataframe is empty
+
+    Scenario: a zero replacement sample still evaluates a child filter
+      When dataframe replacement sample fraction 0.0 over failing filter
+      Then dataframe error filter-error
+
   Rule: Sample without replacement bound validation
+
+    @sail-bug
+    Scenario: an invalid fraction is checked before child analysis
+      When dataframe sample fraction 2.0 over unresolved projection
+      Then dataframe error Sampling fraction .* must be on interval
+
+    Scenario: a child construction error precedes fraction validation
+      When dataframe sample fraction 2.0 over zero-step range
+      Then dataframe error (?i)(step .* cannot be 0|range step must not be 0)
 
     Scenario Outline: sample without replacement rejects invalid individual bounds
       When dataframe sample without replacement with bounds <lower_bound> and <upper_bound>

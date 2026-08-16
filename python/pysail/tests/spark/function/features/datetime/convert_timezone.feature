@@ -61,7 +61,49 @@ Feature: convert_timezone
         | CAST(NULL AS STRING)             | CAST(CAST(NULL AS STRUCT<value: INT>) AS VARIANT) |
         | CAST(NULL AS STRING)             | CAST(CAST(NULL AS MAP<STRING, INT>) AS VARIANT)   |
 
+    @sail-bug
+    Scenario: an ARRAY time zone fails analysis even when it is NULL
+      When query
+        """
+        SELECT convert_timezone(
+          CAST(NULL AS ARRAY<STRING>),
+          'UTC',
+          TIMESTAMP_NTZ '2024-01-01 00:00:00'
+        ) AS result
+        """
+      Then query error DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE
+
   Rule: Null propagation
+
+    @sail-bug
+    Scenario: a direct NULL suppresses a Python UDF before extraction
+      Given scalar Python UDF fail_string raises direct-null-target-evaluated
+      When query
+        """
+        SELECT convert_timezone(
+          CAST(NULL AS STRING),
+          fail_string(id),
+          TIMESTAMP_NTZ '2024-01-01 00:00:00'
+        ) AS result
+        FROM range(1)
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    @sail-bug
+    Scenario: a direct NULL suppresses a valid Variant time zone expression
+      When query
+        """
+        SELECT convert_timezone(
+          CAST(NULL AS STRING),
+          CAST(CAST(1 AS INT) AS VARIANT),
+          TIMESTAMP_NTZ '2024-01-01 00:00:00'
+        ) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
 
     Scenario: a raw NULL stops later expression evaluation
       When query
@@ -99,6 +141,34 @@ Feature: convert_timezone
       Then query result
         | null_source | null_target | null_timestamp |
         | NULL        | NULL        | NULL           |
+
+    @sail-bug
+    Scenario: an arbitrary foldable NULL suppresses an earlier row-dependent error
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT convert_timezone(
+          CAST(1 / id AS STRING),
+          concat(CAST(NULL AS STRING), 'UTC'),
+          TIMESTAMP_NTZ '2024-01-01 00:00:00'
+        ) AS result
+        FROM range(1)
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: a foldable NULL does not suppress an earlier foldable error
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT convert_timezone(
+          CAST(1 / 0 AS STRING),
+          IF(true, CAST(NULL AS STRING), 'UTC'),
+          TIMESTAMP_NTZ '2024-01-01 00:00:00'
+        ) AS result
+        """
+      Then query error (?i)(DIVIDE_BY_ZERO|divide by zero)
 
     Scenario: per-row time zones are not parsed when another value is null
       When query

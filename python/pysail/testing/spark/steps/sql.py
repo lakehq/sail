@@ -103,6 +103,22 @@ def sample_with_replacement_as_temporary_view(fraction, seed, view, spark):
     sampled.createOrReplaceTempView(view)
 
 
+@given(parsers.parse("scalar Python UDF {name} returns {value:d}"))
+def scalar_python_udf(name, value, spark):
+    """Register a scalar Python UDF that ignores its argument."""
+    spark.udf.register(name, lambda _value: value, "long")
+
+
+@given(parsers.parse("scalar Python UDF {name} raises {message}"))
+def failing_scalar_python_udf(name, message, spark):
+    """Register a scalar Python UDF that always raises an error."""
+
+    def fail(_value):
+        raise RuntimeError(message)
+
+    spark.udf.register(name, fail, "string")
+
+
 @given(parsers.re(r"statement(?P<template>( template)?) with error (?P<error>.*)"))
 def statement_with_error(template, error, docstring, spark, variables):
     """Executes a SQL statement that is expected to fail with an error."""
@@ -187,6 +203,39 @@ def dataframe_sample_without_replacement_with_bounds(lower_bound, upper_bound, s
     return dataframe
 
 
+def _sample_input(case, spark):
+    cases = {
+        "failing projection": lambda: spark.range(1, numPartitions=1).selectExpr(
+            "raise_error('projection-error') AS result"
+        ),
+        "failing filter": lambda: spark.range(1, numPartitions=1).filter("raise_error('filter-error') IS NULL"),
+        "unresolved projection": lambda: spark.range(1, numPartitions=1).select("missing"),
+        "zero-step range": lambda: spark.range(0, 1, 0, numPartitions=1),
+    }
+    try:
+        return cases[case]()
+    except KeyError:
+        pytest.fail(f"Unknown sample input: {case}")
+
+
+@when(
+    parsers.parse("dataframe replacement sample fraction {fraction} over {case}"),
+    target_fixture="dataframe",
+)
+def dataframe_replacement_sample(fraction, case, spark):
+    """Build a replacement sample over a named input plan."""
+    return _sample_input(case, spark).sample(True, float(fraction), 1)
+
+
+@when(
+    parsers.parse("dataframe sample fraction {fraction} over {case}"),
+    target_fixture="dataframe",
+)
+def dataframe_sample(fraction, case, spark):
+    """Build a sample without replacement over a named input plan."""
+    return _sample_input(case, spark).sample(False, float(fraction), 1)
+
+
 @then("dataframe schema")
 def dataframe_schema(docstring, dataframe):
     """Compare a DataFrame schema with expected schema tree string."""
@@ -198,6 +247,12 @@ def dataframe_error(error, dataframe):
     """Collect the DataFrame and expect it to fail with an error."""
     with pytest.raises(Exception, match=error):
         _ = dataframe.collect()
+
+
+@then("dataframe is empty")
+def dataframe_is_empty(dataframe):
+    """Collect the DataFrame and verify that it has no rows."""
+    assert dataframe.collect() == []
 
 
 def assert_schema_tree(df, docstring):
