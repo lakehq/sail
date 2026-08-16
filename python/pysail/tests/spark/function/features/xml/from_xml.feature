@@ -393,3 +393,37 @@ Feature: from_xml parses an XML string into a struct value
          |-- result: struct (nullable = true)
          |    |-- a: integer (nullable = true)
         """
+
+  @function(nullability)
+  Rule: The user-supplied schema is forced nullable
+
+    # `XmlToStructs` rewrites the whole schema before using it:
+    #   private val nullableSchema: DataType = schema.asNullable   (xmlExpressions.scala:74-75)
+    # Every downstream use goes through `nullableSchema`, never `schema`, so a NOT NULL field
+    # in the DDL is ignored. Sail honors it, then the kernel writes NULL for the empty element
+    # and the batch is rejected at execution.
+
+    Scenario: a plain XML schema yields a nullable field
+      When query
+        """
+        SELECT from_xml('<r><a></a></r>', 'a INT') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: struct (nullable = true)
+         |    |-- a: integer (nullable = true)
+        """
+
+    @sail-bug
+    Scenario: a NOT NULL field in the XML schema is forced nullable
+      When query
+        """
+        SELECT from_xml('<r><a></a></r>', 'a INT NOT NULL') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: struct (nullable = true)
+         |    |-- a: integer (nullable = true)
+        """

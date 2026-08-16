@@ -1038,3 +1038,37 @@ Feature: from_json function parses JSON strings into structured types
         | {1}  |
         | {2}  |
         | NULL |
+
+  @function(nullability)
+  Rule: The user-supplied schema is forced nullable
+
+    # `JsonToStructs` rewrites the whole schema before using it:
+    #   private val nullableSchema: DataType = schema.asNullable   (jsonExpressions.scala:271)
+    # Every downstream use goes through `nullableSchema`, never `schema`, so a NOT NULL field
+    # in the DDL is ignored. Sail honors it, then the kernel writes NULL for the missing key
+    # and the batch is rejected at execution.
+
+    Scenario: a plain JSON schema yields a nullable field
+      When query
+        """
+        SELECT from_json('{"a": null}', 'a INT') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: struct (nullable = true)
+         |    |-- a: integer (nullable = true)
+        """
+
+    @sail-bug
+    Scenario: a NOT NULL field in the JSON schema is forced nullable
+      When query
+        """
+        SELECT from_json('{"a": null}', 'a INT NOT NULL') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: struct (nullable = true)
+         |    |-- a: integer (nullable = true)
+        """

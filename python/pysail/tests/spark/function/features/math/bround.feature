@@ -73,6 +73,53 @@ Feature: bround comprehensive tests
   #         | 4.0    |
   #
 
+  @function(nullability)
+  Rule: Output type follows the input type
+
+    # `RoundBase.dataType = child.dataType`, with a precision/scale adjustment for decimals
+    # (mathExpressions.scala:1567-1584, `case t => t` at :1583). Sail collapses Float32,
+    # Decimal128 and Decimal256 to Float64.
+    #
+    # Asserted on the SCHEMA rather than on a value: the runtime type-mismatch assertion is
+    # debug-only (see the FIXME above), while the declared type comes from
+    # `return_field_from_args` at plan time and is therefore identical in both build profiles.
+    # A column input is used so constant folding does not replace the call with a literal.
+
+    Scenario: a DOUBLE input keeps DOUBLE
+      When query
+        """
+        SELECT bround(v, 0) AS result FROM VALUES (CAST(1.5 AS DOUBLE)) AS t(v)
+        """
+      Then query schema
+        """
+        root
+         |-- result: double (nullable = true)
+        """
+
+    @sail-bug
+    Scenario: a FLOAT input keeps FLOAT
+      When query
+        """
+        SELECT bround(v, 0) AS result FROM VALUES (CAST(2.5 AS FLOAT)) AS t(v)
+        """
+      Then query schema
+        """
+        root
+         |-- result: float (nullable = true)
+        """
+
+    @sail-bug
+    Scenario: a DECIMAL input keeps an adjusted DECIMAL
+      When query
+        """
+        SELECT bround(v, 2) AS result FROM VALUES (CAST(1.005 AS DECIMAL(10,3))) AS t(v)
+        """
+      Then query schema
+        """
+        root
+         |-- result: decimal(10,2) (nullable = true)
+        """
+
   Rule: Integer paths with negative scale preserve input type
 
     Scenario Outline: Integer negative scale: <case>
