@@ -44,11 +44,13 @@ impl ScalarUDFImpl for SparkTryParseUrl {
         )
     }
 
-    /// Spark: `TryParseUrl` (`urlExpressions.scala:182-193`) declares no `nullable` of its own,
-    /// and neither does the `InheritAnalysisRules` trait it mixes in (`Expression.scala:470`),
-    /// so the rule comes from `RuntimeReplaceable` (`Expression.scala:446`):
-    /// `replacement.nullable`. Its replacement is `ParseUrl(children, failOnError = false)`
-    /// (`:184`), which declares `true` unconditionally (`urlExpressions.scala:221`).
+    /// Spark: `TryParseUrl` declares no `nullable` of its own, and neither does the
+    /// `InheritAnalysisRules` it mixes in, so the rule comes from `RuntimeReplaceable`:
+    /// `replacement.nullable`. Its replacement is `ParseUrl(children, failOnError = false)`,
+    /// and `ParseUrl.nullable = true`, unconditional.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/urlExpressions.scala#L184>
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/urlExpressions.scala#L221>
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/Expression.scala#L455>
     ///
     /// So both spellings land on the same constant, and unlike the `to_number` pair there is no
     /// try-vs-strict split to encode here.
