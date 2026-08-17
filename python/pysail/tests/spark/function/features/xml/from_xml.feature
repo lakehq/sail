@@ -424,3 +424,35 @@ Feature: from_xml parses an XML string into a struct value
          |    |-- s: struct (nullable = true)
          |    |    |-- b: integer (nullable = true)
         """
+
+    # The schema scenarios above only analyse; these execute, which is where the corruption
+    # `asNullable` exists to prevent would actually surface (xmlExpressions.scala:72-75).
+
+    Scenario: a null value under a plain XML field is returned
+      When query
+        """
+        SELECT from_xml('<r><a></a></r>', 'a INT') AS result
+        """
+      Then query result
+        | result |
+        | {NULL} |
+
+    @sail-bug
+    Scenario: a null value under a NOT NULL XML field is returned
+      When query
+        """
+        SELECT from_xml('<r><a></a></r>', 'a INT NOT NULL') AS result
+        """
+      Then query result
+        | result |
+        | {NULL} |
+
+    @sail-bug
+    Scenario: a null value nested under a NOT NULL XML field is returned
+      When query
+        """
+        SELECT from_xml('<r><s><b></b></s></r>', 's STRUCT<b: INT NOT NULL>') AS result
+        """
+      Then query result
+        | result   |
+        | {{NULL}} |

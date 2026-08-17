@@ -1039,6 +1039,39 @@ Feature: from_json function parses JSON strings into structured types
          |    |-- s: struct (nullable = true)
          |    |    |-- b: integer (nullable = true)
         """
+
+    # The schema scenarios above only analyse; these execute, which is where the corruption
+    # `asNullable` exists to prevent would actually surface (jsonExpressions.scala:268-271).
+
+    Scenario: a null value under a plain JSON field is returned
+      When query
+        """
+        SELECT from_json('{"a": null}', 'a INT') AS result
+        """
+      Then query result
+        | result |
+        | {NULL} |
+
+    @sail-bug
+    Scenario: a null value under a NOT NULL JSON field is returned
+      When query
+        """
+        SELECT from_json('{"a": null}', 'a INT NOT NULL') AS result
+        """
+      Then query result
+        | result |
+        | {NULL} |
+
+    @sail-bug
+    Scenario: a null value nested under a NOT NULL JSON field is returned
+      When query
+        """
+        SELECT from_json('{"s": {"b": null}}', 's STRUCT<b: INT NOT NULL>') AS result
+        """
+      Then query result
+        | result   |
+        | {{NULL}} |
+
   Rule: Result values (migrated from test_from_json.txt doctests)
 
     Scenario Outline: Result values: <case>

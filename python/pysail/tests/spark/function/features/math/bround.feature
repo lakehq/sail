@@ -166,10 +166,16 @@ Feature: bround comprehensive tests
         | -2.0      |
 
     @sail-bug
-    # Same pre-existing Float32 return_type mismatch as the "Float32 path" rule
-    # above (Float32 branch yields Float32Array while return_type promises
-    # Float64). The special-value semantics themselves match Spark. Fix in the
-    # separate return_type PR; kept perf-only here.
+    # Pre-existing Float32 mismatch: `return_field_from_args` promises Float64
+    # (spark_bround.rs:69-72) while the Float32 branch yields a Float32Array
+    # (spark_bround.rs:141-148). The special-value semantics themselves match Spark;
+    # the declared type is what diverges, asserted directly by "a FLOAT input keeps
+    # FLOAT" under `Rule: Output schema`.
+    # This scenario asserts VALUES, so unlike that one it executes: what makes it
+    # fail is the type check in datafusion-expr/src/udf.rs:277, which is
+    # `#[cfg(debug_assertions)]`. In a release build it may instead fail on Arrow's
+    # RecordBatch column-type validation, or not at all — and `@sail-bug` is
+    # xfail(strict=True), so an XPASS turns CI red. Not measured against release.
     Scenario: bround FLOAT column with NULL NaN and Infinity mix
       When query
         """
@@ -278,9 +284,25 @@ Feature: bround comprehensive tests
         """
 
     # `RoundBase.dataType = child.dataType`, with a precision/scale adjustment for decimals
-    # (mathExpressions.scala:1567-1584, `case t => t` at :1583). Asserted on the schema because
-    # the runtime type check is debug-only; the declared type is plan-time and identical in
-    # both build profiles.
+    # (mathExpressions.scala:1567-1584, `case t => t` at :1583). Spark inserts no cast for any
+    # of these: `inputTypes = Seq(NumericType, IntegerType)` (:1586) and `NumericType` accepts
+    # FLOAT, DECIMAL, TINYINT and SMALLINT directly.
+    #
+    # These assert the output data TYPE, not nullability, so they inherit
+    # `@function(nullability)` from this Rule without being about it — filed here deliberately
+    # rather than in a Rule of their own, because `Rule: Output schema` is where the declared
+    # field lives. Asserted on the schema rather than on a value because the declared type comes
+    # from `return_field_from_args` at plan time, so it is identical in debug and release; the
+    # runtime type check is debug-only (datafusion-expr/src/udf.rs:277).
+    #
+    # Two DIFFERENT Sail bugs are recorded below, despite the shared Rule:
+    #   - FLOAT and DECIMAL: the type is declared wrong (`Float64`, spark_bround.rs:69-72).
+    #   - TINYINT and SMALLINT: the input is REJECTED outright — `Int8`/`Int16` have no arm in
+    #     `return_field_from_args` and fall through to `unsupported_data_type_exec_err`. The
+    #     `coerce_types` that would widen them (spark_bround.rs:191) is dead code, because the
+    #     signature is `variadic_any` and DataFusion only consults `coerce_types` for
+    #     `TypeSignature::UserDefined`. So fixing type propagation alone will NOT turn these two
+    #     green, and `strict=True` will not flag the tags as outdated either.
 
     @sail-bug
     Scenario: a FLOAT input keeps FLOAT
@@ -316,4 +338,16 @@ Feature: bround comprehensive tests
         """
         root
          |-- result: byte (nullable = true)
+        """
+
+    @sail-bug
+    Scenario: a SMALLINT input keeps SMALLINT
+      When query
+        """
+        SELECT bround(v, 0) AS result FROM VALUES (CAST(1 AS SMALLINT)) AS t(v)
+        """
+      Then query schema
+        """
+        root
+         |-- result: short (nullable = true)
         """
