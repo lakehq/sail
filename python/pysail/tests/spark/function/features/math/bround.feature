@@ -40,86 +40,6 @@ Feature: bround comprehensive tests
         | bround DOUBLE 1.25 scale 1 | 1.25 | 1.2    |
         | bround DOUBLE 1.35 scale 1 | 1.35 | 1.4    |
 
-  # FIXME: The type mismatch assertion is only active in debug builds,
-  #   so the following tests would fail with XPASS in release builds.
-  #
-  #   Rule: Float32 path
-  #     # Pre-existing bug (NOT caused by the binary-kernel perf refactor, which
-  #     # preserves the Float32Array output). `return_type` maps a FLOAT/Float32
-  #     # input to Float64, but the Float32 execution branch yields a Float32Array,
-  #     # so execution fails with a planning-vs-runtime type mismatch
-  #     # ("type 'Float32' ... expected: 'Float64'"). Spark returns FLOAT here.
-  #     # Fix path (separate PR): make return_type return Float32 for Float32 input
-  #     # (or coerce the arg/result to Float64). Kept perf-only in this PR.
-  #
-  #     @sail-bug
-  #     Scenario: bround FLOAT 2.5 rounds to even
-  #       When query
-  #         """
-  #         SELECT bround(CAST(2.5 AS FLOAT), 0) AS result
-  #         """
-  #       Then query result
-  #         | result |
-  #         | 2.0    |
-  #
-  #     @sail-bug
-  #     Scenario: bround FLOAT 3.5 rounds to even
-  #       When query
-  #         """
-  #         SELECT bround(CAST(3.5 AS FLOAT), 0) AS result
-  #         """
-  #       Then query result
-  #         | result |
-  #         | 4.0    |
-  #
-
-  @function(nullability)
-  Rule: Output type follows the input type
-
-    # `RoundBase.dataType = child.dataType`, with a precision/scale adjustment for decimals
-    # (mathExpressions.scala:1567-1584, `case t => t` at :1583). Sail collapses Float32,
-    # Decimal128 and Decimal256 to Float64.
-    #
-    # Asserted on the SCHEMA rather than on a value: the runtime type-mismatch assertion is
-    # debug-only (see the FIXME above), while the declared type comes from
-    # `return_field_from_args` at plan time and is therefore identical in both build profiles.
-    # A column input is used so constant folding does not replace the call with a literal.
-
-    Scenario: a DOUBLE input keeps DOUBLE
-      When query
-        """
-        SELECT bround(v, 0) AS result FROM VALUES (CAST(1.5 AS DOUBLE)) AS t(v)
-        """
-      Then query schema
-        """
-        root
-         |-- result: double (nullable = true)
-        """
-
-    @sail-bug
-    Scenario: a FLOAT input keeps FLOAT
-      When query
-        """
-        SELECT bround(v, 0) AS result FROM VALUES (CAST(2.5 AS FLOAT)) AS t(v)
-        """
-      Then query schema
-        """
-        root
-         |-- result: float (nullable = true)
-        """
-
-    @sail-bug
-    Scenario: a DECIMAL input keeps an adjusted DECIMAL
-      When query
-        """
-        SELECT bround(v, 2) AS result FROM VALUES (CAST(1.005 AS DECIMAL(10,3))) AS t(v)
-        """
-      Then query schema
-        """
-        root
-         |-- result: decimal(10,2) (nullable = true)
-        """
-
   Rule: Integer paths with negative scale preserve input type
 
     Scenario Outline: Integer negative scale: <case>
@@ -355,4 +275,45 @@ Feature: bround comprehensive tests
         """
         root
          |-- result: double (nullable = true)
+        """
+
+    # `RoundBase.dataType = child.dataType`, with a precision/scale adjustment for decimals
+    # (mathExpressions.scala:1567-1584, `case t => t` at :1583). Asserted on the schema because
+    # the runtime type check is debug-only; the declared type is plan-time and identical in
+    # both build profiles.
+
+    @sail-bug
+    Scenario: a FLOAT input keeps FLOAT
+      When query
+        """
+        SELECT bround(v, 0) AS result FROM VALUES (CAST(2.5 AS FLOAT)) AS t(v)
+        """
+      Then query schema
+        """
+        root
+         |-- result: float (nullable = true)
+        """
+
+    @sail-bug
+    Scenario: a DECIMAL input keeps an adjusted DECIMAL
+      When query
+        """
+        SELECT bround(v, 2) AS result FROM VALUES (CAST(1.005 AS DECIMAL(10,3))) AS t(v)
+        """
+      Then query schema
+        """
+        root
+         |-- result: decimal(10,2) (nullable = true)
+        """
+
+    @sail-bug
+    Scenario: a TINYINT input keeps TINYINT
+      When query
+        """
+        SELECT bround(v, 0) AS result FROM VALUES (CAST(1 AS TINYINT)) AS t(v)
+        """
+      Then query schema
+        """
+        root
+         |-- result: byte (nullable = true)
         """

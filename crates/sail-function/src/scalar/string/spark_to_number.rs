@@ -75,16 +75,12 @@ impl ScalarUDFImpl for SparkToNumber {
         )
     }
 
-    /// Spark: only the SAFE spelling is unconditionally nullable. `TryToNumber` overrides
-    /// `nullable = true`, while `ToNumber` declares none and inherits `BinaryExpression`'s
-    /// `left.nullable || right.nullable`, so with non-null arguments Spark reports
-    /// `to_number` as `nullable = false`.
+    /// Spark: `TryToNumber.nullable = true`, unconditional. `ToNumber` declares none and
+    /// inherits `BinaryExpression`'s `left.nullable || right.nullable`, so the strict spelling
+    /// is `nullable = false` over non-null arguments; the `@sail-bug` scenarios in
+    /// `to_number.feature` track that gap.
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/numberFormatExpressions.scala#L183>
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/numberFormatExpressions.scala#L145>
-    ///
-    /// The constant `true` below is therefore correct for `try_to_number` and a KNOWN
-    /// divergence for `to_number`, recorded by the `@sail-bug` scenarios in
-    /// `features/string/to_number.feature`. Deriving it is out of scope for this change.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let ReturnFieldArgs {
             scalar_arguments, ..

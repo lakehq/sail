@@ -57,9 +57,7 @@ impl ScalarUDFImpl for SparkTryParseUrl {
             .iter()
             .map(|f| f.data_type().clone())
             .collect::<Vec<_>>();
-        // Spark reports this expression as `try_parse_url` (`TryParseUrl.prettyName`,
-        // urlExpressions.scala:186); `self.name()` is the Sail registry name.
-        let data_type = parse_url_return_type("try_parse_url", &arg_types)?;
+        let data_type = parse_url_return_type(self.name(), &arg_types)?;
         Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
