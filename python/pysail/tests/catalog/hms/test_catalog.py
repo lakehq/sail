@@ -13,13 +13,13 @@ if TYPE_CHECKING:
     from pysail.testing.containers.hms import HmsService
 
 
-HmsCatalog = _native._hms.HmsCatalog  # noqa: SLF001
-TableNotFoundError = _native._hms.TableNotFoundError  # noqa: SLF001
-ViewNotFoundError = _native._hms.ViewNotFoundError  # noqa: SLF001
+HmsCatalogProvider = _native._catalog._hms.HmsCatalogProvider  # noqa: SLF001
+TableNotFoundError = _native._catalog.TableNotFoundError  # noqa: SLF001
+ViewNotFoundError = _native._catalog.ViewNotFoundError  # noqa: SLF001
 
 _FORMATS = ["parquet", "csv", "delta", "textfile", "json", "orc", "avro"]
-_ID_COLUMN = [("id", "int64", True)]
-_ITEM_COLUMNS = [("id", "int64", True), ("value", "utf8", True)]
+_ID_COLUMN = [("id", "int64", True, None)]
+_ITEM_COLUMNS = [("id", "int64", True, None), ("value", "utf8", True, None)]
 _HMS_CONTAINER_TMP = "/tmp"  # noqa: S108
 
 
@@ -27,7 +27,7 @@ def _table_location(database: list[str], table: str) -> str:
     return f"{_HMS_CONTAINER_TMP}/{database[0]}_{table}"
 
 
-def test_create_get_list_drop_database(hms_catalog: HmsCatalog) -> None:
+def test_create_get_list_drop_database(hms_catalog: HmsCatalogProvider) -> None:
     database = [f"native_hms_database_{uuid.uuid4().hex}"]
     try:
         created = hms_catalog.create_database(database)
@@ -45,7 +45,7 @@ def test_create_get_list_drop_database(hms_catalog: HmsCatalog) -> None:
 
 
 def test_create_get_list_drop_table(
-    hms_catalog: HmsCatalog,
+    hms_catalog: HmsCatalogProvider,
     hms_database: list[str],
 ) -> None:
     created = hms_catalog.create_table(
@@ -70,7 +70,7 @@ def test_create_get_list_drop_table(
 
 @pytest.mark.parametrize("table_format", _FORMATS)
 def test_supported_formats_round_trip(
-    hms_catalog: HmsCatalog,
+    hms_catalog: HmsCatalogProvider,
     hms_database: list[str],
     table_format: str,
 ) -> None:
@@ -95,7 +95,7 @@ def test_supported_formats_round_trip(
 
 
 def test_get_table_returns_table_not_found_for_view(
-    hms_catalog: HmsCatalog,
+    hms_catalog: HmsCatalogProvider,
     hms_database: list[str],
 ) -> None:
     hms_catalog.create_view(hms_database, "v_items", _ID_COLUMN, "SELECT 1 AS id")
@@ -105,7 +105,7 @@ def test_get_table_returns_table_not_found_for_view(
 
 
 def test_list_tables_excludes_views(
-    hms_catalog: HmsCatalog,
+    hms_catalog: HmsCatalogProvider,
     hms_database: list[str],
 ) -> None:
     hms_catalog.create_table(
@@ -120,7 +120,7 @@ def test_list_tables_excludes_views(
 
 
 def test_create_get_list_drop_view(
-    hms_catalog: HmsCatalog,
+    hms_catalog: HmsCatalogProvider,
     hms_database: list[str],
 ) -> None:
     definition = "SELECT 1 AS id"
@@ -140,7 +140,7 @@ def test_create_get_list_drop_view(
 
 
 def test_get_view_returns_view_not_found_for_table(
-    hms_catalog: HmsCatalog,
+    hms_catalog: HmsCatalogProvider,
     hms_database: list[str],
 ) -> None:
     hms_catalog.create_table(
@@ -155,7 +155,7 @@ def test_get_view_returns_view_not_found_for_table(
 
 
 def test_list_views_excludes_tables(
-    hms_catalog: HmsCatalog,
+    hms_catalog: HmsCatalogProvider,
     hms_database: list[str],
 ) -> None:
     hms_catalog.create_table(
@@ -170,7 +170,7 @@ def test_list_views_excludes_tables(
 
 
 def test_failover_from_dead_primary_endpoint(hms_service: HmsService) -> None:
-    catalog = HmsCatalog(
+    catalog = HmsCatalogProvider(
         "native-hms-failover",
         ["127.0.0.1:1", hms_service.endpoint],
         connect_timeout_secs=1,
