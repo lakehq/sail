@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any, Generic, TypeVar, cast
 
 FrameT = TypeVar("FrameT")
+_MISSING = object()
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -96,8 +97,10 @@ class ProxyEventStore:
         if not isinstance(event, event_type):
             return False
         for name, expected in attributes.items():
-            actual = getattr(event, name, event.attributes.get(name))
-            if actual != expected:
+            actual = getattr(event, name, _MISSING)
+            if actual is _MISSING:
+                actual = event.attributes.get(name, _MISSING)
+            if actual is _MISSING or actual != expected:
                 return False
         return True
 
@@ -280,11 +283,7 @@ class EndpointProxy:
         self._thread.start()
 
     def close_active_connections(self, *, reason: str = "") -> int:
-        """Close every established connection active when this method is called.
-
-        Connections waiting to establish an upstream socket due to injected delays are intentionally excluded.
-        This lets tests target only active upstream traffic.
-        """
+        """Close every accepted connection active when this method is called."""
         with self._connection_lock:
             connections = tuple(self._connections.values())
         for connection in connections:
@@ -334,12 +333,16 @@ class EndpointProxy:
                 )
                 continue
 
-            EndpointProxyConnection(
+            connection = EndpointProxyConnection(
                 proxy=self,
                 connection_id=connection_id,
                 client=client,
                 connect_delay=decision.delay_seconds,
-            ).start()
+            )
+            if self.register_connection(connection):
+                connection.start()
+            else:
+                connection.close("proxy closed")
 
     def _allocate_connection_id(self) -> int:
         with self._dispatch_lock:
@@ -375,10 +378,13 @@ class EndpointProxy:
             for rule in self.rules.snapshot():
                 rule.observe(event)
 
-    def register_connection(self, connection: EndpointProxyConnection) -> None:
-        """Mark a successfully connected endpoint-proxy connection as active."""
+    def register_connection(self, connection: EndpointProxyConnection) -> bool:
+        """Track an accepted connection unless the endpoint proxy has already closed."""
         with self._connection_lock:
+            if self._closed.is_set():
+                return False
             self._connections[connection.connection_id] = connection
+            return True
 
     def remove_connection(self, connection_id: int) -> None:
         """Remove a closed endpoint-proxy connection from the active registry."""
@@ -428,15 +434,13 @@ class EndpointProxyConnection:
 
     def _run(self) -> None:
         try:
-            if self._connect_delay:
-                time.sleep(self._connect_delay)
-            if self._closed.is_set():
+            if self._closed.wait(self._connect_delay):
                 return
             self._upstream = socket.create_connection(self.proxy.target, timeout=1)
             self._upstream.settimeout(None)
             if self._closed.is_set():
+                self._close_socket(self._upstream)
                 return
-            self.proxy.register_connection(self)
             self.proxy.record(
                 ConnectionOpened(
                     connection_id=self.connection_id,

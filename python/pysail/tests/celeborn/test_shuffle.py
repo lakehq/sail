@@ -185,7 +185,15 @@ def test_shuffle_client_revives_a_dropped_push_connection(
         assert time.monotonic() - started < _MAX_RECOVERY_TIME_SECONDS
         assert _event_count(celeborn_push_proxies, ConnectionAccepted) == _MULTI_EPOCH_WORKER_COUNT
         assert _event_count(celeborn_push_proxies, RuleApplied) == 1
-        assert len(_event_workers(celeborn_push_proxies, ConnectionOpened)) == 1
+        rejected_workers = _event_workers(
+            celeborn_push_proxies,
+            ConnectionClosed,
+            reason="injected dropped connection",
+        )
+        opened_workers = _event_workers(celeborn_push_proxies, ConnectionOpened)
+        assert len(rejected_workers) == 1
+        assert len(opened_workers) == 1
+        assert set(rejected_workers).isdisjoint(opened_workers)
         client.mapper_end(1, 0, 0, 1)
 
         assert b"".join(client.read_partition_stream(1, 0)) == _DATA
@@ -264,6 +272,7 @@ def test_shuffle_client_does_not_reuse_a_worker_that_failed_in_an_earlier_epoch(
         )
         assert _event_count(celeborn_push_proxies, RuleApplied) == 1
         assert _event_count(celeborn_push_proxies, ConnectionOpened) == 2  # noqa: PLR2004
+        assert len(_event_workers(celeborn_push_proxies, ConnectionOpened)) == 2  # noqa: PLR2004
 
 
 def test_shuffle_client_reader_discovers_epochs_revived_by_another_client(

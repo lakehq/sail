@@ -13,13 +13,16 @@ import pytest
 from pysail.testing.utils.proxy import (
     Close,
     ConnectionAccepted,
+    ConnectionClosed,
     ConnectionOpened,
     ConnectionRule,
     EndpointProxy,
+    Forward,
     FrameDecoder,
     FrameReceived,
     FrameRule,
     ProxyCodec,
+    ProxyEventStore,
     Replace,
     RuleApplied,
 )
@@ -143,6 +146,13 @@ def test_proxy_codec_handles_fragmented_and_combined_frames() -> None:
     assert decoder.feed(encoded[2:]) == [first, second]
 
 
+def test_event_store_does_not_match_missing_attributes() -> None:
+    events = ProxyEventStore()
+    events.add(ConnectionOpened(connection_id=1))
+
+    assert events.count(ConnectionOpened, missing=None) == 0
+
+
 def test_endpoint_proxy_records_frames_and_replaces_a_response() -> None:
     codec = _TestCodec()
     upstream = _EchoServer()
@@ -189,6 +199,27 @@ def test_connection_rule_closes_the_next_accepted_socket() -> None:
 
         _wait_until(lambda: proxy.events.count(RuleApplied) == 1)
         assert proxy.events.count(ConnectionAccepted) == 1
+        assert proxy.events.count(ConnectionOpened) == 0
+    finally:
+        proxy.close()
+        upstream.close()
+
+
+def test_close_active_connections_closes_delayed_connections() -> None:
+    upstream = _EchoServer()
+    proxy = EndpointProxy("echo", upstream.host, upstream.port)
+    proxy.rules.add(ConnectionRule(action=lambda _: Forward(delay_seconds=1)))
+    upstream.start()
+    proxy.start()
+
+    try:
+        with socket.create_connection((proxy.host, proxy.port), timeout=1) as client:
+            _wait_until(lambda: proxy.events.count(ConnectionAccepted) == 1)
+            assert proxy.close_active_connections(reason="test") == 1
+            client.settimeout(1)
+            assert client.recv(1) == b""
+
+        assert proxy.events.count(ConnectionClosed, reason="test") == 1
         assert proxy.events.count(ConnectionOpened) == 0
     finally:
         proxy.close()
