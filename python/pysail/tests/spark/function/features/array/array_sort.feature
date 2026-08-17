@@ -104,3 +104,112 @@ Feature: array_sort higher-order function
         | Comparator with one parameter is rejected           | array(2, 1), x -> x                          |
         | Comparator with three parameters is rejected        | array(2, 1), (a, b, c) -> 1                  |
         | Non-array first argument is rejected                | 5, (l, r) -> 1                               |
+
+  Rule: Non-lambda expression in place of the comparator
+
+    # A constant comparator is not a consistent ordering, so only the values that
+    # leave the array untouched are pinned here. A comparator that always reports
+    # "less" produces a permutation that depends on the sort algorithm, which is
+    # not a contract worth asserting.
+
+    Scenario Outline: Non-lambda comparator: <case>
+      When query
+        """
+        SELECT array_sort(<args>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                                  | args                           | result    |
+        | a constant positive comparator        | array(3, 1, 2), 1              | [3, 1, 2] |
+        | a constant zero comparator            | array(3, 1, 2), 0              | [3, 1, 2] |
+        | a constant comparator, empty array    | array(), 1                     | []        |
+        | a constant comparator, NULL array     | CAST(NULL AS ARRAY<INT>), 1    | NULL      |
+
+    Scenario: A constant comparator over an array column resolves per row
+      When query
+        """
+        SELECT array_sort(c, 1) AS result
+        FROM VALUES (array(2, 1)), (array()), (CAST(NULL AS ARRAY<INT>)) AS t(c)
+        """
+      Then query result ordered
+        | result |
+        | [2, 1] |
+        | []     |
+        | NULL   |
+
+    Scenario: A comparator that does not return INT is still an error
+      When query
+        """
+        SELECT array_sort(array(2, 1), true) AS result
+        """
+      Then query error requires return "INT" type, but the actual is "BOOLEAN" type
+
+    Scenario: the comparator return type is validated at analysis, even inside an unreachable IF branch
+      When query
+        """
+        SELECT IF(false, array_sort(array(2, 1), true), array(0)) AS result
+        """
+      Then query error requires return "INT" type, but the actual is "BOOLEAN" type
+
+    # Unlike `aggregate`, whose merge body is coerced (a VOID body is erased to a
+    # typed NULL), `array_sort` validates the comparator's return type with a manual
+    # check, so a NULL-typed (VOID) comparator is rejected at analysis rather than
+    # erased — matching Spark's `DATATYPE_MISMATCH.UNEXPECTED_RETURN_TYPE`.
+    Scenario: a NULL-typed comparator body is rejected, not erased
+      When query
+        """
+        SELECT array_sort(array(2, 1), (l, r) -> assert_true(l <> r)) AS result
+        """
+      Then query error requires return "INT" type, but the actual is "VOID" type
+
+  Rule: A NullType array skips the comparator entirely
+
+    Scenario: a comparator that would error is never evaluated for an all-NULL untyped array
+      When query
+        """
+        SELECT array_sort(array(NULL, NULL), CAST(raise_error('boom') AS INT)) AS result
+        """
+      Then query result
+        | result       |
+        | [NULL, NULL] |
+
+    Scenario: a comparator is never evaluated for a single-element NULL array
+      When query
+        """
+        SELECT array_sort(array(NULL), CAST(raise_error('boom') AS INT)) AS result
+        """
+      Then query result
+        | result |
+        | [NULL] |
+
+    Scenario: a comparator is never evaluated for NULL arrays coming from a column
+      When query
+        """
+        SELECT array_sort(c, CAST(raise_error('boom') AS INT)) AS result FROM VALUES (array(NULL, NULL)), (array(NULL)) AS t(c)
+        """
+      Then query result ordered
+        | result       |
+        | [NULL, NULL] |
+        | [NULL]       |
+
+  Rule: A subquery in a value argument is rejected
+
+    Scenario: a subquery in the array argument is rejected
+      When query
+        """
+        SELECT array_sort((SELECT array(2, 1)), (l, r) -> l - r) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions
+
+    # The no-comparator `array_sort(a)` resolves as an ordinary function, but the
+    # subquery guard runs for every higher-order name regardless of arity, so it is
+    # rejected here too (a 1-arg `array_sort` is an `ArraySort` HOF in Spark).
+    Scenario: a subquery in the array argument without a comparator is rejected
+      When query
+        """
+        SELECT array_sort((SELECT array(2, 1))) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions

@@ -60,6 +60,10 @@ pub struct PlanConfig {
     /// (`spark.sql.tvf.allowMultipleTableArguments.enabled`, default false). Multiple table
     /// arguments produce the cartesian product of their rows.
     pub tvf_allow_multiple_table_arguments: bool,
+    /// Whether subquery expressions are allowed inside a lambda or higher-order function
+    /// (`spark.sql.analyzer.allowSubqueryExpressionsInLambdasOrHigherOrderFunctions`, default
+    /// false). True restores the legacy behavior Spark rejects under SPARK-47509.
+    pub allow_subquery_in_higher_order_functions: bool,
 }
 
 impl PlanConfig {
@@ -89,6 +93,7 @@ impl Default for PlanConfig {
             case_sensitive: false,
             pivot_max_values: 10000,
             tvf_allow_multiple_table_arguments: false,
+            allow_subquery_in_higher_order_functions: false,
         }
     }
 }
