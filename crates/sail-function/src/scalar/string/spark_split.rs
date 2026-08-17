@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{
     Array, ArrayRef, GenericStringArray, Int32Array, ListArray, ListBuilder, OffsetSizeTrait,
-    StringBuilder,
+    StringBuilder, StringViewArray,
 };
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::take_function_args;
@@ -94,59 +94,44 @@ impl ScalarUDFImpl for SparkSplit {
 }
 
 fn spark_split_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match (args[0].data_type(), args[1].data_type()) {
-        (DataType::LargeUtf8, DataType::LargeUtf8) => spark_split_inner_downcast::<i64, i64>(args),
-        (_, DataType::LargeUtf8) => spark_split_inner_downcast::<i32, i64>(args),
-        (DataType::LargeUtf8, _) => spark_split_inner_downcast::<i64, i32>(args),
-        _ => spark_split_inner_downcast::<i32, i32>(args),
-    }
+    spark_split_inner_downcast(args)
 }
 
-fn spark_split_inner_downcast<FirstOffset, SecondOffset>(args: &[ArrayRef]) -> Result<ArrayRef>
-where
-    FirstOffset: OffsetSizeTrait,
-    SecondOffset: OffsetSizeTrait,
-{
+fn spark_split_inner_downcast(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [values_arr, format_arr, limit_arr] = take_function_args(SparkSplit::NAME, args)?;
-    let values: Arc<Option<&GenericStringArray<FirstOffset>>> = Arc::new(
-        values_arr
-            .as_any()
-            .downcast_ref::<GenericStringArray<FirstOffset>>(),
-    );
-    let format: Arc<Option<&GenericStringArray<SecondOffset>>> = Arc::new(
-        format_arr
-            .as_any()
-            .downcast_ref::<GenericStringArray<SecondOffset>>(),
-    );
+    let values = string_array_like(values_arr);
+    let format = string_array_like(format_arr);
     let limit = opt_downcast_arg!(limit_arr, Int32Array);
 
-    match (values.as_ref(), format.as_ref(), limit.as_ref()) {
+    match (values.as_deref(), format.as_deref(), limit.as_ref()) {
         (Some(values), Some(format), Some(limit)) => {
-            let format_scalar_opt = (format.len() == 1 && format.is_valid(0))
-                .then(|| parse_regex(format.value(0)))
+            let format_scalar_opt = (format.len_() == 1 && format.is_valid_(0))
+                .then(|| parse_regex(format.value_(0)))
                 .transpose()?;
             let limit_scalar_opt = (limit.len() == 1 && limit.is_valid(0)).then(|| limit.value(0));
-            let is_format_null = format.len() == 1 && format.is_null(0);
+            let is_format_null = format.len_() == 1 && format.is_null_(0);
             let is_limit_null = limit.len() == 1 && limit.is_null(0);
 
             let mut builder = ListBuilder::new(StringBuilder::new());
             for i in 0..args[0].len() {
+                let format_index = if format.len_() == 1 { 0 } else { i };
+                let limit_index = if limit.len() == 1 { 0 } else { i };
                 if is_format_null
                     || is_limit_null
-                    || values.is_null(i)
-                    || format.is_null(i)
-                    || limit.is_null(i)
+                    || values.is_null_(i)
+                    || format.is_null_(format_index)
+                    || limit.is_null(limit_index)
                 {
                     builder.append_null();
                 } else {
                     let format_regex = format_scalar_opt.as_ref().map_or_else(
-                        || parse_regex(format.value(i)),
+                        || parse_regex(format.value_(format_index)),
                         |format_regex| Ok(format_regex.clone()),
                     )?;
-                    let limit = limit_scalar_opt.unwrap_or_else(|| limit.value(i));
+                    let limit = limit_scalar_opt.unwrap_or_else(|| limit.value(limit_index));
 
                     let values_format: Vec<Option<String>> =
-                        split_to_array(values.value(i), &format_regex, limit)?;
+                        split_to_array(values.value_(i), &format_regex, limit)?;
                     builder.append_value(values_format);
                 }
             }
@@ -157,6 +142,71 @@ where
             SparkSplit::NAME,
             "Could not downcast arguments to arrow arrays",
         )),
+    }
+}
+
+trait StringArrayLike {
+    fn len_(&self) -> usize;
+    fn is_valid_(&self, index: usize) -> bool;
+    fn is_null_(&self, index: usize) -> bool;
+    fn value_(&self, index: usize) -> &str;
+}
+
+impl<O: OffsetSizeTrait> StringArrayLike for GenericStringArray<O> {
+    fn len_(&self) -> usize {
+        self.len()
+    }
+    fn is_valid_(&self, index: usize) -> bool {
+        self.is_valid(index)
+    }
+    fn is_null_(&self, index: usize) -> bool {
+        self.is_null(index)
+    }
+    fn value_(&self, index: usize) -> &str {
+        self.value(index)
+    }
+}
+
+impl StringArrayLike for StringViewArray {
+    fn len_(&self) -> usize {
+        self.len()
+    }
+    fn is_valid_(&self, index: usize) -> bool {
+        self.is_valid(index)
+    }
+    fn is_null_(&self, index: usize) -> bool {
+        self.is_null(index)
+    }
+    fn value_(&self, index: usize) -> &str {
+        self.value(index)
+    }
+}
+
+impl<T: StringArrayLike + ?Sized> StringArrayLike for &T {
+    fn len_(&self) -> usize {
+        (**self).len_()
+    }
+    fn is_valid_(&self, index: usize) -> bool {
+        (**self).is_valid_(index)
+    }
+    fn is_null_(&self, index: usize) -> bool {
+        (**self).is_null_(index)
+    }
+    fn value_(&self, index: usize) -> &str {
+        (**self).value_(index)
+    }
+}
+
+fn string_array_like(array: &ArrayRef) -> Option<Box<dyn StringArrayLike + '_>> {
+    if let Some(array) = array.as_any().downcast_ref::<GenericStringArray<i32>>() {
+        Some(Box::new(array))
+    } else if let Some(array) = array.as_any().downcast_ref::<GenericStringArray<i64>>() {
+        Some(Box::new(array))
+    } else {
+        array
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .map(|array| Box::new(array) as Box<dyn StringArrayLike>)
     }
 }
 

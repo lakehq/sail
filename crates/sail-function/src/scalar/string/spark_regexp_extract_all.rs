@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{
     Array, ArrayRef, GenericStringArray, Int64Array, ListArray, ListBuilder, OffsetSizeTrait,
-    StringBuilder,
+    StringBuilder, StringViewArray,
 };
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::take_function_args;
@@ -121,19 +121,16 @@ impl ScalarUDFImpl for SparkRegexpExtractAll {
 }
 
 fn regexp_extract_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args[0].data_type() {
-        DataType::LargeUtf8 => regexp_extract_downcast::<i64>(args),
-        _ => regexp_extract_downcast::<i32>(args),
-    }
+    regexp_extract_downcast(args)
 }
 
-fn regexp_extract_downcast<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn regexp_extract_downcast(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [values_arr, pattern_arr, idx_arr] = take_function_args(SparkRegexpExtract::NAME, args)?;
-    let values = values_arr.as_any().downcast_ref::<GenericStringArray<O>>();
+    let values = string_array_like(values_arr);
     let pattern = string_array_like(pattern_arr);
     let idx = opt_downcast_arg!(idx_arr, Int64Array);
 
-    match (values, pattern.as_deref(), idx.as_ref()) {
+    match (values.as_deref(), pattern.as_deref(), idx.as_ref()) {
         (Some(values), Some(pattern), Some(idx)) => {
             let pattern_len = pattern.len_();
             let idx_len = idx.len();
@@ -158,7 +155,7 @@ fn regexp_extract_downcast<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Arra
                     idx.is_null(i)
                 };
 
-                if pattern_is_null || idx_is_null || values.is_null(i) {
+                if pattern_is_null || idx_is_null || values.is_null_(i) {
                     builder.append_null();
                 } else {
                     let re = pattern_scalar_opt.as_ref().map_or_else(
@@ -168,7 +165,7 @@ fn regexp_extract_downcast<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Arra
                     let group_idx = idx_scalar_opt.unwrap_or_else(|| idx.value(i));
                     builder.append_value(extract_first_match(
                         SparkRegexpExtract::NAME,
-                        values.value(i),
+                        values.value_(i),
                         &re,
                         group_idx,
                     )?);
@@ -184,19 +181,16 @@ fn regexp_extract_downcast<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Arra
 }
 
 fn regexp_extract_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args[0].data_type() {
-        DataType::LargeUtf8 => regexp_extract_all_downcast::<i64>(args),
-        _ => regexp_extract_all_downcast::<i32>(args),
-    }
+    regexp_extract_all_downcast(args)
 }
 
-fn regexp_extract_all_downcast<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn regexp_extract_all_downcast(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [values_arr, pattern_arr, idx_arr] = take_function_args(SparkRegexpExtractAll::NAME, args)?;
-    let values = values_arr.as_any().downcast_ref::<GenericStringArray<O>>();
+    let values = string_array_like(values_arr);
     let pattern = string_array_like(pattern_arr);
     let idx = opt_downcast_arg!(idx_arr, Int64Array);
 
-    match (values, pattern.as_deref(), idx.as_ref()) {
+    match (values.as_deref(), pattern.as_deref(), idx.as_ref()) {
         (Some(values), Some(pattern), Some(idx)) => {
             let pattern_len = pattern.len_();
             let idx_len = idx.len();
@@ -221,7 +215,7 @@ fn regexp_extract_all_downcast<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<
                     idx.is_null(i)
                 };
 
-                if pattern_is_null || idx_is_null || values.is_null(i) {
+                if pattern_is_null || idx_is_null || values.is_null_(i) {
                     builder.append_null();
                 } else {
                     let re = pattern_scalar_opt.as_ref().map_or_else(
@@ -231,7 +225,7 @@ fn regexp_extract_all_downcast<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<
                     let group_idx = idx_scalar_opt.unwrap_or_else(|| idx.value(i));
                     let matches = extract_all_matches(
                         SparkRegexpExtractAll::NAME,
-                        values.value(i),
+                        values.value_(i),
                         &re,
                         group_idx,
                     )?;
@@ -310,13 +304,30 @@ impl<O: OffsetSizeTrait> StringArrayLike for GenericStringArray<O> {
     }
 }
 
+impl StringArrayLike for StringViewArray {
+    fn len_(&self) -> usize {
+        self.len()
+    }
+    fn is_valid_(&self, i: usize) -> bool {
+        self.is_valid(i)
+    }
+    fn is_null_(&self, i: usize) -> bool {
+        self.is_null(i)
+    }
+    fn value_(&self, i: usize) -> &str {
+        self.value(i)
+    }
+}
+
 fn string_array_like(array: &ArrayRef) -> Option<Box<dyn StringArrayLike + '_>> {
     if let Some(array) = array.as_any().downcast_ref::<GenericStringArray<i32>>() {
+        Some(Box::new(array))
+    } else if let Some(array) = array.as_any().downcast_ref::<GenericStringArray<i64>>() {
         Some(Box::new(array))
     } else {
         array
             .as_any()
-            .downcast_ref::<GenericStringArray<i64>>()
+            .downcast_ref::<StringViewArray>()
             .map(|array| Box::new(array) as Box<dyn StringArrayLike>)
     }
 }

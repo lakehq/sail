@@ -25,3 +25,18 @@ Feature: View types are expanded only at query output
       ORDER BY label
       """
     Then query plan matches snapshot
+
+  Scenario: Parquet view strings are accepted by custom string and hash functions
+    When query template
+      """
+      SELECT
+        regexp_extract(label, '(top)-(level)', 2) AS extracted,
+        regexp_extract_all(label, '(top)-(level)', 1) AS extracted_all,
+        split(label, '-')[1] AS split_part,
+        hash(label) AS hashed,
+        hash(details.payload) AS binary_hashed
+      FROM parquet.`{{ location.string }}`
+      """
+    Then query result
+      | extracted | extracted_all | split_part | hashed     | binary_hashed |
+      | level     | [top]         | level      | -835272491 | 2065139274    |

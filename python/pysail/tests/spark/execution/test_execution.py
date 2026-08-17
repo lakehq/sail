@@ -236,11 +236,41 @@ def test_parquet_directory_scan_reads_each_file_once_in_cluster_mode(spark, tmp_
 
 def test_parquet_utf8_view_across_cluster_shuffle(spark, tmp_path):
     path = tmp_path / "utf8_view.parquet"
-    pd.DataFrame({"key": ["alpha", "beta", "alpha"], "value": [1, 2, 3]}).to_parquet(path)
+    pd.DataFrame(
+        {
+            "key": ["alpha", "beta", "alpha"],
+            "label": ["top-level", "other", "top-level"],
+            "raw": [b"bytes", b"other", b"bytes"],
+            "value": [1, 2, 3],
+        }
+    ).to_parquet(path)
 
     df = spark.read.parquet(str(path))
     assert isinstance(df.schema["key"].dataType, StringType)
     assert df.select("key").orderBy("key").toPandas()["key"].tolist() == ["alpha", "alpha", "beta"]
+
+    function_rows = (
+        df.repartition(4, "key")
+        .where("label = 'top-level'")
+        .selectExpr(
+            "regexp_extract(label, '(top)-(level)', 2) AS extracted",
+            "regexp_extract_all(label, '(top)-(level)', 1) AS extracted_all",
+            "split(label, '-')[1] AS split_part",
+            "hash(label) AS hashed",
+            "hash(raw) AS binary_hashed",
+        )
+        .distinct()
+        .collect()
+    )
+    assert function_rows == [
+        Row(
+            extracted="level",
+            extracted_all=["top"],
+            split_part="level",
+            hashed=-835272491,
+            binary_hashed=2065139274,
+        )
+    ]
 
     result = df.repartition(4, "key").groupBy("key").count().orderBy("key").toPandas()
     expected = pd.DataFrame({"key": ["alpha", "beta"], "count": [2, 1]}).astype({"count": "int64"})
