@@ -333,10 +333,11 @@
   type: boolean
   default: "true"
   description: |
-    Whether to collect file statistics for query planning.
-    For Parquet data sources, enabling this setting eagerly populates the file statistics cache
-    during source creation, including direct reads and catalog table reads. This can make initial
-    DataFrame creation more expensive but avoids collecting file statistics during the first query.
+    Should statistics be collected when first creating a table.
+    For Parquet data sources with the file statistics cache enabled, Sail also attempts to eagerly
+    collect and cache statistics during source creation, including direct reads and catalog table reads.
+    This can slow down the initial DataFrame creation while greatly accelerating queries with certain filters.
+    The setting is applied when the table or data source is created.
   experimental: true
 
 - key: execution.use_row_number_estimates_to_optimize_partitioning
