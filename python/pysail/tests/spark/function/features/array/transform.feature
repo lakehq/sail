@@ -499,6 +499,27 @@ Feature: transform higher-order function
         | result |
         | true   |
 
+  @function(nullability)
+  Rule: Output schema
+
+    # Spark forces the CAST result nullable (`Cast.forceNullable`,
+    # fractional→integral), so the transformed element is nullable. Sail's
+    # expression nullability does not reproduce `Cast.forceNullable`, so it
+    # under-reports `containsNull` here. Schema-only under ANSI (the CAST throws
+    # rather than producing NULL); the root fix belongs in the cast resolver.
+    @sail-bug
+    Scenario: a Cast.forceNullable body under-reports element containsNull
+      When query
+        """
+        SELECT transform(array(1.5, 2.5), x -> CAST(x AS INT)) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = false)
+         |    |-- element: integer (containsNull = true)
+        """
+
     Scenario: A randn() body produces a distinct value per element
       When query
         """
@@ -538,15 +559,6 @@ Feature: transform higher-order function
         | [NULL, NULL] |
 
   Rule: Non-lambda wrapping must not capture outer lambda variables
-
-    Scenario: a generated lambda parameter does not shadow an outer variable of the same name
-      When query
-        """
-        SELECT transform(array(1), __sail_unused_lambda_param_0 -> transform(array(2), __sail_unused_lambda_param_0)) AS result
-        """
-      Then query result
-        | result |
-        | [[1]]  |
 
     Scenario: a backtick-spelled internal parameter name does not shadow an outer variable
       When query

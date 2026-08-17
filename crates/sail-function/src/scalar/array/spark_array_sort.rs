@@ -30,6 +30,7 @@ use datafusion_expr::{
     HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda, Volatility,
 };
 
+use crate::error::spark_sql_type_name;
 use crate::scalar::array::lambda_utils::{
     ListValuesResult, coerce_single_list_arg, extract_list_values, value_lambda_pair,
 };
@@ -122,7 +123,7 @@ impl HigherOrderUDFImpl for SparkArraySort {
                 "cannot resolve `{}`: The `lambdafunction` requires return \"INT\" type, \
                  but the actual is \"{}\" type",
                 self.name(),
-                lambda.data_type()
+                spark_sql_type_name(lambda.data_type())
             );
         }
 

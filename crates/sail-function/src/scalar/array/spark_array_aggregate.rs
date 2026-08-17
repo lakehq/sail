@@ -21,6 +21,8 @@ use datafusion_expr::{
     HigherOrderUDFImpl, LambdaArgument, LambdaParametersProgress, ValueOrLambda, Volatility,
 };
 
+use crate::error::spark_sql_type_name;
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkArrayAggregate {
     signature: HigherOrderSignature,
@@ -133,8 +135,8 @@ impl HigherOrderUDFImpl for SparkArrayAggregate {
                 "cannot resolve `{}`: The third parameter requires the \"{}\" type, \
                  however the merge lambda has the type \"{}\"",
                 self.name(),
-                zero.data_type(),
-                merge.data_type()
+                spark_sql_type_name(zero.data_type()),
+                spark_sql_type_name(merge.data_type())
             );
         }
 

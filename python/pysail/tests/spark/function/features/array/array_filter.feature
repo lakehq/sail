@@ -750,3 +750,20 @@ Feature: array filter with lambda
         SELECT filter((SELECT array(1, 2)), x -> x > 1) AS result
         """
       Then query error Subquery expressions are not supported within higher-order functions
+
+  Rule: A NULL-typed predicate with a side effect is erased, not evaluated
+
+    # Spark's type coercion replaces a lambda body whose type is NULL (here
+    # `assert_true`, whose type is NullType) with a constant NULL of the expected
+    # boolean type, so the body never runs and every element is dropped. Sail keeps
+    # and evaluates the body, so the side effect still raises. Pure `x -> NULL`
+    # bodies agree; only effectful NULL-typed bodies diverge.
+    @sail-bug
+    Scenario: a side-effecting NULL-typed predicate is erased rather than evaluated
+      When query
+        """
+        SELECT filter(array(1, 0), x -> assert_true(x <> 0)) AS result
+        """
+      Then query result
+        | result |
+        | []     |

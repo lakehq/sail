@@ -238,7 +238,14 @@ Feature: aggregate higher-order function
         """
         SELECT aggregate(array(1, 2), 0, 'x') AS result
         """
-      Then query error The third parameter requires the
+      Then query error The third parameter requires the "INT" type
+
+    Scenario: the merge type is validated at analysis, even inside an unreachable IF branch
+      When query
+        """
+        SELECT IF(false, aggregate(array(1), 0, 'x'), 0) AS result
+        """
+      Then query error The third parameter requires the "INT" type
 
   Rule: Untyped NULL body
 
@@ -268,6 +275,21 @@ Feature: aggregate higher-order function
       Then query result
         | result |
         | 0      |
+
+    # Spark's type coercion replaces a NULL-typed merge body (here `assert_true`,
+    # whose type is VOID) with a constant NULL of the accumulator's type, so the
+    # body never runs and the fold collapses to NULL. Sail keeps and evaluates the
+    # body, so the side effect still raises. Same class as the exists/forall/filter
+    # erasure; `array_sort` differs — it rejects a VOID comparator at analysis.
+    @sail-bug
+    Scenario: a side-effecting NULL-typed merge lambda is erased rather than evaluated
+      When query
+        """
+        SELECT aggregate(array(1, 0), 0, (acc, x) -> assert_true(x <> 0)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
 
   Rule: Subquery expressions are rejected in a value argument
 

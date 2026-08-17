@@ -1,9 +1,7 @@
 import pytest
+from pyspark.errors import AnalysisException
 from pyspark.sql.functions import udf
 from pyspark.sql.types import BooleanType, IntegerType
-
-# Runs alongside the higher-order function suite.
-pytestmark = [pytest.mark.transform, pytest.mark.filter, pytest.mark.exists]
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -29,5 +27,8 @@ def _register_udfs(spark):
     ],
 )
 def test_python_udf_inside_higher_order_function_is_rejected(spark, query):
-    with pytest.raises(Exception, match="Python UDF"):
+    # The rejection is an analysis-time error; narrowing to AnalysisException (not
+    # a bare Exception) ensures a Python-worker crash — the very outcome this
+    # feature prevents — cannot masquerade as a pass just by mentioning "Python UDF".
+    with pytest.raises(AnalysisException, match="Python UDF"):
         spark.sql(query).collect()

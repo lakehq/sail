@@ -59,13 +59,15 @@ static SPARK_ARRAY_SORT_UDF: LazyLock<Arc<HigherOrderUDF>> =
 static SPARK_ARRAY_SORT_SWAPPED_UDF: LazyLock<Arc<HigherOrderUDF>> =
     LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new_swapped())));
 
-/// The single name-to-UDF lookup for built-in higher-order functions.
+/// The name-to-UDF lookup for built-in higher-order functions.
 ///
-/// This is the only place a function name is matched: the resolver runs before
-/// the UDF is looked up in the catalog, so the parsed name is the only key
-/// available at that point. Everything else about a higher-order function
-/// (whether it is one, which arguments are lambdas) is derived from the UDF this
-/// returns, so those facts are declared once, on the UDF itself.
+/// The resolver runs before the UDF is looked up in the catalog, so the parsed
+/// name is the only key available at that point. Almost everything about a
+/// higher-order function (whether it is one, which arguments are lambdas) is
+/// derived from the UDF this returns, so those facts are declared once, on the
+/// UDF itself. The lone remaining exception is [`wrapped_lambda_param_count`],
+/// which still matches on the name; that count is a property of the UDF and
+/// belongs on `HigherOrderUDFImpl` (e.g. a `min_lambda_arity()`) as a follow-up.
 fn higher_order_udf(name: &str) -> Option<&'static LazyLock<Arc<HigherOrderUDF>>> {
     Some(match name.trim().to_lowercase().as_str() {
         "aggregate" | "reduce" => &SPARK_ARRAY_AGGREGATE_UDF,
@@ -119,8 +121,13 @@ pub(crate) fn lambda_argument_positions(function_name: &str, arity: usize) -> Ve
 /// and `aggregate` genuinely require their full comparator/accumulator arity, so
 /// they keep every available parameter.
 pub(crate) fn wrapped_lambda_param_count(function_name: &str, available: usize) -> usize {
+    // `transform`/`filter` expose an optional trailing index parameter, so their
+    // `available` count is 2 but Spark wraps a bare expression with a single
+    // element parameter. `exists`/`forall` already expose one parameter, and
+    // `array_sort`/`aggregate` genuinely need every parameter, so `available` is
+    // already correct for them.
     match function_name.trim().to_lowercase().as_str() {
-        "transform" | "filter" | "exists" | "forall" => 1,
+        "transform" | "filter" => 1,
         _ => available,
     }
 }

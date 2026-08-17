@@ -332,6 +332,45 @@ Feature: forall higher-order function
          |-- result: boolean (nullable = false)
         """
 
+    Scenario: a non-nullable array with a null element yields a nullable boolean
+      When query
+        """
+        SELECT forall(array(1, CAST(NULL AS INT), 3), x -> x > 0) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: boolean (nullable = true)
+        """
+
+    Scenario: an untyped NULL predicate yields a nullable boolean
+      When query
+        """
+        SELECT forall(array(1, 2), NULL) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: boolean (nullable = true)
+        """
+
+    # Spark forces the CAST result nullable (`Cast.forceNullable`,
+    # fractional→integral) so the predicate — and thus the result — is nullable.
+    # Sail's expression nullability does not reproduce `Cast.forceNullable`, so it
+    # under-reports here. The divergence is schema-only under ANSI (the CAST throws
+    # rather than producing NULL); the root fix belongs in the cast resolver.
+    @sail-bug
+    Scenario: a Cast.forceNullable predicate body yields a nullable boolean
+      When query
+        """
+        SELECT forall(array(1.5, 2.5), x -> CAST(x AS INT) > 0) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: boolean (nullable = true)
+        """
+
   Rule: Non-lambda expression in place of the lambda
 
     Scenario: a constant true predicate
@@ -485,3 +524,20 @@ Feature: forall higher-order function
         SELECT forall(array(1, 2), x -> x > (SELECT 1)) AS result
         """
       Then query error Subquery expressions are not supported within higher-order functions
+
+  Rule: A NULL-typed predicate with a side effect is erased, not evaluated
+
+    # Spark's type coercion replaces a lambda body whose type is NULL (here
+    # `assert_true`, whose type is NullType) with a constant NULL of the expected
+    # boolean type, so the body never runs. Sail keeps and evaluates the body, so
+    # the side effect still raises. Pure `x -> NULL` bodies agree; only effectful
+    # NULL-typed bodies diverge.
+    @sail-bug
+    Scenario: a side-effecting NULL-typed predicate is erased rather than evaluated
+      When query
+        """
+        SELECT forall(array(1, 0), x -> assert_true(x <> 0)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |

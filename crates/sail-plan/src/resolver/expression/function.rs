@@ -73,8 +73,27 @@ impl PlanResolver<'_> {
         }
 
         let canonical_function_name = function_name.to_ascii_lowercase();
+        let is_higher_order = is_higher_order_function(&canonical_function_name);
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
-        if let Some(udf) = catalog_manager.get_function(&canonical_function_name)?
+        // A built-in higher-order function is not shadowable by a user function of
+        // the same name: Spark 4.2 searches the built-in namespace before the
+        // session one, so `exists(a)` resolves to the built-in and raises
+        // `WRONG_NUM_ARGS`, `transform(1, 2)` resolves to the built-in and errors,
+        // and neither invokes the UDF. Skip the user-function lookup entirely for a
+        // higher-order name so a same-name registered UDF — which is unreachable —
+        // cannot perturb planning here either (e.g. flipping on
+        // `arrow_allow_large_var_types` for a function it can never resolve to).
+        //
+        // FIXME: `is_user_defined_function` is always false, so we look up UDFs
+        //   before built-in functions. This special-cases the higher-order names;
+        //   the general fix is to invert the lookup order (built-in before session)
+        //   for every built-in, honoring `spark.sql.functionResolution.sessionOrder`.
+        let catalog_function = if is_higher_order {
+            None
+        } else {
+            catalog_manager.get_function(&canonical_function_name)?
+        };
+        if let Some(udf) = &catalog_function
             && udf.inner().is::<PySparkUnresolvedUDF>()
         {
             state.config_mut().arrow_allow_large_var_types = true;
@@ -92,23 +111,11 @@ impl PlanResolver<'_> {
         let (arguments, order_by) =
             Self::convert_mode_within_group(&canonical_function_name, arguments, order_by)?;
 
-        // A user-defined function shadows a built-in higher-order function of the
-        // same name (Spark gives temporary/user functions precedence), so it must
-        // NOT be intercepted by the HOF path — `transform(1, 2)` against a
-        // registered `transform(INT, INT)` UDF has to reach the UDF below. The
-        // built-in higher-order functions are resolved via `get_built_in_function`
-        // and are not in this catalog, so any registered function of the same name
-        // is a user function that wins — regardless of whether it is a Python UDF.
-        let shadowed_by_udf = catalog_manager
-            .get_function(&canonical_function_name)?
-            .is_some();
-
-        // A higher-order function also takes this path when no argument is a
+        // A higher-order function takes this path even when no argument is a
         // lambda syntactically, because Spark accepts a plain expression in a
         // lambda position and wraps it. An arity that matches no lambda form
         // (e.g. `array_sort(a)`) yields no positions and resolves as usual.
-        let has_lambda_argument_position = !shadowed_by_udf
-            && is_higher_order_function(&canonical_function_name)
+        let has_lambda_argument_position = is_higher_order
             && (arguments.iter().any(is_spec_lambda_argument)
                 || !lambda_argument_positions(&canonical_function_name, arguments.len())
                     .is_empty());
@@ -129,11 +136,16 @@ impl PlanResolver<'_> {
                 .await?
         };
 
+        // Spark validates the whole higher-order call, so this covers every arity
+        // — including 1-arg forms like `array_sort(a)` that resolve as an ordinary
+        // function above and so never enter `resolve_higher_order_function_arguments`.
+        if is_higher_order {
+            self.reject_disallowed_higher_order_arguments(&arguments)?;
+        }
+
         let has_lambda_argument = arguments.iter().any(|x| matches!(x, expr::Expr::Lambda(_)));
 
-        // FIXME: `is_user_defined_function` is always false,
-        //   so we need to check UDFs before built-in functions.
-        let func = match catalog_manager.get_function(&canonical_function_name)? {
+        let func = match catalog_function {
             Some(udf) => {
                 if ignore_nulls.is_some() || filter.is_some() || order_by.is_some() {
                     return Err(PlanError::invalid("invalid scalar function clause"));

@@ -165,7 +165,25 @@ Feature: array_sort higher-order function
         """
         SELECT array_sort(array(2, 1), true) AS result
         """
-      Then query error requires return "INT" type
+      Then query error requires return "INT" type, but the actual is "BOOLEAN" type
+
+    Scenario: the comparator return type is validated at analysis, even inside an unreachable IF branch
+      When query
+        """
+        SELECT IF(false, array_sort(array(2, 1), true), array(0)) AS result
+        """
+      Then query error requires return "INT" type, but the actual is "BOOLEAN" type
+
+    # Unlike `aggregate`, whose merge body is coerced (a VOID body is erased to a
+    # typed NULL), `array_sort` validates the comparator's return type with a manual
+    # check, so a NULL-typed (VOID) comparator is rejected at analysis rather than
+    # erased — matching Spark's `DATATYPE_MISMATCH.UNEXPECTED_RETURN_TYPE`.
+    Scenario: a NULL-typed comparator body is rejected, not erased
+      When query
+        """
+        SELECT array_sort(array(2, 1), (l, r) -> assert_true(l <> r)) AS result
+        """
+      Then query error requires return "INT" type, but the actual is "VOID" type
 
   Rule: A NullType array skips the comparator entirely
 
@@ -203,5 +221,15 @@ Feature: array_sort higher-order function
       When query
         """
         SELECT array_sort((SELECT array(2, 1)), (l, r) -> l - r) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions
+
+    # The no-comparator `array_sort(a)` resolves as an ordinary function, but the
+    # subquery guard runs for every higher-order name regardless of arity, so it is
+    # rejected here too (a 1-arg `array_sort` is an `ArraySort` HOF in Spark).
+    Scenario: a subquery in the array argument without a comparator is rejected
+      When query
+        """
+        SELECT array_sort((SELECT array(2, 1))) AS result
         """
       Then query error Subquery expressions are not supported within higher-order functions

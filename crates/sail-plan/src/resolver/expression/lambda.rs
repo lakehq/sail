@@ -193,20 +193,30 @@ impl PlanResolver<'_> {
                     // Generated placeholder parameter names. Spark's hidden lambda
                     // parameters use expression identity and never participate in
                     // name resolution; DataFusion resolves lambda variables by name,
-                    // so a placeholder must not match any variable the body captures
-                    // (including a backtick-spelled `#N`), or evaluation would rebind
-                    // it. `transform(array(1), `#0` -> transform(array(2), `#0`))`
-                    // is the adversarial case: the inner body captures the outer
-                    // `#0`, so the placeholder is chosen to avoid it.
+                    // so a placeholder must not match any variable the body captures,
+                    // or evaluation would rebind it. `transform(array(1), x ->
+                    // transform(array(2), x))` is the adversarial case: the inner
+                    // body captures the outer `x`, so the placeholder avoids it.
+                    // The names are generated locally rather than through the plan's
+                    // hidden-field registry — lambda parameters are not plan columns
+                    // (the real-lambda path registers none either), so registering
+                    // them would only leak a field entry for every rejected candidate.
                     let captured = referenced_lambda_variables(&body.expr)?;
                     let mut params: Vec<String> = Vec::with_capacity(param_count);
+                    let mut n = 0;
                     while params.len() < param_count {
-                        let candidate = state.register_hidden_field_name("lambda_param");
+                        let candidate = format!("__wrapped_lambda_param_{n}");
+                        n += 1;
                         if !captured.contains(&candidate) {
                             params.push(candidate);
                         }
                     }
-                    let name = format!("lambdafunction({})", body.name.clone().one()?);
+                    // Spark renders each hidden parameter as a nameless
+                    // `namedlambdavariable()` in the derived column name (the
+                    // placeholder's internal name never surfaces), e.g.
+                    // `exists(a, lambdafunction(true, namedlambdavariable()))`.
+                    let placeholders = vec!["namedlambdavariable()"; params.len()].join(", ");
+                    let name = format!("lambdafunction({}, {placeholders})", body.name.clone().one()?);
                     NamedExpr::new(
                         vec![name],
                         expr::Expr::Lambda(Lambda::new(params, body.expr)),
@@ -216,42 +226,50 @@ impl PlanResolver<'_> {
             names.push(name.one()?);
             exprs.push(expr);
         }
-        // Spark rejects subquery expressions anywhere in a higher-order function
-        // — in a value argument as well as in a lambda body (SPARK-47509 is a
-        // correctness fix). The guard is on by default, controlled by
-        // `spark.sql.analyzer.allowSubqueryExpressionsInLambdasOrHigherOrderFunctions`.
-        if !self.config.allow_subquery_in_higher_order_functions {
-            for expr in &exprs {
-                // A lambda's parameters are opaque; only its body can carry a
-                // subquery. Every other argument is checked whole.
-                let scope = match expr {
-                    expr::Expr::Lambda(lambda) => &lambda.body,
-                    other => other,
-                };
-                if expr_contains_subquery(scope)? {
-                    return Err(PlanError::AnalysisError(
-                        "Subquery expressions are not supported within higher-order functions. \
-                         Please remove all subquery expressions."
-                            .to_string(),
-                    ));
-                }
+        Ok((names, exprs))
+    }
+
+    /// Rejects the expressions Spark forbids anywhere in a higher-order function
+    /// call: subquery expressions (SPARK-47509) and Python UDFs inside a lambda
+    /// body. Spark applies both to the whole `HigherOrderFunction` node, so this
+    /// is called on every argument of the call regardless of arity — including
+    /// forms like 1-arg `array_sort(a)` that never enter
+    /// `resolve_higher_order_function_arguments`.
+    pub(super) fn reject_disallowed_higher_order_arguments(
+        &self,
+        exprs: &[expr::Expr],
+    ) -> PlanResult<()> {
+        let reject_subquery = !self.config.allow_subquery_in_higher_order_functions;
+        for expr in exprs {
+            // The guard is on by default, controlled by
+            // `spark.sql.analyzer.allowSubqueryExpressionsInLambdasOrHigherOrderFunctions`.
+            // `Expr::Lambda` recurses only into its body and is not itself a
+            // subquery variant, so checking the whole expression covers a lambda's
+            // body as well as every plain argument.
+            if reject_subquery && expr_contains_subquery(expr)? {
+                return Err(PlanError::AnalysisError(
+                    "Subquery expressions are not supported within higher-order functions. \
+                     Please remove all subquery expressions from higher-order functions \
+                     and then try the query again."
+                        .to_string(),
+                ));
             }
-        }
-        for expr in &exprs {
-            let expr::Expr::Lambda(lambda) = expr else {
-                continue;
-            };
             // Spark rejects Python UDFs inside a higher-order function lambda
             // (`UNSUPPORTED_FEATURE.LAMBDA_FUNCTION_WITH_PYTHON_UDF`, checked in
             // `CheckAnalysis`), because the evaluator cannot drive the Python
             // worker per element.
-            if let Some(name) = expr_python_udf_name(&lambda.body)? {
+            if let expr::Expr::Lambda(lambda) = expr
+                && let Some(name) = expr_python_udf_name(&lambda.body)?
+            {
+                // Spark quotes the full SQL of the UDF call here (e.g.
+                // `"plus_one(lambda x#11)"`); the exact form embeds a runtime
+                // expression id we cannot reproduce, so we quote the UDF name.
                 return Err(PlanError::AnalysisError(format!(
-                    "Lambda function with Python UDF `{name}` in a higher order function."
+                    "Lambda function with Python UDF \"{name}\" in a higher order function."
                 )));
             }
         }
-        Ok((names, exprs))
+        Ok(())
     }
 
     pub(super) async fn resolve_expression_lambda_function(

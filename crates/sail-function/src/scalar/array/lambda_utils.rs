@@ -22,7 +22,7 @@ use datafusion_common::utils::{
 use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, LambdaArgument, ValueOrLambda};
 
-use crate::error::generic_exec_err;
+use crate::error::{generic_exec_err, spark_sql_type_name};
 
 /// Validates, at planning time, that a predicate lambda returns `BOOLEAN`.
 ///
@@ -35,7 +35,8 @@ pub(crate) fn require_boolean_predicate(name: &str, return_type: &DataType) -> R
         DataType::Boolean | DataType::Null => Ok(()),
         other => plan_err!(
             "cannot resolve `{name}`: The second parameter requires the \"BOOLEAN\" type, \
-             however the lambda body has the type \"{other}\""
+             however the lambda body has the type \"{}\"",
+            spark_sql_type_name(other)
         ),
     }
 }
@@ -214,7 +215,10 @@ fn single_boolean(name: &str, output: &ColumnarValue) -> Result<Option<bool>> {
     if let ColumnarValue::Scalar(ScalarValue::Boolean(value)) = output {
         return Ok(*value);
     }
-    let array = output.clone().into_array(1)?;
+    // A `Null`-typed body coerces to a boolean that is NULL, exactly as the
+    // vectorized path does; without this the downcast below rejects it and the
+    // recovery path masks the real error with a spurious type error.
+    let array = coerce_null_lambda_result(output.clone().into_array(1)?);
     let Some(array) = array.as_any().downcast_ref::<BooleanArray>() else {
         return exec_err!(
             "{name} lambda must return boolean, got {}",
