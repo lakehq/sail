@@ -2,6 +2,50 @@
   "tests": [
     {
       "input": {
+        "query": "SELECT is_valid_variant(parse_json('[{\"b\":true,\"a\":0}]'));",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "is_valid_variant(parse_json([{\"b\":true,\"a\":0}]))",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: is_valid_variant"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT is_valid_variant(parse_json('null'));",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "is_valid_variant(parse_json(null))",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: is_valid_variant"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT is_variant_null(parse_json('\"null\"'));",
         "result": [
           "false"

@@ -81,26 +81,26 @@ impl SparkToXmlOptions {
 
         let timestamp_ltz_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
             .as_deref()
-            .map(DateTimeFormat::parse)
+            .map(DateTimeFormat::for_formatting)
             .transpose()?;
 
         let timestamp_ntz_format = find_key_value(map, Self::TIMESTAMP_NTZ_FORMAT_OPTION)
             .as_deref()
-            .map(DateTimeFormat::parse)
+            .map(DateTimeFormat::for_formatting)
             .transpose()?
             .unwrap_or_else(|| {
                 #[expect(clippy::expect_used)]
-                DateTimeFormat::parse(Self::TIMESTAMP_NTZ_FORMAT_DEFAULT)
+                DateTimeFormat::for_formatting(Self::TIMESTAMP_NTZ_FORMAT_DEFAULT)
                     .expect("default timestamp NTZ format should be valid")
             });
 
         let date_format = find_key_value(map, Self::DATE_FORMAT_OPTION)
             .as_deref()
-            .map(DateTimeFormat::parse)
+            .map(DateTimeFormat::for_formatting)
             .transpose()?
             .unwrap_or_else(|| {
                 #[expect(clippy::expect_used)]
-                DateTimeFormat::parse(Self::DATE_FORMAT_DEFAULT)
+                DateTimeFormat::for_formatting(Self::DATE_FORMAT_DEFAULT)
                     .expect("default date format should be valid")
             });
 
@@ -140,9 +140,11 @@ impl Default for SparkToXmlOptions {
             value_tag: Self::VALUE_TAG_DEFAULT.to_string(),
             null_value: None,
             timestamp_ltz_format: None,
-            timestamp_ntz_format: DateTimeFormat::parse(Self::TIMESTAMP_NTZ_FORMAT_DEFAULT)
-                .expect("default timestamp NTZ format should be valid"),
-            date_format: DateTimeFormat::parse(Self::DATE_FORMAT_DEFAULT)
+            timestamp_ntz_format: DateTimeFormat::for_formatting(
+                Self::TIMESTAMP_NTZ_FORMAT_DEFAULT,
+            )
+            .expect("default timestamp NTZ format should be valid"),
+            date_format: DateTimeFormat::for_formatting(Self::DATE_FORMAT_DEFAULT)
                 .expect("default date format should be valid"),
             session_timezone: "UTC".to_string(),
         }
@@ -945,7 +947,7 @@ fn format_timestamp_field(
             // Use default format
             #[expect(clippy::expect_used)]
             let default_fmt =
-                DateTimeFormat::parse(SparkToXmlOptions::TIMESTAMP_LTZ_FORMAT_DEFAULT)
+                DateTimeFormat::for_formatting(SparkToXmlOptions::TIMESTAMP_LTZ_FORMAT_DEFAULT)
                     .expect("default timestamp LTZ format should be valid");
             Ok(default_fmt.format(input).map_err(|e| {
                 DataFusionError::Execution(format!("Failed to format timestamp: {e}"))

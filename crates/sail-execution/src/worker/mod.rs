@@ -2,9 +2,7 @@ mod actor;
 mod client;
 mod debug;
 pub(crate) mod entrypoint;
-mod event;
-mod options;
-mod peer_tracker;
+pub(crate) mod peer_tracker;
 mod server;
 
 #[expect(clippy::allow_attributes)]
@@ -15,8 +13,6 @@ mod r#gen {
         tonic::include_file_descriptor_set!("sail_worker_descriptor");
 }
 
-pub(crate) use actor::WorkerActor;
+pub(crate) use actor::{WorkerActor, WorkerLocation, WorkerMessage, WorkerOptions};
 pub(crate) use client::WorkerClientSet;
-pub(crate) use event::{WorkerEvent, WorkerLocation, WorkerStreamOwner};
 pub(crate) use r#gen::worker_service_client::WorkerServiceClient;
-pub(crate) use options::WorkerOptions;

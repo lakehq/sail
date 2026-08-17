@@ -38,6 +38,16 @@ pub struct AppConfig {
     pub internal: (),
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CheckpointConfig {
+    #[serde(
+        serialize_with = "serialize_non_empty_string",
+        deserialize_with = "deserialize_non_empty_string"
+    )]
+    pub path: Option<String>,
+}
+
 /// A configuration provider that injects placeholder internal configuration.
 struct InternalConfigPlaceholder;
 
@@ -176,6 +186,8 @@ pub struct TemporaryFilesConfig {
 #[serde(deny_unknown_fields)]
 pub struct ClusterConfig {
     pub enable_tls: bool,
+    #[serde(skip_serializing)]
+    pub session_id: String,
     pub driver_listen_host: String,
     pub driver_listen_port: u16,
     pub driver_external_host: String,
@@ -200,6 +212,7 @@ pub struct ClusterConfig {
     pub task_stream_creation_timeout_secs: u64,
     pub task_max_attempts: usize,
     pub rpc_retry_strategy: RetryStrategy,
+    pub shuffle_backend: ShuffleBackend,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -285,6 +298,122 @@ mod retry_strategy {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(
+    into = "shuffle_backend::ShuffleBackend",
+    from = "shuffle_backend::ShuffleBackend"
+)]
+pub enum ShuffleBackend {
+    Flight,
+    Storage(StorageShuffleBackend),
+    Celeborn(CelebornShuffleBackend),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StorageShuffleBackend {
+    #[serde(
+        serialize_with = "serialize_non_empty_string",
+        deserialize_with = "deserialize_non_empty_string"
+    )]
+    pub path: Option<String>,
+    pub max_file_size: usize,
+    pub compression: ShuffleCompression,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CelebornShuffleBackend {
+    pub master_host: String,
+    pub master_port: u16,
+    pub endpoint_overrides: Vec<CelebornEndpointOverride>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CelebornEndpointOverride {
+    pub internal_host: String,
+    pub internal_port: u16,
+    pub external_host: String,
+    pub external_port: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShuffleCompression {
+    None,
+    Lz4,
+    Zstd,
+}
+
+mod shuffle_backend {
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum Type {
+        Flight,
+        Storage,
+        Celeborn,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct ShuffleBackend {
+        pub r#type: Type,
+        pub storage: super::StorageShuffleBackend,
+        pub celeborn: super::CelebornShuffleBackend,
+    }
+
+    impl From<ShuffleBackend> for super::ShuffleBackend {
+        fn from(value: ShuffleBackend) -> Self {
+            match value.r#type {
+                Type::Flight => super::ShuffleBackend::Flight,
+                Type::Storage => super::ShuffleBackend::Storage(value.storage),
+                Type::Celeborn => super::ShuffleBackend::Celeborn(value.celeborn),
+            }
+        }
+    }
+
+    impl From<super::ShuffleBackend> for ShuffleBackend {
+        fn from(value: super::ShuffleBackend) -> Self {
+            match value {
+                super::ShuffleBackend::Flight => ShuffleBackend {
+                    r#type: Type::Flight,
+                    storage: super::StorageShuffleBackend {
+                        path: None,
+                        max_file_size: 0,
+                        compression: super::ShuffleCompression::None,
+                    },
+                    celeborn: super::CelebornShuffleBackend {
+                        master_host: String::new(),
+                        master_port: 0,
+                        endpoint_overrides: vec![],
+                    },
+                },
+                super::ShuffleBackend::Storage(storage) => ShuffleBackend {
+                    r#type: Type::Storage,
+                    storage,
+                    celeborn: super::CelebornShuffleBackend {
+                        master_host: String::new(),
+                        master_port: 0,
+                        endpoint_overrides: vec![],
+                    },
+                },
+                super::ShuffleBackend::Celeborn(celeborn) => ShuffleBackend {
+                    r#type: Type::Celeborn,
+                    storage: super::StorageShuffleBackend {
+                        path: None,
+                        max_file_size: 0,
+                        compression: super::ShuffleCompression::None,
+                    },
+                    celeborn,
+                },
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExecutionConfig {
     pub batch_size: usize,
@@ -293,6 +422,7 @@ pub struct ExecutionConfig {
     pub prewarm_file_statistics_on_source_creation: bool,
     pub use_row_number_estimates_to_optimize_partitioning: bool,
     pub file_listing_cache: FileListingCacheConfig,
+    pub checkpoint: CheckpointConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -512,7 +642,7 @@ pub struct OptimizerConfig {
     pub expand_views_at_output: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OneLakeApi {
     Delta,
@@ -552,6 +682,14 @@ pub enum CatalogType {
             serialize_with = "serialize_optional_secret"
         )]
         bearer_access_token: Option<SecretString>,
+        /// Path to a file holding the bearer token. When set, the token is
+        /// re-read from this file for every request, so a rotated token (for
+        /// example a kubelet-projected service account token) is picked up
+        /// without restarting the server. Takes precedence over
+        /// `bearer_access_token`. The path is not a secret, so it is kept as a
+        /// plain string.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        bearer_access_token_file: Option<String>,
         #[serde(flatten)]
         cache: CatalogCacheConfig,
     },
@@ -635,15 +773,31 @@ pub struct TelemetryConfig {
     pub export_traces: bool,
     pub export_metrics: bool,
     pub export_logs: bool,
-    pub otlp_endpoint: String,
-    pub otlp_protocol: OtlpProtocol,
-    pub otlp_timeout_secs: u64,
+    pub exporter: TelemetryExporterConfig,
     pub traces_export_interval_secs: u64,
     pub metrics_export_interval_secs: u64,
     pub metrics_collection_interval_secs: u64,
     pub logs_export_interval_secs: u64,
     pub logs_export_max_queue_size: u64,
     pub logs_export_batch_size: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetryExporterConfig {
+    pub otlp: OtlpConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OtlpConfig {
+    #[serde(
+        serialize_with = "serialize_non_empty_string",
+        deserialize_with = "deserialize_non_empty_string"
+    )]
+    pub endpoint: Option<String>,
+    pub protocol: OtlpProtocol,
+    pub timeout_secs: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -668,6 +822,7 @@ macro_rules! define_cluster_config_env {
 impl ClusterConfigEnv {
     define_cluster_config_env! {
         ENABLE_TLS,
+        SESSION_ID,
         DRIVER_EXTERNAL_HOST,
         DRIVER_EXTERNAL_PORT,
         DRIVER_ID,
@@ -678,5 +833,12 @@ impl ClusterConfigEnv {
         TASK_STREAM_BUFFER,
         TASK_STREAM_CREATION_TIMEOUT_SECS,
         RPC_RETRY_STRATEGY,
+        SHUFFLE_BACKEND__TYPE,
+        SHUFFLE_BACKEND__STORAGE__PATH,
+        SHUFFLE_BACKEND__STORAGE__MAX_FILE_SIZE,
+        SHUFFLE_BACKEND__STORAGE__COMPRESSION,
+        SHUFFLE_BACKEND__CELEBORN__MASTER_HOST,
+        SHUFFLE_BACKEND__CELEBORN__MASTER_PORT,
+        SHUFFLE_BACKEND__CELEBORN__ENDPOINT_OVERRIDES,
     }
 }

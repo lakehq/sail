@@ -406,6 +406,15 @@ def test_udf(df, udf_add_one, udf_add_x_y, udf_add):
     )
 
 
+def test_udf_binary_view_input(spark, tmp_path):
+    path = str(tmp_path / "binary.parquet")
+    spark.createDataFrame([(b"value",)], "value BINARY").write.parquet(path)
+
+    identity = F.udf(lambda value: value, "binary")
+    actual = spark.read.parquet(path).select(identity("value").alias("value")).collect()
+    assert actual == [Row(value=b"value")]
+
+
 def test_sql_with_clause(spark, df, df_view):
     assert_frame_equal(
         spark.sql(f"WITH test AS (SELECT * FROM {df_view}) SELECT * FROM test").toPandas(),  # noqa: S608

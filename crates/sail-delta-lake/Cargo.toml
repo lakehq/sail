@@ -56,6 +56,7 @@ regex = { workspace = true }
 serde_arrow = { workspace = true }
 moka = { workspace = true }
 once_cell = { workspace = true }
+icu_casemap = { workspace = true }
 roaring = { workspace = true }
 crc32fast = { workspace = true }
 educe = { workspace = true }

@@ -8,16 +8,17 @@ use datafusion::execution::{SessionState, SessionStateBuilder};
 use datafusion::functions_aggregate::first_last::first_value_udaf;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_expr::registry::FunctionRegistry;
+use sail_cache::remote_checkpoint::RemoteCheckpointRegistry;
 use sail_catalog::provider::CatalogCacheManager;
 use sail_catalog_system::service::SystemTableService;
-use sail_common::config::AppConfig;
+use sail_common::actor::ActorHandle;
+use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::session::activity::ActivityTracker;
 use sail_common_datafusion::session::job::{JobRunner, JobService};
 use sail_common_datafusion::session::repartition::RepartitionBufferConfig;
 use sail_delta_lake::session_extension::DeltaTableCache;
 use sail_physical_optimizer::{PhysicalOptimizerOptions, get_physical_optimizers};
-use sail_server::actor::ActorHandle;
 
 use crate::catalog::create_catalog_manager;
 use crate::formats::create_table_format_registry;
@@ -120,6 +121,10 @@ impl ServerSessionFactory {
             )?))
             .with_extension(Arc::new(ActivityTracker::new()))
             .with_extension(Arc::new(JobService::new(job_runner)))
+            .with_extension(Arc::new(RemoteCheckpointRegistry::new(
+                self.config.execution.checkpoint.path.clone(),
+                info.session_id.clone(),
+            )))
             .with_extension(Arc::new(RepartitionBufferConfig::new(
                 self.config.cluster.task_stream_buffer,
             )))
@@ -177,6 +182,12 @@ impl ServerSessionFactory {
     fn apply_optimizer_config(&mut self, config: &mut SessionConfig) {
         let optimizer = &mut config.options_mut().optimizer;
         optimizer.expand_views_at_output = self.config.optimizer.expand_views_at_output;
+        match &self.config.mode {
+            ExecutionMode::Local => {}
+            ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster => {
+                optimizer.enable_dynamic_filter_pushdown = false;
+            }
+        }
     }
 
     fn apply_execution_parquet_config(&mut self, config: &mut SessionConfig) {

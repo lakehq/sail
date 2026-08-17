@@ -17,9 +17,11 @@ pub mod mapping;
 pub mod normalize;
 pub mod type_widening;
 
+pub(crate) use converter::adapt_array_to_physical_field;
 pub use converter::{
     arrow_field_physical_name, arrow_schema_from_struct_type, arrow_schema_reorder_partitions,
-    get_physical_arrow_schema as get_physical_schema, make_physical_arrow_schema,
+    attach_column_mapping_metadata, get_physical_arrow_schema as get_physical_schema,
+    make_physical_arrow_schema, restore_logical_record_batch,
 };
 pub use manager::{
     evolve_schema, metadata_for_create_with_struct_type, protocol_for_create,
@@ -33,7 +35,7 @@ pub use mapping::{
     annotate_new_fields_for_column_mapping, annotate_schema_for_column_mapping,
     annotate_schema_for_column_mapping as annotate_for_column_mapping, compute_max_column_id,
 };
-pub use normalize::normalize_delta_schema;
+pub use normalize::{normalize_delta_schema, strip_column_mapping_metadata};
 pub use type_widening::{
     add_type_widening_metadata, collect_type_changes, format_type_change_path,
     is_supported_type_change_for_schema_evolution, is_supported_type_change_for_write,

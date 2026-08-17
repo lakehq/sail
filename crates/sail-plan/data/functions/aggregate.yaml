@@ -650,6 +650,72 @@
       
   since: "3.5.0"
 
+- name: "kll_merge_agg_bigint"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.KllMergeAggBigint"
+  signatures:
+    - "kll_merge_agg_bigint(expr[, k])"
+  usage: |2-
+    
+        kll_merge_agg_bigint(expr[, k]) - Merges binary KllLongsSketch representations and returns the merged sketch.
+          The input expression should contain binary sketch representations (e.g., from kll_sketch_agg_bigint).
+          The optional k parameter controls the size and accuracy of the merged sketch (range 8-65535).
+          If k is not specified, the merged sketch adopts the k value from the first input sketch.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT kll_sketch_get_n_bigint(kll_merge_agg_bigint(sketch)) FROM (SELECT kll_sketch_agg_bigint(col) as sketch FROM VALUES (1), (2), (3) tab(col) UNION ALL SELECT kll_sketch_agg_bigint(col) as sketch FROM VALUES (4), (5), (6) tab(col)) t;
+           6
+      
+  since: "4.1.2"
+
+- name: "kll_merge_agg_double"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.KllMergeAggDouble"
+  signatures:
+    - "kll_merge_agg_double(expr[, k])"
+  usage: |2-
+    
+        kll_merge_agg_double(expr[, k]) - Merges binary KllDoublesSketch representations and returns the merged sketch.
+          The input expression should contain binary sketch representations (e.g., from kll_sketch_agg_double).
+          The optional k parameter controls the size and accuracy of the merged sketch (range 8-65535).
+          If k is not specified, the merged sketch adopts the k value from the first input sketch.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT kll_sketch_get_n_double(kll_merge_agg_double(sketch)) FROM (SELECT kll_sketch_agg_double(col) as sketch FROM VALUES (CAST(1.0 AS DOUBLE)), (CAST(2.0 AS DOUBLE)), (CAST(3.0 AS DOUBLE)) tab(col) UNION ALL SELECT kll_sketch_agg_double(col) as sketch FROM VALUES (CAST(4.0 AS DOUBLE)), (CAST(5.0 AS DOUBLE)), (CAST(6.0 AS DOUBLE)) tab(col)) t;
+           6
+      
+  since: "4.1.2"
+
+- name: "kll_merge_agg_float"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.KllMergeAggFloat"
+  signatures:
+    - "kll_merge_agg_float(expr[, k])"
+  usage: |2-
+    
+        kll_merge_agg_float(expr[, k]) - Merges binary KllFloatsSketch representations and returns the merged sketch.
+          The input expression should contain binary sketch representations (e.g., from kll_sketch_agg_float).
+          The optional k parameter controls the size and accuracy of the merged sketch (range 8-65535).
+          If k is not specified, the merged sketch adopts the k value from the first input sketch.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT kll_sketch_get_n_float(kll_merge_agg_float(sketch)) FROM (SELECT kll_sketch_agg_float(col) as sketch FROM VALUES (CAST(1.0 AS FLOAT)), (CAST(2.0 AS FLOAT)), (CAST(3.0 AS FLOAT)) tab(col) UNION ALL SELECT kll_sketch_agg_float(col) as sketch FROM VALUES (CAST(4.0 AS FLOAT)), (CAST(5.0 AS FLOAT)), (CAST(6.0 AS FLOAT)) tab(col)) t;
+           6
+      
+  since: "4.1.2"
+
 - name: "kurtosis"
   scope: "sql_builtin"
   group: "agg_funcs"
@@ -792,22 +858,33 @@
   scope: "sql_builtin"
   group: "agg_funcs"
   source: "built-in"
-  class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.MaxBy"
+  class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.MaxByBuilder"
   signatures:
     - "max_by(x, y)"
-  usage: "max_by(x, y) - Returns the value of `x` associated with the maximum value of `y`."
+    - "max_by(x, y, k)"
+  usage: |2-
+    
+        max_by(x, y) - Returns the value of `x` associated with the maximum value of `y`.
+        max_by(x, y, k) - Returns an array of the `k` values of `x` associated with the
+        maximum values of `y`, sorted in descending order by `y`.
+        Returns NULL if there are no non-NULL ordering values.
+      
   examples: |2-
     
         Examples:
           > SELECT max_by(x, y) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y);
            b
+          > SELECT max_by(x, y, 2) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y);
+           ["b","c"]
       
   note: |2-
     
         The function is non-deterministic so the output order can be different for
-        those associated the same values of `x`.
+        those associated the same values of `y`.
+
+        The maximum value of `k` is 100000.
       
-  since: "3.0.0"
+  since: "4.2.0"
 
 - name: "mean"
   scope: "sql_builtin"
@@ -826,6 +903,25 @@
            1.5
       
   since: "1.0.0"
+
+- name: "measure"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.Measure"
+  signatures:
+    - "measure(expr)"
+  usage: "measure(expr) - this function is used and can only be used to calculate a measure defined in a metric view."
+  examples: |2-
+    
+        Examples:
+          > SELECT dimension_col, measure(measure_col)
+            FROM test_metric_view
+            GROUP BY dimension_col;
+          dim_1, 100
+          dim_2, 200
+      
+  since: "4.2.0"
 
 - name: "median"
   scope: "sql_builtin"
@@ -865,22 +961,33 @@
   scope: "sql_builtin"
   group: "agg_funcs"
   source: "built-in"
-  class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.MinBy"
+  class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.MinByBuilder"
   signatures:
     - "min_by(x, y)"
-  usage: "min_by(x, y) - Returns the value of `x` associated with the minimum value of `y`."
+    - "min_by(x, y, k)"
+  usage: |2-
+    
+        min_by(x, y) - Returns the value of `x` associated with the minimum value of `y`.
+        min_by(x, y, k) - Returns an array of the `k` values of `x` associated with the
+        minimum values of `y`, sorted in ascending order by `y`.
+        Returns NULL if there are no non-NULL ordering values.
+      
   examples: |2-
     
         Examples:
           > SELECT min_by(x, y) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y);
            a
+          > SELECT min_by(x, y, 2) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y);
+           ["a","c"]
       
   note: |2-
     
         The function is non-deterministic so the output order can be different for
-        those associated the same values of `x`.
+        those associated the same values of `y`.
+
+        The maximum value of `k` is 100000.
       
-  since: "3.0.0"
+  since: "4.2.0"
 
 - name: "mode"
   scope: "sql_builtin"
@@ -1517,6 +1624,134 @@
       
   since: "3.3.0"
 
+- name: "tuple_intersection_agg_double"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.TupleIntersectionAggDouble"
+  signatures:
+    - "tuple_intersection_agg_double(child, mode)"
+  usage: |2-
+    
+        tuple_intersection_agg_double(child, mode) - Returns the intersected TupleSketch compact binary representation.
+          `child` should be a binary TupleSketch representation created with a double type summary.
+          `mode` is the aggregation mode for numeric summaries during intersection (sum, min, max, alwaysone). Default is sum. 
+  examples: |2-
+    
+        Examples:
+          > SELECT tuple_sketch_estimate_double(tuple_intersection_agg_double(sketch)) FROM (SELECT tuple_sketch_agg_double(key, summary) as sketch FROM VALUES (1, 5.0D), (2, 10.0D), (3, 15.0D) tab(key, summary) UNION ALL SELECT tuple_sketch_agg_double(key, summary) as sketch FROM VALUES (2, 3.0D), (3, 7.0D), (4, 12.0D) tab(key, summary));
+           2.0
+      
+  since: "4.2.0"
+
+- name: "tuple_intersection_agg_integer"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.TupleIntersectionAggInteger"
+  signatures:
+    - "tuple_intersection_agg_integer(child, mode)"
+  usage: |2-
+    
+        tuple_intersection_agg_integer(child, mode) - Returns the intersected TupleSketch compact binary representation.
+          `child` should be a binary TupleSketch representation created with an integer type summary.
+          `mode` is the aggregation mode for numeric summaries during intersection (sum, min, max, alwaysone). Default is sum. 
+  examples: |2-
+    
+        Examples:
+          > SELECT tuple_sketch_estimate_integer(tuple_intersection_agg_integer(sketch)) FROM (SELECT tuple_sketch_agg_integer(key, summary) as sketch FROM VALUES (1, 1), (2, 2), (3, 3) tab(key, summary) UNION ALL SELECT tuple_sketch_agg_integer(key, summary) as sketch FROM VALUES (2, 2), (3, 3), (4, 4) tab(key, summary));
+           2.0
+      
+  since: "4.2.0"
+
+- name: "tuple_sketch_agg_double"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.TupleSketchAggDoubleExpressionBuilder"
+  signatures:
+    - "tuple_sketch_agg_double(key, summary, lgNomEntries, mode)"
+  usage: |2-
+    
+        tuple_sketch_agg_double(key, summary, lgNomEntries, mode) - Returns the TupleSketch compact binary representation.
+          `key` is the expression for unique value counting.
+          `summary` is the double value to be aggregated.
+          `lgNomEntries` is the log-base-2 of nominal entries, with nominal entries deciding
+          the number buckets or slots for the TupleSketch. Default is 12.
+          `mode` is the aggregation mode for numeric summaries (sum, min, max, alwaysone). Default is sum. 
+  examples: |2-
+    
+        Examples:
+          > SELECT tuple_sketch_estimate_double(tuple_sketch_agg_double(key, summary, 12, 'sum')) FROM VALUES (1, 5.0D), (1, 1.0D), (2, 2.0D), (2, 3.0D), (3, 2.2D) tab(key, summary);
+           3.0
+      
+  since: "4.2.0"
+
+- name: "tuple_sketch_agg_integer"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.TupleSketchAggIntegerExpressionBuilder"
+  signatures:
+    - "tuple_sketch_agg_integer(key, summary, lgNomEntries, mode)"
+  usage: |2-
+    
+        tuple_sketch_agg_integer(key, summary, lgNomEntries, mode) - Returns the TupleSketch compact binary representation.
+          `key` is the expression for unique value counting.
+          `summary` is the integer value to be aggregated.
+          `lgNomEntries` is the log-base-2 of nominal entries, with nominal entries deciding
+          the number buckets or slots for the TupleSketch. Default is 12.
+          `mode` is the aggregation mode for numeric summaries (sum, min, max, alwaysone). Default is sum. 
+  examples: |2-
+    
+        Examples:
+          > SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, 'sum')) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary);
+           3.0
+      
+  since: "4.2.0"
+
+- name: "tuple_union_agg_double"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.TupleUnionAggDoubleExpressionBuilder"
+  signatures:
+    - "tuple_union_agg_double(child, lgNomEntries, mode)"
+  usage: |2-
+    
+        tuple_union_agg_double(child, lgNomEntries, mode) - Returns the unioned TupleSketch compact binary representation.
+          `child` should be a binary TupleSketch representation created with a double type summary.
+          `lgNomEntries` is the log-base-2 of nominal entries for the union operation. Default is 12.
+          `mode` is the aggregation mode for numeric summaries during union (sum, min, max, alwaysone). Default is sum. 
+  examples: |2-
+    
+        Examples:
+          > SELECT tuple_sketch_estimate_double(tuple_union_agg_double(sketch)) FROM (SELECT tuple_sketch_agg_double(key, summary) as sketch FROM VALUES (1, 5.0D), (2, 10.0D) tab(key, summary) UNION ALL SELECT tuple_sketch_agg_double(key, summary) as sketch FROM VALUES (2, 3.0D), (3, 7.0D) tab(key, summary));
+           3.0
+      
+  since: "4.2.0"
+
+- name: "tuple_union_agg_integer"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.TupleUnionAggIntegerExpressionBuilder"
+  signatures:
+    - "tuple_union_agg_integer(child, lgNomEntries, mode)"
+  usage: |2-
+    
+        tuple_union_agg_integer(child, lgNomEntries, mode) - Returns the unioned TupleSketch compact binary representation.
+          `child` should be a binary TupleSketch representation created with an integer type summary.
+          `lgNomEntries` is the log-base-2 of nominal entries for the union operation. Default is 12.
+          `mode` is the aggregation mode for numeric summaries during union (sum, min, max, alwaysone). Default is sum. 
+  examples: |2-
+    
+        Examples:
+          > SELECT tuple_sketch_estimate_integer(tuple_union_agg_integer(sketch)) FROM (SELECT tuple_sketch_agg_integer(key, summary) as sketch FROM VALUES (1, 5), (2, 10) tab(key, summary) UNION ALL SELECT tuple_sketch_agg_integer(key, summary) as sketch FROM VALUES (2, 3), (3, 7) tab(key, summary));
+           3.0
+      
+  since: "4.2.0"
+
 - name: "var_pop"
   scope: "sql_builtin"
   group: "agg_funcs"
@@ -1565,3 +1800,42 @@
       
   since: "1.6.0"
 
+- name: "vector_avg"
+  scope: "sql_builtin"
+  group: "vector_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.VectorAvg"
+  signatures:
+    - "vector_avg(array)"
+  usage: |2-
+    
+        vector_avg(array) - Returns the element-wise mean of float vectors in a group.
+        All vectors must have the same dimension.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT vector_avg(col) FROM VALUES (array(1.0F, 2.0F)), (array(3.0F, 4.0F)) AS tab(col);
+           [2.0,3.0]
+      
+  since: "4.2.0"
+
+- name: "vector_sum"
+  scope: "sql_builtin"
+  group: "vector_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.VectorSum"
+  signatures:
+    - "vector_sum(array)"
+  usage: |2-
+    
+        vector_sum(array) - Returns the element-wise sum of float vectors in a group.
+        All vectors must have the same dimension.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT vector_sum(col) FROM VALUES (array(1.0F, 2.0F)), (array(3.0F, 4.0F)) AS tab(col);
+           [4.0,6.0]
+      
+  since: "4.2.0"

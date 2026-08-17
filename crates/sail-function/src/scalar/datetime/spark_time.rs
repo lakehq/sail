@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
 use chrono::{NaiveTime, Timelike};
@@ -10,6 +12,7 @@ use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signatur
 use datafusion_functions::utils::make_scalar_function;
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
+use crate::scalar::datetime::format::DateTimeFormat;
 
 const DEFAULT_TIME_FORMATS: &[&str] = &[
     "%H:%M:%S%.f",
@@ -25,8 +28,8 @@ const DEFAULT_TIME_FORMATS: &[&str] = &[
 ///
 /// Accepts 1 or 2 arguments:
 /// - `(expr)` — parses strings with default formats, or casts other types to Time64.
-/// - `(expr, format)` — parses strings with the given chrono format. The format
-///   may be a scalar string (broadcast) or a string column (per-row).
+/// - `(expr, format)` — parses strings with the given Spark Java datetime pattern.
+///   The pattern may be a scalar string (broadcast) or a string column (per-row).
 ///
 /// `to_time` always errors on invalid input (Spark's `ToTime` does not honor ANSI);
 /// `try_to_time` (`is_try = true`) returns NULL on parse/cast failure — mirroring
@@ -72,14 +75,33 @@ impl SparkTime {
 
     fn string_to_time_us_with_format(
         value: &str,
-        format: &str,
+        format: &DateTimeFormat,
         is_try: bool,
     ) -> Result<Option<i64>> {
-        match NaiveTime::parse_from_str(value, format) {
-            Ok(t) => Ok(Some(Self::naive_time_to_us(t))),
+        match format.parse_datetime_value(value) {
+            Ok(parsed) => Ok(Some(Self::naive_time_to_us(parsed.datetime.time()))),
             Err(_) if is_try => Ok(None),
-            Err(e) => Err(exec_datafusion_err!("{e}")),
+            Err(e) => Err(e),
         }
+    }
+
+    fn get_or_parse_format<'a>(
+        cache: &'a mut HashMap<String, Option<DateTimeFormat>>,
+        pattern: &str,
+        is_try: bool,
+    ) -> Result<Option<&'a DateTimeFormat>> {
+        let format = match cache.entry(pattern.to_string()) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                let format = match DateTimeFormat::for_parsing(pattern) {
+                    Ok(format) => Some(format),
+                    Err(_) if is_try => None,
+                    Err(e) => return Err(e),
+                };
+                entry.insert(format)
+            }
+        };
+        Ok(format.as_ref())
     }
 
     fn string_array_iter(array: &ArrayRef) -> Result<Box<dyn Iterator<Item = Option<&str>> + '_>> {
@@ -116,10 +138,16 @@ impl SparkTime {
         }
         let values = Self::string_array_iter(value_arr)?;
         let formats = Self::string_array_iter(format_arr)?;
+        let mut cache = HashMap::new();
         let out: Time64MicrosecondArray = values
             .zip(formats)
             .map(|(v, f)| match (v, f) {
-                (Some(s), Some(fmt)) => Self::string_to_time_us_with_format(s, fmt, is_try),
+                (Some(value), Some(pattern)) => {
+                    match Self::get_or_parse_format(&mut cache, pattern, is_try)? {
+                        Some(format) => Self::string_to_time_us_with_format(value, format, is_try),
+                        None => Ok(None),
+                    }
+                }
                 _ => Ok(None),
             })
             .collect::<Result<_>>()?;

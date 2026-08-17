@@ -246,7 +246,7 @@ impl PlanResolver<'_> {
         })?;
         if delta_check_constraints_from_properties(&properties)
             .iter()
-            .any(|constraint| constraint.name.eq_ignore_ascii_case(&name))
+            .any(|constraint| delta_constraint_names_equal(&constraint.name, &name))
         {
             return Err(PlanError::invalid(format!(
                 "Delta constraint `{name}` already exists"
@@ -366,10 +366,19 @@ impl PlanResolver<'_> {
                 properties.extend(items.clone());
             }
         }
-        let constraints = delta_constraints_from_schema_and_properties(
-            target_schema.fields().iter().map(|field| field.as_ref()),
-            &properties,
-        );
+
+        // MERGE target schemas use opaque field IDs internally. Constraint source text and
+        // diagnostics must use the corresponding user-facing names; resolving that source text
+        // against `target_schema` maps it back to the opaque field safely.
+        let target_field_names = Self::get_field_names(target_schema, state)?;
+        let target_fields = target_schema
+            .fields()
+            .iter()
+            .zip(target_field_names)
+            .map(|(field, name)| field.as_ref().clone().with_name(name))
+            .collect::<Vec<_>>();
+        let constraints =
+            delta_constraints_from_schema_and_properties(target_fields.iter(), &properties);
         self.resolve_delta_check_constraints(constraints, target_schema, state)
             .await
     }
@@ -396,6 +405,7 @@ impl PlanResolver<'_> {
                 state,
                 target_schema,
                 source_schema,
+                self.config.case_sensitive,
             );
             let resolved = self
                 .resolve_expression(disambiguated, merge_schema, state)
@@ -612,7 +622,7 @@ fn upsert_delta_check_constraints(
         };
         if let Some(existing) = constraints
             .iter_mut()
-            .find(|c| c.name.eq_ignore_ascii_case(name))
+            .find(|constraint| delta_constraint_names_equal(&constraint.name, name))
         {
             existing.name = name.to_string();
             existing.expression = value.clone();
@@ -625,6 +635,10 @@ fn upsert_delta_check_constraints(
             });
         }
     }
+}
+
+fn delta_constraint_names_equal(left: &str, right: &str) -> bool {
+    left.to_lowercase() == right.to_lowercase()
 }
 
 fn strip_delta_check_constraint_prefix(key: &str) -> Option<&str> {

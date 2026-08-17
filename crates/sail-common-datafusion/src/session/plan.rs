@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{Result, ScalarValue};
-use sail_common::object::DynObject;
+use sail_common::utils::object::DynObject;
 
 use crate::catalog::display::CatalogDisplay;
 use crate::extension::SessionExtension;

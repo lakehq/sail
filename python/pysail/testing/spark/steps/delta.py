@@ -236,14 +236,21 @@ def _normalize_column_mapping_schema(schema: object, field_path: str = "") -> ob
     normalized = dict(schema)
     if "fields" in normalized and isinstance(normalized["fields"], list):
         for i, field in enumerate(normalized["fields"]):
+            if not isinstance(field, dict):
+                continue
             current_path = f"{field_path}.{i}" if field_path else str(i)
-            if isinstance(field, dict) and "metadata" in field:
-                meta = field.get("metadata", {})
+            meta = field.get("metadata")
+            if isinstance(meta, dict):
                 phys = meta.get("delta.columnMapping.physicalName", "")
                 if isinstance(phys, str) and phys.startswith("col-"):
                     meta["delta.columnMapping.physicalName"] = f"<physical_name_{current_path}>"
-            if isinstance(field, dict) and "type" in field and isinstance(field["type"], dict):
-                field["type"] = _normalize_column_mapping_schema(field["type"], field_path=current_path)
+            field_type = field.get("type")
+            if isinstance(field_type, dict):
+                field["type"] = _normalize_column_mapping_schema(field_type, field_path=current_path)
+    for child_key in ("elementType", "keyType", "valueType"):
+        child_type = normalized.get(child_key)
+        if isinstance(child_type, dict):
+            normalized[child_key] = _normalize_column_mapping_schema(child_type, field_path=field_path)
     return normalized
 
 
@@ -281,6 +288,21 @@ def _normalize_delta_log_json_file_for_snapshot(filename: str, obj: object) -> o
 def delta_log_cache() -> dict[str, dict]:
     """Per-scenario cache for normalized delta log objects."""
     return {}
+
+
+@given(parsers.parse("append query to delta table in {location_var} with mergeSchema"))
+def append_query_to_delta_table_with_merge_schema(
+    docstring: str,
+    location_var: str,
+    variables: dict,
+    spark,
+) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    spark.sql(docstring).write.format("delta").mode("append").option(
+        "mergeSchema",
+        "true",
+    ).save(str(location.path.absolute()))
 
 
 def _delta_log_compute(which: str, variables: dict, delta_log_cache: dict[str, dict]) -> dict:

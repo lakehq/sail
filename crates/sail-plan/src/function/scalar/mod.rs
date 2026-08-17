@@ -21,6 +21,7 @@ mod string;
 mod r#struct;
 mod url;
 mod variant;
+mod vector;
 mod xml;
 
 pub(super) fn list_built_in_scalar_functions() -> Vec<(&'static str, ScalarFunction)> {
@@ -44,6 +45,7 @@ pub(super) fn list_built_in_scalar_functions() -> Vec<(&'static str, ScalarFunct
     output.extend(r#struct::list_built_in_struct_functions());
     output.extend(url::list_built_in_url_functions());
     output.extend(variant::list_built_in_variant_functions());
+    output.extend(vector::list_built_in_vector_functions());
     output.extend(xml::list_built_in_xml_functions());
     output
 }
