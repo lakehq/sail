@@ -751,6 +751,16 @@ Feature: array filter with lambda
         """
       Then query error Subquery expressions are not supported within higher-order functions
 
+    # At an arity that never forms a higher-order function (filter needs 2
+    # arguments), Spark fails on argument count before the subquery validator runs,
+    # so the argument-count error wins over the subquery rejection.
+    Scenario: a subquery at an invalid arity is an argument-count error, not a subquery error
+      When query
+        """
+        SELECT filter((SELECT array(1, 2)))
+        """
+      Then query error (?i)two values|requires 2|WRONG_NUM
+
   Rule: A NULL-typed predicate with a side effect is erased, not evaluated
 
     # Spark's type coercion replaces a lambda body whose type is NULL (here

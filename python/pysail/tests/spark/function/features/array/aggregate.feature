@@ -194,6 +194,28 @@ Feature: aggregate higher-order function
         | result |
         | 99     |
 
+    # The mixed [merge non-lambda, finish lambda] form: the wrapped merge takes a
+    # two-parameter set (acc, element) while the real finish takes one (acc), so
+    # this is the shape where positional param-set alignment would regress if the
+    # wrapped and real lambdas were bound out of order.
+    Scenario: A constant merge with a real finish lambda
+      When query
+        """
+        SELECT aggregate(array(1, 2), 0, 9, acc -> acc) AS result
+        """
+      Then query result
+        | result |
+        | 9      |
+
+    Scenario: reduce (the aggregate alias) accepts a non-lambda merge
+      When query
+        """
+        SELECT reduce(array(1, 2), 0, 9) AS result
+        """
+      Then query result
+        | result |
+        | 9      |
+
     Scenario: A merge lambda that only references an outer column
       When query
         """

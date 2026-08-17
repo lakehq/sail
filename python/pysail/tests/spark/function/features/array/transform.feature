@@ -499,6 +499,24 @@ Feature: transform higher-order function
         | result |
         | true   |
 
+    Scenario: A randn() body produces a distinct value per element
+      When query
+        """
+        SELECT size(array_distinct(transform(array(1, 2, 3, 4, 5), randn()))) > 1 AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: Every rand() element falls within the unit interval
+      When query
+        """
+        SELECT forall(transform(array(1, 2, 3, 4, 5), rand()), v -> v >= 0 AND v < 1) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
   @function(nullability)
   Rule: Output schema
 
@@ -519,24 +537,6 @@ Feature: transform higher-order function
          |-- result: array (nullable = false)
          |    |-- element: integer (containsNull = true)
         """
-
-    Scenario: A randn() body produces a distinct value per element
-      When query
-        """
-        SELECT size(array_distinct(transform(array(1, 2, 3, 4, 5), randn()))) > 1 AS result
-        """
-      Then query result
-        | result |
-        | true   |
-
-    Scenario: Every rand() element falls within the unit interval
-      When query
-        """
-        SELECT forall(transform(array(1, 2, 3, 4, 5), rand()), v -> v >= 0 AND v < 1) AS result
-        """
-      Then query result
-        | result |
-        | true   |
 
   Rule: Untyped NULL body
 
@@ -560,19 +560,24 @@ Feature: transform higher-order function
 
   Rule: Non-lambda wrapping must not capture outer lambda variables
 
-    Scenario: a backtick-spelled internal parameter name does not shadow an outer variable
+    # `__wrapped_lambda_param_N` is the exact name Sail generates for a wrapped
+    # lambda's hidden parameters, so a user variable spelled that way is the
+    # adversarial case: the collision loop must skip it for the inner wrapped
+    # lambda, or the inner body would rebind to the inner element instead of the
+    # captured outer one (which would flip [[1]] to [[2]]).
+    Scenario: a user variable spelled like the generated placeholder is not shadowed
       When query
         """
-        SELECT transform(array(1), `#0` -> transform(array(2), `#0`)) AS result
+        SELECT transform(array(1), `__wrapped_lambda_param_0` -> transform(array(2), `__wrapped_lambda_param_0`)) AS result
         """
       Then query result
         | result |
         | [[1]]  |
 
-    Scenario: the collision is independent of the internal name suffix
+    Scenario: a placeholder-shaped name that is not the generated one is used verbatim
       When query
         """
-        SELECT transform(array(1), `#1` -> transform(array(2), `#1`)) AS result
+        SELECT transform(array(1), `__wrapped_lambda_param_1` -> transform(array(2), `__wrapped_lambda_param_1`)) AS result
         """
       Then query result
         | result |
@@ -581,7 +586,7 @@ Feature: transform higher-order function
     Scenario: the captured value is preserved not the inner element
       When query
         """
-        SELECT transform(array(5), `#0` -> transform(array(2), `#0`)) AS result
+        SELECT transform(array(5), `__wrapped_lambda_param_0` -> transform(array(2), `__wrapped_lambda_param_0`)) AS result
         """
       Then query result
         | result |
@@ -590,7 +595,7 @@ Feature: transform higher-order function
     Scenario: a captured variable inside a wrapped filter predicate is not shadowed
       When query
         """
-        SELECT transform(array(1), `#0` -> filter(array(2), `#0` > 1)) AS result
+        SELECT transform(array(1), `__wrapped_lambda_param_0` -> filter(array(2), `__wrapped_lambda_param_0` > 1)) AS result
         """
       Then query result
         | result |
@@ -599,7 +604,7 @@ Feature: transform higher-order function
     Scenario: a captured variable inside a wrapped exists predicate is not shadowed
       When query
         """
-        SELECT transform(array(1), `#0` -> exists(array(2), `#0` > 0)) AS result
+        SELECT transform(array(1), `__wrapped_lambda_param_0` -> exists(array(2), `__wrapped_lambda_param_0` > 0)) AS result
         """
       Then query result
         | result  |

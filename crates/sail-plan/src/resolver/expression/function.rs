@@ -13,8 +13,8 @@ use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{AggFunctionInput, FunctionContextInput, ScalarFunctionInput};
 use crate::function::{
-    get_built_in_aggregate_function, get_built_in_function, is_higher_order_function,
-    lambda_argument_positions,
+    get_built_in_aggregate_function, get_built_in_function, is_higher_order_arity,
+    is_higher_order_function, lambda_argument_positions,
 };
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
@@ -136,10 +136,14 @@ impl PlanResolver<'_> {
                 .await?
         };
 
-        // Spark validates the whole higher-order call, so this covers every arity
-        // — including 1-arg forms like `array_sort(a)` that resolve as an ordinary
-        // function above and so never enter `resolve_higher_order_function_arguments`.
-        if is_higher_order {
+        // Spark validates the whole higher-order call, so this covers every valid
+        // arity — including 1-arg forms like `array_sort(a)` that resolve as an
+        // ordinary function above and so never enter
+        // `resolve_higher_order_function_arguments`. It must gate on a valid HOF
+        // arity, not just the name: at a shorter arity (e.g. `filter(x)`) Spark
+        // fails on argument count first, so the validator never runs and the arity
+        // error must win over the subquery error.
+        if is_higher_order_arity(&canonical_function_name, arguments.len()) {
             self.reject_disallowed_higher_order_arguments(&arguments)?;
         }
 

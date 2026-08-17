@@ -109,6 +109,33 @@ pub(crate) fn lambda_argument_positions(function_name: &str, arity: usize) -> Ve
         .collect()
 }
 
+/// Whether `function_name` called with `arity` arguments forms a valid
+/// higher-order function in Spark — i.e. Spark would build a `HigherOrderFunction`
+/// node rather than fail on argument count first.
+///
+/// The trailing lambda is optional for `array_sort` (natural-order form) and
+/// `aggregate`/`reduce` (identity finish), so those accept one fewer argument than
+/// their full signature; every other higher-order function requires all of its
+/// arguments. Used to gate the whole-node validators (subquery rejection) to the
+/// arities where Spark actually builds the node — at a shorter arity Spark's
+/// `FunctionRegistry` builder fails on argument count first, so the validator
+/// never runs. (This min-arity fact belongs on `HigherOrderUDFImpl` next to the
+/// lambda-arity table — a follow-up folds both onto the trait.)
+pub(crate) fn is_higher_order_arity(function_name: &str, arity: usize) -> bool {
+    let Some(udf) = higher_order_udf(function_name) else {
+        return false;
+    };
+    let HigherOrderTypeSignature::Exact(slots) = &udf.signature().type_signature else {
+        return false;
+    };
+    let max = slots.len();
+    let min = match function_name.trim().to_lowercase().as_str() {
+        "array_sort" | "aggregate" | "reduce" => max.saturating_sub(1),
+        _ => max,
+    };
+    (min..=max).contains(&arity)
+}
+
 /// Returns how many parameters to declare when wrapping a bare (non-lambda)
 /// expression in a lambda for `function_name`, given the `available` parameters
 /// the function's lambda supports.
