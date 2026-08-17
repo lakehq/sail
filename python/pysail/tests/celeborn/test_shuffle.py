@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from pysail import _native
-from pysail.testing.proxy import (
+from pysail.testing.utils.proxy import (
     Close,
     ConnectionAccepted,
     ConnectionClosed,
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
         MasterService,
         WorkerService,
     )
-    from pysail.testing.proxy import EndpointProxy
+    from pysail.testing.utils.proxy import EndpointProxy
 
 
 ShuffleClient = _native._celeborn.ShuffleClient  # noqa: SLF001
@@ -213,7 +213,7 @@ def test_shuffle_client_reads_data_from_epochs_before_and_after_revive(
 
         assert client.push_data(2, 0, 0, 0, before_revive) == len(before_revive) + 16
         (first_worker,) = _event_workers(celeborn_push_proxies, ConnectionOpened)
-        assert sum(proxy.disconnect_active_connections() for proxy in celeborn_push_proxies.values()) == 1
+        assert sum(proxy.close_active_connections(reason="test") for proxy in celeborn_push_proxies.values()) == 1
 
         started = time.monotonic()
         assert client.push_data(2, 0, 0, 0, after_revive) == len(after_revive) + 16
@@ -221,7 +221,7 @@ def test_shuffle_client_reads_data_from_epochs_before_and_after_revive(
         assert _event_workers(
             celeborn_push_proxies,
             ConnectionClosed,
-            reason="test requested disconnect",
+            reason="test",
         ) == (first_worker,)
         assert _event_count(celeborn_push_proxies, ConnectionOpened) == _MULTI_EPOCH_WORKER_COUNT
         assert len(_event_workers(celeborn_push_proxies, ConnectionOpened)) == _MULTI_EPOCH_WORKER_COUNT
@@ -248,7 +248,7 @@ def test_shuffle_client_does_not_reuse_a_worker_that_failed_in_an_earlier_epoch(
         client.register_shuffle(3, [0], False, 1)
 
         assert client.push_data(3, 0, 0, 0, b"epoch zero") == len(b"epoch zero") + 16
-        assert sum(proxy.disconnect_active_connections() for proxy in celeborn_push_proxies.values()) == 1
+        assert sum(proxy.close_active_connections(reason="test") for proxy in celeborn_push_proxies.values()) == 1
         assert client.push_data(3, 0, 0, 0, b"epoch one") == len(b"epoch one") + 16
         _add_drop_next_connection(celeborn_push_proxies)
         with pytest.raises(RuntimeError, match="master error: status 27"):
@@ -258,7 +258,7 @@ def test_shuffle_client_does_not_reuse_a_worker_that_failed_in_an_earlier_epoch(
             _event_count(
                 celeborn_push_proxies,
                 ConnectionClosed,
-                reason="test requested disconnect",
+                reason="test",
             )
             == 1
         )
@@ -288,7 +288,7 @@ def test_shuffle_client_reader_discovers_epochs_revived_by_another_client(
         reader.register_shuffle(4, [0], False, 1)
 
         assert writer.push_data(4, 0, 0, 0, before_revive) == len(before_revive) + 16
-        assert sum(proxy.disconnect_active_connections() for proxy in celeborn_push_proxies.values()) == 1
+        assert sum(proxy.close_active_connections(reason="test") for proxy in celeborn_push_proxies.values()) == 1
         assert writer.push_data(4, 0, 0, 0, after_revive) == len(after_revive) + 16
         writer.mapper_end(4, 0, 0, 1)
 
@@ -296,7 +296,7 @@ def test_shuffle_client_reader_discovers_epochs_revived_by_another_client(
             _event_count(
                 celeborn_push_proxies,
                 ConnectionClosed,
-                reason="test requested disconnect",
+                reason="test",
             )
             == 1
         )

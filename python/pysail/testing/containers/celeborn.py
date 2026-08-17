@@ -15,7 +15,7 @@ from testcontainers.core.container import DockerContainer
 from testcontainers.core.network import Network
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
-from pysail.testing.proxy import EndpointProxy, FrameDecoder, ProxyCodec
+from pysail.testing.utils.proxy import EndpointProxy, FrameDecoder, ProxyCodec
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -88,7 +88,7 @@ class CelebornFrame:
 
 
 class CelebornFrameDecoder(FrameDecoder[CelebornFrame]):
-    """Decode Celeborn's ``message-size, type, body-size`` transport framing."""
+    """Decode Celeborn transport frames."""
 
     _HEADER_SIZE = 9
     _MAX_FRAME_SIZE = 2**31 - 1
@@ -123,7 +123,7 @@ class CelebornFrameDecoder(FrameDecoder[CelebornFrame]):
 class CelebornCodec(ProxyCodec[CelebornFrame]):
     """Codec for Celeborn's framed Netty transport protocol."""
 
-    def new_decoder(self, direction: str) -> CelebornFrameDecoder:
+    def decoder(self, direction: str) -> CelebornFrameDecoder:
         del direction
         return CelebornFrameDecoder()
 

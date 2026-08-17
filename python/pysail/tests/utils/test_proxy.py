@@ -1,4 +1,4 @@
-"""Unit tests for the integration-test endpoint proxy."""
+"""Integration tests for the endpoint proxy."""
 
 from __future__ import annotations
 
@@ -8,7 +8,9 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from pysail.testing.proxy import (
+import pytest
+
+from pysail.testing.utils.proxy import (
     Close,
     ConnectionAccepted,
     ConnectionOpened,
@@ -24,6 +26,9 @@ from pysail.testing.proxy import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+
+pytestmark = pytest.mark.integration
 
 
 _FRAME_COUNT = 2
@@ -54,7 +59,7 @@ class _TestFrameDecoder(FrameDecoder[_TestFrame]):
 
 
 class _TestCodec(ProxyCodec[_TestFrame]):
-    def new_decoder(self, direction: str) -> _TestFrameDecoder:
+    def decoder(self, direction: str) -> _TestFrameDecoder:
         del direction
         return _TestFrameDecoder()
 
@@ -132,7 +137,7 @@ def test_proxy_codec_handles_fragmented_and_combined_frames() -> None:
     first = _TestFrame(b"one")
     second = _TestFrame(b"two")
     encoded = codec.encode(first) + codec.encode(second)
-    decoder = codec.new_decoder("client_to_server")
+    decoder = codec.decoder("client_to_server")
 
     assert decoder.feed(encoded[:2]) == []
     assert decoder.feed(encoded[2:]) == [first, second]

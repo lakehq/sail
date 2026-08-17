@@ -2,7 +2,7 @@
 
 An :class:`EndpointProxy` forwards one listening endpoint to one upstream
 endpoint.  Every accepted socket is represented by an
-:class:`EndpointProxyConnection`; rules and observations remain owned by the
+:class:`EndpointProxyConnection`. Rules and observations remain owned by the
 endpoint proxy so tests can inject faults without coupling them to a specific
 transport protocol.
 """
@@ -51,7 +51,7 @@ class ConnectionClosed(ProxyEvent):
 
 @dataclass(frozen=True)
 class FrameReceived(ProxyEvent, Generic[FrameT]):
-    """A complete codec frame received on one direction of a connection."""
+    """A complete codec frame was received on one direction of a connection."""
 
     direction: str
     frame: FrameT
@@ -155,7 +155,10 @@ def _always(_: object) -> bool:
 
 @dataclass
 class ConnectionRule(ProxyRule):
-    """Apply a typed action when a client connection is accepted."""
+    """Apply a typed action when a client connection is accepted.
+
+    The lock permits one rule instance to be shared by multiple endpoint proxies.
+    """
 
     action: ConnectionAction
     condition: ConnectionCondition = _always
@@ -163,10 +166,10 @@ class ConnectionRule(ProxyRule):
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def apply(self, event: ProxyEvent) -> Decision | None:
-        if not isinstance(event, ConnectionAccepted) or not self.condition(event):
+        if not isinstance(event, ConnectionAccepted):
             return None
         with self._lock:
-            if self.count == 0:
+            if self.count == 0 or not self.condition(event):
                 return None
             decision = self.action(event)
             if self.count is not None:
@@ -176,7 +179,10 @@ class ConnectionRule(ProxyRule):
 
 @dataclass
 class FrameRule(ProxyRule, Generic[FrameT]):
-    """Apply a typed action to codec frames of ``frame_type``."""
+    """Apply a typed action to codec frames of ``frame_type``.
+
+    The lock permits one rule instance to be shared by multiple endpoint proxies.
+    """
 
     frame_type: type[FrameT]
     action: FrameAction[FrameT]
@@ -188,10 +194,8 @@ class FrameRule(ProxyRule, Generic[FrameT]):
         if not isinstance(event, FrameReceived) or not isinstance(event.frame, self.frame_type):
             return None
         typed_event = cast("FrameReceived[FrameT]", event)
-        if not self.condition(typed_event):
-            return None
         with self._lock:
-            if self.count == 0:
+            if self.count == 0 or not self.condition(typed_event):
                 return None
             decision = self.action(typed_event)
             if self.count is not None:
@@ -207,7 +211,7 @@ class ProxyRuleStore:
         self._lock = threading.Lock()
 
     def add(self, rule: ProxyRule) -> None:
-        """Append a rule; earlier rules have priority over later rules."""
+        """Append a rule. Earlier rules have priority over later rules."""
         with self._lock:
             self._rules.append(rule)
 
@@ -228,7 +232,7 @@ class ProxyCodec(ABC, Generic[FrameT]):
     """A connection-scoped framing codec used by an endpoint proxy."""
 
     @abstractmethod
-    def new_decoder(self, direction: str) -> FrameDecoder[FrameT]:
+    def decoder(self, direction: str) -> FrameDecoder[FrameT]:
         """Create an independent incremental decoder for one TCP direction."""
 
     @abstractmethod
@@ -275,8 +279,12 @@ class EndpointProxy:
     def start(self) -> None:
         self._thread.start()
 
-    def disconnect_active_connections(self, *, reason: str = "test requested disconnect") -> int:
-        """Close every connection active when this method is called."""
+    def close_active_connections(self, *, reason: str = "") -> int:
+        """Close every established connection active when this method is called.
+
+        Connections waiting to establish an upstream socket due to injected delays are intentionally excluded.
+        This lets tests target only active upstream traffic.
+        """
         with self._connection_lock:
             connections = tuple(self._connections.values())
         for connection in connections:
@@ -286,7 +294,7 @@ class EndpointProxy:
     def close(self) -> None:
         self._closed.set()
         self._listener.close()
-        self.disconnect_active_connections(reason="proxy closed")
+        self.close_active_connections(reason="proxy closed")
         self._thread.join(timeout=1)
 
     def _serve(self) -> None:
@@ -302,7 +310,7 @@ class EndpointProxy:
             event = ConnectionAccepted(
                 connection_id=connection_id,
                 peer=(str(peer[0]), int(peer[1])),
-                attributes=self.event_attributes(),
+                attributes={"endpoint": self.name},
             )
             decision = self.dispatch(event)
             if isinstance(decision, (Close, Discard)):
@@ -310,8 +318,8 @@ class EndpointProxy:
                 self.record(
                     ConnectionClosed(
                         connection_id=connection_id,
-                        reason=self._close_reason(decision),
-                        attributes=self.event_attributes(),
+                        reason=(decision.reason if isinstance(decision, Close) else "discarded connection"),
+                        attributes={"endpoint": self.name},
                     )
                 )
                 continue
@@ -321,7 +329,7 @@ class EndpointProxy:
                     ConnectionClosed(
                         connection_id=connection_id,
                         reason="invalid replacement for connection",
-                        attributes=self.event_attributes(),
+                        attributes={"endpoint": self.name},
                     )
                 )
                 continue
@@ -339,10 +347,6 @@ class EndpointProxy:
             self._next_connection_id += 1
             return connection_id
 
-    def event_attributes(self, **attributes: object) -> Mapping[str, object]:
-        """Build common event attributes for this endpoint."""
-        return {"endpoint": self.name, **attributes}
-
     def dispatch(self, event: ProxyEvent) -> Decision:
         """Record and route a connection or frame event through ordered rules."""
         with self._dispatch_lock:
@@ -358,7 +362,7 @@ class EndpointProxy:
                             connection_id=event.connection_id,
                             rule_name=type(rule).__name__,
                             decision_name=type(decision).__name__,
-                            attributes=self.event_attributes(),
+                            attributes={"endpoint": self.name},
                         )
                     )
                     return decision
@@ -380,12 +384,6 @@ class EndpointProxy:
         """Remove a closed endpoint-proxy connection from the active registry."""
         with self._connection_lock:
             self._connections.pop(connection_id, None)
-
-    @staticmethod
-    def _close_reason(decision: Close | Discard) -> str:
-        if isinstance(decision, Close):
-            return decision.reason
-        return "discarded connection"
 
 
 class EndpointProxyConnection:
@@ -424,7 +422,7 @@ class EndpointProxyConnection:
             ConnectionClosed(
                 connection_id=self.connection_id,
                 reason=reason,
-                attributes=self.proxy.event_attributes(),
+                attributes={"endpoint": self.proxy.name},
             )
         )
 
@@ -442,7 +440,7 @@ class EndpointProxyConnection:
             self.proxy.record(
                 ConnectionOpened(
                     connection_id=self.connection_id,
-                    attributes=self.proxy.event_attributes(),
+                    attributes={"endpoint": self.proxy.name},
                 )
             )
 
@@ -465,7 +463,7 @@ class EndpointProxyConnection:
             self.close(f"upstream connection failed: {exc}")
 
     def _relay(self, direction: str, source: socket.socket, destination: socket.socket) -> None:
-        decoder = self.proxy.codec.new_decoder(direction) if self.proxy.codec is not None else None
+        decoder = self.proxy.codec.decoder(direction) if self.proxy.codec is not None else None
         try:
             while not self._closed.is_set():
                 data = source.recv(64 * 1024)
@@ -485,7 +483,7 @@ class EndpointProxyConnection:
                         connection_id=self.connection_id,
                         direction=direction,
                         frame=frame,
-                        attributes=self.proxy.event_attributes(),
+                        attributes={"endpoint": self.proxy.name},
                     )
                     decision = self.proxy.dispatch(event)
                     if isinstance(decision, Close):
