@@ -52,7 +52,14 @@ data:
     sequence-number: 1
     snapshot-id: <snapshot-id>
     summary:
+      added-data-files: '3'
+      added-records: '4'
       operation: append
+      total-data-files: '3'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '4'
     timestamp-ms: <timestamp>
   sort-orders:
   - fields: []
@@ -119,7 +126,14 @@ data:
     sequence-number: 1
     snapshot-id: <snapshot-id>
     summary:
+      added-data-files: '4'
+      added-records: '4'
       operation: append
+      total-data-files: '4'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '4'
     timestamp-ms: <timestamp>
   sort-orders:
   - fields: []
@@ -193,7 +207,14 @@ data:
     sequence-number: 1
     snapshot-id: <snapshot-id>
     summary:
+      added-data-files: '3'
+      added-records: '4'
       operation: append
+      total-data-files: '3'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '4'
     timestamp-ms: <timestamp>
   sort-orders:
   - fields: []
@@ -252,7 +273,14 @@ data:
     sequence-number: 1
     snapshot-id: <snapshot-id>
     summary:
+      added-data-files: '3'
+      added-records: '4'
       operation: append
+      total-data-files: '3'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '4'
     timestamp-ms: <timestamp>
   sort-orders:
   - fields: []
@@ -311,7 +339,14 @@ data:
     sequence-number: 1
     snapshot-id: <snapshot-id>
     summary:
+      added-data-files: '3'
+      added-records: '4'
       operation: append
+      total-data-files: '3'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '4'
     timestamp-ms: <timestamp>
   sort-orders:
   - fields: []
@@ -320,7 +355,14 @@ data:
 ---
 name: "test_month_transform_partitions_by_year_and_month.1"
 data:
+  added-data-files: '3'
+  added-records: '4'
   operation: append
+  total-data-files: '3'
+  total-delete-files: '0'
+  total-equality-deletes: '0'
+  total-position-deletes: '0'
+  total-records: '4'
 ---
 name: "test_truncate_on_string_column_groups_similar_values"
 data:
@@ -374,7 +416,14 @@ data:
     sequence-number: 1
     snapshot-id: <snapshot-id>
     summary:
+      added-data-files: '2'
+      added-records: '4'
       operation: append
+      total-data-files: '2'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '4'
     timestamp-ms: <timestamp>
   sort-orders:
   - fields: []
@@ -444,7 +493,14 @@ data:
     sequence-number: 1
     snapshot-id: <snapshot-id>
     summary:
+      added-data-files: '2'
+      added-records: '4'
       operation: append
+      total-data-files: '2'
+      total-delete-files: '0'
+      total-equality-deletes: '0'
+      total-position-deletes: '0'
+      total-records: '4'
     timestamp-ms: <timestamp>
   sort-orders:
   - fields: []

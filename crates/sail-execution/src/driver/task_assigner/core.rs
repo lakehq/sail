@@ -163,10 +163,11 @@ impl TaskAssigner {
         Some(assignment.clone())
     }
 
-    /// Records local and remote stream ownership for each resource based on the given task assignments.
+    /// Records stream ownership for each resource based on task assignments.
     pub fn track_streams(&mut self, assignments: &[TaskSetAssignment]) {
         for assignment in assignments {
-            self.driver.track_remote_streams(&assignment.set);
+            self.driver.track_storage_streams(&assignment.set);
+            self.driver.track_external_streams(&assignment.set);
             match &assignment.assignment {
                 TaskAssignment::Driver => {
                     self.driver.track_local_streams(&assignment.set);
@@ -203,8 +204,21 @@ impl TaskAssigner {
         assignments
     }
 
-    pub fn untrack_remote_streams(&mut self, job_id: JobId, stage: Option<usize>) -> bool {
-        self.driver.untrack_remote_streams(job_id, stage)
+    pub fn untrack_storage_streams(&mut self, job_id: JobId, stage: Option<usize>) -> bool {
+        self.driver.untrack_storage_streams(job_id, stage)
+    }
+
+    pub fn untrack_external_streams(&mut self, job_id: JobId, stage: Option<usize>) -> bool {
+        self.driver.untrack_external_streams(job_id, stage)
+    }
+
+    pub fn active_worker_ids(&self) -> Vec<WorkerId> {
+        self.workers
+            .iter()
+            .filter_map(|(worker_id, worker)| {
+                matches!(worker, WorkerResource::Active { .. }).then_some(*worker_id)
+            })
+            .collect()
     }
 
     pub fn is_worker_idle(&self, worker_id: WorkerId) -> bool {

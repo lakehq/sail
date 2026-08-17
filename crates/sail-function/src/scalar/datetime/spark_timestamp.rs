@@ -86,7 +86,6 @@ impl TimestampParser {
         let parsed = match format.parse_datetime_value(value) {
             Ok(v) => v,
             Err(_e) if is_try => return Ok(None),
-            Err(e) if is_invalid_leap_second(&e) => return Ok(None),
             Err(e) => return Err(e),
         };
         match self {
@@ -115,38 +114,30 @@ impl TimestampParser {
                 let micros = truncate_datetime_to_microseconds(&datetime);
                 Ok(Some(micros))
             }
-            TimestampParser::Ntz => {
-                let datetime = if let Some(offset) = parsed.offset {
-                    parsed
-                        .datetime
-                        .and_local_timezone(offset)
-                        .single()
-                        .map(|x| x.to_utc())
-                        .ok_or_else(|| exec_datafusion_err!("cannot apply parsed offset"))?
-                } else {
-                    parsed.datetime.and_utc()
-                };
-                // Truncate nanoseconds to microseconds to preserve fractional seconds
-                let micros = truncate_datetime_to_microseconds(&datetime);
-                Ok(Some(micros))
-            }
+            TimestampParser::Ntz => Ok(Some(parsed.datetime.and_utc().timestamp_micros())),
         }
     }
 
     fn string_to_microseconds(&self, value: &str, safe: bool) -> Result<Option<i64>> {
-        let (datetime, timezone) = match parse_timestamp(value).and_then(|x| x.into_naive()) {
+        let timestamp = match parse_timestamp(value) {
+            Ok(v) => v,
+            Err(_e) if safe => return Ok(None),
+            Err(e) => return Err(exec_datafusion_err!("{e}")),
+        };
+        if timestamp.time.second == 60 {
+            return if safe {
+                Ok(None)
+            } else {
+                exec_err!("invalid timestamp: leap seconds are not supported")
+            };
+        }
+        let (datetime, timezone) = match timestamp.into_naive() {
             Ok(v) => v,
             Err(_e) if safe => return Ok(None),
             Err(e) => return Err(exec_datafusion_err!("{e}")),
         };
         self.localize(datetime, timezone, safe)
     }
-}
-
-fn is_invalid_leap_second(error: &datafusion_common::DataFusionError) -> bool {
-    error
-        .to_string()
-        .contains("valid leap second must be 23:59:60")
 }
 
 /// Spark-compatible `to_timestamp` / `try_to_timestamp` (and their `_ntz`
@@ -378,7 +369,7 @@ impl ScalarUDFImpl for SparkTimestamp {
 fn parse_scalar_format(format: Option<ColumnarValue>) -> Result<ScalarFormat> {
     match format {
         Some(ColumnarValue::Scalar(scalar)) => match scalar.try_as_str() {
-            Some(Some(format)) => Ok(ScalarFormat::Format(DateTimeFormat::parse(format)?)),
+            Some(Some(format)) => Ok(ScalarFormat::Format(DateTimeFormat::for_parsing(format)?)),
             Some(None) => Ok(ScalarFormat::Null),
             None => exec_err!("spark_timestamp format argument must be a string scalar"),
         },
@@ -472,6 +463,29 @@ fn get_or_parse_format<'a>(
 ) -> Result<&'a DateTimeFormat> {
     match cache.entry(pattern.to_string()) {
         Entry::Occupied(entry) => Ok(entry.into_mut()),
-        Entry::Vacant(entry) => Ok(entry.insert(DateTimeFormat::parse(pattern)?)),
+        Entry::Vacant(entry) => Ok(entry.insert(DateTimeFormat::for_parsing(pattern)?)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unformatted_parser_rejects_leap_seconds_in_safe_and_strict_modes() -> Result<()> {
+        let parser = TimestampParser::Ltz {
+            default_timezone: "UTC".to_string(),
+        };
+
+        assert_eq!(
+            parser.string_to_microseconds("2026-06-15 23:59:60", true)?,
+            None
+        );
+        assert!(
+            parser
+                .string_to_microseconds("2026-06-15 23:59:60", false)
+                .is_err()
+        );
+        Ok(())
     }
 }

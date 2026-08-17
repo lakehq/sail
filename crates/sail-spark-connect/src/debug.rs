@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Formatter};
 
-use sail_common::debug::DebugBinary;
+use sail_common::utils::debug::DebugBinary;
 
 use crate::spark::connect::LocalRelation;
 use crate::spark::connect::execute_plan_response::ArrowBatch;

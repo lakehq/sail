@@ -100,8 +100,6 @@ df = spark.read.format("delta").option("versionAsOf", "0").load(path)
 df = spark.read.format("delta").option("timestampAsOf", "2025-01-02T03:04:05.678").load(path)
 ```
 
-Time travel is not available for Spark SQL in Sail yet, but we plan to support it soon.
-
 ## Column Mapping
 
 You can write Delta tables with column mapping enabled. The supported column mapping modes are `name` and `id`. You must write to a new Delta table to enable column mapping.
@@ -112,8 +110,3 @@ df.write.format("delta").option("columnMappingMode", "id").save(path)
 ```
 
 Existing Delta tables with column mapping can be read as usual.
-
-## More Features
-
-We will continue adding more examples for advanced Delta Lake features as they become available in Sail.
-For questions, reach out on [Slack](https://lakesail.com/slack) or [GitHub Discussions](https://github.com/lakehq/sail/discussions).

@@ -24,8 +24,3 @@ serde_json = { workspace = true }
 tokio = { workspace = true }
 volo = { workspace = true }
 volo-thrift = { workspace = true }
-
-[dev-dependencies]
-arrow = { workspace = true }
-tempfile = { workspace = true }
-testcontainers = { workspace = true }

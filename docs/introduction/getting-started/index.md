@@ -28,7 +28,7 @@ pip install "pyspark[connect]==4.2.0"
 
 ```bash-vue [Spark 3.5]
 pip install "pysail=={{ libVersion }}"
-pip install "pyspark[connect]==3.5.7
+pip install "pyspark[connect]==3.5.9"
 ```
 
 :::

@@ -11,6 +11,9 @@ use datafusion_functions::downcast_arg;
 use datafusion_functions::utils::make_scalar_function;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 
+use crate::scalar::csv::options::{
+    CsvFunction, find_option, find_option_with_alias, reject_null_entries, validate_options,
+};
 use crate::scalar::datetime::format::DateTimeFormat;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -163,9 +166,9 @@ impl Default for SparkSchemaOfCsvOptions {
     fn default() -> Self {
         Self {
             sep: ",".to_string(),
-            timestamp_format: DateTimeFormat::parse("yyyy-MM-dd HH:mm:ss")
+            timestamp_format: DateTimeFormat::for_parsing("yyyy-MM-dd HH:mm:ss")
                 .expect("default timestamp format should be valid"),
-            date_format: DateTimeFormat::parse("yyyy-MM-dd")
+            date_format: DateTimeFormat::for_parsing("yyyy-MM-dd")
                 .expect("default date format should be valid"),
             timezone: None,
         }
@@ -175,52 +178,24 @@ impl Default for SparkSchemaOfCsvOptions {
 impl SparkSchemaOfCsvOptions {
     fn from_map(map_array: &MapArray) -> Result<Self> {
         let mut options = Self::default();
-        if map_array.is_empty() || map_array.is_null(0) {
-            return Ok(options);
+        // `schema_of_csv` takes only literal arguments, so it is always evaluated eagerly: both the
+        // structural NULL-entry check and the value validation run unconditionally here.
+        reject_null_entries(map_array, CsvFunction::SchemaOf)?;
+        validate_options(map_array, CsvFunction::SchemaOf)?;
+
+        // Read through the same case-insensitive, sep-before-delimiter path as `from_csv`/`to_csv`,
+        // so a duplicated key resolves to the last variant and `sep` wins over `delimiter`.
+        if let Some(sep) = find_option_with_alias(map_array, "sep", "delimiter") {
+            options.sep = sep.to_string();
         }
-        let entries = map_array.value(0);
-        let entries = entries
-            .as_any()
-            .downcast_ref::<datafusion::arrow::array::StructArray>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("expected map entries to be a struct array".to_string())
-            })?;
-        let keys = entries
-            .column_by_name(SAIL_MAP_KEY_FIELD_NAME)
-            .and_then(|x| x.as_any().downcast_ref::<StringArray>())
-            .ok_or_else(|| {
-                DataFusionError::Execution("expected map keys to be a string array".to_string())
-            })?;
-        let values = entries
-            .column_by_name(SAIL_MAP_VALUE_FIELD_NAME)
-            .and_then(|x| x.as_any().downcast_ref::<StringArray>())
-            .ok_or_else(|| {
-                DataFusionError::Execution("expected map values to be a string array".to_string())
-            })?;
-        for (key, value) in keys.iter().zip(values.iter()) {
-            let (key, value) = match (key, value) {
-                (Some(key), Some(value)) => (key, value),
-                _ => {
-                    return plan_err!(
-                        "function `{}` does not support null option keys or values",
-                        SparkSchemaOfCsv::SCHEMA_OF_CSV_NAME
-                    );
-                }
-            };
-            match key {
-                "sep" | "delimiter" => options.sep = value.to_string(),
-                "timestampFormat" => {
-                    options.timestamp_format = DateTimeFormat::parse(value)?;
-                }
-                "dateFormat" => {
-                    options.date_format = DateTimeFormat::parse(value)?;
-                }
-                "timeZone" => {
-                    options.timezone = Some(value.to_string());
-                }
-                // Silently ignore unrecognised options, matching Spark's behaviour.
-                _ => {}
-            }
+        if let Some(format) = find_option(map_array, "timestampFormat") {
+            options.timestamp_format = DateTimeFormat::for_parsing(format)?;
+        }
+        if let Some(format) = find_option(map_array, "dateFormat") {
+            options.date_format = DateTimeFormat::for_parsing(format)?;
+        }
+        if let Some(timezone) = find_option(map_array, "timeZone") {
+            options.timezone = Some(timezone.to_string());
         }
         Ok(options)
     }

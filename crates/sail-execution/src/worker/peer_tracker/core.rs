@@ -1,11 +1,10 @@
 use datafusion::common::HashMap;
-use sail_server::actor::ActorContext;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::WorkerId;
 use crate::rpc::ClientOptions;
 use crate::worker::peer_tracker::{Peer, PeerTracker, PeerTrackerOptions};
-use crate::worker::{WorkerActor, WorkerClientSet, WorkerEvent, WorkerLocation};
+use crate::worker::{WorkerClientSet, WorkerLocation};
 
 impl PeerTracker {
     pub fn new(options: PeerTrackerOptions) -> Self {
@@ -15,19 +14,17 @@ impl PeerTracker {
         }
     }
 
-    pub fn track(&mut self, ctx: &mut ActorContext<WorkerActor>, peers: Vec<WorkerLocation>) {
+    pub fn track(&mut self, peers: Vec<WorkerLocation>) {
         if peers.is_empty() {
             // Although the logic below can handle empty peer list,
             // we return early as an optimization to avoid unnecessary gRPC calls.
             return;
         }
-        let peer_worker_ids = peers.iter().map(|x| x.worker_id).collect();
         for peer in peers {
             self.peers
                 .entry(peer.worker_id)
                 .or_insert_with(|| Peer::new(peer.host, peer.port));
         }
-        ctx.send(WorkerEvent::ReportKnownPeers { peer_worker_ids });
     }
 
     pub fn get_client_set(&mut self, worker_id: WorkerId) -> ExecutionResult<WorkerClientSet> {

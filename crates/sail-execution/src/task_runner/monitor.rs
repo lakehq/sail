@@ -1,24 +1,24 @@
 use datafusion::execution::SendableRecordBatchStream;
 use futures::StreamExt;
+use sail_common::actor::ActorHandle;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
-use sail_server::actor::{Actor, ActorHandle};
 use tokio::sync::oneshot;
 
 use crate::driver::TaskStatus;
 use crate::id::{TaskKey, TaskKeyDisplay};
-use crate::task_runner::TaskRunnerMessage;
+use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage};
 
-pub struct TaskMonitor<T: Actor> {
-    handle: ActorHandle<T>,
+pub struct TaskMonitor {
+    handle: ActorHandle<TaskRunnerActor>,
     key: TaskKey,
     stream: SendableRecordBatchStream,
     signal: oneshot::Receiver<()>,
 }
 
-impl<T: Actor> TaskMonitor<T> {
+impl TaskMonitor {
     pub fn new(
-        handle: ActorHandle<T>,
+        handle: ActorHandle<TaskRunnerActor>,
         key: TaskKey,
         stream: SendableRecordBatchStream,
         signal: oneshot::Receiver<()>,
@@ -30,13 +30,7 @@ impl<T: Actor> TaskMonitor<T> {
             signal,
         }
     }
-}
 
-impl<T: Actor> TaskMonitor<T>
-where
-    T::Message: TaskRunnerMessage,
-{
-    /// Runs the task monitor, reporting running and terminal status updates.
     pub async fn run(self) {
         let Self {
             handle,
@@ -44,24 +38,37 @@ where
             stream,
             signal,
         } = self;
-        let event = Self::running(key.clone());
-        let _ = handle.send(event).await;
-        let event = tokio::select! {
+        let _ = handle.send(Self::running(key.clone())).await;
+        let message = tokio::select! {
             x = Self::execute(key.clone(), stream) => x,
             x = Self::cancel(key.clone(), signal) => x,
         };
-        let _ = handle.send(event).await;
+        let _ = handle.send(message).await;
     }
 
     /// Builds a "task is running" status message.
-    fn running(key: TaskKey) -> T::Message {
-        T::Message::report_task_status(key, TaskStatus::Running, None, None)
+    fn running(key: TaskKey) -> TaskRunnerMessage {
+        Self::status(key, TaskStatus::Running, None, None)
+    }
+
+    fn status(
+        key: TaskKey,
+        status: TaskStatus,
+        message: Option<String>,
+        cause: Option<CommonErrorCause>,
+    ) -> TaskRunnerMessage {
+        TaskRunnerMessage::ReportTaskStatus {
+            key,
+            status,
+            message,
+            cause,
+        }
     }
 
     /// Waits for a cancellation signal and builds a canceled status message.
-    async fn cancel(key: TaskKey, signal: oneshot::Receiver<()>) -> T::Message {
+    async fn cancel(key: TaskKey, signal: oneshot::Receiver<()>) -> TaskRunnerMessage {
         let _ = signal.await;
-        T::Message::report_task_status(
+        Self::status(
             key.clone(),
             TaskStatus::Canceled,
             Some(format!("{} canceled", TaskKeyDisplay(&key))),
@@ -69,30 +76,17 @@ where
         )
     }
 
-    /// Drains the output stream and builds a succeeded or failed status message.
-    async fn execute(key: TaskKey, mut stream: SendableRecordBatchStream) -> T::Message {
+    async fn execute(key: TaskKey, mut stream: SendableRecordBatchStream) -> TaskRunnerMessage {
         loop {
             let Some(batch) = stream.next().await else {
-                break T::Message::report_task_status(
-                    key.clone(),
-                    TaskStatus::Succeeded,
-                    None,
-                    None,
-                );
+                break Self::status(key, TaskStatus::Succeeded, None, None);
             };
-            let error = match &batch {
-                Ok(_) => None,
-                Err(e) => Some((
-                    format!("task error: {e}"),
-                    CommonErrorCause::new::<PyErrExtractor>(e),
-                )),
-            };
-            if let Some((message, cause)) = error {
-                break T::Message::report_task_status(
-                    key.clone(),
+            if let Err(error) = batch {
+                break Self::status(
+                    key,
                     TaskStatus::Failed,
-                    Some(message),
-                    Some(cause),
+                    Some(format!("task error: {error}")),
+                    Some(CommonErrorCause::new::<PyErrExtractor>(&error)),
                 );
             }
         }
