@@ -20,6 +20,8 @@ pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
     let mut rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> =
         vec![Arc::new(ResolveLambdaVariables)];
     rules.extend(built_in_rules);
+    // Run this after the built-in analyzer rules so only the final root schema is expanded;
+    // casting scan or intermediate schemas would discard the benefit of keeping view arrays.
     rules.push(Arc::new(ExpandViewTypesAtOutput));
     rules
 }

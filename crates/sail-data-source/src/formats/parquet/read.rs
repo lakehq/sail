@@ -101,8 +101,10 @@ impl ReadFormat for ParquetReadFormat {
             normalizer.normalize_schema(schema)
         });
 
-        // Embedded Arrow metadata can retain view types. Normalize each file before
-        // merging so mixed physical string and binary representations remain compatible.
+        // Embedded Arrow metadata can retain view types. Normalize each file before merging so
+        // mixed physical string and binary representations remain compatible. The normalized
+        // views stay in the internal plan; ExpandViewTypesAtOutput materializes them only at the
+        // Spark-facing query boundary.
         let merged = Schema::try_merge(schemas)?;
 
         Ok(Arc::new(merged))

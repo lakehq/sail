@@ -1,3 +1,23 @@
+//! Materializes Arrow view arrays only when results leave a query.
+//!
+//! With `parquet.schema_force_view_types` enabled, Parquet scans use `Utf8View` and `BinaryView`
+//! to avoid eagerly converting decoded values to offset-based arrays before internal operators
+//! and shuffles consume them. Spark-facing result schemas do not have equivalent view types, so
+//! `optimizer.expand_views_at_output` adds one projection at the root that casts them to
+//! `LargeUtf8` and `LargeBinary`.
+//!
+//! DataFusion's built-in output coercion handles top-level view fields only. Spark results can
+//! also contain views nested in lists, structs, maps, dictionaries, unions, and run-end encoded
+//! arrays, which is why this rule recursively rebuilds the output schema while preserving field
+//! metadata and qualifiers.
+//!
+//! Keeping views inside the plan also means functions can receive view arrays directly. In
+//! particular, Spark SQL `hash` (`Utf8View` and `BinaryView`), `regexp_extract`,
+//! `regexp_extract_all`, and `split` (`Utf8View`) can consume Parquet view inputs before this
+//! rule runs; `str_to_map` delegates its first parsing stage to `split`. New string or binary
+//! functions that downcast concrete Arrow arrays must likewise accept the corresponding view
+//! representation.
+
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, FieldRef, Fields, Schema};
@@ -40,6 +60,7 @@ fn expanded_output_schema(schema: &DFSchemaRef) -> Result<Option<DFSchema>> {
         .unzip();
 
     if !transformed {
+        // Avoid adding a no-op projection to plans whose output is already client-compatible.
         return Ok(None);
     }
 

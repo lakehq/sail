@@ -145,6 +145,8 @@ fn spark_split_inner_downcast(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
+// Parquet strings remain `Utf8View` inside the plan. This also makes `str_to_map` view-aware
+// because its first parsing stage delegates to `SparkSplit`.
 trait StringArrayLike {
     fn len_(&self) -> usize;
     fn is_valid_(&self, index: usize) -> bool;

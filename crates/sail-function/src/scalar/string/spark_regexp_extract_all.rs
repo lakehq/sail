@@ -282,6 +282,8 @@ fn coerce_regexp_extract_types(
     res_types.into_iter().collect::<Result<Vec<_>>>()
 }
 
+// Parquet strings remain `Utf8View` inside the plan. Keep one access path for `Utf8`,
+// `LargeUtf8`, and `Utf8View` so both regexp functions avoid materializing view buffers.
 trait StringArrayLike {
     fn len_(&self) -> usize;
     fn is_valid_(&self, i: usize) -> bool;
