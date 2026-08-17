@@ -2,9 +2,11 @@
 //!
 //! With `parquet.schema_force_view_types` enabled, Parquet scans use `Utf8View` and `BinaryView`
 //! to avoid eagerly converting decoded values to offset-based arrays before internal operators
-//! and shuffles consume them. Spark-facing result schemas do not have equivalent view types, so
-//! `optimizer.expand_views_at_output` adds one projection at the root that casts them to
-//! `LargeUtf8` and `LargeBinary`.
+//! and shuffles consume them. Spark's Arrow result mapping exposes `StringType` and `BinaryType`
+//! as offset-based `Utf8`/`LargeUtf8` and `Binary`/`LargeBinary`; it does not accept `Utf8View`
+//! or `BinaryView` for those logical types. `optimizer.expand_views_at_output` therefore coerces
+//! only the root output to `LargeUtf8` and `LargeBinary`, reusing an existing root projection when
+//! possible.
 //!
 //! DataFusion's built-in output coercion handles top-level view fields only. Spark results can
 //! also contain views nested in lists, structs, maps, dictionaries, unions, and run-end encoded
@@ -60,7 +62,7 @@ fn expanded_output_schema(schema: &DFSchemaRef) -> Result<Option<DFSchema>> {
         .unzip();
 
     if !transformed {
-        // Avoid adding a no-op projection to plans whose output is already client-compatible.
+        // Avoid schema coercion when the output contains no string or binary view types.
         return Ok(None);
     }
 
