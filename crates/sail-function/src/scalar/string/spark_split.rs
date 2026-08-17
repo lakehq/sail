@@ -94,10 +94,6 @@ impl ScalarUDFImpl for SparkSplit {
 }
 
 fn spark_split_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    spark_split_inner_downcast(args)
-}
-
-fn spark_split_inner_downcast(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [values_arr, format_arr, limit_arr] = take_function_args(SparkSplit::NAME, args)?;
     let values = string_array_like(values_arr);
     let format = string_array_like(format_arr);

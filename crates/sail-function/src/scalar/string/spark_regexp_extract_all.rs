@@ -121,10 +121,6 @@ impl ScalarUDFImpl for SparkRegexpExtractAll {
 }
 
 fn regexp_extract_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    regexp_extract_downcast(args)
-}
-
-fn regexp_extract_downcast(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [values_arr, pattern_arr, idx_arr] = take_function_args(SparkRegexpExtract::NAME, args)?;
     let values = string_array_like(values_arr);
     let pattern = string_array_like(pattern_arr);
@@ -181,10 +177,6 @@ fn regexp_extract_downcast(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 fn regexp_extract_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    regexp_extract_all_downcast(args)
-}
-
-fn regexp_extract_all_downcast(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [values_arr, pattern_arr, idx_arr] = take_function_args(SparkRegexpExtractAll::NAME, args)?;
     let values = string_array_like(values_arr);
     let pattern = string_array_like(pattern_arr);
