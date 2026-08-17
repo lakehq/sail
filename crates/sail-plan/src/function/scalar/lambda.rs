@@ -59,15 +59,8 @@ static SPARK_ARRAY_SORT_UDF: LazyLock<Arc<HigherOrderUDF>> =
 static SPARK_ARRAY_SORT_SWAPPED_UDF: LazyLock<Arc<HigherOrderUDF>> =
     LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new_swapped())));
 
-/// The name-to-UDF lookup for built-in higher-order functions.
-///
-/// The resolver runs before the UDF is looked up in the catalog, so the parsed
-/// name is the only key available at that point. Almost everything about a
-/// higher-order function (whether it is one, which arguments are lambdas) is
-/// derived from the UDF this returns, so those facts are declared once, on the
-/// UDF itself. The lone remaining exception is [`wrapped_lambda_param_count`],
-/// which still matches on the name; that count is a property of the UDF and
-/// belongs on `HigherOrderUDFImpl` (e.g. a `min_lambda_arity()`) as a follow-up.
+/// The name-to-UDF lookup for built-in higher-order functions. The resolver runs
+/// before the catalog lookup, so the parsed name is the only key available.
 fn higher_order_udf(name: &str) -> Option<&'static LazyLock<Arc<HigherOrderUDF>>> {
     Some(match name.trim().to_lowercase().as_str() {
         "aggregate" | "reduce" => &SPARK_ARRAY_AGGREGATE_UDF,
@@ -84,16 +77,8 @@ pub(crate) fn is_higher_order_function(name: &str) -> bool {
     higher_order_udf(name).is_some()
 }
 
-/// Returns the argument positions where a built-in higher-order function expects
-/// a lambda, for a call with `arity` arguments.
-///
-/// Spark accepts a plain expression in any of these positions and wraps it in a
-/// lambda whose parameters go unused, so `exists(a, true)` means
-/// `exists(a, x -> true)`. The positions come straight from the UDF's own
-/// signature — the slots it declares as [`ValueOrLambda::Lambda`] — rather than
-/// a hand-written table. Positions at or beyond `arity` are dropped so that a
-/// shorter overload (e.g. `array_sort(a)` or `aggregate` without the optional
-/// finish lambda) keeps resolving as an ordinary call.
+/// The argument positions expecting a lambda. Positions at or beyond `arity` are
+/// dropped so a shorter overload (`array_sort(a)`) resolves as an ordinary call.
 pub(crate) fn lambda_argument_positions(function_name: &str, arity: usize) -> Vec<usize> {
     let Some(udf) = higher_order_udf(function_name) else {
         return vec![];
@@ -115,12 +100,7 @@ pub(crate) fn lambda_argument_positions(function_name: &str, arity: usize) -> Ve
 ///
 /// The trailing lambda is optional for `array_sort` (natural-order form) and
 /// `aggregate`/`reduce` (identity finish), so those accept one fewer argument than
-/// their full signature; every other higher-order function requires all of its
-/// arguments. Used to gate the whole-node validators (subquery rejection) to the
-/// arities where Spark actually builds the node — at a shorter arity Spark's
-/// `FunctionRegistry` builder fails on argument count first, so the validator
-/// never runs. (This min-arity fact belongs on `HigherOrderUDFImpl` next to the
-/// lambda-arity table — a follow-up folds both onto the trait.)
+/// their full signature.
 pub(crate) fn is_higher_order_arity(function_name: &str, arity: usize) -> bool {
     let Some(udf) = higher_order_udf(function_name) else {
         return false;
@@ -140,19 +120,10 @@ pub(crate) fn is_higher_order_arity(function_name: &str, arity: usize) -> bool {
 /// expression in a lambda for `function_name`, given the `available` parameters
 /// the function's lambda supports.
 ///
-/// The wrapped body references no parameters, so only the minimum arity Spark
-/// declares is needed. Spark wraps the element-wise higher-order functions with
-/// a single hidden element parameter (see `higherOrderFunctions.scala`);
-/// declaring the optional extras (e.g. `transform`/`filter`'s index) would only
-/// force DataFusion to materialize an unused per-element column. `array_sort`
-/// and `aggregate` genuinely require their full comparator/accumulator arity, so
-/// they keep every available parameter.
+/// `transform`/`filter` expose an optional trailing index parameter, but Spark
+/// wraps a bare expression with the element parameter only; declaring the extra
+/// would materialize an unused per-element column.
 pub(crate) fn wrapped_lambda_param_count(function_name: &str, available: usize) -> usize {
-    // `transform`/`filter` expose an optional trailing index parameter, so their
-    // `available` count is 2 but Spark wraps a bare expression with a single
-    // element parameter. `exists`/`forall` already expose one parameter, and
-    // `array_sort`/`aggregate` genuinely need every parameter, so `available` is
-    // already correct for them.
     match function_name.trim().to_lowercase().as_str() {
         "transform" | "filter" => 1,
         _ => available,

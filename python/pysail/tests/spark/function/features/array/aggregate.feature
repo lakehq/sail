@@ -167,32 +167,20 @@ Feature: aggregate higher-order function
 
   Rule: Non-lambda expression in place of a lambda
 
-    Scenario: A constant merge lambda
+    Scenario Outline: Non-lambda argument: <case>
       When query
         """
-        SELECT aggregate(array(1, 2), 0, 9) AS result
+        SELECT aggregate(array(1, 2), 0, <rest>) AS result
         """
       Then query result
-        | result |
-        | 9      |
+        | result   |
+        | <result> |
 
-    Scenario: A constant finish lambda
-      When query
-        """
-        SELECT aggregate(array(1, 2), 0, (acc, x) -> acc + x, 99) AS result
-        """
-      Then query result
-        | result |
-        | 99     |
-
-    Scenario: Both lambdas constant
-      When query
-        """
-        SELECT aggregate(array(1, 2), 0, 9, 99) AS result
-        """
-      Then query result
-        | result |
-        | 99     |
+      Examples:
+        | case                   | rest                        | result |
+        | a constant merge       | 9                           | 9      |
+        | a constant finish      | (acc, x) -> acc + x, 99     | 99     |
+        | both lambdas constant  | 9, 99                       | 99     |
 
     # The mixed [merge non-lambda, finish lambda] form: the wrapped merge takes a
     # two-parameter set (acc, element) while the real finish takes one (acc), so

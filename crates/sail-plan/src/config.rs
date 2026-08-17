@@ -62,8 +62,7 @@ pub struct PlanConfig {
     pub tvf_allow_multiple_table_arguments: bool,
     /// Whether subquery expressions are allowed inside a lambda or higher-order function
     /// (`spark.sql.analyzer.allowSubqueryExpressionsInLambdasOrHigherOrderFunctions`, default
-    /// false). Spark rejects them by default (SPARK-47509, a correctness fix); setting this to
-    /// true restores the legacy permissive behavior.
+    /// false). True restores the legacy behavior Spark rejects under SPARK-47509.
     pub allow_subquery_in_higher_order_functions: bool,
 }
 

@@ -24,12 +24,9 @@ use datafusion_expr::{ColumnarValue, LambdaArgument, ValueOrLambda};
 
 use crate::error::{generic_exec_err, spark_sql_type_name};
 
-/// Validates, at planning time, that a predicate lambda returns `BOOLEAN`.
-///
-/// Spark declares `functionType = BooleanType` for `filter`/`exists`/`forall` and
-/// rejects a non-boolean body during analysis (regardless of whether execution
-/// would ever evaluate it). An untyped `NULL` body carries the `Null` type and is
-/// coerced to boolean, so it is allowed.
+/// Validates, at planning time, that a predicate lambda returns `BOOLEAN`, as
+/// Spark's `functionType = BooleanType` does during analysis. An untyped `NULL`
+/// body carries the `Null` type and is coerced, so it is allowed.
 pub(crate) fn require_boolean_predicate(name: &str, return_type: &DataType) -> Result<()> {
     match return_type {
         DataType::Boolean | DataType::Null => Ok(()),
@@ -119,12 +116,8 @@ pub(crate) fn extract_list_values(
     Ok(ListValuesResult::Values(values))
 }
 
-/// Reinterprets a `Null`-typed lambda result as a boolean that is NULL everywhere.
-///
-/// An untyped `NULL` body (`x -> NULL`, or a bare `NULL` in a lambda position)
-/// carries the `Null` type rather than the boolean the predicate functions
-/// require. Spark coerces it to the required type, so the predicate is simply
-/// NULL for every element; without this the downcast below rejects it.
+/// Reinterprets a `Null`-typed lambda result as a boolean that is NULL everywhere,
+/// mirroring the coercion Spark applies; without it the downcast rejects it.
 pub(crate) fn coerce_null_lambda_result(result: ArrayRef) -> ArrayRef {
     if result.data_type() == &DataType::Null {
         Arc::new(BooleanArray::new_null(result.len()))
@@ -215,9 +208,8 @@ fn single_boolean(name: &str, output: &ColumnarValue) -> Result<Option<bool>> {
     if let ColumnarValue::Scalar(ScalarValue::Boolean(value)) = output {
         return Ok(*value);
     }
-    // A `Null`-typed body coerces to a boolean that is NULL, exactly as the
-    // vectorized path does; without this the downcast below rejects it and the
-    // recovery path masks the real error with a spurious type error.
+    // Same coercion as the vectorized path; otherwise this recovery path masks the
+    // real error with a spurious type error.
     let array = coerce_null_lambda_result(output.clone().into_array(1)?);
     let Some(array) = array.as_any().downcast_ref::<BooleanArray>() else {
         return exec_err!(

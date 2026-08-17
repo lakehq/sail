@@ -4,10 +4,8 @@ use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 // TODO: https://github.com/apache/spark/tree/master/common/utils/src/main/resources/error
 use datafusion_common::{DataFusionError, exec_datafusion_err, internal_datafusion_err};
 
-/// Backticks a struct field name when Spark's `quoteIfNeeded` would — anything
-/// that does not start with a letter or `_`, or contains a character outside
-/// `[a-zA-Z0-9_]` (Spark's `validIdentPattern = "^[a-zA-Z_][a-zA-Z0-9_]*"`) —
-/// escaping any backtick by doubling it.
+/// Backticks a struct field name like Spark's `quoteIfNeeded`
+/// (`validIdentPattern = "^[a-zA-Z_][a-zA-Z0-9_]*"`), doubling any backtick.
 fn quote_field_name(name: &str) -> Cow<'_, str> {
     let mut bytes = name.bytes();
     let is_bare_identifier = match bytes.next() {
@@ -24,14 +22,10 @@ fn quote_field_name(name: &str) -> Cow<'_, str> {
 }
 
 /// Renders the Spark SQL type name of an Arrow `DataType`, matching Spark's
-/// `DataType.sql` / `toSQLType` (`Int32` → `INT`, `Utf8` → `STRING`,
-/// `struct<a:int>` → `STRUCT<a: INT>`), for quoting types in analysis-time error
-/// messages exactly as Spark does.
+/// `DataType.sql` (`Int32` → `INT`, `struct<a:int>` → `STRUCT<a: INT>`).
 ///
-/// This is the uppercase `sql` counterpart of
-/// `SparkPlanFormatter::data_type_to_simple_string` (Spark's lowercase
-/// `simpleString`). The two tables should eventually derive from a single shared
-/// mapping (they live in different crates today).
+/// Uppercase counterpart of `SparkPlanFormatter::data_type_to_simple_string`; the
+/// two should derive from one mapping once they can share a crate.
 pub(crate) fn spark_sql_type_name(data_type: &DataType) -> Cow<'static, str> {
     match data_type {
         DataType::Null => Cow::Borrowed("VOID"),

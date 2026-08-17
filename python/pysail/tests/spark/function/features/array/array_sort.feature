@@ -112,41 +112,21 @@ Feature: array_sort higher-order function
     # "less" produces a permutation that depends on the sort algorithm, which is
     # not a contract worth asserting.
 
-    Scenario: A constant positive comparator leaves the array untouched
+    Scenario Outline: Non-lambda comparator: <case>
       When query
         """
-        SELECT array_sort(array(3, 1, 2), 1) AS result
+        SELECT array_sort(<args>) AS result
         """
       Then query result
-        | result    |
-        | [3, 1, 2] |
+        | result   |
+        | <result> |
 
-    Scenario: A constant zero comparator leaves the array untouched
-      When query
-        """
-        SELECT array_sort(array(3, 1, 2), 0) AS result
-        """
-      Then query result
-        | result    |
-        | [3, 1, 2] |
-
-    Scenario: A constant comparator over an empty array
-      When query
-        """
-        SELECT array_sort(array(), 1) AS result
-        """
-      Then query result
-        | result |
-        | []     |
-
-    Scenario: A constant comparator over a NULL array
-      When query
-        """
-        SELECT array_sort(CAST(NULL AS ARRAY<INT>), 1) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case                                  | args                           | result    |
+        | a constant positive comparator        | array(3, 1, 2), 1              | [3, 1, 2] |
+        | a constant zero comparator            | array(3, 1, 2), 0              | [3, 1, 2] |
+        | a constant comparator, empty array    | array(), 1                     | []        |
+        | a constant comparator, NULL array     | CAST(NULL AS ARRAY<INT>), 1    | NULL      |
 
     Scenario: A constant comparator over an array column resolves per row
       When query

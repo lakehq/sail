@@ -379,32 +379,22 @@ Feature: exists higher-order function
 
   Rule: Non-lambda expression in place of the lambda
 
-    Scenario: a constant true predicate
+    Scenario Outline: Non-lambda predicate: <case>
       When query
         """
-        SELECT exists(array(1, 2), true) AS result
+        SELECT exists(<args>) AS result
         """
       Then query result
-        | result |
-        | true   |
+        | result   |
+        | <result> |
 
-    Scenario: a constant false predicate
-      When query
-        """
-        SELECT exists(array(1, 2), false) AS result
-        """
-      Then query result
-        | result |
-        | false  |
-
-    Scenario: a constant NULL predicate
-      When query
-        """
-        SELECT exists(array(1, 2), CAST(NULL AS BOOLEAN)) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
+      Examples:
+        | case                                        | args                               | result |
+        | a constant true predicate                   | array(1, 2), true                  | true   |
+        | a constant false predicate                  | array(1, 2), false                 | false  |
+        | a constant NULL predicate                   | array(1, 2), CAST(NULL AS BOOLEAN) | NULL   |
+        | the empty array wins over a constant true   | array(), true                      | false  |
+        | a NULL array wins over a constant true      | CAST(NULL AS ARRAY<INT>), true     | NULL   |
 
     Scenario: a predicate that only references an outer column
       When query
@@ -414,24 +404,6 @@ Feature: exists higher-order function
       Then query result
         | result |
         | true   |
-
-    Scenario: the empty array wins over a constant true predicate
-      When query
-        """
-        SELECT exists(array(), true) AS result
-        """
-      Then query result
-        | result |
-        | false  |
-
-    Scenario: a NULL array wins over a constant true predicate
-      When query
-        """
-        SELECT exists(CAST(NULL AS ARRAY<INT>), true) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
 
     Scenario: a constant predicate over an array column resolves per row
       When query

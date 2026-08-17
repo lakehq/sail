@@ -607,32 +607,22 @@ Feature: array filter with lambda
 
   Rule: Non-lambda expression in place of the lambda
 
-    Scenario: A constant true predicate keeps every element
+    Scenario Outline: Non-lambda predicate: <case>
       When query
         """
-        SELECT filter(array(1, 2), true) AS result
+        SELECT filter(<args>) AS result
         """
       Then query result
-        | result |
-        | [1, 2] |
+        | result   |
+        | <result> |
 
-    Scenario: A constant false predicate drops every element
-      When query
-        """
-        SELECT filter(array(1, 2), false) AS result
-        """
-      Then query result
-        | result |
-        | []     |
-
-    Scenario: A constant NULL predicate drops every element
-      When query
-        """
-        SELECT filter(array(1, 2), CAST(NULL AS BOOLEAN)) AS result
-        """
-      Then query result
-        | result |
-        | []     |
+      Examples:
+        | case                                    | args                               | result |
+        | constant true keeps every element       | array(1, 2), true                  | [1, 2] |
+        | constant false drops every element      | array(1, 2), false                 | []     |
+        | constant NULL drops every element       | array(1, 2), CAST(NULL AS BOOLEAN) | []     |
+        | constant predicate over an empty array  | array(), true                      | []     |
+        | constant predicate over a NULL array    | CAST(NULL AS ARRAY<INT>), true     | NULL   |
 
     Scenario: A predicate that only references an outer column
       When query
@@ -642,24 +632,6 @@ Feature: array filter with lambda
       Then query result
         | result |
         | [1, 2] |
-
-    Scenario: A constant predicate over an empty array
-      When query
-        """
-        SELECT filter(array(), true) AS result
-        """
-      Then query result
-        | result |
-        | []     |
-
-    Scenario: A constant predicate over a NULL array
-      When query
-        """
-        SELECT filter(CAST(NULL AS ARRAY<INT>), true) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
 
     Scenario: A constant predicate over an array column resolves per row
       When query

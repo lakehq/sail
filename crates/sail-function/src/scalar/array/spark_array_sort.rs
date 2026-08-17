@@ -115,9 +115,7 @@ impl HigherOrderUDFImpl for SparkArraySort {
     fn return_field_from_args(&self, args: HigherOrderReturnFieldArgs) -> Result<FieldRef> {
         let (list, lambda) = value_lambda_pair(self.name(), args.arg_fields)?;
 
-        // Spark requires the comparator to return exactly `IntegerType` (Int32);
-        // bigint/double/etc. raise `UNEXPECTED_RETURN_TYPE` at analysis. The
-        // message mirrors Spark's so error-parity tests match on the same text.
+        // Spark requires exactly `IntegerType`; bigint/double raise at analysis.
         if lambda.data_type() != &DataType::Int32 {
             return plan_err!(
                 "cannot resolve `{}`: The `lambdafunction` requires return \"INT\" type, \
@@ -143,9 +141,8 @@ impl HigherOrderUDFImpl for SparkArraySort {
         let (list, lambda) = value_lambda_pair(self.name(), &args.args)?;
         let list_array = list.to_array(args.number_rows)?;
 
-        // Spark skips sorting a `NullType` array entirely — every element is NULL,
-        // so the comparator is never evaluated (even one that would raise). Return
-        // the input unchanged before touching the lambda.
+        // Spark skips sorting a `NullType` array, so the comparator never runs —
+        // not even one that would raise.
         let element_is_null = matches!(
             list_array.data_type(),
             DataType::List(field) | DataType::LargeList(field)

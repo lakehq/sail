@@ -75,19 +75,12 @@ impl PlanResolver<'_> {
         let canonical_function_name = function_name.to_ascii_lowercase();
         let is_higher_order = is_higher_order_function(&canonical_function_name);
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
-        // A built-in higher-order function is not shadowable by a user function of
-        // the same name: Spark 4.2 searches the built-in namespace before the
-        // session one, so `exists(a)` resolves to the built-in and raises
-        // `WRONG_NUM_ARGS`, `transform(1, 2)` resolves to the built-in and errors,
-        // and neither invokes the UDF. Skip the user-function lookup entirely for a
-        // higher-order name so a same-name registered UDF — which is unreachable —
-        // cannot perturb planning here either (e.g. flipping on
-        // `arrow_allow_large_var_types` for a function it can never resolve to).
+        // Spark 4.2 searches built-ins before session functions, so a user function
+        // never shadows a higher-order name.
         //
-        // FIXME: `is_user_defined_function` is always false, so we look up UDFs
-        //   before built-in functions. This special-cases the higher-order names;
-        //   the general fix is to invert the lookup order (built-in before session)
-        //   for every built-in, honoring `spark.sql.functionResolution.sessionOrder`.
+        // FIXME: `is_user_defined_function` is always false, so UDFs are looked up
+        //   first; the general fix is to invert the order for every built-in,
+        //   honoring `spark.sql.functionResolution.sessionOrder`.
         let catalog_function = if is_higher_order {
             None
         } else {
@@ -111,10 +104,8 @@ impl PlanResolver<'_> {
         let (arguments, order_by) =
             Self::convert_mode_within_group(&canonical_function_name, arguments, order_by)?;
 
-        // A higher-order function takes this path even when no argument is a
-        // lambda syntactically, because Spark accepts a plain expression in a
-        // lambda position and wraps it. An arity that matches no lambda form
-        // (e.g. `array_sort(a)`) yields no positions and resolves as usual.
+        // Also taken when no argument is a lambda syntactically: Spark accepts a
+        // plain expression in a lambda position and wraps it.
         let has_lambda_argument_position = is_higher_order
             && (arguments.iter().any(is_spec_lambda_argument)
                 || !lambda_argument_positions(&canonical_function_name, arguments.len())
@@ -136,13 +127,8 @@ impl PlanResolver<'_> {
                 .await?
         };
 
-        // Spark validates the whole higher-order call, so this covers every valid
-        // arity — including 1-arg forms like `array_sort(a)` that resolve as an
-        // ordinary function above and so never enter
-        // `resolve_higher_order_function_arguments`. It must gate on a valid HOF
-        // arity, not just the name: at a shorter arity (e.g. `filter(x)`) Spark
-        // fails on argument count first, so the validator never runs and the arity
-        // error must win over the subquery error.
+        // Gated on a valid HOF arity, not just the name: at a shorter arity Spark
+        // fails on argument count first, so that error must win.
         if is_higher_order_arity(&canonical_function_name, arguments.len()) {
             self.reject_disallowed_higher_order_arguments(&arguments)?;
         }

@@ -123,14 +123,11 @@ impl HigherOrderUDFImpl for SparkArrayAggregate {
         let (list, zero, merge, finish) = aggregate_args(self.name(), args.arg_fields)?;
         list_element_field(self.name(), list.data_type())?;
 
-        // An untyped `NULL` merge body carries the `Null` type. Spark coerces it
-        // to the accumulator type instead of rejecting it, so the fold runs and
-        // leaves the accumulator NULL once it reaches its first element.
+        // Spark coerces a `Null` merge body to the accumulator type rather than
+        // rejecting it, so the fold still runs.
         if merge.data_type() != &DataType::Null
             && !equals_structurally_ignore_nullability(zero.data_type(), merge.data_type())
         {
-            // Mirror Spark's `UNEXPECTED_INPUT_TYPE` wording (the merge lambda is
-            // the third parameter) so error-parity tests match on the same text.
             return plan_err!(
                 "cannot resolve `{}`: The third parameter requires the \"{}\" type, \
                  however the merge lambda has the type \"{}\"",
