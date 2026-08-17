@@ -471,6 +471,28 @@ Feature: Scalar subqueries in distributed execution
       """
     Then query plan matches snapshot
 
+  Scenario: Empty scalar subquery makes a non-null projection nullable
+    When query
+      """
+      SELECT o.id AS v,
+        o.id + (SELECT i.id FROM range(0) AS i) AS shifted
+      FROM range(1, 3) AS o
+      ORDER BY v
+      """
+    Then query result collected ordered
+      | v | shifted |
+      | 1 | NULL    |
+      | 2 | NULL    |
+    When query
+      """
+      EXPLAIN CODEGEN
+      SELECT o.id AS v,
+        o.id + (SELECT i.id FROM range(0) AS i) AS shifted
+      FROM range(1, 3) AS o
+      ORDER BY v
+      """
+    Then query plan matches snapshot
+
   Scenario: Null scalar subquery result
     When query
       """

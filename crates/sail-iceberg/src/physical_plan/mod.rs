@@ -23,6 +23,7 @@ pub mod partition_transform_expr;
 pub mod plan_builder;
 mod position_delete_writer;
 pub mod scan_by_data_files_exec;
+pub(crate) mod write_context;
 mod write_location;
 mod writer_exec;
 mod writer_options;
@@ -36,5 +37,8 @@ pub use merge_metadata_exec::IcebergMergeMetadataExec;
 pub use partition_transform_expr::IcebergPartitionTransformExpr;
 pub use plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
 pub use scan_by_data_files_exec::IcebergScanByDataFilesExec;
+pub use write_context::{
+    IcebergBaseWriteContext, IcebergWriteContext, prepare_iceberg_write_context,
+};
 pub use writer_exec::IcebergWriterExec;
 pub use writer_options::IcebergWriterExecOptions;

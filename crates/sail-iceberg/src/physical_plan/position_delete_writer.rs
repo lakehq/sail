@@ -13,9 +13,10 @@ use url::Url;
 use crate::io::StoreContext;
 use crate::operations::write::arrow_parquet::ArrowParquetWriter;
 use crate::physical_plan::delete_writer_common;
+use crate::physical_plan::write_context::IcebergBaseWriteContext;
 use crate::row_level_metadata::{MERGE_PARTITION_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN};
 use crate::spec::types::values::Literal;
-use crate::spec::{DataContentType, DataFile, TableMetadata};
+use crate::spec::{DataContentType, DataFile};
 
 #[derive(Debug, Clone, PartialEq)]
 struct PositionDeleteTarget {
@@ -46,9 +47,13 @@ enum PositionDeleteGranularity {
 }
 
 impl PositionDeleteGranularity {
-    fn from_table_metadata(table_meta: &TableMetadata) -> Result<Self> {
+    fn from_base_context(base_table_context: &IcebergBaseWriteContext) -> Result<Self> {
         const PROPERTY: &str = "write.delete.granularity";
-        match table_meta.properties.get(PROPERTY).map(String::as_str) {
+        match base_table_context
+            .properties
+            .get(PROPERTY)
+            .map(String::as_str)
+        {
             None => Ok(Self::Partition),
             Some(value) if value.eq_ignore_ascii_case("file") => Ok(Self::File),
             Some(value) if value.eq_ignore_ascii_case("partition") => Ok(Self::Partition),
@@ -68,16 +73,16 @@ pub(crate) struct PositionDeleteAccumulator {
 }
 
 impl PositionDeleteAccumulator {
-    pub(crate) fn try_new(table_meta: &TableMetadata) -> Result<Self> {
+    pub(crate) fn try_new(base_table_context: &IcebergBaseWriteContext) -> Result<Self> {
         Ok(Self {
-            granularity: PositionDeleteGranularity::from_table_metadata(table_meta)?,
+            granularity: PositionDeleteGranularity::from_base_context(base_table_context)?,
             rows_by_group: BTreeMap::new(),
         })
     }
 
     pub(crate) fn add_batch(
         &mut self,
-        table_meta: &TableMetadata,
+        base_table_context: &IcebergBaseWriteContext,
         batch: &ArrowRecordBatch,
         file_column_name: &str,
         row_index_column_name: &str,
@@ -163,7 +168,7 @@ impl PositionDeleteAccumulator {
                 }
                 Entry::Vacant(entry) => entry.insert(PositionDeleteRows {
                     target: position_delete_target(
-                        table_meta,
+                        base_table_context,
                         file_path,
                         partition_spec_id,
                         partition_json,
@@ -213,12 +218,12 @@ impl PositionDeleteAccumulator {
 }
 
 fn position_delete_target(
-    table_meta: &TableMetadata,
+    base_table_context: &IcebergBaseWriteContext,
     file_path: &str,
     partition_spec_id: i32,
     partition_json: &str,
 ) -> Result<PositionDeleteTarget> {
-    if !table_meta
+    if !base_table_context
         .partition_specs
         .iter()
         .any(|spec| spec.spec_id() == partition_spec_id)
