@@ -419,7 +419,6 @@ pub struct ExecutionConfig {
     pub batch_size: usize,
     pub default_parallelism: usize,
     pub collect_statistics: bool,
-    pub prewarm_file_statistics_on_source_creation: bool,
     pub use_row_number_estimates_to_optimize_partitioning: bool,
     pub file_listing_cache: FileListingCacheConfig,
     pub checkpoint: CheckpointConfig,

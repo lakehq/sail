@@ -29,6 +29,10 @@ impl FormatFactory for ParquetFormatFactory {
         "parquet"
     }
 
+    fn supports_file_statistics() -> bool {
+        true
+    }
+
     fn read(ctx: &dyn Session, options: Vec<OptionLayer>) -> Result<Self::Read> {
         let options = ParquetReadOptions::resolve(ctx, options).map_err(DataFusionError::from)?;
         Ok(ParquetReadFormat { options })

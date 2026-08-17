@@ -333,20 +333,10 @@
   type: boolean
   default: "true"
   description: |
-    Should statistics be collected when first creating a table.
-    This can slow down the initial DataFrame creation while greatly accelerating queries with certain filters.
-    Has no effect after the table is created.
-  experimental: true
-
-- key: execution.prewarm_file_statistics_on_source_creation
-  type: boolean
-  default: "false"
-  description: |
-    Whether to eagerly populate the file statistics cache when resolving a listing data source.
-    This applies to direct reads such as `spark.read.parquet()` as well as catalog table reads.
-    It can make data source resolution more expensive but avoids collecting file statistics
-    during the first query. This setting requires `execution.collect_statistics` and an enabled
-    file statistics cache.
+    Whether to collect file statistics for query planning.
+    For Parquet data sources, enabling this setting eagerly populates the file statistics cache
+    during source creation, including direct reads and catalog table reads. This can make initial
+    DataFrame creation more expensive but avoids collecting file statistics during the first query.
   experimental: true
 
 - key: execution.use_row_number_estimates_to_optimize_partitioning

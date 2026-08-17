@@ -17,40 +17,21 @@ use sail_data_source::formats::text::TextTableFormat;
 use sail_delta_lake::DeltaTableFormat;
 use sail_iceberg::IcebergTableFormat;
 
-pub fn create_table_format_registry(
-    prewarm_file_statistics_on_source_creation: bool,
-) -> Result<Arc<TableFormatRegistry>> {
+pub fn create_table_format_registry() -> Result<Arc<TableFormatRegistry>> {
     let registry = Arc::new(TableFormatRegistry::new());
-    register_builtin_formats(&registry, prewarm_file_statistics_on_source_creation)?;
+    register_builtin_formats(&registry)?;
     register_external_formats(&registry)?;
     Ok(registry)
 }
 
-fn register_builtin_formats(
-    registry: &Arc<TableFormatRegistry>,
-    prewarm_file_statistics_on_source_creation: bool,
-) -> Result<()> {
-    registry.register(Arc::new(ArrowTableFormat::new(
-        prewarm_file_statistics_on_source_creation,
-    )))?;
-    registry.register(Arc::new(AvroTableFormat::new(
-        prewarm_file_statistics_on_source_creation,
-    )))?;
-    registry.register(Arc::new(BinaryTableFormat::new(
-        prewarm_file_statistics_on_source_creation,
-    )))?;
-    registry.register(Arc::new(CsvTableFormat::new(
-        prewarm_file_statistics_on_source_creation,
-    )))?;
-    registry.register(Arc::new(JsonTableFormat::new(
-        prewarm_file_statistics_on_source_creation,
-    )))?;
-    registry.register(Arc::new(ParquetTableFormat::new(
-        prewarm_file_statistics_on_source_creation,
-    )))?;
-    registry.register(Arc::new(TextTableFormat::new(
-        prewarm_file_statistics_on_source_creation,
-    )))?;
+fn register_builtin_formats(registry: &Arc<TableFormatRegistry>) -> Result<()> {
+    registry.register(Arc::new(ArrowTableFormat::default()))?;
+    registry.register(Arc::new(AvroTableFormat::default()))?;
+    registry.register(Arc::new(BinaryTableFormat::default()))?;
+    registry.register(Arc::new(CsvTableFormat::default()))?;
+    registry.register(Arc::new(JsonTableFormat::default()))?;
+    registry.register(Arc::new(ParquetTableFormat::default()))?;
+    registry.register(Arc::new(TextTableFormat::default()))?;
     registry.register(Arc::new(SocketTableFormat))?;
     registry.register(Arc::new(RateTableFormat))?;
     registry.register(Arc::new(ConsoleTableFormat))?;

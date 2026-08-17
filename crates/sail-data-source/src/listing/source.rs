@@ -44,6 +44,11 @@ pub trait FormatFactory: Debug + Send + Sync + 'static {
     /// The name of the format.
     fn name() -> &'static str;
 
+    /// Whether the format provides reusable file-level statistics.
+    fn supports_file_statistics() -> bool {
+        false
+    }
+
     /// Creates the read format.
     fn read(ctx: &dyn Session, options: Vec<OptionLayer>) -> Result<Self::Read>;
 
@@ -149,20 +154,12 @@ pub trait WriteFormat: Debug + Send + Sync + 'static {
     ) -> Result<Arc<dyn ExecutionPlan>>;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ListingTableFormat<T: FormatFactory> {
-    prewarm_file_statistics_on_source_creation: bool,
     phantom: PhantomData<T>,
 }
 
 impl<T: FormatFactory> ListingTableFormat<T> {
-    pub fn new(prewarm_file_statistics_on_source_creation: bool) -> Self {
-        Self {
-            prewarm_file_statistics_on_source_creation,
-            phantom: PhantomData,
-        }
-    }
-
     async fn create_listing_source(
         &self,
         ctx: &dyn Session,
@@ -293,12 +290,6 @@ impl<T: FormatFactory> ListingTableFormat<T> {
     }
 }
 
-impl<T: FormatFactory> Default for ListingTableFormat<T> {
-    fn default() -> Self {
-        Self::new(false)
-    }
-}
-
 #[async_trait]
 impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
     fn name(&self) -> &str {
@@ -311,7 +302,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         info: SourceInfo,
     ) -> Result<Arc<dyn TableSource>> {
         let source = self.create_listing_source(ctx, info).await?;
-        if self.prewarm_file_statistics_on_source_creation
+        if T::supports_file_statistics()
             && ctx.config().collect_statistics()
             && ctx
                 .runtime_env()
@@ -331,7 +322,8 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         runtime_env: Arc<RuntimeEnv>,
         info: SourceInfo,
     ) -> Result<()> {
-        if !session_config.collect_statistics()
+        if !T::supports_file_statistics()
+            || !session_config.collect_statistics()
             || runtime_env.cache_manager.get_file_statistic_cache_limit() == 0
         {
             return Ok(());
@@ -484,6 +476,10 @@ mod tests {
             "test"
         }
 
+        fn supports_file_statistics() -> bool {
+            true
+        }
+
         fn read(_ctx: &dyn Session, _options: Vec<OptionLayer>) -> Result<Self::Read> {
             Ok(TestReadFormat)
         }
@@ -509,7 +505,11 @@ mod tests {
             _files: &[ListingFileSample<'_>],
             _compression: CompressionTypeVariant,
         ) -> Result<SchemaRef> {
-            unreachable!()
+            Ok(Arc::new(Schema::new(vec![Field::new(
+                "value",
+                DataType::Int64,
+                false,
+            )])))
         }
 
         async fn infer_file_meta(
@@ -548,7 +548,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_source_prewarms_file_statistics_when_enabled() {
+    async fn schema_inferred_source_respects_collect_statistics() {
         FILE_META_INFERENCE_COUNT.store(0, Ordering::Relaxed);
         let object_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         object_store
@@ -558,17 +558,10 @@ mod tests {
             )
             .await
             .unwrap();
-        let context = SessionContext::new();
-        context.register_object_store(&Url::parse("memory://").unwrap(), object_store);
-        let state = context.state();
         let info = SourceInfo {
             paths: vec!["memory:///table/".to_string()],
             lakehouse_table: None,
-            schema: Some(Schema::new(vec![Field::new(
-                "value",
-                DataType::Int64,
-                false,
-            )])),
+            schema: None,
             constraints: Constraints::default(),
             partition_by: vec![],
             bucket_by: None,
@@ -577,21 +570,24 @@ mod tests {
             read_case_sensitive: true,
         };
 
-        let disabled_format = ListingTableFormat::<TestFormatFactory>::new(false);
-        disabled_format
-            .create_source(&state, info.clone())
+        let disabled_context =
+            SessionContext::new_with_config(SessionConfig::new().with_collect_statistics(false));
+        disabled_context
+            .register_object_store(&Url::parse("memory://").unwrap(), Arc::clone(&object_store));
+        let format = ListingTableFormat::<TestFormatFactory>::default();
+        format
+            .create_source(&disabled_context.state(), info.clone())
             .await
             .unwrap();
         assert_eq!(FILE_META_INFERENCE_COUNT.load(Ordering::Relaxed), 0);
 
-        let enabled_format = ListingTableFormat::<TestFormatFactory>::new(true);
-        enabled_format
-            .create_source(&state, info.clone())
-            .await
-            .unwrap();
+        let enabled_context = SessionContext::new();
+        enabled_context.register_object_store(&Url::parse("memory://").unwrap(), object_store);
+        let state = enabled_context.state();
+        format.create_source(&state, info.clone()).await.unwrap();
         assert_eq!(FILE_META_INFERENCE_COUNT.load(Ordering::Relaxed), 1);
 
-        enabled_format.create_source(&state, info).await.unwrap();
+        format.create_source(&state, info).await.unwrap();
         assert_eq!(FILE_META_INFERENCE_COUNT.load(Ordering::Relaxed), 1);
     }
 }
