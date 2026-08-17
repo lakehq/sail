@@ -9,14 +9,14 @@ import subprocess
 import time
 
 _DATABASE_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-_ITEM_COLUMNS = [("id", "int64", True), ("value", "utf8", True)]
+_ITEM_COLUMNS = [("id", "int64", True, None), ("value", "utf8", True, None)]
 _HMS_CONTAINER_TMP = "/tmp"  # noqa: S108
 
 
 def _hms_catalog(uri: str, service_principal: str):
     from pysail import _native  # noqa: PLC0415
 
-    return _native._hms.HmsCatalog(  # noqa: SLF001
+    return _native._catalog._hms.HmsCatalogProvider(  # noqa: SLF001
         "kerberos-hms-test",
         [uri],
         auth="kerberos",

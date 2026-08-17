@@ -16,6 +16,7 @@ sail-cli = { path = "../sail-cli" }
 sail-celeborn = { path = "../sail-celeborn" }
 sail-catalog = { path = "../sail-catalog" }
 sail-catalog-hms = { path = "../sail-catalog-hms" }
+sail-catalog-iceberg = { path = "../sail-catalog-iceberg" }
 
 arrow-schema = { workspace = true }
 pyo3 = { workspace = true }
