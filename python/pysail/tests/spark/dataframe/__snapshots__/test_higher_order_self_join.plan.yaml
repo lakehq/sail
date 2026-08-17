@@ -1,0 +1,13 @@
+# serializer version: 1
+---
+name: "test_higher_order_lambda_survives_nested_loop_join_filter"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#10@0 as id, #11@1 as k]
+      ProjectionExec: expr=[#4@1 as #10, #9@0 as #11]
+        NestedLoopJoinExec: join_type=Inner, filter=exists(#5@1, (x) -> x@3 IS NOT NULL) = #4@0 > #9@2
+          ProjectionExec: expr=[k@0 as #9]
+            DataSourceExec: partitions=1, partition_sizes=[1]
+          ProjectionExec: expr=[id@0 as #4, arr@1 as #5]
+            DataSourceExec: partitions=1, partition_sizes=[1]
