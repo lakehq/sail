@@ -9,7 +9,7 @@ Sail is a **drop-in Apache Spark replacement** written in Rust, unifying batch p
 
 - **Compatible** with the Spark Connect protocol, supporting the Spark SQL and DataFrame API with no code rewrites required.
 - **100% Rust-native** with no JVM overhead, delivering memory safety, instant startup, and predictable performance.
-- **~4× faster** (up to 8× in specific workloads) than Spark and **94% cheaper** on infrastructure costs. See **[derived TPC-H benchmarks](#benchmark-results)**.
+- **~10× faster** than Spark and **98% cheaper** on infrastructure costs. See **[derived TPC-H benchmarks](#benchmark-results)**.
 - **Proven on [ClickBench](https://go.lakesail.com/clickbench)**, outperforming Spark, popular Spark accelerators, Databricks, and Snowflake.
 
 ## Documentation
@@ -142,19 +142,19 @@ Ready to bring your existing workloads over? Our [Migration Guide](https://docs.
 
 Derived TPC-H results show that Sail outperforms Apache Spark in every query:
 
-- **Execution Time**: ~4× faster across diverse SQL workloads.
-- **Hardware Cost**: 94% lower with significantly lower peak memory usage and zero shuffle spill.
+- **Execution Time**: ~10× faster across diverse SQL workloads.
+- **Hardware Cost**: 98% lower with significantly lower peak memory usage and zero shuffle spill.
 
-| Metric                     | Spark    | Sail            |
-| -------------------------- | -------- | --------------- |
-| Total Query Time           | 387.36 s | **102.75 s**    |
-| Query Speed-Up             | Baseline | **43% – 727%**  |
-| Peak Memory Usage          | 54 GB    | **22 GB (1 s)** |
-| Disk Write (Shuffle Spill) | > 110 GB | **0 GB**        |
+| Metric                     | Spark    | Sail             |
+| -------------------------- | -------- | ---------------- |
+| Total Query Time           | 534.78 s | **52.81 s**      |
+| Query Speed-Up             | Baseline | **176% – 2819%** |
+| Peak Memory Usage          | 72 GB    | **26 GB**        |
+| Disk Write (Shuffle Spill) | 115 GB   | **0 GB**         |
 
 These results come from a derived TPC-H benchmark (22 queries, scale factor 100, Parquet format) on AWS `r8g.4xlarge` instances.
 
-![Query Time Comparison](https://github.com/lakehq/sail/raw/46d0520532f22e99de6d9ade6373a117216484ca/.github/images/query-time.svg)
+![Query Time Comparison](https://github.com/lakehq/sail/raw/3eb128d98b4c9f2a189b0afecea6af29bc97127a/.github/images/query-time.svg)
 
 See the full analysis and graphs on our [Benchmark Results](https://docs.lakesail.com/sail/latest/introduction/benchmark-results/) page.
 

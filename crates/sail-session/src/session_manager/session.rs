@@ -13,7 +13,7 @@ use sail_common_datafusion::system::observable::{JobRunnerObserver, StateObserva
 use sail_execution::DriverId;
 use tokio::sync::oneshot;
 
-use crate::session_manager::event::SessionHistory;
+use crate::session_manager::SessionHistory;
 
 pub struct ServerSession {
     pub user_id: String,

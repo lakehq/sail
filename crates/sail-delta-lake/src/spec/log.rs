@@ -98,6 +98,12 @@ pub fn uuid_checkpoint_path(version: i64, uuid: &Uuid) -> Path {
     ))
 }
 
+pub fn uuid_json_checkpoint_path(version: i64, uuid: &Uuid) -> Path {
+    Path::from(format!(
+        "{DELTA_LOG_DIR}/{version:020}.checkpoint.{uuid}.json"
+    ))
+}
+
 pub fn delta_log_file_path(table_root_path: &str, filename: &str) -> Path {
     Path::from(format!(
         "{}{}{}{}{}",

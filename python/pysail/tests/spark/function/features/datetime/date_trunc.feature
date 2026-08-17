@@ -1,34 +1,38 @@
-Feature: DATE_TRUNC preserves timestamp type
+Feature: DATE_TRUNC output type
 
-  Rule: date_trunc on timestamp preserves type
+  Rule: date_trunc always returns TIMESTAMP
 
-    Scenario Outline: Preserves type: <case>
+    Scenario: date_trunc on a timestamp column returns timestamp
       When query
         """
-        WITH t(ts) AS (VALUES (<type> '<value>'))
+        WITH t(ts) AS (VALUES (TIMESTAMP '2026-02-02 00:00:00 UTC'))
         SELECT date_trunc('YEAR', ts) AS result FROM t
         """
       Then query schema
         """
         root
-         |-- result: <schema> (nullable = true)
+         |-- result: timestamp (nullable = true)
         """
 
-      Examples:
-        | case                                                            | type          | value                   | schema        |
-        | date_trunc on timestamp column preserves timestamp type         | TIMESTAMP     | 2026-02-02 00:00:00 UTC | timestamp     |
-        | date_trunc on timestamp_ntz column preserves timestamp_ntz type | TIMESTAMP_NTZ | 2026-02-02 00:00:00     | timestamp_ntz |
-
-    Scenario: date_trunc on timestamp_ntz literal preserves timestamp_ntz type
+    # `date_trunc` is declared to return TIMESTAMP regardless of the input type, so a
+    # TIMESTAMP_NTZ argument is converted rather than preserved. Sail returns timestamp_ntz.
+    @sail-bug
+    @function(nullability)
+    Scenario Outline: date_trunc on timestamp_ntz returns timestamp: <case>
       When query
         """
-        SELECT date_trunc('YEAR', TIMESTAMP_NTZ '2026-02-02 00:00:00') AS result
+        <query>
         """
       Then query schema
         """
         root
-         |-- result: timestamp_ntz (nullable = true)
+         |-- result: timestamp (nullable = true)
         """
+
+      Examples:
+        | case    | query                                                                                                  |
+        | column  | WITH t(ts) AS (VALUES (TIMESTAMP_NTZ '2026-02-02 00:00:00')) SELECT date_trunc('YEAR', ts) AS result FROM t |
+        | literal | SELECT date_trunc('YEAR', TIMESTAMP_NTZ '2026-02-02 00:00:00') AS result                                |
 
     Scenario: date_trunc YEAR on timestamp values
       When query

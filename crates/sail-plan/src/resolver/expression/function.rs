@@ -453,6 +453,8 @@ impl PlanResolver<'_> {
         mut arguments: Vec<spec::Expr>,
     ) -> Vec<spec::Expr> {
         const DATE_PART_FUNCTIONS: &[&str] = &[
+            "date_add",
+            "dateadd",
             "datediff",
             "date_diff",
             "timestampadd",
