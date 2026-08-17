@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 use datafusion::execution::object_store::ObjectStoreRegistry;
-use datafusion_common::{plan_datafusion_err, Result};
+use datafusion_common::{Result, plan_datafusion_err};
 #[cfg(feature = "hdfs")]
 use hdfs_native_object_store::HdfsObjectStoreBuilder;
 use log::debug;
@@ -135,6 +135,22 @@ fn get_dynamic_object_store(url: &Url) -> object_store::Result<Arc<dyn ObjectSto
             }
             Arc::new(HuggingFaceObjectStore::try_new()?)
         }
+        "oss" => {
+            let url = url.clone();
+            let store = LazyObjectStore::new(move || {
+                let url = url.clone();
+                async move { get_s3_object_store(&url).await }
+            });
+            Arc::new(store)
+        }
+        _ if is_aliyun_oss_url(url) => {
+            let url = url.clone();
+            let store = LazyObjectStore::new(move || {
+                let url = url.clone();
+                async move { get_s3_object_store(&url).await }
+            });
+            Arc::new(store)
+        }
         _ => {
             let (scheme, _path) = ObjectStoreScheme::parse(url)?;
             let store: Arc<dyn ObjectStore> = match scheme {
@@ -178,13 +194,28 @@ fn get_dynamic_object_store(url: &Url) -> object_store::Result<Arc<dyn ObjectSto
                         source: Box::new(plan_datafusion_err!(
                             "unsupported object store URL: {url} for {other:?}"
                         )),
-                    })
+                    });
                 }
             };
             store
         }
     };
     Ok(Arc::new(LoggingObjectStore::new(store)))
+}
+
+fn is_aliyun_oss_url(url: &Url) -> bool {
+    if !matches!(url.scheme(), "http" | "https") {
+        return false;
+    }
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let labels = host.split('.').collect::<Vec<_>>();
+    matches!(
+        labels.as_slice(),
+        [_, "s3", region, "aliyuncs", "com"] | ["s3", region, "aliyuncs", "com"]
+            if region.starts_with("oss-")
+    )
 }
 
 // The following implementations are basic for now just to get preliminary functionality.
@@ -218,13 +249,13 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::execution::object_store::ObjectStoreRegistry;
-    use object_store::memory::InMemory;
     use object_store::ObjectStore;
+    use object_store::memory::InMemory;
     use sail_common::runtime::RuntimeHandle;
     use tokio::runtime::Handle;
     use url::Url;
 
-    use super::{DynamicObjectStoreRegistry, ObjectStoreKey};
+    use super::{DynamicObjectStoreRegistry, ObjectStoreKey, is_aliyun_oss_url};
 
     #[test]
     fn object_store_key_separates_session_fingerprints() {
@@ -265,5 +296,18 @@ mod tests {
             .unwrap();
         let default_store = registry.get_store(&url).unwrap();
         assert!(Arc::ptr_eq(&fallback, &default_store));
+    }
+
+    #[test]
+    fn aliyun_oss_url_detection_matches_s3_compatible_endpoints() {
+        assert!(is_aliyun_oss_url(
+            &Url::parse("https://bucket.s3.oss-cn-hangzhou.aliyuncs.com/path").unwrap()
+        ));
+        assert!(is_aliyun_oss_url(
+            &Url::parse("https://s3.oss-cn-hangzhou.aliyuncs.com/bucket/path").unwrap()
+        ));
+        assert!(!is_aliyun_oss_url(
+            &Url::parse("https://bucket.oss-cn-hangzhou.aliyuncs.com/path").unwrap()
+        ));
     }
 }

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use arrow::datatypes::DataType;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{cast, expr, lit, when, ExprSchemable, Operator, ScalarUDF};
+use datafusion_expr::{ExprSchemable, Operator, ScalarUDF, cast, expr, lit, when};
 use datafusion_spark::function::bitmap::expr_fn as bitmap_fn;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::utils::quote_namespace_if_needed;
@@ -33,7 +33,7 @@ fn assert_true(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         let col = arguments.one()?;
         (
             // Need to do this order to avoid the "value used after being moved" error.
-            lit(ScalarValue::Utf8(Some(format!("'{}' is not true!", &col)))),
+            lit(ScalarValue::Utf8(Some(format!("'{}' is not true!", col)))),
             col,
         )
     } else if arguments.len() == 2 {
@@ -144,7 +144,7 @@ fn theta_union(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         count => {
             return Err(PlanError::invalid(format!(
                 "theta_union requires 2 or 3 arguments, got {count}"
-            )))
+            )));
         }
     };
     Ok(ScalarUDF::from(ThetaUnionFunction::new()).call(arguments))
@@ -168,7 +168,7 @@ fn hll_union(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         count => {
             return Err(PlanError::invalid(format!(
                 "hll_union requires 2 or 3 arguments, got {count}"
-            )))
+            )));
         }
     };
     Ok(ScalarUDF::from(HllUnionFunction::new()).call(arguments))
@@ -186,6 +186,7 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
         ("bitmap_count", F::unary(bitmap_fn::bitmap_count)),
         ("current_catalog", F::custom(current_catalog)),
         ("current_database", F::custom(current_database)),
+        ("current_path", F::unknown("current_path")),
         ("current_schema", F::custom(current_database)),
         ("current_user", F::custom(current_user)),
         ("from_avro", F::unknown("from_avro")),
@@ -206,6 +207,72 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
             F::udf(ThetaSketchEstimateFunction::new()),
         ),
         ("theta_union", F::custom(theta_union)),
+        (
+            "tuple_difference_double",
+            F::unknown("tuple_difference_double"),
+        ),
+        (
+            "tuple_difference_integer",
+            F::unknown("tuple_difference_integer"),
+        ),
+        (
+            "tuple_difference_theta_double",
+            F::unknown("tuple_difference_theta_double"),
+        ),
+        (
+            "tuple_difference_theta_integer",
+            F::unknown("tuple_difference_theta_integer"),
+        ),
+        (
+            "tuple_intersection_double",
+            F::unknown("tuple_intersection_double"),
+        ),
+        (
+            "tuple_intersection_integer",
+            F::unknown("tuple_intersection_integer"),
+        ),
+        (
+            "tuple_intersection_theta_double",
+            F::unknown("tuple_intersection_theta_double"),
+        ),
+        (
+            "tuple_intersection_theta_integer",
+            F::unknown("tuple_intersection_theta_integer"),
+        ),
+        (
+            "tuple_sketch_estimate_double",
+            F::unknown("tuple_sketch_estimate_double"),
+        ),
+        (
+            "tuple_sketch_estimate_integer",
+            F::unknown("tuple_sketch_estimate_integer"),
+        ),
+        (
+            "tuple_sketch_summary_double",
+            F::unknown("tuple_sketch_summary_double"),
+        ),
+        (
+            "tuple_sketch_summary_integer",
+            F::unknown("tuple_sketch_summary_integer"),
+        ),
+        (
+            "tuple_sketch_theta_double",
+            F::unknown("tuple_sketch_theta_double"),
+        ),
+        (
+            "tuple_sketch_theta_integer",
+            F::unknown("tuple_sketch_theta_integer"),
+        ),
+        ("tuple_union_double", F::unknown("tuple_union_double")),
+        ("tuple_union_integer", F::unknown("tuple_union_integer")),
+        (
+            "tuple_union_theta_double",
+            F::unknown("tuple_union_theta_double"),
+        ),
+        (
+            "tuple_union_theta_integer",
+            F::unknown("tuple_union_theta_integer"),
+        ),
         (
             "input_file_block_length",
             F::unknown("input_file_block_length"),

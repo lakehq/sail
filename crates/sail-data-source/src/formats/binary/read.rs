@@ -2,13 +2,13 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
-use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::Result;
+use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 
 use crate::formats::binary::source::BinarySource;
 use crate::listing::source::{ListingFileSample, ListingScanInput, ReadFormat};
-use crate::options::gen::BinaryReadOptions;
+use crate::options::r#gen::BinaryReadOptions;
 
 #[derive(Debug, Clone)]
 pub struct BinaryReadFormat {
@@ -43,12 +43,7 @@ impl ReadFormat for BinaryReadFormat {
     }
 
     async fn scan(&self, _ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {
-        let options = self.options.clone().into_table_options();
-
-        let file_source = Arc::new(BinarySource::new(
-            input.schema,
-            options.path_glob_filter.clone(),
-        ));
+        let file_source = Arc::new(BinarySource::new(input.schema));
 
         let config = FileScanConfigBuilder::new(input.object_store_url, file_source)
             .with_file_groups(input.file_groups)
@@ -62,5 +57,9 @@ impl ReadFormat for BinaryReadFormat {
             .build();
 
         Ok(config)
+    }
+
+    fn path_glob_filter(&self) -> Option<&str> {
+        self.options.path_glob_filter.as_deref()
     }
 }

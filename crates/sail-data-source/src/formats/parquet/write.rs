@@ -10,7 +10,7 @@ use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_format::FileFormat;
 
 use crate::listing::source::{ListingSinkInput, WriteFormat};
-use crate::options::gen::ParquetWriteOptions;
+use crate::options::r#gen::ParquetWriteOptions;
 use crate::utils::split_parquet_compression_string;
 
 #[derive(Debug, Clone)]

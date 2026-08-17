@@ -3,12 +3,12 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{DFSchema, DFSchemaRef};
-use datafusion_expr::{cast, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Projection};
+use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Projection, cast};
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_values(
@@ -51,14 +51,14 @@ impl PlanResolver<'_> {
         let mut nan_positions = HashSet::new();
         for value in values.iter() {
             value.iter().enumerate().for_each(|(idx, expr)| {
-                if let Expr::Cast(cast) = expr {
-                    if let Expr::Literal(sv, _) = cast.expr.as_ref() {
-                        if let Some(true) = sv.try_as_str().flatten().map(|s| {
-                            s.to_uppercase() == "NAN" && cast.field.data_type().is_numeric()
-                        }) {
-                            nan_positions.insert(idx);
-                        }
-                    }
+                if let Expr::Cast(cast) = expr
+                    && let Expr::Literal(sv, _) = cast.expr.as_ref()
+                    && let Some(true) = sv
+                        .try_as_str()
+                        .flatten()
+                        .map(|s| s.to_uppercase() == "NAN" && cast.field.data_type().is_numeric())
+                {
+                    nan_positions.insert(idx);
                 }
             });
         }

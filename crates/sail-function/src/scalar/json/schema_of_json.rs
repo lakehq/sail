@@ -5,10 +5,10 @@ use std::sync::Arc;
 use chrono::{NaiveDate, NaiveTime};
 use chrono_tz::Tz;
 use datafusion::arrow::array::{
-    downcast_array, Array, ArrayRef, MapArray, StringArray, StructArray,
+    Array, ArrayRef, MapArray, StringArray, StructArray, downcast_array,
 };
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields};
-use datafusion_common::{exec_err, plan_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, exec_err, plan_err};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -16,6 +16,8 @@ use datafusion_expr::{
 use datafusion_expr_common::signature::Volatility;
 use datafusion_functions::downcast_arg;
 use datafusion_functions::utils::make_scalar_function;
+
+use crate::schema_inference::{InferredType, TypeMerger};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkSchemaOfJson {
@@ -67,24 +69,25 @@ impl SparkSchemaOfJson {
     fn validate_arg_types(arg_types: &[DataType]) -> Result<()> {
         match arg_types {
             [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8] => Ok(()),
-            [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Map(map_field, _)] => {
-                match map_field.data_type() {
-                    DataType::Struct(fields) => {
-                        let key = fields[0].clone();
-                        let value = fields[1].clone();
-                        if !key.data_type().is_string() || !value.data_type().is_string() {
-                            return Err(DataFusionError::Plan(format!(
-                                "For function `{}`, the options map keys/values should both be type string. Instead got key: {}, value: {}",
-                                Self::SCHEMA_OF_JSON_NAME,
-                                key.data_type(),
-                                value.data_type(),
-                            )));
-                        }
-                        Ok(())
+            [
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                DataType::Map(map_field, _),
+            ] => match map_field.data_type() {
+                DataType::Struct(fields) => {
+                    let key = fields[0].clone();
+                    let value = fields[1].clone();
+                    if !key.data_type().is_string() || !value.data_type().is_string() {
+                        return Err(DataFusionError::Plan(format!(
+                            "For function `{}`, the options map keys/values should both be type string. Instead got key: {}, value: {}",
+                            Self::SCHEMA_OF_JSON_NAME,
+                            key.data_type(),
+                            value.data_type(),
+                        )));
                     }
-                    _ => unreachable!(),
+                    Ok(())
                 }
-            }
+                _ => unreachable!(),
+            },
             _ => plan_err!(
                 "For function `{:?}` found invalid arg types: {:?}",
                 Self::SCHEMA_OF_JSON_NAME,
@@ -199,26 +202,6 @@ fn infer_json_schema_type(json_string: &str, options: &SparkSchemaOfJsonOptions)
 
 /// The maximum precision of Spark's `DecimalType`.
 const MAX_DECIMAL_PRECISION: usize = 38;
-
-/// A JSON type inferred from a literal JSON string, mirroring the types that
-/// Spark's `JsonInferSchema` can produce for `schema_of_json`.
-#[derive(Debug, Clone, PartialEq)]
-enum InferredType {
-    Null,
-    Boolean,
-    Long,
-    /// A number inferred as a decimal with the given precision and scale.
-    Decimal(u8, u8),
-    Double,
-    String,
-    /// A string inferred as a timestamp when the `inferTimestamp` option is
-    /// enabled and the value matches a recognized timestamp/date pattern.
-    Timestamp,
-    Array(Box<InferredType>),
-    /// Fields are sorted by name and duplicate names are preserved, matching
-    /// Spark's `JsonInferSchema`.
-    Struct(Vec<(String, InferredType)>),
-}
 
 /// A parser that infers the Spark type of a literal JSON string, mirroring
 /// the Jackson lexing behavior that Spark relies on for `schema_of_json`,
@@ -357,7 +340,7 @@ impl<'a> JsonSchemaParser<'a> {
                     self.parse_unquoted_name()
                 }
                 Some(c) => {
-                    return exec_err!("unexpected character `{c}` when parsing a field name")
+                    return exec_err!("unexpected character `{c}` when parsing a field name");
                 }
                 None => return exec_err!("unexpected end of input when parsing a field name"),
             };
@@ -413,7 +396,7 @@ impl<'a> JsonSchemaParser<'a> {
                 Some(c) if c == quote => return Ok(value),
                 Some('\\') => value.push(self.parse_escape(quote)?),
                 Some(c) if (c as u32) < 0x20 => {
-                    return exec_err!("unescaped control character in a string")
+                    return exec_err!("unescaped control character in a string");
                 }
                 Some(c) => value.push(c),
             }
@@ -830,18 +813,22 @@ fn is_timestamp_string(s: &str) -> bool {
 /// Returns the most specific type that both types can be promoted to,
 /// mirroring Spark's `JsonInferSchema.compatibleType`.
 fn merge_types(left: InferredType, right: InferredType) -> InferredType {
-    use InferredType::*;
-    match (left, right) {
-        (Null, t) | (t, Null) => t,
-        (l, r) if l == r => l,
-        (Long, Double) | (Double, Long) => Double,
-        // A long is at most `DECIMAL(20, 0)` when promoted to a decimal.
-        (Long, Decimal(p, s)) | (Decimal(p, s), Long) => merge_decimals(p.max(20), s, 20, 0),
-        (Double, Decimal(_, _)) | (Decimal(_, _), Double) => Double,
-        (Decimal(p1, s1), Decimal(p2, s2)) => merge_decimals(p1, s1, p2, s2),
-        (Array(l), Array(r)) => Array(Box::new(merge_types(*l, *r))),
-        (Struct(l), Struct(r)) => Struct(merge_fields(l, r)),
-        _ => String,
+    left.merge_with(right, &JsonTypeMerger)
+}
+
+struct JsonTypeMerger;
+
+impl TypeMerger for JsonTypeMerger {
+    fn merge_atomic(&self, left: InferredType, right: InferredType) -> InferredType {
+        use InferredType::*;
+        match (left, right) {
+            (Long, Double) | (Double, Long) => Double,
+            // A long is at most `DECIMAL(20, 0)` when promoted to a decimal.
+            (Long, Decimal(p, s)) | (Decimal(p, s), Long) => merge_decimals(p.max(20), s, 20, 0),
+            (Double, Decimal(_, _)) | (Decimal(_, _), Double) => Double,
+            (Decimal(p1, s1), Decimal(p2, s2)) => merge_decimals(p1, s1, p2, s2),
+            _ => String,
+        }
     }
 }
 
@@ -858,27 +845,6 @@ fn merge_decimals(p1: u8, s1: u8, p2: u8, s2: u8) -> InferredType {
     }
 }
 
-/// Merges the fields of two structs by name, mirroring Spark's behavior of
-/// grouping fields by name and reducing each group with `compatibleType`.
-fn merge_fields(
-    left: Vec<(String, InferredType)>,
-    right: Vec<(String, InferredType)>,
-) -> Vec<(String, InferredType)> {
-    let mut fields = left;
-    fields.extend(right);
-    fields.sort_by(|(a, _), (b, _)| a.cmp(b));
-    let mut merged: Vec<(String, InferredType)> = Vec::new();
-    for (name, t) in fields {
-        match merged.last_mut() {
-            Some((last_name, last_type)) if *last_name == name => {
-                *last_type = merge_types(last_type.clone(), t);
-            }
-            _ => merged.push((name, t)),
-        }
-    }
-    merged
-}
-
 /// Writes the type as a Spark DDL string, returning `None` for types that
 /// Spark drops during canonicalization (empty structs, fields with empty
 /// names, and arrays of dropped types). `NULL` types become `STRING`.
@@ -887,10 +853,14 @@ fn canonicalize_ddl(t: &InferredType) -> Option<String> {
         InferredType::Null => Some("STRING".to_string()),
         InferredType::Boolean => Some("BOOLEAN".to_string()),
         InferredType::Long => Some("BIGINT".to_string()),
+        InferredType::Float => Some("FLOAT".to_string()),
         InferredType::Decimal(p, s) => Some(format!("DECIMAL({p},{s})")),
         InferredType::Double => Some("DOUBLE".to_string()),
         InferredType::String => Some("STRING".to_string()),
+        InferredType::Binary => Some("BINARY".to_string()),
+        InferredType::Date => Some("DATE".to_string()),
         InferredType::Timestamp => Some("TIMESTAMP".to_string()),
+        InferredType::TimestampNtz => Some("TIMESTAMP_NTZ".to_string()),
         InferredType::Array(element) => canonicalize_ddl(element).map(|e| format!("ARRAY<{e}>")),
         InferredType::Struct(fields) => {
             let fields = fields
@@ -906,6 +876,7 @@ fn canonicalize_ddl(t: &InferredType) -> Option<String> {
                 Some(format!("STRUCT<{}>", fields.join(", ")))
             }
         }
+        InferredType::Variant => Some("VARIANT".to_string()),
     }
 }
 
@@ -1061,16 +1032,15 @@ impl SparkSchemaOfJsonOptions {
                 } else {
                     return Err(DataFusionError::Plan(format!(
                         "Expected options to be type map<string, string> but found key type {:?} and value type {:?}",
-                        key_type,
-                        value_type
-                    )))
+                        key_type, value_type
+                    )));
                 }
-            },
+            }
             other => {
                 return Err(DataFusionError::Plan(format!(
                     "Should be unreachable: options should be a map with an inner struct but instead got {:?}",
                     other
-                )))
+                )));
             }
         };
         Ok((keys, values))
@@ -1096,7 +1066,7 @@ mod tests {
 
     #[test]
     fn timestamp_inference_matches_spark() {
-        // (input, expected) pairs verified against Spark 4.1.1 JVM
+        // (input, expected) pairs verified against Spark 4.x JVM
         // (`schema_of_json(..., map('inferTimestamp','true'))`).
         let cases: &[(&str, bool)] = &[
             ("2024", true),

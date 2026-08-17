@@ -23,8 +23,8 @@ use serde::de::{DeserializeOwned, IgnoredAny};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::{DataContentType, DataFileFormat};
-use crate::spec::types::{Datum, PrimitiveLiteral, RawLiteral, StructType, Type};
 use crate::spec::Schema;
+use crate::spec::types::{Datum, PrimitiveLiteral, RawLiteral, StructType, Type};
 
 #[derive(Serialize, Deserialize)]
 pub(super) struct IntLongMapEntry {

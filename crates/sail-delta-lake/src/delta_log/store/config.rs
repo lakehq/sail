@@ -18,9 +18,9 @@
 
 use std::sync::Arc;
 
+use object_store::ObjectStore;
 use object_store::path::Path;
 use object_store::prefix::PrefixStore;
-use object_store::ObjectStore;
 use url::Url;
 
 use crate::spec::DeltaResult;

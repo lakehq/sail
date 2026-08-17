@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -9,13 +8,13 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::datatypes::{
     DataType, Date32Type, Date64Type, Field, FieldRef, Float16Type, Float32Type, Float64Type,
-    Int16Type, Int32Type, Int64Type, Int8Type, Time32MillisecondType, Time32SecondType,
+    Int8Type, Int16Type, Int32Type, Int64Type, Time32MillisecondType, Time32SecondType,
     Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type,
-    UInt64Type, UInt8Type,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type,
+    UInt32Type, UInt64Type,
 };
 use datafusion::common::cast::{as_list_array, as_primitive_array, as_string_array};
-use datafusion::common::{exec_err, not_impl_err};
+use datafusion::common::{HashMap, exec_err, not_impl_err};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};

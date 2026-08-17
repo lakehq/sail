@@ -11,7 +11,7 @@ use sail_common_datafusion::display::{ArrayFormatter, FormatOptions};
 use sail_common_datafusion::utils::items::ItemTaker;
 
 macro_rules! define_to_string_udf {
-    ($udf:ident, $name:expr, $return_type:expr, $func:expr $(,)?) => {
+    ($udf:ident, $name:expr_2021, $return_type:expr_2021, $func:expr_2021 $(,)?) => {
         #[derive(Debug, PartialEq, Eq, Hash)]
         pub struct $udf {
             signature: Signature,

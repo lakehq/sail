@@ -9,8 +9,8 @@ use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 use datafusion::scalar::ScalarValue;
 use datafusion_common::types::{
-    logical_float16, logical_float32, logical_float64, logical_int16, logical_int32, logical_int64,
-    logical_int8, logical_uint16, logical_uint32, logical_uint64, logical_uint8, NativeType,
+    NativeType, logical_float16, logical_float32, logical_float64, logical_int8, logical_int16,
+    logical_int32, logical_int64, logical_uint8, logical_uint16, logical_uint32, logical_uint64,
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 

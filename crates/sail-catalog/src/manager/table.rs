@@ -2,11 +2,10 @@ use sail_common_datafusion::catalog::TableStatus;
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::lakehouse::{
-    resolve_lakehouse_table_status, BeginTableAccessRequest, DeltaRatifiedCommitRequest,
-    DeltaRatifiedCommitResponse, LakehouseCommitOutcome, LakehouseCommitRequest,
-    LakehouseCreatePlan, LakehouseCreateRequest, LakehouseResolvedTable,
-    LakehouseScanPlanningRequest, LakehouseScanPlanningResponse, ResolveLakehouseTableRequest,
-    TableAccessSession,
+    BeginTableAccessRequest, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
+    LakehouseCommitOutcome, LakehouseCommitRequest, LakehouseCreatePlan, LakehouseCreateRequest,
+    LakehouseResolvedTable, LakehouseScanPlanningRequest, LakehouseScanPlanningResponse,
+    ResolveLakehouseTableRequest, TableAccessSession, resolve_lakehouse_table_status,
 };
 use crate::manager::CatalogManager;
 use crate::provider::{
@@ -202,10 +201,10 @@ impl CatalogManager {
                 Err(e) => return Err(e),
             }
         }
-        if let [x @ .., name] = reference {
-            if self.state()?.is_global_temporary_view_database(x) {
-                return self.get_global_temporary_view(name.as_ref()).await;
-            }
+        if let [x @ .., name] = reference
+            && self.state()?.is_global_temporary_view_database(x)
+        {
+            return self.get_global_temporary_view(name.as_ref()).await;
         }
         match self.get_table(reference).await {
             Ok(x) => return Ok(x),

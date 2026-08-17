@@ -10,12 +10,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use datafusion::arrow::array::UInt64Array;
-use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::arrow::array::Int64Array;
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_expr::{Distribution, EquivalenceProperties};
@@ -25,45 +26,115 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
-use datafusion_common::{internal_err, DataFusionError, Result};
-use futures::stream::once;
+use datafusion_common::{DataFusionError, Result, internal_err};
 use futures::StreamExt;
+use futures::stream::once;
 use object_store::ObjectStoreExt;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use url::Url;
 
 use crate::catalog_support::commit::{
-    catalog_requirements, table_metadata_location, CatalogCommitOutcome, CatalogTableInfo,
-    IcebergCatalogCommitCoordinator, IcebergCatalogCommitMode,
+    CatalogCommitOutcome, CatalogTableInfo, IcebergCatalogCommitCoordinator,
+    IcebergCatalogCommitMode, catalog_requirements, table_metadata_location,
 };
 use crate::io::StoreContext;
 use crate::operations::bootstrap::{
-    bootstrap_first_snapshot, bootstrap_new_table_with_style, bootstrap_snapshot_action_commit,
-    NewTableMetadataStyle, PersistStrategy,
+    NewTableMetadataStyle, PersistStrategy, bootstrap_first_snapshot,
+    bootstrap_new_table_with_style, prepare_bootstrap_snapshot,
 };
 use crate::operations::helpers::format_version_for_schema;
-use crate::operations::{SnapshotProduceOperation, Transaction, TransactionAction};
-use crate::physical_plan::action_schema::decode_actions_and_meta_from_batch;
+use crate::operations::{SnapshotProducer, SnapshotUpdateKind, Transaction};
+use crate::physical_plan::action_schema::{CommitMeta, decode_actions_and_meta_from_batch};
 use crate::physical_plan::commit::IcebergCommitInfo;
 use crate::spec::catalog::TableUpdate;
 use crate::spec::metadata::table_metadata::SnapshotLog;
 use crate::spec::partition::{UnboundPartitionField, UnboundPartitionSpec};
 use crate::spec::snapshots::MAIN_BRANCH;
-use crate::spec::{PartitionSpec, Schema as IcebergSchema, TableMetadata, TableRequirement};
+use crate::spec::{
+    DataFile, PartitionSpec, Schema as IcebergSchema, TableMetadata, TableRequirement,
+};
 use crate::table::metadata_loader::{
     encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
-    metadata_file_version_from_path, metadata_location_to_object_path_string,
+    metadata_file_version_from_path, metadata_location_to_object_path_string, write_version_hint,
 };
 use crate::table_format::metadata_location_from_properties;
 use crate::utils::get_object_store_from_context;
 use crate::utils::metadata::metadata_files_for_version;
 const MAX_COMMIT_RETRIES: usize = 5;
 
+async fn cleanup_uncommitted_task_files(store_ctx: &StoreContext, file_paths: &[String]) {
+    let mut base_paths = Vec::new();
+    let mut prefixed_paths = Vec::new();
+    for file_path in file_paths.iter().collect::<BTreeSet<_>>() {
+        let (store, path) = match store_ctx.resolve(file_path) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                log::warn!(
+                    "Failed to resolve uncommitted Iceberg task file {file_path} for cleanup: {error}"
+                );
+                continue;
+            }
+        };
+        if Arc::ptr_eq(store, &store_ctx.base) {
+            base_paths.push(path);
+        } else {
+            prefixed_paths.push(path);
+        }
+    }
+
+    delete_task_files(&store_ctx.base, base_paths).await;
+    delete_task_files(&store_ctx.prefixed, prefixed_paths).await;
+}
+
+async fn delete_task_files(
+    store: &Arc<dyn object_store::ObjectStore>,
+    paths: Vec<object_store::path::Path>,
+) {
+    let locations = futures::stream::iter(paths.into_iter().map(Ok));
+    let mut deletions = store.delete_stream(Box::pin(locations));
+    while let Some(result) = deletions.next().await {
+        match result {
+            Ok(_) | Err(object_store::Error::NotFound { .. }) => {}
+            Err(error) => {
+                log::warn!("Failed to remove an uncommitted Iceberg task file: {error}");
+            }
+        }
+    }
+}
+
+fn task_file_paths(data_files: &[DataFile], delete_files: &[DataFile]) -> Vec<String> {
+    data_files
+        .iter()
+        .chain(delete_files.iter())
+        .map(|file| file.file_path.clone())
+        .collect()
+}
+
+fn commit_count_batch(schema: SchemaRef, row_count: u64) -> Result<RecordBatch> {
+    let row_count = i64::try_from(row_count).map_err(|e| {
+        DataFusionError::Execution(format!("Iceberg commit row count overflow: {e}"))
+    })?;
+    let array = Arc::new(Int64Array::from(vec![row_count]));
+    RecordBatch::try_new(schema, vec![array])
+        .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
+}
+
+fn expected_snapshot_requirement(
+    expected_snapshot_id: Option<Option<i64>>,
+) -> Option<TableRequirement> {
+    expected_snapshot_id.map(|snapshot_id| TableRequirement::RefSnapshotIdMatch {
+        r#ref: MAIN_BRANCH.to_string(),
+        snapshot_id,
+    })
+}
+
 #[derive(Debug)]
 pub struct IcebergCommitExec {
     input: Arc<dyn ExecutionPlan>,
     table_url: Url,
     lakehouse_table: Option<LakehouseExecutionContext>,
+    snapshot_update_kind: SnapshotUpdateKind,
+    expected_snapshot_id: Option<Option<i64>>,
     cache: Arc<PlanProperties>,
 }
 
@@ -72,10 +143,11 @@ impl IcebergCommitExec {
         input: Arc<dyn ExecutionPlan>,
         table_url: Url,
         lakehouse_table: Option<LakehouseExecutionContext>,
+        snapshot_update_kind: SnapshotUpdateKind,
     ) -> Self {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "count",
-            DataType::UInt64,
+            DataType::Int64,
             true,
         )]));
         let cache = Arc::new(PlanProperties::new(
@@ -88,8 +160,15 @@ impl IcebergCommitExec {
             input,
             table_url,
             lakehouse_table,
+            snapshot_update_kind,
+            expected_snapshot_id: None,
             cache,
         }
+    }
+
+    pub fn with_expected_snapshot_id(mut self, expected_snapshot_id: Option<Option<i64>>) -> Self {
+        self.expected_snapshot_id = expected_snapshot_id;
+        self
     }
 
     pub fn table_url(&self) -> &Url {
@@ -102,6 +181,14 @@ impl IcebergCommitExec {
 
     pub fn lakehouse_table(&self) -> Option<&LakehouseExecutionContext> {
         self.lakehouse_table.as_ref()
+    }
+
+    pub fn snapshot_update_kind(&self) -> SnapshotUpdateKind {
+        self.snapshot_update_kind
+    }
+
+    pub fn expected_snapshot_id(&self) -> Option<Option<i64>> {
+        self.expected_snapshot_id
     }
 
     fn apply_schema_update(table_meta: &mut TableMetadata, new_schema: IcebergSchema) {
@@ -141,9 +228,9 @@ impl IcebergCommitExec {
             table_meta.partition_specs.push(new_spec.clone());
         }
         table_meta.default_spec_id = spec_id;
-        if let Some(highest) = new_spec.highest_field_id() {
-            table_meta.last_partition_id = table_meta.last_partition_id.max(highest);
-        }
+        table_meta.last_partition_id = table_meta
+            .last_partition_id
+            .max(new_spec.last_assigned_field_id());
     }
 
     fn validate_requirements(
@@ -340,6 +427,33 @@ impl IcebergCommitExec {
     fn table_metadata_location(table_url: &Url, metadata_file: &str) -> Result<String> {
         table_metadata_location(table_url, metadata_file)
     }
+
+    fn merge_writer_commit_meta(
+        accumulated: &mut Option<CommitMeta>,
+        mut incoming: CommitMeta,
+    ) -> Result<()> {
+        let Some(existing) = accumulated.as_mut() else {
+            *accumulated = Some(incoming);
+            return Ok(());
+        };
+
+        let incoming_row_count = incoming.row_count;
+        incoming.row_count = existing.row_count;
+        if existing != &incoming {
+            return Err(DataFusionError::Internal(
+                "inconsistent commit_meta actions from Iceberg writer partitions".to_string(),
+            ));
+        }
+        existing.row_count = existing
+            .row_count
+            .checked_add(incoming_row_count)
+            .ok_or_else(|| {
+                DataFusionError::Execution(
+                    "Iceberg writer row count overflow across partitions".to_string(),
+                )
+            })?;
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -367,11 +481,15 @@ impl ExecutionPlan for IcebergCommitExec {
         if children.len() != 1 {
             return internal_err!("IcebergCommitExec requires exactly one child");
         }
-        Ok(Arc::new(Self::new(
-            Arc::clone(&children[0]),
-            self.table_url.clone(),
-            self.lakehouse_table.clone(),
-        )))
+        Ok(Arc::new(
+            Self::new(
+                Arc::clone(&children[0]),
+                self.table_url.clone(),
+                self.lakehouse_table.clone(),
+                self.snapshot_update_kind,
+            )
+            .with_expected_snapshot_id(self.expected_snapshot_id),
+        ))
     }
 
     fn execute(
@@ -394,6 +512,8 @@ impl ExecutionPlan for IcebergCommitExec {
 
         let table_url = self.table_url.clone();
         let lakehouse_table = self.lakehouse_table.clone();
+        let snapshot_update_kind = self.snapshot_update_kind;
+        let expected_snapshot_id = self.expected_snapshot_id;
         let schema = self.schema();
         let future = async move {
             let object_store = get_object_store_from_context(&context, &table_url)?;
@@ -401,25 +521,39 @@ impl ExecutionPlan for IcebergCommitExec {
 
             // Read writer result as Arrow-native action batches (may be empty for IgnoreIfExists).
             let mut data = input_stream;
-            let mut added_data_files = Vec::new();
+            let mut added_data_files: Vec<DataFile> = Vec::new();
+            let mut added_delete_files: Vec<DataFile> = Vec::new();
             let mut commit_meta = None;
-            while let Some(batch_result) = data.next().await {
-                let batch = batch_result?;
-                if batch.num_rows() == 0 {
-                    continue;
+            let input_result: Result<()> = async {
+                while let Some(batch_result) = data.next().await {
+                    let batch = batch_result?;
+                    if batch.num_rows() == 0 {
+                        continue;
+                    }
+                    let (adds, deletes, meta) = decode_actions_and_meta_from_batch(&batch)?;
+                    added_data_files.extend(adds);
+                    added_delete_files.extend(deletes);
+                    if let Some(meta) = meta {
+                        Self::merge_writer_commit_meta(&mut commit_meta, meta)?;
+                    }
                 }
-                let (adds, _deletes, meta) = decode_actions_and_meta_from_batch(&batch)?;
-                added_data_files.extend(adds);
-                if meta.is_some() {
-                    commit_meta = meta;
-                }
+                Ok(())
+            }
+            .await;
+            if let Err(error) = input_result {
+                let paths = task_file_paths(&added_data_files, &added_delete_files);
+                cleanup_uncommitted_task_files(&store_ctx, &paths).await;
+                return Err(error);
             }
 
+            let task_file_paths = task_file_paths(&added_data_files, &added_delete_files);
+            let mut task_files_may_be_committed = false;
+            let commit_result: Result<RecordBatch> = async {
+
             // No-op path (e.g. IgnoreIfExists on existing table): no rows, no meta.
-            if commit_meta.is_none() && added_data_files.is_empty() {
-                let array = Arc::new(UInt64Array::from(vec![0u64]));
-                let batch = RecordBatch::try_new(schema, vec![array])?;
-                return Ok(batch);
+            if commit_meta.is_none() && added_data_files.is_empty() && added_delete_files.is_empty()
+            {
+                return commit_count_batch(schema, 0);
             }
 
             let commit_meta = commit_meta.ok_or_else(|| {
@@ -428,20 +562,26 @@ impl ExecutionPlan for IcebergCommitExec {
                 )
             })?;
 
-            let commit_info = IcebergCommitInfo {
+            let mut commit_info = IcebergCommitInfo {
                 table_uri: commit_meta.table_uri,
                 row_count: commit_meta.row_count,
                 data_files: added_data_files,
+                delete_files: added_delete_files,
                 manifest_path: String::new(),
                 manifest_list_path: String::new(),
                 updates: vec![],
                 requirements: commit_meta.requirements,
                 table_properties: commit_meta.table_properties,
                 lakehouse_table: commit_meta.lakehouse_table.or(lakehouse_table),
-                operation: commit_meta.operation,
+                snapshot_update_kind,
                 schema: commit_meta.schema,
                 partition_spec: commit_meta.partition_spec,
             };
+            if let Some(requirement) = expected_snapshot_requirement(expected_snapshot_id)
+                && !commit_info.requirements.contains(&requirement)
+            {
+                commit_info.requirements.push(requirement);
+            }
 
             let catalog_table = commit_info
                 .lakehouse_table
@@ -499,10 +639,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 catalog_commit_mode
             );
 
-            if latest_meta_res.is_err()
-                && (matches!(commit_info.operation, crate::spec::Operation::Overwrite)
-                    || matches!(commit_info.operation, crate::spec::Operation::Append))
-            {
+            if latest_meta_res.is_err() {
                 Self::validate_requirements(None, &commit_info.requirements)?;
                 if let Some(catalog_table) = catalog_metadata_update_table {
                     let bootstrap_result = bootstrap_new_table_with_style(
@@ -512,6 +649,7 @@ impl ExecutionPlan for IcebergCommitExec {
                         NewTableMetadataStyle::Uuid,
                     )
                     .await?;
+                    task_files_may_be_committed = true;
                     let new_metadata_location =
                         Self::table_metadata_location(&table_url, &bootstrap_result.metadata_file)?;
                     Self::update_catalog_metadata_location(
@@ -535,6 +673,7 @@ impl ExecutionPlan for IcebergCommitExec {
                         NewTableMetadataStyle::Hadoop,
                     )
                     .await?;
+                    task_files_may_be_committed = true;
                     if let Some(catalog_table) = catalog_registered_metadata_table {
                         let new_metadata_location = Self::table_metadata_location(
                             &table_url,
@@ -551,9 +690,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     }
                 }
 
-                let array = Arc::new(UInt64Array::from(vec![commit_info.row_count]));
-                let batch = RecordBatch::try_new(schema, vec![array])?;
-                return Ok(batch);
+                return commit_count_batch(schema, commit_info.row_count);
             }
 
             let initial_latest_meta = latest_meta_res?;
@@ -645,42 +782,57 @@ impl ExecutionPlan for IcebergCommitExec {
 
                 // If metadata exists but there is no current snapshot (e.g. from a CREATE TABLE),
                 // bootstrap the first snapshot as a normal metadata version.
-                if maybe_snapshot.is_none()
-                    && (matches!(commit_info.operation, crate::spec::Operation::Overwrite)
-                        || matches!(commit_info.operation, crate::spec::Operation::Append))
-                {
+                if maybe_snapshot.is_none() {
                     let mut catalog_fallback_table = catalog_metadata_update_table;
                     if let Some(catalog_table) = catalog_commit_table {
-                        let action_commit = bootstrap_snapshot_action_commit(
+                        let prepared_snapshot = prepare_bootstrap_snapshot(
                             &table_url,
                             &store_ctx,
                             &commit_info,
                             &table_meta,
                         )
                         .await?;
-                        let action_requirements = action_commit.requirements().to_vec();
-                        Self::validate_requirements(Some(&table_meta), &action_requirements)?;
+                        let action_requirements = prepared_snapshot
+                            .action_commit()
+                            .requirements()
+                            .to_vec();
+                        if let Err(error) =
+                            Self::validate_requirements(Some(&table_meta), &action_requirements)
+                        {
+                            prepared_snapshot.cleanup().await;
+                            return Err(error);
+                        }
                         let requirements = catalog_requirements(
                             &table_meta,
                             &commit_info.requirements,
                             &action_requirements,
                         );
                         let mut updates = metadata_updates.clone();
-                        updates.extend(action_commit.into_updates());
-                        match Self::try_commit_to_catalog(
-                            &context,
-                            catalog_table,
-                            commit_info.lakehouse_table.as_ref().ok_or_else(|| {
-                                DataFusionError::Internal(
+                        updates.extend(prepared_snapshot.action_commit().updates().to_vec());
+                        let lakehouse_table = match commit_info.lakehouse_table.as_ref() {
+                            Some(table) => table,
+                            None => {
+                                prepared_snapshot.cleanup().await;
+                                return Err(DataFusionError::Internal(
                                     "missing lakehouse context for Iceberg catalog commit"
                                         .to_string(),
-                                )
-                            })?,
+                                ));
+                            }
+                        };
+                        task_files_may_be_committed = true;
+                        let catalog_outcome = match Self::try_commit_to_catalog(
+                            &context,
+                            catalog_table,
+                            lakehouse_table,
                             requirements,
                             updates,
                         )
-                        .await?
+                        .await
                         {
+                            Ok(outcome) => outcome,
+                            Err(error) => return Err(error),
+                        };
+                        match catalog_outcome {
                             CatalogCommitOutcome::Committed(committed) => {
                                 if let Some(metadata_location) = committed.metadata_location() {
                                     log::debug!(
@@ -690,12 +842,11 @@ impl ExecutionPlan for IcebergCommitExec {
                                 if committed.payload().is_some() {
                                     log::trace!("Iceberg catalog commit returned a payload");
                                 }
-                                let array =
-                                    Arc::new(UInt64Array::from(vec![commit_info.row_count]));
-                                let batch = RecordBatch::try_new(schema, vec![array])?;
-                                return Ok(batch);
+                                return commit_count_batch(schema, commit_info.row_count);
                             }
                             CatalogCommitOutcome::NotSupported => {
+                                task_files_may_be_committed = false;
+                                prepared_snapshot.cleanup().await;
                                 if matches!(
                                     catalog_commit_mode,
                                     IcebergCatalogCommitMode::CompatibilityCatalogCommit
@@ -709,6 +860,8 @@ impl ExecutionPlan for IcebergCommitExec {
                                 }
                             }
                             CatalogCommitOutcome::Conflict => {
+                                task_files_may_be_committed = false;
+                                prepared_snapshot.cleanup().await;
                                 if attempt >= MAX_COMMIT_RETRIES {
                                     return Err(commit_conflict_error());
                                 }
@@ -736,6 +889,7 @@ impl ExecutionPlan for IcebergCommitExec {
                         persist_strategy,
                     )
                     .await?;
+                    task_files_may_be_committed = true;
                     if let (Some(catalog_table), Some(previous_metadata_location)) =
                         (catalog_fallback_table, catalog_metadata_location.as_deref())
                     {
@@ -766,9 +920,7 @@ impl ExecutionPlan for IcebergCommitExec {
                         .await?;
                     }
 
-                    let array = Arc::new(UInt64Array::from(vec![commit_info.row_count]));
-                    let batch = RecordBatch::try_new(schema, vec![array])?;
-                    return Ok(batch);
+                    return commit_count_batch(schema, commit_info.row_count);
                 }
 
                 let snapshot = maybe_snapshot.ok_or_else(|| {
@@ -793,58 +945,39 @@ impl ExecutionPlan for IcebergCommitExec {
                     continue;
                 }
 
-                // Build transaction and action based on operation
-                let tx = Transaction::new(table_url.to_string(), snapshot);
+                // Build transaction and action based on the snapshot update algorithm.
+                let tx = Transaction::new(
+                    table_url.to_string(),
+                    snapshot,
+                    table_meta.last_sequence_number,
+                );
                 let manifest_meta = tx.default_manifest_metadata(
                     &schema_iceberg,
                     &partition_spec_for_commit,
                     table_meta.format_version,
                 );
-                let action_commit = match commit_info.operation {
-                    crate::spec::Operation::Append => {
-                        let mut action = tx
-                            .fast_append()
-                            .with_store_context(store_ctx.clone())
-                            .with_manifest_metadata(manifest_meta)
-                            .with_row_lineage_start_row_id(row_lineage_start_row_id);
-                        for df in commit_info.data_files.clone().into_iter() {
-                            action.add_file(df);
-                        }
-                        Arc::new(action)
-                            .commit(&tx)
-                            .await
-                            .map_err(DataFusionError::Execution)?
-                    }
-                    crate::spec::Operation::Overwrite => {
-                        let producer = crate::operations::SnapshotProducer::new(
-                            &tx,
-                            commit_info.data_files.clone(),
-                            Some(store_ctx.clone()),
-                            Some(manifest_meta),
-                        )
-                        .with_row_lineage_start_row_id(row_lineage_start_row_id);
-                        struct LocalOverwriteOperation;
-                        impl SnapshotProduceOperation for LocalOverwriteOperation {
-                            fn operation(&self) -> &'static str {
-                                "overwrite"
-                            }
-                        }
-                        producer
-                            .commit(LocalOverwriteOperation)
-                            .await
-                            .map_err(DataFusionError::Execution)?
-                    }
-                    _ => {
-                        return Err(DataFusionError::NotImplemented(
-                            "Unsupported Iceberg operation in commit".to_string(),
-                        ));
-                    }
-                };
+                let prepared_snapshot = SnapshotProducer::new(
+                    &tx,
+                    commit_info.data_files.clone(),
+                    Some(store_ctx.clone()),
+                    Some(manifest_meta),
+                )
+                .with_added_delete_files(commit_info.delete_files.clone())
+                .with_partition_specs(table_meta.partition_specs.clone())
+                .with_row_lineage_start_row_id(row_lineage_start_row_id)
+                .prepare(commit_info.snapshot_update_kind)
+                .await
+                .map_err(DataFusionError::Execution)?;
 
                 // Apply updates (only handle the ones we emit: AddSnapshot, SetSnapshotRef)
-                let action_requirements = action_commit.requirements().to_vec();
-                Self::validate_requirements(Some(&table_meta), &action_requirements)?;
-                let action_updates = action_commit.into_updates();
+                let action_requirements = prepared_snapshot.action_commit().requirements().to_vec();
+                if let Err(error) =
+                    Self::validate_requirements(Some(&table_meta), &action_requirements)
+                {
+                    prepared_snapshot.cleanup().await;
+                    return Err(error);
+                }
+                let action_updates = prepared_snapshot.action_commit().updates().to_vec();
                 if let Some(catalog_table) = catalog_commit_table {
                     let requirements = catalog_requirements(
                         &table_meta,
@@ -853,19 +986,29 @@ impl ExecutionPlan for IcebergCommitExec {
                     );
                     let mut updates = metadata_updates.clone();
                     updates.extend(action_updates.clone());
-                    match Self::try_commit_to_catalog(
+                    let lakehouse_table = match commit_info.lakehouse_table.as_ref() {
+                        Some(table) => table,
+                        None => {
+                            prepared_snapshot.cleanup().await;
+                            return Err(DataFusionError::Internal(
+                                "missing lakehouse context for Iceberg catalog commit".to_string(),
+                            ));
+                        }
+                    };
+                    task_files_may_be_committed = true;
+                    let catalog_outcome = match Self::try_commit_to_catalog(
                         &context,
                         catalog_table,
-                        commit_info.lakehouse_table.as_ref().ok_or_else(|| {
-                            DataFusionError::Internal(
-                                "missing lakehouse context for Iceberg catalog commit".to_string(),
-                            )
-                        })?,
+                        lakehouse_table,
                         requirements,
                         updates,
                     )
-                    .await?
+                    .await
                     {
+                        Ok(outcome) => outcome,
+                        Err(error) => return Err(error),
+                    };
+                    match catalog_outcome {
                         CatalogCommitOutcome::Committed(committed) => {
                             if let Some(metadata_location) = committed.metadata_location() {
                                 log::debug!(
@@ -875,22 +1018,26 @@ impl ExecutionPlan for IcebergCommitExec {
                             if committed.payload().is_some() {
                                 log::trace!("Iceberg catalog commit returned a payload");
                             }
-                            let array = Arc::new(UInt64Array::from(vec![commit_info.row_count]));
-                            let batch = RecordBatch::try_new(schema, vec![array])?;
-                            return Ok(batch);
+                            return commit_count_batch(schema, commit_info.row_count);
                         }
                         CatalogCommitOutcome::NotSupported
                             if matches!(
                                 catalog_commit_mode,
                                 IcebergCatalogCommitMode::CompatibilityCatalogCommit
-                            ) => {}
+                            ) => {
+                            task_files_may_be_committed = false;
+                        }
                         CatalogCommitOutcome::NotSupported => {
+                            task_files_may_be_committed = false;
+                            prepared_snapshot.cleanup().await;
                             return Err(DataFusionError::Plan(
                                 "Iceberg catalog commit is not supported by the resolved catalog authority"
                                     .to_string(),
                             ));
                         }
                         CatalogCommitOutcome::Conflict => {
+                            task_files_may_be_committed = false;
+                            prepared_snapshot.cleanup().await;
                             if attempt >= MAX_COMMIT_RETRIES {
                                 return Err(commit_conflict_error());
                             }
@@ -899,9 +1046,10 @@ impl ExecutionPlan for IcebergCommitExec {
                     }
                 }
 
-                log::trace!("commit_exec: applying updates: {:?}", &action_updates);
+                log::trace!("commit_exec: applying updates: {:?}", action_updates);
                 let mut newest_snapshot_seq: Option<i64> = None;
                 let mut newest_snapshot_added_rows: Option<i64> = None;
+                let previous_metadata_timestamp_ms = table_meta.last_updated_ms;
                 let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
                 for upd in action_updates {
                     match upd {
@@ -924,10 +1072,10 @@ impl ExecutionPlan for IcebergCommitExec {
                         _ => {}
                     }
                 }
-                if let Some(seq) = newest_snapshot_seq {
-                    if seq > table_meta.last_sequence_number {
-                        table_meta.last_sequence_number = seq;
-                    }
+                if let Some(seq) = newest_snapshot_seq
+                    && seq > table_meta.last_sequence_number
+                {
+                    table_meta.last_sequence_number = seq;
                 }
                 table_meta.last_updated_ms = timestamp_ms;
                 if let Some(added_rows) = newest_snapshot_added_rows {
@@ -938,66 +1086,82 @@ impl ExecutionPlan for IcebergCommitExec {
                 table_meta
                     .metadata_log
                     .push(crate::spec::metadata::table_metadata::MetadataLog {
-                        timestamp_ms,
+                        timestamp_ms: previous_metadata_timestamp_ms,
                         metadata_file: catalog_metadata_location
                             .clone()
                             .unwrap_or_else(|| latest_meta.clone()),
                     });
 
-                let new_meta_json = table_meta
-                    .to_json()
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let file_extension =
-                    metadata_file_extension_from_properties(&table_meta.properties)?;
                 let use_uuid_metadata_file = catalog_metadata_update_table.is_some();
-                let new_meta_rel = if use_uuid_metadata_file {
-                    format!(
-                        "metadata/{next_version:05}-{}{file_extension}",
-                        uuid::Uuid::new_v4()
-                    )
-                } else {
-                    format!("metadata/v{next_version}{file_extension}")
+                let encoded_metadata: Result<(String, String, Vec<u8>)> = (|| {
+                    let metadata_json = table_meta
+                        .to_json()
+                        .map_err(|error| DataFusionError::External(Box::new(error)))?;
+                    let file_extension =
+                        metadata_file_extension_from_properties(&table_meta.properties)?;
+                    let metadata_file = if use_uuid_metadata_file {
+                        format!(
+                            "metadata/{next_version:05}-{}{file_extension}",
+                            uuid::Uuid::new_v4()
+                        )
+                    } else {
+                        format!("metadata/v{next_version}{file_extension}")
+                    };
+                    let metadata_location =
+                        Self::table_metadata_location(&table_url, &metadata_file)?;
+                    let metadata_bytes = encode_metadata_file(&metadata_file, &metadata_json)
+                        .map_err(|error| DataFusionError::External(Box::new(error)))?;
+                    Ok((metadata_file, metadata_location, metadata_bytes))
+                })();
+                let (metadata_file, metadata_location, metadata_bytes) = match encoded_metadata {
+                    Ok(encoded_metadata) => encoded_metadata,
+                    Err(error) => {
+                        prepared_snapshot.cleanup().await;
+                        return Err(error);
+                    }
                 };
-                let new_metadata_location =
-                    Self::table_metadata_location(&table_url, &new_meta_rel)?;
-                let new_meta_bytes = encode_metadata_file(&new_meta_rel, &new_meta_json)
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                 log::trace!(
                     "Writing metadata: {} snapshot_id={:?} table_url={}",
-                    &new_meta_rel,
+                    metadata_file,
                     table_meta.current_snapshot_id,
-                    &table_url
+                    table_url
                 );
 
-                let new_meta_path = object_store::path::Path::from(new_meta_rel.as_str());
+                let metadata_path = object_store::path::Path::from(metadata_file.as_str());
                 let put_opts = object_store::PutOptions {
                     mode: object_store::PutMode::Create,
                     ..Default::default()
                 };
-                let payload = object_store::PutPayload::from(Bytes::from(new_meta_bytes));
+                let payload = object_store::PutPayload::from(Bytes::from(metadata_bytes));
                 match store_ctx
                     .prefixed
-                    .put_opts(&new_meta_path, payload, put_opts)
+                    .put_opts(&metadata_path, payload, put_opts)
                     .await
                 {
-                    Ok(_) => {}
+                    Ok(_) => {
+                        task_files_may_be_committed = true;
+                    }
                     Err(object_store::Error::AlreadyExists { .. }) => {
                         log::warn!(
                             "Metadata file {} already exists for version {}. Retrying attempt {}",
-                            new_meta_rel,
+                            metadata_file,
                             next_version,
                             attempt
                         );
+                        prepared_snapshot.cleanup().await;
                         if attempt >= MAX_COMMIT_RETRIES {
                             return Err(commit_conflict_error());
                         }
                         continue;
                     }
-                    Err(e) => return Err(DataFusionError::External(Box::new(e))),
+                    Err(error) => {
+                        prepared_snapshot.cleanup().await;
+                        return Err(DataFusionError::External(Box::new(error)));
+                    }
                 }
                 let version_files = metadata_files_for_version(&store_ctx, next_version).await?;
-                let conflict_after_write = version_files.iter().any(|path| path != &new_meta_rel);
+                let conflict_after_write = version_files.iter().any(|path| path != &metadata_file);
                 if conflict_after_write {
                     log::warn!(
                         "Concurrent metadata writes detected for version {}: {:?}. Retrying attempt {}",
@@ -1005,12 +1169,16 @@ impl ExecutionPlan for IcebergCommitExec {
                         version_files,
                         attempt
                     );
-                    if let Err(err) = store_ctx.prefixed.delete(&new_meta_path).await {
-                        log::warn!(
-                            "Failed to delete conflicted metadata file {}: {:?}",
-                            new_meta_rel,
-                            err
-                        );
+                    match store_ctx.prefixed.delete(&metadata_path).await {
+                        Ok(()) | Err(object_store::Error::NotFound { .. }) => {
+                            task_files_may_be_committed = false;
+                            prepared_snapshot.cleanup().await;
+                        }
+                        Err(error) => {
+                            return Err(DataFusionError::Execution(format!(
+                                "failed to remove conflicted Iceberg metadata file {metadata_file}; commit state is uncertain: {error}"
+                            )));
+                        }
                     }
                     if attempt >= MAX_COMMIT_RETRIES {
                         return Err(commit_conflict_error());
@@ -1018,23 +1186,18 @@ impl ExecutionPlan for IcebergCommitExec {
                     continue;
                 }
                 log::trace!("Metadata written successfully");
+                drop(prepared_snapshot);
 
-                let hint = if use_uuid_metadata_file {
-                    new_meta_rel
+                let version_hint = if use_uuid_metadata_file {
+                    metadata_file
                         .rsplit('/')
                         .next()
-                        .unwrap_or(new_meta_rel.as_str())
+                        .unwrap_or(metadata_file.as_str())
                         .to_string()
                 } else {
                     next_version.to_string()
                 };
-                let hint_bytes = Bytes::from(hint.into_bytes());
-                let hint_path = object_store::path::Path::from("metadata/version-hint.text");
-                store_ctx
-                    .prefixed
-                    .put(&hint_path, object_store::PutPayload::from(hint_bytes))
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                write_version_hint(&store_ctx.prefixed, &version_hint).await;
 
                 if let Some(catalog_table) = catalog_metadata_update_table {
                     Self::update_catalog_metadata_location(
@@ -1042,7 +1205,7 @@ impl ExecutionPlan for IcebergCommitExec {
                         catalog_table,
                         &commit_info.table_properties,
                         catalog_metadata_location.as_deref(),
-                        &new_metadata_location,
+                        &metadata_location,
                     )
                     .await?;
                 } else if let Some(catalog_table) = catalog_registered_metadata_table {
@@ -1051,15 +1214,20 @@ impl ExecutionPlan for IcebergCommitExec {
                         catalog_table,
                         &commit_info.table_properties,
                         catalog_recorded_metadata_location.as_deref(),
-                        &new_metadata_location,
+                        &metadata_location,
                     )
                     .await?;
                 }
 
-                let array = Arc::new(UInt64Array::from(vec![commit_info.row_count]));
-                let batch = RecordBatch::try_new(schema, vec![array])?;
-                return Ok(batch);
+                return commit_count_batch(schema, commit_info.row_count);
             }
+            }
+            .await;
+
+            if commit_result.is_err() && !task_files_may_be_committed {
+                cleanup_uncommitted_task_files(&store_ctx, &task_file_paths).await;
+            }
+            commit_result
         };
 
         let stream = once(future);
@@ -1088,4 +1256,416 @@ fn commit_conflict_error() -> DataFusionError {
     DataFusionError::Execution(format!(
         "Iceberg commit failed after {MAX_COMMIT_RETRIES} retries due to concurrent metadata updates"
     ))
+}
+
+#[cfg(test)]
+#[expect(clippy::expect_used)]
+mod tests {
+    use std::collections::HashMap;
+    use std::ops::Range;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Barrier, Mutex};
+
+    use datafusion::datasource::memory::MemorySourceConfig;
+    use datafusion::prelude::SessionContext;
+    use futures::stream::BoxStream;
+    use futures::{StreamExt, TryStreamExt};
+    use object_store::path::Path;
+    use object_store::{
+        CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+        ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+    };
+
+    use super::*;
+    use crate::physical_plan::action_schema::{
+        encode_add_data_files, encode_commit_meta, iceberg_action_schema,
+    };
+    use crate::spec::types::{NestedField, PrimitiveType, Type};
+    use crate::spec::{
+        DataContentType, DataFileFormat, FormatVersion, Operation, SnapshotBuilder,
+        SnapshotReference, SnapshotRetention,
+    };
+
+    #[derive(Debug)]
+    struct ConcurrentMetadataStore {
+        memory_store: Arc<object_store::memory::InMemory>,
+        concurrent_metadata: Bytes,
+        conflict_injected: AtomicBool,
+    }
+
+    impl std::fmt::Display for ConcurrentMetadataStore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "ConcurrentMetadataStore")
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ObjectStore for ConcurrentMetadataStore {
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: PutPayload,
+            opts: PutOptions,
+        ) -> object_store::Result<PutResult> {
+            if location.as_ref().ends_with("metadata/v2.metadata.json")
+                && !self.conflict_injected.swap(true, Ordering::SeqCst)
+            {
+                self.memory_store
+                    .put(location, PutPayload::from(self.concurrent_metadata.clone()))
+                    .await?;
+            }
+            self.memory_store.put_opts(location, payload, opts).await
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            location: &Path,
+            opts: PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            self.memory_store.put_multipart_opts(location, opts).await
+        }
+
+        async fn get_opts(
+            &self,
+            location: &Path,
+            options: GetOptions,
+        ) -> object_store::Result<GetResult> {
+            self.memory_store.get_opts(location, options).await
+        }
+
+        async fn get_ranges(
+            &self,
+            location: &Path,
+            ranges: &[Range<u64>],
+        ) -> object_store::Result<Vec<Bytes>> {
+            self.memory_store.get_ranges(location, ranges).await
+        }
+
+        fn delete_stream(
+            &self,
+            locations: BoxStream<'static, object_store::Result<Path>>,
+        ) -> BoxStream<'static, object_store::Result<Path>> {
+            self.memory_store.delete_stream(locations)
+        }
+
+        fn list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+            self.memory_store.list(prefix)
+        }
+
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> object_store::Result<ListResult> {
+            self.memory_store.list_with_delimiter(prefix).await
+        }
+
+        async fn copy_opts(
+            &self,
+            from: &Path,
+            to: &Path,
+            options: CopyOptions,
+        ) -> object_store::Result<()> {
+            self.memory_store.copy_opts(from, to, options).await
+        }
+    }
+
+    fn table_metadata_at_snapshot(snapshot_id: Option<i64>) -> TableMetadata {
+        TableMetadata {
+            format_version: FormatVersion::V2,
+            table_uuid: None,
+            location: "file:///tmp/table".to_string(),
+            last_sequence_number: 2,
+            last_updated_ms: 0,
+            last_column_id: 0,
+            schemas: vec![],
+            current_schema_id: 0,
+            partition_specs: vec![],
+            default_spec_id: 0,
+            last_partition_id: 0,
+            properties: HashMap::new(),
+            current_snapshot_id: snapshot_id,
+            next_row_id: None,
+            encryption_keys: vec![],
+            snapshots: vec![],
+            snapshot_log: vec![],
+            metadata_log: vec![],
+            sort_orders: vec![],
+            default_sort_order_id: None,
+            refs: HashMap::new(),
+            statistics: vec![],
+            partition_statistics: vec![],
+        }
+    }
+
+    #[test]
+    fn planned_delete_snapshot_requirement_rejects_concurrent_branch_advance() {
+        let metadata = Arc::new(Mutex::new(table_metadata_at_snapshot(Some(1))));
+        let barrier = Arc::new(Barrier::new(2));
+        let delete_metadata = Arc::clone(&metadata);
+        let delete_barrier = Arc::clone(&barrier);
+        let delete = std::thread::spawn(move || {
+            let requirement = {
+                let metadata = delete_metadata.lock().expect("metadata lock");
+                expected_snapshot_requirement(Some(metadata.current_snapshot_id))
+                    .expect("DELETE must capture its read snapshot")
+            };
+            delete_barrier.wait();
+            delete_barrier.wait();
+            let metadata = delete_metadata.lock().expect("metadata lock");
+            IcebergCommitExec::validate_requirements(Some(&metadata), &[requirement])
+        });
+
+        barrier.wait();
+        metadata.lock().expect("metadata lock").current_snapshot_id = Some(2);
+        barrier.wait();
+
+        let error = delete
+            .join()
+            .expect("DELETE validation thread")
+            .expect_err("planned snapshot 1 must conflict with current snapshot 2");
+
+        assert!(error.to_string().contains("expected snapshot Some(1)"));
+        assert!(error.to_string().contains("found Some(2)"));
+    }
+
+    #[test]
+    fn empty_read_snapshot_requirement_preserves_none() {
+        let requirement = expected_snapshot_requirement(Some(None))
+            .expect("planned empty snapshot must produce a requirement");
+        assert!(
+            IcebergCommitExec::validate_requirements(
+                Some(&table_metadata_at_snapshot(None)),
+                std::slice::from_ref(&requirement),
+            )
+            .is_ok()
+        );
+        assert!(
+            IcebergCommitExec::validate_requirements(
+                Some(&table_metadata_at_snapshot(Some(2))),
+                &[requirement],
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn cleanup_removes_absolute_and_relative_task_files() {
+        futures::executor::block_on(async {
+            let table_url = Url::parse("file:///tmp/table/").expect("table URL");
+            let memory = Arc::new(object_store::memory::InMemory::new());
+            let store: Arc<dyn object_store::ObjectStore> = memory.clone();
+            let store_ctx = StoreContext::new(store, &table_url).expect("store context");
+            let absolute_path = object_store::path::Path::from("tmp/table/data/absolute.parquet");
+            let relative_path = object_store::path::Path::from("data/relative.parquet");
+            memory
+                .put(&absolute_path, Bytes::from_static(b"absolute").into())
+                .await
+                .expect("write absolute task file");
+            store_ctx
+                .prefixed
+                .put(&relative_path, Bytes::from_static(b"relative").into())
+                .await
+                .expect("write relative task file");
+
+            cleanup_uncommitted_task_files(
+                &store_ctx,
+                &[
+                    "file:///tmp/table/data/absolute.parquet".to_string(),
+                    "data/relative.parquet".to_string(),
+                ],
+            )
+            .await;
+
+            assert!(matches!(
+                memory.head(&absolute_path).await,
+                Err(object_store::Error::NotFound { .. })
+            ));
+            assert!(matches!(
+                store_ctx.prefixed.head(&relative_path).await,
+                Err(object_store::Error::NotFound { .. })
+            ));
+        });
+    }
+
+    #[test]
+    fn metadata_conflict_cleans_attempt_artifacts_and_uncommitted_task_file() {
+        futures::executor::block_on(async {
+            let table_url = Url::parse("file:///tmp/commit-conflict/").expect("table URL");
+            let memory = Arc::new(object_store::memory::InMemory::new());
+            let base_store: Arc<dyn ObjectStore> = memory.clone();
+            let store_ctx = StoreContext::new(base_store, &table_url).expect("store context");
+            let iceberg_schema = IcebergSchema::builder()
+                .with_schema_id(1)
+                .with_fields([Arc::new(NestedField::required(
+                    1,
+                    "id",
+                    Type::Primitive(PrimitiveType::Int),
+                ))])
+                .build()
+                .expect("schema");
+            let partition_spec = PartitionSpec::builder().with_spec_id(1).build();
+            let table_properties = vec![("format-version".to_string(), "2".to_string())];
+            let bootstrap = crate::operations::bootstrap::bootstrap_empty_table_metadata(
+                &table_url,
+                &store_ctx,
+                iceberg_schema.clone(),
+                partition_spec.clone(),
+                &table_properties,
+                NewTableMetadataStyle::Hadoop,
+            )
+            .await
+            .expect("bootstrap metadata");
+
+            let current_snapshot = SnapshotBuilder::new()
+                .with_snapshot_id(17)
+                .with_sequence_number(1)
+                .with_timestamp_ms(123)
+                .with_manifest_list("")
+                .with_summary(crate::spec::snapshots::Summary::new(Operation::Append))
+                .with_schema_id(iceberg_schema.schema_id())
+                .build()
+                .expect("current snapshot");
+            let mut current_metadata = bootstrap.table_metadata;
+            current_metadata.last_sequence_number = current_snapshot.sequence_number();
+            current_metadata.current_snapshot_id = Some(current_snapshot.snapshot_id());
+            current_metadata.snapshots = vec![current_snapshot.clone()];
+            current_metadata.snapshot_log = vec![SnapshotLog {
+                timestamp_ms: current_snapshot.timestamp_ms,
+                snapshot_id: current_snapshot.snapshot_id(),
+            }];
+            current_metadata.refs.insert(
+                MAIN_BRANCH.to_string(),
+                SnapshotReference {
+                    snapshot_id: current_snapshot.snapshot_id(),
+                    retention: SnapshotRetention::Branch {
+                        min_snapshots_to_keep: None,
+                        max_snapshot_age_ms: None,
+                        max_ref_age_ms: None,
+                    },
+                },
+            );
+            let metadata_json = current_metadata.to_json().expect("metadata JSON");
+            let metadata_bytes = Bytes::from(
+                encode_metadata_file(&bootstrap.metadata_file, &metadata_json)
+                    .expect("metadata bytes"),
+            );
+            store_ctx
+                .prefixed
+                .put(
+                    &Path::from(bootstrap.metadata_file.as_str()),
+                    PutPayload::from(metadata_bytes.clone()),
+                )
+                .await
+                .expect("overwrite current metadata");
+
+            let task_file_path = Path::from("data/task.parquet");
+            store_ctx
+                .prefixed
+                .put(
+                    &task_file_path,
+                    PutPayload::from(Bytes::from_static(b"task-data")),
+                )
+                .await
+                .expect("task file");
+            let data_file = DataFile {
+                content: DataContentType::Data,
+                file_path: "file:///tmp/commit-conflict/data/task.parquet".to_string(),
+                file_format: DataFileFormat::Parquet,
+                partition: vec![],
+                record_count: 1,
+                file_size_in_bytes: 9,
+                column_sizes: HashMap::new(),
+                value_counts: HashMap::new(),
+                null_value_counts: HashMap::new(),
+                nan_value_counts: HashMap::new(),
+                lower_bounds: HashMap::new(),
+                upper_bounds: HashMap::new(),
+                block_size_in_bytes: None,
+                key_metadata: None,
+                split_offsets: vec![],
+                equality_ids: vec![],
+                sort_order_id: None,
+                first_row_id: None,
+                partition_spec_id: partition_spec.spec_id(),
+                referenced_data_file: None,
+                content_offset: None,
+                content_size_in_bytes: None,
+            };
+            let action_schema = iceberg_action_schema().expect("action schema");
+            let action_batch = datafusion::arrow::compute::concat_batches(
+                &action_schema,
+                &[
+                    encode_add_data_files(vec![data_file]).expect("add action"),
+                    encode_commit_meta(CommitMeta {
+                        table_uri: table_url.to_string(),
+                        row_count: 1,
+                        requirements: vec![],
+                        table_properties,
+                        lakehouse_table: None,
+                        schema: None,
+                        partition_spec: None,
+                    })
+                    .expect("commit metadata action"),
+                ],
+            )
+            .expect("action batch");
+            let input = MemorySourceConfig::try_new_exec(
+                &[vec![action_batch]],
+                Arc::clone(&action_schema),
+                None,
+            )
+            .expect("memory input");
+            let commit =
+                IcebergCommitExec::new(input, table_url, None, SnapshotUpdateKind::FastAppend);
+            let conflict_store = Arc::new(ConcurrentMetadataStore {
+                memory_store: Arc::clone(&memory),
+                concurrent_metadata: metadata_bytes,
+                conflict_injected: AtomicBool::new(false),
+            });
+            let context = SessionContext::new();
+            context.runtime_env().register_object_store(
+                &Url::parse("file:///").expect("file store URL"),
+                conflict_store.clone(),
+            );
+
+            let mut output = commit
+                .execute(0, context.task_ctx())
+                .expect("commit stream");
+            let error = output
+                .next()
+                .await
+                .expect("commit result")
+                .expect_err("injected metadata conflict must exhaust retries");
+
+            assert!(error.to_string().contains("after 5 retries"));
+            assert!(conflict_store.conflict_injected.load(Ordering::SeqCst));
+            let metadata_prefix = Path::from("tmp/commit-conflict/metadata");
+            let metadata_objects = memory
+                .list(Some(&metadata_prefix))
+                .try_collect::<Vec<_>>()
+                .await
+                .expect("metadata listing");
+            let metadata_paths = metadata_objects
+                .iter()
+                .map(|object| object.location.as_ref())
+                .collect::<Vec<_>>();
+            assert!(
+                metadata_paths
+                    .iter()
+                    .any(|path| path.ends_with("metadata/v2.metadata.json"))
+            );
+            assert!(
+                metadata_paths
+                    .iter()
+                    .all(|path| !path.contains("/manifest-") && !path.contains("/snap-"))
+            );
+            assert!(matches!(
+                store_ctx.prefixed.head(&task_file_path).await,
+                Err(object_store::Error::NotFound { .. })
+            ));
+        });
+    }
 }

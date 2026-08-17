@@ -418,11 +418,11 @@ impl CardinalityEstimator {
 
         // Recursively count the number of base conditions in the expression
         fn count_conditions(expr: &Arc<dyn datafusion::physical_expr::PhysicalExpr>) -> usize {
-            if let Some(binary_expr) = expr.downcast_ref::<BinaryExpr>() {
-                if binary_expr.op() == &Operator::And {
-                    return count_conditions(binary_expr.left())
-                        + count_conditions(binary_expr.right());
-                }
+            if let Some(binary_expr) = expr.downcast_ref::<BinaryExpr>()
+                && binary_expr.op() == &Operator::And
+            {
+                return count_conditions(binary_expr.left())
+                    + count_conditions(binary_expr.right());
             }
             1 // Not an AND, count as one condition
         }
@@ -441,8 +441,8 @@ mod tests {
     use datafusion::common::stats::Precision;
     use datafusion::common::{ScalarValue, Statistics};
     use datafusion::logical_expr::{JoinType, Operator};
-    use datafusion::physical_expr::expressions::{BinaryExpr, Column, Literal};
     use datafusion::physical_expr::PhysicalExpr;
+    use datafusion::physical_expr::expressions::{BinaryExpr, Column, Literal};
     use datafusion::physical_plan::empty::EmptyExec;
 
     use super::*;
@@ -571,8 +571,8 @@ mod tests {
     #[test]
     fn test_has_non_equi_filter() {
         use datafusion::logical_expr::{JoinType, Operator};
-        use datafusion::physical_expr::expressions::{BinaryExpr, Column};
         use datafusion::physical_expr::PhysicalExpr;
+        use datafusion::physical_expr::expressions::{BinaryExpr, Column};
 
         use crate::join_reorder::graph::JoinEdge;
 
@@ -642,8 +642,8 @@ mod tests {
         use datafusion::arrow::datatypes::{DataType, Field, Schema};
         use datafusion::common::Statistics;
         use datafusion::logical_expr::JoinType;
-        use datafusion::physical_expr::expressions::{BinaryExpr, Column};
         use datafusion::physical_expr::PhysicalExpr;
+        use datafusion::physical_expr::expressions::{BinaryExpr, Column};
         use datafusion::physical_plan::empty::EmptyExec;
 
         let mut graph: QueryGraph = QueryGraph::new();
@@ -728,8 +728,8 @@ mod tests {
     #[test]
     fn test_tdom_prefers_distinct_stats_over_missing_cols() -> Result<()> {
         use datafusion::logical_expr::JoinType;
-        use datafusion::physical_expr::expressions::{BinaryExpr, Column};
         use datafusion::physical_expr::PhysicalExpr;
+        use datafusion::physical_expr::expressions::{BinaryExpr, Column};
 
         let mut graph = QueryGraph::new();
         let schema: Arc<Schema> =
@@ -783,8 +783,8 @@ mod tests {
     #[test]
     fn test_tdom_cap_uses_base_cardinality_for_filtered_dimension() -> Result<()> {
         use datafusion::logical_expr::JoinType;
-        use datafusion::physical_expr::expressions::{BinaryExpr, Column};
         use datafusion::physical_expr::PhysicalExpr;
+        use datafusion::physical_expr::expressions::{BinaryExpr, Column};
 
         let mut graph = QueryGraph::new();
         let schema: Arc<Schema> =
@@ -853,8 +853,8 @@ mod tests {
     #[test]
     fn test_tdom_fallback_uses_min_relation_cardinality() -> Result<()> {
         use datafusion::logical_expr::JoinType;
-        use datafusion::physical_expr::expressions::{BinaryExpr, Column};
         use datafusion::physical_expr::PhysicalExpr;
+        use datafusion::physical_expr::expressions::{BinaryExpr, Column};
 
         let mut graph = QueryGraph::new();
         let schema: Arc<Schema> =
@@ -915,8 +915,8 @@ mod tests {
     #[test]
     fn test_tdom_for_multi_key_edge_uses_all_equivalence_sets() -> Result<()> {
         use datafusion::logical_expr::JoinType;
-        use datafusion::physical_expr::expressions::{BinaryExpr, Column};
         use datafusion::physical_expr::PhysicalExpr;
+        use datafusion::physical_expr::expressions::{BinaryExpr, Column};
 
         let mut graph = QueryGraph::new();
         let schema: Arc<Schema> = Arc::new(Schema::new(vec![
@@ -997,8 +997,8 @@ mod tests {
     #[test]
     fn test_tdom_for_multi_key_edge_is_capped_by_min_relation_cardinality() -> Result<()> {
         use datafusion::logical_expr::JoinType;
-        use datafusion::physical_expr::expressions::{BinaryExpr, Column};
         use datafusion::physical_expr::PhysicalExpr;
+        use datafusion::physical_expr::expressions::{BinaryExpr, Column};
 
         let mut graph = QueryGraph::new();
         let schema: Arc<Schema> = Arc::new(Schema::new(vec![

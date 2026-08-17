@@ -4,7 +4,7 @@ use datafusion::arrow::array::{Array, ArrayRef, ListArray};
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::compute::concat;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{Result, plan_err};
 
 pub fn get_fields(data_types: &[DataType], names: &[String]) -> Result<Vec<Field>> {
     if data_types.len() != names.len() {

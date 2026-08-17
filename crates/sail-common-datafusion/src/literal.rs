@@ -1,6 +1,6 @@
 use datafusion::arrow::array::{RecordBatch, RecordBatchOptions};
 use datafusion::physical_expr::create_physical_expr;
-use datafusion_common::{exec_datafusion_err, exec_err, DFSchema, Result, ScalarValue};
+use datafusion_common::{DFSchema, Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{ColumnarValue, Expr};
 

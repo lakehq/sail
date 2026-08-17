@@ -6,7 +6,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::{ArrayRef, StringArray, *};
 use datafusion::arrow::datatypes::{DataType, *};
 use datafusion_common::{
-    exec_datafusion_err, exec_err, internal_err, DataFusionError, Result, ScalarValue,
+    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, internal_err,
 };
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -257,7 +257,7 @@ impl ParsedNumber {
 }
 
 macro_rules! get_opt_capture_group {
-    ($captures:expr, $group_name:expr) => {
+    ($captures:expr_2021, $group_name:expr_2021) => {
         $captures
             .name($group_name)
             .map(|m| m.as_str().trim().to_string())
@@ -265,7 +265,7 @@ macro_rules! get_opt_capture_group {
 }
 
 macro_rules! get_capture_group {
-    ($captures:expr, $group_name:expr) => {
+    ($captures:expr_2021, $group_name:expr_2021) => {
         get_opt_capture_group!($captures, $group_name).ok_or_else(|| {
             exec_datafusion_err!(
                 "Missing '{}' group in the format regex or not well formed.",
@@ -280,13 +280,13 @@ macro_rules! get_capture_group {
 // is only inspected (compared, measured), never stored — avoiding an allocation
 // per row per group.
 macro_rules! get_opt_capture_str {
-    ($captures:expr, $group_name:expr) => {
+    ($captures:expr_2021, $group_name:expr_2021) => {
         $captures.name($group_name).map(|m| m.as_str().trim())
     };
 }
 
 macro_rules! get_capture_str {
-    ($captures:expr, $group_name:expr) => {
+    ($captures:expr_2021, $group_name:expr_2021) => {
         get_opt_capture_str!($captures, $group_name).ok_or_else(|| {
             exec_datafusion_err!(
                 "Missing '{}' group in the format regex or not well formed.",
@@ -375,8 +375,8 @@ fn validate_thousands_separator_positions(numbers: &str) -> Result<()> {
             "The format is invalid: '{numbers}'. Thousands separators (, or G) must have digits on both sides."
         );
     }
-    for w in bytes.windows(2) {
-        if is_sep(w[0]) && is_sep(w[1]) {
+    for &[left, right] in bytes.array_windows::<2>() {
+        if is_sep(left) && is_sep(right) {
             return exec_err!(
                 "The format is invalid: '{numbers}'. Thousands separators (, or G) must have digits between them."
             );
@@ -644,7 +644,9 @@ fn match_grouping(value_captures: &Captures, format_spec: &RegexSpec) -> Result<
     let has_comma = format_positions.iter().any(|(_, d)| *d == ',');
     let has_g = format_positions.iter().any(|(_, d)| *d == 'G');
     if has_comma && has_g {
-        return exec_err!("Malformed integer format related groupings: {format_numbers}. Cannot mix ',' and 'G' separators.");
+        return exec_err!(
+            "Malformed integer format related groupings: {format_numbers}. Cannot mix ',' and 'G' separators."
+        );
     }
 
     // Check if the groupings are in the correct order position

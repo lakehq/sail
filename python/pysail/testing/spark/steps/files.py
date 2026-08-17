@@ -42,7 +42,7 @@ _HEX_PREFIX_DIR_RE = re.compile(r"^[0-9a-fA-F]{2}$")
 _DELTA_UUID_CHECKPOINT_RE = re.compile(
     r"^(\d{20}\.checkpoint\.)"
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
-    r"\.parquet$"
+    r"\.(?P<format>parquet|json)$"
 )
 _DELTA_SIDECAR_FILE_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\.parquet$"
@@ -91,11 +91,11 @@ def _normalize_name(name: str) -> str | None:
         return "snap-*.avro"
 
     # Normalize Delta V2 UUID-named checkpoint files
-    # e.g., `00000000000000000001.checkpoint.80a083e8-7026-4e79-81be-64bd76c43a11.parquet`
-    #     → `00000000000000000001.checkpoint.<uuid>.parquet`
+    # e.g., `00000000000000000001.checkpoint.80a083e8-7026-4e79-81be-64bd76c43a11.json`
+    #     → `00000000000000000001.checkpoint.<uuid>.json`
     m = _DELTA_UUID_CHECKPOINT_RE.match(name)
     if m is not None:
-        return f"{m.group(1)}<uuid>.parquet"
+        return f"{m.group(1)}<uuid>.{m.group('format')}"
 
     # Normalize Delta V2 sidecar files (UUID-named parquet in _sidecars/)
     # e.g., `3a0d65cd-4056-49b8-937b-95f9e3ee90e5.parquet` → `<uuid>.parquet`

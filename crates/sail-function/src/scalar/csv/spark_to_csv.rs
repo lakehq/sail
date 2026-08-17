@@ -5,13 +5,43 @@ use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::*;
 use datafusion::error::{DataFusionError, Result};
-use datafusion_common::{exec_err, plan_err, ScalarValue};
+use datafusion_common::{ScalarValue, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_expr_common::signature::Volatility;
-use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
+use lazy_static::lazy_static;
 
 use crate::functions_utils::make_scalar_function;
-use crate::scalar::datetime::utils::spark_datetime_format_to_chrono_strftime;
+use crate::scalar::csv::options::{
+    CsvFunction, find_option, find_option_with_alias, parse_bool_option, reject_null_entries,
+    validate_options,
+};
+use crate::scalar::datetime::format::{
+    DateTimeFormat, DateTimeFormatInput, TimePrecision, TimeZoneDisplay, TimestampKind,
+};
+
+fn default_timestamp_format() -> DateTimeFormat {
+    #[expect(clippy::expect_used)]
+    DateTimeFormat::for_formatting(SparkToCsvOptions::TIMESTAMP_FORMAT_DEFAULT)
+        .expect("default timestamp format should be valid")
+}
+
+fn default_date_format() -> DateTimeFormat {
+    #[expect(clippy::expect_used)]
+    DateTimeFormat::for_formatting(SparkToCsvOptions::DATE_FORMAT_DEFAULT)
+        .expect("default date format should be valid")
+}
+
+fn default_ltz_format() -> DateTimeFormat {
+    #[expect(clippy::expect_used)]
+    DateTimeFormat::for_formatting("yyyy-MM-dd'T'HH:mm:ss.SSSXXX")
+        .expect("default timestamp LTZ format should be valid")
+}
+
+lazy_static! {
+    static ref DEFAULT_TIMESTAMP_FORMAT: DateTimeFormat = default_timestamp_format();
+    static ref DEFAULT_DATE_FORMAT: DateTimeFormat = default_date_format();
+    static ref DEFAULT_LTZ_FORMAT: DateTimeFormat = default_ltz_format();
+}
 
 #[cfg(test)]
 const DEFAULT_SESSION_TIMEZONE: &str = "UTC";
@@ -41,8 +71,8 @@ struct SparkToCsvOptions {
     empty_value: String,
     ignore_leading_whitespace: bool,
     ignore_trailing_whitespace: bool,
-    timestamp_format: String,
-    date_format: String,
+    timestamp_format: DateTimeFormat,
+    date_format: DateTimeFormat,
 }
 
 impl SparkToCsvOptions {
@@ -64,62 +94,55 @@ impl SparkToCsvOptions {
     pub const DATE_FORMAT_OPTION: &'static str = "dateFormat";
 
     // Default formats matching Spark's defaults
-    pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "%Y-%m-%dT%H:%M:%S%.3f";
-    pub const DATE_FORMAT_DEFAULT: &'static str = "%Y-%m-%d";
+    pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd'T'HH:mm:ss.SSS";
+    pub const DATE_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd";
 
     /// Build `SparkToCsvOptions` from a DataFusion `MapArray` of key-value pairs.
     fn from_map(map: &MapArray) -> Result<Self> {
-        let sep = find_key_value(map, Self::SEP_OPTION)
-            .or_else(|| find_key_value(map, Self::DELIMITER_OPTION))
-            .unwrap_or_else(|| Self::SEP_DEFAULT.to_string());
+        validate_options(map, CsvFunction::To)?;
 
-        let quote = parse_char_option(
-            find_key_value(map, Self::QUOTE_OPTION).as_deref(),
-            Self::QUOTE_OPTION,
-            Self::QUOTE_DEFAULT,
-        )?;
-        let escape = parse_char_option(
-            find_key_value(map, Self::ESCAPE_OPTION).as_deref(),
-            Self::ESCAPE_OPTION,
-            Self::ESCAPE_DEFAULT,
-        )?;
+        let sep = find_option_with_alias(map, Self::SEP_OPTION, Self::DELIMITER_OPTION)
+            .unwrap_or(Self::SEP_DEFAULT)
+            .to_string();
+
+        let quote = parse_char_option(find_option(map, Self::QUOTE_OPTION), Self::QUOTE_DEFAULT);
+        let escape = parse_char_option(find_option(map, Self::ESCAPE_OPTION), Self::ESCAPE_DEFAULT);
         let escape_quotes = parse_bool_option(
-            find_key_value(map, Self::ESCAPE_QUOTES_OPTION).as_deref(),
+            find_option(map, Self::ESCAPE_QUOTES_OPTION),
             Self::ESCAPE_QUOTES_OPTION,
             true,
         )?;
         let quote_all = parse_bool_option(
-            find_key_value(map, Self::QUOTE_ALL_OPTION).as_deref(),
+            find_option(map, Self::QUOTE_ALL_OPTION),
             Self::QUOTE_ALL_OPTION,
             false,
         )?;
-        let null_value = find_key_value(map, Self::NULL_VALUE_OPTION);
+        let null_value = find_option(map, Self::NULL_VALUE_OPTION);
         let null_value_set = null_value.is_some();
-        let null_value = null_value.unwrap_or_default();
-        let empty_value = find_key_value(map, Self::EMPTY_VALUE_OPTION)
-            .unwrap_or_else(|| Self::EMPTY_VALUE_DEFAULT.to_string());
+        let null_value = null_value.unwrap_or_default().to_string();
+        let empty_value = find_option(map, Self::EMPTY_VALUE_OPTION)
+            .unwrap_or(Self::EMPTY_VALUE_DEFAULT)
+            .to_string();
         let ignore_leading_whitespace = parse_bool_option(
-            find_key_value(map, Self::IGNORE_LEADING_WHITESPACE_OPTION).as_deref(),
+            find_option(map, Self::IGNORE_LEADING_WHITESPACE_OPTION),
             Self::IGNORE_LEADING_WHITESPACE_OPTION,
             true,
         )?;
         let ignore_trailing_whitespace = parse_bool_option(
-            find_key_value(map, Self::IGNORE_TRAILING_WHITESPACE_OPTION).as_deref(),
+            find_option(map, Self::IGNORE_TRAILING_WHITESPACE_OPTION),
             Self::IGNORE_TRAILING_WHITESPACE_OPTION,
             true,
         )?;
 
-        let timestamp_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
-            .as_deref()
-            .map(spark_datetime_format_to_chrono_strftime)
+        let timestamp_format = find_option(map, Self::TIMESTAMP_FORMAT_OPTION)
+            .map(DateTimeFormat::for_formatting)
             .transpose()?
-            .unwrap_or_else(|| Self::TIMESTAMP_FORMAT_DEFAULT.to_string());
+            .unwrap_or_else(|| DEFAULT_TIMESTAMP_FORMAT.clone());
 
-        let date_format = find_key_value(map, Self::DATE_FORMAT_OPTION)
-            .as_deref()
-            .map(spark_datetime_format_to_chrono_strftime)
+        let date_format = find_option(map, Self::DATE_FORMAT_OPTION)
+            .map(DateTimeFormat::for_formatting)
             .transpose()?
-            .unwrap_or_else(|| Self::DATE_FORMAT_DEFAULT.to_string());
+            .unwrap_or_else(|| DEFAULT_DATE_FORMAT.clone());
 
         Ok(Self {
             sep,
@@ -151,8 +174,8 @@ impl Default for SparkToCsvOptions {
             empty_value: Self::EMPTY_VALUE_DEFAULT.to_string(),
             ignore_leading_whitespace: true,
             ignore_trailing_whitespace: true,
-            timestamp_format: Self::TIMESTAMP_FORMAT_DEFAULT.to_string(),
-            date_format: Self::DATE_FORMAT_DEFAULT.to_string(),
+            timestamp_format: DEFAULT_TIMESTAMP_FORMAT.clone(),
+            date_format: DEFAULT_DATE_FORMAT.clone(),
         }
     }
 }
@@ -259,6 +282,11 @@ fn spark_to_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Array
             ))
         })?;
 
+    let num_rows = struct_array.len();
+
+    // Option VALUES are validated lazily (inside `from_map`), so a bad option is not seen when
+    // every input struct is NULL; a structurally invalid map (NULL key/value) is rejected eagerly.
+    // See F2 in the #2255 review.
     let options: SparkToCsvOptions = if let Some(opts) = args.get(1) {
         let map = opts.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
             DataFusionError::Execution(format!(
@@ -266,29 +294,42 @@ fn spark_to_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Array
                 SparkToCsv::TO_CSV_NAME
             ))
         })?;
-        SparkToCsvOptions::from_map(map)?
+        reject_null_entries(map, CsvFunction::To)?;
+        if struct_array.null_count() < num_rows {
+            SparkToCsvOptions::from_map(map)?
+        } else {
+            SparkToCsvOptions::default()
+        }
     } else {
         SparkToCsvOptions::default()
     };
 
-    let num_rows = struct_array.len();
     let fields = struct_array.fields();
     let columns = struct_array.columns();
 
-    let mut output: Vec<Option<String>> = Vec::with_capacity(num_rows);
+    // Reused row buffer + `StringBuilder`: no per-row `Vec<String>` + `join`, and no
+    // outer `Vec<Option<String>>` — write each field (and the separator) straight into
+    // `row`, then append once into the Arrow buffer.
+    // Reserve the exact item/offset count (known); let the value byte-buffer grow on
+    // its own — CSV row length is unknown up front and, for strings, the byte-capacity
+    // hint barely matters (byte-copy dominates).
+    let mut builder = StringBuilder::with_capacity(num_rows, 0);
+    let mut row = String::new();
 
     for row_idx in 0..num_rows {
         if struct_array.is_null(row_idx) {
-            output.push(None);
+            builder.append_null();
             continue;
         }
 
-        let mut parts: Vec<String> = Vec::with_capacity(fields.len());
-
+        row.clear();
         for (col_idx, field) in fields.iter().enumerate() {
+            if col_idx > 0 {
+                row.push_str(&options.sep);
+            }
             let col = &columns[col_idx];
             if col.is_null(row_idx) {
-                parts.push(write_csv_null_field(&options));
+                row.push_str(&write_csv_null_field(&options));
             } else {
                 let value_str = format_field_to_csv(
                     col,
@@ -297,14 +338,14 @@ fn spark_to_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Array
                     &options,
                     session_timezone,
                 )?;
-                parts.push(write_csv_field(&value_str, &options));
+                row.push_str(&write_csv_field(&value_str, &options));
             }
         }
 
-        output.push(Some(parts.join(&options.sep)));
+        builder.append_value(&row);
     }
 
-    Ok(Arc::new(StringArray::from(output)))
+    Ok(Arc::new(builder.finish()))
 }
 
 /// Extracts a timestamp value from an Arrow array at `row_idx` as microseconds,
@@ -363,7 +404,6 @@ fn format_timestamp_field(
 
     let secs = micros.div_euclid(1_000_000);
     let nanos = (micros.rem_euclid(1_000_000) * 1_000) as u32;
-    let is_default_format = options.timestamp_format == SparkToCsvOptions::TIMESTAMP_FORMAT_DEFAULT;
 
     if tz_opt.is_some() {
         // TIMESTAMP LTZ — localize to session timezone and emit offset
@@ -376,15 +416,20 @@ fn format_timestamp_field(
             DataFusionError::Execution(format!("Timestamp out of range: {micros}"))
         })?;
         let local_dt = utc_dt.with_timezone(&tz);
-        if is_default_format {
-            // Spark default: ISO 8601 with offset — Z for UTC, +HH:MM otherwise
-            Ok(local_dt
-                .format("%Y-%m-%dT%H:%M:%S%.3f%:z")
-                .to_string()
-                .replace("+00:00", "Z"))
+        let input = DateTimeFormatInput {
+            datetime: local_dt.naive_local(),
+            timezone: Some(TimeZoneDisplay {
+                offset: local_dt.offset().fix(),
+                name: Some(session_timezone),
+            }),
+            zone_id: Some(session_timezone),
+            timestamp_kind: TimestampKind::Normal,
+            precision: TimePrecision::Microsecond,
+        };
+        if options.timestamp_format == *DEFAULT_TIMESTAMP_FORMAT {
+            DEFAULT_LTZ_FORMAT.format(input)
         } else {
-            // Custom timestampFormat — apply format, no offset appended
-            Ok(local_dt.format(&options.timestamp_format).to_string())
+            options.timestamp_format.format(input)
         }
     } else {
         // TIMESTAMP_NTZ — no timezone, no offset suffix
@@ -393,7 +438,13 @@ fn format_timestamp_field(
             .ok_or_else(|| {
                 DataFusionError::Execution(format!("Timestamp out of range: {micros}"))
             })?;
-        Ok(naive.format(&options.timestamp_format).to_string())
+        options.timestamp_format.format(DateTimeFormatInput {
+            datetime: naive,
+            timezone: None,
+            zone_id: None,
+            timestamp_kind: TimestampKind::Normal,
+            precision: TimePrecision::Microsecond,
+        })
     }
 }
 
@@ -429,7 +480,15 @@ fn format_field_to_csv(
                 .ok_or_else(|| {
                     DataFusionError::Execution(format!("Date32 value out of range: {days}"))
                 })?;
-            Ok(date.format(&options.date_format).to_string())
+            options.date_format.format(DateTimeFormatInput {
+                datetime: date.and_hms_opt(0, 0, 0).ok_or_else(|| {
+                    DataFusionError::Execution(format!("Date32 value out of range: {days}"))
+                })?,
+                timezone: None,
+                zone_id: None,
+                timestamp_kind: TimestampKind::Normal,
+                precision: TimePrecision::Second,
+            })
         }
 
         DataType::Date64 => {
@@ -444,7 +503,15 @@ fn format_field_to_csv(
                 .ok_or_else(|| {
                     DataFusionError::Execution(format!("Date64 value out of range: {millis}"))
                 })?;
-            Ok(date.format(&options.date_format).to_string())
+            options.date_format.format(DateTimeFormatInput {
+                datetime: date.and_hms_opt(0, 0, 0).ok_or_else(|| {
+                    DataFusionError::Execution(format!("Date64 value out of range: {millis}"))
+                })?,
+                timezone: None,
+                zone_id: None,
+                timestamp_kind: TimestampKind::Normal,
+                precision: TimePrecision::Second,
+            })
         }
 
         DataType::List(field) => {
@@ -723,55 +790,13 @@ fn format_float64(value: f64) -> String {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Helpers (same pattern as spark_from_csv.rs)
-// ---------------------------------------------------------------------------
-
-fn find_key_value(options: &MapArray, search_key: &str) -> Option<String> {
-    let entries = options.entries();
-    let keys = entries
-        .column_by_name(SAIL_MAP_KEY_FIELD_NAME)
-        .and_then(|c| c.as_any().downcast_ref::<StringArray>())?;
-    let values = entries
-        .column_by_name(SAIL_MAP_VALUE_FIELD_NAME)
-        .and_then(|c| c.as_any().downcast_ref::<StringArray>())?;
-
-    keys.iter()
-        .enumerate()
-        .find(|(_, k)| {
-            k.as_deref()
-                .is_some_and(|k| k.eq_ignore_ascii_case(search_key))
-        })
-        .and_then(|(i, _)| {
-            // Return None if the value is null
-            if values.is_null(i) {
-                None
-            } else {
-                Some(values.value(i).to_string())
-            }
-        })
-}
-
-fn parse_char_option(value: Option<&str>, option_name: &str, default: char) -> Result<char> {
+/// Reads a single-character CSV option. `validate_options` already rejects a value longer than one
+/// character (with Spark's message), so an empty value maps to `'\0'` and anything else to its
+/// first character; this never has to error.
+fn parse_char_option(value: Option<&str>, default: char) -> char {
     match value {
-        None => Ok(default),
-        Some(value) => {
-            let mut chars = value.chars();
-            match (chars.next(), chars.next()) {
-                (None, _) => Ok('\0'),
-                (Some(ch), None) => Ok(ch),
-                _ => exec_err!("CSV option `{option_name}` must be a single character"),
-            }
-        }
-    }
-}
-
-fn parse_bool_option(value: Option<&str>, option_name: &str, default: bool) -> Result<bool> {
-    match value {
-        None => Ok(default),
-        Some(value) if value.eq_ignore_ascii_case("true") => Ok(true),
-        Some(value) if value.eq_ignore_ascii_case("false") => Ok(false),
-        Some(_) => exec_err!("CSV option `{option_name}` must be `true` or `false`"),
+        None => default,
+        Some(value) => value.chars().next().unwrap_or('\0'),
     }
 }
 
@@ -1424,7 +1449,7 @@ mod tests {
 
         // Manually construct options with custom format
         let options = SparkToCsvOptions {
-            timestamp_format: "%d/%m/%Y".to_string(), // dd/MM/yyyy format
+            timestamp_format: DateTimeFormat::for_formatting("dd/MM/yyyy")?,
             ..SparkToCsvOptions::default()
         };
 

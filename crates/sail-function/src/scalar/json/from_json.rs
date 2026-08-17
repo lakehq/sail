@@ -6,7 +6,7 @@ use datafusion::arrow::array::*;
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use datafusion::arrow::datatypes::*;
 use datafusion::error::{DataFusionError, Result};
-use datafusion_common::{exec_err, plan_err, ScalarValue};
+use datafusion_common::{ScalarValue, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
@@ -22,7 +22,7 @@ use serde_json::Value;
 
 use crate::functions_nested_utils::*;
 use crate::functions_utils::make_scalar_function;
-use crate::scalar::datetime::utils::spark_datetime_format_to_chrono_strftime;
+use crate::scalar::datetime::format::DateTimeFormat;
 
 /// UDF implementation of `from_json`, similar to Spark's `from_json`.
 /// This function parses a column of JSON strings using a specified schema
@@ -47,29 +47,37 @@ pub struct SparkFromJson {
 /// Configuration options for the `from_json` function.
 #[derive(Debug)]
 struct SparkFromJsonOptions {
-    timestamp_format: String,
-    date_format: String,
+    timestamp_format: DateTimeFormat,
+    date_format: DateTimeFormat,
 }
 
 impl SparkFromJsonOptions {
     pub const TIMESTAMP_FORMAT_OPTION: &'static str = "timestampFormat";
     pub const DATE_FORMAT_OPTION: &'static str = "dateFormat";
-    // Default formats matching Spark's behavior
-    pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "%Y-%m-%d %H:%M:%S";
-    pub const DATE_FORMAT_DEFAULT: &'static str = "%Y-%m-%d";
+    // Default formats matching Spark's behavior (Java DateTimeFormatter patterns)
+    pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd HH:mm:ss";
+    pub const DATE_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd";
 
     fn from_map(map: &MapArray) -> Result<Self> {
         let timestamp_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
             .as_deref()
-            .map(spark_datetime_format_to_chrono_strftime)
+            .map(DateTimeFormat::for_parsing)
             .transpose()?
-            .unwrap_or_else(|| Self::TIMESTAMP_FORMAT_DEFAULT.to_string());
+            .unwrap_or_else(|| {
+                #[expect(clippy::expect_used)]
+                DateTimeFormat::for_parsing(Self::TIMESTAMP_FORMAT_DEFAULT)
+                    .expect("default timestamp format should be valid")
+            });
 
         let date_format = find_key_value(map, Self::DATE_FORMAT_OPTION)
             .as_deref()
-            .map(spark_datetime_format_to_chrono_strftime)
+            .map(DateTimeFormat::for_parsing)
             .transpose()?
-            .unwrap_or_else(|| Self::DATE_FORMAT_DEFAULT.to_string());
+            .unwrap_or_else(|| {
+                #[expect(clippy::expect_used)]
+                DateTimeFormat::for_parsing(Self::DATE_FORMAT_DEFAULT)
+                    .expect("default date format should be valid")
+            });
 
         Ok(Self {
             timestamp_format,
@@ -79,10 +87,13 @@ impl SparkFromJsonOptions {
 }
 
 impl Default for SparkFromJsonOptions {
+    #[expect(clippy::expect_used)]
     fn default() -> Self {
         Self {
-            timestamp_format: Self::TIMESTAMP_FORMAT_DEFAULT.to_string(),
-            date_format: Self::DATE_FORMAT_DEFAULT.to_string(),
+            timestamp_format: DateTimeFormat::for_parsing(Self::TIMESTAMP_FORMAT_DEFAULT)
+                .expect("default timestamp format should be valid"),
+            date_format: DateTimeFormat::for_parsing(Self::DATE_FORMAT_DEFAULT)
+                .expect("default date format should be valid"),
         }
     }
 }
@@ -154,16 +165,19 @@ impl ScalarUDFImpl for SparkFromJson {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         match arg_types {
-            [DataType::Null | DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8] => {
-                Ok(vec![DataType::Utf8, arg_types[1].clone()])
-            }
-            [DataType::Null | DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Map(_, _)] => {
-                Ok(vec![
-                    DataType::Utf8,
-                    arg_types[1].clone(),
-                    arg_types[2].clone(),
-                ])
-            }
+            [
+                DataType::Null | DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+            ] => Ok(vec![DataType::Utf8, arg_types[1].clone()]),
+            [
+                DataType::Null | DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                DataType::Map(_, _),
+            ] => Ok(vec![
+                DataType::Utf8,
+                arg_types[1].clone(),
+                arg_types[2].clone(),
+            ]),
             _ => plan_err!(
                 "`{}` function requires 2 or 3 arguments, got {}",
                 Self::FROM_JSON_NAME,
@@ -216,7 +230,7 @@ fn from_json_inner(args: &[ArrayRef], session_timezone: &str) -> Result<ArrayRef
                 "`{}` function doesn't support target schema type {}",
                 SparkFromJson::FROM_JSON_NAME,
                 other
-            )
+            );
         }
     }
 
@@ -381,18 +395,16 @@ fn create_builder(
             })
         }
         DataType::LargeUtf8 => Ok(FieldBuilder::LargeString(
-            LargeStringBuilder::with_capacity(capacity, capacity * 16),
+            LargeStringBuilder::with_capacity(capacity, 0),
         )),
         DataType::Map(field, ordered) => {
             let (keys_field, values_field) = match field.data_type() {
-                DataType::Struct(fields) => {
-                    Ok((fields[0].clone(), fields[1].clone()))
-                },
+                DataType::Struct(fields) => Ok((fields[0].clone(), fields[1].clone())),
                 other => exec_err!(
                     "Unreachable: `{}` function handled map field that should be a struct but is {:#?}",
                     SparkFromJson::FROM_JSON_NAME,
                     other
-                )
+                ),
             }?;
             let keys_builder = create_builder(keys_field.data_type(), capacity, session_timezone)?;
             let values_builder =
@@ -420,8 +432,7 @@ fn create_builder(
             })
         }
         DataType::Utf8 => Ok(FieldBuilder::String(StringBuilder::with_capacity(
-            capacity,
-            capacity * 16,
+            capacity, 0,
         ))),
         DataType::Timestamp(time_unit, tz) => {
             let resolved_tz = tz.clone().unwrap_or(Arc::from(session_timezone));
@@ -770,7 +781,7 @@ fn finish_builder(builder: FieldBuilder) -> Result<ArrayRef> {
                     "Unreachable: `{}` function handled map field that should be a struct but is {:#?}",
                     SparkFromJson::FROM_JSON_NAME,
                     other
-                )
+                ),
             }?;
             let struct_array =
                 StructArray::new(fields.clone(), vec![finished_keys, finished_values], None);
@@ -928,12 +939,8 @@ fn parse_date32(
     options: &SparkFromJsonOptions,
 ) -> Result<<Date32Type as ArrowPrimitiveType>::Native> {
     let format = &options.date_format;
-    let naive_date = NaiveDate::parse_from_str(s, format).map_err(|e| {
-        DataFusionError::Execution(format!(
-            "Failed to parse date '{s}' with format '{format}': {e}"
-        ))
-    })?;
-    Ok(Date32Type::from_naive_date(naive_date))
+    let parsed = format.parse_datetime_value(s)?;
+    Ok(Date32Type::from_naive_date(parsed.datetime.date()))
 }
 
 fn parse_timestamp(
@@ -942,21 +949,23 @@ fn parse_timestamp(
     options: &SparkFromJsonOptions,
 ) -> Result<DateTime<Utc>> {
     let format = &options.timestamp_format;
-    let naive_datetime = if let Ok(datetime) = NaiveDateTime::parse_from_str(s, format) {
-        datetime
-    } else if let Ok(date) = NaiveDate::parse_from_str(s, format) {
-        let Some(datetime) = date.and_hms_opt(0, 0, 0) else {
-            return exec_err!("Failed to parse timestamp '{s}': invalid date");
-        };
-        datetime
+    let parsed = format.parse_datetime_value(s)?;
+
+    let datetime = if let Some(offset) = parsed.offset {
+        parsed
+            .datetime
+            .and_local_timezone(offset)
+            .single()
+            .map(|x| x.to_utc())
+            .ok_or_else(|| DataFusionError::Execution("cannot apply parsed offset".to_string()))?
     } else {
-        return exec_err!("Failed to parse timestamp '{s}' with format '{format}'");
+        let tz: Tz = timezone.as_ref().parse().map_err(|e| {
+            DataFusionError::Execution(format!("Invalid timezone '{timezone}': {e}"))
+        })?;
+        localize_with_fallback(&tz, &parsed.datetime)?
     };
-    let tz: Tz = timezone
-        .as_ref()
-        .parse()
-        .map_err(|e| DataFusionError::Execution(format!("Invalid timezone '{timezone}': {e}")))?;
-    localize_with_fallback(&tz, &naive_datetime)
+
+    Ok(datetime)
 }
 
 /// Parses a schema string into an Arrow DataType. The schema may be a bare field list
@@ -1124,20 +1133,18 @@ fn json_type_name_to_data_type(type_name: &str, session_timezone: &str) -> Resul
                 let mut parts = args.split(',').map(str::trim);
                 if let (Some(precision), Some(scale), None) =
                     (parts.next(), parts.next(), parts.next())
-                {
-                    if let (Ok(precision), Ok(scale)) =
+                    && let (Ok(precision), Ok(scale)) =
                         (precision.parse::<u8>(), scale.parse::<i8>())
-                    {
-                        datafusion::arrow::datatypes::validate_decimal_precision_and_scale::<
-                            Decimal128Type,
-                        >(precision, scale)
-                        .map_err(|e| {
-                            DataFusionError::Plan(format!(
-                                "Invalid decimal precision/scale in '{other}': {e}"
-                            ))
-                        })?;
-                        return Ok(DataType::Decimal128(precision, scale));
-                    }
+                {
+                    datafusion::arrow::datatypes::validate_decimal_precision_and_scale::<
+                        Decimal128Type,
+                    >(precision, scale)
+                    .map_err(|e| {
+                        DataFusionError::Plan(format!(
+                            "Invalid decimal precision/scale in '{other}': {e}"
+                        ))
+                    })?;
+                    return Ok(DataType::Decimal128(precision, scale));
                 }
             }
             if let Some(args) = other

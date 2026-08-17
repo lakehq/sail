@@ -9,7 +9,7 @@ use datafusion::execution::SessionState;
 use datafusion::logical_expr::{Extension, LogicalPlan, TableSource, UserDefinedLogicalNode};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
-use datafusion_common::{internal_err, not_impl_err, plan_err, DFSchema, DFSchemaRef, Result};
+use datafusion_common::{DFSchema, DFSchemaRef, Result, internal_err, not_impl_err, plan_err};
 use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
 use educe::Educe;
 use sail_common_datafusion::datasource::{SinkInfo, SinkMode, SourceInfo, TableFormat};
@@ -17,8 +17,8 @@ use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 pub use crate::formats::console::writer::ConsoleSinkExec;
-use crate::options::gen::ConsoleWriteOptions;
 use crate::options::ResolveOptions;
+use crate::options::r#gen::ConsoleWriteOptions;
 
 /// Write data to stdout for testing purposes.
 #[derive(Debug)]

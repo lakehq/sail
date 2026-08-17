@@ -17,7 +17,7 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::stream::{self, StreamExt};
@@ -27,8 +27,8 @@ use url::Url;
 
 use crate::deletion_vector::{DeletionVectorBitmap, DeletionVectorWriter};
 use crate::physical_plan::{
-    current_timestamp_millis, decode_adds_from_batch, delta_action_schema, encode_actions,
-    meta_adds, ExecCommitMeta, COL_ACTION,
+    COL_ACTION, ExecCommitMeta, current_timestamp_millis, decode_adds_from_batch,
+    delta_action_schema, encode_actions, meta_adds,
 };
 use crate::spec::{Action, Add, RemoveOptions};
 use crate::transaction::OperationMetrics;
@@ -559,8 +559,8 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
                 }
             }
 
-            if let Some(path) = current_path {
-                if let Some(stats) = write_merge_dv_actions_for_path(
+            if let Some(path) = current_path
+                && let Some(stats) = write_merge_dv_actions_for_path(
                     path,
                     current_bitmap,
                     &add_by_path,
@@ -571,12 +571,11 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
                     &mut output_actions,
                 )
                 .await?
-                {
-                    total_deleted_rows += stats.newly_deleted_rows;
-                    num_dv_added += 1;
-                    if stats.had_existing_dv {
-                        num_dv_updated += 1;
-                    }
+            {
+                total_deleted_rows += stats.newly_deleted_rows;
+                num_dv_added += 1;
+                if stats.had_existing_dv {
+                    num_dv_updated += 1;
                 }
             }
 
@@ -897,7 +896,7 @@ async fn scan_file_for_matching_rows(
         "{}{}{}",
         table_root,
         object_store::path::DELIMITER,
-        &add.path
+        add.path
     ));
     let file_size = add.size as u64;
     let partitioned_file = PartitionedFile::new(file_location.to_string(), file_size);

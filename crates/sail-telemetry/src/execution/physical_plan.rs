@@ -8,14 +8,14 @@ use std::time::{Duration, Instant};
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion::common::{plan_err, Result, Statistics};
+use datafusion::common::{Result, Statistics, plan_err};
 use datafusion::config::ConfigOptions;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{
     Distribution, OrderingRequirements, PhysicalExpr, PhysicalSortExpr,
 };
 use datafusion::physical_plan::execution_plan::{
-    check_default_invariants, CardinalityEffect, InvariantLevel,
+    CardinalityEffect, InvariantLevel, check_default_invariants,
 };
 use datafusion::physical_plan::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase, FilterPushdownPropagation,
@@ -29,9 +29,9 @@ use fastrace::Span;
 use fastrace_futures::StreamExt;
 use futures::Stream;
 use pin_project_lite::pin_project;
+use sail_common::telemetry::{KeyValue, SpanAttribute};
 use sail_common_datafusion::utils::items::ItemTaker;
 
-use crate::common::{KeyValue, SpanAttribute};
 use crate::execution::metrics::MetricEmitter;
 use crate::metrics::{MetricAttribute, MetricManager, MetricRegistry};
 

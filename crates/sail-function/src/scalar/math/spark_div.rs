@@ -291,7 +291,7 @@ fn interval_div_inner(args: &[ArrayRef], ansi: bool) -> Result<ArrayRef> {
                 "spark_interval_div",
                 "Interval / Interval of the same unit",
                 &[dividend.data_type().clone(), divisor.data_type().clone()],
-            ))
+            ));
         }
     };
 

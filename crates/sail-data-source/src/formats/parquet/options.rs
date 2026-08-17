@@ -7,7 +7,7 @@ use datafusion_common::parquet_config::DFParquetWriterVersion;
 use sail_common_datafusion::datasource::OptionLayer;
 
 use crate::error::{DataSourceError, DataSourceResult};
-use crate::options::gen::{
+use crate::options::r#gen::{
     ParquetReadOptions, ParquetReadPartialOptions, ParquetWriteOptions, ParquetWritePartialOptions,
 };
 use crate::options::{BuildPartialOptions, PartialOptions, ResolveOptions};
@@ -27,7 +27,6 @@ fn check_parquet_level_is_none(codec: &str, level: &Option<u32>) -> DataSourceRe
 impl BuildPartialOptions<ParquetReadPartialOptions> for TableParquetOptions {
     fn build_partial_options(self) -> DataSourceResult<ParquetReadPartialOptions> {
         Ok(ParquetReadPartialOptions {
-            extension: None,
             enable_page_index: Some(self.global.enable_page_index),
             pruning: Some(self.global.pruning),
             skip_metadata: Some(self.global.skip_metadata),
@@ -40,6 +39,7 @@ impl BuildPartialOptions<ParquetReadPartialOptions> for TableParquetOptions {
             coerce_int96: self.global.coerce_int96.map(Some),
             bloom_filter_on_read: Some(self.global.bloom_filter_on_read),
             max_predicate_cache_size: Some(self.global.max_predicate_cache_size),
+            path_glob_filter: None,
         })
     }
 }
@@ -47,7 +47,6 @@ impl BuildPartialOptions<ParquetReadPartialOptions> for TableParquetOptions {
 impl ParquetReadOptions {
     pub fn into_table_options(self) -> TableParquetOptions {
         let ParquetReadOptions {
-            extension: _,
             enable_page_index,
             pruning,
             skip_metadata,
@@ -59,6 +58,7 @@ impl ParquetReadOptions {
             coerce_int96,
             bloom_filter_on_read,
             max_predicate_cache_size,
+            path_glob_filter: _,
         } = self;
         let global = ParquetOptions {
             enable_page_index,
@@ -312,8 +312,8 @@ mod tests {
     use datafusion::prelude::SessionContext;
     use datafusion_common::parquet_config::DFParquetWriterVersion;
 
-    use crate::options::gen::{ParquetReadOptions, ParquetWriteOptions};
-    use crate::options::{option_list, ResolveOptions};
+    use crate::options::r#gen::{ParquetReadOptions, ParquetWriteOptions};
+    use crate::options::{ResolveOptions, option_list};
 
     #[test]
     fn test_resolve_parquet_read_options() -> datafusion_common::Result<()> {
@@ -363,36 +363,6 @@ mod tests {
             .map_err(datafusion_common::DataFusionError::from)?
             .into_table_options();
         assert_eq!(options.global.metadata_size_hint, None);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_resolve_parquet_read_extension() -> datafusion_common::Result<()> {
-        let ctx = SessionContext::default();
-        let state = ctx.state();
-
-        // default: no option layer → ".parquet"
-        let opts = ParquetReadOptions::resolve(&state, vec![option_list(&[])])
-            .map_err(datafusion_common::DataFusionError::from)?;
-        assert_eq!(opts.extension, ".parquet");
-
-        // snake_case override
-        let opts =
-            ParquetReadOptions::resolve(&state, vec![option_list(&[("extension", ".hive")])])
-                .map_err(datafusion_common::DataFusionError::from)?;
-        assert_eq!(opts.extension, ".hive");
-
-        // camelCase alias
-        let opts =
-            ParquetReadOptions::resolve(&state, vec![option_list(&[("fileExtension", ".pq")])])
-                .map_err(datafusion_common::DataFusionError::from)?;
-        assert_eq!(opts.extension, ".pq");
-
-        // empty string disables filtering
-        let opts = ParquetReadOptions::resolve(&state, vec![option_list(&[("extension", "")])])
-            .map_err(datafusion_common::DataFusionError::from)?;
-        assert_eq!(opts.extension, "");
 
         Ok(())
     }

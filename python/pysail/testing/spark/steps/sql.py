@@ -200,6 +200,27 @@ def query_result(datatable, ordered, query, spark):
         assert sorted(rows) == sorted(r)
 
 
+def _format_collected_value(value) -> str:
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return str(value).lower()
+    return str(value)
+
+
+@then(parsers.re("query result collected(?P<ordered>( ordered)?)"))
+def query_result_collected(datatable, ordered, query, spark):
+    """Execute the SQL query with collect() and compare result with expected data table."""
+    expected_header, *expected_rows = datatable
+    df = spark.sql(query)
+    actual = [[_format_collected_value(value) for value in row] for row in df.collect()]
+    assert expected_header == df.schema.names
+    if ordered:
+        assert expected_rows == actual
+    else:
+        assert sorted(expected_rows) == sorted(actual)
+
+
 @then(parsers.parse("query error {error}"))
 def query_error(error, query, spark):
     """Executes the SQL query and expects it to fail with an error (regex match)."""

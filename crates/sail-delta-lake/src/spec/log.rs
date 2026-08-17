@@ -16,7 +16,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use object_store::path::{Path, DELIMITER};
+use object_store::path::{DELIMITER, Path};
 use uuid::Uuid;
 
 // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/path.rs#L23-L25>
@@ -95,6 +95,12 @@ pub fn sidecar_file_name(sidecar_filename: &str) -> String {
 pub fn uuid_checkpoint_path(version: i64, uuid: &Uuid) -> Path {
     Path::from(format!(
         "{DELTA_LOG_DIR}/{version:020}.checkpoint.{uuid}.parquet"
+    ))
+}
+
+pub fn uuid_json_checkpoint_path(version: i64, uuid: &Uuid) -> Path {
+    Path::from(format!(
+        "{DELTA_LOG_DIR}/{version:020}.checkpoint.{uuid}.json"
     ))
 }
 

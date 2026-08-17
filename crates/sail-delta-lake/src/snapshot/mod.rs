@@ -33,11 +33,11 @@ use serde_json::Value;
 use url::Url;
 
 use crate::checkpoint::{
-    latest_replayable_version, load_replayed_table_header, load_replayed_table_state,
-    ReplayedTableState,
+    ReplayedTableState, latest_replayable_version, load_replayed_table_header,
+    load_replayed_table_state,
 };
-use crate::delta_log::segment_files::ReplayedTableHeader;
 use crate::delta_log::LogStore;
+use crate::delta_log::segment_files::ReplayedTableHeader;
 use crate::schema::{
     arrow_field_physical_name, arrow_schema_reorder_partitions, protocol_supports_type_widening,
     schema_contains_type_widening_metadata, validate_type_widening_metadata,
@@ -51,7 +51,8 @@ use crate::spec::fields::{
 use crate::spec::{
     Add, ColumnMappingMode, ColumnMetadataKey, CommitConflictError, DeltaError as DeltaTableError,
     DeltaResult, DomainMetadata, Metadata, Protocol, Remove, SchemaRef, StructType, TableFeature,
-    TableProperties, Transaction, TransactionError, VersionChecksum,
+    TableProperties, Transaction, TransactionError, VersionChecksum, contains_timestampntz,
+    contains_variant,
 };
 use crate::table::{
     ChangeDataFeedSupport, ChangeDataFeedToken, ColumnMappingToken, DeletionVectorToken,
@@ -64,8 +65,8 @@ mod stats;
 
 pub use config::DeltaSnapshotConfig;
 pub(crate) use config::{
-    catalog_managed_commit_file_name, catalog_managed_commit_path, CatalogManagedCommitFile,
-    CatalogManagedCommitSet,
+    CatalogManagedCommitFile, CatalogManagedCommitSet, catalog_managed_commit_file_name,
+    catalog_managed_commit_path,
 };
 
 pub struct DeltaSnapshot {
@@ -172,7 +173,7 @@ impl DeltaSnapshot {
                         Err(crate::spec::DeltaError::MissingVersion) => {
                             return Err(DeltaTableError::invalid_table_location(
                                 "No commit files found in _delta_log",
-                            ))
+                            ));
                         }
                         Err(err) => return Err(err),
                     }
@@ -190,7 +191,7 @@ impl DeltaSnapshot {
             .await
             {
                 Ok(Some(replayed)) => {
-                    return Self::from_replayed_header(log_store, config, replayed)
+                    return Self::from_replayed_header(log_store, config, replayed);
                 }
                 Ok(None) => {}
                 Err(err) => {
@@ -467,6 +468,22 @@ impl DeltaSnapshot {
             .map_err(map_read_protocol_error)?;
 
         let schema = StructType::try_from(self.schema())?;
+        if contains_timestampntz(schema.fields())
+            && !crate::transaction::PROTOCOL.supports_timestamp_ntz_schema(self.protocol())
+        {
+            return Err(DeltaTableError::Unsupported(
+                "Delta schema contains timestamp_ntz requires the timestampNtz reader and writer features"
+                    .to_string(),
+            ));
+        }
+        if contains_variant(schema.fields())
+            && !crate::transaction::PROTOCOL.supports_variant_schema(self.protocol())
+        {
+            return Err(DeltaTableError::Unsupported(
+                "Delta schema contains Variant requires matching variantType or variantType-preview reader and writer features"
+                    .to_string(),
+            ));
+        }
         let has_type_changes = schema_contains_type_widening_metadata(&schema);
         if has_type_changes && !protocol_supports_type_widening(self.protocol()) {
             return Err(DeltaTableError::Unsupported(
@@ -602,7 +619,7 @@ impl DeltaSnapshot {
     pub async fn all_tombstones(
         &self,
         log_store: &dyn LogStore,
-    ) -> DeltaResult<impl Iterator<Item = Remove>> {
+    ) -> DeltaResult<impl Iterator<Item = Remove> + use<>> {
         Ok(self
             .tombstones(log_store)
             .try_collect::<Vec<_>>()
@@ -613,7 +630,7 @@ impl DeltaSnapshot {
     pub async fn unexpired_tombstones(
         &self,
         log_store: &dyn LogStore,
-    ) -> DeltaResult<impl Iterator<Item = Remove>> {
+    ) -> DeltaResult<impl Iterator<Item = Remove> + use<>> {
         let retention_timestamp = Utc::now().timestamp_millis()
             - self
                 .table_properties()
@@ -1001,14 +1018,14 @@ mod tests {
     use std::collections::{BTreeMap, HashMap};
     use std::sync::Arc;
 
-    use object_store::memory::InMemory;
     use object_store::ObjectStore;
+    use object_store::memory::InMemory;
     use once_cell::sync::OnceCell;
     use url::Url;
 
     use super::DeltaSnapshot;
     use crate::datasource::DeltaScanConfig;
-    use crate::delta_log::{default_logstore, LogStoreRef, StorageConfig};
+    use crate::delta_log::{LogStoreRef, StorageConfig, default_logstore};
     use crate::logical::table_source::DeltaTableSource;
     use crate::snapshot::{CatalogManagedCommitSet, DeltaSnapshotConfig};
     use crate::spec::{
@@ -1033,6 +1050,10 @@ mod tests {
                 .collect(),
         )
         .unwrap()
+    }
+
+    fn test_metadata_with_schema(schema: StructType) -> crate::spec::DeltaResult<Metadata> {
+        Metadata::try_new(None, None, schema, Vec::new(), 0, HashMap::new())
     }
 
     fn test_snapshot(
@@ -1359,6 +1380,80 @@ mod tests {
     }
 
     #[test]
+    fn data_read_support_validates_schema_feature_matrix() -> crate::spec::DeltaResult<()> {
+        let cases = [
+            (
+                "timestamp_ntz",
+                StructField::nullable("event_time", DataType::TIMESTAMP_NTZ),
+                TableFeature::TimestampWithoutTimezone,
+                vec![TableFeature::TimestampWithoutTimezone],
+                "schema contains timestamp_ntz requires the timestampNtz reader and writer features",
+            ),
+            (
+                "Variant",
+                StructField::nullable("payload", DataType::unshredded_variant()),
+                TableFeature::VariantType,
+                vec![TableFeature::VariantType, TableFeature::VariantTypePreview],
+                "schema contains Variant requires matching variantType or variantType-preview reader and writer features",
+            ),
+        ];
+
+        for (label, feature_field, required_feature, supported_features, expected_error) in cases {
+            let metadata = test_metadata_with_schema(StructType::try_new([
+                StructField::not_null("id", DataType::LONG),
+                feature_field,
+            ])?)?;
+            let legacy = test_snapshot(
+                Protocol::new(1, 2, None, None),
+                metadata.clone(),
+                Vec::new(),
+            );
+            let result = legacy.ensure_data_read_supported();
+            assert!(
+                matches!(
+                    result,
+                    Err(crate::spec::DeltaError::Unsupported(message))
+                        if message.contains(expected_error)
+                ),
+                "a {label} schema without its protocol feature must be rejected"
+            );
+
+            for feature in supported_features {
+                let supported = test_snapshot(
+                    Protocol::new(3, 7, Some(vec![feature.clone()]), Some(vec![feature])),
+                    metadata.clone(),
+                    Vec::new(),
+                );
+                assert!(
+                    supported.ensure_data_read_supported().is_ok(),
+                    "{label} must accept its matching reader and writer feature"
+                );
+            }
+
+            let missing_feature_cases = [
+                (
+                    "reader feature list",
+                    Protocol::new(1, 7, None, Some(vec![required_feature.clone()])),
+                ),
+                (
+                    "writer feature list",
+                    Protocol::new(3, 7, Some(vec![required_feature]), Some(Vec::new())),
+                ),
+            ];
+            for (missing_side, protocol) in missing_feature_cases {
+                let result = test_snapshot(protocol, metadata.clone(), Vec::new())
+                    .ensure_data_read_supported();
+                assert!(
+                    result.is_err(),
+                    "{label} must be rejected without its {missing_side}"
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn data_read_support_rejects_catalog_managed_without_catalog_replay() {
         let protocol = Protocol::new(
             3,
@@ -1395,13 +1490,11 @@ mod tests {
 
     #[test]
     fn delta_table_source_rejects_unsupported_reader_features() {
-        // VacuumProtocolCheck is a reader-writer feature that we does not yet support.
-        // Use it to verify that the source correctly rejects tables with unsupported features.
         let protocol = Protocol::new(
             3,
             7,
-            Some(vec![TableFeature::VacuumProtocolCheck]),
-            Some(vec![TableFeature::VacuumProtocolCheck]),
+            Some(vec![TableFeature::Unknown]),
+            Some(vec![TableFeature::AppendOnly, TableFeature::Unknown]),
         );
         let snapshot = Arc::new(test_snapshot(protocol, test_metadata([]), Vec::new()));
 
@@ -1418,20 +1511,22 @@ mod tests {
 
         assert!(matches!(
             err,
-            crate::spec::DeltaError::Unsupported(message) if message.contains("VacuumProtocolCheck")
+            crate::spec::DeltaError::Unsupported(message) if message.contains("Unknown")
         ));
     }
 
     #[test]
     #[expect(clippy::unwrap_used)]
-    fn version_checksum_skips_explicitly_known_but_unsupported_features() {
-        // TODO: support VacuumProtocolCheck
-        let protocol = Protocol::new(1, 7, None, Some(vec![TableFeature::VacuumProtocolCheck]));
-        let snapshot = test_snapshot(protocol, test_metadata([]), Vec::new());
+    fn version_checksum_includes_vacuum_protocol_check_feature() {
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::VacuumProtocolCheck]),
+            Some(vec![TableFeature::VacuumProtocolCheck]),
+        );
+        let snapshot = test_snapshot(protocol.clone(), test_metadata([]), Vec::new());
 
-        assert!(snapshot
-            .build_version_checksum(None, None)
-            .unwrap()
-            .is_none());
+        let checksum = snapshot.build_version_checksum(None, None).unwrap();
+        assert_eq!(checksum.map(|checksum| checksum.protocol), Some(protocol));
     }
 }

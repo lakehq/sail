@@ -4,16 +4,16 @@ use std::sync::Arc;
 use datafusion::common::{JoinSide, NullEquality};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::{JoinType, Operator};
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::expressions::{BinaryExpr, Column};
 use datafusion::physical_expr::utils::collect_columns;
-use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode,
 };
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
-use datafusion::physical_plan::ExecutionPlan;
 use log::warn;
 
 use crate::join_reorder::builder::{ColumnMap, ColumnMapEntry};
@@ -900,7 +900,10 @@ impl<'a> PlanReconstructor<'a> {
                 )));
             }
 
-            match (left_matches.first().copied(), right_matches.first().copied()) {
+            match (
+                left_matches.first().copied(),
+                right_matches.first().copied(),
+            ) {
                 (Some(_), Some(_)) => Err(DataFusionError::Internal(format!(
                     "Ambiguous column reference '{}' found in both left and right join inputs during reconstruction",
                     col.name()
@@ -1023,8 +1026,8 @@ impl<'a> PlanReconstructor<'a> {
         let transformed = expr_arc.transform(|node| {
             if let Some(col) = node.downcast_ref::<Column>() {
                 // Prefer stable name mapping first
-                if let Some((rel, cidx)) = StableColumn::parse_stable_name(col.name()) {
-                    if let Some(pos) = output_map.iter().position(|e| {
+                if let Some((rel, cidx)) = StableColumn::parse_stable_name(col.name())
+                    && let Some(pos) = output_map.iter().position(|e| {
                         matches!(
                             e,
                             ColumnMapEntry::Stable {
@@ -1032,12 +1035,12 @@ impl<'a> PlanReconstructor<'a> {
                                 column_index
                             } if *relation_id == rel && *column_index == cidx
                         )
-                    }) {
-                        // Use the final plan's schema field name and index
-                        let field_name = plan.schema().field(pos).name().to_string();
-                        let new_col = Column::new(&field_name, pos);
-                        return Ok(Transformed::yes(Arc::new(new_col)));
-                    }
+                    })
+                {
+                    // Use the final plan's schema field name and index
+                    let field_name = plan.schema().field(pos).name().to_string();
+                    let new_col = Column::new(&field_name, pos);
+                    return Ok(Transformed::yes(Arc::new(new_col)));
                 }
 
                 // Fallback: try to match by current schema field name.

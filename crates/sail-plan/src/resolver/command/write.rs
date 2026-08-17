@@ -8,8 +8,8 @@ use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, ScalarValue};
 use datafusion_expr::expr::{self, FieldMetadata, Sort, WindowFunctionParams};
 use datafusion_expr::{
-    col, lit, when, BinaryExpr, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder,
-    Operator, Projection, ScalarUDF, WindowFrame, WindowFunctionDefinition,
+    BinaryExpr, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder, Operator,
+    Projection, ScalarUDF, WindowFrame, WindowFunctionDefinition, col, lit, when,
 };
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::error::CatalogError;
@@ -28,8 +28,8 @@ use sail_common_datafusion::column_features::{
     ColumnFeatures, ColumnFeaturesBuilder, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
 };
 use sail_common_datafusion::datasource::{
-    find_path_in_options, BucketBy, OptionLayer, SinkInfo, SinkMode, SourceInfo,
-    TableFormatRegistry,
+    BucketBy, OptionLayer, SinkInfo, SinkMode, SourceInfo, TableFormatRegistry,
+    find_path_in_options,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
@@ -43,8 +43,8 @@ use sail_logical_plan::barrier::BarrierNode;
 
 use super::delta::parse_delta_generation_expr;
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 /// The write modes for all targets.
 ///
@@ -463,7 +463,7 @@ impl PlanResolver<'_> {
                         .iter()
                         .map(|part| part.as_ref().to_string())
                         .collect::<Vec<_>>();
-                    let create_options = CreateTableOptions {
+                    let mut create_options = CreateTableOptions {
                         columns,
                         comment: None,
                         constraints: vec![],
@@ -488,6 +488,14 @@ impl PlanResolver<'_> {
                             },
                         )
                         .await?;
+                    if let Some(location) = create_plan.table.status.location.clone()
+                        && create_options.location.as_deref() != Some(location.as_str())
+                    {
+                        create_options.location = Some(location.clone());
+                        sink_info.options.push(OptionLayer::OptionList {
+                            items: vec![("path".to_string(), location)],
+                        });
+                    }
                     sink_info.lakehouse_table = Some(
                         create_plan
                             .table
@@ -1282,31 +1290,7 @@ impl PlanResolver<'_> {
         let mut out = Vec::with_capacity(info.columns.len());
         for column in &info.columns {
             let expr = if let Some(default) = column.default.as_deref() {
-                let ast_expr =
-                    sail_sql_analyzer::parser::parse_expression(default).map_err(|e| {
-                        PlanError::invalid(format!(
-                            "failed to parse default expression `{default}`: {e}"
-                        ))
-                    })?;
-                let spec_expr = sail_sql_analyzer::expression::from_ast_expression(ast_expr)
-                    .map_err(|e| {
-                        PlanError::invalid(format!(
-                            "failed to analyze default expression `{default}`: {e}"
-                        ))
-                    })?;
-                // A column reference can never be a valid default value. Such text
-                // comes from metadata that stored a raw string value (e.g. the
-                // JSON-encoded string `"hello"` for an Iceberg column default)
-                // rather than SQL expression text, so it is interpreted as a
-                // string literal.
-                let spec_expr = if matches!(spec_expr, spec::Expr::UnresolvedAttribute { .. }) {
-                    spec::Expr::Literal(spec::Literal::Utf8 {
-                        value: Some(default.to_string()),
-                    })
-                } else {
-                    spec_expr
-                };
-                self.resolve_expression(spec_expr, &empty_schema, state)
+                self.resolve_column_default_expression(default, &empty_schema, state)
                     .await?
             } else {
                 lit(ScalarValue::try_from(column.field().data_type())?)
@@ -1314,6 +1298,36 @@ impl PlanResolver<'_> {
             out.push(expr);
         }
         Ok(out)
+    }
+
+    pub(super) async fn resolve_column_default_expression(
+        &self,
+        default: &str,
+        empty_schema: &datafusion_common::DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Expr> {
+        let ast_expr = sail_sql_analyzer::parser::parse_expression(default).map_err(|error| {
+            PlanError::invalid(format!(
+                "failed to parse default expression `{default}`: {error}"
+            ))
+        })?;
+        let spec_expr =
+            sail_sql_analyzer::expression::from_ast_expression(ast_expr).map_err(|error| {
+                PlanError::invalid(format!(
+                    "failed to analyze default expression `{default}`: {error}"
+                ))
+            })?;
+        // A column reference cannot be a default value. Raw string defaults in
+        // format metadata parse as unresolved attributes, so treat them as literals.
+        let spec_expr = if matches!(spec_expr, spec::Expr::UnresolvedAttribute { .. }) {
+            spec::Expr::Literal(spec::Literal::Utf8 {
+                value: Some(default.to_string()),
+            })
+        } else {
+            spec_expr
+        };
+        self.resolve_expression(spec_expr, empty_schema, state)
+            .await
     }
 
     fn rewrite_default_column_values_in_input(
@@ -1459,7 +1473,9 @@ impl PlanResolver<'_> {
         }
     }
 
-    fn expr_contains_default_column_value(expr: &Expr) -> datafusion_common::Result<bool> {
+    pub(super) fn expr_contains_default_column_value(
+        expr: &Expr,
+    ) -> datafusion_common::Result<bool> {
         let mut found = false;
         expr.apply(|expr| {
             if Self::is_default_column_value_expr(expr) {
@@ -1472,7 +1488,7 @@ impl PlanResolver<'_> {
         Ok(found)
     }
 
-    fn is_standalone_default_column_value_expr(expr: &Expr) -> bool {
+    pub(super) fn is_standalone_default_column_value_expr(expr: &Expr) -> bool {
         if Self::is_default_column_value_expr(expr) {
             return true;
         }
@@ -1483,7 +1499,7 @@ impl PlanResolver<'_> {
         }
     }
 
-    fn is_default_column_value_expr(expr: &Expr) -> bool {
+    pub(super) fn is_default_column_value_expr(expr: &Expr) -> bool {
         matches!(
             expr,
             Expr::Placeholder(placeholder)

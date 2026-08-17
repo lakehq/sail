@@ -1,16 +1,16 @@
+use datafusion_common::DFSchemaRef;
 use datafusion_common::arrow::datatypes::FieldRef;
 use datafusion_common::datatype::FieldExt;
-use datafusion_common::DFSchemaRef;
 use datafusion_expr::expr::{Lambda, LambdaVariable};
-use datafusion_expr::{expr, ExprSchemable, ValueOrLambda};
+use datafusion_expr::{ExprSchemable, ValueOrLambda, expr};
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::get_lambda_parameters;
+use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
-use crate::resolver::PlanResolver;
 
 pub(super) fn is_spec_lambda_argument(argument: &spec::Expr) -> bool {
     match argument {

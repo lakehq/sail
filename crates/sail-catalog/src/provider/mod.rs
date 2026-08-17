@@ -11,11 +11,11 @@ use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
 
 use crate::error::{CatalogError, CatalogResult};
 use crate::lakehouse::{
-    plan_lakehouse_create_from_requirement, resolve_lakehouse_table_status,
     BeginTableAccessRequest, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
     LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest, LakehouseCreatePlan,
     LakehouseCreateRequest, LakehouseResolvedTable, LakehouseScanPlanningRequest,
     LakehouseScanPlanningResponse, ResolveLakehouseTableRequest, TableAccessSession,
+    plan_lakehouse_create_from_requirement, resolve_lakehouse_table_status,
 };
 
 /// A trait that defines the interface for a catalog.

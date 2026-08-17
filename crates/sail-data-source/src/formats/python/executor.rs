@@ -13,8 +13,8 @@ use futures::stream::BoxStream;
 use pyo3::prelude::*;
 use pyo3::types::PyAnyMethods;
 
-use super::error::{import_cloudpickle, PythonDataSourceContext};
-use super::filter::{filters_to_python, PythonFilter};
+use super::error::{PythonDataSourceContext, import_cloudpickle};
+use super::filter::{PythonFilter, filters_to_python};
 
 /// Default capacity for the write channel, matching `python.data_source_write_channel_capacity` config.
 const DEFAULT_WRITE_CHANNEL_CAPACITY: usize = 8;
@@ -673,14 +673,17 @@ impl PythonExecutor for InProcessExecutor {
                 };
 
                 // Call writer.abort(messages) - log errors but don't propagate
-                if let Err(e) = writer.call_method1("abort", (messages_list,)) {
-                    log::warn!("[{}::abort] Abort call failed: {}", writer_name, e);
-                } else {
-                    log::debug!(
-                        "[{}::abort] Aborted {} partitions",
-                        writer_name,
-                        commit_messages.len()
-                    );
+                match writer.call_method1("abort", (messages_list,)) {
+                    Err(e) => {
+                        log::warn!("[{}::abort] Abort call failed: {}", writer_name, e);
+                    }
+                    _ => {
+                        log::debug!(
+                            "[{}::abort] Aborted {} partitions",
+                            writer_name,
+                            commit_messages.len()
+                        );
+                    }
                 }
 
                 Ok(())
@@ -740,49 +743,46 @@ impl RecordBatchIterator {
 
         loop {
             // If we have an active batch, try to get the next item
-            if let Some(batch) = &slf.current_batch {
-                if slf.current_row < batch.num_rows() {
-                    // Compute result and next row index without mutating slf while borrowing batch
-                    let (result, next_row) = if slf.is_arrow {
-                        // For arrow, return one batch at a time (DataSourceArrowWriter.write(iterator))
-                        let r = super::arrow_utils::rust_record_batch_to_py(py, batch).map_err(
-                            |e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()),
-                        )?;
-                        (r, batch.num_rows())
-                    } else {
-                        // For row, return one row at a time
-                        let row_idx = slf.current_row;
-                        let factory = slf
-                            .row_factory
-                            .as_ref()
-                            .ok_or_else(|| {
-                                pyo3::exceptions::PyRuntimeError::new_err(
-                                    "row_factory is None for row-based writer",
-                                )
-                            })?
-                            .bind(py);
-                        let mut row_values = Vec::with_capacity(batch.num_columns());
-                        for col_idx in 0..batch.num_columns() {
-                            let column = batch.column(col_idx);
-                            let value =
-                                super::arrow_utils::extract_python_value(py, column, row_idx)
-                                    .map_err(|e| {
-                                        pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
-                                    })?;
-                            row_values.push(value);
-                        }
-                        let args = pyo3::types::PyTuple::new(py, row_values).map_err(|e| {
+            if let Some(batch) = &slf.current_batch
+                && slf.current_row < batch.num_rows()
+            {
+                // Compute result and next row index without mutating slf while borrowing batch
+                let (result, next_row) = if slf.is_arrow {
+                    // For arrow, return one batch at a time (DataSourceArrowWriter.write(iterator))
+                    let r = super::arrow_utils::rust_record_batch_to_py(py, batch)
+                        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+                    (r, batch.num_rows())
+                } else {
+                    // For row, return one row at a time
+                    let row_idx = slf.current_row;
+                    let factory = slf
+                        .row_factory
+                        .as_ref()
+                        .ok_or_else(|| {
+                            pyo3::exceptions::PyRuntimeError::new_err(
+                                "row_factory is None for row-based writer",
+                            )
+                        })?
+                        .bind(py);
+                    let mut row_values = Vec::with_capacity(batch.num_columns());
+                    for col_idx in 0..batch.num_columns() {
+                        let column = batch.column(col_idx);
+                        let value = super::arrow_utils::extract_python_value(py, column, row_idx)
+                            .map_err(|e| {
                             pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
                         })?;
-                        let r = factory
-                            .call1(args)
-                            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?
-                            .unbind();
-                        (r, row_idx + 1)
-                    };
-                    slf.current_row = next_row;
-                    return Ok(Some(result));
-                }
+                        row_values.push(value);
+                    }
+                    let args = pyo3::types::PyTuple::new(py, row_values)
+                        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+                    let r = factory
+                        .call1(args)
+                        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?
+                        .unbind();
+                    (r, row_idx + 1)
+                };
+                slf.current_row = next_row;
+                return Ok(Some(result));
             }
 
             // No active batch or batch exhausted, get the next one from the channel

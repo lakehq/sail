@@ -90,5 +90,5 @@ jobs:
           files: coverage-python-${{ inputs.spark_version }}.info
           flags: python-unit-tests
           name: python-unit-tests
-          fail_ci_if_error: true
+          fail_ci_if_error: ${{ github.repository == 'lakehq/sail' }}
           env_vars: OS

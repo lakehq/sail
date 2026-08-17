@@ -87,7 +87,8 @@
   {
     "module": "pyspark.sql.Catalog",
     "function": "listFunctions",
-    "status": "planned"
+    "status": "partially supported",
+    "note": "Persistent catalog functions are not supported yet."
   },
   {
     "module": "pyspark.sql.Catalog",

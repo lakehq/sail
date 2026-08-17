@@ -1,7 +1,7 @@
 use std::ffi::NulError;
 
-use pyo3::ffi::{PyUnicode_AsWideCharString, PyUnicode_FromString, Py_Main};
 use pyo3::Python;
+use pyo3::ffi::{Py_Main, PyUnicode_AsWideCharString, PyUnicode_FromString};
 use sail_common::config::{CliConfig, CliConfigEnv};
 
 #[cfg(feature = "mimalloc")]
@@ -21,7 +21,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // in the child process. It uses `sys.executable` to determine the location of
         // the Python interpreter. When the Sail CLI runs as a standalone binary, the
         // Python interpreter is embedded and `sys.executable` points to the Sail binary.
-        std::env::set_var(CliConfigEnv::RUN_PYTHON, "true");
+        // SAFETY: This runs during CLI startup before Python initialization creates threads.
+        unsafe { std::env::set_var(CliConfigEnv::RUN_PYTHON, "true") };
         // Initialize the Python interpreter.
         Python::initialize();
         let args = std::env::args().collect();

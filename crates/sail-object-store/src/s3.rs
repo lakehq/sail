@@ -4,8 +4,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use aws_config::identity::IdentityCache;
 use aws_config::{BehaviorVersion, SdkConfig};
-use aws_credential_types::provider::SharedCredentialsProvider;
 use aws_credential_types::Credentials;
+use aws_credential_types::provider::SharedCredentialsProvider;
 use aws_smithy_async::rt::sleep::TokioSleep;
 use aws_smithy_async::time::SystemTimeSource;
 use aws_smithy_runtime_api::client::identity::{
@@ -18,7 +18,7 @@ use aws_smithy_types::config_bag::ConfigBag;
 use datafusion_common::plan_datafusion_err;
 use log::debug;
 use object_store::aws::{
-    resolve_bucket_region, AmazonS3, AmazonS3Builder, AmazonS3ConfigKey, AwsCredential,
+    AmazonS3, AmazonS3Builder, AmazonS3ConfigKey, AwsCredential, resolve_bucket_region,
 };
 use object_store::{ClientOptions, CredentialProvider};
 use tokio::sync::OnceCell;
@@ -156,21 +156,24 @@ pub fn parse_s3_url(
         )),
     })?;
     let first_path_segment = url.path_segments().into_iter().flatten().next();
-    debug!("Parsing S3 url: {url} scheme: {scheme} host: {host} first_path_segment: {first_path_segment:?}");
+    debug!(
+        "Parsing S3 url: {url} scheme: {scheme} host: {host} first_path_segment: {first_path_segment:?}"
+    );
 
     match scheme {
-        "s3" | "s3a" => {
+        "s3" | "s3a" | "oss" => {
             builder = builder.with_bucket_name(host);
-            if let Some(bucket_prefix) = host.strip_suffix("--x-s3") {
-                if let Some(_bucket_az) = bucket_prefix.rsplit_once("--") {
-                    builder = builder.with_s3_express(true);
-                }
+            if let Some(bucket_prefix) = host.strip_suffix("--x-s3")
+                && let Some(_bucket_az) = bucket_prefix.rsplit_once("--")
+            {
+                builder = builder.with_s3_express(true);
             }
         }
         "http" | "https" => {
             if scheme == "http" {
                 builder = builder.with_allow_http(true);
             }
+            let endpoint = || url[..url::Position::BeforePath].to_string();
             match host.split('.').collect::<Vec<&str>>()[..] {
                 // Support for path-style continues for buckets created on/before Sept. 30, 2020:
                 // https://aws.amazon.com/blogs/aws/amazon-s3-path-deprecation-plan-the-rest-of-the-story/
@@ -217,6 +220,20 @@ pub fn parse_s3_url(
                         builder = builder.with_bucket_name(bucket);
                     }
                 }
+                [bucket, "s3", region, "aliyuncs", "com"] if region.starts_with("oss-") => {
+                    builder = builder.with_bucket_name(bucket);
+                    builder = builder.with_region(region.trim_start_matches("oss-"));
+                    builder = builder.with_endpoint(endpoint());
+                    builder = builder.with_virtual_hosted_style_request(true);
+                }
+                ["s3", region, "aliyuncs", "com"] if region.starts_with("oss-") => {
+                    builder = builder.with_region(region.trim_start_matches("oss-"));
+                    builder = builder.with_endpoint(endpoint());
+                    builder = builder.with_virtual_hosted_style_request(false);
+                    if let Some(bucket) = first_path_segment {
+                        builder = builder.with_bucket_name(bucket);
+                    }
+                }
                 [bucket, _s3express_zone_id, region, "amazonaws", "com"] => {
                     builder = builder.with_bucket_name(bucket);
                     builder = builder.with_region(region);
@@ -228,7 +245,7 @@ pub fn parse_s3_url(
                         source: Box::new(plan_datafusion_err!(
                             "URL did not match any known pattern for scheme: {url}"
                         )),
-                    })
+                    });
                 }
             }
         }
@@ -243,4 +260,61 @@ pub fn parse_s3_url(
     };
 
     Ok(builder)
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_oss_url_sets_bucket() {
+        let url = Url::parse("oss://bucket/path/to/data").unwrap();
+        let builder = parse_s3_url(AmazonS3Builder::from_env(), &url).unwrap();
+
+        assert_eq!(
+            builder.get_config_value(&AmazonS3ConfigKey::Bucket),
+            Some("bucket".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_aliyun_oss_virtual_hosted_endpoint() {
+        let url =
+            Url::parse("https://bucket.s3.oss-cn-hangzhou.aliyuncs.com:9443/path/to/data").unwrap();
+        let builder = parse_s3_url(AmazonS3Builder::from_env(), &url).unwrap();
+
+        assert_eq!(
+            builder.get_config_value(&AmazonS3ConfigKey::Bucket),
+            Some("bucket".to_string())
+        );
+        assert_eq!(
+            builder.get_config_value(&AmazonS3ConfigKey::Region),
+            Some("cn-hangzhou".to_string())
+        );
+        assert_eq!(
+            builder.get_config_value(&AmazonS3ConfigKey::Endpoint),
+            Some("https://bucket.s3.oss-cn-hangzhou.aliyuncs.com:9443".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_aliyun_oss_path_style_endpoint() {
+        let url =
+            Url::parse("https://s3.oss-cn-hangzhou.aliyuncs.com:9443/bucket/path/to/data").unwrap();
+        let builder = parse_s3_url(AmazonS3Builder::from_env(), &url).unwrap();
+
+        assert_eq!(
+            builder.get_config_value(&AmazonS3ConfigKey::Bucket),
+            Some("bucket".to_string())
+        );
+        assert_eq!(
+            builder.get_config_value(&AmazonS3ConfigKey::Region),
+            Some("cn-hangzhou".to_string())
+        );
+        assert_eq!(
+            builder.get_config_value(&AmazonS3ConfigKey::Endpoint),
+            Some("https://s3.oss-cn-hangzhou.aliyuncs.com:9443".to_string())
+        );
+    }
 }

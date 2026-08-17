@@ -4,17 +4,21 @@ use datafusion_common::{DataFusionError, Result};
 use sail_common_datafusion::datasource::OptionLayer;
 
 use crate::listing::source::{FormatFactory, ListingTableFormat};
-use crate::options::gen::{CsvReadOptions, CsvWriteOptions};
 use crate::options::ResolveOptions;
+use crate::options::r#gen::{CsvReadOptions, CsvWriteOptions};
 
-// Some of the code in the `read` and `write` modules is adapted from the DataFusion `CsvFormat` implementation.
-// [CREDIT]: https://github.com/apache/datafusion/blob/53.1.0/datafusion/datasource-csv/src/file_format.rs
+// Some of the CSV implementation is adapted from DataFusion's `CsvFormat` and `CsvSource`.
+// [CREDIT]: https://github.com/apache/datafusion/blob/54.1.0/datafusion/datasource-csv/src/file_format.rs
+// [CREDIT]: https://github.com/apache/datafusion/blob/54.1.0/datafusion/datasource-csv/src/source.rs
 
+mod decoder;
 mod options;
 mod read;
+mod source;
 mod write;
 
 pub use read::CsvReadFormat;
+pub use source::CsvSource;
 pub use write::CsvWriteFormat;
 
 pub type CsvTableFormat = ListingTableFormat<CsvFormatFactory>;

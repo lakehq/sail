@@ -1,0 +1,264 @@
+- name: "&"
+  scope: "sql_builtin"
+  group: "bitwise_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.BitwiseAnd"
+  signatures:
+    - "expr1 & expr2"
+  usage: "expr1 & expr2 - Returns the result of bitwise AND of `expr1` and `expr2`."
+  examples: |2-
+    
+        Examples:
+          > SELECT 3 & 5;
+           1
+      
+  since: "1.4.0"
+
+- name: "<<"
+  scope: "sql_builtin"
+  group: "bitwise_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.ShiftLeft"
+  signatures:
+    - "base << exp"
+  usage: "base << exp - Bitwise left shift."
+  examples: |2-
+    
+        Examples:
+          > SELECT shiftleft(2, 1);
+           4
+          > SELECT 2 << 1;
+           4
+      
+  note: |2-
+    
+          `<<` operator is added in Spark 4.0.0 as an alias for `shiftleft`.
+        
+  since: "4.0.0"
+
+- name: ">>"
+  scope: "sql_builtin"
+  group: "bitwise_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.ShiftRight"
+  signatures:
+    - "base >> expr"
+  usage: "base >> expr - Bitwise (signed) right shift."
+  examples: |2-
+    
+        Examples:
+          > SELECT shiftright(4, 1);
+           2
+          > SELECT 4 >> 1;
+           2
+      
+  note: |2-
+    
+          `>>` operator is added in Spark 4.0.0 as an alias for `shiftright`.
+        
+  since: "4.0.0"
+
+- name: ">>>"
+  scope: "sql_builtin"
+  group: "bitwise_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.ShiftRightUnsigned"
+  signatures:
+    - "base >>> expr"
+  usage: "base >>> expr - Bitwise unsigned right shift."
+  examples: |2-
+    
+        Examples:
+          > SELECT shiftrightunsigned(4, 1);
+           2
+          > SELECT 4 >>> 1;
+           2
+      
+  note: |2-
+    
+        `>>>` operator is added in Spark 4.0.0 as an alias for `shiftrightunsigned`.
+      
+  since: "4.0.0"
+
+- name: "^"
+  scope: "sql_builtin"
+  group: "bitwise_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.BitwiseXor"
+  signatures:
+    - "expr1 ^ expr2"
+  usage: "expr1 ^ expr2 - Returns the result of bitwise exclusive OR of `expr1` and `expr2`."
+  examples: |2-
+    
+        Examples:
+          > SELECT 3 ^ 5;
+           6
+      
+  since: "1.4.0"
+
+- name: "bit_count"
+  scope: "sql_builtin"
+  group: "bitwise_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.BitwiseCount"
+  signatures:
+    - "bit_count(expr)"
+  usage: "bit_count(expr) - Returns the number of bits that are set in the argument expr as an unsigned 64-bit integer, or NULL if the argument is NULL."
+  examples: |2-
+    
+        Examples:
+          > SELECT bit_count(0);
+           0
+      
+  since: "3.0.0"
+
+- name: "bit_get"
+  scope: "sql_builtin"
+  group: "bitwise_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.BitwiseGet"
+  signatures:
+    - "bit_get(expr, pos)"
+  usage: |2-
+    
+        bit_get(expr, pos) - Returns the value of the bit (0 or 1) at the specified position.
+          The positions are numbered from right to left, starting at zero.
+          The position argument cannot be negative.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT bit_get(11, 0);
+           1
+          > SELECT bit_get(11, 2);
+           0
+      
+  since: "3.2.0"
+
+- name: "bitwise_not"
+  scope: "sail_extension"
+  signatures:
+    - "bitwise_not(expr)"
+  usage: "bitwise_not(expr) - Returns the bitwise NOT of expr."
+
+- name: "getbit"
+  scope: "sql_builtin"
+  group: "bitwise_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.BitwiseGet"
+  signatures:
+    - "getbit(expr, pos)"
+  usage: |2-
+    
+        getbit(expr, pos) - Returns the value of the bit (0 or 1) at the specified position.
+          The positions are numbered from right to left, starting at zero.
+          The position argument cannot be negative.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT getbit(11, 0);
+           1
+          > SELECT getbit(11, 2);
+           0
+      
+  since: "3.2.0"
+
+- name: "shiftleft"
+  scope: "sql_builtin"
+  group: "bitwise_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.ShiftLeft"
+  signatures:
+    - "base shiftleft exp"
+  usage: "base shiftleft exp - Bitwise left shift."
+  examples: |2-
+    
+        Examples:
+          > SELECT shiftleft(2, 1);
+           4
+          > SELECT 2 << 1;
+           4
+      
+  note: |2-
+    
+          `<<` operator is added in Spark 4.0.0 as an alias for `shiftleft`.
+        
+  since: "1.5.0"
+
+- name: "shiftright"
+  scope: "sql_builtin"
+  group: "bitwise_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.ShiftRight"
+  signatures:
+    - "base shiftright expr"
+  usage: "base shiftright expr - Bitwise (signed) right shift."
+  examples: |2-
+    
+        Examples:
+          > SELECT shiftright(4, 1);
+           2
+          > SELECT 4 >> 1;
+           2
+      
+  note: |2-
+    
+          `>>` operator is added in Spark 4.0.0 as an alias for `shiftright`.
+        
+  since: "1.5.0"
+
+- name: "shiftrightunsigned"
+  scope: "sql_builtin"
+  group: "bitwise_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.ShiftRightUnsigned"
+  signatures:
+    - "base shiftrightunsigned expr"
+  usage: "base shiftrightunsigned expr - Bitwise unsigned right shift."
+  examples: |2-
+    
+        Examples:
+          > SELECT shiftrightunsigned(4, 1);
+           2
+          > SELECT 4 >>> 1;
+           2
+      
+  note: |2-
+    
+        `>>>` operator is added in Spark 4.0.0 as an alias for `shiftrightunsigned`.
+      
+  since: "1.5.0"
+
+- name: "|"
+  scope: "sql_builtin"
+  group: "bitwise_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.BitwiseOr"
+  signatures:
+    - "expr1 | expr2"
+  usage: "expr1 | expr2 - Returns the result of bitwise OR of `expr1` and `expr2`."
+  examples: |2-
+    
+        Examples:
+          > SELECT 3 | 5;
+           7
+      
+  since: "1.4.0"
+
+- name: "~"
+  scope: "sql_builtin"
+  group: "bitwise_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.BitwiseNot"
+  signatures:
+    - "~ expr"
+  usage: "~ expr - Returns the result of bitwise NOT of `expr`."
+  examples: |2-
+    
+        Examples:
+          > SELECT ~ 0;
+           -1
+      
+  since: "1.4.0"
+

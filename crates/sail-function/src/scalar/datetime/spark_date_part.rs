@@ -6,7 +6,7 @@ use datafusion::arrow::compute::kernels::cast_utils::IntervalUnit;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 use datafusion::arrow::temporal_conversions::MICROSECONDS;
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };

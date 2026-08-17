@@ -10,8 +10,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use apache_avro::schema::{RecordField as AvroRecordField, RecordFieldOrder, UnionSchema};
 use apache_avro::Schema as AvroSchema;
+use apache_avro::schema::{RecordField as AvroRecordField, RecordFieldOrder, UnionSchema};
 use serde_json::{Number, Value as JsonValue};
 
 /// Avro custom attribute used to annotate Iceberg field ids.

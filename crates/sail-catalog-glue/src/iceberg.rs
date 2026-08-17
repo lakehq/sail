@@ -1,26 +1,26 @@
 /// Iceberg table creation logic for AWS Glue Data Catalog.
 use std::collections::{HashMap, HashSet};
 
+use aws_sdk_glue::Client;
 use aws_sdk_glue::types::{
     CreateIcebergTableInput, IcebergInput, IcebergPartitionField, IcebergPartitionSpec,
     IcebergSchema, IcebergStructField, IcebergStructTypeEnum, MetadataOperation,
     OpenTableFormatInput, SerDeInfo, StorageDescriptor, TableInput,
 };
-use aws_sdk_glue::Client;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::hive_format::HiveStorageFormat;
 use sail_catalog::provider::{
     CatalogPartitionField, CatalogProvider, CreateTableColumnOptions, CreateTableOptions,
     Namespace, PartitionTransform,
 };
-use sail_common_datafusion::catalog::iceberg::{
-    is_iceberg_table_properties, ICEBERG_CLASSIFICATION_KEY, ICEBERG_TABLE_TYPE_KEY,
-    ICEBERG_TABLE_TYPE_VALUE,
-};
 use sail_common_datafusion::catalog::TableStatus;
+use sail_common_datafusion::catalog::iceberg::{
+    ICEBERG_CLASSIFICATION_KEY, ICEBERG_TABLE_TYPE_KEY, ICEBERG_TABLE_TYPE_VALUE,
+    is_iceberg_table_properties,
+};
 
-use crate::data_type::{arrow_to_glue_type, arrow_to_iceberg_type};
 use crate::GlueCatalogProvider;
+use crate::data_type::{arrow_to_glue_type, arrow_to_iceberg_type};
 
 /// Default Iceberg table spec version for new tables (v2 is the modern standard).
 const DEFAULT_ICEBERG_FORMAT_VERSION: &str = "2";
@@ -97,6 +97,7 @@ pub(crate) async fn create_iceberg_table(
 
     let result = client
         .create_table()
+        .set_catalog_id(provider.catalog_id())
         .database_name(&database_name)
         .name(table)
         .open_table_format_input(open_format_input)
@@ -198,6 +199,7 @@ async fn create_iceberg_table_via_table_input(
 
     let result = client
         .create_table()
+        .set_catalog_id(provider.catalog_id())
         .database_name(&database_name)
         .table_input(table_input)
         .send()

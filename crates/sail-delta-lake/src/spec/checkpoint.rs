@@ -21,10 +21,10 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::spec::{
-    add_struct_type, checkpoint_metadata_struct_type, domain_metadata_struct_type,
-    metadata_struct_type, protocol_struct_type, remove_struct_type, sidecar_struct_type,
-    transaction_struct_type, Add, CheckpointMetadata, DataType, DomainMetadata, Metadata, Protocol,
-    Remove, Sidecar, StructField, StructType, Transaction,
+    Add, CheckpointMetadata, DataType, DomainMetadata, Metadata, Protocol, Remove, Sidecar,
+    StructField, StructType, Transaction, add_struct_type, checkpoint_metadata_struct_type,
+    domain_metadata_struct_type, metadata_struct_type, protocol_struct_type, remove_struct_type,
+    sidecar_struct_type, transaction_struct_type,
 };
 
 // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/checkpoint/mod.rs#L126-L135>
@@ -93,4 +93,18 @@ pub struct LastCheckpointHint {
     pub checksum: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<HashMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub v2_checkpoint: Option<LastCheckpointV2>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LastCheckpointV2 {
+    pub path: String,
+    pub size_in_bytes: i64,
+    pub modification_time: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub non_file_actions: Option<Vec<CheckpointActionRow>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sidecar_files: Option<Vec<Sidecar>>,
 }

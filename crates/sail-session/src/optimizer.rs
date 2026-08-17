@@ -21,8 +21,10 @@ mod tests {
     #[test]
     fn default_rules_skip_leaf_projection_pushdown() {
         let rules = default_optimizer_rules();
-        assert!(!rules
-            .iter()
-            .any(|rule| rule.name() == "push_down_leaf_projections"));
+        assert!(
+            !rules
+                .iter()
+                .any(|rule| rule.name() == "push_down_leaf_projections")
+        );
     }
 }

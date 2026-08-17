@@ -17,13 +17,15 @@ use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
 use datafusion::arrow::compute::take_arrays;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::{adjust_offsets_for_slice, list_values, list_values_row_number};
-use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
     HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda, Volatility,
 };
 
-use super::lambda_utils::{coerce_single_list_arg, value_lambda_pair};
+use super::lambda_utils::{
+    coerce_single_list_arg, short_circuit_boolean_reduce, value_lambda_pair,
+};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkArrayForall {
@@ -85,10 +87,19 @@ impl HigherOrderUDFImpl for SparkArrayForall {
 
         let values_param = || Ok(Arc::clone(&values));
         let params: [&dyn Fn() -> Result<ArrayRef>; 1] = [&values_param];
-        let predicate_output = lambda.evaluate(&params, |arrays| {
+        let predicate_output = match lambda.evaluate(&params, |arrays| {
             let indices = list_values_row_number(&list_array)?;
             Ok(take_arrays(arrays, &indices, None)?)
-        })?;
+        }) {
+            Ok(output) => output,
+            // Evaluating every element at once can raise on an element that Spark
+            // would never reach; retry in Spark's order before giving up.
+            Err(_) => {
+                let result =
+                    short_circuit_boolean_reduce(self.name(), &list_array, &values, lambda, false)?;
+                return Ok(ColumnarValue::Array(Arc::new(result)));
+            }
+        };
 
         let result = match list_array.data_type() {
             DataType::List(_) => {

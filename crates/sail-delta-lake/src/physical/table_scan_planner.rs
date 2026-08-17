@@ -12,7 +12,7 @@ use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use crate::logical::table_source::DeltaTableSource;
 use crate::physical::scan_planner::plan_delta_scan;
 use crate::physical_plan::planner::create_row_level_write_physical_plan;
-use crate::table_format::{plan_delta_write, DeltaWriteNode};
+use crate::table_format::{DeltaWriteNode, plan_delta_write};
 
 /// Physical planner for logical Delta table scans.
 /// Plans `DeltaTableSource` table scans directly without an intermediate extension node.

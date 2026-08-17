@@ -6,10 +6,10 @@ use datafusion::arrow::array::{Array, BooleanArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion::common::{internal_datafusion_err, Result, ScalarValue};
+use datafusion::common::{Result, ScalarValue, internal_datafusion_err};
 use datafusion::logical_expr::{Expr, Operator};
-use datafusion::physical_expr::expressions::BinaryExpr;
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr::expressions::BinaryExpr;
 use datafusion::physical_plan::internal_err;
 use sail_common_datafusion::system::predicate::Predicate;
 
@@ -66,11 +66,11 @@ pub fn is_column_logical_predicate(expr: &Expr, column: &str) -> Result<bool> {
 
     let mut valid = true;
     expr.apply(|e| {
-        if let Expr::Column(Column { name, .. }) = e {
-            if name != column {
-                valid = false;
-                return Ok(TreeNodeRecursion::Stop);
-            }
+        if let Expr::Column(Column { name, .. }) = e
+            && name != column
+        {
+            valid = false;
+            return Ok(TreeNodeRecursion::Stop);
         }
         Ok(TreeNodeRecursion::Continue)
     })?;
@@ -82,11 +82,11 @@ pub fn is_column_physical_predicate(expr: &Arc<dyn PhysicalExpr>, column: &str) 
 
     let mut valid = true;
     expr.apply(|e| {
-        if let Some(col) = e.downcast_ref::<Column>() {
-            if col.name() != column {
-                valid = false;
-                return Ok(TreeNodeRecursion::Stop);
-            }
+        if let Some(col) = e.downcast_ref::<Column>()
+            && col.name() != column
+        {
+            valid = false;
+            return Ok(TreeNodeRecursion::Stop);
         }
         Ok(TreeNodeRecursion::Continue)
     })?;
@@ -197,8 +197,8 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::logical_expr::Operator;
-    use datafusion::physical_expr::expressions::{BinaryExpr, Column, Literal};
     use datafusion::physical_expr::PhysicalExpr;
+    use datafusion::physical_expr::expressions::{BinaryExpr, Column, Literal};
     use datafusion::scalar::ScalarValue;
 
     use super::ArrowPredicateEvaluator;

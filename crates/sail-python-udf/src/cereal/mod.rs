@@ -1,45 +1,44 @@
 use datafusion::arrow::datatypes::DataType;
 use pyo3::prelude::PyAnyMethods;
+use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyList, PyModule};
-use pyo3::{intern, PyResult, Python};
+use pyo3::{PyResult, Python, intern};
 use sail_common::spec;
-use sail_pyarrow::ToPyArrow;
 
+use crate::conversion::TryToPy;
 use crate::error::{PyUdfError, PyUdfResult};
 
 pub mod pyspark_udf;
 pub mod pyspark_udtf;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum PySparkVersion {
     V3,
     V4_0,
     V4_1,
-}
-
-impl PySparkVersion {
-    fn is_v4(&self) -> bool {
-        matches!(self, PySparkVersion::V4_0 | PySparkVersion::V4_1)
-    }
+    V4_2,
 }
 
 fn get_pyspark_version() -> PyUdfResult<PySparkVersion> {
-    use pyo3::prelude::PyAnyMethods;
-    use pyo3::types::PyModule;
+    static PYSPARK_VERSION: PyOnceLock<PySparkVersion> = PyOnceLock::new();
 
     Python::attach(|py| {
-        let module = PyModule::import(py, "pyspark")?;
-        let version: String = module.getattr("__version__")?.extract()?;
-        if version.starts_with("3.") {
-            Ok(PySparkVersion::V3)
-        } else if version.starts_with("4.0.") {
-            Ok(PySparkVersion::V4_0)
-        } else if version.starts_with("4.") {
-            Ok(PySparkVersion::V4_1)
-        } else {
-            Err(PyUdfError::invalid(format!(
-                "unsupported PySpark version: {version}"
-            )))
-        }
+        PYSPARK_VERSION
+            .get_or_try_init(py, || {
+                let module = PyModule::import(py, "pyspark")?;
+                let version: String = module.getattr("__version__")?.extract()?;
+                let parts: Vec<_> = version.split('.').collect();
+                match parts.as_slice() {
+                    ["3", ..] => Ok(PySparkVersion::V3),
+                    ["4", "0", ..] => Ok(PySparkVersion::V4_0),
+                    ["4", "1", ..] => Ok(PySparkVersion::V4_1),
+                    ["4", "2", ..] => Ok(PySparkVersion::V4_2),
+                    _ => Err(PyUdfError::invalid(format!(
+                        "unsupported PySpark version: {version}"
+                    ))),
+                }
+            })
+            .copied()
     })
 }
 
@@ -104,6 +103,16 @@ pub(crate) fn write_kwarg(data: &mut Vec<u8>, kwargs: &[Option<String>], index: 
     }
 }
 
+pub(crate) fn write_conf(data: &mut Vec<u8>, conf: Vec<(String, String)>) {
+    data.extend((conf.len() as i32).to_be_bytes());
+    for (key, value) in conf {
+        data.extend((key.len() as i32).to_be_bytes());
+        data.extend(key.as_bytes());
+        data.extend((value.len() as i32).to_be_bytes());
+        data.extend(value.as_bytes());
+    }
+}
+
 fn should_write_config(eval_type: spec::PySparkUdfType) -> bool {
     use spec::PySparkUdfType;
 
@@ -141,7 +150,7 @@ fn should_write_config(eval_type: spec::PySparkUdfType) -> bool {
 /// Builds a JSON string representing a PySpark StructType schema from Arrow input types.
 /// This is used by PySpark 4.x's `read_udfs` to deserialize input type information
 /// for `SQL_ARROW_BATCHED_UDF`.
-fn build_input_types_json(input_types: &[DataType]) -> PyUdfResult<String> {
+fn build_input_types_json(input_types: &[DataType], large_var_types: bool) -> PyUdfResult<String> {
     Python::attach(|py| -> PyResult<String> {
         let types_module = PyModule::import(py, intern!(py, "pyspark.sql.types"))?;
         let struct_type_cls = types_module.getattr(intern!(py, "StructType"))?;
@@ -153,7 +162,7 @@ fn build_input_types_json(input_types: &[DataType]) -> PyUdfResult<String> {
             .iter()
             .enumerate()
             .map(|(i, dt)| -> PyResult<_> {
-                let arrow_type = dt.to_pyarrow(py)?;
+                let arrow_type = dt.try_to_py(py, large_var_types)?;
                 let spark_type = from_arrow_type.call1((arrow_type,))?;
                 struct_field_cls.call1((format!("_{i}"), spark_type, true))
             })

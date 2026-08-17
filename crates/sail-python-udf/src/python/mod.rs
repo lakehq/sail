@@ -1,6 +1,6 @@
 use pyo3::prelude::{PyAnyMethods, PyModule};
 use pyo3::types::{PyString, PyTuple};
-use pyo3::{intern, Bound, BoundObject, IntoPyObject, PyAny, PyResult};
+use pyo3::{Bound, BoundObject, IntoPyObject, PyAny, PyResult, intern};
 
 pub(crate) mod spark;
 

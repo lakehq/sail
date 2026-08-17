@@ -21,6 +21,7 @@ on:
 jobs:
   docs-deploy:
     name: Docs Deploy
+    if: ${{ github.repository == 'lakehq/sail' }}
     runs-on: ubuntu-slim
     environment: docs/${{ inputs.stage }}
     permissions:

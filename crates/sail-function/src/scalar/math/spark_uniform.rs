@@ -1,17 +1,17 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    new_null_array, Array, ArrayRef, Decimal128Array, Float32Array, Float64Array, Int16Array,
-    Int32Array, Int64Array, Int8Array,
+    Array, ArrayRef, Decimal128Array, Float32Array, Float64Array, Int8Array, Int16Array,
+    Int32Array, Int64Array, new_null_array,
 };
 use datafusion::arrow::datatypes::{
-    DataType, Field, FieldRef, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DataType, Field, FieldRef,
 };
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use rand::{rng, RngExt};
+use rand::{RngExt, rng};
 
 use super::xorshift::SparkXorShiftRandom;
 use crate::error::{
@@ -251,7 +251,7 @@ impl ScalarUDFImpl for SparkUniform {
                         "uniform",
                         "INT or BIGINT type for seed",
                         &arg_types[2..],
-                    ))
+                    ));
                 }
             };
             coerced_types.push(seed_type);

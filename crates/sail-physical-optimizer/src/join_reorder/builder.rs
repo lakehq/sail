@@ -5,21 +5,21 @@ use datafusion::common::stats::Precision;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::{JoinType, Operator};
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::expressions::{BinaryExpr, Column};
 use datafusion::physical_expr::utils::collect_columns;
-use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::aggregates::AggregateExec;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::HashJoinExec;
 use datafusion::physical_plan::projection::ProjectionExec;
-use datafusion::physical_plan::ExecutionPlan;
 use datafusion_physical_expr::intervals::utils::check_support;
-use datafusion_physical_expr::{analyze, AnalysisContext};
+use datafusion_physical_expr::{AnalysisContext, analyze};
 use log::trace;
 
+use crate::join_reorder::JoinReorderOptions;
 use crate::join_reorder::graph::{JoinEdge, QueryGraph, RelationNode, StableColumn};
 use crate::join_reorder::join_set::JoinSet;
-use crate::join_reorder::JoinReorderOptions;
 
 type PhysicalExprRef = Arc<dyn PhysicalExpr>;
 type EquiPair = (StableColumn, StableColumn);
@@ -1692,8 +1692,8 @@ mod tests {
     #[test]
     fn test_builder_keeps_true_multi_relation_predicate_as_hyperedge() -> Result<()> {
         use datafusion::common::{JoinSide, NullEquality};
-        use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
         use datafusion::physical_plan::joins::PartitionMode;
+        use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 
         let mut builder = GraphBuilder::default();
 

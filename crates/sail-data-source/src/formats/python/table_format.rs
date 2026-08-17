@@ -12,7 +12,7 @@ use datafusion::execution::SessionState;
 use datafusion::logical_expr::{Extension, LogicalPlan, TableSource, UserDefinedLogicalNode};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
-use datafusion_common::{internal_err, DFSchema, DFSchemaRef, Result};
+use datafusion_common::{DFSchema, DFSchemaRef, Result, internal_err};
 use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
 use educe::Educe;
 use sail_common_datafusion::datasource::{
@@ -145,11 +145,16 @@ impl PythonTableFormat {
                 .call_method1("loads", (class_bytes,))
                 .map_err(py_err)?;
 
-            // Create options dict
+            // Create Spark-compatible case-insensitive options
             let py_options = PyDict::new(py);
             for (k, v) in &options {
                 py_options.set_item(k, v).map_err(py_err)?;
             }
+            let py_options = py
+                .import("pyspark.sql.datasource")
+                .and_then(|module| module.getattr("CaseInsensitiveDict"))
+                .and_then(|class| class.call1((py_options,)))
+                .map_err(py_err)?;
 
             // Instantiate the datasource with options
             let ds_instance = ds_class.call1((py_options,)).map_err(py_err)?;

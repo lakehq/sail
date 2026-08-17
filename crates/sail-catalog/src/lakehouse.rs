@@ -1,5 +1,5 @@
 use sail_common_datafusion::catalog::delta::{
-    unity_table_id_value, DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
+    DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY, unity_table_id_value,
 };
 use sail_common_datafusion::catalog::{
     CapabilityFingerprint, CatalogProviderId, CatalogTableIdentity, CommitAuthority,

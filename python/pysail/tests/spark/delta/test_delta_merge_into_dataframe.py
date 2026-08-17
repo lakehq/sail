@@ -4,6 +4,7 @@ from pandas.testing import assert_frame_equal
 from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql.dataframe import DataFrame as SparkDataFrame
 
+from pysail.testing.spark.utils.common import pyspark_version
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 if not hasattr(SparkDataFrame, "mergeInto"):
@@ -69,3 +70,34 @@ def test_dataframe_merge_into_insert_all_and_delete(spark, tmp_path):
         assert_frame_equal(result, expected, check_dtype=False)
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+@pytest.mark.skipif(
+    pyspark_version() < (4,),
+    reason="DataFrame arguments in spark.sql() require Spark 4+",
+)
+def test_merge_into_path_target_with_dataframe_source(spark, tmp_path):
+    table_path = tmp_path / "delta_merge_df_arg_target"
+    table_path_str = str(table_path)
+
+    target_df = spark.createDataFrame([(1, "old"), (2, "keep")], "id INT, value STRING")
+    target_df.write.format("delta").mode("overwrite").save(table_path_str)
+
+    source_df = spark.createDataFrame([(1, "new"), (3, "insert")], "id INT, value STRING")
+
+    spark.sql(
+        f"""
+        MERGE INTO delta.`{table_path_str}` AS tgt
+        USING {{src_df}} AS src
+        ON tgt.id = src.id
+        WHEN MATCHED THEN UPDATE SET tgt.value = src.value
+        WHEN NOT MATCHED THEN INSERT *
+        """,
+        src_df=source_df,
+    )
+
+    result = spark.read.format("delta").load(table_path_str).sort("id").toPandas()
+    expected = pd.DataFrame({"id": [1, 2, 3], "value": ["new", "keep", "insert"]}).astype(
+        {"id": "int32", "value": "string"}
+    )
+    assert_frame_equal(result, expected, check_dtype=False)

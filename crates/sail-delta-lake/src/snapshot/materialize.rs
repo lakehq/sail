@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    new_empty_array, Array, ArrayRef, MapArray, StringArray, StructArray,
+    Array, ArrayRef, MapArray, StringArray, StructArray, new_empty_array,
 };
 use datafusion::arrow::datatypes::{Field, Fields, Schema as ArrowSchema};
 use datafusion::arrow::record_batch::RecordBatch;
@@ -15,8 +15,8 @@ use crate::spec::fields::{
     FIELD_NAME_PARTITION_VALUES_PARSED, FIELD_NAME_STATS, FIELD_NAME_STATS_PARSED,
 };
 use crate::spec::{
-    parse_stats_json_array, stats_schema, Add, ColumnMappingMode, DataType,
-    DeltaError as DeltaTableError, DeltaResult, StructType,
+    Add, ColumnMappingMode, DataType, DeltaError as DeltaTableError, DeltaResult, StructType,
+    parse_stats_json_array, stats_schema,
 };
 
 impl DeltaSnapshot {
@@ -189,7 +189,10 @@ pub(crate) fn parse_partition_values_array(
     let arrow_fields: Fields = Fields::from(
         partition_schema
             .fields()
-            .map(|field| Field::try_from(&field.make_physical(column_mapping_mode)))
+            .map(|field| {
+                Field::try_from(&field.make_physical(column_mapping_mode))
+                    .map(|field| field.with_nullable(true))
+            })
             .collect::<Result<Vec<Field>, _>>()?,
     );
 
@@ -226,7 +229,11 @@ pub(crate) fn parse_partition_values_array(
         })
         .collect::<DeltaResult<Vec<_>>>()?;
 
-    Ok(StructArray::try_new(arrow_fields, columns, None)?)
+    Ok(StructArray::try_new(
+        arrow_fields,
+        columns,
+        partitions.nulls().cloned(),
+    )?)
 }
 
 fn map_array_from_path<'a>(batch: &'a RecordBatch, path: &str) -> DeltaResult<&'a MapArray> {

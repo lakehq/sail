@@ -4,7 +4,7 @@ use sail_common::error::CommonError;
 use crate::flight::run_flight_server;
 use crate::spark::run::run_pyspark_script;
 use crate::spark::{
-    run_pyspark_shell, run_spark_connect_server, run_spark_mcp_server, McpSettings, McpTransport,
+    McpSettings, McpTransport, run_pyspark_shell, run_spark_connect_server, run_spark_mcp_server,
 };
 use crate::worker::run_worker;
 

@@ -10,9 +10,10 @@ use futures::FutureExt;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::job::JobService;
 use sail_common_datafusion::system::observable::{JobRunnerObserver, StateObservable};
+use sail_execution::DriverId;
 use tokio::sync::oneshot;
 
-use crate::session_manager::event::SessionHistory;
+use crate::session_manager::SessionHistory;
 
 pub struct ServerSession {
     pub user_id: String,
@@ -32,21 +33,20 @@ impl ServerSession {
     {
         let (tx, rx) = oneshot::channel();
         let observer = observer(tx);
-        if let ServerSessionState::Running { context } = &self.state {
-            if let Ok(service) = context.extension::<JobService>() {
-                async move {
+        if let ServerSessionState::Running { context, .. } = &self.state {
+            match context.extension::<JobService>() {
+                Ok(service) => async move {
                     service.runner().observe(observer).await;
                     rx.await
                         .map_err(|_| exec_datafusion_err!("failed to observe job runner"))?
                 }
-                .boxed()
-            } else {
-                async {
+                .boxed(),
+                _ => async {
                     Err(exec_datafusion_err!(
                         "job service not found in session context"
                     ))
                 }
-                .boxed()
+                .boxed(),
             }
         } else if let ServerSessionState::Deleted { history } = &self.state {
             let history = history.clone();
@@ -63,9 +63,16 @@ impl ServerSession {
 }
 
 pub enum ServerSessionState {
-    Running { context: SessionContext },
-    Deleting,
-    Deleted { history: Arc<SessionHistory> },
+    Running {
+        context: SessionContext,
+        driver_id: Option<DriverId>,
+    },
+    Deleting {
+        driver_id: Option<DriverId>,
+    },
+    Deleted {
+        history: Arc<SessionHistory>,
+    },
     Failed,
 }
 
@@ -73,7 +80,7 @@ impl ServerSessionState {
     pub fn status(&self) -> &'static str {
         match self {
             ServerSessionState::Running { .. } => "RUNNING",
-            ServerSessionState::Deleting => "DELETING",
+            ServerSessionState::Deleting { .. } => "DELETING",
             ServerSessionState::Deleted { .. } => "DELETED",
             ServerSessionState::Failed => "FAILED",
         }

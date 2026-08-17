@@ -1,322 +1,157 @@
-Feature: to_json function converts complex types to JSON strings
+Feature: to_json
 
-  Rule: Basic struct conversion
-    Scenario: Convert named_struct to JSON
+  @function(nullability)
+  Rule: Output schema
+
+    Scenario: a non-null literal input to to_json yields the schema Spark declares
       When query
         """
         SELECT to_json(named_struct('a', 1, 'b', 2)) AS result
         """
-      Then query result
-        | result         |
-        | {"a":1,"b":2}  |
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
 
-    Scenario: Convert nested struct to JSON
+    Scenario: an empty struct input to to_json yields the schema Spark declares
       When query
         """
-        SELECT to_json(named_struct('a', 1, 'b', named_struct('c', 3))) AS result
+        SELECT to_json(struct()) AS result
         """
-      Then query result
-        | result                 |
-        | {"a":1,"b":{"c":3}}    |
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
 
-  Rule: Map conversion
-    Scenario: Convert simple map to JSON
+  Rule: Empty struct
+
+    Scenario: an empty struct has no fields, is non-null, and has a byte-exact JSON representation
       When query
         """
-        SELECT to_json(map('a', 1)) AS result
+        SELECT
+          typeof(struct()) AS struct_type,
+          struct() IS NOT NULL AS is_non_null,
+          to_json(struct()) AS result,
+          hex(to_json(struct())) AS bytes
         """
       Then query result
-        | result    |
-        | {"a":1}   |
+        | struct_type | is_non_null | result | bytes |
+        | struct<>    | true        | {}     | 7B7D  |
 
-    Scenario: Convert map with struct value to JSON
+    Scenario: to_json preserves row cardinality for an empty struct
       When query
         """
-        SELECT to_json(map('a', named_struct('b', 1))) AS result
+        SELECT id, to_json(struct()) AS result
+        FROM range(3)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | result |
+        | 0  | {}     |
+        | 1  | {}     |
+        | 2  | {}     |
+
+    Scenario: to_json distinguishes nested empty structs from null structs
+      When query
+        """
+        SELECT
+          to_json(named_struct('empty', struct())) AS nested,
+          to_json(CAST(NULL AS STRUCT<>)) AS null_struct
         """
       Then query result
-        | result            |
-        | {"a":{"b":1}}     |
+        | nested       | null_struct |
+        | {"empty":{}} | NULL        |
 
-    Scenario: Convert map with struct key to JSON
+  Rule: Struct field order
+
+    Scenario: to_json preserves struct field declaration order byte-for-byte
       When query
         """
-        SELECT to_json(map(named_struct('a', 1), named_struct('b', 2))) AS result
+        SELECT to_json(struct(zeta, alpha, mid)) AS result
+        FROM VALUES ('z', 'a', 'm') AS t(zeta, alpha, mid)
         """
       Then query result
-        | result              |
-        | {"[1]":{"b":2}}     |
+        | result                                 |
+        | {"zeta":"z","alpha":"a","mid":"m"}     |
 
-  Rule: Array conversion
-    Scenario: Convert array of maps to JSON
+    Scenario: to_json preserves nested struct field declaration order byte-for-byte
       When query
         """
-        SELECT to_json(array(map('a', 1))) AS result
+        SELECT to_json(named_struct(
+          'zeta', named_struct('zeta_inner', 'z', 'alpha_inner', 'a'),
+          'alpha', 'a',
+          'mid', 'm'
+        )) AS result
         """
       Then query result
-        | result      |
-        | [{"a":1}]   |
+        | result                                                                         |
+        | {"zeta":{"zeta_inner":"z","alpha_inner":"a"},"alpha":"a","mid":"m"}            |
 
-    Scenario: Convert array of structs to JSON
+    Scenario: omitted null fields do not reorder the remaining struct fields
       When query
         """
-        SELECT to_json(array(named_struct('a', 1, 'b', 2))) AS result
+        SELECT to_json(struct(zeta, alpha, mid)) AS result
+        FROM VALUES ('z', CAST(NULL AS STRING), 'm') AS t(zeta, alpha, mid)
         """
       Then query result
-        | result            |
-        | [{"a":1,"b":2}]   |
+        | result                     |
+        | {"zeta":"z","mid":"m"}     |
 
-  Rule: Timestamp formatting with options
-    Scenario: Convert struct with timestamp using custom format
+  Rule: Map key order
+
+    Scenario: to_json preserves map entry order when sortKeys is disabled
       When query
         """
-        SELECT to_json(
-          named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')),
-          map('timestampFormat', 'dd/MM/yyyy')
-        ) AS result
+        SELECT
+          to_json(value) AS default_result,
+          to_json(value, map('sortKeys', 'false')) AS false_result
+        FROM (
+          SELECT map_from_arrays(
+            array('zeta', 'alpha', 'mid'),
+            array(1, 2, 3)
+          ) AS value
+        )
         """
       Then query result
-        | result                  |
-        | {"time":"26/08/2015"}   |
+        | default_result                   | false_result                     |
+        | {"zeta":1,"alpha":2,"mid":3} | {"zeta":1,"alpha":2,"mid":3} |
 
-  Rule: Null handling
-    Scenario: Null fields are omitted from JSON output
+  Rule: Sorted JSON object keys
+
+    # The sortKeys JSON writer option was added in Spark 4.2.
+    @spark-4.2
+    Scenario: sortKeys recursively sorts struct fields including structs inside arrays
       When query
         """
-        SELECT to_json(named_struct('a', 1, 'b', CAST(NULL AS INT))) AS result
+        SELECT
+          to_json(named_struct(
+            'zeta', named_struct('zeta_inner', 'z', 'alpha_inner', 'a'),
+            'alpha', 'a',
+            'mid', 'm'
+          ), map('sortKeys', 'true')) AS nested,
+          to_json(array(named_struct(
+            'zeta', 'z',
+            'alpha', 'a'
+          )), map('sortKeys', 'true')) AS array_result
         """
       Then query result
-        | result    |
-        | {"a":1}   |
+        | nested                                                                         | array_result                   |
+        | {"alpha":"a","mid":"m","zeta":{"alpha_inner":"a","zeta_inner":"z"}} | [{"alpha":"a","zeta":"z"}] |
 
-    Scenario: Null input returns null
+    @spark-4.2
+    Scenario: sortKeys recursively sorts map keys
       When query
         """
-        SELECT to_json(CAST(NULL AS STRUCT<a: INT>)) AS result
+        SELECT to_json(map_from_arrays(
+          array('zeta', 'alpha'),
+          array(
+            map_from_arrays(array('zeta_inner', 'alpha_inner'), array('z', 'a')),
+            map_from_arrays(array('zeta_inner', 'alpha_inner'), array('Z', 'A'))
+          )
+        ), map('sortKeys', 'true')) AS result
         """
       Then query result
-        | result |
-        | NULL   |
-
-  Rule: Decimal conversion
-    Scenario: Convert struct with decimal to JSON
-      When query
-        """
-        SELECT to_json(named_struct('price', CAST(123.45 AS DECIMAL(10,2)))) AS result
-        """
-      Then query result
-        | result             |
-        | {"price":123.45}   |
-
-  Rule: Boolean conversion
-    Scenario: Convert struct with boolean to JSON
-      When query
-        """
-        SELECT to_json(named_struct('active', true, 'deleted', false)) AS result
-        """
-      Then query result
-        | result                          |
-        | {"active":true,"deleted":false} |
-
-  Rule: Date formatting
-    Scenario: Convert struct with date using custom format
-      When query
-        """
-        SELECT to_json(
-          named_struct('date', to_date('2024-01-15')),
-          map('dateFormat', 'dd/MM/yyyy')
-        ) AS result
-        """
-      Then query result
-        | result                  |
-        | {"date":"15/01/2024"}   |
-
-  Rule: Float conversion
-    Scenario: Convert struct with float to JSON
-      When query
-        """
-        SELECT to_json(named_struct('value', CAST(3.14159 AS DOUBLE))) AS result
-        """
-      Then query result
-        | result               |
-        | {"value":3.14159}    |
-
-  Rule: String conversion
-    Scenario: Convert struct with string to JSON
-      When query
-        """
-        SELECT to_json(named_struct('name', 'hello world')) AS result
-        """
-      Then query result
-        | result                    |
-        | {"name":"hello world"}    |
-
-  Rule: Array of primitives
-    Scenario: Array of integers
-      When query
-        """
-        SELECT to_json(array(1, 2, 3)) AS result
-        """
-      Then query result
-        | result  |
-        | [1,2,3] |
-
-    Scenario: Array of strings
-      When query
-        """
-        SELECT to_json(array('a', 'b', 'c')) AS result
-        """
-      Then query result
-        | result          |
-        | ["a","b","c"]   |
-
-  Rule: Empty structures
-
-    Scenario: Empty map
-      When query
-        """
-        SELECT to_json(map()) AS result
-        """
-      Then query result
-        | result |
-        | {}     |
-
-    Scenario: Empty array
-      When query
-        """
-        SELECT to_json(array()) AS result
-        """
-      Then query result
-        | result |
-        | []     |
-
-  Rule: Special float values
-    Scenario: NaN value rendered as string
-      When query
-        """
-        SELECT to_json(named_struct('v', CAST('NaN' AS DOUBLE))) AS result
-        """
-      Then query result
-        | result        |
-        | {"v":"NaN"}   |
-
-    Scenario: Infinity value rendered as string
-      When query
-        """
-        SELECT to_json(named_struct('v', CAST('Infinity' AS DOUBLE))) AS result
-        """
-      Then query result
-        | result             |
-        | {"v":"Infinity"}   |
-
-    Scenario: Negative Infinity value rendered as string
-      When query
-        """
-        SELECT to_json(named_struct('v', CAST('-Infinity' AS DOUBLE))) AS result
-        """
-      Then query result
-        | result              |
-        | {"v":"-Infinity"}   |
-
-  Rule: Integer types
-    Scenario: Tinyint zero
-      When query
-        """
-        SELECT to_json(named_struct('v', CAST(0 AS TINYINT))) AS result
-        """
-      Then query result
-        | result  |
-        | {"v":0} |
-
-    Scenario: Tinyint max
-      When query
-        """
-        SELECT to_json(named_struct('v', CAST(127 AS TINYINT))) AS result
-        """
-      Then query result
-        | result    |
-        | {"v":127} |
-
-    Scenario: Tinyint min
-      When query
-        """
-        SELECT to_json(named_struct('v', CAST(-128 AS TINYINT))) AS result
-        """
-      Then query result
-        | result     |
-        | {"v":-128} |
-
-  Rule: Default date and timestamp format
-    Scenario: Date default format
-      When query
-        """
-        SELECT to_json(named_struct('d', to_date('2024-01-15'))) AS result
-        """
-      Then query result
-        | result                |
-        | {"d":"2024-01-15"}   |
-
-  Rule: Null in complex types
-    Scenario: Array of nulls
-      When query
-        """
-        SELECT to_json(named_struct('a', array(CAST(NULL AS INT), CAST(NULL AS INT)))) AS result
-        """
-      Then query result
-        | result              |
-        | {"a":[null,null]}   |
-
-    Scenario: Map with null value
-      When query
-        """
-        SELECT to_json(map('a', CAST(NULL AS INT), 'b', 1)) AS result
-        """
-      Then query result
-        | result              |
-        | {"a":null,"b":1}    |
-
-  Rule: Deeply nested structures
-    Scenario: Four levels of nesting
-      When query
-        """
-        SELECT to_json(named_struct('a', named_struct('b', named_struct('c', named_struct('d', 42))))) AS result
-        """
-      Then query result
-        | result                      |
-        | {"a":{"b":{"c":{"d":42}}}}  |
-
-    Scenario: Array of arrays
-      When query
-        """
-        SELECT to_json(named_struct('v', array(array(1,2), array(3,4)))) AS result
-        """
-      Then query result
-        | result                |
-        | {"v":[[1,2],[3,4]]}   |
-
-    Scenario: Nested maps
-      When query
-        """
-        SELECT to_json(map('outer', map('inner', 1))) AS result
-        """
-      Then query result
-        | result                    |
-        | {"outer":{"inner":1}}     |
-
-  Rule: String with special characters
-    Scenario: Empty string value
-      When query
-        """
-        SELECT to_json(named_struct('a', '')) AS result
-        """
-      Then query result
-        | result     |
-        | {"a":""}   |
-
-  Rule: Error handling
-    Scenario: Invalid options type returns error
-      When query
-        """
-        SELECT to_json(named_struct('a', 1), 'invalid_options') AS result
-        """
-      Then query error INVALID_OPTIONS.NON_MAP_FUNCTION
+        | result                                                                                         |
+        | {"alpha":{"alpha_inner":"A","zeta_inner":"Z"},"zeta":{"alpha_inner":"a","zeta_inner":"z"}} |

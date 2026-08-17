@@ -9,3 +9,8 @@ message TaskStreamTicket {
   uint64 attempt = 4;
   uint64 channel = 5;
 }
+
+message DriverTaskStreamTicket {
+  uint64 driver_id = 1;
+  TaskStreamTicket stream = 2;
+}

@@ -3,10 +3,10 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::catalog::TableFunctionArgs;
-use datafusion::datasource::{provider_as_source, source_as_provider, TableProvider};
+use datafusion::datasource::{TableProvider, provider_as_source, source_as_provider};
 use datafusion_common::{DFSchema, ScalarValue, TableReference};
 use datafusion_expr::{Expr, LogicalPlan, SubqueryAlias, TableScan, TableSource, UNNAMED_TABLE};
-use rand::{rng, RngExt};
+use rand::{RngExt, rng};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::{LakehouseOperation, TableColumnStatus, TableKind};
@@ -20,9 +20,9 @@ use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::{get_built_in_table_function, is_built_in_generator_function};
+use crate::resolver::PlanResolver;
 use crate::resolver::function::PythonUdtf;
 use crate::resolver::state::PlanResolverState;
-use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
     /// Resolves a named table or view reference into a logical plan node.
@@ -417,16 +417,17 @@ impl PlanResolver<'_> {
             } else {
                 let schema = Arc::new(DFSchema::empty());
                 let arguments = self.resolve_expressions(arguments, &schema, state).await?;
-                let table_function =
-                    if let Ok(f) = self.ctx.table_function(&canonical_function_name) {
-                        f
-                    } else if let Ok(f) = get_built_in_table_function(&canonical_function_name) {
-                        f
-                    } else {
-                        return Err(PlanError::unsupported(format!(
-                            "unknown table function: {function_name}"
-                        )));
-                    };
+                let table_function = match self.ctx.table_function(&canonical_function_name) {
+                    Ok(f) => f,
+                    _ => match get_built_in_table_function(&canonical_function_name) {
+                        Ok(f) => f,
+                        _ => {
+                            return Err(PlanError::unsupported(format!(
+                                "unknown table function: {function_name}"
+                            )));
+                        }
+                    },
+                };
                 let session_state = self.ctx.state();
                 let table_provider = table_function.create_table_provider_with_args(
                     TableFunctionArgs::new(&arguments, &session_state),

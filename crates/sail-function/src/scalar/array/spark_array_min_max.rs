@@ -1,9 +1,9 @@
 use datafusion::arrow::array::{
-    as_large_list_array, as_list_array, Array, ArrayRef, GenericListArray, OffsetSizeTrait,
+    Array, ArrayRef, GenericListArray, OffsetSizeTrait, as_large_list_array, as_list_array,
 };
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions_aggregate::min_max;
-use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{
     Accumulator, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };

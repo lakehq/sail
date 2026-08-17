@@ -1,8 +1,8 @@
 use std::fmt::{Debug, Formatter};
 
-use sail_common::debug::DebugBinary;
+use sail_common::utils::debug::DebugBinary;
 
-use crate::worker::gen::RunTaskRequest;
+use crate::worker::r#gen::RunTaskRequest;
 
 impl Debug for RunTaskRequest {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {

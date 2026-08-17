@@ -8,16 +8,16 @@ use datafusion::config::ConfigOptions;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_plan::projection::ProjectionExec;
-use datafusion::physical_plan::{displayable, ExecutionPlan};
+use datafusion::physical_plan::{ExecutionPlan, displayable};
 use log::{trace, warn};
 
+use crate::PhysicalOptimizerRule;
 use crate::join_reorder::builder::{ColumnMap, ColumnMapEntry, GraphBuilder};
 use crate::join_reorder::enumerator::{
     JoinReorderFallbackReason, JoinReorderStatus, PlanEnumerator,
 };
 use crate::join_reorder::graph::StableColumn;
 use crate::join_reorder::reconstructor::PlanReconstructor;
-use crate::PhysicalOptimizerRule;
 
 mod builder;
 mod cardinality_estimator;
@@ -227,8 +227,7 @@ impl JoinReorder {
             Some(plan) => {
                 trace!(
                     "JoinReorder: DP optimization completed successfully (status={:?}, emits={})",
-                    solve_result.status,
-                    emit_count
+                    solve_result.status, emit_count
                 );
                 self.record_outcome(RegionOutcome {
                     relation_count,
@@ -335,9 +334,7 @@ impl JoinReorder {
 
                     trace!(
                         "build_final_projection: Looking for stable column R{}.C{} (output_idx={})",
-                        relation_id,
-                        column_index,
-                        output_idx
+                        relation_id, column_index, output_idx
                     );
 
                     // Find this stable column's position in the final join tree output
@@ -495,9 +492,9 @@ mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::common::NullEquality;
     use datafusion::logical_expr::{JoinType, Operator};
+    use datafusion::physical_expr::PhysicalExpr;
     use datafusion::physical_expr::expressions::{BinaryExpr, Column, Literal};
     use datafusion::physical_expr::utils::collect_columns;
-    use datafusion::physical_expr::PhysicalExpr;
     use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::filter::FilterExec;
@@ -1060,8 +1057,8 @@ mod tests {
     // `JoinReorder::take_recorded_outcomes()` so that we catch silent regressions where the
     // rule shape is unchanged but the optimizer fell back to greedy (or vice versa).
 
-    use datafusion::common::stats::Precision;
     use datafusion::common::Statistics;
+    use datafusion::common::stats::Precision;
     use datafusion::physical_plan::test::exec::StatisticsExec;
 
     /// Build a `StatisticsExec` leaf with a fixed (id, val) schema, a known total row count,

@@ -4,7 +4,7 @@ use datafusion::arrow::array::{
     Array, ArrayRef, GenericStringBuilder, LargeStringArray, StringArray, StringArrayType,
 };
 use datafusion::arrow::datatypes::DataType;
-use datafusion::common::{exec_datafusion_err, exec_err, plan_err, Result};
+use datafusion::common::{Result, exec_datafusion_err, exec_err, plan_err};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use url::Url;
@@ -252,7 +252,7 @@ pub fn spark_handled_parse_url(
     let url = &args[0];
     let part = &args[1];
 
-    let result = if args.len() == 3 {
+    if args.len() == 3 {
         // In this case, the 'key' argument is passed
         let key = &args[2];
 
@@ -557,8 +557,7 @@ pub fn spark_handled_parse_url(
             }
             _ => exec_err!("{} expects STRING arguments, got {:?}", "`parse_url`", args),
         }
-    };
-    result
+    }
 }
 
 fn process_parse_url<'a, A, B, C, T>(

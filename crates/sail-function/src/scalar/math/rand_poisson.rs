@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::Int64Array;
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use rand::rngs::StdRng;
-use rand::{rng, SeedableRng};
+use rand::{SeedableRng, rng};
 use rand_distr::{Distribution, Poisson};
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_types_exec_err};
@@ -66,13 +66,13 @@ impl ScalarUDFImpl for RandPoisson {
                 _ => {
                     return exec_err!(
                         "`random_poisson` expects a scalar Float64 for `lambda`, got {scalar}"
-                    )
+                    );
                 }
             },
             _ => {
                 return exec_err!(
                     "`random_poisson` expects a scalar Float64 for `lambda`, got {lambda}"
-                )
+                );
             }
         };
         if args.len() == 1 {
@@ -86,10 +86,10 @@ impl ScalarUDFImpl for RandPoisson {
                     ScalarValue::Int64(Some(value)) => *value as u64,
                     ScalarValue::UInt64(Some(value)) => *value,
                     ScalarValue::Int64(None) | ScalarValue::UInt64(None) | ScalarValue::Null => {
-                        return invoke_no_seed(lambda, number_rows)
+                        return invoke_no_seed(lambda, number_rows);
                     }
                     _ => {
-                        return exec_err!("`random_poisson` expects an integer seed, got {scalar}")
+                        return exec_err!("`random_poisson` expects an integer seed, got {scalar}");
                     }
                 };
                 let poisson = Poisson::new(lambda).map_err(|e| {

@@ -2,13 +2,13 @@ use std::ops::BitAnd;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    new_empty_array, new_null_array, Array, ArrayRef, AsArray, FixedSizeListArray,
-    GenericListArray, NullArray, OffsetSizeTrait, StructArray,
+    Array, ArrayRef, AsArray, FixedSizeListArray, GenericListArray, OffsetSizeTrait, StructArray,
+    UInt64Array, new_null_array,
 };
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
-use datafusion::arrow::compute::{cast, concat};
-use datafusion::arrow::datatypes::{DataType, Field, Fields};
-use datafusion_common::{arrow_err, exec_err, plan_err, DataFusionError, Result};
+use datafusion::arrow::compute::{cast, take};
+use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion_common::{DataFusionError, Result, arrow_err, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
@@ -341,10 +341,15 @@ fn arrays_zip_generic<O: OffsetSizeTrait>(
         DataFusionError::Execution("`arrays_zip`: zero offset should always exist".to_string())
     })?;
 
-    let mut struct_arrays = Vec::with_capacity(num_rows);
+    // Flatten build: compute the output offsets once and gather each struct column with a single
+    // `take`, null-padding ragged rows via null indices. Avoids building a `StructArray` per row
+    // and a final `concat` of all of them.
+    let n_args = lists.len();
     let mut offsets = Vec::with_capacity(num_rows + 1);
     offsets.push(zero_offset);
     let mut last_offset = zero_offset;
+    let mut take_indices: Vec<Vec<Option<u64>>> = (0..n_args).map(|_| Vec::new()).collect();
+    let mut row_spans: Vec<(usize, usize)> = Vec::with_capacity(n_args);
 
     for row_idx in 0..num_rows {
         if validity_mask_opt
@@ -355,78 +360,34 @@ fn arrays_zip_generic<O: OffsetSizeTrait>(
             continue;
         }
 
-        let mut arrays_one_row: Vec<ArrayRef> = Vec::with_capacity(lists.len());
-        let mut lens_one_row: Vec<O> = Vec::with_capacity(lists.len());
-        let mut max_len_one_row = zero_offset;
-        let mut all_uniform = true;
-        for arg in &lists {
-            let arr = arg.value(row_idx);
-            let len = arg.value_length(row_idx);
-            if !lens_one_row.is_empty() && len != lens_one_row[0] {
-                all_uniform = false;
-            }
-            if len > max_len_one_row {
-                max_len_one_row = len;
-            }
-            arrays_one_row.push(arr);
-            lens_one_row.push(len);
+        row_spans.clear();
+        let mut max_len = 0usize;
+        for list in &lists {
+            let start = list.value_offsets()[row_idx].as_usize();
+            let len = list.value_length(row_idx).as_usize();
+            row_spans.push((start, len));
+            max_len = max_len.max(len);
         }
-
-        let arrays_padded = if all_uniform {
-            arrays_one_row
-        } else {
-            arrays_one_row
-                .iter()
-                .zip(lens_one_row.iter())
-                .map(|(arr, len)| {
-                    Ok(match (max_len_one_row - *len).as_usize() {
-                        0 => arr.clone(),
-                        len_diff => Arc::new(concat(&[
-                            arr,
-                            &cast(&NullArray::new(len_diff), arr.data_type())?,
-                        ])?),
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?
-        };
-
-        let struct_array = to_struct_array(
-            arrays_padded.as_slice(),
-            field_names.as_slice(),
-            &arg_fields,
-        )?;
-        let offset = O::from_usize(struct_array.len()).ok_or_else(|| {
-            DataFusionError::Execution("`arrays_zip` offset overflow error".to_string())
-        })?;
-
-        last_offset += offset;
+        for k in 0..max_len {
+            for (j, &(start, len)) in row_spans.iter().enumerate() {
+                take_indices[j].push((k < len).then(|| (start + k) as u64));
+            }
+        }
+        last_offset += O::usize_as(max_len);
         offsets.push(last_offset);
-        struct_arrays.push(struct_array);
     }
 
-    let values: ArrayRef = if struct_arrays.is_empty() {
-        // When all rows are null, struct_arrays is empty. Create an empty struct array.
-        let fields: Fields = field_names
-            .iter()
-            .zip(inner_fields.iter())
-            .map(|(name, f)| {
-                Field::new(name, f.data_type().clone(), true).with_metadata(f.metadata().clone())
-            })
-            .collect();
-        let empty_arrays: Vec<ArrayRef> = inner_fields
-            .iter()
-            .map(|f| new_empty_array(f.data_type()))
-            .collect();
-        Arc::new(StructArray::try_new(fields, empty_arrays, None)?)
-    } else {
-        concat(
-            struct_arrays
-                .iter()
-                .map(|a| a.as_ref())
-                .collect::<Vec<_>>()
-                .as_slice(),
-        )?
-    };
+    // One `take` per struct column; a `None` index null-pads a ragged position.
+    let columns = lists
+        .iter()
+        .zip(take_indices)
+        .map(|(list, indices)| {
+            let indices = UInt64Array::from(indices);
+            take(list.values().as_ref(), &indices, None).map_or_else(|err| arrow_err!(err), Ok)
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let values = to_struct_array(columns.as_slice(), field_names.as_slice(), &arg_fields)?;
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
         struct_result_field(&inner_fields, &field_names),

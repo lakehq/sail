@@ -15,8 +15,8 @@ use std::sync::Arc;
 use datafusion::arrow::compute::can_cast_types;
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion::common::Result;
-use datafusion::physical_expr::expressions::CastExpr;
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr::expressions::CastExpr;
 use datafusion_common::DataFusionError;
 use indexmap::IndexMap;
 
@@ -115,7 +115,7 @@ impl DeltaTypeConverter {
                             "Unexpected map child layout for field '{}': {:?}",
                             table_field.name(),
                             t_kv_dt
-                        )))
+                        )));
                     }
                 };
                 let (i_key, i_val) = match i_kv_dt {
@@ -127,7 +127,7 @@ impl DeltaTypeConverter {
                             "Unexpected map child layout for input field '{}': {:?}",
                             table_field.name(),
                             i_kv_dt
-                        )))
+                        )));
                     }
                 };
                 let merged_key = Self::promote_field_types(t_key, i_key)?;
@@ -221,8 +221,8 @@ impl DeltaTypeConverter {
                 DataType::Decimal128(to_precision, to_scale),
             ) if (from_precision > to_precision || from_scale > to_scale) => {
                 return Err(DataFusionError::Plan(format!(
-                        "Potential precision loss in decimal cast for field '{field_name}': from Decimal({from_precision},{from_scale}) to Decimal({to_precision},{to_scale})"
-                    )));
+                    "Potential precision loss in decimal cast for field '{field_name}': from Decimal({from_precision},{from_scale}) to Decimal({to_precision},{to_scale})"
+                )));
             }
             (DataType::Int64, DataType::Int32)
             | (DataType::Int32, DataType::Int16)

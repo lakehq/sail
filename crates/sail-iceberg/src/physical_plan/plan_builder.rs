@@ -12,7 +12,6 @@
 
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::common::Result;
 use datafusion::physical_expr::expressions::Column;
@@ -24,6 +23,8 @@ use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
+use crate::operations::SnapshotUpdateKind;
+use crate::physical_plan::write_context::IcebergWriteContext;
 use crate::physical_plan::writer_exec::IcebergWriterExec;
 use crate::physical_plan::writer_options::IcebergWriterExecOptions;
 use crate::utils::partition_transform::format_partition_expr;
@@ -33,6 +34,7 @@ pub struct IcebergTableConfig {
     pub partition_columns: Vec<CatalogPartitionField>,
     pub table_exists: bool,
     pub options: IcebergWriterExecOptions,
+    pub write_context: IcebergWriteContext,
 }
 
 pub struct IcebergPlanBuilder<'a> {
@@ -40,7 +42,6 @@ pub struct IcebergPlanBuilder<'a> {
     table_config: IcebergTableConfig,
     sink_mode: PhysicalSinkMode,
     sort_order: Option<Vec<PhysicalSortExpr>>,
-    logical_input_schema: Option<SchemaRef>,
     #[expect(unused)]
     session: &'a dyn Session,
 }
@@ -51,7 +52,6 @@ impl<'a> IcebergPlanBuilder<'a> {
         table_config: IcebergTableConfig,
         sink_mode: PhysicalSinkMode,
         sort_order: Option<Vec<PhysicalSortExpr>>,
-        logical_input_schema: Option<SchemaRef>,
         session: &'a dyn Session,
     ) -> Self {
         Self {
@@ -59,7 +59,6 @@ impl<'a> IcebergPlanBuilder<'a> {
             table_config,
             sink_mode,
             sort_order,
-            logical_input_schema,
             session,
         }
     }
@@ -128,13 +127,14 @@ impl<'a> IcebergPlanBuilder<'a> {
     }
 
     fn add_sort_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
-        if let Some(sort_exprs) = self.sort_order.clone() {
-            let lex = LexOrdering::new(sort_exprs).ok_or_else(|| {
-                datafusion::common::DataFusionError::Internal("Invalid sort order".to_string())
-            })?;
-            Ok(Arc::new(SortExec::new(lex, input)))
-        } else {
-            Ok(input)
+        match self.sort_order.clone() {
+            Some(sort_exprs) => {
+                let lex = LexOrdering::new(sort_exprs).ok_or_else(|| {
+                    datafusion::common::DataFusionError::Internal("Invalid sort order".to_string())
+                })?;
+                Ok(Arc::new(SortExec::new(lex, input)))
+            }
+            _ => Ok(input),
         }
     }
 
@@ -146,16 +146,24 @@ impl<'a> IcebergPlanBuilder<'a> {
             self.sink_mode.clone(),
             self.table_config.table_exists,
             self.table_config.options.clone(),
-            self.logical_input_schema.clone(),
-        )))
+            self.table_config.write_context.clone(),
+        )?))
     }
 
     fn add_commit_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+        let snapshot_update_kind = if self.table_config.table_exists
+            && matches!(&self.sink_mode, PhysicalSinkMode::Overwrite)
+        {
+            SnapshotUpdateKind::FullOverwrite
+        } else {
+            SnapshotUpdateKind::FastAppend
+        };
         Ok(Arc::new(
             crate::physical_plan::commit::commit_exec::IcebergCommitExec::new(
                 input,
                 self.table_config.table_url.clone(),
                 self.table_config.options.lakehouse_table.clone(),
+                snapshot_update_kind,
             ),
         ))
     }

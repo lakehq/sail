@@ -7,7 +7,7 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::datasource::TableProvider;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::{internal_err, Constraints, Result, Statistics};
+use datafusion_common::{Constraints, Result, Statistics, internal_err};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{Expr, LogicalPlan, TableProviderFilterPushDown, TableType};
 

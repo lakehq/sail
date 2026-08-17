@@ -2,14 +2,15 @@ use std::sync::Arc;
 
 use datafusion_common::{Column, JoinType, NullEquality};
 use datafusion_expr::utils::split_conjunction;
-use datafusion_expr::{build_join_schema, Expr, LogicalPlan, LogicalPlanBuilder};
-use datafusion_functions::expr_fn::coalesce;
+use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, build_join_schema};
 use sail_common::spec;
 use sail_python_udf::udf::pyspark_udf::PySparkUDF;
 
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
+use crate::function::common::{FunctionContextInput, ScalarFunctionInput};
+use crate::function::get_built_in_function;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 /// Returns `true` if the expression is itself a top-level Python scalar UDF call.
 /// This matches Spark SQL's `ExtractPythonUDFFromJoinCondition` optimizer rule
@@ -39,8 +40,7 @@ fn join_type_name(join_type: JoinType) -> &'static str {
     }
 }
 
-const IMPLICIT_CARTESIAN_PRODUCT_MSG: &str =
-    "Detected implicit cartesian product for INNER join between logical plans. \
+const IMPLICIT_CARTESIAN_PRODUCT_MSG: &str = "Detected implicit cartesian product for INNER join between logical plans. \
     Join condition is missing or trivial. \
     Either: use the CROSS JOIN syntax to allow cartesian products between \
     these relations, or: enable implicit cartesian products by setting the \
@@ -222,15 +222,36 @@ impl PlanResolver<'_> {
             })
             .collect::<PlanResult<Vec<_>>>()?;
         let builder = match join_type {
-            JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
+            JoinType::Inner | JoinType::Left | JoinType::Right => {
+                let uses_right = matches!(join_type, JoinType::Right);
                 let projections = join_columns
                     .into_iter()
                     .map(|(name, (left, right))| {
-                        coalesce(vec![Expr::Column(left), Expr::Column(right)])
-                            .alias(state.register_field_name(name))
+                        let column = if uses_right { right } else { left };
+                        Expr::Column(column).alias(state.register_field_name(name))
                     })
                     .chain(hidden_columns);
                 builder.project(projections)?
+            }
+            JoinType::Full => {
+                let join_schema = builder.schema().clone();
+                let coalesce_function = get_built_in_function("coalesce")?;
+                let projections = join_columns
+                    .into_iter()
+                    .map(|(name, (left, right))| {
+                        let expression = coalesce_function(ScalarFunctionInput {
+                            arguments: vec![Expr::Column(left), Expr::Column(right)],
+                            function_context: FunctionContextInput {
+                                argument_display_names: &[],
+                                plan_config: &self.config,
+                                session_context: self.ctx,
+                                schema: &join_schema,
+                            },
+                        })?;
+                        Ok(expression.alias(state.register_field_name(name)))
+                    })
+                    .collect::<PlanResult<Vec<_>>>()?;
+                builder.project(projections.into_iter().chain(hidden_columns))?
             }
             JoinType::LeftSemi
             | JoinType::RightSemi

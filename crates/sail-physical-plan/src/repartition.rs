@@ -12,17 +12,20 @@ use datafusion::physical_expr::Partitioning;
 use datafusion::physical_plan::execution_plan::{
     CardinalityEffect, EvaluationType, SchedulingType,
 };
+use datafusion::physical_plan::projection::{
+    ProjectionExec, all_columns, make_with_child, update_expr,
+};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
-use datafusion_common::{internal_err, plan_err, Result, Statistics};
+use datafusion_common::{Result, Statistics, internal_err, plan_err};
 use futures::{Stream, StreamExt};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::repartition::{
-    RepartitionBufferConfig, DEFAULT_REPARTITION_BUFFER_SIZE,
+    DEFAULT_REPARTITION_BUFFER_SIZE, RepartitionBufferConfig,
 };
-use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::mpsc::{Receiver, Sender, channel};
 
 #[derive(Debug, Clone)]
 pub struct RowRoundRobinPartitioner {
@@ -483,10 +486,43 @@ impl ExecutionPlan for ExplicitRepartitionExec {
         CardinalityEffect::Equal
     }
 
-    // TODO: Implement the logic to push down filters or projections.
-    //   The filters and projections are safe to push down if they are
-    //   column references. For other expressions, we may not want to
-    //   push them down since the evaluation can be potentially expensive,
-    //   and the presence of explicit repartitioning indicates that the user
-    //   wants to evaluate these expressions after repartitioning.
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // No benefit if projection does not narrow the schema
+        if projection.expr().len() >= projection.input().schema().fields().len() {
+            return Ok(None);
+        }
+
+        // Skip if projection expressions are not simple column references
+        if projection.benefits_from_input_partitioning()[0] || !all_columns(projection.expr()) {
+            return Ok(None);
+        }
+
+        let new_projection = make_with_child(projection, self.input())?;
+        // Handle all partitioning variants — 'ProjectionPushdown' runs before 'RewriteExplicitRepartition'
+        let new_partitioning = match &self.properties.partitioning {
+            Partitioning::Hash(partitions, size) => {
+                let mut new_partitions = vec![];
+                for partition in partitions {
+                    let Some(new_partition) = update_expr(partition, projection.expr(), false)?
+                    else {
+                        return Ok(None);
+                    };
+                    new_partitions.push(new_partition);
+                }
+                Partitioning::Hash(new_partitions, *size)
+            }
+            other => other.clone(),
+        };
+        Ok(Some(Arc::new(ExplicitRepartitionExec::new(
+            new_projection,
+            new_partitioning,
+        ))))
+    }
+
+    // Do not implement Filter pushdown, as its evaluation can be potentially
+    // expensive, and the presence of explicit repartitioning indicates that
+    // the user wants to evaluate the filters after repartitioning.
 }

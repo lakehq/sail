@@ -2,8 +2,8 @@ use std::fmt::Write;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    as_dictionary_array, as_largestring_array, as_string_array, BinaryBuilder, OffsetSizeTrait,
-    StringArray,
+    BinaryBuilder, OffsetSizeTrait, StringArray, as_dictionary_array, as_largestring_array,
+    as_string_array,
 };
 use datafusion::arrow::datatypes::{DataType, Int32Type};
 use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
@@ -11,7 +11,7 @@ use datafusion_common::cast::{
     as_binary_array, as_fixed_size_binary_array, as_generic_string_array, as_int64_array,
     as_string_view_array,
 };
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
 use datafusion_expr::ScalarFunctionArgs;
 use datafusion_expr_common::signature::TypeSignature;
 

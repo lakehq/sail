@@ -10,7 +10,7 @@ use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuil
 use crate::formats::text::source::TextSource;
 use crate::listing::source::{ListingFileSample, ListingScanInput, ReadFormat};
 use crate::listing::utils::infer_listing_compression;
-use crate::options::gen::TextReadOptions;
+use crate::options::r#gen::TextReadOptions;
 
 #[derive(Debug, Clone)]
 pub struct TextReadFormat {
@@ -72,5 +72,9 @@ impl ReadFormat for TextReadFormat {
             .build();
 
         Ok(config)
+    }
+
+    fn path_glob_filter(&self) -> Option<&str> {
+        self.options.path_glob_filter.as_deref()
     }
 }

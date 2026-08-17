@@ -1,7 +1,7 @@
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
-use datafusion_spark::function::math::modulus::{spark_pmod, SparkPmod as DataFusionPmod};
+use datafusion_spark::function::math::modulus::{SparkPmod as DataFusionPmod, spark_pmod};
 
 /// Spark `pmod(a, b)` (positive modulo) that honors `spark.sql.ansi.enabled`.
 ///

@@ -9,10 +9,10 @@ use datafusion::arrow::ipc::root_as_message;
 use datafusion::catalog::Session;
 use datafusion::datasource::physical_plan::ArrowSource;
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::{internal_datafusion_err, Result};
+use datafusion_common::{Result, internal_datafusion_err};
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
-use futures::stream::BoxStream;
 use futures::StreamExt;
+use futures::stream::BoxStream;
 use object_store::path::Path;
 use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore, ObjectStoreExt};
 
@@ -21,7 +21,7 @@ use crate::listing::source::{ListingFileSample, ListingScanInput, ReadFormat};
 #[derive(Debug, Default, Clone)]
 pub struct ArrowReadFormat;
 
-const ARROW_MAGIC: [u8; 6] = [b'A', b'R', b'R', b'O', b'W', b'1'];
+const ARROW_MAGIC: [u8; 6] = *b"ARROW1";
 const CONTINUATION_MARKER: [u8; 4] = [0xff; 4];
 
 async fn is_object_in_arrow_ipc_file_format(
@@ -74,8 +74,8 @@ impl ReadFormat for ArrowReadFormat {
                                     Ok(reader) => reader.schema(),
                                     Err(stream_error) => {
                                         return Err(internal_datafusion_err!(
-                                    "Failed to parse Arrow file as either file format or stream format. File format error: {file_error}. Stream format error: {stream_error}"
-                                ));
+                                            "Failed to parse Arrow file as either file format or stream format. File format error: {file_error}. Stream format error: {stream_error}"
+                                        ));
                                     }
                                 }
                             }

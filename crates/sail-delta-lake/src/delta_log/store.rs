@@ -35,7 +35,7 @@ use uuid::Uuid;
 
 use crate::delta_log::latest_version_from_listing;
 use crate::spec::{
-    commit_path, Action, DeltaError as DeltaTableError, DeltaError, DeltaResult, TransactionError,
+    Action, DeltaError as DeltaTableError, DeltaError, DeltaResult, TransactionError, commit_path,
 };
 
 mod config;

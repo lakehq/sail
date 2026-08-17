@@ -5,17 +5,17 @@ use async_trait::async_trait;
 use chrono::Utc;
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
-use datafusion::common::{not_impl_err, plan_err, DFSchema, DataFusionError, Result};
+use datafusion::common::{DFSchema, DataFusionError, Result, not_impl_err, plan_err};
 use datafusion::datasource::listing::ListingTableUrl;
-use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::SessionState;
+use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::{LogicalPlan, TableSource};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, Extension, UserDefinedLogicalNodeCore};
 use educe::Educe;
 use sail_common_datafusion::catalog::delta::{
-    unity_table_id_value, DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
+    DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY, unity_table_id_value,
 };
 use sail_common_datafusion::catalog::{
     CatalogPartitionField, CatalogTableColumnIdentity, CommitAuthority, LakehouseExecutionContext,
@@ -25,10 +25,10 @@ use sail_common_datafusion::column_features::{
     ColumnFeatureKey, ColumnFeatures, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
 };
 use sail_common_datafusion::datasource::{
-    create_sort_order, find_path_in_options, BucketBy, DeleteInfo, MergeInfo, OptionLayer,
-    PhysicalSinkMode, SinkInfo, SinkMode, SourceInfo, TableFormat, TableFormatAlterTableOperation,
+    BucketBy, CATALOG_TABLE_OPTION, DeleteInfo, MergeInfo, OptionLayer, PhysicalSinkMode, SinkInfo,
+    SinkMode, SourceInfo, TableFormat, TableFormatAlterTableOperation,
     TableFormatCreateTableColumn, TableFormatCreateTableInfo, TableFormatCreateTableResult,
-    TableFormatMetadata, TableFormatRegistry, CATALOG_TABLE_OPTION,
+    TableFormatMetadata, TableFormatRegistry, create_sort_order, find_path_in_options,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -41,32 +41,30 @@ use url::Url;
 use crate::catalog_managed::{metadata_with_catalog_managed, protocol_with_catalog_managed};
 use crate::datasource::actions::adds_to_remove_actions;
 use crate::delta_log::StorageConfig;
-use crate::options::gen::{DeltaReadOptions, DeltaWriteOptions};
+use crate::options::r#gen::{DeltaReadOptions, DeltaWriteOptions};
 use crate::physical_plan::planner::{DeltaPhysicalPlanner, DeltaPlannerConfig, PlannerContext};
+use crate::schema::manager::{canonicalize_partition_columns, is_check_constraint_property};
 use crate::schema::type_widening::alter_column_type as alter_delta_column_type;
 use crate::schema::{
     add_type_widening_metadata, annotate_for_column_mapping, collect_type_changes,
     compute_max_column_id, evolve_schema, format_type_change_path, inject_default_expressions,
     inject_generation_expressions, inject_identity_columns, is_supported_type_change_for_write,
     metadata_for_create_with_struct_type, normalize_delta_schema, protocol_can_write_type_widening,
-    protocol_for_create, schema_has_column_defaults, schema_has_generated_columns,
-    schema_has_identity_columns,
+    protocol_for_metadata,
 };
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
-    canonicalize_and_validate_table_properties, contains_timestampntz_arrow,
-    contains_variant_arrow, route_table_property_key, ColumnMappingMode, ColumnMetadataKey,
-    CommitAction, DataType as DeltaDataType, DeltaOperation, MetadataValue, Protocol, SaveMode,
-    StructField, StructType, TableFeature, TableProperties,
+    ColumnMappingMode, ColumnMetadataKey, CommitAction, DataType as DeltaDataType, DeltaOperation,
+    MetadataValue, Protocol, SaveMode, StructField, StructType, TableFeature, TableProperties,
+    canonicalize_and_validate_table_properties, route_table_property_key,
 };
 use crate::table::{
-    create_delta_table_with_object_store, create_logstore_with_object_store,
-    infer_delta_logical_metadata, infer_delta_logical_schema,
+    DeltaTable, catalog_managed_commit_context, create_delta_table_with_object_store,
+    create_logstore_with_object_store, infer_delta_logical_metadata, infer_delta_logical_schema,
     load_catalog_managed_commits_for_snapshot, open_table_with_object_store_and_table_config,
-    DeltaTable,
 };
 use crate::transaction::CommitBuilder;
-use crate::{create_delta_source, DeltaTableError};
+use crate::{DeltaTableError, create_delta_source};
 
 /// Delta Lake implementation of [`TableFormat`].
 #[derive(Debug)]
@@ -309,21 +307,6 @@ impl TableFormat for DeltaTableFormat {
             kernel_schema
         };
 
-        let mut protocol = protocol_for_create(
-            !matches!(effective_mode, ColumnMappingMode::None),
-            contains_timestampntz_arrow(normalized_schema.as_ref()),
-            TableProperties::from(configuration.iter()).enable_in_commit_timestamps(),
-            schema_has_generated_columns(&metadata_schema),
-            schema_has_column_defaults(&metadata_schema),
-            schema_has_identity_columns(&metadata_schema),
-            contains_variant_arrow(normalized_schema.as_ref()),
-            &configuration,
-        )
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        if catalog_managed_table_id.is_some() {
-            protocol = protocol_with_catalog_managed(&protocol);
-        }
-
         let partition_columns = partition_by
             .iter()
             .map(|field| field.column.clone())
@@ -337,6 +320,11 @@ impl TableFormat for DeltaTableFormat {
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
         if let Some(comment) = comment {
             metadata = metadata.with_description(comment);
+        }
+        let mut protocol =
+            protocol_for_metadata(&metadata).map_err(|e| DataFusionError::External(Box::new(e)))?;
+        if catalog_managed_table_id.is_some() {
+            protocol = protocol_with_catalog_managed(&protocol);
         }
         if let Some(table_id) = &catalog_managed_table_id {
             metadata = metadata_with_catalog_managed(metadata, table_id);
@@ -633,7 +621,7 @@ pub(crate) async fn plan_delta_write(
         }
     };
     let physical_sort = create_sort_order(ctx, sort_order, logical_input.schema())?;
-    let partition_by = partition_by
+    let requested_partition_columns = partition_by
         .into_iter()
         .map(|field| field.column)
         .collect::<Vec<_>>();
@@ -647,13 +635,14 @@ pub(crate) async fn plan_delta_write(
         .object_store_registry
         .get_store(&table_url)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let lakehouse_planning_context = lakehouse_table.as_ref().filter(|context| {
-        context.table_identity.table_id.is_some()
-            && !matches!(
-                context.operation,
-                LakehouseOperation::Create | LakehouseOperation::Register
-            )
-    });
+    let lakehouse_planning_context = catalog_managed_commit_context(lakehouse_table.as_ref())
+        .filter(|context| {
+            context.table_identity.table_id.is_some()
+                && !matches!(
+                    context.operation,
+                    LakehouseOperation::Create | LakehouseOperation::Register
+                )
+        });
     let table = match open_delta_write_planning_table(
         ctx,
         table_url.clone(),
@@ -697,39 +686,50 @@ pub(crate) async fn plan_delta_write(
         _ => {}
     }
 
+    let partition_by = if requested_partition_columns.is_empty() {
+        requested_partition_columns
+    } else {
+        let normalized_write_schema = normalize_delta_schema(&physical_input.schema());
+        let delta_write_schema = StructType::try_from(normalized_write_schema.as_ref())
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        canonicalize_partition_columns(&delta_write_schema, requested_partition_columns)
+            .map_err(|error| DataFusionError::External(Box::new(error)))?
+    };
+
     let existing_partition_columns = table_snapshot
         .as_ref()
         .map(|snapshot| snapshot.metadata().partition_columns().clone());
 
-    if let Some(existing_partitions) = &existing_partition_columns {
-        if !partition_by.is_empty() && partition_by != *existing_partitions {
-            match mode {
-                PhysicalSinkMode::Append => {
-                    return plan_err!(
-                        "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
+    if let Some(existing_partitions) = &existing_partition_columns
+        && !partition_by.is_empty()
+        && partition_by != *existing_partitions
+    {
+        match mode {
+            PhysicalSinkMode::Append => {
+                return plan_err!(
+                    "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
                         Cannot change partitioning on append.",
-                        existing_partitions,
-                        partition_by
-                    );
-                }
-                PhysicalSinkMode::OverwriteIf { .. } => {
-                    return plan_err!(
-                        "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
-                        Cannot change partitioning with replaceWhere or conditional overwrite.",
-                        existing_partitions,
-                        partition_by
-                    );
-                }
-                PhysicalSinkMode::Overwrite if !delta_options.overwrite_schema => {
-                    return plan_err!(
-                        "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
-                        Set overwriteSchema=true to change partitioning.",
-                        existing_partitions,
-                        partition_by
-                    );
-                }
-                _ => {}
+                    existing_partitions,
+                    partition_by
+                );
             }
+            PhysicalSinkMode::OverwriteIf { .. } => {
+                return plan_err!(
+                    "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
+                        Cannot change partitioning with replaceWhere or conditional overwrite.",
+                    existing_partitions,
+                    partition_by
+                );
+            }
+            PhysicalSinkMode::Overwrite if !delta_options.overwrite_schema => {
+                return plan_err!(
+                    "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
+                        Set overwriteSchema=true to change partitioning.",
+                    existing_partitions,
+                    partition_by
+                );
+            }
+            _ => {}
         }
     }
 
@@ -782,7 +782,7 @@ async fn open_delta_write_planning_table(
         ..Default::default()
     };
 
-    if let Some(lakehouse_table) = lakehouse_table {
+    if let Some(lakehouse_table) = catalog_managed_commit_context(lakehouse_table) {
         let log_store = create_logstore_with_object_store(
             Arc::clone(&object_store),
             table_url.clone(),
@@ -819,12 +819,11 @@ impl DeltaTableFormat {
         changes: Vec<(String, Option<String>)>,
         if_exists: bool,
     ) -> Result<()> {
-        use crate::schema::protocol_for_metadata;
         use crate::transaction::CommitBuilder;
 
         if let Some((key, _)) = changes
             .iter()
-            .find(|(key, _)| is_delta_constraint_property(key))
+            .find(|(key, _)| is_check_constraint_property(key))
         {
             return plan_err!(
                 "[DELTA_ADD_CONSTRAINTS] Please use ALTER TABLE ADD CONSTRAINT to add CHECK constraints. Invalid property: {key}"
@@ -923,6 +922,11 @@ impl DeltaTableFormat {
         );
 
         let existing_protocol = snapshot.protocol();
+        let desired_protocol = append_only_protocol_for_existing_table(
+            existing_protocol,
+            &desired_protocol,
+            &new_metadata,
+        );
         let (merged_protocol, protocol_upgraded) =
             merge_protocol_for_upgrade(existing_protocol, &desired_protocol);
 
@@ -961,7 +965,6 @@ impl DeltaTableFormat {
         name: &str,
         expression: &str,
     ) -> Result<()> {
-        use crate::schema::protocol_for_metadata;
         use crate::transaction::CommitBuilder;
 
         let url = parse_location_to_url(path)?;
@@ -986,12 +989,12 @@ impl DeltaTableFormat {
             .map_err(|e| DataFusionError::External(Box::new(e)))?
             .clone();
         ensure_not_catalog_managed_delta(&snapshot, "ALTER TABLE ADD CONSTRAINT")?;
-        let key = format!("delta.constraints.{name}");
+        let key = format!("delta.constraints.{}", name.to_lowercase());
         if snapshot
             .metadata()
             .configuration()
             .keys()
-            .any(|existing| existing.eq_ignore_ascii_case(&key))
+            .any(|existing| existing.to_lowercase() == key)
         {
             return plan_err!("Delta constraint '{name}' already exists");
         }
@@ -1143,7 +1146,6 @@ impl DeltaTableFormat {
         column_path: Vec<String>,
         default: Option<String>,
     ) -> Result<()> {
-        use crate::schema::protocol_for_metadata;
         use crate::transaction::CommitBuilder;
 
         let url = parse_location_to_url(path)?;
@@ -1460,6 +1462,32 @@ fn avoid_stable_type_widening_auto_upgrade_for_preview_tables(
     }
 }
 
+fn append_only_protocol_for_existing_table(
+    existing: &Protocol,
+    desired: &Protocol,
+    metadata: &crate::spec::Metadata,
+) -> Protocol {
+    let append_only = TableProperties::from(metadata.configuration().iter()).append_only();
+    let needs_explicit_feature = existing.min_writer_version() < 2
+        || existing.min_writer_version() >= 7
+        || desired.min_writer_version() >= 7;
+    if !append_only
+        || !needs_explicit_feature
+        || desired.has_writer_feature(&TableFeature::AppendOnly)
+    {
+        return desired.clone();
+    }
+
+    let mut writer_features = desired.writer_features().unwrap_or(&[]).to_vec();
+    writer_features.push(TableFeature::AppendOnly);
+    Protocol::new(
+        desired.min_reader_version(),
+        desired.min_writer_version().max(7),
+        desired.reader_features().map(<[_]>::to_vec),
+        Some(writer_features),
+    )
+}
+
 /// Merge an existing protocol with a desired one. The result preserves every feature and
 /// version already present on the table, and adds anything additionally required by
 /// `desired`. Returns `(merged, upgraded)` where `upgraded` indicates whether the merged
@@ -1468,62 +1496,7 @@ fn merge_protocol_for_upgrade(
     existing: &crate::spec::Protocol,
     desired: &crate::spec::Protocol,
 ) -> (crate::spec::Protocol, bool) {
-    use crate::spec::{Protocol, TableFeature};
-
-    let new_min_reader = existing
-        .min_reader_version()
-        .max(desired.min_reader_version());
-    let new_min_writer = existing
-        .min_writer_version()
-        .max(desired.min_writer_version());
-
-    fn merge_features(
-        existing: Option<&[TableFeature]>,
-        desired: Option<&[TableFeature]>,
-    ) -> Option<Vec<TableFeature>> {
-        match (existing, desired) {
-            (None, None) => None,
-            (Some(a), None) => Some(a.to_vec()),
-            (None, Some(b)) => {
-                if b.is_empty() {
-                    Some(Vec::new())
-                } else {
-                    Some(b.to_vec())
-                }
-            }
-            (Some(a), Some(b)) => {
-                let mut out = a.to_vec();
-                for f in b {
-                    if !out.contains(f) {
-                        out.push(f.clone());
-                    }
-                }
-                Some(out)
-            }
-        }
-    }
-
-    // Only attach explicit reader/writer feature lists if the corresponding version
-    // requires them (>=3 for readers, >=7 for writers) -- otherwise older clients may
-    // mis-interpret the table as being on the table-features protocol.
-    let reader_features = if new_min_reader >= 3 {
-        merge_features(existing.reader_features(), desired.reader_features())
-    } else {
-        existing.reader_features().map(|s| s.to_vec())
-    };
-    let writer_features = if new_min_writer >= 7 {
-        merge_features(existing.writer_features(), desired.writer_features())
-    } else {
-        existing.writer_features().map(|s| s.to_vec())
-    };
-
-    let merged = Protocol::new(
-        new_min_reader,
-        new_min_writer,
-        reader_features,
-        writer_features,
-    );
-
+    let merged = existing.merge_upgrade_requirements(desired);
     let upgraded = merged != *existing;
     (merged, upgraded)
 }
@@ -1787,13 +1760,6 @@ fn resolve_delta_metadata_configuration(
     )
 }
 
-fn is_delta_constraint_property(key: &str) -> bool {
-    key.len() > "delta.constraints.".len()
-        && key
-            .get(.."delta.constraints.".len())
-            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("delta.constraints."))
-}
-
 pub fn split_delta_write_options_and_table_properties(
     options: Vec<OptionLayer>,
 ) -> Result<(Vec<OptionLayer>, HashMap<String, String>)> {
@@ -2016,6 +1982,47 @@ mod tests {
         assert!(!adjusted.has_reader_feature(&TableFeature::TypeWidening));
         assert!(!adjusted.has_writer_feature(&TableFeature::TypeWidening));
         assert!(adjusted.has_writer_feature(&TableFeature::AllowColumnDefaults));
+    }
+
+    #[test]
+    fn append_only_protocol_upgrade_respects_legacy_and_table_feature_versions()
+    -> crate::spec::DeltaResult<()> {
+        let metadata = crate::schema::metadata_for_create_with_struct_type(
+            StructType::try_new([StructField::nullable("id", DeltaDataType::INTEGER)])?,
+            vec![],
+            0,
+            HashMap::from([("delta.appendOnly".to_string(), "true".to_string())]),
+        )?;
+        let desired = Protocol::new(1, 2, None, None);
+
+        let legacy_v2 = append_only_protocol_for_existing_table(
+            &Protocol::new(1, 2, None, None),
+            &desired,
+            &metadata,
+        );
+        assert_eq!(legacy_v2, desired);
+
+        let upgraded_v1 = append_only_protocol_for_existing_table(
+            &Protocol::new(1, 1, None, None),
+            &desired,
+            &metadata,
+        );
+        assert_eq!(upgraded_v1.min_writer_version(), 7);
+        assert!(upgraded_v1.has_writer_feature(&TableFeature::AppendOnly));
+
+        let existing_v7 = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::V2Checkpoint]),
+            Some(vec![TableFeature::V2Checkpoint]),
+        );
+        let explicit_v7 =
+            append_only_protocol_for_existing_table(&existing_v7, &desired, &metadata);
+        let (merged, upgraded) = merge_protocol_for_upgrade(&existing_v7, &explicit_v7);
+        assert!(upgraded);
+        assert!(merged.has_writer_feature(&TableFeature::V2Checkpoint));
+        assert!(merged.has_writer_feature(&TableFeature::AppendOnly));
+        Ok(())
     }
 
     #[test]

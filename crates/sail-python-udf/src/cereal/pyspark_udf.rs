@@ -2,12 +2,12 @@ use datafusion::arrow::datatypes::DataType;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::PyAnyMethods;
 use pyo3::types::PyModule;
-use pyo3::{intern, Bound, IntoPyObject, PyAny, Python};
+use pyo3::{Bound, IntoPyObject, PyAny, Python, intern};
 use sail_common::spec;
 
 use crate::cereal::{
-    build_input_types_json, check_python_udf_version, get_pyspark_version, should_write_config,
-    supports_kwargs, write_kwarg, PySparkVersion,
+    PySparkVersion, build_input_types_json, check_python_udf_version, get_pyspark_version,
+    should_write_config, supports_kwargs, write_conf, write_kwarg,
 };
 use crate::config::PySparkUdfConfig;
 use crate::error::{PyUdfError, PyUdfResult};
@@ -29,9 +29,20 @@ impl PySparkUdfPayload {
         let serializer = PyModule::import(py, intern!(py, "pyspark.serializers"))?
             .getattr(intern!(py, "CPickleSerializer"))?
             .call0()?;
-        let tuple = PyModule::import(py, intern!(py, "pyspark.worker"))?
-            .getattr(intern!(py, "read_udfs"))?
-            .call1((serializer, infile, eval_type))?;
+        let worker = PyModule::import(py, intern!(py, "pyspark.worker"))?;
+        let read_udfs = worker.getattr(intern!(py, "read_udfs"))?;
+        let tuple = match get_pyspark_version()? {
+            PySparkVersion::V4_2 => {
+                let runner_conf = worker
+                    .getattr(intern!(py, "RunnerConf"))?
+                    .call1((&infile,))?;
+                let eval_conf = worker.getattr(intern!(py, "EvalConf"))?.call1((&infile,))?;
+                read_udfs.call1((serializer, infile, eval_type, runner_conf, eval_conf))?
+            }
+            PySparkVersion::V3 | PySparkVersion::V4_0 | PySparkVersion::V4_1 => {
+                read_udfs.call1((serializer, infile, eval_type))?
+            }
+        };
         tuple
             .get_item(0)?
             .into_pyobject(py)
@@ -54,29 +65,42 @@ impl PySparkUdfPayload {
 
         data.extend(i32::from(eval_type).to_be_bytes());
 
-        if should_write_config(eval_type) {
-            let config = config.to_key_value_pairs();
-            data.extend((config.len() as i32).to_be_bytes()); // number of configuration options
-            for (key, value) in config {
-                data.extend((key.len() as i32).to_be_bytes()); // length of the key
-                data.extend(key.as_bytes());
-                data.extend((value.len() as i32).to_be_bytes()); // length of the value
-                data.extend(value.as_bytes());
+        match pyspark_version {
+            PySparkVersion::V4_2 => {
+                // Spark 4.2 reads both maps before dispatching to read_udfs.
+                write_conf(&mut data, config.to_key_value_pairs());
+                let mut eval_conf = vec![];
+                if eval_type == spec::PySparkUdfType::ArrowBatched {
+                    eval_conf.push((
+                        "input_type".to_string(),
+                        build_input_types_json(input_types, config.arrow_use_large_var_types)?,
+                    ))
+                }
+                write_conf(&mut data, eval_conf);
+            }
+            PySparkVersion::V3 | PySparkVersion::V4_0 | PySparkVersion::V4_1 => {
+                if should_write_config(eval_type) {
+                    write_conf(&mut data, config.to_key_value_pairs());
+                }
+
+                // PySpark 4.1 reads input types for ArrowBatched UDFs.
+                // PySpark 4.0.x does not read input types and would misparse the stream.
+                if pyspark_version == PySparkVersion::V4_1
+                    && eval_type == spec::PySparkUdfType::ArrowBatched
+                {
+                    let schema_json =
+                        build_input_types_json(input_types, config.arrow_use_large_var_types)?;
+                    data.extend((schema_json.len() as i32).to_be_bytes());
+                    data.extend(schema_json.as_bytes());
+                }
             }
         }
 
-        // PySpark 4.1+ reads input types for ArrowBatched UDFs.
-        // PySpark 4.0.x does not read input types and would misparse the stream.
-        if matches!(pyspark_version, PySparkVersion::V4_1)
-            && matches!(eval_type, spec::PySparkUdfType::ArrowBatched)
-        {
-            let schema_json = build_input_types_json(input_types)?;
-            data.extend((schema_json.len() as i32).to_be_bytes());
-            data.extend(schema_json.as_bytes());
-        }
-
-        if pyspark_version.is_v4() {
-            data.extend(0u8.to_be_bytes()); // profiling is not enabled
+        match pyspark_version {
+            PySparkVersion::V4_0 | PySparkVersion::V4_1 => {
+                data.extend(0u8.to_be_bytes()); // profiling is not enabled
+            }
+            PySparkVersion::V3 | PySparkVersion::V4_2 => {}
         }
 
         data.extend(1i32.to_be_bytes()); // number of UDFs
@@ -87,7 +111,11 @@ impl PySparkUdfPayload {
             .map_err(|e| PyUdfError::invalid(format!("num args: {e}")))?;
         data.extend(num_arg_offsets.to_be_bytes()); // number of argument offsets
 
-        let allow_kwargs = pyspark_version.is_v4() && supports_kwargs(eval_type);
+        let allow_kwargs = match pyspark_version {
+            PySparkVersion::V4_2 => true,
+            PySparkVersion::V4_0 | PySparkVersion::V4_1 => supports_kwargs(eval_type),
+            PySparkVersion::V3 => false,
+        };
 
         for (i, offset) in arg_offsets.iter().enumerate() {
             let offset: i32 = (*offset)
@@ -102,6 +130,14 @@ impl PySparkUdfPayload {
         data.extend(1i32.to_be_bytes()); // number of functions
         data.extend((command.len() as i32).to_be_bytes()); // length of the function
         data.extend_from_slice(command);
+
+        match pyspark_version {
+            PySparkVersion::V4_2 => {
+                // Spark 4.2 always sends this field, even with profiling disabled.
+                data.extend(0i64.to_be_bytes());
+            }
+            PySparkVersion::V3 | PySparkVersion::V4_0 | PySparkVersion::V4_1 => {}
+        }
 
         Ok(data)
     }

@@ -174,11 +174,14 @@ where
             return None;
         }
         if let Some(current) = &mut self.current {
-            if let Some(item) = current.next() {
-                self.fetch -= 1;
-                return Some(Ok(item));
-            } else {
-                self.current = None;
+            match current.next() {
+                Some(item) => {
+                    self.fetch -= 1;
+                    return Some(Ok(item));
+                }
+                _ => {
+                    self.current = None;
+                }
             }
         }
         for item in self.input.by_ref() {
@@ -270,7 +273,7 @@ impl<U> PredicateFilterAsyncFlatMapTask<U> {
 mod tests {
     use std::sync::Arc;
 
-    use datafusion_common::{internal_err, Result};
+    use datafusion_common::{Result, internal_err};
 
     use super::{Predicate, PredicateExt};
 

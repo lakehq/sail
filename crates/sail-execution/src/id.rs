@@ -64,6 +64,7 @@ macro_rules! define_id_type {
 }
 
 define_id_type!(JobId, u64);
+define_id_type!(DriverId, u64);
 define_id_type!(WorkerId, u64);
 
 #[derive(Debug)]
@@ -83,10 +84,19 @@ where
         }
     }
 
-    pub fn next(&mut self) -> ExecutionResult<T> {
+    pub fn generate(&mut self) -> ExecutionResult<T> {
         let value = self.next_value;
         self.next_value = T::Value::next(value)?;
         Ok(value.into())
+    }
+}
+
+impl<T: IdType> Default for IdGenerator<T>
+where
+    T::Value: Copy,
+{
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -97,6 +107,18 @@ pub struct TaskKey {
     pub stage: usize,
     pub partition: usize,
     pub attempt: usize,
+}
+
+impl TaskKey {
+    pub fn task_stream_key(&self, channel: usize) -> TaskStreamKey {
+        TaskStreamKey {
+            job_id: self.job_id,
+            stage: self.stage,
+            partition: self.partition,
+            attempt: self.attempt,
+            channel,
+        }
+    }
 }
 
 pub struct TaskKeyDisplay<'a>(pub &'a TaskKey);
@@ -127,18 +149,6 @@ impl fmt::Display for TaskStreamKeyDisplay<'_> {
         write!(
             f,
             "job {} stage {} partition {} attempt {} channel {}",
-            self.0.job_id, self.0.stage, self.0.partition, self.0.attempt, self.0.channel
-        )
-    }
-}
-
-pub struct TaskStreamKeyDenseDisplay<'a>(pub &'a TaskStreamKey);
-
-impl fmt::Display for TaskStreamKeyDenseDisplay<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}/{}/{}/{}/{}",
             self.0.job_id, self.0.stage, self.0.partition, self.0.attempt, self.0.channel
         )
     }

@@ -4,8 +4,8 @@ use datafusion_common::{DataFusionError, Result};
 use sail_common_datafusion::datasource::OptionLayer;
 
 use crate::listing::source::{FormatFactory, ListingTableFormat};
-use crate::options::gen::{TextReadOptions, TextWriteOptions};
 use crate::options::ResolveOptions;
+use crate::options::r#gen::{TextReadOptions, TextWriteOptions};
 
 pub mod options;
 mod read;

@@ -13,8 +13,8 @@
 use std::sync::Arc;
 
 use datafusion::common::DataFusionError;
-use object_store::path::Path as ObjectPath;
 use object_store::ObjectStoreExt;
+use object_store::path::Path as ObjectPath;
 use url::Url;
 
 use crate::spec::{FormatVersion, Manifest, ManifestList};

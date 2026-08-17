@@ -1,5 +1,5 @@
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{Result, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 /// A placeholder UDF used to represent a list of expressions that come from the output

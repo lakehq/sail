@@ -9,12 +9,12 @@ use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::get_outer_built_in_generator_functions;
+use crate::resolver::PlanResolver;
 use crate::resolver::function::PythonUdtf;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
 use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
-use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
     #[expect(clippy::too_many_arguments)]
@@ -38,10 +38,10 @@ impl PlanResolver<'_> {
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
         let mut scope = state.enter_config_scope();
         let state = scope.state();
-        if let Some(f) = catalog_manager.get_function(&canonical_function_name)? {
-            if f.inner().is::<PySparkUnresolvedUDF>() {
-                state.config_mut().arrow_allow_large_var_types = true;
-            }
+        if let Some(f) = catalog_manager.get_function(&canonical_function_name)?
+            && f.inner().is::<PySparkUnresolvedUDF>()
+        {
+            state.config_mut().arrow_allow_large_var_types = true;
         }
         let input = match input {
             Some(x) => self.resolve_query_plan(x, state).await?,
@@ -49,22 +49,24 @@ impl PlanResolver<'_> {
         };
         let schema = input.schema().clone();
 
-        if let Some(f) = catalog_manager.get_function(&canonical_function_name)? {
-            if let Some(f) = f.inner().downcast_ref::<PySparkUnresolvedUDF>() {
-                if !f.eval_type().is_table_function() {
-                    return Err(PlanError::invalid(format!(
-                        "not a table function for UDTF lateral view: {function_name}"
-                    )));
-                }
-                let udtf = PythonUdtf {
-                    python_version: f.python_version().to_string(),
-                    eval_type: f.eval_type(),
-                    command: f.command().to_vec(),
-                    return_type: f.output_type().cloned(),
-                };
-                // Merge named_arguments (SQL kwargs like `col => expr`) into the argument list
-                // as NamedArgument expressions so extract_kwargs can process them uniformly.
-                let all_arguments: Vec<spec::Expr> = arguments
+        if let Some(f) = catalog_manager.get_function(&canonical_function_name)?
+            && let Some(f) = f.inner().downcast_ref::<PySparkUnresolvedUDF>()
+        {
+            if !f.eval_type().is_table_function() {
+                return Err(PlanError::invalid(format!(
+                    "not a table function for UDTF lateral view: {function_name}"
+                )));
+            }
+            let udtf = PythonUdtf {
+                python_version: f.python_version().to_string(),
+                eval_type: f.eval_type(),
+                command: f.command().to_vec(),
+                return_type: f.output_type().cloned(),
+            };
+            // Merge named_arguments (SQL kwargs like `col => expr`) into the argument list
+            // as NamedArgument expressions so extract_kwargs can process them uniformly.
+            let all_arguments: Vec<spec::Expr> =
+                arguments
                     .into_iter()
                     .chain(named_arguments.into_iter().map(|(key, value)| {
                         spec::Expr::NamedArgument {
@@ -73,27 +75,26 @@ impl PlanResolver<'_> {
                         }
                     }))
                     .collect();
-                let (positional_args, kwarg_names) = Self::extract_kwargs(all_arguments);
-                let arguments = self
-                    .resolve_named_expressions(positional_args, input.schema(), state)
-                    .await?;
-                let output_names =
-                    column_aliases.map(|aliases| aliases.into_iter().map(|x| x.into()).collect());
-                let output_qualifier = table_alias
-                    .map(|alias| self.resolve_table_reference(&alias))
-                    .transpose()?;
-                return self.resolve_python_udtf_plan(
-                    udtf,
-                    &function_name,
-                    input,
-                    arguments,
-                    &kwarg_names,
-                    output_names,
-                    output_qualifier,
-                    f.deterministic(),
-                    state,
-                );
-            }
+            let (positional_args, kwarg_names) = Self::extract_kwargs(all_arguments);
+            let arguments = self
+                .resolve_named_expressions(positional_args, input.schema(), state)
+                .await?;
+            let output_names =
+                column_aliases.map(|aliases| aliases.into_iter().map(|x| x.into()).collect());
+            let output_qualifier = table_alias
+                .map(|alias| self.resolve_table_reference(&alias))
+                .transpose()?;
+            return self.resolve_python_udtf_plan(
+                udtf,
+                &function_name,
+                input,
+                arguments,
+                &kwarg_names,
+                output_names,
+                output_qualifier,
+                f.deterministic(),
+                state,
+            );
         }
 
         let function_name = if outer {

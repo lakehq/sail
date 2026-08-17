@@ -2,7 +2,7 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 use datafusion::logical_expr::LogicalPlan;
-use datafusion_common::{plan_err, DFSchemaRef, Result};
+use datafusion_common::{DFSchemaRef, Result, plan_err};
 use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
 
 /// A logical plan node that limits the number of retractable rows in a stream

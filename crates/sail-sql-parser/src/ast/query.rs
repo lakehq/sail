@@ -1,16 +1,16 @@
+use chumsky::Parser;
 use chumsky::extra::ParserExtra;
 use chumsky::input::{Input, ValueInput};
 use chumsky::label::LabelError;
 use chumsky::pratt::{infix, left};
 use chumsky::prelude::choice;
-use chumsky::Parser;
 use either::Either;
 use sail_sql_macro::{TreeParser, TreeSyntax, TreeText};
 
 use crate::ast::expression::{
     DuplicateTreatment, Expr, FunctionArgument, GroupingExpr, OrderByExpr, WindowSpec,
 };
-use crate::ast::identifier::{column_ident, object_name, table_ident, Ident, ObjectName};
+use crate::ast::identifier::{Ident, ObjectName, column_ident, object_name, table_ident};
 use crate::ast::keywords::{
     All, Anti, As, Bucket, By, Cluster, Cross, Cube, Distinct, Distribute, Except, Exclude, For,
     From, Full, Group, Having, Identifier, In, Include, Inner, Intersect, Join, Lateral, Left,

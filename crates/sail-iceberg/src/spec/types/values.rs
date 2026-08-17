@@ -413,7 +413,7 @@ impl Literal {
             (expected, literal) => {
                 return Err(format!(
                     "Sail literal {literal:?} is not supported for Iceberg type {expected:?}"
-                ))
+                ));
             }
         })
     }

@@ -3,20 +3,22 @@ use std::sync::Arc;
 use arrow_schema::FieldRef;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::datasource::listing::helpers::expr_applicable_for_cols;
-use datafusion::execution::cache::cache_manager::CachedFileList;
 use datafusion::execution::cache::TableScopedPath;
+use datafusion::execution::cache::cache_manager::CachedFileList;
 use datafusion::logical_expr::Expr;
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::{internal_datafusion_err, plan_err, DataFusionError, GetExt, Result};
-use datafusion_datasource::file_compression_type::FileCompressionType;
+use datafusion_common::{DataFusionError, GetExt, Result, internal_datafusion_err, plan_err};
 use datafusion_datasource::ListingTableUrl;
+use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_session::Session;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use log::debug;
+use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
 use crate::listing::source::ListingFileSample;
+use crate::url::PathGlobFilter;
 
 pub fn rewrite_utf8view_fields(schema: Arc<Schema>) -> Arc<Schema> {
     // TODO: Spark doesn't support Utf8View
@@ -88,11 +90,12 @@ pub fn infer_listing_compression(
 pub async fn sample_listing_files<'a>(
     ctx: &dyn Session,
     urls: &'a [ListingTableUrl],
+    path_glob_filter: Option<&'a PathGlobFilter>,
 ) -> Result<Vec<ListingFileSample<'a>>> {
     let mut samples = vec![];
     for url in urls {
         let store = ctx.runtime_env().object_store(url)?;
-        let objects: Vec<_> = list_all_files(url, ctx, store.as_ref())
+        let objects: Vec<_> = list_all_files(url, ctx, store.as_ref(), path_glob_filter)
             .await?
             // Empty files can't contribute to schema / partition inference and may error when read.
             .try_filter(|meta| futures::future::ready(meta.size > 0))
@@ -197,6 +200,7 @@ pub async fn list_all_files<'a>(
     url: &'a ListingTableUrl,
     ctx: &'a dyn Session,
     store: &'a dyn ObjectStore,
+    path_glob_filter: Option<&'a PathGlobFilter>,
 ) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
     let exec_options = &ctx.config_options().execution;
     let ignore_subdirectory = exec_options.listing_table_ignore_subdirectory;
@@ -225,11 +229,38 @@ pub async fn list_all_files<'a>(
     Ok(list
         .try_filter(move |meta| {
             let path = &meta.location;
-            let glob_match = url.contains(path, ignore_subdirectory);
-            futures::future::ready(glob_match)
+            let included = url.contains(path, ignore_subdirectory)
+                && !has_hidden_path_component(url, path)
+                && matches_path_glob_filter(path_glob_filter, path);
+            futures::future::ready(included)
         })
         .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))
         .boxed())
+}
+
+pub fn matches_path_glob_filter(
+    path_glob_filter: Option<&PathGlobFilter>,
+    location: &Path,
+) -> bool {
+    path_glob_filter.is_none_or(|filter| {
+        location
+            .filename()
+            .is_some_and(|filename| filter.matches(filename))
+    })
+}
+
+/// Returns `true` if the path is hidden per Spark's `HadoopFSUtils.shouldFilterOutPathName`.
+pub fn has_hidden_path_component(url: &ListingTableUrl, location: &Path) -> bool {
+    let is_hidden = |name: &str| {
+        let exclude = (name.starts_with('_') && !name.contains('='))
+            || name.starts_with('.')
+            || name.ends_with("._COPYING_");
+        let keep = name.starts_with("_common_metadata") || name.starts_with("_metadata");
+        exclude && !keep
+    };
+    url.strip_prefix(location)
+        .is_some_and(|mut segments| segments.any(is_hidden))
+        || location.filename().is_some_and(is_hidden)
 }
 
 pub fn can_be_evaluated_for_partition_pruning(
@@ -237,4 +268,54 @@ pub fn can_be_evaluated_for_partition_pruning(
     expr: &Expr,
 ) -> bool {
     !partition_column_names.is_empty() && expr_applicable_for_cols(partition_column_names, expr)
+}
+
+#[expect(clippy::unwrap_used)]
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_has_hidden_path_component() {
+        let dir = ListingTableUrl::parse("file:///data/").unwrap();
+        let hidden = |path: &str| has_hidden_path_component(&dir, &Path::from(path));
+
+        // Data files and partition directories are kept.
+        assert!(!hidden("data/part-0.parquet"));
+        assert!(!hidden("data/year=2020/part-0.parquet"));
+
+        // Hidden markers and hidden directories are excluded.
+        assert!(hidden("data/_SUCCESS"));
+        assert!(hidden("data/.hidden.json"));
+        assert!(hidden("data/_temporary/0/part-0.parquet"));
+        assert!(hidden("data/visible/_hidden/bad.json"));
+
+        // Files mid-copy (Hadoop `._COPYING_`) are excluded.
+        assert!(hidden("data/part-0.parquet._COPYING_"));
+
+        // Spark keeps the Parquet summary files.
+        assert!(!hidden("data/_metadata"));
+        assert!(!hidden("data/_common_metadata"));
+
+        // Spark keeps `_`-prefixed partition directories (they contain `=`).
+        assert!(!hidden("data/_part=1/part-0.parquet"));
+
+        // A hidden listing root is not itself filtered.
+        let hidden_root = ListingTableUrl::parse("file:///_root/").unwrap();
+        assert!(!has_hidden_path_component(
+            &hidden_root,
+            &Path::from("_root/part-0.parquet")
+        ));
+
+        // A location outside the prefix falls back to judging its file name.
+        assert!(!hidden("outside/part-0.parquet"));
+        assert!(hidden("outside/_SUCCESS"));
+
+        // An explicitly targeted hidden file is excluded.
+        let file = ListingTableUrl::parse("file:///data/_data.json").unwrap();
+        assert!(has_hidden_path_component(
+            &file,
+            &Path::from("data/_data.json")
+        ));
+    }
 }

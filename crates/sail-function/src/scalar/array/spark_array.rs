@@ -3,13 +3,13 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    make_array, new_empty_array, new_null_array, Array, ArrayData, ArrayRef, Capacities,
-    GenericListArray, MutableArrayData, NullArray, OffsetSizeTrait,
+    Array, ArrayData, ArrayRef, Capacities, GenericListArray, MutableArrayData, NullArray,
+    OffsetSizeTrait, make_array, new_empty_array, new_null_array,
 };
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::SingleRowListArrayBuilder;
-use datafusion_common::{plan_datafusion_err, plan_err, Result};
+use datafusion_common::{Result, plan_datafusion_err, plan_err};
 use datafusion_expr::type_coercion::binary::comparison_coercion;
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,

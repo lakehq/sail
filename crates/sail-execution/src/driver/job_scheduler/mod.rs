@@ -4,7 +4,10 @@ mod options;
 mod state;
 mod topology;
 
+use std::sync::Arc;
+
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::execution::TaskContext;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use indexmap::IndexMap;
 pub use options::JobSchedulerOptions;
@@ -14,7 +17,7 @@ pub use state::TaskState;
 use crate::driver::job_scheduler::state::JobDescriptor;
 use crate::driver::output::JobOutputHandle;
 use crate::id::{IdGenerator, JobId, TaskKey, TaskStreamKey};
-use crate::proto::codec::RemoteExecutionCodec;
+use crate::proto::RemoteExecutionCodec;
 use crate::task::scheduling::TaskRegion;
 
 pub struct JobScheduler {
@@ -55,5 +58,6 @@ pub enum JobAction {
     CleanUpJob {
         job_id: JobId,
         stage: Option<usize>,
+        context: Arc<TaskContext>,
     },
 }

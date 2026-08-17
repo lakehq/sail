@@ -7,7 +7,7 @@ use datafusion::common::{Column, Result, UnnestOptions};
 use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion::logical_expr::builder::unnest_with_options;
 use datafusion::logical_expr::{Expr, ExprSchemable, LogicalPlan, Projection, ScalarUDF};
-use datafusion_common::{plan_err, ExprSchema};
+use datafusion_common::{ExprSchema, plan_err};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{ident, lit, when};
 use datafusion_functions_nested::expr_fn as nested_fn;
@@ -20,7 +20,7 @@ use sail_function::scalar::explode::{Explode, ExplodeKind};
 use sail_function::scalar::multi_expr::MultiExpr;
 
 use crate::resolver::state::PlanResolverState;
-use crate::resolver::tree::{empty_logical_plan, PlanRewriter};
+use crate::resolver::tree::{PlanRewriter, empty_logical_plan};
 
 enum ExplodeDataType {
     List,

@@ -113,7 +113,11 @@ def test_pivot_allows_duplicate_aliases(spark):
 
 
 def test_pivot_allows_literal_aggregate_expression(spark):
-    actual = spark.sql("""
+    # A literal aggregate (Int32) goes through Spark's PivotFirst path, so an absent
+    # (group, value) combination is NULL, not the literal: group 'b' has no 'y' row, so
+    # b/y is NULL (JVM-verified). collect() keeps the exact NULL (toPandas would coerce
+    # the int column to float/NaN).
+    rows = spark.sql("""
         SELECT * FROM (
           SELECT g, k FROM VALUES
             ('a', 'x'),
@@ -122,9 +126,9 @@ def test_pivot_allows_literal_aggregate_expression(spark):
           AS t(g, k)
         ) PIVOT (1 FOR (k) IN ('x', 'y'))
         ORDER BY g
-    """).toPandas()
-    assert list(actual.columns) == ["g", "x", "y"]
-    assert actual.values.tolist() == [["a", 1, 1], ["b", 1, 1]]
+    """)
+    assert rows.columns == ["g", "x", "y"]
+    assert [tuple(r) for r in rows.collect()] == [("a", 1, 1), ("b", 1, None)]
 
 
 def test_pivot_rejects_bare_column_outside_aggregate(spark):

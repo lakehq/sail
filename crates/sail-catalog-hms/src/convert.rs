@@ -11,10 +11,10 @@ use sail_catalog::provider::{
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::iceberg::{
-    is_iceberg_table_properties, ICEBERG_TABLE_TYPE_KEY, ICEBERG_TABLE_TYPE_VALUE,
+    ICEBERG_TABLE_TYPE_KEY, ICEBERG_TABLE_TYPE_VALUE, is_iceberg_table_marker,
 };
 use sail_common_datafusion::catalog::{
-    identity_partition_fields, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
+    DatabaseStatus, TableColumnStatus, TableKind, TableStatus, identity_partition_fields,
 };
 use sail_common_datafusion::column_features::{
     ColumnFeatureKey, ColumnFeatures, ColumnFeaturesBuilder,
@@ -32,6 +32,7 @@ pub(crate) const COMMENT_KEY: &str = "comment";
 pub(crate) const EXTERNAL_KEY: &str = "EXTERNAL";
 pub(crate) const EXTERNAL_TRUE: &str = "TRUE";
 pub(crate) const SPARK_DATASOURCE_PROVIDER_KEY: &str = "spark.sql.sources.provider";
+pub(crate) const SPARK_DATASOURCE_PATH_KEY: &str = "path";
 pub(crate) const SPARK_SCHEMA_KEY: &str = "spark.sql.sources.schema";
 pub(crate) const EXTERNAL_TABLE_TYPE: &str = "EXTERNAL_TABLE";
 pub(crate) const VIRTUAL_VIEW_TYPE: &str = "VIRTUAL_VIEW";
@@ -94,21 +95,11 @@ pub(crate) fn table_to_status(
         Some(spark_columns) => reorder_spark_columns(spark_columns, &partition_columns)?,
         None => columns_from_hms(storage, table.partition_keys.as_ref())?,
     };
-    let location = storage
-        .and_then(|sd| sd.location.as_ref())
-        .map(ToString::to_string);
+    let location = table_location(table);
     let format = if is_iceberg_table_parameters(table.parameters.as_ref()) {
         ICEBERG_TABLE_TYPE_VALUE.to_string()
     } else {
-        table_provider_format(table.parameters.as_ref()).unwrap_or_else(|| {
-            detect_hms_logical_format(
-                storage
-                    .and_then(|sd| sd.serde_info.as_ref())
-                    .and_then(|serde| serde.serialization_lib.as_deref()),
-                storage.and_then(|sd| sd.input_format.as_deref()),
-                storage.and_then(|sd| sd.output_format.as_deref()),
-            )
-        })
+        resolve_table_format(table.parameters.as_ref(), storage)
     };
     let partition_by = table
         .partition_keys
@@ -210,10 +201,10 @@ pub(crate) fn build_generic_table(
     let mut parameters = vec_to_map(properties);
     insert_comment(&mut parameters, comment);
     let table_parameters = parameters.get_or_insert_with(AHashMap::new);
-    if format.logical_format.eq_ignore_ascii_case("delta") {
+    if let Some(provider) = spark_datasource_provider(format.logical_format) {
         table_parameters.insert(
             FastStr::from_static_str(SPARK_DATASOURCE_PROVIDER_KEY),
-            FastStr::from_static_str("delta"),
+            FastStr::from_string(provider),
         );
     } else if format
         .logical_format
@@ -229,14 +220,18 @@ pub(crate) fn build_generic_table(
         FastStr::from_static_str(EXTERNAL_KEY),
         FastStr::from_static_str(EXTERNAL_TRUE),
     );
-    let serde_parameters = location.as_ref().map(|location| {
-        let mut parameters = AHashMap::new();
-        parameters.insert(
-            FastStr::from_static_str("path"),
-            FastStr::from_string(location.clone()),
-        );
-        parameters
-    });
+    let serde_parameters = if is_spark_datasource_format(format.logical_format) {
+        location.as_ref().map(|location| {
+            let mut parameters = AHashMap::new();
+            parameters.insert(
+                FastStr::from_static_str(SPARK_DATASOURCE_PATH_KEY),
+                FastStr::from_string(location.clone()),
+            );
+            parameters
+        })
+    } else {
+        None
+    };
 
     Ok(Table {
         db_name: Some(database_name.to_string().into()),
@@ -321,10 +316,12 @@ pub(crate) fn inject_spark_metadata(
         }
     }
 
-    parameters.insert(
-        FastStr::from_static_str(SPARK_DATASOURCE_PROVIDER_KEY),
-        FastStr::from_string(format.to_string()),
-    );
+    if let Some(provider) = spark_datasource_provider(format) {
+        parameters.insert(
+            FastStr::from_static_str(SPARK_DATASOURCE_PROVIDER_KEY),
+            FastStr::from_string(provider),
+        );
+    }
 
     parameters.insert(
         FastStr::from_static_str("spark.sql.create.version"),
@@ -470,22 +467,59 @@ pub(crate) fn extract_property(
     parameters.and_then(|props| props.get(key).map(ToString::to_string))
 }
 
+fn is_spark_datasource_format(logical_format: &str) -> bool {
+    spark_datasource_provider(logical_format).is_some()
+}
+
+// Generic formats use Spark's datasource representation unless the catalog
+// contract explicitly selects Hive SerDe or Iceberg metadata. This decision is
+// independent of Sail's current execution support for the provider.
+fn spark_datasource_provider(logical_format: &str) -> Option<String> {
+    let provider = logical_format.trim().to_ascii_lowercase();
+    match provider.as_str() {
+        "textfile" | ICEBERG_TABLE_TYPE_VALUE => None,
+        _ => Some(provider),
+    }
+}
+
+pub(crate) fn table_location(table: &Table) -> Option<String> {
+    let storage = table.sd.as_ref()?;
+    if extract_property(table.parameters.as_ref(), SPARK_DATASOURCE_PROVIDER_KEY).is_some() {
+        return storage
+            .serde_info
+            .as_ref()
+            .and_then(|serde| {
+                get_case_insensitive(serde.parameters.as_ref(), SPARK_DATASOURCE_PATH_KEY)
+            })
+            .map(ToString::to_string);
+    }
+    storage.location.as_ref().map(ToString::to_string)
+}
+
 fn table_provider_format(parameters: Option<&AHashMap<FastStr, FastStr>>) -> Option<String> {
     let provider = extract_property(parameters, SPARK_DATASOURCE_PROVIDER_KEY)?;
     let provider = provider.trim().to_ascii_lowercase();
-    Some(match provider.as_str() {
-        "deltalake" => "delta".to_string(),
-        _ => provider,
-    })
+    match provider.as_str() {
+        "" => Some("unknown".to_string()),
+        _ => Some(provider),
+    }
+}
+
+fn get_case_insensitive<'a>(
+    parameters: Option<&'a AHashMap<FastStr, FastStr>>,
+    key: &str,
+) -> Option<&'a str> {
+    parameters?
+        .iter()
+        .find(|(candidate, _)| candidate.as_str().eq_ignore_ascii_case(key))
+        .map(|(_, value)| value.as_str())
 }
 
 fn is_iceberg_table_parameters(parameters: Option<&AHashMap<FastStr, FastStr>>) -> bool {
     parameters.is_some_and(|properties| {
-        is_iceberg_table_properties(
-            properties
-                .iter()
-                .map(|(key, value)| (key.as_str(), value.as_str())),
-        )
+        properties
+            .iter()
+            .any(|(key, value)| is_iceberg_table_marker(key.as_str().trim(), value.as_str().trim()))
     })
 }
 
@@ -665,15 +699,33 @@ fn reorder_spark_columns(
     Ok(regular.into_iter().chain(partition).collect())
 }
 
-fn detect_hms_logical_format(
-    serde_library: Option<&str>,
-    input_format: Option<&str>,
-    output_format: Option<&str>,
+/// Resolve a non-Iceberg table's logical format from its HMS metadata.
+///
+/// The domain model, in priority order:
+///
+/// 1. A Spark datasource provider is preserved after trimming and normalizing
+///    case.
+/// 2. Only tables without a datasource marker are classified from their Hive
+///    SerDe/InputFormat/OutputFormat metadata.
+/// 3. If neither is present or detectable, the format is `unknown`.
+fn resolve_table_format(
+    parameters: Option<&AHashMap<FastStr, FastStr>>,
+    storage: Option<&StorageDescriptor>,
 ) -> String {
-    match HiveDetectedFormat::detect(serde_library, input_format, output_format) {
-        HiveDetectedFormat::Csv => "csv".to_string(),
-        detected => detected.as_str().to_string(),
+    if let Some(format) = table_provider_format(parameters) {
+        return format;
     }
+    let detected = HiveDetectedFormat::detect(
+        storage
+            .and_then(|sd| sd.serde_info.as_ref())
+            .and_then(|serde| serde.serialization_lib.as_deref()),
+        storage.and_then(|sd| sd.input_format.as_deref()),
+        storage.and_then(|sd| sd.output_format.as_deref()),
+    );
+    if detected != HiveDetectedFormat::Unknown {
+        return detected.as_str().to_string();
+    }
+    "unknown".to_string()
 }
 
 fn insert_comment(parameters: &mut Option<AHashMap<FastStr, FastStr>>, comment: Option<String>) {
@@ -836,9 +888,10 @@ mod tests {
     use sail_common_hms::hms::{FieldSchema, SerDeInfo, StorageDescriptor, Table};
 
     use super::{
-        build_generic_table, build_view, columns_from_spark_properties, database_to_status,
-        inject_spark_metadata, is_view_table, map_to_vec, validate_namespace, GenericTableFormat,
-        COMMENT_KEY, SPARK_DATASOURCE_PROVIDER_KEY, SPARK_SCHEMA_KEY, VIRTUAL_VIEW_TYPE,
+        COMMENT_KEY, GenericTableFormat, SPARK_DATASOURCE_PATH_KEY, SPARK_DATASOURCE_PROVIDER_KEY,
+        SPARK_SCHEMA_KEY, VIRTUAL_VIEW_TYPE, build_generic_table, build_view,
+        columns_from_spark_properties, database_to_status, inject_spark_metadata, is_view_table,
+        map_to_vec, validate_namespace,
     };
 
     #[test]
@@ -893,16 +946,78 @@ mod tests {
             Some(super::EXTERNAL_TABLE_TYPE)
         );
         let properties = map_to_vec(table.parameters.as_ref());
-        assert!(properties
-            .iter()
-            .any(|(k, v)| k == super::EXTERNAL_KEY && v == super::EXTERNAL_TRUE));
-        assert!(properties
-            .iter()
-            .any(|(k, v)| k == COMMENT_KEY && v == "comment"));
+        assert!(
+            properties
+                .iter()
+                .any(|(k, v)| k == super::EXTERNAL_KEY && v == super::EXTERNAL_TRUE)
+        );
+        assert!(
+            properties
+                .iter()
+                .any(|(k, v)| k == COMMENT_KEY && v == "comment")
+        );
     }
 
     #[test]
-    fn test_build_generic_table_marks_delta_provider() {
+    fn test_build_generic_table_writes_datasource_location_as_serde_path() {
+        for (logical_format, storage) in [
+            ("delta", HiveStorageFormat::parquet()),
+            ("parquet", HiveStorageFormat::parquet()),
+            ("csv", HiveStorageFormat::csv()),
+            ("json", HiveStorageFormat::json()),
+            ("avro", HiveStorageFormat::avro()),
+            ("orc", HiveStorageFormat::orc()),
+        ] {
+            let table = build_generic_table(
+                "default",
+                "items",
+                vec![CreateTableColumnOptions {
+                    name: "id".to_string(),
+                    data_type: DataType::Int64,
+                    nullable: false,
+                    comment: None,
+                    default: None,
+                    generated_always_as: None,
+                    identity: None,
+                }],
+                vec![],
+                Some(format!("s3://warehouse/{logical_format}_items")),
+                GenericTableFormat {
+                    logical_format,
+                    storage: &storage,
+                },
+                None,
+                vec![],
+            )
+            .unwrap();
+
+            let table_parameters = map_to_vec(table.parameters.as_ref());
+            assert!(table_parameters.iter().any(|(key, value)| {
+                key == SPARK_DATASOURCE_PROVIDER_KEY && value == logical_format
+            }));
+
+            let serde_parameters = table
+                .sd
+                .as_ref()
+                .and_then(|sd| sd.serde_info.as_ref())
+                .and_then(|serde| serde.parameters.as_ref())
+                .expect("datasource serde parameters");
+            assert_eq!(
+                serde_parameters
+                    .get(SPARK_DATASOURCE_PATH_KEY)
+                    .map(|value| value.as_str()),
+                Some(format!("s3://warehouse/{logical_format}_items").as_str())
+            );
+            assert!(
+                !table_parameters
+                    .iter()
+                    .any(|(key, _)| key == SPARK_DATASOURCE_PATH_KEY)
+            );
+        }
+    }
+
+    #[test]
+    fn test_build_generic_table_textfile_does_not_write_datasource_serde_path() {
         let table = build_generic_table(
             "default",
             "items",
@@ -918,18 +1033,46 @@ mod tests {
             vec![],
             Some("s3://warehouse/items".to_string()),
             GenericTableFormat {
-                logical_format: "delta",
-                storage: &HiveStorageFormat::parquet(),
+                logical_format: "textfile",
+                storage: &HiveStorageFormat::textfile(),
             },
             None,
             vec![],
         )
         .unwrap();
 
-        let properties = map_to_vec(table.parameters.as_ref());
-        assert!(properties
-            .iter()
-            .any(|(k, v)| k == SPARK_DATASOURCE_PROVIDER_KEY && v == "delta"));
+        // Hive's native textfile format is read back via SerDe detection, so
+        // build_generic_table must not register a Spark datasource provider.
+        let table_parameters = map_to_vec(table.parameters.as_ref());
+        assert!(
+            !table_parameters
+                .iter()
+                .any(|(key, _)| key == SPARK_DATASOURCE_PROVIDER_KEY),
+            "build_generic_table must not insert a datasource provider for textfile"
+        );
+
+        // The location must also not be mirrored into the SerDe parameters as a
+        // datasource `path`.
+        let serde_path = table
+            .sd
+            .as_ref()
+            .and_then(|sd| sd.serde_info.as_ref())
+            .and_then(|serde| serde.parameters.as_ref())
+            .and_then(|params| {
+                params
+                    .get(SPARK_DATASOURCE_PATH_KEY)
+                    .map(ToString::to_string)
+            });
+        assert!(
+            serde_path.is_none(),
+            "textfile must not write a datasource serde path, got {serde_path:?}"
+        );
+
+        // The requested location is still stored on the storage descriptor.
+        assert_eq!(
+            table.sd.as_ref().and_then(|sd| sd.location.as_deref()),
+            Some("s3://warehouse/items")
+        );
     }
 
     #[test]
@@ -1152,13 +1295,71 @@ mod tests {
         let props = map_to_vec(table.parameters.as_ref());
         assert!(props.iter().any(|(k, v)| k == "owner" && v == "alice"));
         assert!(props.iter().any(|(k, _)| k == SPARK_SCHEMA_KEY));
-        assert!(props
-            .iter()
-            .any(|(k, v)| k == "spark.sql.sources.schema.partCol.0" && v == "day"));
-        assert!(props
-            .iter()
-            .any(|(k, v)| k == "spark.sql.sources.provider" && v == "parquet"));
+        assert!(
+            props
+                .iter()
+                .any(|(k, v)| k == "spark.sql.sources.schema.partCol.0" && v == "day")
+        );
+        assert!(
+            props
+                .iter()
+                .any(|(k, v)| k == "spark.sql.sources.provider" && v == "parquet")
+        );
         assert!(props.iter().any(|(k, _)| k == "spark.sql.create.version"));
+    }
+
+    #[test]
+    fn test_inject_spark_metadata_skips_datasource_provider_for_textfile() {
+        let mut table = build_generic_table(
+            "default",
+            "items",
+            vec![CreateTableColumnOptions {
+                name: "id".to_string(),
+                data_type: DataType::Int64,
+                nullable: false,
+                comment: None,
+                default: None,
+                generated_always_as: None,
+                identity: None,
+            }],
+            vec![],
+            Some("s3://warehouse/items".to_string()),
+            GenericTableFormat {
+                logical_format: "textfile",
+                storage: &HiveStorageFormat::textfile(),
+            },
+            None,
+            vec![],
+        )
+        .unwrap();
+
+        inject_spark_metadata(
+            &mut table,
+            &[CreateTableColumnOptions {
+                name: "id".to_string(),
+                data_type: DataType::Int64,
+                nullable: false,
+                comment: None,
+                default: None,
+                generated_always_as: None,
+                identity: None,
+            }],
+            &[],
+            "textfile",
+        )
+        .unwrap();
+
+        let props = map_to_vec(table.parameters.as_ref());
+        assert!(
+            !props
+                .iter()
+                .any(|(k, _)| k == SPARK_DATASOURCE_PROVIDER_KEY),
+            "textfile must not get a datasource provider key, got: {props:?}"
+        );
+        assert!(
+            props.iter().any(|(k, _)| k == SPARK_SCHEMA_KEY),
+            "Spark schema must still be written for textfile"
+        );
     }
 
     #[test]
@@ -1477,7 +1678,7 @@ mod tests {
         );
         parameters.insert(
             FastStr::from_static_str("spark.sql.sources.provider"),
-            FastStr::from_static_str("deltalake"),
+            FastStr::from_static_str("delta"),
         );
         parameters.insert(
             FastStr::from_static_str("spark.sql.sources.schema.numPartCols"),
@@ -1576,9 +1777,11 @@ mod tests {
 
         let error = super::table_to_status("hms", &namespace, &table).unwrap_err();
 
-        assert!(error
-            .to_string()
-            .contains("Partition columns missing in Spark schema metadata: day"));
+        assert!(
+            error
+                .to_string()
+                .contains("Partition columns missing in Spark schema metadata: day")
+        );
     }
 
     #[test]
@@ -1667,9 +1870,11 @@ mod tests {
 
         let error = super::table_to_status("hms", &namespace, &table).unwrap_err();
 
-        assert!(error
-            .to_string()
-            .contains("Missing split property part spark.sql.sources.schema.part.0"));
+        assert!(
+            error
+                .to_string()
+                .contains("Missing split property part spark.sql.sources.schema.part.0")
+        );
     }
 
     #[test]
@@ -2112,6 +2317,191 @@ mod tests {
             }
             other => panic!("expected table, got {other:?}"),
         }
+    }
+
+    fn table_status_location(table: &Table) -> Option<String> {
+        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
+        let status = super::table_to_status("hms", &namespace, table).unwrap();
+        match status.kind {
+            sail_common_datafusion::catalog::TableKind::Table { location, .. } => location,
+            other => panic!("expected table, got {other:?}"),
+        }
+    }
+
+    fn table_status_format(table: &Table) -> Option<String> {
+        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
+        let status = super::table_to_status("hms", &namespace, table).unwrap();
+        match status.kind {
+            sail_common_datafusion::catalog::TableKind::Table { format, .. } => Some(format),
+            other => panic!("expected table, got {other:?}"),
+        }
+    }
+
+    fn hms_table_with_locations(
+        provider: Option<&str>,
+        sd_location: Option<&str>,
+        serde_path_key: Option<&str>,
+        serde_path: Option<&str>,
+    ) -> Table {
+        let mut table_parameters = AHashMap::new();
+        if let Some(provider) = provider {
+            table_parameters.insert(
+                FastStr::from_static_str(SPARK_DATASOURCE_PROVIDER_KEY),
+                FastStr::from_string(provider.to_string()),
+            );
+        }
+
+        let serde_parameters = serde_path_key.map(|key| {
+            [(
+                FastStr::from_string(key.to_string()),
+                FastStr::from_string(serde_path.unwrap_or_default().to_string()),
+            )]
+            .into_iter()
+            .collect()
+        });
+
+        Table {
+            db_name: Some("default".into()),
+            table_name: Some("items".into()),
+            parameters: if table_parameters.is_empty() {
+                None
+            } else {
+                Some(table_parameters)
+            },
+            sd: Some(StorageDescriptor {
+                cols: Some(vec![FieldSchema {
+                    name: Some("id".into()),
+                    r#type: Some("bigint".into()),
+                    ..Default::default()
+                }]),
+                location: sd_location.map(|location| location.to_string().into()),
+                input_format: Some(HiveStorageFormat::parquet().input_format.into()),
+                output_format: Some(HiveStorageFormat::parquet().output_format.into()),
+                serde_info: Some(SerDeInfo {
+                    serialization_lib: Some(HiveStorageFormat::parquet().serde_library.into()),
+                    parameters: serde_parameters,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_table_to_status_uses_datasource_serde_path_for_any_provider() {
+        for provider in ["delta", "parquet", "csv", "json", "avro"] {
+            let table = hms_table_with_locations(
+                Some(provider),
+                Some("s3://wrong-or-sentinel"),
+                Some("path"),
+                Some(&format!("s3://actual-{provider}")),
+            );
+
+            assert_eq!(
+                table_status_location(&table).as_deref(),
+                Some(format!("s3://actual-{provider}").as_str())
+            );
+            assert_eq!(table_status_format(&table).as_deref(), Some(provider));
+        }
+    }
+
+    #[test]
+    fn test_table_to_status_preserves_unsupported_datasource_providers_over_serde() {
+        for (provider, expected) in [
+            ("com.acme.CustomSource", "com.acme.customsource"),
+            ("orc", "orc"),
+        ] {
+            let table = hms_table_with_locations(
+                Some(provider),
+                Some("s3://sd-location"),
+                Some("path"),
+                Some(&format!("s3://actual-{provider}")),
+            );
+            let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
+
+            let status = super::table_to_status("hms", &namespace, &table).unwrap();
+            match status.kind {
+                sail_common_datafusion::catalog::TableKind::Table { format, .. } => {
+                    assert_eq!(
+                        format, expected,
+                        "datasource provider {provider} must remain authoritative over Parquet SerDe metadata"
+                    );
+                }
+                other => panic!("expected table, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_table_to_status_datasource_provider_without_path_has_no_location() {
+        let missing = hms_table_with_locations(Some("delta"), Some("s3://sd-location"), None, None);
+        assert_eq!(
+            table_status_location(&missing).as_deref(),
+            None,
+            "datasource tables without a SerDe path must not fall back to sd.location"
+        );
+    }
+
+    #[test]
+    fn test_table_to_status_preserves_empty_datasource_path() {
+        let empty = hms_table_with_locations(
+            Some("delta"),
+            Some("s3://sd-location"),
+            Some("path"),
+            Some(""),
+        );
+        assert_eq!(
+            table_status_location(&empty).as_deref(),
+            Some(""),
+            "a present empty datasource path must remain authoritative"
+        );
+    }
+
+    #[test]
+    fn test_table_to_status_ignores_serde_path_for_hive_serde_table() {
+        let table = hms_table_with_locations(
+            None,
+            Some("s3://hive-sd-location"),
+            Some("path"),
+            Some("s3://datasource-path"),
+        );
+
+        assert_eq!(
+            table_status_location(&table).as_deref(),
+            Some("s3://hive-sd-location")
+        );
+    }
+
+    #[test]
+    fn test_table_to_status_reads_datasource_path_key_case_insensitively() {
+        let table = hms_table_with_locations(
+            Some(" DeLtA "),
+            Some("s3://wrong-or-sentinel"),
+            Some("PATH"),
+            Some("s3://actual-uppercase"),
+        );
+
+        assert_eq!(
+            table_status_location(&table).as_deref(),
+            Some("s3://actual-uppercase")
+        );
+        assert_eq!(table_status_format(&table).as_deref(), Some("delta"));
+    }
+
+    #[test]
+    fn test_table_to_status_metadata_location_without_marker_is_not_iceberg() {
+        let mut table = hms_table_with_locations(None, Some("s3://warehouse/items"), None, None);
+        table.parameters = Some(AHashMap::from_iter([(
+            FastStr::from_static_str("metadata_location"),
+            FastStr::from_static_str("s3://warehouse/items/metadata/00001.json"),
+        )]));
+
+        assert_eq!(
+            table_status_format(&table).as_deref(),
+            Some("parquet"),
+            "metadata_location alone must not classify an HMS table as Iceberg"
+        );
     }
 
     #[test]

@@ -1003,9 +1003,11 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
             let null_treatment = match (inner_null_treatment, null_treatment) {
                 (Some(x), None) => Some(x),
                 (None, Some(x)) => Some(x),
-                (Some(_), Some(_)) => return Err(SqlError::invalid(
-                    "conflicting null treatment clause inside and outside function argument list",
-                )),
+                (Some(_), Some(_)) => {
+                    return Err(SqlError::invalid(
+                        "conflicting null treatment clause inside and outside function argument list",
+                    ));
+                }
                 (None, None) => None,
             };
             let ignore_nulls = match null_treatment {

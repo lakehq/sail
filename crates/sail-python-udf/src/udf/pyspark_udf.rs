@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{make_array, ArrayData, ArrayRef};
+use datafusion::arrow::array::{ArrayData, ArrayRef, make_array};
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::Result;
@@ -136,7 +136,13 @@ impl ScalarUDFImpl for PySparkUDF {
         let args: Vec<ArrayRef> = ColumnarValue::values_to_arrays(&args)?;
         let udf = Python::attach(|py| self.udf(py))?;
         let data = Python::attach(|py| -> PyUdfResult<_> {
-            let output = udf.call1(py, (args.try_to_py(py)?, number_rows))?;
+            let output = udf.call1(
+                py,
+                (
+                    args.try_to_py(py, self.config.arrow_use_large_var_types)?,
+                    number_rows,
+                ),
+            )?;
             Ok(ArrayData::try_from_py(py, &output)?)
         })?;
         let array = cast(&make_array(data), &self.output_type)?;

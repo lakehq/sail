@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{plan_datafusion_err, Column, DFSchemaRef, ScalarValue};
+use datafusion_common::{Column, DFSchemaRef, ScalarValue, plan_datafusion_err};
 use datafusion_expr::expr::FieldMetadata;
-use datafusion_expr::{cast, expr, lit, when, ExprSchemable, ScalarUDF};
+use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, when};
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_functions::expr_fn as datafusion_fn;
 use datafusion_functions_nested::expr_fn::{array_element, array_length, map_extract};
@@ -20,9 +20,9 @@ use sail_function::scalar::table_input::TableInput;
 use sail_function::scalar::update_struct_field::UpdateStructField;
 
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
-use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_expression_alias(
@@ -118,15 +118,11 @@ impl PlanResolver<'_> {
                         return Ok(Transformed::yes(expr::Expr::Literal(scalar.clone(), None)));
                     }
                     // Try positional parameter (key is a 1-based integer index).
-                    if let Ok(index) = key.parse::<usize>() {
-                        if index > 0 {
-                            if let Some(scalar) = state.get_positional_param_value(index - 1) {
-                                return Ok(Transformed::yes(expr::Expr::Literal(
-                                    scalar.clone(),
-                                    None,
-                                )));
-                            }
-                        }
+                    if let Ok(index) = key.parse::<usize>()
+                        && index > 0
+                        && let Some(scalar) = state.get_positional_param_value(index - 1)
+                    {
+                        return Ok(Transformed::yes(expr::Expr::Literal(scalar.clone(), None)));
                     }
                 }
                 Ok(Transformed::no(e))
@@ -326,7 +322,9 @@ impl PlanResolver<'_> {
                         cast(index_expr, DataType::Utf8),
                         lit(" is out of bounds. The array has "),
                         cast(length.clone(), DataType::Utf8),
-                        lit(" elements. Use the SQL function `get()` to tolerate accessing element at invalid index and return NULL instead."),
+                        lit(
+                            " elements. Use the SQL function `get()` to tolerate accessing element at invalid index and return NULL instead.",
+                        ),
                     ]);
                     let error = cast(
                         ScalarUDF::from(RaiseError::new()).call(vec![message]),
@@ -364,7 +362,7 @@ impl PlanResolver<'_> {
             _ => {
                 return Err(PlanError::AnalysisError(format!(
                     "cannot extract value from data type: {data_type}"
-                )))
+                )));
             }
         };
         Ok(NamedExpr::new(vec![name], expr))

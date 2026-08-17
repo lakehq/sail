@@ -1,7 +1,6 @@
 pub use sail_common_datafusion::variant::{
-    apply_variant_shredding_plan, build_variant_shredding_plan,
-    unshred_shredded_variants_for_write, VariantShreddingPlan,
-    DEFAULT_VARIANT_INFERENCE_NODE_BUDGET,
+    DEFAULT_VARIANT_INFERENCE_NODE_BUDGET, VariantShreddingPlan, apply_variant_shredding_plan,
+    build_variant_shredding_plan, unshred_shredded_variants_for_write,
 };
 
 #[cfg(test)]
@@ -14,7 +13,7 @@ mod tests {
     use datafusion_common::{DataFusionError, Result};
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use parquet_variant_compute::{
-        json_to_variant, shred_variant, unshred_variant, variant_to_json, VariantArray, VariantType,
+        VariantArray, VariantType, json_to_variant, shred_variant, unshred_variant, variant_to_json,
     };
     use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
 
@@ -159,9 +158,11 @@ mod tests {
         let DataType::Struct(payload_fields) = payload_field.data_type() else {
             return Err(DataFusionError::Plan("expected variant struct".to_string()));
         };
-        assert!(payload_fields
-            .iter()
-            .any(|field| field.name() == "typed_value"));
+        assert!(
+            payload_fields
+                .iter()
+                .any(|field| field.name() == "typed_value")
+        );
         let typed_value = payload_fields
             .iter()
             .find(|field| field.name() == "typed_value")

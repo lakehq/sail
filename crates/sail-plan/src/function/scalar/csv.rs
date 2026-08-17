@@ -1,8 +1,8 @@
-use datafusion_expr::{expr, Expr, ScalarUDF};
+use datafusion_expr::{Expr, ScalarUDF, expr};
 use sail_common_datafusion::literal::LiteralEvaluator;
+use sail_function::scalar::csv::SparkSchemaOfCsv;
 use sail_function::scalar::csv::spark_from_csv::SparkFromCSV;
 use sail_function::scalar::csv::spark_to_csv::SparkToCsv;
-use sail_function::scalar::csv::SparkSchemaOfCsv;
 
 use crate::error::PlanResult;
 use crate::function::common::{ScalarFunction, ScalarFunctionBuilder as F, ScalarFunctionInput};

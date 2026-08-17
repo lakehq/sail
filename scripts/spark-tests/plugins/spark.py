@@ -423,6 +423,14 @@ SKIPPED_SPARK_TESTS = [
         reason="Spark 3.x doctest uses the JVM-dependent RDD API",
         spark_major_version_less_than=4,
     ),
+    TestMarker(
+        keywords=["test_parity_readwriter.py", "test_create_without_provider"],
+        reason=(
+            "Spark 3 requires Hive when no provider is specified, while Spark 4 uses the default provider; "
+            "Sail follows Spark 4"
+        ),
+        spark_major_version_less_than=4,
+    ),
 ]
 
 
@@ -545,11 +553,11 @@ def patch_pyspark_doctest_output_checker():
     _pytest.doctest.CHECKER_CLASS = OutputChecker
 
 
-def pytest_collection_modifyitems(session: pytest.Session, config: pytest.Config, items: list[pytest.Item]) -> None:  # noqa: ARG001
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     if _is_spark_testing():
         add_pyspark_test_markers(items)
 
 
-def pytest_sessionstart(session: pytest.Session):  # noqa: ARG001
+def pytest_sessionstart() -> None:
     if _is_spark_testing():
         patch_pyspark_doctest_output_checker()

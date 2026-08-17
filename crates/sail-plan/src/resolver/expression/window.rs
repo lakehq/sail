@@ -7,7 +7,7 @@ use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
 use datafusion_expr::expr::WindowFunctionParams;
 use datafusion_expr::simplify::SimplifyContextBuilder;
 use datafusion_expr::{
-    expr, AggregateUDF, ExprSchemable, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    AggregateUDF, ExprSchemable, WindowFrame, WindowFrameBound, WindowFrameUnits, expr,
 };
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec::{self};
@@ -21,11 +21,11 @@ use sail_python_udf::udf::pyspark_udaf::{PySparkGroupAggKind, PySparkGroupAggreg
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{get_null_treatment, FunctionContextInput, WinFunctionInput};
+use crate::function::common::{FunctionContextInput, WinFunctionInput, get_null_treatment};
 use crate::function::get_built_in_window_function;
+use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
-use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_expression_window(
@@ -243,7 +243,7 @@ impl PlanResolver<'_> {
                     _ => {
                         return Err(PlanError::invalid(
                             "invalid user-defined window function type",
-                        ))
+                        ));
                     }
                 };
                 let window = expr::Expr::WindowFunction(Box::new(expr::WindowFunction {

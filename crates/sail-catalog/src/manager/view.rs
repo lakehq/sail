@@ -126,13 +126,13 @@ impl CatalogManager {
                 Err(e) => return Err(e),
             }
         }
-        if let [x @ .., name] = view {
-            if self.state()?.is_global_temporary_view_database(x) {
-                match GLOBAL_TEMPORARY_VIEW_MANAGER.drop_view(name.as_ref(), false) {
-                    Ok(_) => return Ok(()),
-                    Err(CatalogError::NotFound(_, _)) => {}
-                    Err(e) => return Err(e),
-                }
+        if let [x @ .., name] = view
+            && self.state()?.is_global_temporary_view_database(x)
+        {
+            match GLOBAL_TEMPORARY_VIEW_MANAGER.drop_view(name.as_ref(), false) {
+                Ok(_) => return Ok(()),
+                Err(CatalogError::NotFound(_, _)) => {}
+                Err(e) => return Err(e),
             }
         }
         self.drop_view(view, options).await

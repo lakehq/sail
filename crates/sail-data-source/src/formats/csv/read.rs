@@ -4,18 +4,20 @@ use bytes::Bytes;
 use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::csv::CsvFormat;
-use datafusion::datasource::physical_plan::CsvSource;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
-use object_store::ObjectStoreExt;
+use object_store::delimited::newline_delimited_stream;
+use object_store::{Error as ObjectStoreError, ObjectStoreExt};
 
+use super::decoder::decode_utf8_lossy_stream;
+use super::source::CsvSource;
 use crate::listing::source::{ListingFileSample, ListingScanInput, ReadFormat};
 use crate::listing::utils::infer_listing_compression;
-use crate::options::gen::CsvReadOptions;
+use crate::options::r#gen::CsvReadOptions;
 
 #[derive(Debug, Clone)]
 pub struct CsvReadFormat {
@@ -65,15 +67,24 @@ impl ReadFormat for CsvReadFormat {
                     .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))
                     .boxed();
 
-                let stream = csv_format
-                    .read_to_delimited_chunks_from_stream(stream)
-                    .await;
+                let stream =
+                    FileCompressionType::from(options.compression).convert_stream(stream)?;
+                let stream = decode_utf8_lossy_stream(stream);
+                let stream = newline_delimited_stream(stream.map_err(|error| match error {
+                    DataFusionError::ObjectStore(error) => *error,
+                    error => ObjectStoreError::Generic {
+                        store: "CSV schema inference",
+                        source: Box::new(error),
+                    },
+                }))
+                .map_err(DataFusionError::from)
+                .boxed();
                 let (schema, records_read) = csv_format
                     .infer_schema_from_stream(ctx, records_to_read, stream)
                     .await
                     .map_err(|err| {
                         DataFusionError::Context(
-                            format!("Error when processing CSV file {}", &object.location),
+                            format!("Error when processing CSV file {}", object.location),
                             Box::new(err),
                         )
                     })?;
@@ -129,5 +140,9 @@ impl ReadFormat for CsvReadFormat {
             .build();
 
         Ok(config)
+    }
+
+    fn path_glob_filter(&self) -> Option<&str> {
+        self.options.path_glob_filter.as_deref()
     }
 }

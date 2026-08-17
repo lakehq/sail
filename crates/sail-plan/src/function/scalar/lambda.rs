@@ -1,10 +1,10 @@
 use std::sync::{Arc, LazyLock};
 
+use datafusion_common::ScalarValue;
 use datafusion_common::arrow::datatypes::FieldRef;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{HigherOrderFunction, Lambda, LambdaVariable};
-use datafusion_expr::{expr, lit, HigherOrderUDF, LambdaParametersProgress, ValueOrLambda};
+use datafusion_expr::{HigherOrderUDF, LambdaParametersProgress, ValueOrLambda, expr, lit};
 use datafusion_functions_nested::expr_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::spark_array_aggregate::SparkArrayAggregate;
@@ -82,7 +82,7 @@ pub(crate) fn get_lambda_parameters(
         other => {
             return Err(PlanError::internal(format!(
                 "not a higher-order function: {other}"
-            )))
+            )));
         }
     };
     match udf.lambda_parameters(0, fields)? {
@@ -203,15 +203,15 @@ fn forall(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 /// so anything that is not a bare `Expr::Lambda` falls back to the lenient path
 /// (no arity check here) until expr matching is improved more broadly.
 fn expect_lambda_arity(role: &str, expr: &expr::Expr, arity: usize) -> PlanResult<()> {
-    if let expr::Expr::Lambda(lambda) = expr {
-        if lambda.params.len() != arity {
-            // Mirrors Spark's `INVALID_LAMBDA_FUNCTION_CALL.NUM_ARGS_MISMATCH`
-            // wording, naming no function (`aggregate`/`reduce` share this builder).
-            return Err(PlanError::AnalysisError(format!(
-                "Invalid lambda function call. The {role} lambda function expects {arity} arguments, but got {}",
-                lambda.params.len()
-            )));
-        }
+    if let expr::Expr::Lambda(lambda) = expr
+        && lambda.params.len() != arity
+    {
+        // Mirrors Spark's `INVALID_LAMBDA_FUNCTION_CALL.NUM_ARGS_MISMATCH`
+        // wording, naming no function (`aggregate`/`reduce` share this builder).
+        return Err(PlanError::AnalysisError(format!(
+            "Invalid lambda function call. The {role} lambda function expects {arity} arguments, but got {}",
+            lambda.params.len()
+        )));
     }
     Ok(())
 }
@@ -283,7 +283,7 @@ fn array_sort_spark(array: expr::Expr, asc: expr::Expr) -> PlanResult<expr::Expr
         _ => {
             return Err(PlanError::invalid(format!(
                 "Invalid asc value for array_sort_spark: {asc}"
-            )))
+            )));
         }
     };
     Ok(expr_fn::array_sort(array, sort, nulls))

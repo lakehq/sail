@@ -4,7 +4,7 @@ use sail_common::spec;
 use sail_common_datafusion::variant::is_variant_storage_field;
 
 use crate::error::{SparkError, SparkResult};
-use crate::spark::connect::{data_type as sdt, DataType};
+use crate::spark::connect::{DataType, data_type as sdt};
 
 /// Spark geometry and geography type metadata.
 #[derive(Debug, Clone)]
@@ -171,7 +171,7 @@ impl TryFrom<adt::DataType> for DataType {
             adt::DataType::Timestamp(adt::TimeUnit::Second, _)
             | adt::DataType::Timestamp(adt::TimeUnit::Millisecond, _)
             | adt::DataType::Timestamp(adt::TimeUnit::Nanosecond, _) => {
-                return Err(error(&data_type))
+                return Err(error(&data_type));
             }
             adt::DataType::Time32(adt::TimeUnit::Second) => Kind::Time(sdt::Time {
                 precision: Some(0),
@@ -339,10 +339,12 @@ mod tests {
         assert!(SparkGeoMetadata::from_json(r#"{"crs":{"type":"GeographicCRS"}}"#).is_err());
 
         // Test error on PROJJSON with unsupported authority:code
-        assert!(SparkGeoMetadata::from_json(
-            r#"{"crs":{"type":"GeographicCRS","id":{"authority":"EPSG","code":32632}}}"#
-        )
-        .is_err());
+        assert!(
+            SparkGeoMetadata::from_json(
+                r#"{"crs":{"type":"GeographicCRS","id":{"authority":"EPSG","code":32632}}}"#
+            )
+            .is_err()
+        );
 
         Ok(())
     }

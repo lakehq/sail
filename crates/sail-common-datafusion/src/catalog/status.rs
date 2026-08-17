@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{Result, plan_err};
 use datafusion_expr::LogicalPlan;
 use serde::{Deserialize, Serialize};
 
@@ -32,6 +32,86 @@ pub struct TableStatus {
     pub database: Vec<String>,
     pub name: String,
     pub kind: TableKind,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+pub struct FunctionStatus {
+    pub name: String,
+    pub catalog: Option<String>,
+    pub namespace: Option<Vec<String>>,
+    pub signatures: Vec<String>,
+    pub usage: Option<String>,
+    pub arguments: Option<String>,
+    pub examples: Option<String>,
+    pub note: Option<String>,
+    pub since: Option<String>,
+    pub deprecated: Option<String>,
+    pub class_name: String,
+    pub is_temporary: bool,
+}
+
+impl FunctionStatus {
+    pub fn temporary(name: String) -> Self {
+        Self {
+            name,
+            catalog: None,
+            namespace: None,
+            signatures: vec![],
+            usage: None,
+            arguments: None,
+            examples: None,
+            note: None,
+            since: None,
+            deprecated: None,
+            class_name: String::new(),
+            is_temporary: true,
+        }
+    }
+
+    pub fn list_description(&self) -> Option<String> {
+        self.usage.clone()
+    }
+
+    pub fn usage(&self) -> String {
+        self.usage.clone().unwrap_or_else(|| "N/A.".to_string())
+    }
+
+    pub fn extended_usage(&self) -> String {
+        let mut output = String::new();
+        if let Some(arguments) = self.arguments.as_deref().filter(|value| !value.is_empty()) {
+            output.push_str(arguments);
+        }
+        if let Some(examples) = self.examples.as_deref().filter(|value| !value.is_empty()) {
+            output.push_str(examples);
+        }
+        if output.is_empty() {
+            output.push('\n');
+            output.push_str("    No example/argument for ");
+            output.push_str(&self.name);
+            output.push_str(".\n");
+        }
+        if let Some(note) = self.note.as_deref().filter(|value| !value.is_empty()) {
+            output.push('\n');
+            output.push_str("    Note:\n");
+            output.push_str("      ");
+            output.push_str(note.trim());
+            output.push('\n');
+        }
+        if let Some(since) = self.since.as_deref().filter(|value| !value.is_empty()) {
+            output.push('\n');
+            output.push_str("    Since: ");
+            output.push_str(since);
+            output.push('\n');
+        }
+        if let Some(deprecated) = self.deprecated.as_deref().filter(|value| !value.is_empty()) {
+            output.push('\n');
+            output.push_str("    Deprecated:\n");
+            output.push_str("      ");
+            output.push_str(deprecated.trim());
+            output.push('\n');
+        }
+        output
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

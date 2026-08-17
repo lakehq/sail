@@ -21,7 +21,7 @@ use url::Url;
 use crate::datasource::provider::IcebergTableProvider;
 use crate::io::StoreContext;
 use crate::operations::Transaction;
-use crate::options::gen::IcebergReadOptions;
+use crate::options::r#gen::IcebergReadOptions;
 use crate::spec::snapshots::MAIN_BRANCH;
 use crate::spec::{PartitionSpec, Schema, Snapshot, TableMetadata};
 
@@ -129,10 +129,13 @@ impl Table {
 
     /// Create a Transaction anchored at the current snapshot, if one exists.
     pub fn new_transaction(&self) -> Option<Transaction> {
-        self.metadata
-            .current_snapshot()
-            .cloned()
-            .map(|snapshot| Transaction::new(self.table_url.to_string(), snapshot))
+        self.metadata.current_snapshot().cloned().map(|snapshot| {
+            Transaction::new(
+                self.table_url.to_string(),
+                snapshot,
+                self.metadata.last_sequence_number,
+            )
+        })
     }
 
     fn select_snapshot(&self, options: &IcebergReadOptions) -> Result<(Schema, Snapshot)> {

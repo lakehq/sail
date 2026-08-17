@@ -53,10 +53,12 @@ async fn test_create_database() {
     );
     assert_eq!(created_db.comment, Some("test comment".to_string()));
     assert_eq!(created_db.location, Some("s3://bucket/path".to_string()));
-    assert!(created_db
-        .properties
-        .iter()
-        .any(|(k, v)| k == "key1" && v == "value1"));
+    assert!(
+        created_db
+            .properties
+            .iter()
+            .any(|(k, v)| k == "key1" && v == "value1")
+    );
 
     // Test creating duplicate without if_not_exists - should fail
     let result = catalog

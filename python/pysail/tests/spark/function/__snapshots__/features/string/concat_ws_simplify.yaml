@@ -1,0 +1,41 @@
+# serializer version: 1
+---
+name: "test_explain_columnonly_separator__spark_concat_ws_stays_in_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as result]
+      ProjectionExec: expr=[spark_concat_ws(column1@0) as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_nested_nullseparator_fold_over_a_column_collapses_to_a_constant"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as result]
+      ProjectionExec: expr=[b as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_null_separator_drops_an_expensive_value_argument"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as result]
+      ProjectionExec: expr=[NULL as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_null_separator_literal_over_a_column__no_spark_concat_ws_in_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as result]
+      ProjectionExec: expr=[NULL as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_null_value_literal_trailing_a_column__spark_concat_ws_stays_null_pruned"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as result]
+      ProjectionExec: expr=[spark_concat_ws(,, column1@0) as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]

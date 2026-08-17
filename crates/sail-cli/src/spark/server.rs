@@ -28,7 +28,7 @@ async fn shutdown() {
 
 pub(super) mod telemetry {
     use sail_common::config::AppConfig;
-    use sail_telemetry::telemetry::{init_telemetry, shutdown_telemetry, ResourceOptions};
+    use sail_telemetry::telemetry::{ResourceOptions, init_telemetry, shutdown_telemetry};
 
     pub struct TelemetryGuard {
         /// A marker to prevent struct creation without calling [`TelemetryGuard::try_new()`].

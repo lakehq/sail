@@ -44,7 +44,7 @@
     },
     {
       "input": "SET CATALOG test-test",
-      "exception": "\n[INVALID_IDENTIFIER] The unquoted identifier test-test is invalid and must be back quoted as: `test-test`.\nUnquoted identifiers can only contain ASCII letters ('a' - 'z', 'A' - 'Z'), digits ('0' - '9'), and underbar ('_').\nUnquoted identifiers must also not start with a digit.\nDifferent data sources and meta stores may impose additional restrictions on valid identifiers. SQLSTATE: 42602 (line 1, pos 16)\n\n== SQL ==\nSET CATALOG test-test\n----------------^^^\n",
+      "exception": "\n[INVALID_SQL_SYNTAX.UNSUPPORTED_SQL_STATEMENT] Invalid SQL syntax: Unsupported SQL statement: SET CATALOG test-test. SQLSTATE: 42000\n== SQL (line 1, position 1) ==\nSET CATALOG test-test\n^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: found - at 16:17 expected ';', or end of input"
       }
@@ -53,7 +53,7 @@
       "input": "SHOW FUNCTIONS LIKE test-func",
       "exception": "\n[INVALID_IDENTIFIER] The unquoted identifier test-func is invalid and must be back quoted as: `test-func`.\nUnquoted identifiers can only contain ASCII letters ('a' - 'z', 'A' - 'Z'), digits ('0' - '9'), and underbar ('_').\nUnquoted identifiers must also not start with a digit.\nDifferent data sources and meta stores may impose additional restrictions on valid identifiers. SQLSTATE: 42602 (line 1, pos 24)\n\n== SQL ==\nSHOW FUNCTIONS LIKE test-func\n------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found LIKE at 15:19 expected ';', or end of input"
+        "failure": "invalid argument: found - at 24:25 expected '.', ';', or end of input"
       }
     },
     {

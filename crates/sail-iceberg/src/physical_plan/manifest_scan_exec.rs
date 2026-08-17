@@ -16,7 +16,7 @@ use futures::stream::{self, TryStreamExt};
 use url::Url;
 
 use crate::io::{
-    load_manifest as io_load_manifest, load_manifest_list as io_load_manifest_list, StoreContext,
+    StoreContext, load_manifest as io_load_manifest, load_manifest_list as io_load_manifest_list,
 };
 use crate::spec::{ManifestContentType, ManifestFile, ManifestStatus, Snapshot};
 

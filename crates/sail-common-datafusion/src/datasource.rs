@@ -9,9 +9,9 @@ use datafusion::common::plan_datafusion_err;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_expr::{
-    create_physical_sort_exprs, LexOrdering, LexRequirement, PhysicalSortRequirement,
+    LexOrdering, LexRequirement, PhysicalSortRequirement, create_physical_sort_exprs,
 };
-use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, DFSchemaRef, Result};
+use datafusion_common::{Constraints, DFSchema, DFSchemaRef, Result, not_impl_err, plan_err};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, TableSource};
 
@@ -66,7 +66,16 @@ impl OptionLayer {
     /// The returned map can be passed to code that accepts `HashMap<String, String>`.
     pub fn into_opaque_options(self) -> HashMap<String, String> {
         match self {
-            OptionLayer::TablePropertyList { items } => items.into_iter().collect(),
+            OptionLayer::TablePropertyList { items } => items
+                .into_iter()
+                .map(|(key, value)| {
+                    if let Some(key) = key.strip_prefix("option.") {
+                        (key.to_string(), value)
+                    } else {
+                        (key, value)
+                    }
+                })
+                .collect(),
             OptionLayer::OptionList { items } => items.into_iter().collect(),
             OptionLayer::TableLocation { .. }
             | OptionLayer::AsOfTimestamp { .. }
@@ -304,6 +313,7 @@ pub struct MergeIntoOptions {
     pub source_alias: Option<String>,
     pub target: MergeTargetInfo,
     pub with_schema_evolution: bool,
+    pub case_sensitive: bool,
     /// Resolved logical schemas from analysis time (before any rewrites)
     pub resolved_target_schema: DFSchemaRef,
     pub resolved_source_schema: DFSchemaRef,
@@ -312,6 +322,8 @@ pub struct MergeIntoOptions {
     /// to real column names without the fragile recover-field-names heuristic.
     pub resolved_target_field_names: Vec<String>,
     pub resolved_source_field_names: Vec<String>,
+    /// User-facing source column name and its collision-free internal alias.
+    pub source_column_aliases: Vec<(String, String)>,
     pub on_condition: ExprWithSource,
     pub matched_clauses: Vec<MergeMatchedClause>,
     pub not_matched_by_source_clauses: Vec<MergeNotMatchedBySourceClause>,
@@ -327,6 +339,8 @@ pub struct MergeIntoOptions {
     /// references target schema field IDs and is rewritten to actual column names
     /// by MERGE expansion before being applied as a post-processing projection.
     pub generated_column_exprs: Vec<(String, Expr)>,
+    /// Resolved target column defaults used by explicit MERGE inserts.
+    pub default_column_exprs: Vec<(String, Expr)>,
     /// Delta CHECK constraint expressions for the target table.
     pub check_constraint_exprs: Vec<DeltaCheckConstraintExpr>,
 }
@@ -723,8 +737,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn missing_jdbc_table_format_error_includes_registration_hint(
-    ) -> std::result::Result<(), String> {
+    fn missing_jdbc_table_format_error_includes_registration_hint()
+    -> std::result::Result<(), String> {
         let registry = TableFormatRegistry::new();
         let error = match registry.get("jdbc") {
             Ok(_) => return Err("expected missing jdbc table format error".to_string()),

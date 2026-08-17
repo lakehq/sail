@@ -6,13 +6,12 @@ pub mod job_runner;
 mod plan;
 mod proto;
 mod rpc;
+mod shuffle;
 mod stream;
-mod stream_accessor;
-mod stream_manager;
-mod stream_service;
 mod task;
 mod task_runner;
 mod worker;
 pub mod worker_manager;
 
+pub use id::{DriverId, IdGenerator};
 pub use worker::entrypoint::run_worker;

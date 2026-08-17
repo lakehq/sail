@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use datafusion::prelude::SessionContext;
-use tonic::codegen::tokio_stream::Stream;
 use tonic::Status;
+use tonic::codegen::tokio_stream::Stream;
 
 use crate::error::{SparkError, SparkResult};
 use crate::spark::connect::add_artifacts_request::Payload;

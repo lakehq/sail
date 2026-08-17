@@ -1,5 +1,5 @@
-use fastrace::local::LocalSpan;
 use fastrace::Event;
+use fastrace::local::LocalSpan;
 use log::{Log, Metadata, Record};
 
 /// A logger that logs the record as fastrace span events.

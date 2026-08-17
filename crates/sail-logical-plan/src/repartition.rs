@@ -2,8 +2,8 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 use datafusion::logical_expr::LogicalPlan;
-use datafusion_common::{plan_err, DFSchemaRef, Result};
-use datafusion_expr::{expr_vec_fmt, Expr, UserDefinedLogicalNodeCore};
+use datafusion_common::{DFSchemaRef, Result, plan_err};
+use datafusion_expr::{Expr, UserDefinedLogicalNodeCore, expr_vec_fmt};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub enum ExplicitRepartitionKind {

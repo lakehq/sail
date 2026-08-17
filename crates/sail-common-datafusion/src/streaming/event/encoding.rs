@@ -3,19 +3,19 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use datafusion::arrow::array::{
-    new_null_array, Array, ArrayData, ArrayRef, BinaryArray, BooleanArray, RecordBatch,
+    Array, ArrayData, ArrayRef, BinaryArray, BooleanArray, RecordBatch, new_null_array,
 };
 use datafusion::arrow::buffer::Buffer;
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream};
-use datafusion_common::{exec_datafusion_err, exec_err, Result};
+use datafusion_common::{Result, exec_datafusion_err, exec_err};
 use futures::{Stream, TryStreamExt};
 
 use crate::array::placeholder::{placeholder_array, placeholder_boolean_array};
+use crate::streaming::event::FlowEvent;
 use crate::streaming::event::marker::FlowMarker;
 use crate::streaming::event::schema::{to_flow_event_schema, try_from_flow_event_schema};
 use crate::streaming::event::stream::{FlowEventStream, SendableFlowEventStream};
-use crate::streaming::event::FlowEvent;
 
 /// A stream for encoded flow events.
 /// The encoded [`RecordBatch`] has a special schema.

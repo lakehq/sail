@@ -156,7 +156,7 @@ fn stats_from_metadata(
                     if is_binary {
                         warn!(
                             "Skipping column {} because it's a binary field.",
-                            &column_descr.name().to_string()
+                            column_descr.name()
                         );
                         None
                     } else {
@@ -364,8 +364,8 @@ fn apply_variant_stats_from_footer(
 }
 
 fn contains_variant_array_path(path: &[String]) -> bool {
-    path.windows(2)
-        .any(|parts| parts[0] == "list" && parts[1] == "element")
+    path.array_windows::<2>()
+        .any(|[left, right]| left == "list" && right == "element")
 }
 
 fn normalized_variant_stats_path(path: &[String]) -> Result<String, DeltaTableError> {
@@ -481,7 +481,7 @@ impl StatsScalar {
         use_min: bool,
     ) -> Result<Self, DeltaTableError> {
         macro_rules! get_stat {
-            ($val: expr) => {
+            ($val: expr_2021) => {
                 if use_min {
                     *$val.min_opt().unwrap()
                 } else {
@@ -638,10 +638,10 @@ impl From<StatsScalar> for StatValue {
                 .unwrap_or_else(|| StatValue::String(v.to_string())),
             StatsScalar::Date(v) => StatValue::String(v.format("%Y-%m-%d").to_string()),
             StatsScalar::Timestamp(v) => {
-                StatValue::String(v.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string())
+                StatValue::String(v.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
             }
             StatsScalar::TimestampNtz(v) => {
-                StatValue::String(v.format("%Y-%m-%dT%H:%M:%S%.f").to_string())
+                StatValue::String(v.format("%Y-%m-%dT%H:%M:%S%.3f").to_string())
             }
             StatsScalar::Decimal(v) => serde_json::Number::from_f64(v)
                 .map(StatValue::Number)
@@ -740,7 +740,7 @@ fn get_list_field_name(column_descr: &Arc<ColumnDescriptor>) -> Option<String> {
             ("list", seen, _) if seen == max_rep_levels => return Some("list".to_string()),
             ("element", _, seen) if seen == max_rep_levels => return Some("element".to_string()),
             (SAIL_LIST_FIELD_NAME, _, seen) if seen == max_rep_levels => {
-                return Some(SAIL_LIST_FIELD_NAME.to_string())
+                return Some(SAIL_LIST_FIELD_NAME.to_string());
             }
             ("list", _, _) => lists_seen += 1,
             ("element", _, _) | (SAIL_LIST_FIELD_NAME, _, _) => items_seen += 1,
@@ -878,11 +878,11 @@ mod tests {
 
         assert_eq!(
             timestamp_json,
-            serde_json::Value::String(expected.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string())
+            serde_json::Value::String(expected.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
         );
         assert_eq!(
             timestamp_ntz_json,
-            serde_json::Value::String(expected.format("%Y-%m-%dT%H:%M:%S%.f").to_string())
+            serde_json::Value::String(expected.format("%Y-%m-%dT%H:%M:%S%.3f").to_string())
         );
     }
 }

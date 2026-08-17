@@ -3,15 +3,15 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{Column, DFSchemaRef, TableReference};
 use datafusion_expr::expr::{LambdaVariable, ScalarFunction};
-use datafusion_expr::{col, expr, lit, ScalarUDF};
+use datafusion_expr::{ScalarUDF, col, expr, lit};
 use datafusion_functions::core::get_field;
 use sail_common::spec;
 use sail_function::scalar::array_struct_field::ArrayStructField;
 
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
-use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
     pub(super) fn resolve_expression_attribute(
@@ -29,27 +29,25 @@ impl PlanResolver<'_> {
         // bodies reference parameters as plain attributes, so the lambda scope stack
         // is consulted first. A `plan_id` indicates an explicit DataFrame column
         // reference, which never refers to a lambda parameter.
-        if plan_id.is_none() {
-            if let [first, rest @ ..] = name.parts() {
-                if let Some((declared, field)) = state
-                    .resolve_lambda_parameter(first.as_ref())
-                    .map(|(param, field)| (param.to_string(), field.cloned()))
-                {
-                    let display = rest
-                        .last()
-                        .map(|x| x.as_ref())
-                        .unwrap_or(declared.as_str())
-                        .to_string();
-                    let mut expr = expr::Expr::LambdaVariable(LambdaVariable::new(declared, field));
-                    for part in rest {
-                        expr = expr::Expr::ScalarFunction(ScalarFunction::new_udf(
-                            get_field(),
-                            vec![expr, lit(part.as_ref().to_string())],
-                        ));
-                    }
-                    return Ok(NamedExpr::new(vec![display], expr));
-                }
+        if plan_id.is_none()
+            && let [first, rest @ ..] = name.parts()
+            && let Some((declared, field)) = state
+                .resolve_lambda_parameter(first.as_ref())
+                .map(|(param, field)| (param.to_string(), field.cloned()))
+        {
+            let display = rest
+                .last()
+                .map(|x| x.as_ref())
+                .unwrap_or(declared.as_str())
+                .to_string();
+            let mut expr = expr::Expr::LambdaVariable(LambdaVariable::new(declared, field));
+            for part in rest {
+                expr = expr::Expr::ScalarFunction(ScalarFunction::new_udf(
+                    get_field(),
+                    vec![expr, lit(part.as_ref().to_string())],
+                ));
             }
+            return Ok(NamedExpr::new(vec![display], expr));
         }
         if let Some((name, expr)) =
             self.resolve_aggregate_field(&name, state.get_grouping_for_having())?

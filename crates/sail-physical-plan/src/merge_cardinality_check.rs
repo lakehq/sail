@@ -10,7 +10,7 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
 };
-use datafusion_common::{internal_err, DataFusionError, Result, Statistics};
+use datafusion_common::{DataFusionError, Result, Statistics, internal_err};
 use futures::Stream;
 
 #[derive(Debug)]
@@ -230,12 +230,10 @@ impl Stream for MergeCardinalityCheckStream {
                     }
                     let id = row_id_values.key(i);
                     if !self.seen.insert(id.clone()) {
-                        return Poll::Ready(Some(Err(DataFusionError::Execution(
-                            format!(
-                                "MERGE_CARDINALITY_VIOLATION: Multiple source rows matched target row '{}'",
-                                id
-                            ),
-                        ))));
+                        return Poll::Ready(Some(Err(DataFusionError::Execution(format!(
+                            "MERGE_CARDINALITY_VIOLATION: Multiple source rows matched target row '{}'",
+                            id
+                        )))));
                     }
                 }
 

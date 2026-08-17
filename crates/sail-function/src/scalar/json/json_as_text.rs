@@ -13,7 +13,7 @@ use datafusion_expr::{
 use jiter::Peek;
 
 use crate::scalar::json::common::{
-    get_err, invoke, jiter_json_find, return_type_check, GetError, InvokeResult, JsonPath,
+    GetError, InvokeResult, JsonPath, get_err, invoke, jiter_json_find, return_type_check,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash)]

@@ -12,7 +12,7 @@ use datafusion::physical_plan::{
     RecordBatchStream,
 };
 use datafusion_common::stats::Precision;
-use datafusion_common::{exec_err, internal_err, ColumnStatistics, Result, Statistics};
+use datafusion_common::{ColumnStatistics, Result, Statistics, exec_err, internal_err};
 use futures::Stream;
 
 #[derive(Debug, Clone)]
@@ -42,7 +42,8 @@ impl MonotonicIdExec {
         }
 
         let properties = Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(schema.clone()),
+            EquivalenceProperties::new(schema.clone())
+                .extend(input.equivalence_properties().clone())?,
             input.output_partitioning().clone(),
             input.pipeline_behavior(),
             input.boundedness(),

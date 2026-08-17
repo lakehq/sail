@@ -12,14 +12,14 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::multi_expr::MultiExpr;
 
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
+use crate::resolver::tree::PlanRewriter;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
 use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
 use crate::resolver::tree::window::WindowRewriter;
-use crate::resolver::tree::PlanRewriter;
-use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_project(
@@ -103,10 +103,10 @@ impl PlanResolver<'_> {
 
             if let Some(outer_schema) = state.get_outer_query_schema() {
                 for (qualifier, field) in outer_schema.iter() {
-                    if let Some(expected) = qualifier_filter {
-                        if qualifier.is_none_or(|q| expected != q) {
-                            continue;
-                        }
+                    if let Some(expected) = qualifier_filter
+                        && qualifier.is_none_or(|q| expected != q)
+                    {
+                        continue;
                     }
                     let info = state.get_field_info(field.name())?;
                     if info.is_hidden() {

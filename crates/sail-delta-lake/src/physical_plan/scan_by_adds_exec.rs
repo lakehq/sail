@@ -18,33 +18,33 @@ use datafusion::arrow::array::{ArrayRef, BooleanArray, Int64Array};
 use datafusion::arrow::buffer::BooleanBuffer;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::execution::context::TaskContext;
 use datafusion::execution::SessionStateBuilder;
+use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
-use datafusion_common::{internal_err, DataFusionError, Result, Statistics};
+use datafusion_common::{DataFusionError, Result, Statistics, internal_err};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::stream::{self, StreamExt, TryStreamExt};
-use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
 use url::Url;
 
 use crate::datasource::scan::{
-    file_scan_projection_for_schema, map_statistics_to_schema, sanitize_statistics_for_schema,
-    FileScanParams, TableStatsMode,
+    FileScanParams, TableStatsMode, file_scan_projection_for_schema, map_statistics_to_schema,
+    sanitize_statistics_for_schema,
 };
-use crate::datasource::{build_file_scan_config, DeltaScanConfig};
+use crate::datasource::{DeltaScanConfig, build_file_scan_config};
 use crate::deletion_vector::DeletionVectorBitmap;
 use crate::delta_log::LogStoreRef;
-use crate::physical_plan::{decode_adds_from_batch, meta_adds, COL_ACTION};
-use crate::schema::{arrow_field_physical_name, get_physical_schema};
-use crate::session_extension::{load_table_uncached, DeltaTableCache};
+use crate::physical_plan::{COL_ACTION, decode_adds_from_batch, meta_adds};
+use crate::schema::{arrow_field_physical_name, get_physical_schema, restore_logical_record_batch};
+use crate::session_extension::{DeltaTableCache, load_table_uncached, load_table_with_config};
+use crate::snapshot::{CatalogManagedCommitSet, DeltaSnapshotConfig};
 use crate::spec::StructType;
 use crate::table::DeltaSnapshot;
 
@@ -60,6 +60,7 @@ struct ScanByAddsStreamState {
     output_schema: SchemaRef,
     scan_config: DeltaScanConfig,
     lakehouse_table: Option<LakehouseExecutionContext>,
+    catalog_managed_commits: Option<CatalogManagedCommitSet>,
     limit: Option<usize>,
     pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
 
@@ -89,6 +90,7 @@ impl ScanByAddsStreamState {
         output_schema: SchemaRef,
         scan_config: DeltaScanConfig,
         lakehouse_table: Option<LakehouseExecutionContext>,
+        catalog_managed_commits: Option<CatalogManagedCommitSet>,
         limit: Option<usize>,
         pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
     ) -> Self {
@@ -100,6 +102,7 @@ impl ScanByAddsStreamState {
             output_schema,
             scan_config,
             lakehouse_table,
+            catalog_managed_commits,
             limit,
             pushdown_filter,
             table_opened: false,
@@ -120,28 +123,42 @@ impl ScanByAddsStreamState {
         if self.table_opened {
             return Ok(());
         }
-        // Prefer a session-scoped cache. This avoids leaking state across sessions / RuntimeEnvs.
-        // If the cache extension is not installed, fall back to no caching.
-        let lakehouse_table = self.lakehouse_table.as_ref();
-        let cached = match self.context.as_ref().extension::<DeltaTableCache>() {
-            Ok(cache) => {
-                cache
-                    .get(
+        let cached = if let Some(catalog_managed_commits) = self.catalog_managed_commits.clone() {
+            load_table_with_config(
+                self.context.as_ref(),
+                &self.table_url,
+                self.table_version,
+                DeltaSnapshotConfig {
+                    require_files: false,
+                    catalog_managed_commits: Some(catalog_managed_commits),
+                    ..Default::default()
+                },
+            )
+            .await?
+        } else {
+            // Prefer a session-scoped cache. This avoids leaking state across sessions / RuntimeEnvs.
+            // If the cache extension is not installed, fall back to no caching.
+            let lakehouse_table = self.lakehouse_table.as_ref();
+            match self.context.as_ref().extension::<DeltaTableCache>() {
+                Ok(cache) => {
+                    cache
+                        .get(
+                            self.context.as_ref(),
+                            &self.table_url,
+                            self.table_version,
+                            lakehouse_table,
+                        )
+                        .await?
+                }
+                Err(_) => {
+                    load_table_uncached(
                         self.context.as_ref(),
                         &self.table_url,
                         self.table_version,
                         lakehouse_table,
                     )
                     .await?
-            }
-            Err(_) => {
-                load_table_uncached(
-                    self.context.as_ref(),
-                    &self.table_url,
-                    self.table_version,
-                    lakehouse_table,
-                )
-                .await?
+                }
             }
         };
 
@@ -165,7 +182,7 @@ impl ScanByAddsStreamState {
         let kschema_arc = snapshot_state.schema();
         let logical_kernel = StructType::try_from(kschema_arc)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let physical_arrow = get_physical_schema(&logical_kernel, kmode);
+        let physical_arrow = get_physical_schema(&logical_kernel, kmode)?;
         let physical_partition_cols: std::collections::HashSet<String> = table_partition_cols
             .iter()
             .map(|col| {
@@ -221,6 +238,7 @@ impl ScanByAddsStreamState {
             .snapshot
             .as_deref()
             .ok_or_else(|| DataFusionError::Internal("missing snapshot".into()))?;
+        let column_mapping_mode = snapshot.effective_column_mapping_mode();
         let log_store = self
             .log_store
             .as_ref()
@@ -305,8 +323,11 @@ impl ScanByAddsStreamState {
                 .and_then(move |batch| {
                     let output_schema = Arc::clone(&output_schema);
                     async move {
-                        let casted = cast_record_batch_relaxed_tz(&batch, &output_schema)
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                        let casted = restore_logical_record_batch(
+                            &batch,
+                            &output_schema,
+                            column_mapping_mode,
+                        )?;
                         Ok(casted)
                     }
                 });
@@ -385,8 +406,8 @@ impl ScanByAddsStreamState {
             .and_then(move |batch| {
                 let output_schema = Arc::clone(&output_schema);
                 async move {
-                    let casted = cast_record_batch_relaxed_tz(&batch, &output_schema)
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    let casted =
+                        restore_logical_record_batch(&batch, &output_schema, column_mapping_mode)?;
                     Ok(casted)
                 }
             });
@@ -594,6 +615,7 @@ pub struct DeltaScanByAddsExec {
     limit: Option<usize>,
     pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
     lakehouse_table: Option<LakehouseExecutionContext>,
+    catalog_managed_commits: Option<CatalogManagedCommitSet>,
     statistics: Statistics,
     cache: Arc<PlanProperties>,
 }
@@ -611,6 +633,7 @@ impl DeltaScanByAddsExec {
         limit: Option<usize>,
         pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
         lakehouse_table: Option<LakehouseExecutionContext>,
+        catalog_managed_commits: Option<CatalogManagedCommitSet>,
     ) -> Self {
         let statistics = Statistics::new_unknown(output_schema.as_ref());
         let cache = Self::compute_properties(
@@ -628,6 +651,7 @@ impl DeltaScanByAddsExec {
             limit,
             pushdown_filter,
             lakehouse_table,
+            catalog_managed_commits,
             statistics,
             cache,
         }
@@ -701,6 +725,10 @@ impl DeltaScanByAddsExec {
         self.lakehouse_table.as_ref()
     }
 
+    pub fn catalog_managed_commits(&self) -> Option<&CatalogManagedCommitSet> {
+        self.catalog_managed_commits.as_ref()
+    }
+
     pub fn statistics(&self) -> &Statistics {
         &self.statistics
     }
@@ -760,6 +788,7 @@ impl ExecutionPlan for DeltaScanByAddsExec {
         let output_schema = self.schema();
         let scan_config = self.scan_config.clone();
         let lakehouse_table = self.lakehouse_table.clone();
+        let catalog_managed_commits = self.catalog_managed_commits.clone();
         let limit = self.limit;
         let pushdown_filter = self.pushdown_filter.clone();
         let state = ScanByAddsStreamState::new(
@@ -770,6 +799,7 @@ impl ExecutionPlan for DeltaScanByAddsExec {
             Arc::clone(&output_schema),
             scan_config,
             lakehouse_table,
+            catalog_managed_commits,
             limit,
             pushdown_filter,
         );
@@ -901,8 +931,8 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::ExecutionPlan;
+    use datafusion::physical_plan::empty::EmptyExec;
     use datafusion_common::stats::{ColumnStatistics, Precision, Statistics};
     use datafusion_common::{DataFusionError, Result, ScalarValue};
     use url::Url;
@@ -1017,6 +1047,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .with_table_statistics(Some(table_stats));
 
@@ -1067,6 +1098,7 @@ mod tests {
             table_schema,
             output_schema,
             crate::datasource::DeltaScanConfig::default(),
+            None,
             None,
             None,
             None,

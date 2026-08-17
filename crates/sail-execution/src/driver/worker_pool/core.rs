@@ -3,19 +3,20 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use datafusion::arrow::datatypes::SchemaRef;
-use fastrace::collector::SpanContext;
 use fastrace::Span;
+use fastrace::collector::SpanContext;
 use futures::TryStreamExt;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
+use sail_common::actor::ActorContext;
+use sail_common::telemetry::SpanAttribute;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
-use sail_server::actor::ActorContext;
-use sail_telemetry::common::SpanAttribute;
 use tokio::time::Instant;
+use tonic::Code;
 
 use crate::driver::worker_pool::state::WorkerState;
 use crate::driver::worker_pool::{WorkerDescriptor, WorkerPool, WorkerPoolOptions};
-use crate::driver::{DriverActor, DriverEvent, TaskStatus};
+use crate::driver::{DriverActor, DriverMessage, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, WorkerId};
 use crate::rpc::ClientOptions;
@@ -29,7 +30,6 @@ impl WorkerPool {
     pub async fn close(&mut self, ctx: &mut ActorContext<DriverActor>) -> ExecutionResult<()> {
         let worker_ids = self.workers.keys().cloned().collect::<Vec<_>>();
         for worker_id in worker_ids.into_iter() {
-            // TODO: Should we wait for the spawned tasks for stopping the workers?
             self.stop_worker(ctx, worker_id, Some("closing worker pool".to_string()));
         }
         // TODO: support timeout for worker manager stop
@@ -37,14 +37,10 @@ impl WorkerPool {
         Ok(())
     }
 
-    pub fn set_driver_server_port(&mut self, port: u16) {
-        self.driver_server_port = Some(port);
-    }
-
     pub fn start_worker(&mut self, ctx: &mut ActorContext<DriverActor>) {
-        let Ok(worker_id) = self.worker_id_generator.next() else {
+        let Ok(worker_id) = self.worker_id_generator.generate() else {
             error!("failed to generate worker ID");
-            ctx.send(DriverEvent::Shutdown { history: None });
+            ctx.send(DriverMessage::Shutdown { result: None });
             return;
         };
         let descriptor = WorkerDescriptor {
@@ -56,7 +52,7 @@ impl WorkerPool {
         };
         self.workers.insert(worker_id, descriptor);
         ctx.send_with_delay(
-            DriverEvent::ProbePendingWorker { worker_id },
+            DriverMessage::ProbePendingWorker { worker_id },
             self.options.worker_launch_timeout,
         );
         // We create a placeholder span when starting the worker before creating the new trace.
@@ -70,26 +66,27 @@ impl WorkerPool {
         let span = Span::root("WorkerPool::start_worker", SpanContext::random())
             .with_property(|| (SpanAttribute::CLUSTER_WORKER_ID, worker_id.to_string()));
         let _guard = span.set_local_parent();
-        let Some(port) = self.driver_server_port else {
-            error!("the driver server is not ready");
-            return;
-        };
         let options = WorkerLaunchOptions {
             enable_tls: self.options.enable_tls,
+            session_id: self.options.session_id.clone(),
+            driver_id: self.options.driver_id,
             driver_external_host: self.options.driver_external_host.to_string(),
             driver_external_port: if self.options.driver_external_port > 0 {
                 self.options.driver_external_port
             } else {
-                port
+                self.options.driver_server_port
             },
             worker_heartbeat_interval: self.options.worker_heartbeat_interval,
             task_stream_buffer: self.options.task_stream_buffer,
             task_stream_creation_timeout: self.options.task_stream_creation_timeout,
             rpc_retry_strategy: self.options.rpc_retry_strategy.clone(),
+            shuffle_backend: self.options.shuffle_backend.clone(),
         };
-        let worker_manager = Arc::clone(&self.worker_manager);
+        let task = self
+            .worker_manager
+            .launch_worker(ctx.children_mut(), worker_id, options);
         ctx.spawn(async move {
-            if let Err(e) = worker_manager.launch_worker(worker_id, options).await {
+            if let Err(e) = task.await {
                 error!("failed to start worker {worker_id}: {e}");
             }
         });
@@ -162,7 +159,7 @@ impl WorkerPool {
                 };
                 ctx.spawn(async move {
                     if let Err(e) = client.stop_worker().await {
-                        error!("failed to stop worker {worker_id}: {e}");
+                        Self::log_worker_control_error("stop worker", worker_id, &e);
                     }
                 });
                 worker.state = WorkerState::Completed;
@@ -281,7 +278,7 @@ impl WorkerPool {
         let Some(worker) = self.workers.get_mut(&worker_id) else {
             let message = format!("worker {} not found", worker_id);
             let cause = CommonErrorCause::Internal(message.clone());
-            ctx.send(DriverEvent::UpdateTask {
+            ctx.send(DriverMessage::UpdateTask {
                 key,
                 status: TaskStatus::Failed,
                 message: Some(message),
@@ -290,13 +287,28 @@ impl WorkerPool {
             });
             return;
         };
-        Self::track_worker_activity(ctx, worker_id, worker, &self.options);
+        if let Err(e) = Self::track_worker_activity(ctx, worker_id, worker, &self.options) {
+            let message = format!(
+                "cannot assign {} to worker {} that is not running: {e}",
+                TaskKeyDisplay(&key),
+                worker_id
+            );
+            let cause = CommonErrorCause::Internal(message.clone());
+            ctx.send(DriverMessage::UpdateTask {
+                key,
+                status: TaskStatus::Failed,
+                message: Some(message),
+                cause: Some(cause),
+                sequence: None,
+            });
+            return;
+        }
         let client = match Self::get_client_set(worker_id, worker, &self.options) {
             Ok(client) => client.core,
             Err(e) => {
                 let message = format!("failed to get worker {} client: {e}", worker_id);
                 let cause = CommonErrorCause::new::<PyErrExtractor>(&e);
-                ctx.send(DriverEvent::UpdateTask {
+                ctx.send(DriverMessage::UpdateTask {
                     key,
                     status: TaskStatus::Failed,
                     message: Some(message),
@@ -306,25 +318,6 @@ impl WorkerPool {
                 return;
             }
         };
-        match &mut worker.state {
-            WorkerState::Running { .. } => {}
-            _ => {
-                let message = format!(
-                    "cannot assign {} to worker {} that is not running",
-                    TaskKeyDisplay(&key),
-                    worker_id
-                );
-                let cause = CommonErrorCause::Internal(message.clone());
-                ctx.send(DriverEvent::UpdateTask {
-                    key,
-                    status: TaskStatus::Failed,
-                    message: Some(message),
-                    cause: Some(cause),
-                    sequence: None,
-                });
-                return;
-            }
-        }
         let peers = running_workers
             .into_iter()
             .filter(|x| !worker.peers.contains(&x.worker_id))
@@ -333,7 +326,7 @@ impl WorkerPool {
         ctx.spawn(async move {
             if let Err(e) = client.run_task(key.clone(), definition, peers).await {
                 let _ = handle
-                    .send(DriverEvent::UpdateTask {
+                    .send(DriverMessage::UpdateTask {
                         key,
                         status: TaskStatus::Failed,
                         message: Some(format!("failed to run task via the worker client: {e}")),
@@ -355,21 +348,22 @@ impl WorkerPool {
             warn!("worker {worker_id} not found");
             return;
         };
-        Self::track_worker_activity(ctx, worker_id, worker, &self.options);
+        let operation = format!("stop task {}", TaskKeyDisplay(key));
+        if let Err(e) = Self::track_worker_activity(ctx, worker_id, worker, &self.options) {
+            debug!("{operation}: worker {worker_id} was already inactive: {e}");
+            return;
+        }
         let client = match Self::get_client_set(worker_id, worker, &self.options) {
             Ok(x) => x.core,
             Err(e) => {
-                error!(
-                    "failed to stop {} in worker {worker_id}: {e}",
-                    TaskKeyDisplay(key)
-                );
+                Self::log_worker_control_error(&operation, worker_id, &e);
                 return;
             }
         };
         let key = key.clone();
         ctx.spawn(async move {
             if let Err(e) = client.stop_task(key.clone()).await {
-                error!("failed to stop {}: {e}", TaskKeyDisplay(&key));
+                Self::log_worker_control_error(&operation, worker_id, &e);
             }
         });
     }
@@ -386,7 +380,7 @@ impl WorkerPool {
                 "worker {worker_id} not found"
             )));
         };
-        Self::track_worker_activity(ctx, worker_id, worker, &self.options);
+        Self::track_worker_activity(ctx, worker_id, worker, &self.options)?;
         let client = match Self::get_client_set(worker_id, worker, &self.options) {
             Ok(x) => x.flight,
             Err(e) => {
@@ -417,7 +411,10 @@ impl WorkerPool {
             warn!("worker {worker_id} not found");
             return;
         };
-        Self::track_worker_activity(ctx, worker_id, worker, &self.options);
+        if let Err(e) = Self::track_worker_activity(ctx, worker_id, worker, &self.options) {
+            debug!("clean up job: worker {worker_id} was already inactive: {e}");
+            return;
+        }
         Self::clean_up_job_for_worker(ctx, job_id, stage, worker_id, worker, &self.options);
     }
 
@@ -457,15 +454,31 @@ impl WorkerPool {
         let client = match Self::get_client_set(worker_id, worker, options) {
             Ok(x) => x.core,
             Err(e) => {
-                error!("failed to clean up job in worker {worker_id}: {e}");
+                Self::log_worker_control_error("clean up job", worker_id, &e);
                 return;
             }
         };
         ctx.spawn(async move {
             if let Err(e) = client.clean_up_job(job_id, stage).await {
-                error!("failed to clean up job in worker {worker_id}: {e}");
+                Self::log_worker_control_error("clean up job", worker_id, &e);
             }
         });
+    }
+
+    fn log_worker_control_error(operation: &str, worker_id: WorkerId, error: &ExecutionError) {
+        if Self::is_worker_unavailable(error) {
+            debug!("{operation}: worker {worker_id} was already unavailable: {error}");
+        } else {
+            error!("{operation}: failed in worker {worker_id}: {error}");
+        }
+    }
+
+    fn is_worker_unavailable(error: &ExecutionError) -> bool {
+        match error {
+            ExecutionError::TonicTransportError(_) => true,
+            ExecutionError::TonicStatusError(status) => status.code() == Code::Unavailable,
+            _ => false,
+        }
     }
 
     fn schedule_idle_worker_probe(
@@ -479,7 +492,7 @@ impl WorkerPool {
             return;
         };
         ctx.send_with_delay(
-            DriverEvent::ProbeIdleWorker {
+            DriverMessage::ProbeIdleWorker {
                 worker_id,
                 instant: *updated_at,
             },
@@ -498,7 +511,7 @@ impl WorkerPool {
             return;
         };
         ctx.send_with_delay(
-            DriverEvent::ProbeLostWorker {
+            DriverMessage::ProbeLostWorker {
                 worker_id,
                 instant: *heartbeat_at,
             },
@@ -511,10 +524,14 @@ impl WorkerPool {
         worker_id: WorkerId,
         worker: &mut WorkerDescriptor,
         options: &WorkerPoolOptions,
-    ) {
-        if let WorkerState::Running { updated_at, .. } = &mut worker.state {
-            *updated_at = Instant::now();
-            Self::schedule_idle_worker_probe(ctx, worker_id, worker, options);
-        }
+    ) -> ExecutionResult<()> {
+        let WorkerState::Running { updated_at, .. } = &mut worker.state else {
+            return Err(ExecutionError::InternalError(format!(
+                "worker {worker_id} is not running"
+            )));
+        };
+        *updated_at = Instant::now();
+        Self::schedule_idle_worker_probe(ctx, worker_id, worker, options);
+        Ok(())
     }
 }

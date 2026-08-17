@@ -5,14 +5,14 @@ use std::time::Duration;
 
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::logical_expr::StringifiedPlan;
-use sail_common::datetime::get_system_timezone;
+use sail_common::utils::datetime::get_system_timezone;
 use sail_common_datafusion::extension::SessionExtension;
 use sail_plan::config::PlanConfig;
 
 use crate::config::{ConfigKeyValue, SparkRuntimeConfig};
 use crate::error::{SparkError, SparkResult, SparkThrowable};
 use crate::executor::Executor;
-use crate::spark::config::SPARK_SQL_SESSION_TIME_ZONE;
+use crate::spark::config::SparkConfigKey;
 use crate::streaming::{
     StreamingQuery, StreamingQueryAwaitHandle, StreamingQueryAwaitHandleSet, StreamingQueryId,
     StreamingQueryManager, StreamingQueryStatus,
@@ -59,10 +59,10 @@ impl SparkSession {
             session_id,
             user_id,
             options,
-            state: Mutex::new(SparkSessionState::new()),
+            state: Mutex::new(SparkSessionState::try_new()?),
         };
         extension.set_config(vec![ConfigKeyValue {
-            key: SPARK_SQL_SESSION_TIME_ZONE.to_string(),
+            key: SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE.to_string(),
             value: Some(get_system_timezone()?),
         }])?;
         Ok(extension)
@@ -152,6 +152,21 @@ impl SparkSession {
     pub(crate) fn get_all_config(&self, prefix: Option<&str>) -> SparkResult<Vec<ConfigKeyValue>> {
         let state = self.state.lock()?;
         state.config.get_all(prefix)
+    }
+
+    pub(crate) fn get_config_warnings(&self, kv: &[ConfigKeyValue]) -> SparkResult<Vec<String>> {
+        let state = self.state.lock()?;
+        Ok(state.config.get_warnings(kv))
+    }
+
+    pub(crate) fn get_config_warnings_by_keys(&self, keys: &[String]) -> SparkResult<Vec<String>> {
+        let state = self.state.lock()?;
+        Ok(state.config.get_warnings_by_keys(keys))
+    }
+
+    pub(crate) fn is_config_modifiable(&self, key: &str) -> SparkResult<bool> {
+        let state = self.state.lock()?;
+        Ok(state.config.is_modifiable(key))
     }
 
     pub(crate) fn add_executor(&self, executor: Executor) -> SparkResult<()> {
@@ -297,11 +312,11 @@ struct SparkSessionState {
 }
 
 impl SparkSessionState {
-    fn new() -> Self {
-        Self {
-            config: SparkRuntimeConfig::new(),
+    fn try_new() -> SparkResult<Self> {
+        Ok(Self {
+            config: SparkRuntimeConfig::try_new()?,
             executors: HashMap::new(),
             streaming_queries: StreamingQueryManager::new(),
-        }
+        })
     }
 }

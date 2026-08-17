@@ -4,7 +4,7 @@ use chrono::{Datelike, Duration, NaiveDate};
 use datafusion::arrow::array::{ArrayRef, AsArray, Date32Array};
 use datafusion::arrow::datatypes::{DataType, Date32Type};
 use datafusion_common::types::NativeType;
-use datafusion_common::{exec_datafusion_err, exec_err, plan_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err, plan_err};
 use datafusion_expr::preimage::PreimageResult;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
@@ -101,7 +101,8 @@ impl ScalarUDFImpl for SparkLastDay {
             Ok(vec![DataType::Date32])
         } else {
             plan_err!(
-                "The first argument of the Spark `last_day` function can only be a date, string or timestamp, but got {}", &arg_types[0]
+                "The first argument of the Spark `last_day` function can only be a date, string or timestamp, but got {}",
+                &arg_types[0]
             )
         }
     }

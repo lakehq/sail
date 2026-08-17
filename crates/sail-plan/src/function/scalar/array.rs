@@ -4,7 +4,7 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::expr_fn::{coalesce, nvl};
 use datafusion::functions_nested::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{cast, expr, is_null, lit, not, or, when, ExprSchemable, ScalarUDF};
+use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, is_null, lit, not, or, when};
 use datafusion_functions_nested::make_array::make_array;
 use datafusion_functions_nested::string::ArrayToString;
 use datafusion_spark::function::array::expr_fn as array_fn;
@@ -100,7 +100,7 @@ fn sort_array(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         n => {
             return Err(PlanError::invalid(format!(
                 "sort_array requires 1 or 2 arguments, got {n}"
-            )))
+            )));
         }
     };
     let (sort, nulls) = match asc {
@@ -115,7 +115,7 @@ fn sort_array(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         _ => {
             return Err(PlanError::invalid(format!(
                 "Invalid asc value for sort_array: {asc}"
-            )))
+            )));
         }
     };
     Ok(expr_fn::array_sort(array, sort, nulls))
@@ -415,7 +415,7 @@ mod tests {
     use datafusion::arrow::datatypes::Int32Type;
     use datafusion::prelude::SessionContext;
     use datafusion_common::DFSchema;
-    use datafusion_expr::{col, ColumnarValue};
+    use datafusion_expr::{ColumnarValue, col};
 
     use super::*;
 

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::StringArray;
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 use crate::scalar::math::xorshift::SparkXorShiftRandom;
@@ -59,7 +59,7 @@ impl ScalarUDFImpl for Randstr {
                 return exec_err!(
                     "`randstr` expects a constant integer length, got {:?}",
                     other.data_type()
-                )
+                );
             }
         };
 
@@ -75,7 +75,7 @@ impl ScalarUDFImpl for Randstr {
                     return exec_err!(
                         "`randstr` expects an integer seed, got {:?}",
                         other.data_type()
-                    )
+                    );
                 }
             }
         } else {

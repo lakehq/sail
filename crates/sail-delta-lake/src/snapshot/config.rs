@@ -19,17 +19,18 @@
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/table/builder.rs>
 
 use object_store::path::Path;
+use serde::{Deserialize, Serialize};
 
 /// Configuration options for loading Delta table snapshots.
 ///
 /// Controls how the log-replay reads the `_delta_log`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CatalogManagedCommitFile {
     pub version: i64,
     pub file_name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CatalogManagedCommitSet {
     pub latest_table_version: i64,
     pub commits: Vec<CatalogManagedCommitFile>,

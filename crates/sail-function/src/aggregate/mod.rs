@@ -15,7 +15,7 @@
 /// let scalar = match_string_type!(DataType::Utf8View, Some("hello".to_string()))?;
 /// ```
 macro_rules! match_string_type {
-    ($data_type:expr, $value:expr) => {
+    ($data_type:expr_2021, $value:expr_2021) => {
         match $data_type {
             DataType::Utf8View => Ok(ScalarValue::Utf8View($value)),
             DataType::LargeUtf8 => Ok(ScalarValue::LargeUtf8($value)),
@@ -40,7 +40,7 @@ macro_rules! match_string_type {
 /// let scalar = interval_none!(IntervalUnit::YearMonth)?;
 /// ```
 macro_rules! interval_none {
-    ($unit:expr) => {
+    ($unit:expr_2021) => {
         match $unit {
             datafusion::arrow::datatypes::IntervalUnit::YearMonth => {
                 Ok(ScalarValue::IntervalYearMonth(None))
@@ -57,7 +57,7 @@ macro_rules! interval_none {
 
 /// Macro to handle Duration type matching for None values
 macro_rules! duration_none {
-    ($unit:expr) => {
+    ($unit:expr_2021) => {
         match $unit {
             datafusion::arrow::datatypes::TimeUnit::Second => Ok(ScalarValue::DurationSecond(None)),
             datafusion::arrow::datatypes::TimeUnit::Millisecond => {

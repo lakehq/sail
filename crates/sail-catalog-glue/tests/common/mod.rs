@@ -47,17 +47,19 @@ pub async fn setup_glue_catalog(
     let port = moto.get_host_port_ipv4(5000).await.expect("get port");
     let endpoint = format!("http://{host}:{port}");
 
-    // Set AWS credentials via environment for the test
-    // Moto accepts any credentials when endpoint_url is set
-    std::env::set_var("AWS_ACCESS_KEY_ID", "testing");
-    std::env::set_var("AWS_SECRET_ACCESS_KEY", "testing");
-
     let config = GlueCatalogConfig {
+        catalog_id: Some("123456789012".to_string()),
         region: Some("us-east-1".to_string()),
         endpoint_url: Some(endpoint),
     };
 
-    let provider = GlueCatalogProvider::new(test_name.to_string(), config);
+    let provider = GlueCatalogProvider::new_with_static_credentials(
+        test_name.to_string(),
+        config,
+        "testing".to_string(),
+        "testing".to_string(),
+        None,
+    );
 
     (provider, moto)
 }

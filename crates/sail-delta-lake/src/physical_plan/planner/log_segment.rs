@@ -4,10 +4,10 @@ use datafusion::common::Result;
 
 use super::context::PlannerContext;
 pub use crate::delta_log::segment_files::{
-    list_log_segment_files as kernel_list_log_segment_files, LogSegmentFiles,
-    LogSegmentResolveOptions,
+    LogSegmentFiles, LogSegmentResolveOptions,
+    list_log_segment_files as kernel_list_log_segment_files,
 };
-use crate::snapshot::{catalog_managed_commit_file_name, CatalogManagedCommitSet};
+use crate::snapshot::{CatalogManagedCommitSet, catalog_managed_commit_file_name};
 use crate::spec::{parse_commit_version, parse_compacted_json_versions, parse_version_prefix};
 
 /// List Delta log files up to `max_version`, using the planner-local cache when available.
@@ -78,16 +78,16 @@ pub async fn resolve_log_segment_files(
             .iter()
             .filter_map(|f| parse_compacted_json_versions(f).map(|r| (r, f.clone())))
             .collect();
-        parsed.sort_by_key(|b| std::cmp::Reverse(b.0 .1)); // sort by end_version descending
+        parsed.sort_by_key(|b| std::cmp::Reverse(b.0.1)); // sort by end_version descending
         let mut selected: Vec<((i64, i64), String)> = Vec::new();
         let mut covered_up_to: Option<i64> = None;
         for entry in parsed {
-            if let Some(boundary) = covered_up_to {
-                if entry.0 .1 >= boundary {
-                    continue;
-                }
+            if let Some(boundary) = covered_up_to
+                && entry.0.1 >= boundary
+            {
+                continue;
             }
-            covered_up_to = Some(entry.0 .0);
+            covered_up_to = Some(entry.0.0);
             selected.push(entry);
         }
 

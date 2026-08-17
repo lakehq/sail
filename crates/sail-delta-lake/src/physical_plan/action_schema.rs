@@ -6,8 +6,8 @@ use datafusion_common::{DataFusionError, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::spec::{
-    add_struct_type, metadata_struct_type, protocol_struct_type, remove_struct_type, Action, Add,
-    DeltaOperation, Metadata, Protocol, Remove,
+    Action, Add, DeltaOperation, Metadata, Protocol, Remove, add_struct_type, metadata_struct_type,
+    protocol_struct_type, remove_struct_type,
 };
 use crate::transaction::OperationMetrics;
 

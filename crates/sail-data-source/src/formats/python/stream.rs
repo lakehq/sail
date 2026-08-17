@@ -63,7 +63,12 @@ impl PythonExecutionMetrics {
 
         log::trace!(
             "[PythonDataSource:partition={}] GIL metrics: wait={}ms, hold={}ms, acquisitions={}, batches={}, rows={}",
-            partition_id, wait_ms, hold_ms, acquisitions, batches, rows
+            partition_id,
+            wait_ms,
+            hold_ms,
+            acquisitions,
+            batches,
+            rows
         );
 
         // Log warning if GIL contention is high
@@ -71,7 +76,9 @@ impl PythonExecutionMetrics {
             log::warn!(
                 "[PythonDataSource:partition={}] High GIL contention detected: wait={}ms > hold={}ms. \
                 Consider using GIL-releasing libraries (connector-x, DuckDB) or subprocess isolation.",
-                partition_id, wait_ms, hold_ms
+                partition_id,
+                wait_ms,
+                hold_ms
             );
         }
     }
@@ -205,7 +212,9 @@ impl PythonDataSourceStream {
                     log::warn!(
                         "[PythonDataSource:partition={}] Slow read detected: {}ms (threshold: {}ms). \
                         Consider using faster I/O or subprocess isolation.",
-                        partition_id, read_elapsed_ms, slow_read_warn_ms
+                        partition_id,
+                        read_elapsed_ms,
+                        slow_read_warn_ms
                     );
                 }
 
@@ -246,16 +255,16 @@ impl PythonDataSourceStream {
                             row_batcher.add_row(row_bytes);
 
                             // Flush if batch is ready
-                            if row_batcher.is_ready() {
-                                if let Some(batch) = row_batcher.flush()? {
-                                    metrics
-                                        .rows_processed
-                                        .fetch_add(batch.num_rows() as u64, Ordering::Relaxed);
-                                    metrics.batches_processed.fetch_add(1, Ordering::Relaxed);
+                            if row_batcher.is_ready()
+                                && let Some(batch) = row_batcher.flush()?
+                            {
+                                metrics
+                                    .rows_processed
+                                    .fetch_add(batch.num_rows() as u64, Ordering::Relaxed);
+                                metrics.batches_processed.fetch_add(1, Ordering::Relaxed);
 
-                                    if tx.blocking_send(Ok(batch)).is_err() {
-                                        break;
-                                    }
+                                if tx.blocking_send(Ok(batch)).is_err() {
+                                    break;
                                 }
                             }
                         }

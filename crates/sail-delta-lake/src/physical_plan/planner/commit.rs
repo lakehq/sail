@@ -20,12 +20,12 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result};
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::execution_plan::reset_plan_states;
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
-use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{JoinType, NullEquality};
 use datafusion_physical_expr::expressions::Column;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
@@ -33,7 +33,7 @@ use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
 use super::context::PlannerContext;
-use super::utils::{build_log_replay_pipeline_with_options, LogReplayOptions};
+use super::utils::{LogReplayOptions, build_log_replay_pipeline_with_options};
 use crate::datasource::PATH_COLUMN;
 use crate::physical_plan::{
     DeltaCommitExec, DeltaDiscoveryExec, DeltaRemoveActionsExec, DeltaWriteContext,

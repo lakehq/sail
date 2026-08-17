@@ -5,7 +5,7 @@ use datafusion::arrow::datatypes::{Field, Schema, SchemaRef};
 use datafusion_common::{DataFusionError, Result};
 use sail_common_datafusion::column_features::SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY;
 use sail_common_datafusion::datasource::{
-    PhysicalSinkMode, MERGE_SOURCE_METRIC_COLUMN, OPERATION_COLUMN,
+    MERGE_SOURCE_METRIC_COLUMN, OPERATION_COLUMN, PhysicalSinkMode,
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -18,14 +18,13 @@ use crate::schema::{
     compute_max_column_id, evolve_schema, format_type_change_path, get_physical_schema,
     inject_default_expressions, inject_generation_expressions, inject_identity_columns,
     is_supported_type_change_for_schema_evolution, metadata_for_create_with_struct_type,
-    normalize_delta_schema, protocol_can_write_type_widening, protocol_for_create,
-    schema_contains_type_widening_metadata, schema_has_column_defaults,
-    schema_has_generated_columns, schema_has_identity_columns,
+    normalize_delta_schema, protocol_can_write_type_widening, protocol_for_metadata,
+    schema_contains_type_widening_metadata, strip_column_mapping_metadata,
 };
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
-    contains_timestampntz_arrow, contains_variant_arrow, Action, ColumnMappingMode, DeltaOperation,
-    DomainMetadata, Metadata, Protocol, SaveMode, StructType, TableProperties, Transaction,
+    Action, ColumnMappingMode, DeltaOperation, DomainMetadata, Metadata, Protocol, SaveMode,
+    StructType, Transaction,
 };
 use crate::table::DeltaSnapshot;
 
@@ -121,7 +120,7 @@ impl DeltaWriteContext {
             Ok(Arc::new(get_physical_schema(
                 logical_kernel,
                 self.effective_column_mapping_mode,
-            )))
+            )?))
         }
     }
 }
@@ -145,10 +144,11 @@ pub fn prepare_delta_write_context(
     input_schema: &SchemaRef,
     operation_override: Option<DeltaOperation>,
 ) -> Result<DeltaWriteContext> {
-    let input_schema = normalize_delta_schema(&apply_target_nullability(
-        &schema_without_writer_metric_columns(input_schema),
-        &options.target_nullability,
-    ));
+    let input_schema =
+        strip_column_mapping_metadata(&normalize_delta_schema(&apply_target_nullability(
+            &schema_without_writer_metric_columns(input_schema),
+            &options.target_nullability,
+        )));
     let mut initial_actions: Vec<Action> = Vec::new();
     let planned_operation = operation_for_sink_mode(table_url, partition_columns, sink_mode);
 
@@ -183,8 +183,6 @@ pub fn prepare_delta_write_context(
     let mut operation = planned_operation;
     let mut annotated_schema_opt: Option<StructType> = None;
     if !table_exists {
-        let has_timestamp_ntz = contains_timestampntz_arrow(final_schema.as_ref());
-        let has_variant = contains_variant_arrow(final_schema.as_ref());
         let mut kernel_schema = StructType::try_from(final_schema.as_ref())
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         if !options.generation_expressions.is_empty() {
@@ -215,17 +213,6 @@ pub fn prepare_delta_write_context(
             kernel_schema
         };
 
-        let protocol = protocol_for_create(
-            !matches!(effective_mode, ColumnMappingMode::None),
-            has_timestamp_ntz,
-            TableProperties::from(configuration.iter()).enable_in_commit_timestamps(),
-            schema_has_generated_columns(&metadata_schema),
-            schema_has_column_defaults(&metadata_schema),
-            schema_has_identity_columns(&metadata_schema),
-            has_variant,
-            &configuration,
-        )
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let metadata = metadata_for_create_with_struct_type(
             metadata_schema,
             partition_columns.to_vec(),
@@ -233,6 +220,8 @@ pub fn prepare_delta_write_context(
             configuration,
         )
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let protocol =
+            protocol_for_metadata(&metadata).map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         initial_actions.push(Action::Protocol(protocol.clone()));
         initial_actions.push(Action::Metadata(metadata.clone()));
@@ -576,4 +565,62 @@ fn validate_schema_compatibility(table_schema: &Schema, input_schema: &Schema) -
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+#[expect(clippy::expect_used, clippy::panic)]
+mod tests {
+    use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+
+    use super::*;
+    use crate::spec::{DataType, MetadataValue, StructField};
+
+    fn mapped_field(name: &str, physical_name: &str, id: i64, data_type: DataType) -> StructField {
+        StructField::new(name, data_type, true).with_metadata([
+            ("delta.columnMapping.id", MetadataValue::Number(id)),
+            (
+                "delta.columnMapping.physicalName",
+                MetadataValue::String(physical_name.to_string()),
+            ),
+        ])
+    }
+
+    #[test]
+    fn writer_schema_preserves_nested_parquet_field_ids() -> Result<()> {
+        let nested = StructType::try_new(vec![mapped_field("rate", "col-rate", 2, DataType::LONG)])
+            .expect("nested schema");
+        let logical = StructType::try_new(vec![mapped_field(
+            "details",
+            "col-details",
+            1,
+            DataType::Struct(Box::new(nested)),
+        )])
+        .expect("logical schema");
+        let context = DeltaWriteContext {
+            commit_context: DeltaCommitContext::default(),
+            final_schema: logical.clone(),
+            effective_column_mapping_mode: ColumnMappingMode::Name,
+            initial_actions: Vec::new(),
+            schema_actions: Vec::new(),
+            operation: None,
+            logical_kernel_for_mapping: Some(logical),
+            physical_partition_columns: Vec::new(),
+        };
+
+        let writer_schema = context.writer_schema()?;
+        let details = writer_schema.field_with_name("col-details")?;
+        let datafusion::arrow::datatypes::DataType::Struct(children) = details.data_type() else {
+            panic!("details must be a struct");
+        };
+        let rate = children.first().expect("nested rate field");
+
+        assert_eq!(rate.name(), "col-rate");
+        assert_eq!(
+            rate.metadata()
+                .get(PARQUET_FIELD_ID_META_KEY)
+                .map(String::as_str),
+            Some("2")
+        );
+        Ok(())
+    }
 }

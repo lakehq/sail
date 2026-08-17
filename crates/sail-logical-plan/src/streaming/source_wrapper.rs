@@ -3,7 +3,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use datafusion::logical_expr::LogicalPlan;
-use datafusion_common::{plan_err, DFSchema, DFSchemaRef, Result, TableReference};
+use datafusion_common::{DFSchema, DFSchemaRef, Result, TableReference, plan_err};
 use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
 use educe::Educe;
 use sail_common_datafusion::rename::expression::expression_before_rename;

@@ -12,8 +12,8 @@
 
 use std::collections::BTreeMap;
 
-use apache_avro::schema::{ArraySchema, Name, RecordField as AvroRecordField, RecordSchema};
 use apache_avro::Schema as AvroSchema;
+use apache_avro::schema::{ArraySchema, Name, RecordField as AvroRecordField, RecordSchema};
 use once_cell::sync::Lazy;
 use serde_json::{Number, Value as JsonValue};
 

@@ -1,12 +1,12 @@
 use async_trait::async_trait;
 use datafusion_common::exec_datafusion_err;
+use sail_common::actor::ActorHandle;
 use sail_common_datafusion::system::observable::{
     Observer, SessionManagerObserver, StateObservable,
 };
-use sail_server::actor::ActorHandle;
 use tokio::sync::mpsc::error::SendError;
 
-use crate::session_manager::{SessionManagerActor, SessionManagerEvent};
+use crate::session_manager::{SessionManagerActor, SessionManagerMessage};
 
 pub struct SessionManagerHandle {
     handle: ActorHandle<SessionManagerActor>,
@@ -23,9 +23,9 @@ impl StateObservable<SessionManagerObserver> for SessionManagerHandle {
     async fn observe(&self, observer: SessionManagerObserver) {
         let result = self
             .handle
-            .send(SessionManagerEvent::ObserveState { observer })
+            .send(SessionManagerMessage::ObserveState { observer })
             .await;
-        if let Err(SendError(SessionManagerEvent::ObserveState { observer })) = result {
+        if let Err(SendError(SessionManagerMessage::ObserveState { observer })) = result {
             observer.fail(exec_datafusion_err!("cannot observe session manager state"));
         }
     }

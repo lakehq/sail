@@ -4,7 +4,7 @@ use std::sync::Arc;
 use log::info;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeManager;
-use sail_telemetry::telemetry::{init_telemetry, shutdown_telemetry, ResourceOptions};
+use sail_telemetry::telemetry::{ResourceOptions, init_telemetry, shutdown_telemetry};
 use tokio::net::TcpListener;
 
 async fn shutdown() {
@@ -33,7 +33,7 @@ pub fn run_flight_server(ip: IpAddr, port: u16) -> Result<(), Box<dyn std::error
 
         info!("Starting the Flight SQL server on {}...", local_addr);
 
-        sail_flight::serve(
+        sail_flight::entrypoint::serve(
             listener,
             shutdown(),
             config,

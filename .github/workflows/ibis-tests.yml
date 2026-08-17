@@ -110,7 +110,7 @@ jobs:
           files: coverage-ibis.info
           flags: ibis-tests
           name: ibis-tests
-          fail_ci_if_error: true
+          fail_ci_if_error: ${{ github.repository == 'lakehq/sail' }}
           env_vars: OS
 
       - name: Upload Test Logs
