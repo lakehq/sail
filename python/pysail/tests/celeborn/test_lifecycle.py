@@ -28,7 +28,7 @@ def lifecycle_manager(
         celeborn_master.host,
         celeborn_master.port,
         "sail-celeborn-integration",
-        celeborn_endpoint_resolver,
+        endpoint_resolver=celeborn_endpoint_resolver,
     ) as manager:
         yield manager
 

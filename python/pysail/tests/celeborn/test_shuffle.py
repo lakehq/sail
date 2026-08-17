@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
+import struct
 import time
 from typing import TYPE_CHECKING
 
 import pytest
 
 from pysail import _native
+from pysail.testing.containers.celeborn import CelebornFrame, CelebornMessageType, CelebornStatus
 from pysail.testing.utils.proxy import (
     Close,
     ConnectionAccepted,
     ConnectionClosed,
     ConnectionOpened,
     ConnectionRule,
+    FrameReceived,
     ProxyEvent,
     RuleApplied,
 )
@@ -59,6 +62,25 @@ def _event_workers(
     return tuple(worker for worker, proxy in proxies.items() if proxy.events.count(event_type, **attributes))
 
 
+def _split_response_workers(
+    proxies: dict[str, EndpointProxy],
+    status: int,
+) -> tuple[str, ...]:
+    """Return workers whose real push response reported the requested split status."""
+    return tuple(
+        worker
+        for worker, proxy in proxies.items()
+        if any(
+            isinstance(event, FrameReceived)
+            and event.direction == "server_to_client"
+            and isinstance(event.frame, CelebornFrame)
+            and event.frame.message_type == CelebornMessageType.RPC_RESPONSE
+            and event.frame.body == struct.pack(">B", status)
+            for event in proxy.events.snapshot()
+        )
+    )
+
+
 @pytest.fixture(scope="module")
 def lifecycle_manager(
     celeborn_master: MasterService,
@@ -70,7 +92,7 @@ def lifecycle_manager(
         celeborn_master.host,
         celeborn_master.port,
         "sail-celeborn-shuffle-integration",
-        celeborn_endpoint_resolver,
+        endpoint_resolver=celeborn_endpoint_resolver,
     ) as manager:
         yield manager
 
@@ -132,7 +154,7 @@ def test_shuffle_client_replicates_data(
             celeborn_master.host,
             celeborn_master.port,
             "sail-celeborn-replication-integration",
-            celeborn_endpoint_resolver,
+            endpoint_resolver=celeborn_endpoint_resolver,
         ) as manager,
         ShuffleClient(manager) as client,
     ):
@@ -161,6 +183,52 @@ def test_shuffle_client_stop_does_not_stop_lifecycle_manager(
     assert lifecycle_manager.running
 
 
+@pytest.mark.parametrize(
+    ("split_mode", "split_status"),
+    [
+        (1, CelebornStatus.HARD_SPLIT),
+        (0, CelebornStatus.SOFT_SPLIT),
+    ],
+    ids=["hard", "soft"],
+)
+def test_shuffle_client_handles_a_partition_split(
+    celeborn_master: MasterService,
+    celeborn_push_endpoint_resolver: object,
+    celeborn_push_proxies: dict[str, EndpointProxy],
+    split_mode: int,
+    split_status: int,
+) -> None:
+    """A partition split preserves every batch while moving future writes to a new epoch."""
+    with (
+        LifecycleManager(
+            celeborn_master.host,
+            celeborn_master.port,
+            f"sail-celeborn-split-{split_mode}",
+            endpoint_resolver=celeborn_push_endpoint_resolver,
+            partition_split_threshold=4,
+            partition_split_mode=split_mode,
+        ) as manager,
+        ShuffleClient(manager) as client,
+    ):
+        client.register_shuffle(5, [0], False, 1)
+
+        batches = []
+        for i in range(16):
+            probe = f"partition split probe {i}".encode()
+            assert client.push_data(5, 0, 0, 0, probe) == len(probe) + 16
+            batches.append(probe)
+            time.sleep(0.01)
+            if _split_response_workers(celeborn_push_proxies, split_status):
+                break
+        else:
+            pytest.fail(f"Celeborn did not emit split status {split_status} after flushing the threshold")
+
+        client.mapper_end(5, 0, 0, 1)
+
+        assert _split_response_workers(celeborn_push_proxies, split_status)
+        assert b"".join(client.read_partition_stream(5, 0)) == b"".join(batches)
+
+
 def test_shuffle_client_revives_a_dropped_push_connection(
     celeborn_master: MasterService,
     celeborn_push_endpoint_resolver: object,
@@ -172,7 +240,7 @@ def test_shuffle_client_revives_a_dropped_push_connection(
             celeborn_master.host,
             celeborn_master.port,
             "sail-celeborn-revive-first-push",
-            celeborn_push_endpoint_resolver,
+            endpoint_resolver=celeborn_push_endpoint_resolver,
         ) as manager,
         ShuffleClient(manager) as client,
     ):
@@ -212,7 +280,7 @@ def test_shuffle_client_reads_data_from_epochs_before_and_after_revive(
             celeborn_master.host,
             celeborn_master.port,
             "sail-celeborn-revive-multi-epoch",
-            celeborn_push_endpoint_resolver,
+            endpoint_resolver=celeborn_push_endpoint_resolver,
         ) as manager,
         ShuffleClient(manager) as client,
     ):
@@ -249,7 +317,7 @@ def test_shuffle_client_does_not_reuse_a_worker_that_failed_in_an_earlier_epoch(
             celeborn_master.host,
             celeborn_master.port,
             "sail-celeborn-revive-worker-exclusion",
-            celeborn_push_endpoint_resolver,
+            endpoint_resolver=celeborn_push_endpoint_resolver,
         ) as manager,
         ShuffleClient(manager) as client,
     ):
@@ -288,7 +356,7 @@ def test_shuffle_client_reader_discovers_epochs_revived_by_another_client(
             celeborn_master.host,
             celeborn_master.port,
             "sail-celeborn-revive-reader-location-update",
-            celeborn_push_endpoint_resolver,
+            endpoint_resolver=celeborn_push_endpoint_resolver,
         ) as manager,
         ShuffleClient(manager) as writer,
         ShuffleClient(manager) as reader,

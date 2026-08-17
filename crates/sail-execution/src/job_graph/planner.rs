@@ -1035,6 +1035,8 @@ mod tests {
                 master_host: "localhost".to_string(),
                 master_port: 1,
                 endpoint_overrides: vec![],
+                partition_split_threshold: 1_i64 << 30,
+                partition_split_mode: 0,
             },
         }
     }

@@ -15,6 +15,8 @@ pub enum ShuffleBackendKind {
         master_host: String,
         master_port: u16,
         endpoint_overrides: Vec<ShuffleEndpointOverride>,
+        partition_split_threshold: i64,
+        partition_split_mode: i32,
     },
 }
 
@@ -48,6 +50,8 @@ impl From<&sail_common::config::ShuffleBackend> for ShuffleBackendKind {
                         external_port: r#override.external_port,
                     })
                     .collect(),
+                partition_split_threshold: celeborn.partition_split_threshold,
+                partition_split_mode: celeborn.partition_split_mode,
             },
         }
     }
@@ -129,6 +133,8 @@ mod tests {
                 external_host: "127.0.0.1".to_string(),
                 external_port: 32000,
             }],
+            partition_split_threshold: 1_i64 << 30,
+            partition_split_mode: 0,
         };
 
         assert_eq!(

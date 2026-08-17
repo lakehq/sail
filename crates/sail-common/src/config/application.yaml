@@ -313,6 +313,22 @@
   experimental: true
   hidden: true
 
+- key: cluster.shuffle_backend.celeborn.partition_split_threshold
+  type: number
+  default: "1073741824"
+  description: |
+    The maximum number of bytes written to a Celeborn partition before the
+    worker requests a split.
+  experimental: true
+
+- key: cluster.shuffle_backend.celeborn.partition_split_mode
+  type: number
+  default: "0"
+  description: |
+    The Celeborn partition split mode. Use `0` for a soft split or `1` for a
+    hard split.
+  experimental: true
+
 - key: execution.batch_size
   type: number
   default: "8192"

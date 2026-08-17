@@ -326,6 +326,8 @@ pub struct CelebornShuffleBackend {
     pub master_host: String,
     pub master_port: u16,
     pub endpoint_overrides: Vec<CelebornEndpointOverride>,
+    pub partition_split_threshold: i64,
+    pub partition_split_mode: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -388,6 +390,8 @@ mod shuffle_backend {
                         master_host: String::new(),
                         master_port: 0,
                         endpoint_overrides: vec![],
+                        partition_split_threshold: 1_i64 << 30,
+                        partition_split_mode: 0,
                     },
                 },
                 super::ShuffleBackend::Storage(storage) => ShuffleBackend {
@@ -397,6 +401,8 @@ mod shuffle_backend {
                         master_host: String::new(),
                         master_port: 0,
                         endpoint_overrides: vec![],
+                        partition_split_threshold: 1_i64 << 30,
+                        partition_split_mode: 0,
                     },
                 },
                 super::ShuffleBackend::Celeborn(celeborn) => ShuffleBackend {
@@ -839,5 +845,7 @@ impl ClusterConfigEnv {
         SHUFFLE_BACKEND__CELEBORN__MASTER_HOST,
         SHUFFLE_BACKEND__CELEBORN__MASTER_PORT,
         SHUFFLE_BACKEND__CELEBORN__ENDPOINT_OVERRIDES,
+        SHUFFLE_BACKEND__CELEBORN__PARTITION_SPLIT_THRESHOLD,
+        SHUFFLE_BACKEND__CELEBORN__PARTITION_SPLIT_MODE,
     }
 }

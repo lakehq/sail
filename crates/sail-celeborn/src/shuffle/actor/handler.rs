@@ -194,6 +194,22 @@ impl ShuffleClientActor {
                 .await;
             let (location, result) = match push_result {
                 Ok(result) => (None, Ok(result)),
+                Err(CelebornError::Worker { status }) if status == StatusCode::SoftSplit as i32 => {
+                    match lifecycle_manager
+                        .revive(ReviveRequest {
+                            shuffle_id,
+                            partition_id,
+                            map_id,
+                            attempt_id,
+                            old_location: location,
+                            cause: status,
+                        })
+                        .await
+                    {
+                        Ok(location) => (Some(location), Ok(data.len() + 16)),
+                        Err(error) => (None, Err(error)),
+                    }
+                }
                 Err(error) => match push_failure_cause(&error) {
                     Some(cause) => match lifecycle_manager
                         .revive(ReviveRequest {

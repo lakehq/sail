@@ -84,14 +84,16 @@ impl WorkerClient {
         primary_locations: Vec<PartitionLocation>,
         replica_locations: Vec<PartitionLocation>,
         user_identifier: UserIdentifier,
+        split_threshold: i64,
+        split_mode: i32,
     ) -> CelebornResult<()> {
         let request = PbReserveSlots {
             application_id,
             shuffle_id,
             primary_locations: primary_locations.into_iter().map(Into::into).collect(),
             replica_locations: replica_locations.into_iter().map(Into::into).collect(),
-            split_threshold: 1_i64 << 30,
-            split_mode: 0,
+            split_threshold,
+            split_mode,
             partition_type: 0,
             range_read_filter: false,
             user_identifier: Some(user_identifier.into()),
