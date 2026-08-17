@@ -81,6 +81,56 @@ def _split_response_workers(
     )
 
 
+def _partition_unique_id(frame: CelebornFrame) -> str:
+    """Decode the partition ID from a PUSH_DATA transport header."""
+    offset = 9  # request ID and partition mode
+    shuffle_key_length = struct.unpack_from(">i", frame.metadata, offset)[0]
+    offset += 4 + shuffle_key_length
+    partition_id_length = struct.unpack_from(">i", frame.metadata, offset)[0]
+    offset += 4
+    return frame.metadata[offset : offset + partition_id_length].decode()
+
+
+def _push_partition_ids(proxies: dict[str, EndpointProxy]) -> tuple[str, ...]:
+    """Return every partition ID observed on proxied PUSH_DATA requests."""
+    return tuple(
+        _partition_unique_id(event.frame)
+        for proxy in proxies.values()
+        for event in proxy.events.snapshot()
+        if isinstance(event, FrameReceived)
+        and event.direction == "client_to_server"
+        and isinstance(event.frame, CelebornFrame)
+        and event.frame.message_type == CelebornMessageType.PUSH_DATA
+    )
+
+
+def _split_response_partition_ids(
+    proxies: dict[str, EndpointProxy],
+    status: int,
+) -> tuple[str, ...]:
+    """Return partition IDs for PUSH_DATA requests that received a split response."""
+    partition_ids = []
+    for proxy in proxies.values():
+        requests = {
+            (event.connection_id, event.frame.metadata[:8]): _partition_unique_id(event.frame)
+            for event in proxy.events.snapshot()
+            if isinstance(event, FrameReceived)
+            and event.direction == "client_to_server"
+            and isinstance(event.frame, CelebornFrame)
+            and event.frame.message_type == CelebornMessageType.PUSH_DATA
+        }
+        partition_ids.extend(
+            requests[(event.connection_id, event.frame.metadata[:8])]
+            for event in proxy.events.snapshot()
+            if isinstance(event, FrameReceived)
+            and event.direction == "server_to_client"
+            and isinstance(event.frame, CelebornFrame)
+            and event.frame.message_type == CelebornMessageType.RPC_RESPONSE
+            and event.frame.body == struct.pack(">B", status)
+        )
+    return tuple(partition_ids)
+
+
 @pytest.fixture(scope="module")
 def lifecycle_manager(
     celeborn_master: MasterService,
@@ -198,7 +248,7 @@ def test_shuffle_client_handles_a_partition_split(
     split_mode: int,
     split_status: int,
 ) -> None:
-    """A partition split preserves every batch while moving future writes to a new epoch."""
+    """A partition split preserves batches and moves future writes to a new epoch."""
     with (
         LifecycleManager(
             celeborn_master.host,
@@ -222,6 +272,13 @@ def test_shuffle_client_handles_a_partition_split(
                 break
         else:
             pytest.fail(f"Celeborn did not emit split status {split_status} after flushing the threshold")
+
+        split_partition_ids = _split_response_partition_ids(celeborn_push_proxies, split_status)
+        push_count = len(_push_partition_ids(celeborn_push_proxies))
+        after_split = b"after partition split"
+        assert client.push_data(5, 0, 0, 0, after_split) == len(after_split) + 16
+        batches.append(after_split)
+        assert _push_partition_ids(celeborn_push_proxies)[push_count] != split_partition_ids[-1]
 
         client.mapper_end(5, 0, 0, 1)
 

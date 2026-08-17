@@ -322,11 +322,11 @@
   experimental: true
 
 - key: cluster.shuffle_backend.celeborn.partition_split_mode
-  type: number
-  default: "0"
+  type: string
+  default: '"soft"'
   description: |
-    The Celeborn partition split mode. Use `0` for a soft split or `1` for a
-    hard split.
+    The Celeborn partition split mode. Use `soft` to accept the batch that
+    crosses the threshold, or `hard` to retry it on a new partition epoch.
   experimental: true
 
 - key: execution.batch_size

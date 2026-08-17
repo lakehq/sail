@@ -327,7 +327,24 @@ pub struct CelebornShuffleBackend {
     pub master_port: u16,
     pub endpoint_overrides: Vec<CelebornEndpointOverride>,
     pub partition_split_threshold: i64,
-    pub partition_split_mode: i32,
+    pub partition_split_mode: CelebornPartitionSplitMode,
+}
+
+/// The behavior a Celeborn worker uses when a partition exceeds its split threshold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CelebornPartitionSplitMode {
+    Soft,
+    Hard,
+}
+
+impl std::fmt::Display for CelebornPartitionSplitMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Soft => f.write_str("soft"),
+            Self::Hard => f.write_str("hard"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -391,7 +408,7 @@ mod shuffle_backend {
                         master_port: 0,
                         endpoint_overrides: vec![],
                         partition_split_threshold: 1_i64 << 30,
-                        partition_split_mode: 0,
+                        partition_split_mode: super::CelebornPartitionSplitMode::Soft,
                     },
                 },
                 super::ShuffleBackend::Storage(storage) => ShuffleBackend {
@@ -402,7 +419,7 @@ mod shuffle_backend {
                         master_port: 0,
                         endpoint_overrides: vec![],
                         partition_split_threshold: 1_i64 << 30,
-                        partition_split_mode: 0,
+                        partition_split_mode: super::CelebornPartitionSplitMode::Soft,
                     },
                 },
                 super::ShuffleBackend::Celeborn(celeborn) => ShuffleBackend {

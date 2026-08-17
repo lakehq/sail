@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::common::PartitionSplitMode;
 use crate::endpoint::EndpointResolver;
 use crate::master::MasterClientOptions;
 
@@ -14,7 +15,7 @@ pub struct LifecycleManagerOptions {
     pub user_name: String,
     pub endpoint_resolver: Option<Arc<dyn EndpointResolver>>,
     pub partition_split_threshold: i64,
-    pub partition_split_mode: i32,
+    pub partition_split_mode: PartitionSplitMode,
 }
 
 impl LifecycleManagerOptions {
@@ -29,7 +30,7 @@ impl LifecycleManagerOptions {
             user_name: "default".to_string(),
             endpoint_resolver: None,
             partition_split_threshold: 1_i64 << 30,
-            partition_split_mode: 0,
+            partition_split_mode: PartitionSplitMode::Soft,
         }
     }
 
@@ -38,7 +39,7 @@ impl LifecycleManagerOptions {
         self
     }
 
-    pub fn with_partition_split(mut self, threshold: i64, mode: i32) -> Self {
+    pub fn with_partition_split(mut self, threshold: i64, mode: PartitionSplitMode) -> Self {
         self.partition_split_threshold = threshold;
         self.partition_split_mode = mode;
         self

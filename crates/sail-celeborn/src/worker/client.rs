@@ -4,6 +4,7 @@ use std::time::Duration;
 use futures::stream::{self, BoxStream};
 use prost::Message;
 
+use crate::common::PartitionSplitMode;
 use crate::endpoint::EndpointResolver;
 use crate::error::{CelebornError, CelebornResult};
 use crate::master::{PartitionLocation, UserIdentifier};
@@ -85,7 +86,7 @@ impl WorkerClient {
         replica_locations: Vec<PartitionLocation>,
         user_identifier: UserIdentifier,
         split_threshold: i64,
-        split_mode: i32,
+        split_mode: PartitionSplitMode,
     ) -> CelebornResult<()> {
         let request = PbReserveSlots {
             application_id,
@@ -93,7 +94,7 @@ impl WorkerClient {
             primary_locations: primary_locations.into_iter().map(Into::into).collect(),
             replica_locations: replica_locations.into_iter().map(Into::into).collect(),
             split_threshold,
-            split_mode,
+            split_mode: i32::from(split_mode),
             partition_type: 0,
             range_read_filter: false,
             user_identifier: Some(user_identifier.into()),

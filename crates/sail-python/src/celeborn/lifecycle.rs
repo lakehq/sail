@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
+use sail_celeborn::common::PartitionSplitMode;
 use sail_celeborn::endpoint::EndpointResolver;
 use sail_celeborn::error::CelebornError;
 use sail_celeborn::lifecycle::{
@@ -83,8 +84,10 @@ impl PyLifecycleManager {
         if let Some(endpoint_resolver) = self.endpoint_resolver.clone() {
             options = options.with_endpoint_resolver(endpoint_resolver);
         }
+        let partition_split_mode = PartitionSplitMode::try_from(self.partition_split_mode)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
         options =
-            options.with_partition_split(self.partition_split_threshold, self.partition_split_mode);
+            options.with_partition_split(self.partition_split_threshold, partition_split_mode);
         let state = py.detach(move || {
             runtime.primary().block_on(async move {
                 let mut system = ActorSystem::new();

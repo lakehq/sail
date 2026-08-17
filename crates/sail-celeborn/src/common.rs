@@ -1,7 +1,17 @@
 use std::collections::HashMap;
 
+use num_enum::{IntoPrimitive, TryFromPrimitive};
+
 use crate::error::CelebornError;
 use crate::protocol::proto::{PbPartitionLocation, PbUserIdentifier};
+
+/// The wire-level behavior a Celeborn worker uses when a partition exceeds its split threshold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, IntoPrimitive, TryFromPrimitive)]
+#[repr(i32)]
+pub enum PartitionSplitMode {
+    Soft = 0,
+    Hard = 1,
+}
 
 /// Slots reserved by the Celeborn master for a shuffle.
 #[derive(Debug, Clone, PartialEq, Eq)]
