@@ -1,18 +1,17 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::Schema as ArrowSchema;
+use datafusion::arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, SchemaRef};
 use datafusion::catalog::Session;
-use datafusion::common::{Result, ToDFSchema};
+use datafusion::common::{DataFusionError, Result, ToDFSchema};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::logical_expr::Expr;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::expressions::{CastExpr, Column};
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
-use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
 use sail_data_source::options::ResolveOptions;
 
 use crate::datasource::scan::{
@@ -28,7 +27,7 @@ use crate::physical_plan::planner::metadata_predicate::{
 };
 use crate::physical_plan::planner::utils::LogReplayOptions;
 use crate::physical_plan::planner::{DeltaPlannerConfig, PlannerContext};
-use crate::physical_plan::{DeltaDiscoveryExec, DeltaScanByAddsExec, RelaxedTzCastExec};
+use crate::physical_plan::{DeltaDiscoveryExec, DeltaScanByAddsExec};
 use crate::schema::{attach_column_mapping_metadata, get_physical_schema};
 use crate::spec::{Add, ColumnMappingMode, StructType};
 use crate::table::DeltaSnapshot;
@@ -280,31 +279,7 @@ pub(crate) async fn plan_delta_scan(
         )?;
 
         let scan_exec = DataSourceExec::from_data_source(file_scan_config);
-
-        // Rename columns from physical back to logical names expected by the Spark-facing schema.
-        let logical_names = output_schema
-            .fields()
-            .iter()
-            .map(|f| f.name().clone())
-            .collect::<Vec<_>>();
-        let renamed = rename_physical_plan(scan_exec, &logical_names)?;
-
-        let renamed_schema = renamed.schema();
-
-        let needs_wrapping = output_schema.fields().iter().any(|field| {
-            let Ok(input_field) = renamed_schema.field_with_name(field.name()) else {
-                return true;
-            };
-            input_field.data_type() != field.data_type()
-        });
-        if needs_wrapping {
-            return Ok(Arc::new(RelaxedTzCastExec::new_with_column_mapping(
-                renamed,
-                output_schema,
-                kmode,
-            )) as Arc<dyn ExecutionPlan>);
-        }
-        return Ok(renamed);
+        return align_delta_scan_output(scan_exec, output_schema);
     }
 
     // Metadata-as-data path: log scan -> replay -> discovery -> scan by adds.
@@ -412,4 +387,121 @@ pub(crate) async fn plan_delta_scan(
     }
 
     Ok(scan_exec)
+}
+
+fn align_delta_scan_output(
+    input: Arc<dyn ExecutionPlan>,
+    target_schema: SchemaRef,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let input_schema = input.schema();
+    if input_schema.fields().len() != target_schema.fields().len() {
+        return Err(DataFusionError::Plan(format!(
+            "cannot align Delta scan with {} fields to logical schema with {} fields",
+            input_schema.fields().len(),
+            target_schema.fields().len()
+        )));
+    }
+    if input_schema == target_schema {
+        return Ok(input);
+    }
+
+    let expressions = input_schema
+        .fields()
+        .iter()
+        .zip(target_schema.fields())
+        .enumerate()
+        .map(|(index, (input_field, target_field))| {
+            let column = Arc::new(Column::new(input_field.name(), index)) as Arc<dyn PhysicalExpr>;
+            let renamed_input_field = input_field.as_ref().clone().with_name(target_field.name());
+            let expression: Arc<dyn PhysicalExpr> = if &renamed_input_field == target_field.as_ref()
+            {
+                column
+            } else {
+                if input_field.data_type() != target_field.data_type()
+                    && matches!(
+                        (input_field.data_type(), target_field.data_type()),
+                        (
+                            ArrowDataType::Timestamp(_, _),
+                            ArrowDataType::Timestamp(_, _)
+                        )
+                    )
+                {
+                    return Err(DataFusionError::Plan(format!(
+                        "Delta Parquet scan did not restore timestamp field '{}' from {} to {}",
+                        target_field.name(),
+                        input_field.data_type(),
+                        target_field.data_type()
+                    )));
+                }
+                Arc::new(CastExpr::new_with_target_field(
+                    column,
+                    Arc::clone(target_field),
+                    None,
+                ))
+            };
+            Ok((expression, target_field.name().clone()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let projection =
+        Arc::new(ProjectionExec::try_new(expressions, input)?) as Arc<dyn ExecutionPlan>;
+
+    if projection.schema() != target_schema {
+        return Err(DataFusionError::Plan(format!(
+            "Delta scan projection produced schema {} instead of {}",
+            projection.schema(),
+            target_schema
+        )));
+    }
+    Ok(projection)
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+    use datafusion::physical_plan::empty::EmptyExec;
+
+    use super::*;
+
+    #[test]
+    fn align_delta_scan_output_reuses_exact_input() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+        let input = Arc::new(EmptyExec::new(Arc::clone(&schema))) as Arc<dyn ExecutionPlan>;
+
+        let aligned = align_delta_scan_output(Arc::clone(&input), schema)?;
+
+        assert!(Arc::ptr_eq(&aligned, &input));
+        Ok(())
+    }
+
+    #[test]
+    fn align_delta_scan_output_rejects_unrestored_timestamp_timezone() -> Result<()> {
+        let input_schema = Arc::new(Schema::new(vec![Field::new(
+            "event_time",
+            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
+            true,
+        )]));
+        let target_schema = Arc::new(Schema::new(vec![Field::new(
+            "event_time",
+            DataType::Timestamp(
+                TimeUnit::Microsecond,
+                Some(Arc::from("America/Los_Angeles")),
+            ),
+            true,
+        )]));
+
+        let Err(error) =
+            align_delta_scan_output(Arc::new(EmptyExec::new(input_schema)), target_schema)
+        else {
+            return Err(DataFusionError::Plan(
+                "expected unrestored timestamp timezone to be rejected".to_string(),
+            ));
+        };
+
+        assert!(
+            error
+                .to_string()
+                .contains("did not restore timestamp field")
+        );
+        Ok(())
+    }
 }

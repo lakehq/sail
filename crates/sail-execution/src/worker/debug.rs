@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Formatter};
 
-use sail_common::debug::DebugBinary;
+use sail_common::utils::debug::DebugBinary;
 
 use crate::worker::r#gen::RunTaskRequest;
 

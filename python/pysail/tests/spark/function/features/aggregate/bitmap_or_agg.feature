@@ -1,4 +1,3 @@
-@bitmap_or_agg
 Feature: bitmap_or_agg returns the bitwise OR of all input bitmaps
 
   Rule: bitmap_or_agg ORs identical bitmaps
@@ -76,12 +75,17 @@ Feature: bitmap_or_agg returns the bitwise OR of all input bitmaps
 
   Rule: bitmap_or_agg rejects invalid oversized inputs
 
+    # Spark does not reject an oversized bitmap: it silently truncates the input to the 4096-byte
+    # maximum (the result is 4096 zero bytes, 8192 hex characters). Sail raises instead.
+    @sail-bug
     Scenario: bitmap_or_agg with oversized bitmap input
       When query
         """
-        SELECT bitmap_or_agg(to_binary(repeat('00', 4097), 'hex')) AS result
+        SELECT length(bitmap_or_agg(to_binary(repeat('00', 4097), 'hex'))) AS result
         """
-      Then query error bitmap_or_agg input length 4097 exceeds maximum 4096
+      Then query result
+        | result |
+        | 4096   |
 
   Rule: bitmap_or_agg works with bitmap_construct_agg output
 

@@ -1,7 +1,6 @@
-@format_number
 Feature: format_number output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to format_number yields the schema Spark declares

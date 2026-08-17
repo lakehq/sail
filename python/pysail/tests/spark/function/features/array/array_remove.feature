@@ -1,4 +1,3 @@
-@array_remove
 Feature: array_remove with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -6,7 +5,7 @@ Feature: array_remove with an argument coming from a column
 
   Rule: array_remove — the argument may come from a column
 
-    @column_args
+    @function(columnargs)
     Scenario: array_remove with the argument as a literal
       When query
         """
@@ -17,7 +16,7 @@ Feature: array_remove with an argument coming from a column
         | [1, 2, NULL] |
 
     # Sail rejects the column: Sail errors: Invalid argument error: Column '#4' is declared as non-nullable but contains null values
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: array_remove takes argument 2 from a column containing NULL
       When query
         """
@@ -28,7 +27,7 @@ Feature: array_remove with an argument coming from a column
         | [1, 2, NULL] |
         | NULL         |
 
-    @column_args
+    @function(columnargs)
     Scenario: array_remove takes argument 2 from a column holding two different values
       When query
         """
@@ -39,7 +38,7 @@ Feature: array_remove with an argument coming from a column
         | [2, 3] |
         | [1, 2] |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null array literal yields a non-nullable array

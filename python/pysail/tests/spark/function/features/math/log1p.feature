@@ -1,7 +1,6 @@
-@log1p
 Feature: log1p output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to log1p yields the schema Spark declares

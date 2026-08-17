@@ -84,6 +84,16 @@ pub trait ReadFormat: Debug + Send + Sync + 'static {
     /// Build a scan configuration for listing reads.
     async fn scan(&self, ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig>;
 
+    /// Whether validating an explicit schema requires the physical file schema.
+    fn requires_explicit_schema_validation(&self) -> bool {
+        false
+    }
+
+    /// Validate a user-provided file schema against the physical file schema.
+    fn validate_explicit_schema(&self, _schema: &Schema, _physical: &Schema) -> Result<()> {
+        Ok(())
+    }
+
     /// File-name glob restricting which listed files compose the dataset.
     fn path_glob_filter(&self) -> Option<&str> {
         None
@@ -174,23 +184,31 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
 
         let (schema, partition_fields) = match schema {
             Some(schema) if !schema.fields().is_empty() => {
+                let physical = if read_format.requires_explicit_schema_validation() {
+                    Some(
+                        read_format
+                            .infer_schema(ctx, &sampled_files, compression)
+                            .await?,
+                    )
+                } else if read_case_sensitive {
+                    None
+                } else {
+                    read_format
+                        .infer_schema(ctx, &sampled_files, compression)
+                        .await
+                        .ok()
+                };
                 // Spark matches a user-specified schema against the physical file
                 // columns case-insensitively by default (`spark.sql.caseSensitive=false`).
                 // Reconcile the user column names to the physical names up front so that both
                 // the file stats and reader (which resolve columns by exact name) find the data.
                 let schema = if read_case_sensitive {
                     schema
+                } else if let Some(physical) = &physical {
+                    reconcile_schema_names_case_insensitive(schema, physical)?
                 } else {
-                    match read_format
-                        .infer_schema(ctx, &sampled_files, compression)
-                        .await
-                    {
-                        Ok(physical) => reconcile_schema_names_case_insensitive(schema, &physical)?,
-                        _ => {
-                            // Keeps the user schema if physical schema inference is unavailable.
-                            schema
-                        }
-                    }
+                    // Keeps the user schema if physical schema inference is unavailable.
+                    schema
                 };
                 // When the partition columns are not specified, auto-discover
                 // them from `key=value` segments in the listing paths.
@@ -212,6 +230,9 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
                 };
                 let (partition_fields, schema) =
                     get_partition_columns_and_file_schema(&schema, partition_by)?;
+                if let Some(physical) = physical {
+                    read_format.validate_explicit_schema(&schema, &physical)?;
+                }
                 (Arc::new(schema), partition_fields)
             }
             _ => {

@@ -1,4 +1,3 @@
-@like_escape
 Feature: LIKE and ILIKE with ESCAPE clause
 
   Rule: Custom ESCAPE character
@@ -17,8 +16,18 @@ Feature: LIKE and ILIKE with ESCAPE clause
         | ilike with '/' as escape character                                    | '%SystemDrive%/Users/John' | ilike | '/%SYSTEMDrive/%//Users%' | '/'    | true   |
         | like with '/' as escape character                                     | '%SystemDrive%/Users/John' | like  | '/%SystemDrive/%//Users%' | '/'    | true   |
         | ilike with '/' as escape character and lowercase pattern              | '%SystemDrive%/Users/John' | ilike | '/%SystemDrive/%//users%' | '/'    | true   |
-        | like with '!' escape before a non-special char (lenient pass-through) | 'a!b'                      | LIKE  | 'a!b'                     | '!'    | true   |
         | like with '!' escape and literal '!' in value but not pattern         | 'a!b'                      | LIKE  | 'ab'                      | '!'    | false  |
+
+    # Spark rejects an escape character that precedes a non-special character:
+    # [INVALID_FORMAT.ESC_IN_THE_MIDDLE] The format is invalid: 'a!b'. The escape character is
+    # not allowed to precede 'b'. Sail lets it through as a literal.
+    @sail-bug
+    Scenario: like with an escape before a non-special char is rejected
+      When query
+        """
+        SELECT 'a!b' LIKE 'a!b' ESCAPE '!' AS result
+        """
+      Then query error \[INVALID_FORMAT.ESC_IN_THE_MIDDLE\]
 
     Scenario: like with '!' escape leaves backslash as a literal
       When query
@@ -29,14 +38,14 @@ Feature: LIKE and ILIKE with ESCAPE clause
         | result |
         | true   |
 
-    Scenario: like with '!' escape adjacent to a literal backslash (lenient)
+    # Same rule: the escape precedes a backslash, which is not special once '!' is the escape.
+    @sail-bug
+    Scenario: like with an escape adjacent to a literal backslash is rejected
       When query
         """
         SELECT '!\\xy' LIKE '!\\%' ESCAPE '!' AS result
         """
-      Then query result
-        | result |
-        | true   |
+      Then query error \[INVALID_FORMAT.ESC_IN_THE_MIDDLE\]
 
   Rule: Default backslash escape
 

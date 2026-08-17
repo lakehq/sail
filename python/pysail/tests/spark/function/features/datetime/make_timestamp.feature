@@ -1,4 +1,3 @@
-@make_timestamp_ntz
 Feature: make_timestamp_ntz and try_make_timestamp_ntz functions
 
   Rule: Basic timestamp creation with 6 arguments
@@ -185,7 +184,7 @@ Feature: make_timestamp_ntz and try_make_timestamp_ntz functions
         | NULL                |
         | 2020-01-01 00:00:00 |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

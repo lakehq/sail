@@ -1,5 +1,4 @@
 # Moved from features/datetime_edge_cases.feature by the datetime/ layout reorganisation.
-@datetime_edge_cases
 Feature: datetime edge cases
 
   Rule: 2-digit year expansion boundaries
@@ -90,21 +89,59 @@ Feature: datetime edge cases
     Background:
       Given config spark.sql.session.timeZone = UTC
 
-    Scenario Outline: Clock hour: <case>
+    Scenario Outline: Strict clock field H/HH rejects hour 24: <case>
+      Given config spark.sql.ansi.enabled = true
       When query
         """
-        SELECT to_timestamp('<in>', '<fmt>') AS result
+        SELECT to_timestamp('2026-06-15 24:30:45', '<fmt>')
+        """
+      Then query error .*
+
+      Examples:
+        | case                                             | fmt                 |
+        | `to_timestamp` rejects H=24 in ANSI mode         | yyyy-MM-dd H:mm:ss  |
+        | `to_timestamp` rejects HH=24 in ANSI mode        | yyyy-MM-dd HH:mm:ss |
+
+    Scenario Outline: Strict clock field k/kk maps hour 24 to same-day midnight: <case>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT to_timestamp('2026-06-15 24:30:45', '<fmt>') AS result
         """
       Then query result
         | result   |
         | <result> |
 
       Examples:
-        | case                                                | in                     | fmt                   | result              |
-        | `to_timestamp` parses 24:00:00 as midnight next day | 2026-06-15 24:00:00    | yyyy-MM-dd HH:mm:ss   | 2026-06-16 00:00:00 |
-        | `to_timestamp` parses k=24 clock hour format        | 2026-06-15 24:00:00    | yyyy-MM-dd kk:mm:ss   | 2026-06-16 00:00:00 |
-        | `to_timestamp` parses 12-hour midnight with AM      | 2026-06-15 12:00:00 AM | yyyy-MM-dd hh:mm:ss a | 2026-06-15 00:00:00 |
-        | `to_timestamp` parses 12-hour noon with PM          | 2026-06-15 12:00:00 PM | yyyy-MM-dd hh:mm:ss a | 2026-06-15 12:00:00 |
+        | case                                                   | fmt                 | result              |
+        | `to_timestamp` maps k=24 to same-day midnight          | yyyy-MM-dd k:mm:ss  | 2026-06-15 00:30:45 |
+        | `to_timestamp` maps kk=24 to same-day midnight         | yyyy-MM-dd kk:mm:ss | 2026-06-15 00:30:45 |
+
+    Scenario Outline: 12-hour clock: <case>
+      When query
+        """
+        SELECT to_timestamp('<in>', 'yyyy-MM-dd hh:mm:ss a') AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                                           | in                     | result              |
+        | `to_timestamp` parses 12-hour midnight with AM | 2026-06-15 12:00:00 AM | 2026-06-15 00:00:00 |
+        | `to_timestamp` parses 12-hour noon with PM     | 2026-06-15 12:00:00 PM | 2026-06-15 12:00:00 |
+
+    Scenario: Strict clock field try_to_timestamp returns NULL for invalid hour and second
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT
+          try_to_timestamp('2026-06-15 24:30:45', 'yyyy-MM-dd H:mm:ss') AS hour_24,
+          try_to_timestamp('2026-06-15 23:59:60', 'yyyy-MM-dd HH:mm:ss') AS second_60
+        """
+      Then query result
+        | hour_24 | second_60 |
+        | NULL    | NULL      |
 
   Rule: Fractional seconds precision
 
@@ -140,19 +177,13 @@ Feature: datetime edge cases
     Background:
       Given config spark.sql.session.timeZone = UTC
 
-    Scenario Outline: Leap second: <case>
+    Scenario: Strict clock field to_timestamp rejects second 60
+      Given config spark.sql.ansi.enabled = true
       When query
         """
-        SELECT to_timestamp('<in>', 'yyyy-MM-dd HH:mm:ss') AS result
+        SELECT to_timestamp('2026-06-15 23:59:60', 'yyyy-MM-dd HH:mm:ss')
         """
-      Then query result
-        | result   |
-        | <result> |
-
-      Examples:
-        | case                                                     | in                  | result              |
-        | `to_timestamp` handles leap second 23:59:60              | 2026-06-15 23:59:60 | 2026-06-16 00:00:00 |
-        | `to_timestamp` rejects invalid leap second at wrong time | 2026-06-15 12:30:60 | NULL                |
+      Then query error .*
 
   Rule: Era handling with BC dates
 
@@ -182,6 +213,13 @@ Feature: datetime edge cases
     Background:
       Given config spark.sql.session.timeZone = UTC
 
+    Scenario: `date_format` rejects week-of-month pattern W
+      When query
+        """
+        SELECT date_format(DATE '2026-06-15', 'W')
+        """
+      Then query error .*
+
     Scenario Outline: Week-based field: <case>
       When query
         """
@@ -193,7 +231,6 @@ Feature: datetime edge cases
 
       Examples:
         | case                                        | fmt | result |
-        | `date_format` formats week-of-month         | W   | 3      |
         | `date_format` formats aligned week-of-month | F   | 1      |
         | `date_format` formats quarter               | Q   | 2      |
         | `date_format` formats quarter with text     | QQQ | Q2     |
@@ -203,7 +240,7 @@ Feature: datetime edge cases
     Background:
       Given config spark.sql.session.timeZone = UTC
 
-    Scenario Outline: Optional section date_format: <case>
+    Scenario Outline: Optional section formatting with fractional seconds: <case>
       When query
         """
         SELECT date_format(TIMESTAMP '<ts>', 'yyyy-MM-dd HH:mm:ss[.SSSSSS]') AS result
@@ -213,9 +250,18 @@ Feature: datetime edge cases
         | <result> |
 
       Examples:
-        | case                                                  | ts                         | result                     |
-        | `date_format` omits optional section when zero        | 2026-06-15 14:30:45        | 2026-06-15 14:30:45        |
-        | `date_format` includes optional section when non-zero | 2026-06-15 14:30:45.123456 | 2026-06-15 14:30:45.123456 |
+        | case                                                               | ts                         | result                     |
+        | `date_format` includes optional section when fraction is zero     | 2026-06-15 14:30:45        | 2026-06-15 14:30:45.000000 |
+        | `date_format` includes optional section when fraction is non-zero | 2026-06-15 14:30:45.123456 | 2026-06-15 14:30:45.123456 |
+
+    Scenario: Optional section formatting includes all-zero time fields
+      When query
+        """
+        SELECT date_format(TIMESTAMP '2026-06-15 00:00:00', 'yyyy-MM-dd[ HH:mm:ss]') AS result
+        """
+      Then query result
+        | result              |
+        | 2026-06-15 00:00:00 |
 
     Scenario Outline: Optional section to_timestamp: <case>
       When query

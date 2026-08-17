@@ -1,7 +1,6 @@
-@try_add
 Feature: try_add output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to try_add yields the schema Spark declares
@@ -89,6 +88,17 @@ Feature: try_add output schema
         | <result> |
 
       Examples:
-        | case                        | args                                            | result                       |
-        | try_add doctest #5 (result) | INTERVAL '1' YEAR, INTERVAL '2' YEAR            | INTERVAL '3-0' YEAR TO MONTH |
-        | try_add doctest #6 (result) | TIMESTAMP '2021-01-01 00:00:00', INTERVAL 1 DAY | 2021-01-02 00:00:00          |
+        | case                        | args                                            | result              |
+        | try_add doctest #6 (result) | TIMESTAMP '2021-01-01 00:00:00', INTERVAL 1 DAY | 2021-01-02 00:00:00 |
+
+    # Adding two YEAR intervals keeps the YEAR-only field range in Spark, which renders as
+    # `INTERVAL '3' YEAR`. Sail widens the result to YEAR TO MONTH and renders `'3-0'`.
+    @sail-bug
+    Scenario: try_add doctest #5 (result)
+      When query
+        """
+        SELECT try_add(INTERVAL '1' YEAR, INTERVAL '2' YEAR) as result
+        """
+      Then query result
+        | result            |
+        | INTERVAL '3' YEAR |

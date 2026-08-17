@@ -9,20 +9,21 @@ message TaskDefinition {
 }
 
 message TaskInput {
-  TaskInputLocator locator = 1;
+  uint64 stage = 1;
+  TaskInputLocator locator = 2;
 }
 
 message TaskInputLocator {
   oneof Kind {
     TaskInputDriverLocator driver = 1;
     TaskInputWorkerLocator worker = 2;
-    TaskInputRemoteLocator remote = 3;
+    TaskInputStorageLocator storage = 3;
+    TaskInputShuffleServiceLocator shuffle_service = 4;
   }
 }
 
 message TaskInputDriverLocator {
-  uint64 stage = 1;
-  repeated TaskInputDriverKeyList keys = 2;
+  repeated TaskInputDriverKeyList keys = 1;
 }
 
 message TaskInputDriverKey {
@@ -36,8 +37,7 @@ message TaskInputDriverKeyList {
 }
 
 message TaskInputWorkerLocator {
-  uint64 stage = 1;
-  repeated TaskInputWorkerKeyList keys = 2;
+  repeated TaskInputWorkerKeyList keys = 1;
 }
 
 message TaskInputWorkerKey {
@@ -51,9 +51,16 @@ message TaskInputWorkerKeyList {
   repeated TaskInputWorkerKey keys = 1;
 }
 
-message TaskInputRemoteLocator {
-  uint64 stage = 2;
-  repeated TaskInputRemoteKeyList keys = 3;
+message TaskInputStorageLocator {
+  repeated TaskInputRemoteKeyList keys = 1;
+}
+
+message TaskInputShuffleServiceLocator {
+  repeated TaskInputChannelList channels = 1;
+}
+
+message TaskInputChannelList {
+  repeated uint64 channels = 1;
 }
 
 message TaskInputRemoteKey {
@@ -94,14 +101,14 @@ message TaskOutputRoundRobinRowDistribution {
 
 message TaskOutputLocator {
   oneof Kind {
-    TaskOutputLocalLocator local = 1;
-    TaskOutputRemoteLocator remote = 2;
+    TaskOutputPipelinedLocator pipelined = 1;
+    TaskOutputBlockingLocator blocking = 2;
   }
 }
 
-message TaskOutputLocalLocator {
+message TaskOutputPipelinedLocator {
   uint64 replicas = 1;
 }
 
-message TaskOutputRemoteLocator {
+message TaskOutputBlockingLocator {
 }

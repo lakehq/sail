@@ -1,4 +1,3 @@
-@from_json
 Feature: from_json function parses JSON strings into structured types
 
   Rule: Basic struct parsing
@@ -330,9 +329,21 @@ Feature: from_json function parses JSON strings into structured types
         | {2024-06-15 10:30:00} |
 
       Examples:
-        | case                                                        | args                                                                                        |
-        | Parse timestamp without timezone using TIMESTAMP_NTZ schema | '{"ts":"2024-06-15 10:30:00"}', 'ts TIMESTAMP_NTZ'                                          |
-        | Parse timestamp without timezone with custom format         | '{"ts":"15/06/2024 10:30"}', 'ts TIMESTAMP_NTZ', map('timestampFormat', 'dd/MM/yyyy HH:mm') |
+        | case                                                        | args                                               |
+        | Parse timestamp without timezone using TIMESTAMP_NTZ schema | '{"ts":"2024-06-15 10:30:00"}', 'ts TIMESTAMP_NTZ' |
+
+    # A TIMESTAMP_NTZ field is driven by the `timestampNTZFormat` option, not `timestampFormat`,
+    # so Spark ignores the custom pattern here and fails the parse. Sail applies `timestampFormat`
+    # to TIMESTAMP_NTZ as well and parses the value.
+    @sail-bug
+    Scenario: Parse timestamp without timezone with a custom timestampFormat is not applied
+      When query
+        """
+        SELECT from_json('{"ts":"15/06/2024 10:30"}', 'ts TIMESTAMP_NTZ', map('timestampFormat', 'dd/MM/yyyy HH:mm')) AS result
+        """
+      Then query result
+        | result |
+        | {NULL} |
 
   Rule: Null value handling
     Scenario Outline: JSON null: <case>
@@ -385,8 +396,19 @@ Feature: from_json function parses JSON strings into structured types
 
       Examples:
         | case                                                   | args                              |
-        | Timestamp field with non-string value returns null     | '{"ts":12345}', 'ts TIMESTAMP'    |
         | Timestamp NTZ field with non-string value returns null | '{"ts":true}', 'ts TIMESTAMP_NTZ' |
+
+    # Spark reads a JSON number into a TIMESTAMP field as epoch seconds
+    # (`JacksonParser`: `VALUE_NUMBER_INT` -> `longToTimestamp`); Sail returns NULL.
+    @sail-bug
+    Scenario: Timestamp field with a numeric value is read as epoch seconds
+      When query
+        """
+        SELECT from_json('{"ts":12345}', 'ts TIMESTAMP') AS result
+        """
+      Then query result
+        | result                |
+        | {1970-01-01 03:25:45} |
 
     Scenario: Parse date-only string as timestamp
       When query
@@ -522,7 +544,10 @@ Feature: from_json function parses JSON strings into structured types
         | result              |
         | {nums -> [1, 2, 3]} |
 
+  # `TEXT` is an Arrow type name accepted by Sail's schema parser; Spark's DDL parser rejects
+  # it with `[PARSE_SYNTAX_ERROR] Syntax error at or near 'TEXT'`.
   Rule: TEXT (LargeUtf8) schema type
+    @sail-only
     Scenario Outline: TEXT field: <case>
       When query
         """
@@ -549,15 +574,61 @@ Feature: from_json function parses JSON strings into structured types
         | {NULL} |
 
       Examples:
+        | case                                    | args                        |
+        | Parse JSON to BINARY field returns null | '{"b":"hello"}', 'b BINARY' |
+
+    # `DATE64` is an Arrow type name, and Spark caps DECIMAL precision at 38. Both are rejected
+    # by Spark's DDL parser with `[PARSE_SYNTAX_ERROR]`, so these are Sail schema extensions.
+    @sail-only
+    Scenario Outline: Unsupported scalar type, Sail-only schema type: <case>
+      When query
+        """
+        SELECT from_json(<args>) AS result
+        """
+      Then query result
+        | result |
+        | {NULL} |
+
+      Examples:
         | case                                                              | args                             |
-        | Parse JSON to BINARY field returns null                           | '{"b":"hello"}', 'b BINARY'      |
         | Parse JSON to DATE64 field returns null                           | '{"d":"2024-01-15"}', 'd DATE64' |
         | Parse JSON to DECIMAL with precision greater than 38 returns null | '{"v":3.14}', 'v DECIMAL(40,2)'  |
-        | Parse JSON to TIME field returns null                             | '{"t":"12:00:00"}', 't TIME'     |
-        | Parse JSON to TIME(0) field (Time32) returns null                 | '{"t":"12:00:00"}', 't TIME(0)'  |
+
+    # Spark parses TIME fields in `from_json`: the `spark.sql.timeType.enabled` gate lives in
+    # `TimeExpression`, not in the type itself, so no configuration is needed here.
+    @sail-bug
+    Scenario Outline: TIME schema type: <case>
+      When query
+        """
+        SELECT from_json(<args>) AS result
+        """
+      Then query result
+        | result     |
+        | {12:00:00} |
+
+      Examples:
+        | case                                     | args                            |
+        | Parse JSON to TIME field                 | '{"t":"12:00:00"}', 't TIME'    |
+        | Parse JSON to TIME(0) field (Time32)     | '{"t":"12:00:00"}', 't TIME(0)' |
 
   Rule: Timestamp schema precision variants
     Scenario Outline: Timestamp precision: <case>
+      When query
+        """
+        SELECT from_json('{"ts":"2024-06-15 10:30:00"}', 'ts <type>') AS result
+        """
+      Then query result
+        | result                |
+        | {2024-06-15 10:30:00} |
+
+      Examples:
+        | case                                      | type          |
+        | Parse timestamp with TIMESTAMP_LTZ schema | TIMESTAMP_LTZ |
+
+    # Spark has no parameterized timestamp type: `TIMESTAMP_NTZ(<p>)` is rejected by its DDL
+    # parser with `[PARSE_SYNTAX_ERROR] Syntax error at or near 'TIMESTAMP_NTZ'`.
+    @sail-only
+    Scenario Outline: Timestamp precision, Sail-only schema type: <case>
       When query
         """
         SELECT from_json('{"ts":"2024-06-15 10:30:00"}', 'ts <type>') AS result
@@ -571,7 +642,6 @@ Feature: from_json function parses JSON strings into structured types
         | Parse timestamp with second precision (TIMESTAMP_NTZ(0))      | TIMESTAMP_NTZ(0) |
         | Parse timestamp with millisecond precision (TIMESTAMP_NTZ(3)) | TIMESTAMP_NTZ(3) |
         | Parse timestamp with nanosecond precision (TIMESTAMP_NTZ(9))  | TIMESTAMP_NTZ(9) |
-        | Parse timestamp with TIMESTAMP_LTZ schema                     | TIMESTAMP_LTZ    |
 
   Rule: Schema parsing errors
     Scenario Outline: Schema error: <case>
@@ -649,6 +719,10 @@ Feature: from_json function parses JSON strings into structured types
         """
       Then query error .*
 
+    # Spark's JSON schema type names for TIME always carry a precision (`time(6)`), so the
+    # bare `time` name is not recognized and the string falls through to the DDL parser,
+    # which fails with `[PARSE_SYNTAX_ERROR] Syntax error at or near '{'`.
+    @sail-only
     Scenario: Parse struct with time field using Spark JSON schema
       When query
         """
@@ -658,32 +732,34 @@ Feature: from_json function parses JSON strings into structured types
         | result |
         | {NULL} |
 
+    @sail-bug
     Scenario: Parse struct with time(0) field using Spark JSON schema
       When query
         """
         SELECT from_json('{"t":"12:00:00"}', '{"type":"struct","fields":[{"name":"t","type":"time(0)","nullable":true,"metadata":{}}]}') AS result
         """
       Then query result
-        | result |
-        | {NULL} |
+        | result     |
+        | {12:00:00} |
 
+    # Spark rejects CHAR/VARCHAR in a `from_json` schema with
+    # `[UNSUPPORTED_CHAR_OR_VARCHAR_AS_STRING] The char/varchar type can't be used in the table
+    # schema.` Sail accepts them and reads the values as strings.
+    @sail-bug
     Scenario: Parse struct with char and varchar fields using Spark JSON schema
       When query
         """
         SELECT from_json('{"c":"abc","v":"hello"}', '{"type":"struct","fields":[{"name":"c","type":"char(3)","nullable":true,"metadata":{}},{"name":"v","type":"varchar(5)","nullable":true,"metadata":{}}]}') AS result
         """
-      Then query result
-        | result       |
-        | {abc, hello} |
+      Then query error char/varchar type can't be used in the table schema
 
+    @sail-bug
     Scenario: Parse nested char and varchar fields using Spark JSON schema
       When query
         """
         SELECT from_json('{"items":["a","b"],"m":{"k":"value"}}', '{"type":"struct","fields":[{"name":"items","type":{"type":"array","elementType":"char(1)","containsNull":true},"nullable":true,"metadata":{}},{"name":"m","type":{"type":"map","keyType":"string","valueType":"varchar(5)","valueContainsNull":true},"nullable":true,"metadata":{}}]}') AS result
         """
-      Then query result
-        | result                 |
-        | {[a, b], {k -> value}} |
+      Then query error char/varchar type can't be used in the table schema
 
     Scenario: Parse struct with interval fields using Spark JSON schema
       When query
@@ -694,6 +770,10 @@ Feature: from_json function parses JSON strings into structured types
         | result             |
         | {NULL, NULL, NULL} |
 
+    # Spark's JSON schema parser does not know the `geometry(...)` / `geography(...)` type
+    # names, so the whole schema string falls through to the DDL parser and fails with
+    # `[PARSE_SYNTAX_ERROR] Syntax error at or near '{'`.
+    @sail-only
     Scenario: Parse struct with variant and geospatial fields using Spark JSON schema
       When query
         """
@@ -795,14 +875,18 @@ Feature: from_json function parses JSON strings into structured types
         | [{1}]  |
 
   Rule: Binary field type
-    Scenario: Parse binary field returns null value
+    # Spark base64-decodes JSON strings into BINARY fields (`JacksonParser` uses
+    # `getBinaryValue`), so a valid base64 payload round-trips to its bytes. Sail returns NULL.
+    # The sibling case above with `"hello"` (not valid base64) yields NULL on both engines.
+    @sail-bug
+    Scenario: Parse binary field base64-decodes the value
       When query
         """
         SELECT from_json('{"b":"aGVsbG8="}', 'b BINARY') AS result
         """
       Then query result
-        | result |
-        | {NULL} |
+        | result             |
+        | {[68 65 6C 6C 6F]} |
 
   Rule: Null propagation through nested structures
     Scenario Outline: Null propagation: <case>
@@ -886,7 +970,7 @@ Feature: from_json function parses JSON strings into structured types
         | Parseable JSON number as array target returns null                      | '42', 'ARRAY<INT>'      | NULL   |
         | Parseable JSON number as map target returns null                        | '42', 'MAP<STRING,INT>' | NULL   |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null json literal yields a struct

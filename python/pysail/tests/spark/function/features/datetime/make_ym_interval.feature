@@ -1,4 +1,3 @@
-@make_ym_interval
 Feature: make_ym_interval builds a year-month interval from years and months
 
   Rule: A NULL in any argument yields NULL (Spark MakeYMInterval is null-intolerant)
@@ -86,7 +85,7 @@ Feature: make_ym_interval builds a year-month interval from years and months
         | overflow errors with ANSI enabled  | true  |
         | overflow errors with ANSI disabled | false |
 
-  @spark_null @spark-4
+  @function(nullability) @spark-4
   Rule: Output schema
 
     @sail-bug

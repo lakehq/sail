@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, Date32Array};
+use datafusion::arrow::array::{Array, Date32Array, new_null_array};
 use datafusion::arrow::datatypes::{DataType, Date32Type};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
@@ -97,11 +97,17 @@ impl ScalarUDFImpl for SparkDate {
             }
             (ColumnarValue::Array(array), format) => {
                 let format = match format {
-                    Some(ColumnarValue::Scalar(scalar)) => scalar
-                        .try_as_str()
-                        .flatten()
-                        .map(DateTimeFormat::parse)
-                        .transpose()?,
+                    Some(ColumnarValue::Scalar(scalar)) => {
+                        match parse_scalar_date_format(&scalar)? {
+                            Some(format) => Some(format),
+                            None => {
+                                return Ok(ColumnarValue::Array(new_null_array(
+                                    &DataType::Date32,
+                                    array.len(),
+                                )));
+                            }
+                        }
+                    }
                     Some(ColumnarValue::Array(_)) => unreachable!(),
                     None => None,
                 };
@@ -145,11 +151,14 @@ impl ScalarUDFImpl for SparkDate {
             }
             (ColumnarValue::Scalar(scalar), format) => {
                 let format = match format {
-                    Some(ColumnarValue::Scalar(scalar)) => scalar
-                        .try_as_str()
-                        .flatten()
-                        .map(DateTimeFormat::parse)
-                        .transpose()?,
+                    Some(ColumnarValue::Scalar(scalar)) => {
+                        match parse_scalar_date_format(&scalar)? {
+                            Some(format) => Some(format),
+                            None => {
+                                return Ok(ColumnarValue::Scalar(ScalarValue::Date32(None)));
+                            }
+                        }
+                    }
                     Some(ColumnarValue::Array(_)) => unreachable!(),
                     None => None,
                 };
@@ -168,6 +177,14 @@ impl ScalarUDFImpl for SparkDate {
                 Ok(ColumnarValue::Scalar(ScalarValue::Date32(value)))
             }
         }
+    }
+}
+
+fn parse_scalar_date_format(format: &ScalarValue) -> Result<Option<DateTimeFormat>> {
+    match format.try_as_str() {
+        Some(Some(pattern)) => Ok(Some(DateTimeFormat::for_parsing(pattern)?)),
+        Some(None) => Ok(None),
+        None => exec_err!("spark_date format argument must be a string scalar"),
     }
 }
 
@@ -242,6 +259,6 @@ fn get_or_parse_format<'a>(
 ) -> Result<&'a DateTimeFormat> {
     match cache.entry(pattern.to_string()) {
         Entry::Occupied(entry) => Ok(entry.into_mut()),
-        Entry::Vacant(entry) => Ok(entry.insert(DateTimeFormat::parse(pattern)?)),
+        Entry::Vacant(entry) => Ok(entry.insert(DateTimeFormat::for_parsing(pattern)?)),
     }
 }

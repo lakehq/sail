@@ -1,7 +1,6 @@
-@md5
 Feature: md5 output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

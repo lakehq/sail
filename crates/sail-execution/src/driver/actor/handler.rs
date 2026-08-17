@@ -1,32 +1,46 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::ExecutionPlan;
 use futures::TryStreamExt;
 use log::{debug, info, warn};
+use sail_celeborn::lifecycle::{LifecycleManagerActor, LocalLifecycleManager};
+use sail_common::actor::{ActorAction, ActorContext, ActorHandle};
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_common_datafusion::session::job::JobRunnerHistory;
 use sail_common_datafusion::system::observable::JobRunnerObserver;
 use sail_common_datafusion::system::predicate::Predicates;
 use sail_python_udf::error::PyErrExtractor;
-use sail_server::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use crate::driver::actor::DriverActor;
 use crate::driver::job_scheduler::{JobAction, TaskState};
 use crate::driver::output::JobOutputItem;
-use crate::driver::{DriverEvent, TaskStatus};
-use crate::error::ExecutionResult;
+use crate::driver::{DriverMessage, TaskStatus};
+use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, TaskStreamKeyDisplay, WorkerId};
 use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
-use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
 use crate::task::scheduling::{TaskAssignment, TaskAssignmentGetter, TaskStreamAssignment};
+use crate::task_runner::TaskRunnerMessage;
 
 impl DriverActor {
+    pub(super) fn handle_celeborn_get_lifecycle_manager(
+        &mut self,
+        result: oneshot::Sender<Option<ActorHandle<LifecycleManagerActor>>>,
+    ) -> ActorAction {
+        let _ = result.send(
+            self.extensions
+                .lifecycle_manager
+                .as_ref()
+                .map(LocalLifecycleManager::handle),
+        );
+        ActorAction::Continue
+    }
+
     pub(super) fn handle_activate(&mut self, ctx: &mut ActorContext<Self>) -> ActorAction {
         info!("activating driver {}", self.options.driver_id);
         for _ in 0..self.options.worker_initial_count {
@@ -260,11 +274,11 @@ impl DriverActor {
                     .options
                     .worker_launch_timeout
                     .min(self.options.task_launch_timeout);
-                ctx.send_with_delay(DriverEvent::ProbePendingTask { key }, delay);
+                ctx.send_with_delay(DriverMessage::ProbePendingTask { key }, delay);
             } else {
                 let message = "task scheduling timeout".to_string();
                 let cause = CommonErrorCause::Execution(message.clone());
-                ctx.send(DriverEvent::UpdateTask {
+                ctx.send(DriverMessage::UpdateTask {
                     key,
                     status: TaskStatus::Failed,
                     message: Some(message),
@@ -276,52 +290,27 @@ impl DriverActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_probe_pending_local_stream(
-        &mut self,
-        _ctx: &mut ActorContext<Self>,
-        key: TaskStreamKey,
-    ) -> ActorAction {
-        self.stream_manager.fail_local_stream_if_pending(&key);
-        ActorAction::Continue
-    }
-
-    pub(super) fn handle_create_local_stream(
-        &mut self,
-        _ctx: &mut ActorContext<Self>,
-        key: TaskStreamKey,
-        storage: LocalStreamStorage,
-        schema: SchemaRef,
-        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
-    ) -> ActorAction {
-        let _ = result.send(
-            self.stream_manager
-                .create_local_stream(key, storage, schema),
-        );
-        ActorAction::Continue
-    }
-
-    pub(super) fn handle_create_remote_stream(
-        &mut self,
-        _ctx: &mut ActorContext<Self>,
-        key: TaskStreamKey,
-        schema: SchemaRef,
-        context: Arc<TaskContext>,
-        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
-    ) -> ActorAction {
-        let _ = result.send(
-            self.stream_manager
-                .create_remote_stream(key, schema, &context),
-        );
-        ActorAction::Continue
-    }
-
     pub(super) fn handle_fetch_driver_stream(
         &mut self,
         ctx: &mut ActorContext<Self>,
         key: TaskStreamKey,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
-        let _ = result.send(self.stream_manager.fetch_local_stream(ctx, &key));
+        let Some(task_runner) = self.task_runner.clone() else {
+            let _ = result.send(Err(ExecutionError::InternalError(
+                "task runner is not started".to_string(),
+            )));
+            return ActorAction::Continue;
+        };
+        ctx.spawn(async move {
+            let _ = task_runner
+                .send(TaskRunnerMessage::FetchDriverStream {
+                    key,
+                    schema: Arc::new(Schema::empty()),
+                    result,
+                })
+                .await;
+        });
         ActorAction::Continue
     }
 
@@ -336,21 +325,6 @@ impl DriverActor {
         let _ = result.send(
             self.worker_pool
                 .fetch_task_stream(ctx, worker_id, &key, schema),
-        );
-        ActorAction::Continue
-    }
-
-    pub(super) fn handle_fetch_remote_stream(
-        &mut self,
-        ctx: &mut ActorContext<Self>,
-        key: TaskStreamKey,
-        schema: SchemaRef,
-        context: Arc<TaskContext>,
-        result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
-    ) -> ActorAction {
-        let _ = result.send(
-            self.stream_manager
-                .fetch_remote_stream(ctx, &key, schema, &context),
         );
         ActorAction::Continue
     }
@@ -412,12 +386,12 @@ impl DriverActor {
     pub(super) fn handle_shutdown(
         &mut self,
         _ctx: &mut ActorContext<Self>,
-        history: Option<oneshot::Sender<JobRunnerHistory>>,
+        result: Option<oneshot::Sender<()>>,
     ) -> ActorAction {
-        if self.history.is_some() {
-            warn!("overriding existing history sender");
+        if self.shutdown_notifier.is_some() {
+            warn!("overriding existing shutdown notifier");
         }
-        self.history = history;
+        self.shutdown_notifier = result;
         ActorAction::Stop
     }
 
@@ -440,7 +414,7 @@ impl DriverActor {
                 for (_, set) in &region.tasks {
                     for entry in &set.entries {
                         ctx.send_with_delay(
-                            DriverEvent::ProbePendingTask {
+                            DriverMessage::ProbePendingTask {
                                 key: entry.key.clone(),
                             },
                             self.options.task_launch_timeout,
@@ -453,7 +427,14 @@ impl DriverActor {
                 self.task_assigner.exclude_task(&key);
                 if let Some(assignment) = self.task_assigner.unassign_task(&key) {
                     match assignment {
-                        TaskAssignment::Driver => self.task_runner.stop_task(&key),
+                        TaskAssignment::Driver => {
+                            if let Some(task_runner) = self.task_runner.clone() {
+                                ctx.spawn(async move {
+                                    let _ =
+                                        task_runner.send(TaskRunnerMessage::StopTask { key }).await;
+                                });
+                            }
+                        }
                         TaskAssignment::Worker { worker_id, slot: _ } => {
                             self.worker_pool.stop_task(ctx, worker_id, &key)
                         }
@@ -467,7 +448,8 @@ impl DriverActor {
             } => {
                 let assignment =
                     TaskAssignmentGetter::get(&self.task_assigner, &TaskKey::from(key.clone()));
-                let stream = match assignment {
+                let (result, receiver) = oneshot::channel();
+                match assignment {
                     None => {
                         warn!(
                             "cannot fetch unassigned stream {}",
@@ -476,14 +458,36 @@ impl DriverActor {
                         return;
                     }
                     Some(TaskAssignment::Driver) => {
-                        self.stream_manager.fetch_local_stream(ctx, &key)
+                        if let Some(task_runner) = self.task_runner.clone() {
+                            let task_key = key.clone();
+                            let task_schema = schema.clone();
+                            ctx.spawn(async move {
+                                let _ = task_runner
+                                    .send(TaskRunnerMessage::FetchDriverStream {
+                                        key: task_key,
+                                        schema: task_schema,
+                                        result,
+                                    })
+                                    .await;
+                            });
+                        } else {
+                            let _ = result.send(Err(ExecutionError::InternalError(
+                                "task runner is not started".to_string(),
+                            )));
+                        }
                     }
-                    Some(TaskAssignment::Worker { worker_id, slot: _ }) => self
-                        .worker_pool
-                        .fetch_task_stream(ctx, *worker_id, &key, schema.clone()),
-                };
+                    Some(TaskAssignment::Worker { worker_id, slot: _ }) => {
+                        let _ = result.send(
+                            self.worker_pool
+                                .fetch_task_stream(ctx, *worker_id, &key, schema),
+                        );
+                    }
+                }
                 let stream = futures::stream::once(async move {
-                    stream.map_err(|e| TaskStreamError::External(Arc::new(e)))
+                    receiver
+                        .await
+                        .map_err(|error| TaskStreamError::External(Arc::new(error)))?
+                        .map_err(|error| TaskStreamError::External(Arc::new(error)))
                 })
                 .try_flatten();
                 ctx.spawn(async move {
@@ -505,14 +509,44 @@ impl DriverActor {
                 stage,
                 context,
             } => {
-                if self.task_assigner.untrack_remote_streams(job_id, stage) {
-                    self.stream_manager
-                        .remove_remote_streams(ctx, job_id, stage, context);
+                if self.task_assigner.untrack_storage_streams(job_id, stage)
+                    && let Some(task_runner) = self.task_runner.clone()
+                {
+                    ctx.spawn(async move {
+                        let _ = task_runner
+                            .send(TaskRunnerMessage::CleanUpStorageStreams {
+                                job_id,
+                                stage,
+                                context,
+                            })
+                            .await;
+                    });
+                }
+                if self.task_assigner.untrack_external_streams(job_id, stage) {
+                    if let Some(task_runner) = self.task_runner.clone() {
+                        ctx.spawn(async move {
+                            let _ = task_runner
+                                .send(TaskRunnerMessage::CleanUpCelebornStreams { job_id, stage })
+                                .await;
+                        });
+                    }
+                    for worker_id in self.task_assigner.active_worker_ids() {
+                        self.worker_pool.clean_up_job(ctx, worker_id, job_id, stage);
+                    }
                 }
                 for x in self.task_assigner.untrack_local_streams(job_id, stage) {
                     match x {
                         TaskStreamAssignment::Driver => {
-                            self.stream_manager.remove_local_streams(job_id, stage);
+                            if let Some(task_runner) = self.task_runner.clone() {
+                                ctx.spawn(async move {
+                                    let _ = task_runner
+                                        .send(TaskRunnerMessage::CleanUpLocalStreams {
+                                            job_id,
+                                            stage,
+                                        })
+                                        .await;
+                                });
+                            }
                         }
                         TaskStreamAssignment::Worker { worker_id } => {
                             self.worker_pool.clean_up_job(ctx, worker_id, job_id, stage)
@@ -539,9 +573,9 @@ impl DriverActor {
                 {
                     Ok(x) => x,
                     Err(e) => {
-                        // The task failure will be handled as a separate event
+                        // The task failure will be handled as a separate message
                         // after processing the current assignments.
-                        ctx.send(DriverEvent::UpdateTask {
+                        ctx.send(DriverMessage::UpdateTask {
                             key: entry.key,
                             status: TaskStatus::Failed,
                             message: Some(e.to_string()),
@@ -554,9 +588,28 @@ impl DriverActor {
                 self.job_scheduler
                     .update_task(&entry.key, TaskState::Scheduled, None, None);
                 match assignment.assignment {
-                    TaskAssignment::Driver => self
-                        .task_runner
-                        .run_task(ctx, entry.key, definition, context),
+                    TaskAssignment::Driver => {
+                        let Some(task_runner) = self.task_runner.clone() else {
+                            ctx.send(DriverMessage::UpdateTask {
+                                key: entry.key,
+                                status: TaskStatus::Failed,
+                                message: Some("task runner is not started".to_string()),
+                                cause: None,
+                                sequence: None,
+                            });
+                            continue;
+                        };
+                        ctx.spawn(async move {
+                            let _ = task_runner
+                                .send(TaskRunnerMessage::RunTask {
+                                    key: entry.key,
+                                    definition,
+                                    context,
+                                    peers: vec![],
+                                })
+                                .await;
+                        });
+                    }
                     TaskAssignment::Worker { worker_id, slot: _ } => self
                         .worker_pool
                         .run_task(ctx, worker_id, entry.key, definition),

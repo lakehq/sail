@@ -1,7 +1,6 @@
-@bit_length
 Feature: bit_length output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to bit_length yields the schema Spark declares

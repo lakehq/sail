@@ -1,4 +1,3 @@
-@timestampadd
 Feature: timestampadd function
 
     Scenario Outline: timestampadd: <case>
@@ -17,7 +16,7 @@ Feature: timestampadd function
         | subtract days    | day         | -5 | '2016-03-11 09:00:07'        | 2016-03-06 09:00:07        |
         | add microseconds | MICROSECOND | 2  | '2016-03-11 09:00:07.000001' | 2016-03-11 09:00:07.000003 |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null timestamp literal yields a timestamp

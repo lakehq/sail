@@ -4,12 +4,12 @@ use datafusion::arrow::datatypes::{DataType, FieldRef, Fields};
 use datafusion::functions_nested::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit};
-use datafusion_spark::function::map::map_from_arrays::MapFromArrays;
-use datafusion_spark::function::map::map_from_entries::MapFromEntries;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::map::map_entries::SparkMapEntries;
+use sail_function::scalar::map::map_from::{SparkMapFromArrays, SparkMapFromEntries};
 use sail_function::scalar::map::str_to_map::StrToMap;
 
+use crate::config::MapKeyDedupPolicy;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
@@ -37,7 +37,9 @@ fn map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let keys = expr_fn::make_array(keys);
     let values = expr_fn::make_array(values);
     let values = cast_list_value_nullability(values, schema, true)?;
-    let expr = F::udf(MapFromArrays::new())(ScalarFunctionInput {
+    let last_value_wins =
+        input.function_context.plan_config.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;
+    let expr = F::udf(SparkMapFromArrays::new(last_value_wins))(ScalarFunctionInput {
         arguments: vec![keys, values],
         function_context: input.function_context,
     })?;
@@ -54,7 +56,9 @@ fn map_from_arrays(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         _ => true,
     };
     let values = cast_list_value_nullability(values, schema, true)?;
-    let expr = F::udf(MapFromArrays::new())(ScalarFunctionInput {
+    let last_value_wins =
+        input.function_context.plan_config.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;
+    let expr = F::udf(SparkMapFromArrays::new(last_value_wins))(ScalarFunctionInput {
         arguments: vec![keys, values],
         function_context: input.function_context,
     })?;
@@ -68,7 +72,9 @@ fn map_from_entries(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let entries = input.arguments.one()?;
     let value_contains_null = map_entries_value_contains_null(&entries.get_type(schema.as_ref())?);
     let entries = cast_map_entries_value_nullability(entries, schema, true)?;
-    let expr = F::udf(MapFromEntries::new())(ScalarFunctionInput {
+    let last_value_wins =
+        input.function_context.plan_config.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;
+    let expr = F::udf(SparkMapFromEntries::new(last_value_wins))(ScalarFunctionInput {
         arguments: vec![entries],
         function_context: input.function_context,
     })?;
@@ -239,7 +245,9 @@ fn map_concat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 
     let keys = expr_fn::array_concat(keys);
     let values = expr_fn::array_concat(values);
-    let result = F::udf(MapFromArrays::new())(ScalarFunctionInput {
+    let last_value_wins =
+        input.function_context.plan_config.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;
+    let result = F::udf(SparkMapFromArrays::new(last_value_wins))(ScalarFunctionInput {
         arguments: vec![keys, values],
         function_context: input.function_context,
     })?;
@@ -277,7 +285,9 @@ fn str_to_map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let pair_delims = delims.first().cloned().unwrap_or(lit(","));
     let key_value_delims = delims.get(1).cloned().unwrap_or(lit(":"));
 
-    F::udf(StrToMap::new())(ScalarFunctionInput {
+    let last_value_wins =
+        input.function_context.plan_config.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;
+    F::udf(StrToMap::new(last_value_wins))(ScalarFunctionInput {
         arguments: vec![strs, pair_delims, key_value_delims],
         function_context: input.function_context,
     })

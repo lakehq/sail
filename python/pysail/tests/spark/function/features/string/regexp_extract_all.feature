@@ -1,4 +1,3 @@
-@regexp_extract_all
 Feature: regexp_extract_all() extracts all regex capture group matches from strings
 
   Rule: Basic extraction with group index
@@ -74,7 +73,7 @@ Feature: regexp_extract_all() extracts all regex capture group matches from stri
         | regexp_extract_all returns NULL when input is NULL   | NULL, r'(\d+)' |
         | regexp_extract_all returns NULL when pattern is NULL | 'abc', NULL    |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

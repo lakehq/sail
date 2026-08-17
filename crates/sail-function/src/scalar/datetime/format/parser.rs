@@ -2,25 +2,32 @@ use datafusion_common::{Result, exec_err};
 
 use super::pattern::{
     DateTimeField, DateTimeFieldSpec, DateTimeFormat, DateTimeItem, FieldStyle, FractionField,
-    FractionSpec, ResolverStyle, SignStyle, ZoneField, ZoneSpec, ZoneStyle,
+    FractionSpec, PatternUse, ResolverStyle, SignStyle, ZoneField, ZoneSpec, ZoneStyle,
 };
 
-pub(crate) fn parse_datetime_pattern(pattern: &str) -> Result<DateTimeFormat> {
+pub(crate) fn parse_datetime_pattern(
+    pattern: &str,
+    pattern_use: PatternUse,
+) -> Result<DateTimeFormat> {
     let chars: Vec<char> = pattern.chars().collect();
     let mut position = 0;
-    let items = parse_items(&chars, &mut position, false)?;
+    let items = parse_items(&chars, &mut position, false, pattern_use)?;
     if position != chars.len() {
         return exec_err!("invalid datetime pattern: unexpected closing optional section");
     }
     Ok(DateTimeFormat {
         items,
-        predefined: None,
         locale: Default::default(),
-        resolver_style: ResolverStyle::Smart,
+        resolver_style: ResolverStyle::Strict,
     })
 }
 
-fn parse_items(chars: &[char], position: &mut usize, optional: bool) -> Result<Vec<DateTimeItem>> {
+fn parse_items(
+    chars: &[char],
+    position: &mut usize,
+    optional: bool,
+    pattern_use: PatternUse,
+) -> Result<Vec<DateTimeItem>> {
     let mut items = Vec::new();
     let mut literal = String::new();
 
@@ -31,14 +38,15 @@ fn parse_items(chars: &[char], position: &mut usize, optional: bool) -> Result<V
                 flush_literal(&mut items, &mut literal);
                 literal.push_str(&parse_quoted_literal(chars, position)?);
             }
-            'T' => {
-                literal.push(ch);
-                *position += 1;
-            }
             '[' => {
                 flush_literal(&mut items, &mut literal);
                 *position += 1;
-                items.push(DateTimeItem::Optional(parse_items(chars, position, true)?));
+                items.push(DateTimeItem::Optional(parse_items(
+                    chars,
+                    position,
+                    true,
+                    pattern_use,
+                )?));
             }
             ']' => {
                 if optional {
@@ -48,21 +56,7 @@ fn parse_items(chars: &[char], position: &mut usize, optional: bool) -> Result<V
                 }
                 return exec_err!("invalid datetime pattern: unexpected ']'");
             }
-            'p' => {
-                flush_literal(&mut items, &mut literal);
-                let token_start = *position;
-                *position += 1;
-                while *position < chars.len() && chars[*position] == 'p' {
-                    *position += 1;
-                }
-                let count = *position - token_start;
-                items.push(DateTimeItem::PadNext {
-                    width: count,
-                    pad_char: ' ',
-                });
-            }
             ch if ch.is_ascii_alphabetic() => {
-                // Try to parse as a pattern field
                 let symbol = ch;
                 let token_start = *position;
                 *position += 1;
@@ -71,18 +65,9 @@ fn parse_items(chars: &[char], position: &mut usize, optional: bool) -> Result<V
                 }
                 let count = *position - token_start;
 
-                // Check if this is a valid pattern letter
-                if validate_width(symbol, count).is_ok() {
-                    flush_literal(&mut items, &mut literal);
-                    let field_item = build_field_item(symbol, count)?;
-                    items.push(field_item);
-                } else {
-                    // Not a valid pattern letter, treat as literal text
-                    // Reset position and collect as literal
-                    *position = token_start;
-                    literal.push(ch);
-                    *position += 1;
-                }
+                validate_pattern_field(symbol, count, pattern_use)?;
+                flush_literal(&mut items, &mut literal);
+                items.push(build_field_item(symbol, count, pattern_use)?);
             }
             _ => {
                 literal.push(ch);
@@ -132,12 +117,40 @@ fn flush_literal(items: &mut Vec<DateTimeItem>, literal: &mut String) {
     }
 }
 
-fn validate_width(symbol: char, count: usize) -> Result<()> {
+fn validate_pattern_field(symbol: char, count: usize, pattern_use: PatternUse) -> Result<()> {
+    if matches!(symbol, 'Y' | 'W' | 'w' | 'u' | 'e' | 'c') {
+        return exec_err!("invalid datetime pattern: week-based pattern letter '{symbol}'");
+    }
+    if matches!(symbol, 'A' | 'B' | 'n' | 'N' | 'p') {
+        return exec_err!("invalid datetime pattern: unsupported pattern letter '{symbol}'");
+    }
+    if pattern_use == PatternUse::Parsing && matches!(symbol, 'E' | 'F' | 'q' | 'Q') {
+        return exec_err!(
+            "invalid datetime pattern: pattern letter '{symbol}' is unsupported for parsing"
+        );
+    }
+
     match symbol {
-        'E' if count > 5 => exec_err!("invalid datetime pattern: 'E' width must be 1 through 5")?,
-        'G' if count > 5 => exec_err!("invalid datetime pattern: 'G' width must be 1 through 5")?,
-        'M' | 'L' | 'Q' | 'q' if count > 5 => {
-            exec_err!("invalid datetime pattern: text field width must be 1 through 5")?
+        'G' | 'M' | 'L' | 'E' | 'Q' | 'q' if count > 4 => {
+            exec_err!("invalid datetime pattern: text field width must be 1 through 4")
+        }
+        'y' if count > 6 => {
+            exec_err!("invalid datetime pattern: 'y' width must be 1 through 6")
+        }
+        'F' | 'a' if count != 1 => {
+            exec_err!("invalid datetime pattern: '{symbol}' requires width 1")
+        }
+        'd' if count > 2 => {
+            exec_err!("invalid datetime pattern: 'd' width must be 1 or 2")
+        }
+        'D' if count > 3 => {
+            exec_err!("invalid datetime pattern: 'D' width must be 1 through 3")
+        }
+        'H' | 'h' | 'k' | 'K' | 'm' | 's' if count > 2 => {
+            exec_err!("invalid datetime pattern: '{symbol}' width must be 1 or 2")
+        }
+        'S' if count > 9 => {
+            exec_err!("invalid datetime pattern: 'S' width must be 1 through 9")
         }
         'V' if count != 2 => exec_err!("invalid datetime pattern: 'V' requires width 2"),
         'O' if count != 1 && count != 4 => {
@@ -146,16 +159,11 @@ fn validate_width(symbol: char, count: usize) -> Result<()> {
         'X' | 'x' | 'Z' if count > 5 => {
             exec_err!("invalid datetime pattern: offset width must be 1 through 5")
         }
-        // Add width validation for previously unchecked fields
-        'w' if count > 2 => exec_err!("invalid datetime pattern: 'w' width must be 1 or 2")?,
-        'W' if count > 1 => exec_err!("invalid datetime pattern: 'W' width must be 1")?,
-        'F' if count > 1 => exec_err!("invalid datetime pattern: 'F' width must be 1")?,
-        'A' if count > 9 => exec_err!("invalid datetime pattern: 'A' width must be 1 through 9")?,
-        'n' if count > 9 => exec_err!("invalid datetime pattern: 'n' width must be 1 through 9")?,
-        'N' if count > 19 => exec_err!("invalid datetime pattern: 'N' width must be 1 through 19")?,
-        'A' | 'D' | 'E' | 'F' | 'G' | 'H' | 'K' | 'L' | 'M' | 'N' | 'O' | 'Q' | 'S' | 'V' | 'W'
-        | 'X' | 'Y' | 'Z' | 'a' | 'c' | 'd' | 'e' | 'h' | 'k' | 'm' | 'n' | 'q' | 's' | 'u'
-        | 'w' | 'x' | 'y' | 'z' => Ok(()),
+        'z' if count > 4 => {
+            exec_err!("invalid datetime pattern: 'z' width must be 1 through 4")
+        }
+        'D' | 'E' | 'F' | 'G' | 'H' | 'K' | 'L' | 'M' | 'O' | 'Q' | 'S' | 'V' | 'X' | 'Z' | 'a'
+        | 'd' | 'h' | 'k' | 'm' | 'q' | 's' | 'x' | 'y' | 'z' => Ok(()),
         _ if symbol.is_ascii_alphabetic() => {
             exec_err!("invalid datetime pattern: unsupported pattern letter '{symbol}'")
         }
@@ -163,7 +171,7 @@ fn validate_width(symbol: char, count: usize) -> Result<()> {
     }
 }
 
-fn build_field_item(symbol: char, count: usize) -> Result<DateTimeItem> {
+fn build_field_item(symbol: char, count: usize, pattern_use: PatternUse) -> Result<DateTimeItem> {
     match symbol {
         'G' => Ok(DateTimeItem::Field(DateTimeFieldSpec {
             kind: DateTimeField::Era,
@@ -351,7 +359,11 @@ fn build_field_item(symbol: char, count: usize) -> Result<DateTimeItem> {
         })),
         'S' => Ok(DateTimeItem::Fraction(FractionSpec {
             field: FractionField::NanoOfSecond,
-            min_width: count,
+            min_width: if pattern_use == PatternUse::Parsing {
+                1
+            } else {
+                count
+            },
             max_width: count.min(9),
             decimal_point: false,
         })),
@@ -374,7 +386,7 @@ fn build_field_item(symbol: char, count: usize) -> Result<DateTimeItem> {
             sign_style: SignStyle::NotNegative,
         })),
         'X' | 'x' => Ok(DateTimeItem::Zone(ZoneSpec {
-            kind: ZoneField::Offset,
+            kind: ZoneField::IsoOffset,
             width: count,
             zero_as_z: symbol == 'X',
             style: match count {
@@ -386,8 +398,10 @@ fn build_field_item(symbol: char, count: usize) -> Result<DateTimeItem> {
         'Z' => Ok(DateTimeItem::Zone(ZoneSpec {
             kind: if count == 4 {
                 ZoneField::LocalizedOffset
+            } else if count == 5 {
+                ZoneField::IsoOffset
             } else {
-                ZoneField::Offset
+                ZoneField::Rfc822Offset
             },
             width: count,
             zero_as_z: count == 5,

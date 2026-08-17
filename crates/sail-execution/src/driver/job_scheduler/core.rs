@@ -5,11 +5,12 @@ use chrono::Utc;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use indexmap::{IndexMap, IndexSet};
 use log::{debug, warn};
+use sail_common::actor::ActorContext;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
-use sail_server::actor::ActorContext;
 
 use crate::driver::DriverActor;
 use crate::driver::job_scheduler::state::{
@@ -24,6 +25,7 @@ use crate::job_graph::{
     InputMode, JobGraph, OutputDistribution, OutputMode, Stage, StageInput, TaskPlacement,
 };
 use crate::proto::{encode_remote_physical_expr, encode_remote_physical_plan};
+use crate::shuffle::ShuffleBackendKind;
 use crate::task::definition::{
     TaskDefinition, TaskInput, TaskInputKey, TaskInputLocator, TaskOutput, TaskOutputDistribution,
     TaskOutputLocator,
@@ -52,7 +54,7 @@ impl JobScheduler {
         let graph = JobGraph::try_new(
             plan,
             crate::job_graph::JobGraphOptions {
-                use_blocking_shuffle: self.options.use_blocking_shuffle,
+                shuffle_backend: self.options.shuffle_backend.clone(),
             },
         )?;
         debug!("job {job_id} job graph \n{graph}");
@@ -355,7 +357,11 @@ impl JobScheduler {
                 let stage = &job.graph.stages()[t.stage];
                 let output = match stage.mode {
                     OutputMode::Pipelined => TaskOutputKind::Local,
-                    OutputMode::Blocking => TaskOutputKind::Remote,
+                    OutputMode::Blocking => match job.graph.shuffle_backend() {
+                        ShuffleBackendKind::Storage { .. } => TaskOutputKind::Storage,
+                        ShuffleBackendKind::Celeborn { .. } => TaskOutputKind::External,
+                        ShuffleBackendKind::Flight => unreachable!(),
+                    },
                 };
                 let key = StageGroupKey {
                     placement: stage.placement,
@@ -529,9 +535,9 @@ impl JobScheduler {
         let inputs = stage
             .inputs
             .iter()
-            .map(|input| self.get_task_input(job, key, input, assignments))
+            .map(|input| TaskInputBuilder::try_new(job, key, input, assignments)?.build())
             .collect::<ExecutionResult<Vec<_>>>()?;
-        let output = self.get_task_output(job, key, stage)?;
+        let output = TaskOutputBuilder::new(job, key, stage, self.codec.as_ref()).build()?;
         let definition = TaskDefinition {
             plan: Arc::from(plan),
             inputs,
@@ -571,136 +577,6 @@ impl JobScheduler {
         }
     }
 
-    fn get_task_input(
-        &self,
-        job: &JobDescriptor,
-        key: &TaskKey,
-        input: &StageInput,
-        assignments: &dyn TaskAssignmentGetter,
-    ) -> ExecutionResult<TaskInput> {
-        let latest_attempt = |stage: usize, partition: usize| -> ExecutionResult<usize> {
-            Self::get_latest_task_attempt(job, stage, partition).ok_or_else(|| {
-                ExecutionError::InvalidArgument(format!(
-                    "no latest task attempt found for job {} stage {} partition {}",
-                    key.job_id, stage, partition
-                ))
-            })
-        };
-
-        let Some(producer) = job.graph.stages().get(input.stage) else {
-            return Err(ExecutionError::InvalidArgument(format!(
-                "job {} input stage {} not found",
-                key.job_id, input.stage
-            )));
-        };
-        let partitions = producer.plan.output_partitioning().partition_count();
-        let channels = producer.distribution.channels();
-        let consumer_stage = &job.graph.stages()[key.stage];
-        let output_partitions = consumer_stage.plan.output_partitioning().partition_count();
-        let keys = build_task_input_keys(
-            input.mode,
-            partitions,
-            channels,
-            output_partitions,
-            |partition| latest_attempt(input.stage, partition),
-        )?;
-        let locator = match producer.mode {
-            OutputMode::Pipelined => match producer.placement {
-                TaskPlacement::Driver => {
-                    keys.iter().flatten().try_for_each(|k| {
-                        match assignments.get(
-                            &TaskKey {
-                                job_id: key.job_id,
-                                stage: input.stage,
-                                partition: k.partition,
-                                attempt: k.attempt,
-                            }
-                        ) {
-                            Some(TaskAssignment::Driver) => Ok(()),
-                            _ => Err(ExecutionError::InternalError(format!(
-                                "job {} input stage {} partition {} attempt {} is not assigned to driver",
-                                key.job_id, input.stage, k.partition, k.attempt
-                            ))),
-                        }
-                    })?;
-                    TaskInputLocator::Driver {
-                        stage: input.stage,
-                        keys,
-                    }
-                }
-                TaskPlacement::Worker => {
-                    let keys = keys.into_iter().map(|keys| {
-                        keys.into_iter().map(|k| {
-                            let Some(TaskAssignment::Worker { worker_id, slot: _ }) = assignments.get(
-                                &TaskKey {
-                                    job_id: key.job_id,
-                                    stage: input.stage,
-                                    partition: k.partition,
-                                    attempt: k.attempt,
-                                }
-                            ) else {
-                                return Err(ExecutionError::InternalError(format!(
-                                    "job {} input stage {} partition {} attempt {} is not assigned to worker",
-                                    key.job_id, input.stage, k.partition, k.attempt
-                                )));
-                            };
-                            Ok((*worker_id, k))
-                        }).collect::<ExecutionResult<Vec<_>>>()
-                    }).collect::<ExecutionResult<Vec<Vec<_>>>>()?;
-                    TaskInputLocator::Worker {
-                        stage: input.stage,
-                        keys,
-                    }
-                }
-            },
-            OutputMode::Blocking => TaskInputLocator::Remote {
-                stage: input.stage,
-                keys,
-            },
-        };
-        Ok(TaskInput { locator })
-    }
-
-    fn get_task_output(
-        &self,
-        job: &JobDescriptor,
-        key: &TaskKey,
-        stage: &Stage,
-    ) -> ExecutionResult<TaskOutput> {
-        let replicas = job.graph.replicas(key.stage);
-        let distribution = match &stage.distribution {
-            OutputDistribution::Hash { keys, channels } => {
-                let keys = keys
-                    .iter()
-                    .map(|expr| {
-                        let expr = encode_remote_physical_expr(self.codec.as_ref(), expr)?;
-                        Ok(Arc::from(expr))
-                    })
-                    .collect::<ExecutionResult<Vec<Arc<[u8]>>>>()?;
-                TaskOutputDistribution::Hash {
-                    keys,
-                    channels: *channels,
-                }
-            }
-            OutputDistribution::RoundRobin { channels } => TaskOutputDistribution::RoundRobin {
-                channels: *channels,
-            },
-            OutputDistribution::RoundRobinRow { channels } => {
-                TaskOutputDistribution::RoundRobinRow {
-                    channels: *channels,
-                }
-            }
-        };
-        let locator = match stage.mode {
-            OutputMode::Pipelined => TaskOutputLocator::Local { replicas },
-            OutputMode::Blocking => TaskOutputLocator::Remote,
-        };
-        Ok(TaskOutput {
-            distribution,
-            locator,
-        })
-    }
-
     fn get_latest_task_attempt(
         job: &JobDescriptor,
         stage: usize,
@@ -713,71 +589,148 @@ impl JobScheduler {
     }
 }
 
-fn build_task_input_keys(
-    mode: InputMode,
-    input_partitions: usize,
-    input_channels: usize,
-    output_partitions: usize,
-    mut latest_attempt: impl FnMut(usize) -> ExecutionResult<usize>,
-) -> ExecutionResult<Vec<Vec<TaskInputKey>>> {
-    match mode {
-        InputMode::Forward | InputMode::Merge => {
-            let mut groups = Vec::with_capacity(input_partitions);
-            for partition in 0..input_partitions {
-                let attempt = latest_attempt(partition)?;
-                let mut group = Vec::with_capacity(input_channels);
-                for channel in 0..input_channels {
-                    group.push(TaskInputKey {
-                        partition,
-                        attempt,
-                        channel,
-                    });
-                }
-                groups.push(group);
+struct TaskInputBuilder<'a> {
+    job: &'a JobDescriptor,
+    key: &'a TaskKey,
+    input: &'a StageInput,
+    producer: &'a Stage,
+    consumer: &'a Stage,
+    assignments: &'a dyn TaskAssignmentGetter,
+}
+
+impl<'a> TaskInputBuilder<'a> {
+    fn try_new(
+        job: &'a JobDescriptor,
+        key: &'a TaskKey,
+        input: &'a StageInput,
+        assignments: &'a dyn TaskAssignmentGetter,
+    ) -> ExecutionResult<Self> {
+        let producer = job.graph.stages().get(input.stage).ok_or_else(|| {
+            ExecutionError::InvalidArgument(format!(
+                "job {} input stage {} not found",
+                key.job_id, input.stage
+            ))
+        })?;
+        let consumer = job.graph.stages().get(key.stage).ok_or_else(|| {
+            ExecutionError::InvalidArgument(format!(
+                "stage {} not found in job {}",
+                key.stage, key.job_id
+            ))
+        })?;
+        Ok(Self {
+            job,
+            key,
+            input,
+            producer,
+            consumer,
+            assignments,
+        })
+    }
+
+    fn build(&self) -> ExecutionResult<TaskInput> {
+        let locator = match self.producer.mode {
+            OutputMode::Pipelined => match self.producer.placement {
+                TaskPlacement::Driver => self.build_driver_locator()?,
+                TaskPlacement::Worker => self.build_worker_locator()?,
+            },
+            OutputMode::Blocking => match self.job.graph.shuffle_backend() {
+                ShuffleBackendKind::Storage { .. } => self.build_storage_locator()?,
+                ShuffleBackendKind::Celeborn { .. } => self.build_shuffle_service_locator()?,
+                ShuffleBackendKind::Flight => self.build_storage_locator()?,
+            },
+        };
+        Ok(TaskInput {
+            stage: self.input.stage,
+            locator,
+        })
+    }
+
+    fn build_driver_locator(&self) -> ExecutionResult<TaskInputLocator> {
+        let keys = self.build_task_input_keys()?;
+        keys.iter()
+            .flatten()
+            .try_for_each(|key| match self.assignment(key) {
+                Some(TaskAssignment::Driver) => Ok(()),
+                _ => Err(ExecutionError::InternalError(format!(
+                    "job {} input stage {} partition {} attempt {} is not assigned to driver",
+                    self.key.job_id, self.input.stage, key.partition, key.attempt
+                ))),
+            })?;
+        Ok(TaskInputLocator::Driver { keys })
+    }
+
+    fn build_worker_locator(&self) -> ExecutionResult<TaskInputLocator> {
+        let keys = self
+            .build_task_input_keys()?
+            .into_iter()
+            .map(|keys| {
+                keys.into_iter()
+                    .map(|key| {
+                        let Some(TaskAssignment::Worker { worker_id, slot: _ }) =
+                            self.assignment(&key)
+                        else {
+                            return Err(ExecutionError::InternalError(format!(
+                                "job {} input stage {} partition {} attempt {} is not assigned to worker",
+                                self.key.job_id,
+                                self.input.stage,
+                                key.partition,
+                                key.attempt
+                            )));
+                        };
+                        Ok((*worker_id, key))
+                    })
+                    .collect::<ExecutionResult<Vec<_>>>()
+            })
+            .collect::<ExecutionResult<Vec<Vec<_>>>>()?;
+        Ok(TaskInputLocator::Worker { keys })
+    }
+
+    fn build_storage_locator(&self) -> ExecutionResult<TaskInputLocator> {
+        Ok(TaskInputLocator::Storage {
+            keys: self.build_task_input_keys()?,
+        })
+    }
+
+    fn build_shuffle_service_locator(&self) -> ExecutionResult<TaskInputLocator> {
+        let input_channels = self.producer.distribution.channels();
+        let output_partitions = self.consumer.plan.output_partitioning().partition_count();
+        let channels = match self.input.mode {
+            InputMode::Shuffle => (0..output_partitions)
+                .map(|partition| vec![partition])
+                .collect(),
+            InputMode::Broadcast => {
+                let channels = (0..input_channels).collect::<Vec<_>>();
+                vec![channels; output_partitions]
             }
-            Ok(groups)
-        }
-        // Enumerate channels in the outer loop and partitions in the inner loop.
-        // This is the whole point of shuffle!
-        InputMode::Shuffle => {
-            let mut groups = Vec::with_capacity(input_channels);
-            for channel in 0..input_channels {
-                let mut group = Vec::with_capacity(input_partitions);
+            mode => {
+                return Err(ExecutionError::InvalidArgument(format!(
+                    "Celeborn shuffle service does not support {mode} input"
+                )));
+            }
+        };
+        Ok(TaskInputLocator::ShuffleService { channels })
+    }
+
+    fn assignment(&self, key: &TaskInputKey) -> Option<&TaskAssignment> {
+        self.assignments.get(&TaskKey {
+            job_id: self.key.job_id,
+            stage: self.input.stage,
+            partition: key.partition,
+            attempt: key.attempt,
+        })
+    }
+
+    fn build_task_input_keys(&self) -> ExecutionResult<Vec<Vec<TaskInputKey>>> {
+        let input_partitions = self.producer.plan.output_partitioning().partition_count();
+        let input_channels = self.producer.distribution.channels();
+        let output_partitions = self.consumer.plan.output_partitioning().partition_count();
+
+        match self.input.mode {
+            InputMode::Forward | InputMode::Merge => {
+                let mut groups = Vec::with_capacity(input_partitions);
                 for partition in 0..input_partitions {
-                    group.push(TaskInputKey {
-                        partition,
-                        attempt: latest_attempt(partition)?,
-                        channel,
-                    });
-                }
-                groups.push(group);
-            }
-            Ok(groups)
-        }
-        InputMode::Broadcast => {
-            let mut keys = Vec::with_capacity(input_partitions * input_channels);
-            for partition in 0..input_partitions {
-                let attempt = latest_attempt(partition)?;
-                for channel in 0..input_channels {
-                    keys.push(TaskInputKey {
-                        partition,
-                        attempt,
-                        channel,
-                    });
-                }
-            }
-            Ok(vec![keys])
-        }
-        InputMode::Rescale => {
-            // Keep rescale input expansion aligned with CoalesceExec's contiguous partition
-            // grouping, where each output partition consumes an evenly divided input range.
-            let mut groups = Vec::with_capacity(output_partitions);
-            for output_partition in 0..output_partitions {
-                let start = output_partition * input_partitions / output_partitions;
-                let end = (output_partition + 1) * input_partitions / output_partitions;
-                let mut group = Vec::with_capacity((end.saturating_sub(start)) * input_channels);
-                for partition in start..end {
-                    let attempt = latest_attempt(partition)?;
+                    let attempt = self.latest_attempt(partition)?;
+                    let mut group = Vec::with_capacity(input_channels);
                     for channel in 0..input_channels {
                         group.push(TaskInputKey {
                             partition,
@@ -785,11 +738,139 @@ fn build_task_input_keys(
                             channel,
                         });
                     }
+                    groups.push(group);
                 }
-                groups.push(group);
+                Ok(groups)
             }
-            Ok(groups)
+            // Enumerate channels in the outer loop and partitions in the inner loop.
+            // This is the whole point of shuffle!
+            InputMode::Shuffle => {
+                let mut groups = Vec::with_capacity(input_channels);
+                for channel in 0..input_channels {
+                    let mut group = Vec::with_capacity(input_partitions);
+                    for partition in 0..input_partitions {
+                        group.push(TaskInputKey {
+                            partition,
+                            attempt: self.latest_attempt(partition)?,
+                            channel,
+                        });
+                    }
+                    groups.push(group);
+                }
+                Ok(groups)
+            }
+            InputMode::Broadcast => {
+                let mut keys = Vec::with_capacity(input_partitions * input_channels);
+                for partition in 0..input_partitions {
+                    let attempt = self.latest_attempt(partition)?;
+                    for channel in 0..input_channels {
+                        keys.push(TaskInputKey {
+                            partition,
+                            attempt,
+                            channel,
+                        });
+                    }
+                }
+                Ok(vec![keys])
+            }
+            InputMode::Rescale => {
+                // Keep rescale input expansion aligned with CoalesceExec's contiguous partition
+                // grouping, where each output partition consumes an evenly divided input range.
+                let mut groups = Vec::with_capacity(output_partitions);
+                for output_partition in 0..output_partitions {
+                    let start = output_partition * input_partitions / output_partitions;
+                    let end = (output_partition + 1) * input_partitions / output_partitions;
+                    let mut group =
+                        Vec::with_capacity((end.saturating_sub(start)) * input_channels);
+                    for partition in start..end {
+                        let attempt = self.latest_attempt(partition)?;
+                        for channel in 0..input_channels {
+                            group.push(TaskInputKey {
+                                partition,
+                                attempt,
+                                channel,
+                            });
+                        }
+                    }
+                    groups.push(group);
+                }
+                Ok(groups)
+            }
         }
+    }
+
+    fn latest_attempt(&self, partition: usize) -> ExecutionResult<usize> {
+        if let Some(attempt) =
+            JobScheduler::get_latest_task_attempt(self.job, self.input.stage, partition)
+        {
+            Ok(attempt)
+        } else {
+            Err(ExecutionError::InvalidArgument(format!(
+                "no latest task attempt found for job {} stage {} partition {}",
+                self.key.job_id, self.input.stage, partition
+            )))
+        }
+    }
+}
+
+struct TaskOutputBuilder<'a> {
+    job: &'a JobDescriptor,
+    key: &'a TaskKey,
+    stage: &'a Stage,
+    codec: &'a dyn PhysicalExtensionCodec,
+}
+
+impl<'a> TaskOutputBuilder<'a> {
+    fn new(
+        job: &'a JobDescriptor,
+        key: &'a TaskKey,
+        stage: &'a Stage,
+        codec: &'a dyn PhysicalExtensionCodec,
+    ) -> Self {
+        Self {
+            job,
+            key,
+            stage,
+            codec,
+        }
+    }
+
+    fn build(&self) -> ExecutionResult<TaskOutput> {
+        let distribution = match &self.stage.distribution {
+            OutputDistribution::Hash { keys, channels } => {
+                let keys = keys
+                    .iter()
+                    .map(|expr| {
+                        let expr = encode_remote_physical_expr(self.codec, expr)?;
+                        Ok(Arc::from(expr))
+                    })
+                    .collect::<ExecutionResult<Vec<Arc<[u8]>>>>()?;
+                TaskOutputDistribution::Hash {
+                    keys,
+                    channels: *channels,
+                }
+            }
+            OutputDistribution::RoundRobinBatch { channels } => {
+                TaskOutputDistribution::RoundRobinBatch {
+                    channels: *channels,
+                }
+            }
+            OutputDistribution::RoundRobinRow { channels } => {
+                TaskOutputDistribution::RoundRobinRow {
+                    channels: *channels,
+                }
+            }
+        };
+        let locator = match self.stage.mode {
+            OutputMode::Pipelined => TaskOutputLocator::Pipelined {
+                replicas: self.job.graph.replicas(self.key.stage),
+            },
+            OutputMode::Blocking => TaskOutputLocator::Blocking,
+        };
+        Ok(TaskOutput {
+            distribution,
+            locator,
+        })
     }
 }
 

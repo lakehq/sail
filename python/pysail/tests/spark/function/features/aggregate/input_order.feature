@@ -1,4 +1,3 @@
-@input_order
 Feature: input_order
   Aggregate/window functions observe input row order established by an
   upstream ORDER BY (migrated SQL-expressible subset of test_input_order.txt).

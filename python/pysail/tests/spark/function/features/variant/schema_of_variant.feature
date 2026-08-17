@@ -1,5 +1,4 @@
 @spark-4
-@schema_of_variant
 Feature: schema_of_variant
 
   Rule: Primitive types
@@ -80,6 +79,22 @@ Feature: schema_of_variant
         | result                      |
         | ARRAY<ARRAY<ARRAY<BIGINT>>> |
 
+    Scenario: schema_of_variant merges object fields with decimal types
+      When query
+        """
+        SELECT schema_of_variant(
+          to_variant_object(
+            array(
+              map('a', CAST(1.23 AS DECIMAL(3,2))),
+              map('b', CAST(4.56 AS DECIMAL(3,2)))
+            )
+          )
+        ) AS result
+        """
+      Then query result
+        | result                                          |
+        | ARRAY<OBJECT<a: DECIMAL(3,2), b: DECIMAL(3,2)>> |
+
     Scenario Outline: Nested: <case>
       When query
         """
@@ -140,7 +155,7 @@ Feature: schema_of_variant
         | schema_of_variant nested null array                    | '[[null]]'                 | ARRAY<ARRAY<VOID>>         |
         | schema_of_variant array with objects and null merges   | '[{"a":1}, null, {"a":2}]' | ARRAY<OBJECT<a: BIGINT>>   |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

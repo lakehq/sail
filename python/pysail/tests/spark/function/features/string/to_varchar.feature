@@ -1,4 +1,3 @@
-@to_varchar
 Feature: to_varchar with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -6,7 +5,7 @@ Feature: to_varchar with an argument coming from a column
 
   Rule: to_varchar — a numeric format must be foldable
 
-    @column_args
+    @function(columnargs)
     Scenario: to_varchar with the argument as a literal
       When query
         """
@@ -17,7 +16,7 @@ Feature: to_varchar with an argument coming from a column
         | 454    |
 
     # Spark requires a foldable argument here; Sail accepts a column: Sail returns ['454', '454'].
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: to_varchar takes argument 2 from a column holding two different values
       When query
         """
@@ -26,7 +25,7 @@ Feature: to_varchar with an argument coming from a column
       Then query error NON_FOLDABLE_INPUT
 
     # Spark requires a foldable argument here; Sail accepts a column: Sail returns ['454', '454'].
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: to_varchar takes argument 2 from a column containing NULL
       When query
         """
@@ -35,7 +34,7 @@ Feature: to_varchar with an argument coming from a column
       Then query error NON_FOLDABLE_INPUT
 
     # Spark requires a foldable argument here; Sail accepts a column: Sail returns ['454', '454'].
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: to_varchar takes argument 2 from a column
       When query
         """
@@ -49,7 +48,7 @@ Feature: to_varchar with an argument coming from a column
 
   Rule: to_varchar — a date format is resolved per row
 
-    @column_args
+    @function(columnargs)
     Scenario: to_varchar takes the date format from a column holding two different values
       When query
         """
@@ -60,7 +59,7 @@ Feature: to_varchar with an argument coming from a column
         | 2026   |
         | 02     |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

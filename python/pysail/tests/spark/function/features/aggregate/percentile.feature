@@ -1,4 +1,3 @@
-@percentile
 Feature: percentile() aggregate function computes percentiles
 
   Rule: Basic percentile calculation

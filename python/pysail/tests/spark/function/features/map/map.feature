@@ -1,7 +1,25 @@
-@map
 Feature: map output schema
 
-  @spark_null
+  Rule: Duplicate key policy
+
+    Scenario: duplicate keys raise an error under the default EXCEPTION policy
+      When query
+        """
+        SELECT map(1, 'a', 1, 'b') AS result
+        """
+      Then query error .*\[DUPLICATED_MAP_KEY\].*
+
+    Scenario: LAST_WIN keeps the final value at the first key position
+      Given config spark.sql.mapKeyDedupPolicy = LAST_WIN
+      When query
+        """
+        SELECT map(1, 'a', 2, 'b', 1, 'c') AS result
+        """
+      Then query result
+        | result           |
+        | {1 -> c, 2 -> b} |
+
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

@@ -1,5 +1,4 @@
 @spark-4
-@parse_json
 Feature: parse_json (strict version; errors on invalid JSON)
 
   Rule: Valid JSON parsing
@@ -189,7 +188,7 @@ Feature: parse_json (strict version; errors on invalid JSON)
         | NULL   |
         | NULL   |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

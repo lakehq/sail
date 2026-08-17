@@ -1,7 +1,6 @@
-@predicate_in
 Feature: in output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to in yields the schema Spark declares

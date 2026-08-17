@@ -1,0 +1,53 @@
+"""Integration tests for the Celeborn lifecycle actor."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+import pytest
+
+from pysail import _native
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
+
+    from pysail.testing.containers.celeborn import MasterService, WorkerService
+
+
+LifecycleManager = _native._celeborn.LifecycleManager  # noqa: SLF001
+
+
+@pytest.fixture(scope="module")
+def lifecycle_manager(
+    celeborn_master: MasterService,
+    celeborn_workers: dict[str, WorkerService],
+    celeborn_endpoint_resolver: object,
+) -> Generator[LifecycleManager, None, None]:
+    assert celeborn_workers["celeborn-worker-1"].rpc_port > 0
+    with LifecycleManager(
+        celeborn_master.host,
+        celeborn_master.port,
+        "sail-celeborn-integration",
+        celeborn_endpoint_resolver,
+    ) as manager:
+        yield manager
+
+
+def test_lifecycle_manager_registers_shuffles_and_unregisters(
+    lifecycle_manager: LifecycleManager,
+) -> None:
+    assert lifecycle_manager.running
+    workers = lifecycle_manager.register_shuffle(1, [0, 1], False, 1)
+    assert sorted(workers) == [
+        "celeborn-worker-1:12000:12001:12002:12003",
+        "celeborn-worker-2:12000:12001:12002:12003",
+    ]
+    lifecycle_manager.unregister_shuffle(1)
+
+
+def test_lifecycle_manager_returns_registration_failure() -> None:
+    with (
+        LifecycleManager("127.0.0.1", 0, "sail-celeborn-unavailable") as manager,
+        pytest.raises(RuntimeError, match="application error: registration failed: I/O error"),
+    ):
+        manager.register_shuffle(1, [0], False, 1)

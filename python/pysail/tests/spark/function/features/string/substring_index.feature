@@ -1,7 +1,6 @@
-@substring_index
 Feature: substring_index output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

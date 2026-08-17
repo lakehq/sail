@@ -1,7 +1,25 @@
-@map_from_arrays
 Feature: map_from_arrays output schema
 
-  @spark_null
+  Rule: Duplicate key policy
+
+    Scenario: duplicate keys raise an error under the default EXCEPTION policy
+      When query
+        """
+        SELECT map_from_arrays(array(1, 1), array('a', 'b')) AS result
+        """
+      Then query error .*\[DUPLICATED_MAP_KEY\].*
+
+    Scenario: LAST_WIN keeps the final value
+      Given config spark.sql.mapKeyDedupPolicy = LAST_WIN
+      When query
+        """
+        SELECT map_from_arrays(array(1, 1), array('a', 'b')) AS result
+        """
+      Then query result
+        | result   |
+        | {1 -> b} |
+
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to map_from_arrays yields the schema Spark declares

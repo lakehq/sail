@@ -1,7 +1,6 @@
-@bitmap_bucket_number
 Feature: bitmap_bucket_number output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

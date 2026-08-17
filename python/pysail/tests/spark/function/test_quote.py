@@ -3,11 +3,16 @@
 import pandas as pd
 import pytest
 
-from pysail.testing.spark.utils.common import pyspark_version
+from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
 
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_quote(spark):
-    """Tests quote escapes single quotes and backslashes, and wraps in single quotes."""
+    """Tests quote escapes single quotes and wraps the value in single quotes.
+
+    Spark escapes only the single quote and leaves a backslash untouched, so `a\\b` comes back
+    as `'a\\b'`. Sail escapes the backslash as well and returns `'a\\\\b'`.
+    """
     df = spark.createDataFrame(
         [
             ("hello",),
@@ -24,8 +29,8 @@ def test_quote(spark):
 
     assert actual["result"].iloc[0] == "'hello'"
     assert actual["result"].iloc[1] == "'Don\\'t'"
-    assert actual["result"].iloc[2] == "'a\\\\b'"
-    assert actual["result"].iloc[3] == "'a\\\\\\'b'"
+    assert actual["result"].iloc[2] == "'a\\b'"
+    assert actual["result"].iloc[3] == "'a\\\\'b'"
     assert actual["result"].iloc[4] == "''"
     assert pd.isna(actual["result"].iloc[5])
 

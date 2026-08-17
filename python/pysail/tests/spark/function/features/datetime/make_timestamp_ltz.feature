@@ -1,4 +1,3 @@
-@make_timestamp_ltz
 Feature: make_timestamp_ltz
 
   Rule: Daylight saving time handling

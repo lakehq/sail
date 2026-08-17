@@ -14,6 +14,8 @@ pub struct PySparkUdfConfig {
     #[pyo3(get)]
     pub arrow_max_records_per_batch: usize,
     #[pyo3(get)]
+    pub arrow_use_large_var_types: bool,
+    #[pyo3(get)]
     pub python_udf_pandas_conversion_enabled: bool,
     #[pyo3(get)]
     pub python_udtf_pandas_conversion_enabled: bool,
@@ -33,6 +35,7 @@ impl Default for PySparkUdfConfig {
             pandas_grouped_map_assign_columns_by_name: true,
             pandas_convert_to_arrow_array_safely: false,
             arrow_max_records_per_batch: 10000,
+            arrow_use_large_var_types: false,
             python_udf_pandas_conversion_enabled: false,
             python_udtf_pandas_conversion_enabled: false,
             python_udf_pandas_int_to_decimal_coercion_enabled: false,
@@ -71,6 +74,10 @@ impl PySparkUdfConfig {
         out.push((
             "spark.sql.execution.arrow.maxRecordsPerBatch".to_string(),
             self.arrow_max_records_per_batch.to_string(),
+        ));
+        out.push((
+            "spark.sql.execution.arrow.useLargeVarTypes".to_string(),
+            self.arrow_use_large_var_types.to_string(),
         ));
         out.push((
             "spark.sql.legacy.execution.pythonUDF.pandas.conversion.enabled".to_string(),

@@ -28,7 +28,7 @@ use sail_catalog::provider::{
     DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace, PartitionTransform,
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
-use sail_common::http::SAIL_USER_AGENT;
+use sail_common::utils::http::SAIL_USER_AGENT;
 use sail_common_datafusion::catalog::managed::METADATA_LOCATION_KEY;
 use sail_common_datafusion::catalog::{
     CapabilityFingerprint, CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
@@ -41,7 +41,7 @@ use sail_iceberg::{
 };
 use tokio::sync::OnceCell;
 
-use crate::r#gen::ApiClient;
+use crate::r#gen::{ApiClient, ApiError};
 
 pub const REST_CATALOG_PROP_URI: &str = "uri";
 
@@ -188,19 +188,64 @@ impl IcebergRestCatalogProvider {
         .await
     }
 
+    /// Retry the bootstrap configuration request once on `401 Unauthorized`.
+    /// This uses [`Self::bootstrap_client`] rather than [`Self::client`]
+    /// because the resolved client itself depends on the bootstrap response.
+    /// Each attempt reloads the credential while reusing the shared HTTP
+    /// client and its connection pool.
+    async fn with_bootstrap_auth_retry<T, E, F, Fut>(
+        &self,
+        call: F,
+    ) -> CatalogResult<Result<T, ApiError<E>>>
+    where
+        F: Fn(ApiClient) -> Fut,
+        Fut: std::future::Future<Output = Result<T, ApiError<E>>>,
+    {
+        let client = self.bootstrap_client().await?;
+        let result = call(client).await;
+        if matches!(&result, Err(e) if e.status() == Some(reqwest::StatusCode::UNAUTHORIZED)) {
+            let client = self.bootstrap_client().await?;
+            return Ok(call(client).await);
+        }
+        Ok(result)
+    }
+
+    /// Run a single outbound REST request, retrying it once if the server
+    /// answers `401 Unauthorized`. Each attempt builds an [`ApiClient`] from a
+    /// freshly resolved credential, so a projected service account token that
+    /// rotated mid-operation is picked up on the retry. The credential is
+    /// re-read per request, so every request in a `drop_database` cascade sees
+    /// the current token. The shared `reqwest::Client` and its connection pool
+    /// are reused across attempts.
+    async fn with_auth_retry<T, E, F, Fut>(&self, call: F) -> CatalogResult<Result<T, ApiError<E>>>
+    where
+        F: Fn(ApiClient) -> Fut,
+        Fut: std::future::Future<Output = Result<T, ApiError<E>>>,
+    {
+        let client = self.client().await?;
+        let result = call(client).await;
+        if matches!(&result, Err(e) if e.status() == Some(reqwest::StatusCode::UNAUTHORIZED)) {
+            let client = self.client().await?;
+            return Ok(call(client).await);
+        }
+        Ok(result)
+    }
+
     // Merge the local catalog config with the [`crate::r#gen::CatalogConfig`] fetched from the REST server.
     // This only happens once, then the result is cached.
     async fn resolved_catalog_config(&self) -> CatalogResult<&CatalogConfig<'static>> {
         self.resolved_catalog_config
             .get_or_try_init(|| async {
-                let client = self.bootstrap_client().await?;
                 let catalog_config = CatalogConfig {
                     properties: Cow::Borrowed(&self.options.properties),
                 };
                 let warehouse = catalog_config.warehouse();
-                let config = client
-                    .get_config(warehouse)
-                    .await
+                let config = self
+                    .with_bootstrap_auth_retry(|client| {
+                        let warehouse = warehouse.clone();
+                        async move { client.get_config(warehouse).await }
+                    })
+                    .await?
                     .map(|response| response.inner)
                     .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
 
@@ -225,34 +270,39 @@ impl IcebergRestCatalogProvider {
         table: &str,
         access_delegation: Option<&str>,
     ) -> CatalogResult<crate::r#gen::LoadTableResult> {
-        let client = self.client().await?;
         let catalog_config = self.resolved_catalog_config().await?;
-        client
-            .load_table(
-                catalog_config.prefix().map(ToOwned::to_owned),
-                catalog_config.namespace_string(database)?,
-                table.to_string(),
-                access_delegation.map(ToOwned::to_owned),
-                None,
-                None,
-            )
-            .await
-            .map(|response| response.inner)
-            .map_err(|e| match e {
-                e if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => CatalogError::NotFound(
-                    CatalogObject::Table,
-                    format!(
-                        "{}.{}",
-                        quote_namespace_if_needed(database),
-                        quote_name_if_needed(table)
-                    ),
-                ),
-                _ => CatalogError::External(format!(
-                    "Failed to load table {}.{}: {e}",
+        let prefix = catalog_config.prefix().map(ToOwned::to_owned);
+        let namespace = catalog_config.namespace_string(database)?;
+        let table_name = table.to_string();
+        let access_delegation = access_delegation.map(ToOwned::to_owned);
+        self.with_auth_retry(|client| {
+            let prefix = prefix.clone();
+            let namespace = namespace.clone();
+            let table_name = table_name.clone();
+            let access_delegation = access_delegation.clone();
+            async move {
+                client
+                    .load_table(prefix, namespace, table_name, access_delegation, None, None)
+                    .await
+            }
+        })
+        .await?
+        .map(|response| response.inner)
+        .map_err(|e| match e {
+            e if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => CatalogError::NotFound(
+                CatalogObject::Table,
+                format!(
+                    "{}.{}",
                     quote_namespace_if_needed(database),
                     quote_name_if_needed(table)
-                )),
-            })
+                ),
+            ),
+            _ => CatalogError::External(format!(
+                "Failed to load table {}.{}: {e}",
+                quote_namespace_if_needed(database),
+                quote_name_if_needed(table)
+            )),
+        })
     }
 
     fn normalize_scan_planning_mode(value: &str) -> CatalogResult<String> {
@@ -379,27 +429,36 @@ impl IcebergRestCatalogProvider {
         catalog_config: &CatalogConfig<'_>,
         result: &crate::r#gen::LoadTableResult,
     ) -> CatalogResult<()> {
-        let rest_session =
-            Self::rest_table_session_ref(catalog, database, table, catalog_config, result)?;
-        let mut requirements = Vec::new();
-        if rest_session.scan_planning_mode.as_deref() == Some("server") {
-            requirements.push("server-side scan planning");
-        }
-        if rest_session.remote_signing_enabled {
-            requirements.push("remote signing");
-        }
-        if rest_session.storage_credential_count > 0 {
-            requirements.push("vended credentials");
+        let scan_planning_mode =
+            Self::effective_scan_planning_mode(result.config.as_ref(), catalog_config)?;
+        if scan_planning_mode.as_deref() == Some("server") {
+            return Err(CatalogError::UnsupportedCapability(
+                "Iceberg REST access session requirements returned by create_table are not supported for create+write yet: server-side scan planning".to_string(),
+            ));
         }
 
-        if requirements.is_empty() {
-            Ok(())
-        } else {
-            Err(CatalogError::UnsupportedCapability(format!(
-                "Iceberg REST access session requirements returned by create_table are not supported for create+write yet: {}",
-                requirements.join(", ")
-            )))
+        let mut configured_storage_fallbacks = Vec::new();
+        if Self::remote_signing_enabled(result.config.as_ref(), catalog_config) {
+            configured_storage_fallbacks.push("remote signing");
         }
+        if result
+            .storage_credentials
+            .as_ref()
+            .is_some_and(|credentials| !credentials.is_empty())
+        {
+            configured_storage_fallbacks.push("vended credentials");
+        }
+        if !configured_storage_fallbacks.is_empty() {
+            log::warn!(
+                "Iceberg REST catalog {} create_table for {}.{} returned {}; using configured object-store credentials for create+write",
+                catalog,
+                quote_namespace_if_needed(database),
+                quote_name_if_needed(table),
+                configured_storage_fallbacks.join(", "),
+            );
+        }
+
+        Ok(())
     }
 
     /// Converts an Iceberg REST API table load result into a catalog `TableStatus`.
@@ -782,7 +841,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         options: CreateDatabaseOptions,
     ) -> CatalogResult<DatabaseStatus> {
         let catalog_config = self.resolved_catalog_config().await?;
-        let client = self.client().await?;
 
         let CreateDatabaseOptions {
             if_not_exists,
@@ -803,10 +861,15 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             namespace: Box::new(database.clone().into()),
             properties: if props.is_empty() { None } else { Some(props) },
         };
+        let prefix = catalog_config.prefix().map(ToOwned::to_owned);
 
-        let result = client
-            .create_namespace(catalog_config.prefix().map(ToOwned::to_owned), request)
-            .await
+        let result = self
+            .with_auth_retry(|client| {
+                let prefix = prefix.clone();
+                let request = request.clone();
+                async move { client.create_namespace(prefix, request).await }
+            })
+            .await?
             .map(|response| response.inner);
 
         match result {
@@ -841,12 +904,16 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 
     async fn get_database(&self, database: &Namespace) -> CatalogResult<DatabaseStatus> {
         let catalog_config = self.resolved_catalog_config().await?;
-        let client = self.client().await?;
         let namespace = catalog_config.namespace_string(database)?;
+        let prefix = catalog_config.prefix().map(ToOwned::to_owned);
 
-        let result = client
-            .load_namespace_metadata(catalog_config.prefix().map(ToOwned::to_owned), namespace)
-            .await
+        let result = self
+            .with_auth_retry(|client| {
+                let prefix = prefix.clone();
+                let namespace = namespace.clone();
+                async move { client.load_namespace_metadata(prefix, namespace).await }
+            })
+            .await?
             .map(|response| response.inner)
             .map_err(|e| match e {
                 e if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => CatalogError::NotFound(
@@ -883,19 +950,22 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         prefix: Option<&Namespace>,
     ) -> CatalogResult<Vec<DatabaseStatus>> {
         let catalog_config = self.resolved_catalog_config().await?;
-        let client = self.client().await?;
         let parent = prefix
             .map(|namespace| catalog_config.namespace_string(namespace))
             .transpose()?;
+        let request_prefix = catalog_config.prefix().map(ToOwned::to_owned);
 
-        let result = client
-            .list_namespaces(
-                catalog_config.prefix().map(ToOwned::to_owned),
-                None,
-                None,
-                parent,
-            )
-            .await
+        let result = self
+            .with_auth_retry(|client| {
+                let request_prefix = request_prefix.clone();
+                let parent = parent.clone();
+                async move {
+                    client
+                        .list_namespaces(request_prefix, None, None, parent)
+                        .await
+                }
+            })
+            .await?
             .map(|response| response.inner)
             .map_err(|e| CatalogError::External(format!("Failed to list namespaces: {e}")))?;
 
@@ -919,54 +989,131 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         options: DropDatabaseOptions,
     ) -> CatalogResult<()> {
         let catalog_config = self.resolved_catalog_config().await?;
-        let client = self.client().await?;
 
         let DropDatabaseOptions { if_exists, cascade } = options;
+        let prefix = catalog_config.prefix().map(ToOwned::to_owned);
+        let ns_string = catalog_config.namespace_string(database)?;
+        let drop_namespace = || async {
+            match self
+                .with_auth_retry(|client| {
+                    let prefix = prefix.clone();
+                    let ns_string = ns_string.clone();
+                    async move { client.drop_namespace(prefix, ns_string).await }
+                })
+                .await?
+            {
+                Ok(_) => Ok(()),
+                Err(e) if e.status() == Some(reqwest::StatusCode::NOT_FOUND) && if_exists => Ok(()),
+                Err(e) => Err(CatalogError::External(format!(
+                    "Failed to drop namespace: {e}"
+                ))),
+            }
+        };
 
         if cascade {
             // For CASCADE, first drop all tables and views in the namespace before dropping the namespace.
-            let prefix = catalog_config.prefix().map(ToOwned::to_owned);
-            let ns_string = catalog_config.namespace_string(database)?;
-            let tables_result = client
-                .list_tables(prefix.clone(), ns_string.clone(), None, None)
-                .await;
-            if let Ok(tables) = tables_result {
-                for identifier in tables.inner.identifiers.unwrap_or_default() {
-                    let _ = client
-                        .drop_table(
-                            prefix.clone(),
-                            ns_string.clone(),
-                            identifier.name,
-                            Some(true),
-                        )
-                        .await;
+            // Each request re-reads the credential and retries once on a 401, so a token that rotates
+            // partway through the cascade is recovered per request instead of leaving a partial drop.
+            match self
+                .with_auth_retry(|client| {
+                    let prefix = prefix.clone();
+                    let ns_string = ns_string.clone();
+                    async move { client.list_tables(prefix, ns_string, None, None).await }
+                })
+                .await?
+            {
+                Ok(tables) => {
+                    for identifier in tables.inner.identifiers.unwrap_or_default() {
+                        match self
+                            .with_auth_retry(|client| {
+                                let prefix = prefix.clone();
+                                let ns_string = ns_string.clone();
+                                let name = identifier.name.clone();
+                                async move {
+                                    client.drop_table(prefix, ns_string, name, Some(true)).await
+                                }
+                            })
+                            .await?
+                        {
+                            Ok(_) => {}
+                            // The table was already removed (a concurrent drop), which is
+                            // an acceptable outcome for a cascade, so keep going.
+                            Err(e) if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => {}
+                            Err(e) => {
+                                return Err(CatalogError::External(format!(
+                                    "Failed to drop table '{}' while cascading namespace drop: {e}",
+                                    identifier.name
+                                )));
+                            }
+                        }
+                    }
+                }
+                // The namespace itself is already gone. Skip the optional views endpoint and
+                // fall through to drop_namespace, which applies canonical if_exists handling.
+                Err(e) if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => {
+                    return drop_namespace().await;
+                }
+                Err(e) => {
+                    return Err(CatalogError::External(format!(
+                        "Failed to list tables while cascading namespace drop: {e}"
+                    )));
                 }
             }
-            let views_result = client
-                .list_views(prefix.clone(), ns_string.clone(), None, None)
-                .await;
-            if let Ok(views) = views_result {
-                for identifier in views.inner.identifiers.unwrap_or_default() {
-                    let _ = client
-                        .drop_view(prefix.clone(), ns_string.clone(), identifier.name)
-                        .await;
+            match self
+                .with_auth_retry(|client| {
+                    let prefix = prefix.clone();
+                    let ns_string = ns_string.clone();
+                    async move { client.list_views(prefix, ns_string, None, None).await }
+                })
+                .await?
+            {
+                Ok(views) => {
+                    for identifier in views.inner.identifiers.unwrap_or_default() {
+                        match self
+                            .with_auth_retry(|client| {
+                                let prefix = prefix.clone();
+                                let ns_string = ns_string.clone();
+                                let name = identifier.name.clone();
+                                async move { client.drop_view(prefix, ns_string, name).await }
+                            })
+                            .await?
+                        {
+                            Ok(_) => {}
+                            // The view was already removed (a concurrent drop), which is
+                            // an acceptable outcome for a cascade, so keep going.
+                            Err(e) if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => {}
+                            Err(e) => {
+                                return Err(CatalogError::External(format!(
+                                    "Failed to drop view '{}' while cascading namespace drop: {e}",
+                                    identifier.name
+                                )));
+                            }
+                        }
+                    }
+                }
+                // The namespace itself is already gone; fall through to drop_namespace,
+                // which applies the canonical if_exists handling below.
+                Err(e) if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => {}
+                // The views endpoint is optional in the Iceberg REST spec, so a catalog
+                // that does not implement it answers 405 or 501. There are then no views
+                // to cascade, so tolerate it and continue to the namespace drop. The tables
+                // endpoint is mandatory, so the list_tables arm above does not tolerate these
+                // statuses and a 405 or 501 there is surfaced as a genuine failure.
+                Err(e)
+                    if matches!(
+                        e.status(),
+                        Some(reqwest::StatusCode::METHOD_NOT_ALLOWED)
+                            | Some(reqwest::StatusCode::NOT_IMPLEMENTED)
+                    ) => {}
+                Err(e) => {
+                    return Err(CatalogError::External(format!(
+                        "Failed to list views while cascading namespace drop: {e}"
+                    )));
                 }
             }
         }
 
-        match client
-            .drop_namespace(
-                catalog_config.prefix().map(ToOwned::to_owned),
-                catalog_config.namespace_string(database)?,
-            )
-            .await
-        {
-            Ok(_) => Ok(()),
-            Err(e) if e.status() == Some(reqwest::StatusCode::NOT_FOUND) && if_exists => Ok(()),
-            Err(e) => Err(CatalogError::External(format!(
-                "Failed to drop namespace: {e}"
-            ))),
-        }
+        drop_namespace().await
     }
 
     async fn create_table(
@@ -997,7 +1144,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         }
 
         let catalog_config = self.resolved_catalog_config().await?;
-        let client = self.client().await?;
 
         if mode.ignore_if_exists()
             && let Ok(existing) = self.get_table(database, table).await
@@ -1061,14 +1207,16 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             properties: if props.is_empty() { None } else { Some(props) },
         };
 
-        let result = client
-            .create_table(
-                catalog_config.prefix().map(ToOwned::to_owned),
-                catalog_config.namespace_string(database)?,
-                None,
-                request,
-            )
-            .await
+        let prefix = catalog_config.prefix().map(ToOwned::to_owned);
+        let namespace = catalog_config.namespace_string(database)?;
+        let result = self
+            .with_auth_retry(|client| {
+                let prefix = prefix.clone();
+                let namespace = namespace.clone();
+                let request = request.clone();
+                async move { client.create_table(prefix, namespace, None, request).await }
+            })
+            .await?
             .map(|response| response.inner)
             .map_err(|e| CatalogError::External(format!("Failed to create table: {e}")))?;
 
@@ -1091,16 +1239,16 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 
     async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
         let catalog_config = self.resolved_catalog_config().await?;
-        let client = self.client().await?;
+        let prefix = catalog_config.prefix().map(ToOwned::to_owned);
+        let namespace = catalog_config.namespace_string(database)?;
 
-        let result = client
-            .list_tables(
-                catalog_config.prefix().map(ToOwned::to_owned),
-                catalog_config.namespace_string(database)?,
-                None,
-                None,
-            )
-            .await
+        let result = self
+            .with_auth_retry(|client| {
+                let prefix = prefix.clone();
+                let namespace = namespace.clone();
+                async move { client.list_tables(prefix, namespace, None, None).await }
+            })
+            .await?
             .map(|response| response.inner)
             .map_err(|e| CatalogError::External(format!("Failed to list tables: {e}")))?;
 
@@ -1135,16 +1283,22 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         options: DropTableOptions,
     ) -> CatalogResult<()> {
         let catalog_config = self.resolved_catalog_config().await?;
-        let client = self.client().await?;
         let DropTableOptions { if_exists, purge } = options;
-        match client
-            .drop_table(
-                catalog_config.prefix().map(ToOwned::to_owned),
-                catalog_config.namespace_string(database)?,
-                table.to_string(),
-                Some(purge),
-            )
-            .await
+        let prefix = catalog_config.prefix().map(ToOwned::to_owned);
+        let namespace = catalog_config.namespace_string(database)?;
+        let table_name = table.to_string();
+        match self
+            .with_auth_retry(|client| {
+                let prefix = prefix.clone();
+                let namespace = namespace.clone();
+                let table_name = table_name.clone();
+                async move {
+                    client
+                        .drop_table(prefix, namespace, table_name, Some(purge))
+                        .await
+                }
+            })
+            .await?
         {
             Ok(_) => Ok(()),
             Err(e) if e.status() == Some(reqwest::StatusCode::NOT_FOUND) && if_exists => Ok(()),
@@ -1183,7 +1337,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         }
 
         let catalog_config = self.resolved_catalog_config().await?;
-        let client = self.client().await?;
         let namespace = catalog_config.namespace_string(database)?;
         let requirements = requirements
             .into_iter()
@@ -1209,14 +1362,21 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             requirements,
             updates,
         };
-        let response = client
-            .update_table(
-                catalog_config.prefix().map(ToOwned::to_owned),
-                namespace,
-                table.to_string(),
-                request,
-            )
-            .await
+        let prefix = catalog_config.prefix().map(ToOwned::to_owned);
+        let table_name = table.to_string();
+        let response = self
+            .with_auth_retry(|client| {
+                let prefix = prefix.clone();
+                let namespace = namespace.clone();
+                let table_name = table_name.clone();
+                let request = request.clone();
+                async move {
+                    client
+                        .update_table(prefix, namespace, table_name, request)
+                        .await
+                }
+            })
+            .await?
             .map(|response| response.inner)
             .map_err(|e| match e {
                 e if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => CatalogError::NotFound(
@@ -1330,7 +1490,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         options: CreateViewOptions,
     ) -> CatalogResult<TableStatus> {
         let catalog_config = self.resolved_catalog_config().await?;
-        let client = self.client().await?;
 
         let CreateViewOptions {
             columns,
@@ -1440,13 +1599,16 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             properties: props,
         };
 
-        let result = client
-            .create_view(
-                catalog_config.prefix().map(ToOwned::to_owned),
-                catalog_config.namespace_string(database)?,
-                request,
-            )
-            .await
+        let prefix = catalog_config.prefix().map(ToOwned::to_owned);
+        let namespace = catalog_config.namespace_string(database)?;
+        let result = self
+            .with_auth_retry(|client| {
+                let prefix = prefix.clone();
+                let namespace = namespace.clone();
+                let request = request.clone();
+                async move { client.create_view(prefix, namespace, request).await }
+            })
+            .await?
             .map(|response| response.inner)
             .map_err(|e| CatalogError::External(format!("Failed to create view: {e}")))?;
 
@@ -1455,14 +1617,17 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 
     async fn get_view(&self, database: &Namespace, view: &str) -> CatalogResult<TableStatus> {
         let catalog_config = self.resolved_catalog_config().await?;
-        let client = self.client().await?;
-        let result = client
-            .load_view(
-                catalog_config.prefix().map(ToOwned::to_owned),
-                catalog_config.namespace_string(database)?,
-                view.to_string(),
-            )
-            .await
+        let prefix = catalog_config.prefix().map(ToOwned::to_owned);
+        let namespace = catalog_config.namespace_string(database)?;
+        let view_name = view.to_string();
+        let result = self
+            .with_auth_retry(|client| {
+                let prefix = prefix.clone();
+                let namespace = namespace.clone();
+                let view_name = view_name.clone();
+                async move { client.load_view(prefix, namespace, view_name).await }
+            })
+            .await?
             .map(|response| response.inner)
             .map_err(|e| match e {
                 e if matches!(
@@ -1492,16 +1657,16 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 
     async fn list_views(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
         let catalog_config = self.resolved_catalog_config().await?;
-        let client = self.client().await?;
+        let prefix = catalog_config.prefix().map(ToOwned::to_owned);
+        let namespace = catalog_config.namespace_string(database)?;
 
-        let result = client
-            .list_views(
-                catalog_config.prefix().map(ToOwned::to_owned),
-                catalog_config.namespace_string(database)?,
-                None,
-                None,
-            )
-            .await
+        let result = self
+            .with_auth_retry(|client| {
+                let prefix = prefix.clone();
+                let namespace = namespace.clone();
+                async move { client.list_views(prefix, namespace, None, None).await }
+            })
+            .await?
             .map(|response| response.inner)
             .map_err(|e| match e {
                 e if matches!(e.status(), Some(reqwest::StatusCode::NOT_FOUND)) => {
@@ -1546,15 +1711,18 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         options: DropViewOptions,
     ) -> CatalogResult<()> {
         let catalog_config = self.resolved_catalog_config().await?;
-        let client = self.client().await?;
         let DropViewOptions { if_exists } = options;
-        match client
-            .drop_view(
-                catalog_config.prefix().map(ToOwned::to_owned),
-                catalog_config.namespace_string(database)?,
-                view.to_string(),
-            )
-            .await
+        let prefix = catalog_config.prefix().map(ToOwned::to_owned);
+        let namespace = catalog_config.namespace_string(database)?;
+        let view_name = view.to_string();
+        match self
+            .with_auth_retry(|client| {
+                let prefix = prefix.clone();
+                let namespace = namespace.clone();
+                let view_name = view_name.clone();
+                async move { client.drop_view(prefix, namespace, view_name).await }
+            })
+            .await?
         {
             Ok(_) => Ok(()),
             Err(e) if e.status() == Some(reqwest::StatusCode::NOT_FOUND) && if_exists => Ok(()),
@@ -1917,8 +2085,10 @@ fn parse_unary_sort_transform(
 #[expect(clippy::unwrap_used, clippy::panic)]
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use arrow::datatypes::DataType;
-    use sail_catalog::credentials::EmptyCatalogCredentials;
+    use sail_catalog::credentials::{EmptyCatalogCredentials, FileCatalogCredentials};
     use sail_catalog::lakehouse::TableAccessPurpose;
     use sail_common::spec;
     use sail_common_datafusion::catalog::{
@@ -1926,8 +2096,9 @@ mod tests {
         LakehouseExecutionContext, LakehouseFormat, LakehouseOperation, MetadataPointerAuthority,
         TableLifecycle,
     };
+    use tempfile::TempDir;
     use wiremock::matchers::{header, method, path, query_param, query_param_is_missing};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
     use super::*;
 
@@ -2039,7 +2210,7 @@ mod tests {
         }
     }
 
-    fn create_table_response_with_access_session_requirements() -> serde_json::Value {
+    fn create_table_response_with_access_session_hints() -> serde_json::Value {
         serde_json::json!({
             "metadata-location": "s3://bucket/table/metadata/v1.metadata.json",
             "metadata": {
@@ -2063,7 +2234,6 @@ mod tests {
                 ]
             },
             "config": {
-                "scan-planning-mode": "server",
                 "s3.remote-signing-enabled": "true"
             },
             "storage-credentials": [
@@ -2076,6 +2246,12 @@ mod tests {
                 }
             ]
         })
+    }
+
+    fn create_table_response_with_server_side_scan_planning() -> serde_json::Value {
+        let mut result = create_table_response_with_access_session_hints();
+        result["config"]["scan-planning-mode"] = serde_json::json!("server");
+        result
     }
 
     async fn load_merged_test_config(
@@ -2651,6 +2827,386 @@ mod tests {
         test_drop_database_impl(Some("test")).await;
     }
 
+    async fn test_drop_database_cascade_propagates_table_drop_failure_impl(name: Option<&str>) {
+        let ctx = TestContext::new(name).await;
+        let namespace = Namespace::try_from(vec!["ns1".to_string()]).unwrap();
+
+        ctx.mock_get_json(
+            &ctx.path("/namespaces/ns1/tables"),
+            serde_json::json!({
+                "identifiers": [
+                    {
+                        "namespace": ["ns1"],
+                        "name": "table1"
+                    }
+                ]
+            }),
+        )
+        .await;
+
+        // The per-object table drop hits a real server error, so the cascade must abort.
+        Mock::given(method("DELETE"))
+            .and(path(ctx.path("/namespaces/ns1/tables/table1").as_str()))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&ctx.server)
+            .await;
+
+        // The namespace drop must never be attempted once a table drop fails.
+        Mock::given(method("DELETE"))
+            .and(path(ctx.path("/namespaces/ns1").as_str()))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&ctx.server)
+            .await;
+
+        let result = ctx
+            .catalog
+            .drop_database(
+                &namespace,
+                DropDatabaseOptions {
+                    if_exists: false,
+                    cascade: true,
+                },
+            )
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_drop_database_cascade_propagates_table_drop_failure() {
+        test_drop_database_cascade_propagates_table_drop_failure_impl(None).await;
+        test_drop_database_cascade_propagates_table_drop_failure_impl(Some("test")).await;
+    }
+
+    async fn test_drop_database_cascade_tolerates_missing_table_impl(name: Option<&str>) {
+        let ctx = TestContext::new(name).await;
+        let namespace = Namespace::try_from(vec!["ns1".to_string()]).unwrap();
+
+        ctx.mock_get_json(
+            &ctx.path("/namespaces/ns1/tables"),
+            serde_json::json!({
+                "identifiers": [
+                    {
+                        "namespace": ["ns1"],
+                        "name": "table1"
+                    }
+                ]
+            }),
+        )
+        .await;
+
+        // A concurrent removal leaves the table already gone; the cascade tolerates that.
+        ctx.mock_delete_404(
+            &ctx.path("/namespaces/ns1/tables/table1"),
+            "NoSuchTableException",
+            "The given table does not exist",
+        )
+        .await;
+
+        ctx.mock_get_json(
+            &ctx.path("/namespaces/ns1/views"),
+            serde_json::json!({ "identifiers": [] }),
+        )
+        .await;
+
+        // The cascade proceeds and drops the namespace itself.
+        Mock::given(method("DELETE"))
+            .and(path(ctx.path("/namespaces/ns1").as_str()))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&ctx.server)
+            .await;
+
+        let result = ctx
+            .catalog
+            .drop_database(
+                &namespace,
+                DropDatabaseOptions {
+                    if_exists: false,
+                    cascade: true,
+                },
+            )
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_drop_database_cascade_tolerates_missing_table() {
+        test_drop_database_cascade_tolerates_missing_table_impl(None).await;
+        test_drop_database_cascade_tolerates_missing_table_impl(Some("test")).await;
+    }
+
+    async fn test_drop_database_cascade_propagates_list_tables_failure_impl(name: Option<&str>) {
+        let ctx = TestContext::new(name).await;
+        let namespace = Namespace::try_from(vec!["ns1".to_string()]).unwrap();
+
+        // Listing the tables fails outright, which the cascade must surface.
+        Mock::given(method("GET"))
+            .and(path(ctx.path("/namespaces/ns1/tables").as_str()))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&ctx.server)
+            .await;
+
+        // The namespace drop must never be attempted once the listing fails.
+        Mock::given(method("DELETE"))
+            .and(path(ctx.path("/namespaces/ns1").as_str()))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&ctx.server)
+            .await;
+
+        let result = ctx
+            .catalog
+            .drop_database(
+                &namespace,
+                DropDatabaseOptions {
+                    if_exists: false,
+                    cascade: true,
+                },
+            )
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_drop_database_cascade_propagates_list_tables_failure() {
+        test_drop_database_cascade_propagates_list_tables_failure_impl(None).await;
+        test_drop_database_cascade_propagates_list_tables_failure_impl(Some("test")).await;
+    }
+
+    async fn test_drop_database_cascade_tolerates_missing_views_endpoint_impl(name: Option<&str>) {
+        let ctx = TestContext::new(name).await;
+        let namespace = Namespace::try_from(vec!["ns1".to_string()]).unwrap();
+
+        ctx.mock_get_json(
+            &ctx.path("/namespaces/ns1/tables"),
+            serde_json::json!({ "identifiers": [] }),
+        )
+        .await;
+
+        // A catalog without a views endpoint answers 405, which must not abort the cascade.
+        Mock::given(method("GET"))
+            .and(path(ctx.path("/namespaces/ns1/views").as_str()))
+            .respond_with(ResponseTemplate::new(405))
+            .mount(&ctx.server)
+            .await;
+
+        Mock::given(method("DELETE"))
+            .and(path(ctx.path("/namespaces/ns1").as_str()))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&ctx.server)
+            .await;
+
+        let result = ctx
+            .catalog
+            .drop_database(
+                &namespace,
+                DropDatabaseOptions {
+                    if_exists: false,
+                    cascade: true,
+                },
+            )
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_drop_database_cascade_tolerates_missing_views_endpoint() {
+        test_drop_database_cascade_tolerates_missing_views_endpoint_impl(None).await;
+        test_drop_database_cascade_tolerates_missing_views_endpoint_impl(Some("test")).await;
+    }
+
+    async fn test_drop_database_cascade_tolerates_unimplemented_views_endpoint_impl(
+        name: Option<&str>,
+    ) {
+        let ctx = TestContext::new(name).await;
+        let namespace = Namespace::try_from(vec!["ns1".to_string()]).unwrap();
+
+        ctx.mock_get_json(
+            &ctx.path("/namespaces/ns1/tables"),
+            serde_json::json!({ "identifiers": [] }),
+        )
+        .await;
+
+        // A catalog without a views endpoint may answer 501 instead of 405, which
+        // must also be tolerated so the cascade still drops the namespace.
+        Mock::given(method("GET"))
+            .and(path(ctx.path("/namespaces/ns1/views").as_str()))
+            .respond_with(ResponseTemplate::new(501))
+            .mount(&ctx.server)
+            .await;
+
+        Mock::given(method("DELETE"))
+            .and(path(ctx.path("/namespaces/ns1").as_str()))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&ctx.server)
+            .await;
+
+        let result = ctx
+            .catalog
+            .drop_database(
+                &namespace,
+                DropDatabaseOptions {
+                    if_exists: false,
+                    cascade: true,
+                },
+            )
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_drop_database_cascade_tolerates_unimplemented_views_endpoint() {
+        test_drop_database_cascade_tolerates_unimplemented_views_endpoint_impl(None).await;
+        test_drop_database_cascade_tolerates_unimplemented_views_endpoint_impl(Some("test")).await;
+    }
+
+    async fn test_drop_database_cascade_propagates_view_drop_failure_impl(name: Option<&str>) {
+        let ctx = TestContext::new(name).await;
+        let namespace = Namespace::try_from(vec!["ns1".to_string()]).unwrap();
+
+        ctx.mock_get_json(
+            &ctx.path("/namespaces/ns1/tables"),
+            serde_json::json!({ "identifiers": [] }),
+        )
+        .await;
+        ctx.mock_get_json(
+            &ctx.path("/namespaces/ns1/views"),
+            serde_json::json!({
+                "identifiers": [
+                    {
+                        "namespace": ["ns1"],
+                        "name": "view1"
+                    }
+                ]
+            }),
+        )
+        .await;
+
+        Mock::given(method("DELETE"))
+            .and(path(ctx.path("/namespaces/ns1/views/view1").as_str()))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&ctx.server)
+            .await;
+
+        // The namespace drop must never be attempted once a view drop fails.
+        Mock::given(method("DELETE"))
+            .and(path(ctx.path("/namespaces/ns1").as_str()))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&ctx.server)
+            .await;
+
+        let result = ctx
+            .catalog
+            .drop_database(
+                &namespace,
+                DropDatabaseOptions {
+                    if_exists: false,
+                    cascade: true,
+                },
+            )
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_drop_database_cascade_propagates_view_drop_failure() {
+        test_drop_database_cascade_propagates_view_drop_failure_impl(None).await;
+        test_drop_database_cascade_propagates_view_drop_failure_impl(Some("test")).await;
+    }
+
+    async fn test_drop_database_cascade_propagates_list_views_failure_impl(name: Option<&str>) {
+        let ctx = TestContext::new(name).await;
+        let namespace = Namespace::try_from(vec!["ns1".to_string()]).unwrap();
+
+        ctx.mock_get_json(
+            &ctx.path("/namespaces/ns1/tables"),
+            serde_json::json!({ "identifiers": [] }),
+        )
+        .await;
+
+        // A genuine views listing failure (not a missing endpoint) must abort the cascade.
+        Mock::given(method("GET"))
+            .and(path(ctx.path("/namespaces/ns1/views").as_str()))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&ctx.server)
+            .await;
+
+        // The namespace drop must never be attempted once the listing fails.
+        Mock::given(method("DELETE"))
+            .and(path(ctx.path("/namespaces/ns1").as_str()))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&ctx.server)
+            .await;
+
+        let result = ctx
+            .catalog
+            .drop_database(
+                &namespace,
+                DropDatabaseOptions {
+                    if_exists: false,
+                    cascade: true,
+                },
+            )
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_drop_database_cascade_propagates_list_views_failure() {
+        test_drop_database_cascade_propagates_list_views_failure_impl(None).await;
+        test_drop_database_cascade_propagates_list_views_failure_impl(Some("test")).await;
+    }
+
+    async fn test_drop_database_cascade_tolerates_missing_namespace_impl(name: Option<&str>) {
+        let ctx = TestContext::new(name).await;
+        let namespace = Namespace::try_from(vec!["ns1".to_string()]).unwrap();
+
+        // The mandatory tables endpoint reports that the namespace is gone. No
+        // optional views request should run after that definitive result.
+        Mock::given(method("GET"))
+            .and(path(ctx.path("/namespaces/ns1/tables").as_str()))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&ctx.server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(ctx.path("/namespaces/ns1/views").as_str()))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&ctx.server)
+            .await;
+
+        // With if_exists set, the trailing namespace 404 is the success path.
+        ctx.mock_delete_404(
+            &ctx.path("/namespaces/ns1"),
+            "NoSuchNamespaceException",
+            "The given namespace does not exist",
+        )
+        .await;
+
+        let result = ctx
+            .catalog
+            .drop_database(
+                &namespace,
+                DropDatabaseOptions {
+                    if_exists: true,
+                    cascade: true,
+                },
+            )
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_drop_database_cascade_tolerates_missing_namespace() {
+        test_drop_database_cascade_tolerates_missing_namespace_impl(None).await;
+        test_drop_database_cascade_tolerates_missing_namespace_impl(Some("test")).await;
+    }
+
     async fn test_drop_table_impl(name: Option<&str>) {
         let ctx = TestContext::new(name).await;
         let namespace = Namespace::try_from(vec!["ns1".to_string()]).unwrap();
@@ -2957,13 +3513,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_table_rejects_rest_access_session_requirements() {
+    async fn create_table_allows_rest_access_session_hints() {
         let ctx = TestContext::new(Some("test")).await;
         let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
 
         ctx.mock_post_json(
             &ctx.path("/namespaces/db1/tables"),
-            create_table_response_with_access_session_requirements(),
+            create_table_response_with_access_session_hints(),
+        )
+        .await;
+
+        let status = ctx
+            .catalog
+            .create_table(&namespace, "table1", simple_create_table_options())
+            .await
+            .unwrap();
+
+        assert_eq!(status.name, "table1");
+    }
+
+    #[tokio::test]
+    async fn create_table_rejects_server_side_scan_planning() {
+        let ctx = TestContext::new(Some("test")).await;
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+
+        ctx.mock_post_json(
+            &ctx.path("/namespaces/db1/tables"),
+            create_table_response_with_server_side_scan_planning(),
         )
         .await;
 
@@ -2974,17 +3550,17 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(err, CatalogError::UnsupportedCapability(_)));
-        assert!(err.to_string().contains("Iceberg REST access session"));
+        assert!(err.to_string().contains("server-side scan planning"));
     }
 
     #[tokio::test]
-    async fn metadata_only_create_table_allows_rest_access_session_requirements() {
+    async fn metadata_only_create_table_allows_server_side_scan_planning() {
         let ctx = TestContext::new(Some("test")).await;
         let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
 
         ctx.mock_post_json(
             &ctx.path("/namespaces/db1/tables"),
-            create_table_response_with_access_session_requirements(),
+            create_table_response_with_server_side_scan_planning(),
         )
         .await;
 
@@ -3470,5 +4046,226 @@ mod tests {
     async fn test_get_database() {
         test_get_database_impl(None).await;
         test_get_database_impl(Some("test")).await;
+    }
+
+    fn error_with_status(status: reqwest::StatusCode) -> ApiError<()> {
+        ApiError::Unknown(crate::r#gen::Response {
+            inner: (),
+            status,
+            headers: reqwest::header::HeaderMap::new(),
+        })
+    }
+
+    #[tokio::test]
+    async fn bootstrap_config_recovers_when_token_rotates_before_response() {
+        let dir = TempDir::new().unwrap();
+        let token_path = dir.path().join("token");
+        std::fs::write(&token_path, "token-a").unwrap();
+
+        let server = MockServer::start().await;
+        let rotate_path = token_path.clone();
+        Mock::given(method("GET"))
+            .and(path("/v1/config"))
+            .and(header("authorization", "Bearer token-a"))
+            .respond_with(move |_req: &Request| {
+                std::fs::write(&rotate_path, "token-b").unwrap();
+                ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                    "error": {
+                        "message": "token expired",
+                        "type": "NotAuthorizedException",
+                        "code": 401
+                    }
+                }))
+            })
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/config"))
+            .and(header("authorization", "Bearer token-b"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "overrides": { "warehouse": "s3://iceberg-catalog" },
+                "defaults": {}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let properties = HashMap::from([(REST_CATALOG_PROP_URI.to_string(), server.uri())]);
+        let catalog = IcebergRestCatalogProvider::new(
+            String::new(),
+            IcebergRestCatalogOptions {
+                credentials: Arc::new(FileCatalogCredentials::new(&token_path)),
+                properties,
+            },
+        );
+
+        let config = catalog.resolved_catalog_config().await.unwrap();
+        assert_eq!(config.warehouse().as_deref(), Some("s3://iceberg-catalog"));
+        assert_eq!(std::fs::read_to_string(&token_path).unwrap(), "token-b");
+    }
+
+    #[tokio::test]
+    async fn with_auth_retry_retries_once_on_unauthorized() {
+        let ctx = TestContext::new(None).await;
+        let calls = AtomicUsize::new(0);
+        let outcome: Result<(), ApiError<()>> = ctx
+            .catalog
+            .with_auth_retry(|_client| {
+                let attempt = calls.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    if attempt == 0 {
+                        Err(error_with_status(reqwest::StatusCode::UNAUTHORIZED))
+                    } else {
+                        Ok(())
+                    }
+                }
+            })
+            .await
+            .unwrap();
+        assert!(outcome.is_ok());
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn with_auth_retry_does_not_retry_more_than_once() {
+        let ctx = TestContext::new(None).await;
+        let calls = AtomicUsize::new(0);
+        let outcome: Result<(), ApiError<()>> = ctx
+            .catalog
+            .with_auth_retry(|_client| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                async move { Err(error_with_status(reqwest::StatusCode::UNAUTHORIZED)) }
+            })
+            .await
+            .unwrap();
+        assert!(outcome.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn with_auth_retry_does_not_retry_non_unauthorized() {
+        let ctx = TestContext::new(None).await;
+        let calls = AtomicUsize::new(0);
+        let outcome: Result<(), ApiError<()>> = ctx
+            .catalog
+            .with_auth_retry(|_client| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    Err(error_with_status(
+                        reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+                    ))
+                }
+            })
+            .await
+            .unwrap();
+        assert!(outcome.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn drop_database_cascade_recovers_when_token_rotates_midway() {
+        let dir = TempDir::new().unwrap();
+        let token_path = dir.path().join("token");
+        std::fs::write(&token_path, "token-a").unwrap();
+
+        let server = MockServer::start().await;
+
+        // Bootstrap config. Reachable with the original token.
+        Mock::given(method("GET"))
+            .and(path("/v1/config"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "overrides": { "warehouse": "s3://iceberg-catalog" },
+                "defaults": {}
+            })))
+            .mount(&server)
+            .await;
+
+        // The namespace still holds one table when the cascade begins. Listing
+        // is authorized with the original token.
+        Mock::given(method("GET"))
+            .and(path("/v1/namespaces/dbc/tables"))
+            .and(header("authorization", "Bearer token-a"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "identifiers": [ { "namespace": ["dbc"], "name": "t1" } ]
+            })))
+            .mount(&server)
+            .await;
+
+        // The first drop of the table arrives with the old token. The server
+        // rejects it with 401 and, at that moment, the projected token file
+        // rotates to a new value (as kubelet would swap it).
+        let rotate_path = token_path.clone();
+        Mock::given(method("DELETE"))
+            .and(path("/v1/namespaces/dbc/tables/t1"))
+            .and(header("authorization", "Bearer token-a"))
+            .respond_with(move |_req: &Request| {
+                std::fs::write(&rotate_path, "token-b").unwrap();
+                ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                    "error": {
+                        "message": "token expired",
+                        "type": "NotAuthorizedException",
+                        "code": 401
+                    }
+                }))
+            })
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // The retry re-reads the rotated token and is authorized.
+        Mock::given(method("DELETE"))
+            .and(path("/v1/namespaces/dbc/tables/t1"))
+            .and(header("authorization", "Bearer token-b"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // The remaining cascade requests all use the rotated token.
+        Mock::given(method("GET"))
+            .and(path("/v1/namespaces/dbc/views"))
+            .and(header("authorization", "Bearer token-b"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "identifiers": []
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("DELETE"))
+            .and(path("/v1/namespaces/dbc"))
+            .and(header("authorization", "Bearer token-b"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let props = HashMap::from([(REST_CATALOG_PROP_URI.to_string(), server.uri())]);
+        let options = IcebergRestCatalogOptions {
+            credentials: Arc::new(FileCatalogCredentials::new(&token_path)),
+            properties: props,
+        };
+        let catalog = IcebergRestCatalogProvider::new(String::new(), options);
+
+        let namespace = Namespace::try_from(vec!["dbc".to_string()]).unwrap();
+        let result = catalog
+            .drop_database(
+                &namespace,
+                DropDatabaseOptions {
+                    if_exists: false,
+                    cascade: true,
+                },
+            )
+            .await;
+
+        assert!(result.is_ok(), "cascade drop should succeed: {result:?}");
+        // The rotated token is the one the file ends up holding, and every
+        // mounted request expectation (including the retried table drop) is
+        // verified when the server is dropped.
+        assert_eq!(
+            std::fs::read_to_string(&token_path).unwrap(),
+            "token-b".to_string()
+        );
     }
 }

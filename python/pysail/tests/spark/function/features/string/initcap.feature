@@ -1,7 +1,6 @@
-@initcap
 Feature: initcap output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

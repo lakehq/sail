@@ -1,4 +1,3 @@
-@concat
 Feature: concat function
 
   Rule: Basic concatenation
@@ -141,6 +140,7 @@ Feature: concat function
       Examples:
         | case                        | args                    | result           |
         | basic binary concatenation  | X'4865', X'6C6C6F'      | [48 65 6C 6C 6F] |
+        | arbitrary binary bytes       | X'FF80', X'00'          | [FF 80 00]       |
         | single binary argument      | X'48656C6C6F'           | [48 65 6C 6C 6F] |
         | three binary arguments      | X'48', X'65', X'6C6C6F' | [48 65 6C 6C 6F] |
         | empty binary with binary    | X'', X'4865'            | [48 65]          |
@@ -201,9 +201,10 @@ Feature: concat function
         | NULL    |
 
       Examples:
-        | case                                | values                                                      | first       |
-        | string concat from table with NULLs | ('hello', ' world'), (NULL, 'x'), ('a', NULL)               | hello world |
-        | array concat from table with NULLs  | (array(1, 2), array(3)), (NULL, array(4)), (array(5), NULL) | [1, 2, 3]   |
+        | case                                | values                                                                                      | first       |
+        | string concat from table with NULLs | ('hello', ' world'), (NULL, 'x'), ('a', NULL)                                         | hello world |
+        | array concat from table with NULLs  | (array(1, 2), array(3)), (NULL, array(4)), (array(5), NULL)                           | [1, 2, 3]   |
+        | binary concat preserves bytes       | (X'FF80', X'00'), (CAST(NULL AS BINARY), X'01'), (X'02', CAST(NULL AS BINARY))       | [FF 80 00]  |
 
   Rule: Error cases
 
@@ -300,7 +301,7 @@ Feature: concat function
         | single NULL timestamp column returns NULL                 | ts                 | CAST(NULL AS TIMESTAMP)                | ts  | NULL                       |
         | single TIMESTAMP_NTZ column coerced to string             | ts                 | TIMESTAMP_NTZ '2024-01-15 12:00:00'    | ts  | 2024-01-15 12:00:00        |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: non-null string literals yield a non-nullable string

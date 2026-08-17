@@ -36,7 +36,7 @@ def normalize_plan_text(plan_text: str) -> str:
 
     # Normalize temp paths / file URIs that appear in plans.
     pytest_tmp_prefix = re.compile(
-        r"(^|[\s\[\(=,:{\"])"
+        r"(^|[\s\[\(=,:{\"]|[A-Za-z][A-Za-z0-9+.\-]+://)"
         r"(?!\[)"
         r"(?:(?:[A-Za-z]:)?/|private/|tmp/)"
         r"(?:[^ \t\r\n\),\]/]+/)*"
@@ -66,6 +66,11 @@ def normalize_plan_text(plan_text: str) -> str:
     text = re.sub(
         r"table_path=file://([^\s\),]+)",
         lambda m: f"table_path=file://{normalize_path(m.group(1))}",
+        text,
+    )
+    text = re.sub(
+        r"data_file=file://([^\s\),]+)",
+        lambda m: f"data_file=file://{normalize_path(m.group(1))}",
         text,
     )
     text = re.sub(
@@ -103,9 +108,9 @@ def normalize_plan_text(plan_text: str) -> str:
         flags=re.IGNORECASE,
     )
     # Normalize Delta V2 UUID-named checkpoint files:
-    # e.g. 00000000000000000001.checkpoint.{uuid}.parquet -> 00000000000000000001.checkpoint.<uuid>.parquet
+    # e.g. 00000000000000000001.checkpoint.{uuid}.json -> 00000000000000000001.checkpoint.<uuid>.json
     text = re.sub(
-        r"(\d{20}\.checkpoint\.)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\.parquet)",
+        r"(\d{20}\.checkpoint\.)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\.(?:parquet|json))",
         r"\1<uuid>\2",
         text,
         flags=re.IGNORECASE,
@@ -149,6 +154,13 @@ def normalize_plan_text(plan_text: str) -> str:
         end = block.rfind("]")
         if start == -1 or end == -1 or end <= start:
             return block
+
+        # Checkpoint scans retain the input's physical partition layout. For iterative queries,
+        # repartitioning can leave different partitions empty across runs, so individual checkpoint
+        # files are execution details rather than stable plan properties.
+        if "__checkpoint_testing__/" in block:
+            return block[:start] + "<checkpoint files>" + block[end + 1 :]
+
         groups_list = block[start : end + 1]
 
         # Parse top-level groups inside the outer list.

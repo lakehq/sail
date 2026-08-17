@@ -1,8 +1,7 @@
 @spark-4
-@cast_to_variant
 Feature: CAST(... AS VARIANT) output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: casting a non-null literal to variant yields a non-nullable variant

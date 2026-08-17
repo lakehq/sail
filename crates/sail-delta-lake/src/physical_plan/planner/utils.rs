@@ -285,7 +285,7 @@ async fn build_log_replay_pipeline_with_files(
     // Projection#1: build a compact log scan schema for streaming replay.
     //
     // - replay_path = coalesce(get_field(add, 'path'), get_field(remove, 'path'))
-    // - is_remove  = remove_struct IS NOT NULL
+    // - is_remove  = remove_struct IS NOT NULL AND add_struct IS NULL
     // - __sail_delta_log_version is passed through from the scan as a partition column
     // - payload columns are extracted up-front so the sort/replay does not carry wide structs
     let input_schema = checkpoint_scan_opt
@@ -381,7 +381,11 @@ async fn build_log_replay_pipeline_with_files(
     )))?;
 
     // Mark tombstones using the struct's own validity.
-    let is_remove = simplify(remove_is_not_null.clone())?;
+    let is_remove = simplify(
+        remove_is_not_null
+            .clone()
+            .and(Expr::Not(Box::new(add_is_not_null.clone()))),
+    )?;
 
     // Extract a stable "metadata table" schema from `add` up-front so replay can stream
     // over narrow payload columns.

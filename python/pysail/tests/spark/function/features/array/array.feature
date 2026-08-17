@@ -1,7 +1,6 @@
-@array
 Feature: array output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to array yields the schema Spark declares
