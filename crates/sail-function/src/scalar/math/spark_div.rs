@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, Int64Array};
 use datafusion::arrow::datatypes::{
-    DataType, Int64Type, IntervalDayTimeType, IntervalUnit, IntervalYearMonthType,
+    DataType, Int64Type, IntervalUnit, IntervalYearMonthType,
 };
 use datafusion::arrow::error::ArrowError;
 use datafusion_common::Result;
@@ -13,14 +13,25 @@ use crate::error::{
 };
 use crate::functions_nested_utils::make_scalar_function;
 
-/// Spark's `DIVIDE_BY_ZERO` message (SQLSTATE 22012). `ArrowError::DivideByZero`
-/// renders as "Divide by zero error", which diverges from Spark's wording.
+/// Spark's `DIVIDE_BY_ZERO` message, verbatim (SQLSTATE 22012).
+/// `ArrowError::DivideByZero` renders as "Divide by zero error", which diverges.
+pub const DIVIDE_BY_ZERO_MESSAGE: &str =
+    "[DIVIDE_BY_ZERO] Division by zero. Use `try_divide` to tolerate divisor being 0 \
+     and return NULL instead. If necessary set \"spark.sql.ansi.enabled\" to \"false\" \
+     to bypass this error. SQLSTATE: 22012";
+
+/// Spark's `ARITHMETIC_OVERFLOW` message for integral divide, verbatim (SQLSTATE 22003).
+const INTEGRAL_DIVIDE_OVERFLOW_MESSAGE: &str =
+    "[ARITHMETIC_OVERFLOW] Overflow in integral divide. Use 'try_divide' to tolerate \
+     overflow and return NULL instead. If necessary set \"spark.sql.ansi.enabled\" to \
+     \"false\" to bypass this error. SQLSTATE: 22003";
+
 fn divide_by_zero_err() -> ArrowError {
-    ArrowError::ComputeError(
-        "[DIVIDE_BY_ZERO] Division by zero. Use `try_divide` to tolerate divisor being 0 \
-         and return NULL instead."
-            .to_string(),
-    )
+    ArrowError::ComputeError(DIVIDE_BY_ZERO_MESSAGE.to_string())
+}
+
+fn integral_divide_overflow_err() -> ArrowError {
+    ArrowError::ComputeError(INTEGRAL_DIVIDE_OVERFLOW_MESSAGE.to_string())
 }
 
 /// Spark's div operator for intervals.
@@ -78,18 +89,15 @@ impl ScalarUDFImpl for SparkIntervalDiv {
             ));
         };
         match (dividend, divisor) {
-            // Spark's `IntegralDivide` accepts only the two ANSI interval families.
-            // `MonthDayNano` is Spark's `CalendarIntervalType`, which it rejects during
-            // analysis, so reject it here too rather than inventing a 30-day month.
-            (DataType::Interval(d), DataType::Interval(s))
-                if d == s && matches!(d, IntervalUnit::YearMonth | IntervalUnit::DayTime) =>
-            {
+            // Only YEAR TO MONTH reaches this UDF: Sail resolves Spark's DAY TO SECOND
+            // to `Duration(Microsecond)`, which the `spark_div` planner handles directly.
+            // `MonthDayNano` is Spark's `CalendarIntervalType`, rejected during analysis.
+            (DataType::Interval(IntervalUnit::YearMonth), DataType::Interval(IntervalUnit::YearMonth)) => {
                 Ok(arg_types.to_vec())
             }
             _ => Err(unsupported_data_types_exec_err(
                 "spark_interval_div",
-                "INTERVAL YEAR TO MONTH / INTERVAL YEAR TO MONTH \
-                 or INTERVAL DAY TO SECOND / INTERVAL DAY TO SECOND",
+                "INTERVAL YEAR TO MONTH / INTERVAL YEAR TO MONTH",
                 arg_types,
             )),
         }
@@ -190,11 +198,7 @@ fn integer_div_inner(args: &[ArrayRef], ansi: bool) -> Result<ArrayRef> {
             if y == 0 {
                 Err(divide_by_zero_err())
             } else if x == i64::MIN && y == -1 {
-                Err(ArrowError::ComputeError(
-                    "[ARITHMETIC_OVERFLOW] Overflow in integral divide. \
-                     Use 'try_divide' to tolerate overflow and return NULL instead."
-                        .to_string(),
-                ))
+                Err(integral_divide_overflow_err())
             } else {
                 Ok(x.wrapping_div(y))
             }
@@ -241,30 +245,6 @@ fn interval_div_inner(args: &[ArrayRef], ansi: bool) -> Result<ArrayRef> {
                             }
                         } else {
                             Ok(Some((d_val as i64) / (s_val as i64)))
-                        }
-                    }
-                    _ => Ok(None),
-                })
-                .collect::<std::result::Result<Int64Array, ArrowError>>()?
-        }
-        (DataType::Interval(IntervalUnit::DayTime), DataType::Interval(IntervalUnit::DayTime)) => {
-            let dividend_arr = dividend.as_primitive::<IntervalDayTimeType>();
-            let divisor_arr = divisor.as_primitive::<IntervalDayTimeType>();
-            dividend_arr
-                .iter()
-                .zip(divisor_arr.iter())
-                .map(|(d, s)| match (d, s) {
-                    (Some(d_val), Some(s_val)) => {
-                        let d_millis = d_val.days as i64 * 86_400_000 + d_val.milliseconds as i64;
-                        let s_millis = s_val.days as i64 * 86_400_000 + s_val.milliseconds as i64;
-                        if s_millis == 0 {
-                            if ansi {
-                                divide_by_zero()
-                            } else {
-                                Ok(None)
-                            }
-                        } else {
-                            Ok(Some(d_millis / s_millis))
                         }
                     }
                     _ => Ok(None),

@@ -151,7 +151,7 @@ Feature: div (integer division) comprehensive tests
         """
         SELECT div(CAST(-9223372036854775808 AS BIGINT), CAST(-1 AS BIGINT)) AS result
         """
-      Then query error .*
+      Then query error Overflow in integral divide
 
     Scenario: div INT MIN by -1 widens to BIGINT (no overflow)
       When query
@@ -196,7 +196,7 @@ Feature: div (integer division) comprehensive tests
         """
         SELECT div(CAST(0 AS BIGINT), CAST(0 AS BIGINT)) AS result
         """
-      Then query error .*
+      Then query error Division by zero
 
     Scenario: div BIGINT column containing LONG_MIN with -1 wraps under ANSI false
       Given config spark.sql.ansi.enabled = false
@@ -340,7 +340,7 @@ Feature: div (integer division) comprehensive tests
         """
         SELECT div(INTERVAL '10' DAY, INTERVAL '0' DAY) AS result
         """
-      Then query error .*
+      Then query error Division by zero
 
     Scenario: div INTERVAL DAY multi-row with zero divisor returns NULL under ANSI false
       Given config spark.sql.ansi.enabled = false
@@ -372,7 +372,7 @@ Feature: div (integer division) comprehensive tests
         """
         SELECT div(INTERVAL '10' YEAR, INTERVAL '0' YEAR) AS result
         """
-      Then query error .*
+      Then query error Division by zero
 
     Scenario: div INTERVAL DAY multi-row with zero divisor errors under ANSI true
       Given config spark.sql.ansi.enabled = true
@@ -383,7 +383,7 @@ Feature: div (integer division) comprehensive tests
           (INTERVAL '5' DAY, INTERVAL '0' DAY)
         AS t(a, b)
         """
-      Then query error .*
+      Then query error Division by zero
 
     Scenario: div NULL INTERVAL returns NULL
       When query
@@ -565,12 +565,11 @@ Feature: div (integer division) comprehensive tests
         | result |
         | 2      |
 
-  # `div` always declares BIGINT, including when the divisor folds to NULL under
-  # ANSI=false. Sail short-circuits a literal zero divisor into an untyped NULL,
-  # so the column comes back as VOID. The value is NULL under either rule, so
-  # only the schema discriminates; the two untagged scenarios below are the
-  # controls that already hold and keep this rule from being satisfied by an
-  # implementation that types everything as VOID.
+  # `div` always declares BIGINT, including when the divisor is a literal zero that
+  # folds to NULL under ANSI=false. The value is NULL under either rule, so only the
+  # schema discriminates; the non-zero and column-fed scenarios are the controls that
+  # keep this rule from being satisfied by an implementation that types everything as
+  # VOID.
   Rule: Literal zero divisor keeps the declared BIGINT output type
 
     Scenario: div by literal zero declares BIGINT under ANSI false
@@ -708,3 +707,123 @@ Feature: div (integer division) comprehensive tests
         SELECT div(make_interval(0, 4000, 0, 1, 0, 0, 0), make_interval(0, 1, 0, 1, 0, 0, 0)) AS result
         """
       Then query error .*
+
+  # `IntegralDivide` declares BIGINT and `nullable = true` unconditionally, for every
+  # operand family and in both ANSI modes, because `DivModLike` hardcodes the flag
+  # rather than deriving it from the operands. In Sail each family reaches the output
+  # type by a different mechanism, so the families are asserted separately: the value
+  # is identical either way and only the schema discriminates.
+  # `IntegralDivide` declares BIGINT and `nullable = true` unconditionally, for every
+  # operand family and in both ANSI modes, because `DivModLike` hardcodes the flag
+  # rather than deriving it from the operands. In Sail each family reaches the output
+  # type by a different mechanism, so every family is asserted separately: the value is
+  # identical either way and only the schema discriminates.
+  Rule: div declares a nullable BIGINT for every operand family
+
+    Scenario Outline: div over <family> declares nullable BIGINT under ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT div(<args>) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = true)
+        """
+
+      Examples:
+        | family        | ansi  | args                                                |
+        | BIGINT        | true  | CAST(7 AS BIGINT), CAST(2 AS BIGINT)                |
+        | BIGINT        | false | CAST(7 AS BIGINT), CAST(2 AS BIGINT)                |
+        | DECIMAL       | true  | CAST(7 AS DECIMAL(5,2)), CAST(2 AS DECIMAL(5,2))    |
+        | DECIMAL       | false | CAST(7 AS DECIMAL(5,2)), CAST(2 AS DECIMAL(5,2))    |
+        | INTERVAL DAY  | true  | INTERVAL '10' DAY, INTERVAL '2' DAY                 |
+        | INTERVAL DAY  | false | INTERVAL '10' DAY, INTERVAL '2' DAY                 |
+        | INTERVAL YEAR | true  | INTERVAL '10' YEAR, INTERVAL '2' YEAR               |
+        | INTERVAL YEAR | false | INTERVAL '10' YEAR, INTERVAL '2' YEAR               |
+
+  # DECIMAL is one of the four operand families Spark's `IntegralDivide` accepts, but it
+  # reaches DataFusion arithmetic rather than a Sail kernel, so its zero-divisor policy
+  # is built in the planner and needs its own pair. The NULL-dividend scenario pins that
+  # a NULL dividend still wins over a zero divisor under ANSI.
+  Rule: DECIMAL zero divisor follows ANSI mode
+
+    Scenario: div DECIMAL by zero DECIMAL returns NULL under ANSI false
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT div(a, CAST(0.0 AS DECIMAL(5,2))) AS result
+        FROM VALUES (CAST(5.5 AS DECIMAL(5,2))) AS t(a)
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: div DECIMAL by zero DECIMAL errors under ANSI true
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT div(a, CAST(0.0 AS DECIMAL(5,2))) AS result
+        FROM VALUES (CAST(5.5 AS DECIMAL(5,2))) AS t(a)
+        """
+      Then query error Division by zero
+
+    Scenario: div NULL DECIMAL dividend by zero DECIMAL returns NULL under ANSI true
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT div(a, CAST(0.0 AS DECIMAL(5,2))) AS result
+        FROM VALUES (CAST(NULL AS DECIMAL(5,2))) AS t(a)
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+  # Boundary cases where Sail still diverges. All three are pre-existing and outside the
+  # scope of this change, but they are measured against the JVM rather than assumed, so
+  # they are pinned here to fail loudly the day they are fixed.
+  Rule: Numeric boundaries not yet matching Spark
+
+    # Spark selects `PhysicalIntegerType.integral` for YEAR TO MONTH, so it divides in
+    # 32-bit and wraps on `Int.MinValue / -1`, then widens. Sail widens to i64 first and
+    # so returns the unwrapped positive value.
+    @sail-bug
+    Scenario: div YEAR-MONTH interval wraps in 32-bit at the Int boundary
+      When query
+        """
+        SELECT div(make_ym_interval(-178956970, -8), INTERVAL '-1' MONTH) AS result
+        """
+      Then query result
+        | result      |
+        | -2147483648 |
+
+    # `checkDivideOverflow` is enabled only when the dividend is LONG, never for an
+    # interval, so Spark wraps here instead of raising. Sail's day-time path divides
+    # through a checked Int64 kernel and raises.
+    @sail-bug
+    Scenario: div DAY-TIME interval wraps instead of overflowing under ANSI true
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT div(
+          INTERVAL '-106751991' DAY - INTERVAL '4' HOUR - INTERVAL '54.775808' SECOND,
+          INTERVAL '-0.000001' SECOND
+        ) AS result
+        """
+      Then query result
+        | result               |
+        | -9223372036854775808 |
+
+    # Spark divides on BigDecimal and only then narrows with `Decimal.toLong`, which
+    # discards the high-order bits. Sail casts the decimal quotient to BIGINT and the
+    # cast rejects the out-of-range value.
+    @sail-bug
+    Scenario: div wide DECIMAL narrows to BIGINT by wrapping
+      When query
+        """
+        SELECT div(CAST(12345678901234567890.12345678 AS DECIMAL(38,8)), CAST(1 AS DECIMAL(38,8))) AS result
+        """
+      Then query result
+        | result               |
+        | -6101065172474983726 |
