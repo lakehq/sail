@@ -5,7 +5,7 @@ use datafusion::arrow::datatypes::{
     DataType, Int64Type, IntervalUnit, IntervalYearMonthType,
 };
 use datafusion::arrow::error::ArrowError;
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 use crate::error::{
@@ -25,6 +25,17 @@ const INTEGRAL_DIVIDE_OVERFLOW_MESSAGE: &str =
     "[ARITHMETIC_OVERFLOW] Overflow in integral divide. Use 'try_divide' to tolerate \
      overflow and return NULL instead. If necessary set \"spark.sql.ansi.enabled\" to \
      \"false\" to bypass this error. SQLSTATE: 22003";
+
+/// Every `ArrowError` variant renders with a prefix (`ComputeError` becomes
+/// "Compute error: ..."), which would corrupt the Spark message. `raise_error` — used by
+/// the plan-side zero guard — raises `DataFusionError::Execution`, which reaches the user
+/// unprefixed, so map kernel errors onto it and keep every `div` path byte-identical.
+fn spark_error(e: ArrowError) -> DataFusionError {
+    match e {
+        ArrowError::ComputeError(message) => DataFusionError::Execution(message),
+        other => DataFusionError::from(other),
+    }
+}
 
 fn divide_by_zero_err() -> ArrowError {
     ArrowError::ComputeError(DIVIDE_BY_ZERO_MESSAGE.to_string())
@@ -202,14 +213,16 @@ fn integer_div_inner(args: &[ArrayRef], ansi: bool) -> Result<ArrayRef> {
             } else {
                 Ok(x.wrapping_div(y))
             }
-        })?
+        })
+        .map_err(spark_error)?
     } else {
         // Zero divisors are masked to NULL upstream by `make_safe_divisor`, but
         // `binary` invokes the closure at those indices too, before applying the
         // null mask — guard `y == 0` to avoid dividing by zero on the masked slot.
         // `wrapping_div` already yields `i64::MIN` for `i64::MIN / -1`, which is
         // what Spark's non-ANSI `quot` produces.
-        datafusion::arrow::compute::binary(d, s, |x, y| if y == 0 { 0 } else { x.wrapping_div(y) })?
+        datafusion::arrow::compute::binary(d, s, |x, y| if y == 0 { 0 } else { x.wrapping_div(y) })
+            .map_err(spark_error)?
     };
     Ok(Arc::new(result))
 }
@@ -236,6 +249,11 @@ fn interval_div_inner(args: &[ArrayRef], ansi: bool) -> Result<ArrayRef> {
                 .iter()
                 .zip(divisor_arr.iter())
                 .map(|(d, s)| match (d, s) {
+                    // NOTE: Spark picks `PhysicalIntegerType.integral` for YEAR TO MONTH and
+                    // therefore divides in 32-bit, wrapping on `Int.MinValue / -1`, before
+                    // widening. Widening to i64 first diverges at that one boundary; it is
+                    // unreachable today because Sail's literal parser rejects the operand.
+                    // Pinned as `@sail-bug` in `div.feature`.
                     (Some(d_val), Some(s_val)) => {
                         if s_val == 0 {
                             if ansi {
@@ -249,7 +267,8 @@ fn interval_div_inner(args: &[ArrayRef], ansi: bool) -> Result<ArrayRef> {
                     }
                     _ => Ok(None),
                 })
-                .collect::<std::result::Result<Int64Array, ArrowError>>()?
+                .collect::<std::result::Result<Int64Array, ArrowError>>()
+                .map_err(spark_error)?
         }
         _ => {
             return Err(unsupported_data_types_exec_err(

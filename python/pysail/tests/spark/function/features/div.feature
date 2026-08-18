@@ -711,11 +711,6 @@ Feature: div (integer division) comprehensive tests
   # `IntegralDivide` declares BIGINT and `nullable = true` unconditionally, for every
   # operand family and in both ANSI modes, because `DivModLike` hardcodes the flag
   # rather than deriving it from the operands. In Sail each family reaches the output
-  # type by a different mechanism, so the families are asserted separately: the value
-  # is identical either way and only the schema discriminates.
-  # `IntegralDivide` declares BIGINT and `nullable = true` unconditionally, for every
-  # operand family and in both ANSI modes, because `DivModLike` hardcodes the flag
-  # rather than deriving it from the operands. In Sail each family reaches the output
   # type by a different mechanism, so every family is asserted separately: the value is
   # identical either way and only the schema discriminates.
   Rule: div declares a nullable BIGINT for every operand family
@@ -827,3 +822,29 @@ Feature: div (integer division) comprehensive tests
       Then query result
         | result               |
         | -6101065172474983726 |
+
+  # Sail reaches the error from two different places — a plan-level `raise_error` for the
+  # families that use DataFusion arithmetic, and the kernel for the ones with a UDF — and
+  # an `ArrowError` renders with a wrapper prefix ("Compute error: ..."). The patterns are
+  # anchored at the start on purpose: a substring alone still matches a prefixed message,
+  # so only the anchor discriminates the shape Spark actually emits.
+  #
+  # The leading `.` stands in for the literal `[` of the error class: this step's patterns
+  # go through an extra escaping pass, so a backslash would be doubled and never match.
+  Rule: div reports zero division and overflow exactly as Spark does
+
+    Scenario Outline: div over <family> reports <condition> with no wrapper prefix
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT div(<args>) AS result
+        """
+      Then query error <pattern>
+
+      Examples:
+        | family        | condition           | args                                                                 | pattern                                        |
+        | BIGINT        | division by zero    | CAST(5 AS BIGINT), CAST(0 AS BIGINT)                                 | ^.DIVIDE_BY_ZERO. Division by zero           |
+        | DECIMAL       | division by zero    | CAST(5.5 AS DECIMAL(5,2)), CAST(0.0 AS DECIMAL(5,2))                 | ^.DIVIDE_BY_ZERO. Division by zero           |
+        | INTERVAL DAY  | division by zero    | INTERVAL '10' DAY, INTERVAL '0' DAY                                  | ^.DIVIDE_BY_ZERO. Division by zero           |
+        | INTERVAL YEAR | division by zero    | INTERVAL '10' YEAR, INTERVAL '0' YEAR                                | ^.DIVIDE_BY_ZERO. Division by zero           |
+        | BIGINT        | integral overflow   | CAST(-9223372036854775808 AS BIGINT), CAST(-1 AS BIGINT)             | ^.ARITHMETIC_OVERFLOW. Overflow in integral divide |

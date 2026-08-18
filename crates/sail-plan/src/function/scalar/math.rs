@@ -421,28 +421,40 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
     //
     // `SparkIntegerDiv` and `SparkIntervalDiv` own it for their arms: under ANSI they
     // raise from inside the kernel, which visits only rows where both operands are
-    // valid, so a NULL dividend yields NULL instead of an error. Those arms therefore
-    // only need the plan-level `nullif` guard outside ANSI.
+    // valid, so a NULL dividend yields NULL instead of an error. `SparkIntervalDiv`
+    // also returns NULL for a zero divisor outside ANSI, so only the integer arm still
+    // needs the plan-level `nullif` guard.
     //
     // The Duration and fallback arms reach plain DataFusion arithmetic instead, so the
     // guard has to be built here. Under ANSI it tests the dividend as well, otherwise a
     // NULL dividend over a zero divisor would raise where Spark returns NULL. Keeping
     // `raise_error` in the expression is also what keeps the output nullable, matching
     // `DivModLike.nullable = true` (arithmetic.scala:658).
+    // `make_safe_divisor`'s message argument is only read on its ANSI path, which these
+    // call sites never take — the kernels and the CASE below own the ANSI error instead.
+    let null_if_zero = |divisor: Expr, divisor_type: &DataType| {
+        make_safe_divisor(divisor, divisor_type, false, "")
+    };
     let kernel_guarded_divisor = |divisor: Expr, divisor_type: &DataType| {
         if ansi_mode {
             divisor
         } else {
-            make_safe_divisor(divisor, divisor_type, false, "Division by zero")
+            null_if_zero(divisor, divisor_type)
         }
     };
     let plan_guarded_divisor = |divisor: Expr, divisor_type: &DataType, dividend: &Expr| {
         if !ansi_mode {
-            return make_safe_divisor(divisor, divisor_type, false, "Division by zero");
+            return null_if_zero(divisor, divisor_type);
         }
+        // Defensive: neither call site reaches this. The Duration arm passes the Int64-cast
+        // divisor, and an Interval divisor only pairs with operands DataFusion rejects first.
         if matches!(divisor_type, DataType::Interval(_) | DataType::Duration(_)) {
             return divisor;
         }
+        // NOTE: the dividend is duplicated into the plan — once in the predicate, once in
+        // the division. There is no divisor-only formulation that still raises under ANSI
+        // *and* lets a NULL dividend win, so the duplication is deliberate. For a volatile
+        // dividend the two evaluations can disagree.
         let raise = Expr::ScalarFunction(expr::ScalarFunction {
             func: Arc::new(ScalarUDF::from(RaiseError::new())),
             args: vec![lit(DIVIDE_BY_ZERO_MESSAGE)],
