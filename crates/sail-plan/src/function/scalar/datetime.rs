@@ -1202,9 +1202,28 @@ fn session_window_gap(gap: Expr, schema: &DFSchemaRef) -> PlanResult<Expr> {
     // intervals are rejected statically, matching Spark; day-time typed
     // intervals are accepted (Spark rejects them, but they are unambiguous).
     match gap.get_type(schema)? {
-        // Spark interval strings are parsed per row at run time by this UDF.
+        // Runtime interval-string parsing. For a CASE gap, push the parse into
+        // the branches (as Spark's implicit cast does): literal branches then
+        // constant-fold to interval literals at plan time, so only non-literal
+        // branches parse per row.
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
-            Ok(ScalarUDF::new_from_impl(SparkCalendarInterval::new()).call(vec![gap]))
+            let parse =
+                |e: Expr| ScalarUDF::new_from_impl(SparkCalendarInterval::new()).call(vec![e]);
+            if let Expr::Case(case) = gap {
+                let when_then_expr = case
+                    .when_then_expr
+                    .into_iter()
+                    .map(|(when, then)| (when, Box::new(parse(*then))))
+                    .collect();
+                let else_expr = case.else_expr.map(|e| Box::new(parse(*e)));
+                Ok(Expr::Case(expr::Case {
+                    expr: case.expr,
+                    when_then_expr,
+                    else_expr,
+                }))
+            } else {
+                Ok(parse(gap))
+            }
         }
         DataType::Interval(IntervalUnit::YearMonth) => Err(PlanError::invalid(
             "gap duration expression used in session window must be an interval string, \
