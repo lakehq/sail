@@ -191,6 +191,44 @@ Feature: div (integer division)
         | result |
         | NULL   |
 
+    # An untyped NULL pairs with ANY accepted family, not just the numeric ones: Spark
+    # rewrites it to the concrete type the other operand carries, so the division resolves
+    # and propagates NULL instead of failing to coerce.
+    Scenario Outline: div with an untyped NULL beside <family> returns NULL under ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT div(<args>) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+      Examples:
+        | family        | ansi  | args                        |
+        | INTERVAL DAY  | true  | NULL, INTERVAL '2' DAY      |
+        | INTERVAL DAY  | false | INTERVAL '10' DAY, NULL     |
+        | INTERVAL YEAR | true  | NULL, INTERVAL '2' YEAR     |
+        | INTERVAL YEAR | false | INTERVAL '10' YEAR, NULL    |
+        | DECIMAL       | true  | NULL, CAST(2 AS DECIMAL(5,2)) |
+        | DECIMAL       | false | CAST(5 AS DECIMAL(5,2)), NULL |
+
+    # Mixed families are rejected as a PAIR, the way Spark rejects any operand pair whose
+    # types differ, rather than slipping past a per-operand check into DataFusion.
+    Scenario Outline: div rejects the mixed pair <case>
+      When query
+        """
+        SELECT div(<args>) AS result
+        """
+      Then query error due to data type mismatch
+
+      Examples:
+        | case             | args                                        |
+        | BIGINT / IDAY    | CAST(10 AS BIGINT), INTERVAL '2' DAY        |
+        | IDAY / BIGINT    | INTERVAL '10' DAY, CAST(2 AS BIGINT)        |
+        | IYEAR / IDAY     | INTERVAL '10' YEAR, INTERVAL '2' DAY        |
+        | DECIMAL / IDAY   | CAST(5 AS DECIMAL(5,2)), INTERVAL '2' DAY   |
+
     Scenario: div untyped NULL dividend
       When query
         """
@@ -495,14 +533,14 @@ Feature: div (integer division)
         """
         SELECT div(INTERVAL '10' DAY, 2) AS result
         """
-      Then query error .*
+      Then query error due to data type mismatch
 
     Scenario: div INTERVAL YEAR by INTERVAL DAY errors
       When query
         """
         SELECT div(INTERVAL '10' YEAR, INTERVAL '2' DAY) AS result
         """
-      Then query error .*
+      Then query error due to data type mismatch
 
     Scenario: div FLOAT/FLOAT errors
       When query
@@ -683,6 +721,7 @@ Feature: div (integer division)
   # schema discriminates; the non-zero and column-fed scenarios are the controls that
   # keep this rule from being satisfied by an implementation that types everything as
   # VOID.
+  @function(nullability)
   Rule: Literal zero divisor keeps the declared BIGINT output type
 
     Scenario: div by literal zero declares BIGINT under ANSI false
@@ -826,6 +865,21 @@ Feature: div (integer division)
   # rather than deriving it from the operands. In Sail each family reaches the output
   # type by a different mechanism, so every family is asserted separately: the value is
   # identical either way and only the schema discriminates.
+  # Spark builds the default column name from `sqlOperator` through `BinaryOperator.sql`
+  # (Expression.scala:859), so an unaliased `div` is named `(7 div 2)`. Sail names it after
+  # the planner function instead. Every other scenario in this file aliases with `AS result`,
+  # so nothing else covers the generated name.
+  @sail-bug
+  Scenario: div names an unaliased column the way Spark does
+    When query
+      """
+      SELECT 7 div 2
+      """
+    Then query result
+      | (7 div 2) |
+      | 3         |
+
+  @function(nullability)
   Rule: div declares a nullable BIGINT for every operand family
 
     Scenario Outline: div over <family> declares nullable BIGINT under ANSI <ansi>

@@ -458,29 +458,57 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
             _ => return reject(),
         };
 
-    // Spark's accepted set, verbatim from `IntegralDivide.inputType` (arithmetic.scala:890):
-    // LONG, DECIMAL and the two ANSI interval families — Sail resolves DAY TO SECOND to
-    // `Duration`. An allow-list rejects FLOAT/DOUBLE, BOOLEAN, DATE and BINARY alike,
-    // where a float-only deny-list let the rest reach DataFusion and fail downstream.
-    // `Err` still falls through, so an unresolved type keeps the behaviour below.
-    for t in [&dividend_type, &divisor_type] {
-        let accepted = match t {
-            Err(_) => true,
-            // An untyped NULL is accepted: Spark rewrites `NullType` to the expected
-            // concrete type for `ExpectsInputTypes` (TypeCoercionHelper.scala:570-578).
-            Ok(DataType::Null) => true,
-            Ok(t) => {
-                t.is_integer()
-                    || matches!(t, DataType::Decimal128(_, _) | DataType::Decimal256(_, _))
-                    || matches!(
-                        t,
-                        DataType::Interval(IntervalUnit::YearMonth) | DataType::Duration(_)
-                    )
-            }
-        };
-        if !accepted {
-            return reject();
+    // Spark rewrites an untyped NULL to the concrete type the expression expects rather
+    // than merely tolerating it (TypeCoercionHelper.scala:570-578), so `NULL div INTERVAL
+    // '2' DAY` resolves to a NULL interval division instead of failing to coerce. Mirror
+    // that by casting the NULL side to the other operand's type; with both sides NULL,
+    // Spark falls back to the first entry of `inputType`, which is LONG.
+    let dividend_is_null = matches!(dividend_type.as_ref().ok(), Some(DataType::Null));
+    let divisor_is_null = matches!(divisor_type.as_ref().ok(), Some(DataType::Null));
+    let (mut dividend, mut divisor) = (dividend, divisor);
+    let (mut dividend_type, mut divisor_type) = (dividend_type, divisor_type);
+    if dividend_is_null && divisor_is_null {
+        dividend = cast(dividend, DataType::Int64);
+        divisor = cast(divisor, DataType::Int64);
+        dividend_type = Ok(DataType::Int64);
+        divisor_type = Ok(DataType::Int64);
+    } else if dividend_is_null {
+        if let Some(t) = divisor_type.as_ref().ok().cloned() {
+            dividend = cast(dividend, t.clone());
+            dividend_type = Ok(t);
         }
+    } else if divisor_is_null {
+        if let Some(t) = dividend_type.as_ref().ok().cloned() {
+            divisor = cast(divisor, t.clone());
+            divisor_type = Ok(t);
+        }
+    }
+
+    // Spark's accepted set, from `IntegralDivide.inputType` (arithmetic.scala:890): LONG,
+    // DECIMAL and the two ANSI interval families — Sail resolves DAY TO SECOND to `Duration`.
+    // The check is on the PAIR, not on each operand: validating them independently lets a
+    // mixed pair like `BIGINT div INTERVAL '2' DAY` through both gates and die later inside
+    // DataFusion's coercion, where Spark rejects it at analysis like any other bad pair.
+    // `Err` still falls through, so an unresolved type keeps the behaviour below.
+    let numeric = |t: &DataType| {
+        t.is_integer() || matches!(t, DataType::Decimal128(_, _) | DataType::Decimal256(_, _))
+    };
+    let accepted = match (&dividend_type, &divisor_type) {
+        (Err(_), _) | (_, Err(_)) => true,
+        (Ok(l), Ok(r)) => {
+            (numeric(l) && numeric(r))
+                || matches!((l, r), (DataType::Duration(_), DataType::Duration(_)))
+                || matches!(
+                    (l, r),
+                    (
+                        DataType::Interval(IntervalUnit::YearMonth),
+                        DataType::Interval(IntervalUnit::YearMonth)
+                    )
+                )
+        }
+    };
+    if !accepted {
+        return reject();
     }
 
     // Spark evaluates the divisor first but still lets a NULL dividend win over a zero
