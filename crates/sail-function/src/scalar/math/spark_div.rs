@@ -22,14 +22,8 @@ const INTEGRAL_DIVIDE_OVERFLOW_MESSAGE: &str = "[ARITHMETIC_OVERFLOW] Overflow i
      overflow and return NULL instead. If necessary set \"spark.sql.ansi.enabled\" to \
      \"false\" to bypass this error. SQLSTATE: 22003";
 
-/// Every `ArrowError` variant renders with a prefix (`ComputeError` becomes
-/// "Compute error: ..."), which would corrupt the Spark message. `raise_error` — used by
-/// the plan-side zero guard — raises `DataFusionError::Execution`, which reaches the user
-/// unprefixed, so map kernel errors onto it and keep every `div` path byte-identical.
-///
-/// The match is deliberately broad: the kernels below build a `ComputeError` only for the
-/// two Spark messages above, so anything else reaching here is an Arrow-authored failure
-/// (a length mismatch, say) that loses its "Compute error:" label but keeps its text.
+/// Every `ArrowError` variant renders with a prefix ("Compute error: ...") that would
+/// corrupt the Spark message; `DataFusionError::Execution` reaches the user unprefixed.
 fn spark_error(e: ArrowError) -> DataFusionError {
     match e {
         ArrowError::ComputeError(message) => DataFusionError::Execution(message),
@@ -100,9 +94,8 @@ impl ScalarUDFImpl for SparkIntervalDiv {
             ));
         };
         match (dividend, divisor) {
-            // Only YEAR TO MONTH reaches this UDF: Sail resolves Spark's DAY TO SECOND
-            // to `Duration(Microsecond)`, which the `spark_div` planner handles directly.
-            // `MonthDayNano` is Spark's `CalendarIntervalType`, rejected during analysis.
+            // Only YEAR TO MONTH reaches here: DAY TO SECOND resolves to `Duration`, and
+            // `MonthDayNano` is `CalendarIntervalType`, which Spark rejects.
             (
                 DataType::Interval(IntervalUnit::YearMonth),
                 DataType::Interval(IntervalUnit::YearMonth),
@@ -118,11 +111,8 @@ impl ScalarUDFImpl for SparkIntervalDiv {
 
 /// Spark-compatible integer division (`div` / `DIV` operator).
 ///
-/// Spark divides with `Integral.quot`, i.e. Java `/`, truncating toward zero.
-/// Handles the overflow edge `LONG_MIN / -1`: ANSI=true errors, ANSI=false wraps
-/// to `LONG_MIN`, which is what Java `long` division yields.
-/// Under ANSI this UDF also owns the zero-divisor error, so that a NULL dividend
-/// wins over a zero divisor as it does in Spark.
+/// Spark uses `Integral.quot`, i.e. Java `/`: truncating, and wrapping on `LONG_MIN / -1`
+/// outside ANSI. Under ANSI this UDF also owns the zero-divisor error.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkIntegerDiv {
     signature: Signature,
@@ -203,9 +193,8 @@ fn integer_div_inner(args: &[ArrayRef], ansi: bool) -> Result<ArrayRef> {
     let d = dividend.as_primitive::<Int64Type>();
     let s = divisor.as_primitive::<Int64Type>();
     let result: Int64Array = if ansi {
-        // `try_binary` visits only rows where both operands are valid, so a NULL
-        // dividend short-circuits to NULL before the zero divisor is ever seen —
-        // which is the order Spark evaluates these in.
+        // `try_binary` visits only rows valid on both sides, so a NULL dividend wins over a
+        // zero divisor, as in Spark.
         datafusion::arrow::compute::try_binary(d, s, |x, y| {
             if y == 0 {
                 Err(divide_by_zero_err())
@@ -217,11 +206,8 @@ fn integer_div_inner(args: &[ArrayRef], ansi: bool) -> Result<ArrayRef> {
         })
         .map_err(spark_error)?
     } else {
-        // Zero divisors are masked to NULL upstream by `make_safe_divisor`, but
-        // `binary` invokes the closure at those indices too, before applying the
-        // null mask — guard `y == 0` to avoid dividing by zero on the masked slot.
-        // `wrapping_div` already yields `i64::MIN` for `i64::MIN / -1`, which is
-        // what Spark's non-ANSI `quot` produces.
+        // `binary` invokes the closure on masked slots too, so the `y == 0` guard is
+        // load-bearing even though `make_safe_divisor` nulled them upstream.
         datafusion::arrow::compute::binary(d, s, |x, y| if y == 0 { 0 } else { x.wrapping_div(y) })
             .map_err(spark_error)?
     };
@@ -250,11 +236,8 @@ fn interval_div_inner(args: &[ArrayRef], ansi: bool) -> Result<ArrayRef> {
                 .iter()
                 .zip(divisor_arr.iter())
                 .map(|(d, s)| match (d, s) {
-                    // NOTE: Spark picks `PhysicalIntegerType.integral` for YEAR TO MONTH and
-                    // therefore divides in 32-bit, wrapping on `Int.MinValue / -1`, before
-                    // widening. Widening to i64 first diverges at that one boundary; it is
-                    // unreachable today because Sail's literal parser rejects the operand.
-                    // Pinned as `@sail-bug` in `div.feature`.
+                    // Spark divides YEAR TO MONTH in 32-bit and wraps at `Int.MinValue / -1`;
+                    // widening to i64 diverges there. Pinned as `@sail-bug`.
                     (Some(d_val), Some(s_val)) => {
                         if s_val == 0 {
                             if ansi { divide_by_zero() } else { Ok(None) }

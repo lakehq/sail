@@ -228,6 +228,9 @@ Feature: div (integer division)
         | IDAY / BIGINT    | INTERVAL '10' DAY, CAST(2 AS BIGINT)        |
         | IYEAR / IDAY     | INTERVAL '10' YEAR, INTERVAL '2' DAY        |
         | DECIMAL / IDAY   | CAST(5 AS DECIMAL(5,2)), INTERVAL '2' DAY   |
+        | IYEAR / INT      | INTERVAL '10' YEAR, 2                       |
+        | INT / IYEAR      | 2, INTERVAL '10' YEAR                       |
+        | IYEAR / DECIMAL  | INTERVAL '10' YEAR, CAST(2 AS DECIMAL(5,2)) |
 
     Scenario: div untyped NULL dividend
       When query
@@ -634,15 +637,9 @@ Feature: div (integer division)
         | 3      |
         | 10     |
 
-  # Spark's rule for a STRING operand, measured across the whole matrix:
-  #   - outside ANSI the legacy promotion casts the string to DOUBLE, which `div` does
-  #     not accept, so EVERY combination involving a string is rejected at analysis;
-  #   - under ANSI the promotion resolves only when exactly one side is a string and the
-  #     other is integral, widening to LONG. Two strings, DECIMAL and the interval
-  #     families stay unresolved and are rejected.
-  # Both halves are pinned: a rule made only of rejections would be satisfied by an
-  # implementation that rejects everything, and one made only of acceptances by an
-  # implementation that accepts everything.
+  # Outside ANSI the legacy promotion sends a STRING to DOUBLE, which `div` rejects, so every
+  # combination with a string fails. Under ANSI it resolves only when exactly one side is a
+  # string and the other is integral. Both halves are pinned so neither direction is vacuous.
   Rule: STRING operands follow ANSI-dependent promotion
 
     Scenario Outline: div <case> is rejected under ANSI false
@@ -860,25 +857,27 @@ Feature: div (integer division)
         """
       Then query error .*
 
+  # Spark builds the default column name from `sqlOperator` through `BinaryOperator.sql`
+  # (Expression.scala:859), so an unaliased `div` is named `(7 div 2)`. Sail names it after
+  # the planner function instead. Every other scenario in this file aliases with `AS result`,
+  # so nothing else covers the generated name.
+  Rule: div names an unaliased column the way Spark does
+
+    @sail-bug
+    Scenario: an unaliased div column carries Spark's operator name
+      When query
+        """
+        SELECT 7 div 2
+        """
+      Then query result
+        | (7 div 2) |
+        | 3         |
+
   # `IntegralDivide` declares BIGINT and `nullable = true` unconditionally, for every
   # operand family and in both ANSI modes, because `DivModLike` hardcodes the flag
   # rather than deriving it from the operands. In Sail each family reaches the output
   # type by a different mechanism, so every family is asserted separately: the value is
   # identical either way and only the schema discriminates.
-  # Spark builds the default column name from `sqlOperator` through `BinaryOperator.sql`
-  # (Expression.scala:859), so an unaliased `div` is named `(7 div 2)`. Sail names it after
-  # the planner function instead. Every other scenario in this file aliases with `AS result`,
-  # so nothing else covers the generated name.
-  @sail-bug
-  Scenario: div names an unaliased column the way Spark does
-    When query
-      """
-      SELECT 7 div 2
-      """
-    Then query result
-      | (7 div 2) |
-      | 3         |
-
   @function(nullability)
   Rule: div declares a nullable BIGINT for every operand family
 
@@ -997,17 +996,9 @@ Feature: div (integer division)
         | result               |
         | -6101065172474983726 |
 
-  # Sail reaches the error from two different places — a plan-level `raise_error` for the
-  # families that use DataFusion arithmetic, and the kernel for the ones with a UDF — and
-  # an `ArrowError` renders with a wrapper prefix ("Compute error: ..."). The patterns are
-  # anchored at the start on purpose: a substring alone still matches a prefixed message,
-  # so only the anchor discriminates the shape Spark actually emits.
-  #
-  # The pattern lives on the step line rather than in the Examples table: measured
-  # end to end, a backslash written in a cell arrives at `re.search` doubled and never
-  # matches, while the same bytes on a step line work. The gherkin parser, `render_string`
-  # and `parsers.parse` each preserve it in isolation, so it is the composition — do not
-  # "simplify" this back into the table without re-running it.
+  # Anchored at the start on purpose: a bare substring also matches a wrapper-prefixed
+  # message, so only the anchor discriminates. The pattern must stay on the step line — a
+  # backslash in an Examples cell arrives at `re.search` doubled (measured); do not move it.
   Rule: div reports zero division and overflow exactly as Spark does
 
     Scenario Outline: div over <family> reports division by zero with no wrapper prefix
