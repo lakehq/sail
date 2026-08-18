@@ -106,6 +106,13 @@ message ExtendedPhysicalExprNode {
 message LazyScalarExprNode {
   string name = 1;
   bytes fun_definition = 2;
+  LazyScalarEvaluationPolicy evaluation_policy = 3;
+}
+
+enum LazyScalarEvaluationPolicy {
+  LAZY_SCALAR_EVALUATION_POLICY_ACTIVE_ROWS = 0;
+  LAZY_SCALAR_EVALUATION_POLICY_TRY_ACTIVE_ROWS = 1;
+  LAZY_SCALAR_EVALUATION_POLICY_ROW_MAJOR = 2;
 }
 
 message IcebergPartitionTransformExprNode {

@@ -3,94 +3,29 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, BooleanArray, new_empty_array, new_null_array};
-use datafusion::arrow::compute::concat;
+use datafusion::arrow::compute::{concat, filter};
 use datafusion::arrow::datatypes::{DataType, FieldRef, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
+use datafusion::physical_expr_common::utils::scatter;
 use datafusion_common::config::{ConfigEntry, ConfigOptions};
 use datafusion_common::{Result, internal_err};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::functions::fields_with_udf;
-use datafusion_expr::{
-    ColumnarValue, ExpressionPlacement, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
-    ScalarUDFImpl, Signature,
-};
+use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, Volatility};
 
-/// Marks a regular scalar UDF for left-to-right, NULL-short-circuiting evaluation.
-///
-/// DataFusion uses this wrapper during logical and initial physical planning. Sail replaces the
-/// resulting [`ScalarFunctionExpr`] with [`LazyScalarExpr`] before execution.
-#[derive(Debug, PartialEq, Eq, Hash)]
-pub struct LazyScalarUDF {
-    function: Arc<ScalarUDF>,
-}
+use crate::logical_expr::lazy_scalar::{LazyScalarEvaluationPolicy, LazyScalarUDF};
 
-impl LazyScalarUDF {
-    pub fn new(function: Arc<ScalarUDF>) -> Self {
-        Self { function }
-    }
-
-    pub fn function(&self) -> &Arc<ScalarUDF> {
-        &self.function
-    }
-}
-
-impl ScalarUDFImpl for LazyScalarUDF {
-    fn name(&self) -> &str {
-        self.function.name()
-    }
-
-    fn aliases(&self) -> &[String] {
-        self.function.aliases()
-    }
-
-    fn signature(&self) -> &Signature {
-        self.function.signature()
-    }
-
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        self.function.return_type(arg_types)
-    }
-
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let arguments_nullable = args.arg_fields.iter().any(|field| field.is_nullable());
-        let return_field = self.function.return_field_from_args(args)?;
-        let nullable = return_field.is_nullable() || arguments_nullable;
-        Ok(Arc::new(
-            return_field.as_ref().clone().with_nullable(nullable),
-        ))
-    }
-
-    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        self.function.invoke_with_args(args)
-    }
-
-    fn short_circuits(&self) -> bool {
-        true
-    }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        self.function.coerce_types(arg_types)
-    }
-
-    fn placement(&self, args: &[ExpressionPlacement]) -> ExpressionPlacement {
-        self.function.placement(args)
-    }
-}
-
-/// A scalar physical expression whose children are evaluated per row from left to right.
-///
-/// A NULL child makes the current row NULL and prevents evaluation of later children. The
-/// row-at-a-time execution deliberately preserves Spark's error order and evaluates volatile or
-/// stateful child expressions at most once for each row.
+/// A scalar physical expression with left-to-right, NULL-short-circuiting children.
 pub struct LazyScalarExpr {
     function: Arc<ScalarUDF>,
     name: String,
     arguments: Vec<Arc<dyn PhysicalExpr>>,
     return_field: FieldRef,
     config_options: Arc<ConfigOptions>,
+    policy: LazyScalarEvaluationPolicy,
 }
 
 impl LazyScalarExpr {
@@ -99,6 +34,7 @@ impl LazyScalarExpr {
         arguments: Vec<Arc<dyn PhysicalExpr>>,
         input_schema: &Schema,
         config_options: Arc<ConfigOptions>,
+        policy: LazyScalarEvaluationPolicy,
     ) -> Result<Self> {
         let argument_fields = arguments
             .iter()
@@ -141,6 +77,7 @@ impl LazyScalarExpr {
             arguments,
             return_field,
             config_options,
+            policy,
         })
     }
 
@@ -156,6 +93,7 @@ impl LazyScalarExpr {
             scalar.args().to_vec(),
             input_schema,
             Arc::new(scalar.config_options().clone()),
+            marker.policy(),
         )
         .map(Some)
     }
@@ -172,27 +110,129 @@ impl LazyScalarExpr {
         &self.config_options
     }
 
-    fn invoke_row(
+    pub fn policy(&self) -> LazyScalarEvaluationPolicy {
+        self.policy
+    }
+
+    fn invoke(
         &self,
         values: Vec<ColumnarValue>,
         argument_fields: &[FieldRef],
+        number_rows: usize,
     ) -> Result<ArrayRef> {
         let result = self.function.invoke_with_args(ScalarFunctionArgs {
             args: values,
             arg_fields: argument_fields.to_vec(),
-            number_rows: 1,
+            number_rows,
             return_field: Arc::clone(&self.return_field),
             config_options: Arc::clone(&self.config_options),
         })?;
-        let result = result.into_array(1)?;
-        if result.len() != 1 {
+        let result = result.into_array(number_rows)?;
+        if result.len() != number_rows {
             return internal_err!(
-                "Lazy scalar function {} returned {} rows for a one-row input",
+                "Lazy scalar function {} returned {} rows for a {number_rows}-row input",
                 self.name,
                 result.len()
             );
         }
         Ok(result)
+    }
+
+    fn argument_fields(&self, batch: &RecordBatch) -> Result<Vec<FieldRef>> {
+        self.arguments
+            .iter()
+            .map(|argument| argument.return_field(batch.schema_ref()))
+            .collect()
+    }
+
+    fn evaluate_active_rows(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        let row_count = batch.num_rows();
+        let argument_fields = self.argument_fields(batch)?;
+        let mut active = BooleanArray::from(vec![true; row_count]);
+        let mut values = Vec::with_capacity(self.arguments.len());
+
+        for argument in &self.arguments {
+            let value = argument.evaluate_selection(batch, &active)?;
+            match &value {
+                ColumnarValue::Scalar(value) => {
+                    if value.is_null() {
+                        active = BooleanArray::from(vec![false; row_count]);
+                    }
+                }
+                ColumnarValue::Array(array) => {
+                    if array.len() != row_count {
+                        return internal_err!(
+                            "Lazy scalar argument returned {} rows for a {row_count}-row input",
+                            array.len()
+                        );
+                    }
+                    active = BooleanArray::from(
+                        (0..row_count)
+                            .map(|row| active.value(row) && !array.is_null(row))
+                            .collect::<Vec<_>>(),
+                    );
+                }
+            }
+            values.push(value);
+
+            if !active.has_true() {
+                return Ok(ColumnarValue::Array(new_null_array(
+                    self.return_field.data_type(),
+                    row_count,
+                )));
+            }
+        }
+
+        let active_count = active.true_count();
+        let values = values
+            .into_iter()
+            .map(|value| -> Result<ColumnarValue> {
+                match value {
+                    ColumnarValue::Array(array) => {
+                        Ok(ColumnarValue::Array(filter(array.as_ref(), &active)?))
+                    }
+                    ColumnarValue::Scalar(value) => Ok(ColumnarValue::Scalar(value)),
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let result = self.invoke(values, &argument_fields, active_count)?;
+        Ok(ColumnarValue::Array(scatter(&active, result.as_ref())?))
+    }
+
+    fn evaluate_row_major(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        let row_count = batch.num_rows();
+        let argument_fields = self.argument_fields(batch)?;
+        let mut row_results = Vec::with_capacity(row_count);
+        let selection = BooleanArray::from(vec![true]);
+
+        for row in 0..row_count {
+            let row_batch = batch.slice(row, 1);
+            let mut values = Vec::with_capacity(self.arguments.len());
+            let mut row_is_null = false;
+
+            for argument in &self.arguments {
+                let value = argument.evaluate_selection(&row_batch, &selection)?;
+                let value = value.into_array(1)?;
+                if matches!(value.data_type(), DataType::Null) || value.is_null(0) {
+                    row_is_null = true;
+                    break;
+                }
+                values.push(ColumnarValue::Array(value));
+            }
+
+            let result = if row_is_null {
+                new_null_array(self.return_field.data_type(), 1)
+            } else {
+                self.invoke(values, &argument_fields, 1)?
+            };
+            row_results.push(result);
+        }
+
+        let row_result_refs = row_results
+            .iter()
+            .map(|array| array.as_ref())
+            .collect::<Vec<_>>();
+        Ok(ColumnarValue::Array(concat(&row_result_refs)?))
     }
 }
 
@@ -203,6 +243,7 @@ impl Debug for LazyScalarExpr {
             .field("function", &self.name)
             .field("arguments", &self.arguments)
             .field("return_field", &self.return_field)
+            .field("policy", &self.policy)
             .finish()
     }
 }
@@ -229,6 +270,7 @@ impl PartialEq for LazyScalarExpr {
             && self.name == other.name
             && self.arguments == other.arguments
             && self.return_field == other.return_field
+            && self.policy == other.policy
             && (Arc::ptr_eq(&self.config_options, &other.config_options)
                 || sorted_config_entries(&self.config_options)
                     == sorted_config_entries(&other.config_options))
@@ -243,6 +285,7 @@ impl Hash for LazyScalarExpr {
         self.name.hash(state);
         self.arguments.hash(state);
         self.return_field.hash(state);
+        self.policy.hash(state);
     }
 }
 
@@ -269,42 +312,13 @@ impl PhysicalExpr for LazyScalarExpr {
             )));
         }
 
-        let argument_fields = self
-            .arguments
-            .iter()
-            .map(|argument| argument.return_field(batch.schema_ref()))
-            .collect::<Result<Vec<_>>>()?;
-        let mut row_results = Vec::with_capacity(row_count);
-        let selection = BooleanArray::from(vec![true]);
-
-        for row in 0..row_count {
-            let row_batch = batch.slice(row, 1);
-            let mut values = Vec::with_capacity(self.arguments.len());
-            let mut row_is_null = false;
-
-            for argument in &self.arguments {
-                let value = argument.evaluate_selection(&row_batch, &selection)?;
-                let value = value.into_array(1)?;
-                if matches!(value.data_type(), DataType::Null) || value.is_null(0) {
-                    row_is_null = true;
-                    break;
-                }
-                values.push(ColumnarValue::Array(value));
-            }
-
-            let result = if row_is_null {
-                new_null_array(self.return_field.data_type(), 1)
-            } else {
-                self.invoke_row(values, &argument_fields)?
-            };
-            row_results.push(result);
+        match self.policy {
+            LazyScalarEvaluationPolicy::ActiveRows => self.evaluate_active_rows(batch),
+            LazyScalarEvaluationPolicy::TryActiveRows => self
+                .evaluate_active_rows(batch)
+                .or_else(|_| self.evaluate_row_major(batch)),
+            LazyScalarEvaluationPolicy::RowMajor => self.evaluate_row_major(batch),
         }
-
-        let row_result_refs = row_results
-            .iter()
-            .map(|array| array.as_ref())
-            .collect::<Vec<_>>();
-        Ok(ColumnarValue::Array(concat(&row_result_refs)?))
     }
 
     fn return_field(&self, _input_schema: &Schema) -> Result<FieldRef> {
@@ -325,6 +339,7 @@ impl PhysicalExpr for LazyScalarExpr {
             arguments: children,
             return_field: Arc::clone(&self.return_field),
             config_options: Arc::clone(&self.config_options),
+            policy: self.policy,
         }))
     }
 
@@ -365,6 +380,10 @@ impl PhysicalExpr for LazyScalarExpr {
         }
         write!(formatter, ")")
     }
+
+    fn is_volatile_node(&self) -> bool {
+        self.function.signature().volatility == Volatility::Volatile
+    }
 }
 
 #[cfg(test)]
@@ -383,6 +402,8 @@ mod tests {
     use datafusion_expr::{
         ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
     };
+
+    use crate::logical_expr::lazy_scalar::LazyScalarEvaluationPolicy;
 
     use super::LazyScalarExpr;
 
@@ -539,6 +560,7 @@ mod tests {
             ],
             batch.schema_ref(),
             Arc::new(ConfigOptions::default()),
+            LazyScalarEvaluationPolicy::RowMajor,
         )?;
 
         let error = match expression.evaluate(&batch) {
@@ -547,6 +569,35 @@ mod tests {
         };
         assert!(error.to_string().contains("second rejected 0"), "{error}");
         assert_eq!(*lock_observations(&first_observations)?, vec![Some(0)]);
+        assert_eq!(*lock_observations(&second_observations)?, vec![Some(0)]);
+        Ok(())
+    }
+
+    #[test]
+    fn replays_pure_batch_failure_in_row_major_order() -> Result<()> {
+        let batch = test_batch(vec![Some(0), Some(1)])?;
+        let first_observations = Arc::new(Mutex::new(Vec::new()));
+        let second_observations = Arc::new(Mutex::new(Vec::new()));
+        let expression = LazyScalarExpr::try_new(
+            Arc::new(ScalarUDF::from(FirstArgument::new())),
+            vec![
+                observed_column("first", Some(1), &first_observations),
+                observed_column("second", Some(0), &second_observations),
+            ],
+            batch.schema_ref(),
+            Arc::new(ConfigOptions::default()),
+            LazyScalarEvaluationPolicy::TryActiveRows,
+        )?;
+
+        let error = match expression.evaluate(&batch) {
+            Ok(_) => return internal_err!("expected lazy scalar evaluation to fail"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("second rejected 0"), "{error}");
+        assert_eq!(
+            *lock_observations(&first_observations)?,
+            vec![Some(0), Some(1), Some(0)]
+        );
         assert_eq!(*lock_observations(&second_observations)?, vec![Some(0)]);
         Ok(())
     }
@@ -564,6 +615,7 @@ mod tests {
             ],
             batch.schema_ref(),
             Arc::new(ConfigOptions::default()),
+            LazyScalarEvaluationPolicy::ActiveRows,
         )?;
 
         let result = expression.evaluate(&batch)?.into_array(batch.num_rows())?;
@@ -593,6 +645,7 @@ mod tests {
             ],
             batch.schema_ref(),
             Arc::new(ConfigOptions::default()),
+            LazyScalarEvaluationPolicy::ActiveRows,
         )?;
 
         let result = expression.evaluate(&batch)?.into_array(batch.num_rows())?;

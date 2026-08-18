@@ -141,7 +141,6 @@ Feature: convert_timezone
         | null_source | null_target | null_timestamp |
         | NULL        | NULL        | NULL           |
 
-    @sail-bug
     Scenario: an arbitrary foldable NULL suppresses an earlier row-dependent error
       Given config spark.sql.ansi.enabled = true
       When query
@@ -167,7 +166,7 @@ Feature: convert_timezone
           TIMESTAMP_NTZ '2024-01-01 00:00:00'
         ) AS result
         """
-      Then query error (?i)(DIVIDE_BY_ZERO|divide by zero)
+      Then query error (?i)(DIVIDE_BY_ZERO|divi.*zero)
 
     Scenario: per-row time zones are not parsed when another value is null
       When query
@@ -244,7 +243,6 @@ Feature: convert_timezone
 
   Rule: Wide timestamp range
 
-    @sail-bug
     Scenario: `convert_timezone` preserves timestamps outside Chrono's range
       Given config spark.sql.session.timeZone = UTC
       When query

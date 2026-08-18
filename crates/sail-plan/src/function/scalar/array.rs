@@ -11,7 +11,7 @@ use datafusion_functions_nested::make_array::make_array;
 use datafusion_functions_nested::string::ArrayToString;
 use datafusion_spark::function::array::expr_fn as array_fn;
 use sail_common::utils::string::SPARK_WHITESPACE_OR_ISO_CONTROL_CHARACTERS;
-use sail_common_datafusion::physical_expr::lazy_scalar::LazyScalarUDF;
+use sail_common_datafusion::logical_expr::lazy_scalar::LazyScalarUDF;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::array_intersect::ArrayIntersect;
 use sail_function::scalar::array::array_position::SparkArrayPosition;
@@ -396,7 +396,11 @@ fn sequence(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .collect::<PlanResult<Vec<_>>>()?;
 
     let function = Arc::new(ScalarUDF::from(sequence));
-    Ok(ScalarUDF::from(LazyScalarUDF::new(function)).call(arguments))
+    Ok(LazyScalarUDF::call_fallible(
+        function,
+        arguments,
+        function_context.schema.as_ref(),
+    )?)
 }
 
 fn array_update_output_type(

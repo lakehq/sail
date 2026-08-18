@@ -7944,6 +7944,7 @@ dependencies = [
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
+ "sail-common-datafusion",
 ]
 
 [[package]]

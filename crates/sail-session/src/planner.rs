@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion::common::config::TableParquetOptions;
 use datafusion::datasource::memory::MemorySourceConfig;
@@ -9,13 +8,10 @@ use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::execution::SessionState;
 use datafusion::execution::context::QueryPlanner;
 use datafusion::physical_expr::expressions::Column;
-use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion::physical_expr::{
-    LexOrdering, OrderingRequirements, PhysicalExpr, PhysicalSortExpr, ScalarFunctionExpr,
+    LexOrdering, OrderingRequirements, PhysicalExpr, PhysicalSortExpr,
 };
 use datafusion::physical_optimizer::output_requirements::OutputRequirementExec;
-use datafusion::physical_plan::filter::{FilterExec, FilterExecBuilder};
-use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
@@ -33,7 +29,6 @@ use sail_cache::remote_checkpoint::RemoteCheckpointRegistry;
 use sail_catalog_system::planner::SystemTablePhysicalPlanner;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_rewriter::LogicalRewriter;
-use sail_common_datafusion::physical_expr::lazy_scalar::LazyScalarExpr;
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
 use sail_common_datafusion::streaming::event::schema::{
     to_flow_event_field_names, to_flow_event_projection,
@@ -80,6 +75,10 @@ use sail_physical_plan::streaming::limit::StreamLimitExec;
 use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
 use sail_plan::catalog::CatalogCommandNode;
 
+mod lazy_scalar;
+
+use lazy_scalar::lower_lazy_scalars;
+
 #[derive(Debug)]
 pub struct ExtensionQueryPlanner {}
 
@@ -111,86 +110,8 @@ impl QueryPlanner for ExtensionQueryPlanner {
         let plan = planner
             .create_physical_plan(&logical_plan, session_state)
             .await?;
-        rewrite_physical_expressions(plan)
+        lower_lazy_scalars(plan, session_state.config().target_partitions())
     }
-}
-
-fn rewrite_physical_expressions(
-    plan: Arc<dyn ExecutionPlan>,
-) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
-    plan.transform_up(|plan| {
-        if let Some(filter) = plan.downcast_ref::<FilterExec>() {
-            let transformed = rewrite_physical_expression(
-                Arc::clone(filter.predicate()),
-                filter.input().schema().as_ref(),
-            )?;
-            if transformed.transformed {
-                let filter = FilterExecBuilder::from(filter)
-                    .with_predicate(transformed.data)
-                    .build()?;
-                return Ok(Transformed::yes(Arc::new(filter) as Arc<dyn ExecutionPlan>));
-            }
-            return Ok(Transformed::no(plan));
-        }
-
-        let Some(projection) = plan.downcast_ref::<ProjectionExec>() else {
-            return Ok(Transformed::no(plan));
-        };
-
-        let mut changed = false;
-        let expressions = projection
-            .expr()
-            .iter()
-            .map(|projection_expr| {
-                let transformed = rewrite_physical_expression(
-                    Arc::clone(&projection_expr.expr),
-                    projection.input().schema().as_ref(),
-                )?;
-                changed |= transformed.transformed;
-                Ok(ProjectionExpr::new(
-                    transformed.data,
-                    projection_expr.alias.clone(),
-                ))
-            })
-            .collect::<datafusion_common::Result<Vec<_>>>()?;
-
-        if changed {
-            Ok(Transformed::yes(Arc::new(ProjectionExec::try_new(
-                expressions,
-                Arc::clone(projection.input()),
-            )?) as Arc<dyn ExecutionPlan>))
-        } else {
-            Ok(Transformed::no(plan))
-        }
-    })
-    .data()
-}
-
-fn rewrite_physical_expression(
-    expression: Arc<dyn PhysicalExpr>,
-    input_schema: &Schema,
-) -> datafusion_common::Result<Transformed<Arc<dyn PhysicalExpr>>> {
-    expression.transform_up(|expression| {
-        if let Some(scalar) = expression.downcast_ref::<ScalarSubqueryExpr>() {
-            if scalar.nullable() {
-                return Ok(Transformed::no(expression));
-            }
-            return Ok(Transformed::yes(Arc::new(ScalarSubqueryExpr::new(
-                scalar.data_type().clone(),
-                true,
-                scalar.index(),
-                scalar.results().clone(),
-            )) as Arc<dyn PhysicalExpr>));
-        }
-
-        let Some(scalar) = expression.downcast_ref::<ScalarFunctionExpr>() else {
-            return Ok(Transformed::no(expression));
-        };
-        let Some(lazy) = LazyScalarExpr::try_from_scalar_function(scalar, input_schema)? else {
-            return Ok(Transformed::no(expression));
-        };
-        Ok(Transformed::yes(Arc::new(lazy) as Arc<dyn PhysicalExpr>))
-    })
 }
 
 pub struct ExtensionPhysicalPlanner;

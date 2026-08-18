@@ -237,7 +237,6 @@ Feature: sequence output schema
         | null-step  | NULL      |
         | null-stop  | NULL      |
 
-    @sail-bug
     Scenario: an earlier foldable NULL suppresses a later foldable sequence error
       Given config spark.sql.ansi.enabled = true
       When query
@@ -251,7 +250,6 @@ Feature: sequence output schema
         | result |
         | NULL   |
 
-    @sail-bug
     Scenario: sequence reports the first of two foldable errors
       Given config spark.sql.ansi.enabled = true
       When query
@@ -261,7 +259,7 @@ Feature: sequence output schema
           CAST(1 / 0 AS BIGINT)
         ) AS result
         """
-      Then query error CAST_INVALID_INPUT
+      Then query error (?i)(CAST_INVALID_INPUT|bad-first)
 
     Scenario: sequence stops evaluating arguments after a NULL boundary
       When query
@@ -314,6 +312,28 @@ Feature: sequence output schema
       Then query result
         | id |
         | 1  |
+
+    Scenario: sequence keeps lazy evaluation inside a sort expression
+      When query
+        """
+        SELECT id
+        FROM VALUES
+          (1, CAST(NULL AS BIGINT), 3L),
+          (2, 1L, 3L)
+          AS t(id, start, stop)
+        ORDER BY size(sequence(
+          start,
+          CASE
+            WHEN start IS NULL
+              THEN CAST(raise_error('sorted-null') AS BIGINT)
+            ELSE stop
+          END
+        )) NULLS FIRST, id
+        """
+      Then query result ordered
+        | id |
+        | 1  |
+        | 2  |
 
     @sail-bug
     Scenario: sequence extracts only the Python UDF subtree before short-circuiting

@@ -6506,6 +6506,7 @@ mod tests {
         use datafusion::arrow::datatypes::{DataType, Field};
         use datafusion::common::config::ConfigOptions;
         use datafusion::physical_expr::expressions::{Column, Literal};
+        use sail_common_datafusion::logical_expr::lazy_scalar::LazyScalarEvaluationPolicy;
         use sail_common_datafusion::physical_expr::lazy_scalar::LazyScalarExpr;
 
         let schema = Arc::new(Schema::new(vec![Field::new("stop", DataType::Int64, true)]));
@@ -6520,6 +6521,7 @@ mod tests {
             ],
             schema.as_ref(),
             Arc::new(ConfigOptions::default()),
+            LazyScalarEvaluationPolicy::TryActiveRows,
         )?) as Arc<dyn PhysicalExpr>;
 
         let decoded = round_trip_expr(&expression, schema.as_ref())?;
@@ -6529,6 +6531,7 @@ mod tests {
         let sequence = downcast_udf::<SparkSequence>(lazy.function(), "SparkSequence")?;
         assert_eq!(sequence.session_timezone(), "America/Los_Angeles");
         assert!(sequence.ansi_mode());
+        assert_eq!(lazy.policy(), LazyScalarEvaluationPolicy::TryActiveRows);
         assert_same_result(
             &expression,
             &decoded,

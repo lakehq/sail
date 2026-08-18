@@ -15,12 +15,13 @@ use datafusion_proto::protobuf::{
     PhysicalExprNode, PhysicalExtensionExprNode, PhysicalPlanNode, physical_expr_node,
 };
 use prost::Message;
+use sail_common_datafusion::logical_expr::lazy_scalar::LazyScalarEvaluationPolicy;
 use sail_common_datafusion::physical_expr::lazy_scalar::LazyScalarExpr;
 
 use crate::plan::r#gen::extended_physical_expr_node::ExprKind;
 use crate::plan::r#gen::{
     ExtendedPhysicalExprNode, HigherOrderUdfExprNode, LambdaExprNode, LambdaVariableExprNode,
-    LazyScalarExprNode,
+    LazyScalarEvaluationPolicy as LazyScalarEvaluationPolicyProto, LazyScalarExprNode,
 };
 use crate::proto::decode::{try_decode_field_ref, try_decode_higher_order_udf};
 use crate::proto::encode::{try_encode_field_ref, try_encode_higher_order_udf};
@@ -134,6 +135,7 @@ impl RemotePhysicalProtoConverter {
             ExprKind::LazyScalar(LazyScalarExprNode {
                 name: lazy.function().name().to_string(),
                 fun_definition,
+                evaluation_policy: encode_lazy_scalar_policy(lazy.policy()) as i32,
             }),
             inputs,
         )
@@ -153,11 +155,13 @@ impl RemotePhysicalProtoConverter {
         let function = ctx
             .codec()
             .try_decode_udf(&node.name, &node.fun_definition)?;
+        let policy = decode_lazy_scalar_policy(node.evaluation_policy)?;
         Ok(Arc::new(LazyScalarExpr::try_new(
             function,
             arguments,
             input_schema,
             Arc::clone(ctx.task_ctx().session_config().options()),
+            policy,
         )?))
     }
 
@@ -261,6 +265,28 @@ impl RemotePhysicalProtoConverter {
             input_schema,
             Arc::clone(ctx.task_ctx().session_config().options()),
         )?))
+    }
+}
+
+fn encode_lazy_scalar_policy(
+    policy: LazyScalarEvaluationPolicy,
+) -> LazyScalarEvaluationPolicyProto {
+    match policy {
+        LazyScalarEvaluationPolicy::ActiveRows => LazyScalarEvaluationPolicyProto::ActiveRows,
+        LazyScalarEvaluationPolicy::TryActiveRows => LazyScalarEvaluationPolicyProto::TryActiveRows,
+        LazyScalarEvaluationPolicy::RowMajor => LazyScalarEvaluationPolicyProto::RowMajor,
+    }
+}
+
+fn decode_lazy_scalar_policy(value: i32) -> Result<LazyScalarEvaluationPolicy> {
+    match LazyScalarEvaluationPolicyProto::try_from(value)
+        .map_err(|_| plan_datafusion_err!("unknown lazy scalar evaluation policy: {value}"))?
+    {
+        LazyScalarEvaluationPolicyProto::ActiveRows => Ok(LazyScalarEvaluationPolicy::ActiveRows),
+        LazyScalarEvaluationPolicyProto::TryActiveRows => {
+            Ok(LazyScalarEvaluationPolicy::TryActiveRows)
+        }
+        LazyScalarEvaluationPolicyProto::RowMajor => Ok(LazyScalarEvaluationPolicy::RowMajor),
     }
 }
 

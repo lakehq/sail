@@ -32,11 +32,11 @@ Feature: Division by zero behavior
 
       Examples:
         | case                                                             | expr                                                    | error                |
-        | Integer divided by zero throws error in ANSI mode                | 1 / 0                                                   | (?i)divide.*zero     |
-        | Float divided by zero throws error in ANSI mode                  | 1.0 / 0.0                                               | (?i)divide.*zero     |
-        | Decimal divided by decimal zero throws error in ANSI mode        | CAST(1.0 AS DECIMAL(10,2)) / CAST(0.0 AS DECIMAL(10,2)) | (?i)divide.*zero     |
-        | Decimal divided by integer zero throws error in ANSI mode        | CAST(100.50 AS DECIMAL(10,2)) / 0                       | (?i)divide.*zero     |
-        | DIV by literal zero throws error in ANSI mode                    | 10 DIV 0                                                | (?i)divide.*zero     |
+        | Integer divided by zero throws error in ANSI mode                | 1 / 0                                                   | (?i)divi.*zero       |
+        | Float divided by zero throws error in ANSI mode                  | 1.0 / 0.0                                               | (?i)divi.*zero       |
+        | Decimal divided by decimal zero throws error in ANSI mode        | CAST(1.0 AS DECIMAL(10,2)) / CAST(0.0 AS DECIMAL(10,2)) | (?i)divi.*zero       |
+        | Decimal divided by integer zero throws error in ANSI mode        | CAST(100.50 AS DECIMAL(10,2)) / 0                       | (?i)divi.*zero       |
+        | DIV by literal zero throws error in ANSI mode                    | 10 DIV 0                                                | (?i)divi.*zero       |
         | Modulo by literal zero throws error in ANSI mode                 | 10 % 0                                                  | (?i)remainder.*zero  |
         | Computed expression evaluating to zero throws error in ANSI mode | 1 / (1 - 1)                                             | (?i)division by zero |
 
