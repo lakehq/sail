@@ -2,8 +2,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, Int64Array};
 use datafusion::arrow::datatypes::{
-    DataType, Int64Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
-    IntervalYearMonthType,
+    DataType, Int64Type, IntervalDayTimeType, IntervalUnit, IntervalYearMonthType,
 };
 use datafusion::arrow::error::ArrowError;
 use datafusion_common::Result;
@@ -13,6 +12,16 @@ use crate::error::{
     invalid_arg_count_exec_err, unsupported_data_type_exec_err, unsupported_data_types_exec_err,
 };
 use crate::functions_nested_utils::make_scalar_function;
+
+/// Spark's `DIVIDE_BY_ZERO` message (SQLSTATE 22012). `ArrowError::DivideByZero`
+/// renders as "Divide by zero error", which diverges from Spark's wording.
+fn divide_by_zero_err() -> ArrowError {
+    ArrowError::ComputeError(
+        "[DIVIDE_BY_ZERO] Division by zero. Use `try_divide` to tolerate divisor being 0 \
+         and return NULL instead."
+            .to_string(),
+    )
+}
 
 /// Spark's div operator for intervals.
 /// Performs integer division between two intervals of the same type.
@@ -25,7 +34,7 @@ pub struct SparkIntervalDiv {
 
 impl Default for SparkIntervalDiv {
     fn default() -> Self {
-        Self::new(true)
+        Self::new(false)
     }
 }
 
@@ -69,10 +78,18 @@ impl ScalarUDFImpl for SparkIntervalDiv {
             ));
         };
         match (dividend, divisor) {
-            (DataType::Interval(d), DataType::Interval(s)) if d == s => Ok(arg_types.to_vec()),
+            // Spark's `IntegralDivide` accepts only the two ANSI interval families.
+            // `MonthDayNano` is Spark's `CalendarIntervalType`, which it rejects during
+            // analysis, so reject it here too rather than inventing a 30-day month.
+            (DataType::Interval(d), DataType::Interval(s))
+                if d == s && matches!(d, IntervalUnit::YearMonth | IntervalUnit::DayTime) =>
+            {
+                Ok(arg_types.to_vec())
+            }
             _ => Err(unsupported_data_types_exec_err(
                 "spark_interval_div",
-                "Interval / Interval of the same unit",
+                "INTERVAL YEAR TO MONTH / INTERVAL YEAR TO MONTH \
+                 or INTERVAL DAY TO SECOND / INTERVAL DAY TO SECOND",
                 arg_types,
             )),
         }
@@ -81,10 +98,11 @@ impl ScalarUDFImpl for SparkIntervalDiv {
 
 /// Spark-compatible integer division (`div` / `DIV` operator).
 ///
-/// Handles the overflow edge `LONG_MIN / -1`: ANSI=true errors, ANSI=false
-/// wraps to `LONG_MIN` (matching Java's `Math.floorDiv` semantics).
-/// Division by zero is expected to be handled upstream by `make_safe_divisor`
-/// (see `spark_div` dispatcher) — this UDF propagates NULLs 1:1.
+/// Spark divides with `Integral.quot`, i.e. Java `/`, truncating toward zero.
+/// Handles the overflow edge `LONG_MIN / -1`: ANSI=true errors, ANSI=false wraps
+/// to `LONG_MIN`, which is what Java `long` division yields.
+/// Under ANSI this UDF also owns the zero-divisor error, so that a NULL dividend
+/// wins over a zero divisor as it does in Spark.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkIntegerDiv {
     signature: Signature,
@@ -93,7 +111,7 @@ pub struct SparkIntegerDiv {
 
 impl Default for SparkIntegerDiv {
     fn default() -> Self {
-        Self::new(true)
+        Self::new(false)
     }
 }
 
@@ -164,32 +182,30 @@ fn integer_div_inner(args: &[ArrayRef], ansi: bool) -> Result<ArrayRef> {
     }
     let d = dividend.as_primitive::<Int64Type>();
     let s = divisor.as_primitive::<Int64Type>();
-    // Zero-divisor positions are masked to NULL upstream by `make_safe_divisor`
-    // (see `spark_div` dispatcher), but `arrow::compute::binary` still invokes
-    // the closure at those indices before applying the null mask — guard `y == 0`
-    // to avoid a wrapping_div panic on the masked slot.
     let result: Int64Array = if ansi {
+        // `try_binary` visits only rows where both operands are valid, so a NULL
+        // dividend short-circuits to NULL before the zero divisor is ever seen —
+        // which is the order Spark evaluates these in.
         datafusion::arrow::compute::try_binary(d, s, |x, y| {
             if y == 0 {
-                Ok(0)
+                Err(divide_by_zero_err())
             } else if x == i64::MIN && y == -1 {
-                Err(ArrowError::ComputeError(format!(
-                    "[ARITHMETIC_OVERFLOW] long overflow on div({x}, {y})"
-                )))
+                Err(ArrowError::ComputeError(
+                    "[ARITHMETIC_OVERFLOW] Overflow in integral divide. \
+                     Use 'try_divide' to tolerate overflow and return NULL instead."
+                        .to_string(),
+                ))
             } else {
                 Ok(x.wrapping_div(y))
             }
         })?
     } else {
-        datafusion::arrow::compute::binary(d, s, |x, y| {
-            if y == 0 {
-                0
-            } else if x == i64::MIN && y == -1 {
-                i64::MIN
-            } else {
-                x.wrapping_div(y)
-            }
-        })?
+        // Zero divisors are masked to NULL upstream by `make_safe_divisor`, but
+        // `binary` invokes the closure at those indices too, before applying the
+        // null mask — guard `y == 0` to avoid dividing by zero on the masked slot.
+        // `wrapping_div` already yields `i64::MIN` for `i64::MIN / -1`, which is
+        // what Spark's non-ANSI `quot` produces.
+        datafusion::arrow::compute::binary(d, s, |x, y| if y == 0 { 0 } else { x.wrapping_div(y) })?
     };
     Ok(Arc::new(result))
 }
@@ -203,7 +219,7 @@ fn interval_div_inner(args: &[ArrayRef], ansi: bool) -> Result<ArrayRef> {
         ));
     };
 
-    let divide_by_zero = || Err::<Option<i64>, _>(ArrowError::DivideByZero);
+    let divide_by_zero = || Err::<Option<i64>, _>(divide_by_zero_err());
 
     let result: Int64Array = match (dividend.data_type(), divisor.data_type()) {
         (
@@ -249,37 +265,6 @@ fn interval_div_inner(args: &[ArrayRef], ansi: bool) -> Result<ArrayRef> {
                             }
                         } else {
                             Ok(Some(d_millis / s_millis))
-                        }
-                    }
-                    _ => Ok(None),
-                })
-                .collect::<std::result::Result<Int64Array, ArrowError>>()?
-        }
-        (
-            DataType::Interval(IntervalUnit::MonthDayNano),
-            DataType::Interval(IntervalUnit::MonthDayNano),
-        ) => {
-            let dividend_arr = dividend.as_primitive::<IntervalMonthDayNanoType>();
-            let divisor_arr = divisor.as_primitive::<IntervalMonthDayNanoType>();
-            dividend_arr
-                .iter()
-                .zip(divisor_arr.iter())
-                .map(|(d, s)| match (d, s) {
-                    (Some(d_val), Some(s_val)) => {
-                        let d_nanos = d_val.months as i64 * 2_592_000_000_000_000
-                            + d_val.days as i64 * 86_400_000_000_000
-                            + d_val.nanoseconds;
-                        let s_nanos = s_val.months as i64 * 2_592_000_000_000_000
-                            + s_val.days as i64 * 86_400_000_000_000
-                            + s_val.nanoseconds;
-                        if s_nanos == 0 {
-                            if ansi {
-                                divide_by_zero()
-                            } else {
-                                Ok(None)
-                            }
-                        } else {
-                            Ok(Some(d_nanos / s_nanos))
                         }
                     }
                     _ => Ok(None),
@@ -377,79 +362,4 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_integer_div_basic() -> Result<()> {
-        // 7 div 2 = 3
-        let dividend = Arc::new(Int64Array::from(vec![7])) as ArrayRef;
-        let divisor = Arc::new(Int64Array::from(vec![2])) as ArrayRef;
-        let result = integer_div_inner(&[dividend, divisor], false)?;
-        let Some(arr) = result.as_any().downcast_ref::<Int64Array>() else {
-            return Err(generic_exec_err("test", "Expected Int64Array"));
-        };
-        assert_eq!(arr.value(0), 3);
-        Ok(())
-    }
-
-    #[test]
-    fn test_integer_div_long_min_overflow_ansi_errors() -> Result<()> {
-        // ANSI=true: LONG_MIN div -1 overflows and must error.
-        let dividend = Arc::new(Int64Array::from(vec![i64::MIN])) as ArrayRef;
-        let divisor = Arc::new(Int64Array::from(vec![-1])) as ArrayRef;
-        match integer_div_inner(&[dividend, divisor], true) {
-            Ok(_) => Err(generic_exec_err(
-                "test",
-                "expected ARITHMETIC_OVERFLOW under ANSI",
-            )),
-            Err(e) => {
-                assert!(e.to_string().contains("ARITHMETIC_OVERFLOW"));
-                Ok(())
-            }
-        }
-    }
-
-    #[test]
-    fn test_integer_div_long_min_overflow_non_ansi_wraps() -> Result<()> {
-        // ANSI=false: LONG_MIN div -1 wraps to LONG_MIN.
-        let dividend = Arc::new(Int64Array::from(vec![i64::MIN])) as ArrayRef;
-        let divisor = Arc::new(Int64Array::from(vec![-1])) as ArrayRef;
-        let result = integer_div_inner(&[dividend, divisor], false)?;
-        let Some(arr) = result.as_any().downcast_ref::<Int64Array>() else {
-            return Err(generic_exec_err("test", "Expected Int64Array"));
-        };
-        assert_eq!(arr.value(0), i64::MIN);
-        Ok(())
-    }
-
-    #[test]
-    fn test_integer_div_zero_divisor_guard_no_panic() -> Result<()> {
-        // Zero divisors are masked to NULL upstream; the inner `y == 0` guard
-        // must not panic in either mode (it yields 0 at the masked slot).
-        let dividend = Arc::new(Int64Array::from(vec![10])) as ArrayRef;
-        let divisor = Arc::new(Int64Array::from(vec![0])) as ArrayRef;
-        let result = integer_div_inner(&[Arc::clone(&dividend), Arc::clone(&divisor)], false)?;
-        let Some(arr) = result.as_any().downcast_ref::<Int64Array>() else {
-            return Err(generic_exec_err("test", "Expected Int64Array"));
-        };
-        assert_eq!(arr.value(0), 0);
-        let result = integer_div_inner(&[dividend, divisor], true)?;
-        let Some(arr) = result.as_any().downcast_ref::<Int64Array>() else {
-            return Err(generic_exec_err("test", "Expected Int64Array"));
-        };
-        assert_eq!(arr.value(0), 0);
-        Ok(())
-    }
-
-    #[test]
-    fn test_integer_div_propagates_nulls() -> Result<()> {
-        // NULL positions stay NULL (binary copies the validity mask).
-        let dividend = Arc::new(Int64Array::from(vec![Some(10), None])) as ArrayRef;
-        let divisor = Arc::new(Int64Array::from(vec![Some(3), Some(2)])) as ArrayRef;
-        let result = integer_div_inner(&[dividend, divisor], false)?;
-        let Some(arr) = result.as_any().downcast_ref::<Int64Array>() else {
-            return Err(generic_exec_err("test", "Expected Int64Array"));
-        };
-        assert_eq!(arr.value(0), 3);
-        assert!(arr.is_null(1));
-        Ok(())
-    }
 }

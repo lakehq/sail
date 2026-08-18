@@ -1,4 +1,3 @@
-@div
 Feature: div (integer division) comprehensive tests
 
   # NOTE: Division-by-zero edge cases (literal and dynamic, both ANSI modes)
@@ -400,6 +399,41 @@ Feature: div (integer division) comprehensive tests
     # (BINARY_OP_WRONG_TYPE / BINARY_OP_DIFF_TYPES). Sail mirrors that in
     # the `spark_div` dispatcher — see workarounds below for valid patterns.
 
+    Scenario: div STRING/STRING errors
+      When query
+        """
+        SELECT div('10', '3') AS result
+        """
+      Then query error .*
+
+    Scenario: div BOOLEAN errors
+      When query
+        """
+        SELECT div(true, true) AS result
+        """
+      Then query error .*
+
+    Scenario: div DATE errors
+      When query
+        """
+        SELECT div(DATE '2024-01-15', DATE '2024-01-01') AS result
+        """
+      Then query error .*
+
+    Scenario: div INTERVAL DAY by INT errors
+      When query
+        """
+        SELECT div(INTERVAL '10' DAY, 2) AS result
+        """
+      Then query error .*
+
+    Scenario: div INTERVAL YEAR by INTERVAL DAY errors
+      When query
+        """
+        SELECT div(INTERVAL '10' YEAR, INTERVAL '2' DAY) AS result
+        """
+      Then query error .*
+
     Scenario: div FLOAT/FLOAT errors
       When query
         """
@@ -456,41 +490,6 @@ Feature: div (integer division) comprehensive tests
         | result |
         | 5      |
 
-    Scenario: div STRING/STRING errors
-      When query
-        """
-        SELECT div('10', '3') AS result
-        """
-      Then query error .*
-
-    Scenario: div BOOLEAN errors
-      When query
-        """
-        SELECT div(true, true) AS result
-        """
-      Then query error .*
-
-    Scenario: div DATE errors
-      When query
-        """
-        SELECT div(DATE '2024-01-15', DATE '2024-01-01') AS result
-        """
-      Then query error .*
-
-    Scenario: div INTERVAL DAY by INT errors
-      When query
-        """
-        SELECT div(INTERVAL '10' DAY, 2) AS result
-        """
-      Then query error .*
-
-    Scenario: div INTERVAL YEAR by INTERVAL DAY errors
-      When query
-        """
-        SELECT div(INTERVAL '10' YEAR, INTERVAL '2' DAY) AS result
-        """
-      Then query error .*
-
   Rule: Multi-row vectorized path
 
     Scenario: div BIGINT column with mixed signs and NULL
@@ -526,3 +525,186 @@ Feature: div (integer division) comprehensive tests
         | 4      |
         | 3      |
         | 10     |
+
+  # Spark's legacy string promotion casts a STRING operand to DOUBLE, which `div`
+  # does not accept, so the query is rejected during analysis. Under ANSI the
+  # promotion picks the wider common numeric type instead, so the same query
+  # succeeds. Sail inverts both halves: `nullif` in the divisor guard silently
+  # casts the string to INT under ANSI=false, and the coercion fails under
+  # ANSI=true.
+  Rule: STRING operands follow ANSI-dependent promotion
+
+    @sail-bug
+    Scenario: div INT by STRING literal is rejected under ANSI false
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT 5 div '2' AS result
+        """
+      Then query error the left and right operands of the binary operator have incompatible types
+
+    @sail-bug
+    Scenario: div INT by STRING literal is accepted under ANSI true
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT 5 div '2' AS result
+        """
+      Then query result
+        | result |
+        | 2      |
+
+    @sail-bug
+    Scenario: div STRING by INT literal is accepted under ANSI true
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT '5' div 2 AS result
+        """
+      Then query result
+        | result |
+        | 2      |
+
+  # `div` always declares BIGINT, including when the divisor folds to NULL under
+  # ANSI=false. Sail short-circuits a literal zero divisor into an untyped NULL,
+  # so the column comes back as VOID. The value is NULL under either rule, so
+  # only the schema discriminates; the two untagged scenarios below are the
+  # controls that already hold and keep this rule from being satisfied by an
+  # implementation that types everything as VOID.
+  Rule: Literal zero divisor keeps the declared BIGINT output type
+
+    Scenario: div by literal zero declares BIGINT under ANSI false
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT 5 div 0 AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = true)
+        """
+
+    Scenario: div by non-zero literal declares BIGINT under ANSI false
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT 5 div 2 AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = true)
+        """
+
+    Scenario: div by zero from columns declares BIGINT under ANSI false
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT a div b AS result FROM VALUES (5, 0) AS t(a, b)
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = true)
+        """
+
+  # A zero divisor must not shadow the type check: Spark rejects a FLOAT/DOUBLE or
+  # otherwise unsupported operand during analysis whatever the divisor's value is.
+  # These pair with the non-zero-divisor rejections above; the pair is what makes the
+  # rule discriminating, since a check that ran only for non-zero divisors passes those.
+  Rule: Type rejection is not shadowed by a zero divisor
+
+    Scenario: div DOUBLE by literal zero is rejected under ANSI false
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT div(CAST(1.0 AS DOUBLE), 0) AS result
+        """
+      Then query error .*
+
+    Scenario: div DOUBLE by literal zero DOUBLE is rejected under ANSI false
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT div(CAST(1.0 AS DOUBLE), CAST(0.0 AS DOUBLE)) AS result
+        """
+      Then query error .*
+
+    Scenario: div BOOLEAN by literal zero is rejected under ANSI false
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT div(true, 0) AS result
+        """
+      Then query error .*
+
+    Scenario: div DATE by literal zero is rejected under ANSI false
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT div(DATE '2024-01-15', 0) AS result
+        """
+      Then query error .*
+
+  # Spark evaluates the divisor first, but a NULL dividend still wins over a zero
+  # divisor: the result is NULL, not an error, even under ANSI. The non-NULL dividend
+  # scenarios are the other half — without them a guard that never raised would pass.
+  Rule: A NULL dividend wins over a zero divisor under ANSI
+
+    Scenario: div NULL BIGINT dividend by literal zero returns NULL under ANSI true
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT div(CAST(NULL AS BIGINT), 0) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: div NULL BIGINT dividend by zero column returns NULL under ANSI true
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT div(a, b) AS result FROM VALUES (CAST(NULL AS BIGINT), CAST(0 AS BIGINT)) AS t(a, b)
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: div NULL INTERVAL DAY dividend by zero interval returns NULL under ANSI true
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT div(a, b) AS result FROM VALUES (CAST(NULL AS INTERVAL DAY), INTERVAL '0' DAY) AS t(a, b)
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: div non-NULL dividend by zero column still errors under ANSI true
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT div(a, b) AS result FROM VALUES (CAST(5 AS BIGINT), CAST(0 AS BIGINT)) AS t(a, b)
+        """
+      Then query error Division by zero
+
+  # Spark's IntegralDivide accepts only the two ANSI interval families; CalendarInterval
+  # (Sail's MonthDayNano) is rejected during analysis rather than divided with an
+  # invented 30-day month, which also removes the i64 overflow that normalization hit.
+  Rule: CalendarInterval operands are rejected
+
+    Scenario: div two calendar intervals is rejected
+      When query
+        """
+        SELECT div(make_interval(1, 0, 0, 2, 0, 0, 0), make_interval(1, 0, 0, 1, 0, 0, 0)) AS result
+        """
+      Then query error .*
+
+    Scenario: div wide calendar interval does not overflow into a wrong answer
+      When query
+        """
+        SELECT div(make_interval(0, 4000, 0, 1, 0, 0, 0), make_interval(0, 1, 0, 1, 0, 0, 0)) AS result
+        """
+      Then query error .*
