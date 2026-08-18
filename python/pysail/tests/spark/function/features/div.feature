@@ -526,39 +526,17 @@ Feature: div (integer division) comprehensive tests
         | 3      |
         | 10     |
 
-  # Spark's legacy string promotion casts a STRING operand to DOUBLE, which `div`
-  # does not accept, so the query is rejected during analysis. Under ANSI the
-  # promotion picks the wider common numeric type instead, so the same query
-  # succeeds. Sail inverts both halves: `nullif` in the divisor guard silently
-  # casts the string to INT under ANSI=false, and the coercion fails under
-  # ANSI=true.
+  # Spark's rule for a STRING operand, measured across the whole matrix:
+  #   - outside ANSI the legacy promotion casts the string to DOUBLE, which `div` does
+  #     not accept, so EVERY combination involving a string is rejected at analysis;
+  #   - under ANSI the promotion resolves only when exactly one side is a string and the
+  #     other is integral, widening to LONG. Two strings, DECIMAL and the interval
+  #     families stay unresolved and are rejected.
+  # Both halves are pinned: a rule made only of rejections would be satisfied by an
+  # implementation that rejects everything, and one made only of acceptances by an
+  # implementation that accepts everything.
   Rule: STRING operands follow ANSI-dependent promotion
 
-    @sail-bug
-    Scenario: div INT by STRING literal is rejected under ANSI false
-      Given config spark.sql.ansi.enabled = false
-      When query
-        """
-        SELECT 5 div '2' AS result
-        """
-      Then query error the left and right operands of the binary operator have incompatible types
-
-    @sail-bug
-    Scenario: div INT by STRING literal is accepted under ANSI true
-      Given config spark.sql.ansi.enabled = true
-      When query
-        """
-        SELECT 5 div '2' AS result
-        """
-      Then query result
-        | result |
-        | 2      |
-
-    # Outside ANSI the legacy promotion casts the STRING operand to DOUBLE, which `div`
-    # does not accept, so Spark rejects every one of these at analysis. Sail's divisor
-    # guard coerces the string instead and produces a value — including a NULL for the
-    # zero and NULL-string cases, which reads as a successful query.
-    @sail-bug
     Scenario Outline: div <case> is rejected under ANSI false
       Given config spark.sql.ansi.enabled = false
       When query
@@ -568,15 +546,33 @@ Feature: div (integer division) comprehensive tests
       Then query error due to data type mismatch
 
       Examples:
-        | case                | args                              |
-        | BIGINT by STRING    | CAST(5 AS BIGINT), '2'            |
-        | DECIMAL by STRING   | CAST(5 AS DECIMAL(5,2)), '2'      |
-        | INT by STRING zero  | 5, '0'                            |
-        | INT by NULL STRING  | 5, CAST(NULL AS STRING)           |
+        | case                 | args                                    |
+        | INT by STRING        | 5, '2'                                  |
+        | STRING by INT        | '5', 2                                  |
+        | BIGINT by STRING     | CAST(5 AS BIGINT), '2'                  |
+        | STRING by STRING     | '10', '3'                               |
+        | DECIMAL by STRING    | CAST(5 AS DECIMAL(5,2)), '2'            |
+        | STRING by DECIMAL    | '5', CAST(2 AS DECIMAL(5,2))            |
+        | INTERVAL by STRING   | INTERVAL '10' DAY, '2'                  |
+        | INT by unparseable   | 5, 'abc'                                |
+        | INT by STRING zero   | 5, '0'                                  |
+        | INT by NULL STRING   | 5, CAST(NULL AS STRING)                 |
 
-    # Under ANSI the promotion widens the STRING to the other operand's numeric type, so
-    # these resolve and evaluate. Sail fails to coerce them instead.
-    @sail-bug
+    Scenario Outline: div <case> is rejected under ANSI true
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT div(<args>) AS result
+        """
+      Then query error due to data type mismatch
+
+      Examples:
+        | case               | args                         |
+        | STRING by STRING   | '10', '3'                    |
+        | DECIMAL by STRING  | CAST(5 AS DECIMAL(5,2)), '2' |
+        | STRING by DECIMAL  | '5', CAST(2 AS DECIMAL(5,2)) |
+        | INTERVAL by STRING | INTERVAL '10' DAY, '2'       |
+
     Scenario Outline: div <case> is accepted under ANSI true
       Given config spark.sql.ansi.enabled = true
       When query
@@ -589,19 +585,28 @@ Feature: div (integer division) comprehensive tests
 
       Examples:
         | case               | args                    | result |
+        | INT by STRING      | 5, '2'                  | 2      |
+        | STRING by INT      | '5', 2                  | 2      |
         | BIGINT by STRING   | CAST(5 AS BIGINT), '2'  | 2      |
         | INT by NULL STRING | 5, CAST(NULL AS STRING) | NULL   |
 
-    @sail-bug
-    Scenario: div STRING by INT literal is accepted under ANSI true
+    # Once the string is widened to LONG the rest falls out of the ordinary rules: an
+    # unparseable string fails the cast, and '0' divides by zero.
+    Scenario: div INT by an unparseable STRING errors under ANSI true
       Given config spark.sql.ansi.enabled = true
       When query
         """
-        SELECT '5' div 2 AS result
+        SELECT div(5, 'abc') AS result
         """
-      Then query result
-        | result |
-        | 2      |
+      Then query error .*
+
+    Scenario: div INT by STRING zero errors under ANSI true
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT div(5, '0') AS result
+        """
+      Then query error Division by zero
 
   # `div` always declares BIGINT, including when the divisor is a literal zero that
   # folds to NULL under ANSI=false. The value is NULL under either rule, so only the

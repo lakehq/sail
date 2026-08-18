@@ -1,9 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, Int64Array};
-use datafusion::arrow::datatypes::{
-    DataType, Int64Type, IntervalUnit, IntervalYearMonthType,
-};
+use datafusion::arrow::datatypes::{DataType, Int64Type, IntervalUnit, IntervalYearMonthType};
 use datafusion::arrow::error::ArrowError;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
@@ -15,14 +13,12 @@ use crate::functions_nested_utils::make_scalar_function;
 
 /// Spark's `DIVIDE_BY_ZERO` message, verbatim (SQLSTATE 22012).
 /// `ArrowError::DivideByZero` renders as "Divide by zero error", which diverges.
-pub const DIVIDE_BY_ZERO_MESSAGE: &str =
-    "[DIVIDE_BY_ZERO] Division by zero. Use `try_divide` to tolerate divisor being 0 \
+pub const DIVIDE_BY_ZERO_MESSAGE: &str = "[DIVIDE_BY_ZERO] Division by zero. Use `try_divide` to tolerate divisor being 0 \
      and return NULL instead. If necessary set \"spark.sql.ansi.enabled\" to \"false\" \
      to bypass this error. SQLSTATE: 22012";
 
 /// Spark's `ARITHMETIC_OVERFLOW` message for integral divide, verbatim (SQLSTATE 22003).
-const INTEGRAL_DIVIDE_OVERFLOW_MESSAGE: &str =
-    "[ARITHMETIC_OVERFLOW] Overflow in integral divide. Use 'try_divide' to tolerate \
+const INTEGRAL_DIVIDE_OVERFLOW_MESSAGE: &str = "[ARITHMETIC_OVERFLOW] Overflow in integral divide. Use 'try_divide' to tolerate \
      overflow and return NULL instead. If necessary set \"spark.sql.ansi.enabled\" to \
      \"false\" to bypass this error. SQLSTATE: 22003";
 
@@ -107,9 +103,10 @@ impl ScalarUDFImpl for SparkIntervalDiv {
             // Only YEAR TO MONTH reaches this UDF: Sail resolves Spark's DAY TO SECOND
             // to `Duration(Microsecond)`, which the `spark_div` planner handles directly.
             // `MonthDayNano` is Spark's `CalendarIntervalType`, rejected during analysis.
-            (DataType::Interval(IntervalUnit::YearMonth), DataType::Interval(IntervalUnit::YearMonth)) => {
-                Ok(arg_types.to_vec())
-            }
+            (
+                DataType::Interval(IntervalUnit::YearMonth),
+                DataType::Interval(IntervalUnit::YearMonth),
+            ) => Ok(arg_types.to_vec()),
             _ => Err(unsupported_data_types_exec_err(
                 "spark_interval_div",
                 "INTERVAL YEAR TO MONTH / INTERVAL YEAR TO MONTH",
@@ -260,11 +257,7 @@ fn interval_div_inner(args: &[ArrayRef], ansi: bool) -> Result<ArrayRef> {
                     // Pinned as `@sail-bug` in `div.feature`.
                     (Some(d_val), Some(s_val)) => {
                         if s_val == 0 {
-                            if ansi {
-                                divide_by_zero()
-                            } else {
-                                Ok(None)
-                            }
+                            if ansi { divide_by_zero() } else { Ok(None) }
                         } else {
                             Ok(Some((d_val as i64) / (s_val as i64)))
                         }
@@ -364,5 +357,4 @@ mod tests {
         assert!(int_array.is_null(0));
         Ok(())
     }
-
 }

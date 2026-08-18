@@ -23,7 +23,7 @@ use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
 use sail_function::scalar::math::spark_div::{
-    SparkIntegerDiv, SparkIntervalDiv, DIVIDE_BY_ZERO_MESSAGE,
+    DIVIDE_BY_ZERO_MESSAGE, SparkIntegerDiv, SparkIntervalDiv,
 };
 use sail_function::scalar::math::spark_negative::SparkNegative;
 use sail_function::scalar::math::spark_pmod::SparkPmod;
@@ -408,13 +408,54 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
     // Spark's `div` (IntegralDivide) accepts only BIGINT, DECIMAL and the two ANSI
     // interval families, and rejects anything else during analysis. Floating point is
     // the case Sail can otherwise reach, so reject it before any value-dependent path.
+    let reject = || {
+        Err(PlanError::unsupported(
+            "div due to data type mismatch: the binary operator requires the input type \
+             (\"BIGINT\" or \"DECIMAL\" or \"INTERVAL YEAR TO MONTH\" or \
+             \"INTERVAL DAY TO SECOND\")",
+        ))
+    };
     for t in [&dividend_type, &divisor_type] {
         if let Ok(DataType::Float16 | DataType::Float32 | DataType::Float64) = t {
-            return Err(PlanError::unsupported(
-                "div requires integral or decimal operands (FLOAT/DOUBLE not allowed)",
-            ));
+            return reject();
         }
     }
+
+    // STRING operands, measured against the JVM across the whole matrix:
+    //   - outside ANSI, `StringPromotionTypeCoercion` casts the string to DOUBLE, which
+    //     `div` does not accept, so *every* combination involving a string is rejected;
+    //   - under ANSI, `findWiderTypeForString` resolves only when exactly one side is a
+    //     string and the other is integral, widening to LONG. Two strings, DECIMAL and
+    //     the interval families all stay unresolved and are rejected.
+    // Everything downstream then falls out on its own: '0' divides by zero, an
+    // unparseable string fails the cast, and a NULL string propagates NULL.
+    let dividend_is_string = matches!(
+        dividend_type.as_ref().ok(),
+        Some(DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)
+    );
+    let divisor_is_string = matches!(
+        divisor_type.as_ref().ok(),
+        Some(DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)
+    );
+    let dividend_is_integral = dividend_type.as_ref().is_ok_and(DataType::is_integer);
+    let divisor_is_integral = divisor_type.as_ref().is_ok_and(DataType::is_integer);
+    let (dividend, divisor, dividend_type, divisor_type) =
+        match (dividend_is_string, divisor_is_string) {
+            (false, false) => (dividend, divisor, dividend_type, divisor_type),
+            (true, false) if ansi_mode && divisor_is_integral => (
+                cast(dividend, DataType::Int64),
+                divisor,
+                Ok(DataType::Int64),
+                divisor_type,
+            ),
+            (false, true) if ansi_mode && dividend_is_integral => (
+                dividend,
+                cast(divisor, DataType::Int64),
+                dividend_type,
+                Ok(DataType::Int64),
+            ),
+            _ => return reject(),
+        };
 
     // Spark evaluates the divisor first but still lets a NULL dividend win over a zero
     // divisor, so the zero policy has to see BOTH operands.
@@ -462,7 +503,12 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
         Expr::Case(expr::Case {
             expr: None,
             when_then_expr: vec![(
-                Box::new(divisor.clone().eq(lit(0)).and(dividend.clone().is_not_null())),
+                Box::new(
+                    divisor
+                        .clone()
+                        .eq(lit(0))
+                        .and(dividend.clone().is_not_null()),
+                ),
                 Box::new(raise),
             )],
             else_expr: Some(Box::new(divisor)),
