@@ -36,6 +36,14 @@ impl Default for SparkCastToVariant {
     }
 }
 
+fn validate_variant_input_type(data_type: &DataType) -> Result<()> {
+    match data_type {
+        DataType::Map(_, _) => exec_err!("cannot cast MAP to VARIANT"),
+        DataType::Struct(_) => exec_err!("cannot cast STRUCT to VARIANT"),
+        _ => Ok(()),
+    }
+}
+
 impl ScalarUDFImpl for SparkCastToVariant {
     fn name(&self) -> &str {
         "spark_cast_to_variant"
@@ -53,6 +61,10 @@ impl ScalarUDFImpl for SparkCastToVariant {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Arc<Field>> {
+        let [input] = args.arg_fields else {
+            return exec_err!("spark_cast_to_variant expects one argument");
+        };
+        validate_variant_input_type(input.data_type())?;
         let data_type = self.return_type(
             args.arg_fields
                 .iter()
@@ -72,13 +84,7 @@ impl ScalarUDFImpl for SparkCastToVariant {
             .map(|f| f.data_type().clone())
             .unwrap_or(DataType::Null);
 
-        // Reject Map and Struct (Spark doesn't support CAST to VARIANT for these)
-        if matches!(input_type, DataType::Map(_, _)) {
-            return exec_err!("cannot cast MAP to VARIANT");
-        }
-        if matches!(input_type, DataType::Struct(_)) {
-            return exec_err!("cannot cast STRUCT to VARIANT");
-        }
+        validate_variant_input_type(&input_type)?;
 
         let arg = &args.args[0];
         match arg {

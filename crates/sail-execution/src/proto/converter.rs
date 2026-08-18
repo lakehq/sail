@@ -15,10 +15,12 @@ use datafusion_proto::protobuf::{
     PhysicalExprNode, PhysicalExtensionExprNode, PhysicalPlanNode, physical_expr_node,
 };
 use prost::Message;
+use sail_common_datafusion::physical_expr::lazy_scalar::LazyScalarExpr;
 
 use crate::plan::r#gen::extended_physical_expr_node::ExprKind;
 use crate::plan::r#gen::{
     ExtendedPhysicalExprNode, HigherOrderUdfExprNode, LambdaExprNode, LambdaVariableExprNode,
+    LazyScalarExprNode,
 };
 use crate::proto::decode::{try_decode_field_ref, try_decode_higher_order_udf};
 use crate::proto::encode::{try_encode_field_ref, try_encode_higher_order_udf};
@@ -55,6 +57,9 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
         ctx: &PhysicalPlanDecodeContext<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         match decode_remote_expr_kind(proto)? {
+            Some((ExprKind::LazyScalar(node), inputs)) => {
+                self.lazy_scalar_proto_to_expr(node, inputs, input_schema, ctx)
+            }
             Some((ExprKind::HigherOrderUdf(node), inputs)) => {
                 self.higher_order_proto_to_expr(node, inputs, input_schema, ctx)
             }
@@ -84,6 +89,9 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
         expr: &Arc<dyn PhysicalExpr>,
         codec: &dyn PhysicalExtensionCodec,
     ) -> Result<PhysicalExprNode> {
+        if let Some(lazy) = expr.downcast_ref::<LazyScalarExpr>() {
+            return self.lazy_scalar_expr_to_proto(expr, lazy, codec);
+        }
         if let Some(hof) = expr.downcast_ref::<HigherOrderFunctionExpr>() {
             return self.higher_order_expr_to_proto(expr, hof, codec);
         }
@@ -108,6 +116,51 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
 }
 
 impl RemotePhysicalProtoConverter {
+    fn lazy_scalar_expr_to_proto(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+        lazy: &LazyScalarExpr,
+        codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<PhysicalExprNode> {
+        let inputs = lazy
+            .arguments()
+            .iter()
+            .map(|argument| self.physical_expr_to_proto(argument, codec))
+            .collect::<Result<_>>()?;
+        let mut fun_definition = Vec::new();
+        codec.try_encode_udf(lazy.function().as_ref(), &mut fun_definition)?;
+        extension_expr_to_proto(
+            expr,
+            ExprKind::LazyScalar(LazyScalarExprNode {
+                name: lazy.function().name().to_string(),
+                fun_definition,
+            }),
+            inputs,
+        )
+    }
+
+    fn lazy_scalar_proto_to_expr(
+        &self,
+        node: LazyScalarExprNode,
+        inputs: &[PhysicalExprNode],
+        input_schema: &Schema,
+        ctx: &PhysicalPlanDecodeContext<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let arguments = inputs
+            .iter()
+            .map(|input| self.proto_to_physical_expr(input, input_schema, ctx))
+            .collect::<Result<Vec<_>>>()?;
+        let function = ctx
+            .codec()
+            .try_decode_udf(&node.name, &node.fun_definition)?;
+        Ok(Arc::new(LazyScalarExpr::try_new(
+            function,
+            arguments,
+            input_schema,
+            Arc::clone(ctx.task_ctx().session_config().options()),
+        )?))
+    }
+
     fn higher_order_expr_to_proto(
         &self,
         expr: &Arc<dyn PhysicalExpr>,

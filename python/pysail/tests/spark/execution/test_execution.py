@@ -37,6 +37,43 @@ def test_basic_query_execution(spark):
     assert result[0]["result"] == 2  # noqa: PLR2004
 
 
+def test_sequence_widens_literal_for_bigint_column_in_cluster_mode(spark):
+    rows = spark.sql("""
+        SELECT n, sequence(1, n) AS result
+        FROM VALUES
+          (CAST(1 AS BIGINT)),
+          (CAST(3 AS BIGINT)),
+          (CAST(12 AS BIGINT))
+          AS t(n)
+        ORDER BY n
+    """).collect()
+
+    assert rows == [
+        Row(n=1, result=[1]),
+        Row(n=3, result=[1, 2, 3]),
+        Row(n=12, result=list(range(1, 13))),
+    ]
+
+
+def test_lazy_convert_timezone_short_circuits_in_cluster_mode(spark):
+    rows = spark.sql("""
+        SELECT
+          id,
+          CAST(convert_timezone(source_tz, target_tz, source_ts) AS STRING) AS result
+        FROM VALUES
+          (0, CAST(NULL AS STRING), 'Not/AZone',
+            TIMESTAMP_NTZ '2024-01-01 00:00:00'),
+          (1, 'UTC', 'UTC', TIMESTAMP_NTZ '2024-01-01 00:00:00')
+          AS t(id, source_tz, target_tz, source_ts)
+        ORDER BY id
+    """).collect()
+
+    assert rows == [
+        Row(id=0, result=None),
+        Row(id=1, result="2024-01-01 00:00:00"),
+    ]
+
+
 def test_dataframe_operations(spark):
     """Test DataFrame operations in local-cluster mode."""
     df = spark.createDataFrame([Row(a=1, b="hello"), Row(a=2, b="world"), Row(a=3, b="test")])

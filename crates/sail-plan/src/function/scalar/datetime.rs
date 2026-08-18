@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use datafusion::arrow::compute::can_cast_types;
 use datafusion::arrow::datatypes::{
     DataType, IntervalDayTimeType, IntervalUnit, IntervalYearMonthType, TimeUnit,
 };
@@ -11,7 +12,9 @@ use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
 use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
 use sail_common::utils::datetime::time_unit_to_multiplier;
+use sail_common_datafusion::physical_expr::lazy_scalar::LazyScalarUDF;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_common_datafusion::variant::is_variant_storage_field;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_format::SparkDateFormat;
@@ -738,8 +741,27 @@ fn current_localtimestamp_microseconds(input: ScalarFunctionInput) -> PlanResult
     Ok(expr_fn::to_local_time(vec![expr]))
 }
 
-fn convert_tz(from_tz: Expr, to_tz: Expr, ts: Expr, classic: bool) -> Expr {
-    ScalarUDF::from(ConvertTz::new(classic)).call(vec![from_tz, to_tz, ts])
+fn convert_tz(from_tz: Expr, to_tz: Expr, ts: Expr, classic: bool, lazy: bool) -> Expr {
+    let function = ScalarUDF::from(ConvertTz::new(classic));
+    let function = if lazy {
+        ScalarUDF::from(LazyScalarUDF::new(Arc::new(function)))
+    } else {
+        function
+    };
+    function.call(vec![from_tz, to_tz, ts])
+}
+
+fn validate_convert_timezone_zone(expr: &Expr, schema: &DFSchemaRef) -> PlanResult<()> {
+    let field = expr.to_field(schema)?.1;
+    if !can_cast_types(field.data_type(), &DataType::Utf8)
+        && !is_variant_storage_field(field.as_ref())
+    {
+        return Err(PlanError::invalid(format!(
+            "convert_timezone time zone arguments must be castable to string, got {}",
+            field.data_type()
+        )));
+    }
+    Ok(())
 }
 
 /// A helper function for processing the input NTZ timestamp.
@@ -751,6 +773,10 @@ fn ntz_timestamp_and_unit(
     match ts.get_type(schema)? {
         DataType::Timestamp(unit, Some(_)) => Ok((expr_fn::to_local_time(vec![ts]), unit)),
         DataType::Timestamp(unit, None) => Ok((ts, unit)),
+        DataType::Null => {
+            let unit = TimeUnit::Microsecond;
+            Ok((cast(ts, DataType::Timestamp(unit, None)), unit))
+        }
         DataType::Date32 | DataType::Date64 => {
             let unit = TimeUnit::Microsecond;
             Ok((cast(ts, DataType::Timestamp(unit, None)), unit))
@@ -780,12 +806,14 @@ fn convert_timezone(input: ScalarFunctionInput) -> PlanResult<Expr> {
             "convert_timezone takes 2 or 3 arguments, got {args:?}"
         ))),
     }?;
+    validate_convert_timezone_zone(&from_tz, input.function_context.schema)?;
+    validate_convert_timezone_zone(&to_tz, input.function_context.schema)?;
     let (ts, _unit) = ntz_timestamp_and_unit(
         ts,
         input.function_context.schema,
         input.function_context.plan_config.ansi_mode,
     )?;
-    Ok(convert_tz(from_tz, to_tz, ts, true))
+    Ok(convert_tz(from_tz, to_tz, ts, true, true))
 }
 
 /// A helper function for processing the input timestamp for
@@ -826,7 +854,7 @@ fn from_utc_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let session_tz = input.function_context.plan_config.session_timezone.clone();
     let (ts, to_tz) = input.arguments.two()?;
     let (ts, unit) = utc_ntz_timestamp_and_unit(ts, input.function_context.schema, &session_tz)?;
-    let ts = convert_tz(lit("UTC"), to_tz, ts, false);
+    let ts = convert_tz(lit("UTC"), to_tz, ts, false, false);
     let ts = cast(ts, DataType::Timestamp(unit, Some(Arc::from("UTC"))));
     Ok(cast(ts, DataType::Timestamp(unit, Some(session_tz))))
 }
@@ -835,7 +863,7 @@ fn to_utc_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let session_tz = input.function_context.plan_config.session_timezone.clone();
     let (ts, from_tz) = input.arguments.two()?;
     let (ts, unit) = utc_ntz_timestamp_and_unit(ts, input.function_context.schema, &session_tz)?;
-    let ts = convert_tz(from_tz, lit("UTC"), ts, false);
+    let ts = convert_tz(from_tz, lit("UTC"), ts, false, false);
     let ts = cast(ts, DataType::Timestamp(unit, Some(Arc::from("UTC"))));
     Ok(cast(ts, DataType::Timestamp(unit, Some(session_tz))))
 }
@@ -849,7 +877,7 @@ fn make_timestamp_ltz(args: Vec<Expr>, session_tz: &Arc<str>, is_try: bool) -> P
             unreachable!()
         };
         let ntz_ts = ScalarUDF::from(SparkMakeTimestampNtz::new(is_try)).call(args);
-        convert_tz(from_tz, lit(session_tz.to_string()), ntz_ts, true)
+        convert_tz(from_tz, lit(session_tz.to_string()), ntz_ts, true, false)
     } else {
         return Err(PlanError::invalid(format!(
             "{}make_timestamp_ltz requires 2, 3, 6 or 7 arguments, got {:?}",

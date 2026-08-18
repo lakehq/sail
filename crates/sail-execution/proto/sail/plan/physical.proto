@@ -99,7 +99,13 @@ message ExtendedPhysicalExprNode {
     LambdaExprNode lambda = 3;
     LambdaVariableExprNode lambda_variable = 4;
     IcebergPartitionTransformExprNode iceberg_partition_transform = 5;
+    LazyScalarExprNode lazy_scalar = 6;
   }
+}
+
+message LazyScalarExprNode {
+  string name = 1;
+  bytes fun_definition = 2;
 }
 
 message IcebergPartitionTransformExprNode {
@@ -229,6 +235,7 @@ message ExtendedScalarUdf {
     SparkMapFromArraysUdf spark_map_from_arrays = 37;
     SparkMapFromEntriesUdf spark_map_from_entries = 38;
     StrToMapUdf str_to_map = 39;
+    SparkSequenceUdf spark_sequence = 40;
   }
 }
 
@@ -299,6 +306,11 @@ message SparkFromXmlUdf {
 }
 
 message SparkUnixTimestampUdf {
+  string session_timezone = 1;
+  bool ansi_mode = 2;
+}
+
+message SparkSequenceUdf {
   string session_timezone = 1;
   bool ansi_mode = 2;
 }

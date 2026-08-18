@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use chrono::FixedOffset;
+use datafusion::arrow::array::timezone::Tz;
 use datafusion::catalog::TableFunction;
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_expr::expr::Expr;
@@ -96,5 +98,54 @@ pub(super) fn transform_count_star_wildcard_expr(arguments: Vec<Expr>) -> Vec<Ex
             vec![Expr::Literal(COUNT_STAR_EXPANSION, None)]
         }
         _ => arguments,
+    }
+}
+
+pub fn is_spark_compatible_arrow_fixed_offset(timezone: &str) -> bool {
+    if !timezone.starts_with('+') && !timezone.starts_with('-') {
+        return false;
+    }
+    if timezone.parse::<Tz>().is_err() {
+        return false;
+    }
+    let normalized = (timezone.len() == 3).then(|| format!("{timezone}:00"));
+    normalized
+        .as_deref()
+        .unwrap_or(timezone)
+        .parse::<FixedOffset>()
+        .is_ok_and(|offset| offset.local_minus_utc().unsigned_abs() <= 18 * 60 * 60)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_spark_compatible_arrow_fixed_offset;
+
+    #[test]
+    fn spark_compatible_arrow_fixed_offset_matrix() {
+        for timezone in [
+            "+00", "+01", "+0130", "+01:30", "-00:00", "-01", "-0130", "-01:30", "+18", "+1800",
+            "+18:00", "-18", "-1800", "-18:00",
+        ] {
+            assert!(
+                is_spark_compatible_arrow_fixed_offset(timezone),
+                "{timezone}"
+            );
+        }
+
+        for timezone in [
+            "00:00",
+            "UTC",
+            "+19",
+            "+1900",
+            "+19:00",
+            "+23:59",
+            "-18:01",
+            "America/Los_Angeles",
+        ] {
+            assert!(
+                !is_spark_compatible_arrow_fixed_offset(timezone),
+                "{timezone}"
+            );
+        }
     }
 }
