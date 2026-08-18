@@ -163,9 +163,11 @@ fn regexp_extract_downcast<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Arra
                 if pattern_is_null || idx_is_null || values.is_null(i) {
                     builder.append_null();
                 } else {
+                    // By reference: cloning a Regex per row would discard its
+                    // lazy-DFA cache and rebuild the automaton on every match.
                     let re = match pattern_scalar_opt.as_ref() {
-                        Some(re) => re.clone(),
-                        None => regex_memo.get_or_try_insert(pattern.value_(i), |p| {
+                        Some(re) => re,
+                        None => regex_memo.get_or_try_insert_ref(pattern.value_(i), |p| {
                             parse_regex(SparkRegexpExtract::NAME, p)
                         })?,
                     };
@@ -173,7 +175,7 @@ fn regexp_extract_downcast<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Arra
                     builder.append_value(extract_first_match(
                         SparkRegexpExtract::NAME,
                         values.value(i),
-                        &re,
+                        re,
                         group_idx,
                     )?);
                 }
@@ -230,9 +232,11 @@ fn regexp_extract_all_downcast<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<
                 if pattern_is_null || idx_is_null || values.is_null(i) {
                     builder.append_null();
                 } else {
+                    // By reference: cloning a Regex per row would discard its
+                    // lazy-DFA cache and rebuild the automaton on every match.
                     let re = match pattern_scalar_opt.as_ref() {
-                        Some(re) => re.clone(),
-                        None => regex_memo.get_or_try_insert(pattern.value_(i), |p| {
+                        Some(re) => re,
+                        None => regex_memo.get_or_try_insert_ref(pattern.value_(i), |p| {
                             parse_regex(SparkRegexpExtractAll::NAME, p)
                         })?,
                     };
@@ -240,7 +244,7 @@ fn regexp_extract_all_downcast<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<
                     let matches = extract_all_matches(
                         SparkRegexpExtractAll::NAME,
                         values.value(i),
-                        &re,
+                        re,
                         group_idx,
                     )?;
                     builder.append_value(matches);

@@ -141,14 +141,16 @@ where
                 {
                     builder.append_null();
                 } else {
+                    // By reference: cloning a Regex per row would discard its
+                    // lazy-DFA cache and rebuild the automaton on every match.
                     let format_regex = match format_scalar_opt.as_ref() {
-                        Some(format_regex) => format_regex.clone(),
-                        None => regex_memo.get_or_try_insert(format.value(i), parse_regex)?,
+                        Some(format_regex) => format_regex,
+                        None => regex_memo.get_or_try_insert_ref(format.value(i), parse_regex)?,
                     };
                     let limit = limit_scalar_opt.unwrap_or_else(|| limit.value(i));
 
                     let values_format: Vec<Option<String>> =
-                        split_to_array(values.value(i), &format_regex, limit)?;
+                        split_to_array(values.value(i), format_regex, limit)?;
                     builder.append_value(values_format);
                 }
             }

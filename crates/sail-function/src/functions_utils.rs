@@ -65,30 +65,36 @@ const MAX_DISTINCT: usize = 128;
 /// pay overhead.
 pub(crate) struct StrMemo<'a, T> {
     cache: std::collections::HashMap<&'a str, T>,
+    /// Value computed for a key seen once the cache is full, so
+    /// `get_or_try_insert_ref` can still hand out a reference.
+    overflow: Option<T>,
 }
 
-impl<'a, T: Clone> StrMemo<'a, T> {
+impl<'a, T> StrMemo<'a, T> {
     pub(crate) fn new() -> Self {
         Self {
             cache: std::collections::HashMap::new(),
+            overflow: None,
         }
     }
 
-    /// Returns the memoized value for `key`, computing it on first sight.
-    /// Errors are not cached and surface unchanged.
-    pub(crate) fn get_or_try_insert(
+    /// Returns a reference to the memoized value for `key`, computing it on
+    /// first sight. Errors are not cached and surface unchanged. Returning a
+    /// reference matters for values whose clone is not free — cloning a
+    /// `Regex` per row discards its internal lazy-DFA cache and forces the
+    /// automaton to be rebuilt on every match.
+    pub(crate) fn get_or_try_insert_ref(
         &mut self,
         key: &'a str,
         compute: impl FnOnce(&str) -> Result<T>,
-    ) -> Result<T> {
-        match self.cache.get(key) {
-            Some(value) => Ok(value.clone()),
-            None if self.cache.len() >= MAX_DISTINCT => compute(key),
-            None => {
-                let value = compute(key)?;
-                self.cache.insert(key, value.clone());
-                Ok(value)
-            }
+    ) -> Result<&T> {
+        use std::collections::hash_map::Entry;
+        if self.cache.len() >= MAX_DISTINCT && !self.cache.contains_key(key) {
+            return Ok(self.overflow.insert(compute(key)?));
+        }
+        match self.cache.entry(key) {
+            Entry::Occupied(entry) => Ok(entry.into_mut()),
+            Entry::Vacant(entry) => Ok(entry.insert(compute(key)?)),
         }
     }
 }
@@ -112,12 +118,12 @@ mod tests {
             }
             Ok(s.len())
         };
-        assert_eq!(memo.get_or_try_insert("ab", compute)?, 2);
-        assert_eq!(memo.get_or_try_insert("ab", compute)?, 2);
-        assert_eq!(memo.get_or_try_insert("xyz", compute)?, 3);
+        assert_eq!(*memo.get_or_try_insert_ref("ab", compute)?, 2);
+        assert_eq!(*memo.get_or_try_insert_ref("ab", compute)?, 2);
+        assert_eq!(*memo.get_or_try_insert_ref("xyz", compute)?, 3);
         assert_eq!(calls.get(), 2);
-        assert!(memo.get_or_try_insert("", compute).is_err());
-        assert!(memo.get_or_try_insert("", compute).is_err());
+        assert!(memo.get_or_try_insert_ref("", compute).is_err());
+        assert!(memo.get_or_try_insert_ref("", compute).is_err());
         assert_eq!(calls.get(), 4);
         Ok(())
     }
@@ -132,15 +138,15 @@ mod tests {
             Ok(s.len())
         };
         for key in &keys {
-            memo.get_or_try_insert(key, compute)?;
+            memo.get_or_try_insert_ref(key, compute)?;
         }
         assert_eq!(calls.get(), MAX_DISTINCT);
         // A cached key is still served without recomputing.
-        memo.get_or_try_insert(&keys[0], compute)?;
+        memo.get_or_try_insert_ref(&keys[0], compute)?;
         assert_eq!(calls.get(), MAX_DISTINCT);
         // Past the cap, values are computed per call and never cached.
-        assert_eq!(memo.get_or_try_insert("overflow", compute)?, 8);
-        assert_eq!(memo.get_or_try_insert("overflow", compute)?, 8);
+        assert_eq!(*memo.get_or_try_insert_ref("overflow", compute)?, 8);
+        assert_eq!(*memo.get_or_try_insert_ref("overflow", compute)?, 8);
         assert_eq!(calls.get(), MAX_DISTINCT + 2);
         Ok(())
     }
