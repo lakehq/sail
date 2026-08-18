@@ -73,6 +73,8 @@ impl Actor for DriverActor {
             ShuffleBackendKind::Celeborn {
                 master_host,
                 master_port,
+                partition_split_threshold,
+                partition_split_mode,
                 ..
             } => {
                 let application_id = celeborn_application_id(&self.options.session_id);
@@ -84,6 +86,8 @@ impl Actor for DriverActor {
                     Some(endpoint_resolver) => options.with_endpoint_resolver(endpoint_resolver),
                     None => options,
                 };
+                let options =
+                    options.with_partition_split(*partition_split_threshold, *partition_split_mode);
                 let handle = ctx.children_mut().spawn::<LifecycleManagerActor>(options);
                 let lifecycle_manager = LocalLifecycleManager::new(handle);
                 self.extensions.lifecycle_manager = Some(lifecycle_manager.clone());

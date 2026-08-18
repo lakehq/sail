@@ -72,6 +72,13 @@ class CelebornMessageType:
     SUBPARTITION_READ_DATA = 25
 
 
+class CelebornStatus:
+    """Celeborn worker response status codes used by split tests."""
+
+    HARD_SPLIT = 21
+    SOFT_SPLIT = 22
+
+
 @dataclass(frozen=True)
 class CelebornFrame:
     """One complete Celeborn Netty transport frame.
@@ -250,6 +257,12 @@ def _celeborn_endpoint_resolver(overrides: dict[tuple[str, int], tuple[str, int]
 
 
 @pytest.fixture(scope="session")
+def celeborn_frame_codec() -> CelebornCodec:
+    """Provide the codec used to inspect Celeborn transport frames."""
+    return CelebornCodec()
+
+
+@pytest.fixture(scope="session")
 def celeborn_endpoint_resolver(celeborn_workers: dict[str, WorkerService]) -> object:
     """Map Docker-network worker endpoints to the host-published ports."""
     return _celeborn_endpoint_resolver(
@@ -268,6 +281,7 @@ def celeborn_endpoint_resolver(celeborn_workers: dict[str, WorkerService]) -> ob
 @pytest.fixture
 def celeborn_push_proxies(
     celeborn_workers: dict[str, WorkerService],
+    celeborn_frame_codec: CelebornCodec,
 ) -> Generator[dict[str, EndpointProxy], None, None]:
     """Forward worker push traffic through general purpose endpoint proxies."""
     proxies = {
@@ -275,7 +289,7 @@ def celeborn_push_proxies(
             name=f"{name}:push",
             target_host=worker.host,
             target_port=worker.push_port,
-            codec=CelebornCodec(),
+            codec=celeborn_frame_codec,
         )
         for name, worker in celeborn_workers.items()
     }

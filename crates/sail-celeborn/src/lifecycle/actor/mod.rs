@@ -9,8 +9,9 @@ pub use message::LifecycleManagerMessage;
 pub use options::LifecycleManagerOptions;
 use tokio::sync::oneshot;
 
+use crate::common::{PartitionLocation, SlotReservation, WorkerSlotLocations};
 use crate::error::{CelebornError, CelebornResult};
-use crate::master::{MasterClient, PartitionLocation, SlotReservation, WorkerSlotLocations};
+use crate::master::MasterClient;
 
 pub(super) enum ApplicationRegistration {
     Pending,
