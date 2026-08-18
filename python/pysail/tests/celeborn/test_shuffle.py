@@ -111,6 +111,7 @@ def _split_response_partition_ids(
     """Return partition IDs for PUSH_DATA requests that received a split response."""
     partition_ids = []
     for proxy in proxies.values():
+        # The first eight metadata bytes are the request ID echoed by RPC_RESPONSE.
         requests = {
             (event.connection_id, event.frame.metadata[:8]): _partition_unique_id(event.frame)
             for event in proxy.events.snapshot()
@@ -236,8 +237,8 @@ def test_shuffle_client_stop_does_not_stop_lifecycle_manager(
 @pytest.mark.parametrize(
     ("split_mode", "split_status"),
     [
-        (1, CelebornStatus.HARD_SPLIT),
-        (0, CelebornStatus.SOFT_SPLIT),
+        ("hard", CelebornStatus.HARD_SPLIT),
+        ("soft", CelebornStatus.SOFT_SPLIT),
     ],
     ids=["hard", "soft"],
 )
@@ -245,7 +246,7 @@ def test_shuffle_client_handles_a_partition_split(
     celeborn_master: MasterService,
     celeborn_push_endpoint_resolver: object,
     celeborn_push_proxies: dict[str, EndpointProxy],
-    split_mode: int,
+    split_mode: str,
     split_status: int,
 ) -> None:
     """A partition split preserves batches and moves future writes to a new epoch."""

@@ -32,7 +32,7 @@ pub(super) struct PyLifecycleManager {
     application_id: String,
     endpoint_resolver: Option<Arc<dyn EndpointResolver>>,
     partition_split_threshold: i64,
-    partition_split_mode: i32,
+    partition_split_mode: PartitionSplitMode,
     runtime: RuntimeHandle,
     state: LifecycleManagerState,
 }
@@ -40,7 +40,7 @@ pub(super) struct PyLifecycleManager {
 #[pymethods]
 impl PyLifecycleManager {
     #[new]
-    #[pyo3(signature = (master_host, master_port, application_id, *, endpoint_resolver=None, partition_split_threshold=1073741824, partition_split_mode=0))]
+    #[pyo3(signature = (master_host, master_port, application_id, *, endpoint_resolver=None, partition_split_threshold=1073741824, partition_split_mode="soft".to_string()))]
     fn new(
         py: Python<'_>,
         master_host: String,
@@ -48,11 +48,14 @@ impl PyLifecycleManager {
         application_id: String,
         endpoint_resolver: Option<Py<PyStaticEndpointResolver>>,
         partition_split_threshold: i64,
-        partition_split_mode: i32,
+        partition_split_mode: String,
     ) -> PyResult<Self> {
         let endpoint_resolver = endpoint_resolver.map(|resolver| {
             Arc::new(resolver.bind(py).borrow().clone()) as Arc<dyn EndpointResolver>
         });
+        let partition_split_mode = partition_split_mode
+            .parse::<PartitionSplitMode>()
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(Self {
             master_host,
             master_port,
@@ -84,10 +87,8 @@ impl PyLifecycleManager {
         if let Some(endpoint_resolver) = self.endpoint_resolver.clone() {
             options = options.with_endpoint_resolver(endpoint_resolver);
         }
-        let partition_split_mode = PartitionSplitMode::try_from(self.partition_split_mode)
-            .map_err(|error| PyValueError::new_err(error.to_string()))?;
         options =
-            options.with_partition_split(self.partition_split_threshold, partition_split_mode);
+            options.with_partition_split(self.partition_split_threshold, self.partition_split_mode);
         let state = py.detach(move || {
             runtime.primary().block_on(async move {
                 let mut system = ActorSystem::new();

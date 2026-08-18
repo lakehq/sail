@@ -2,14 +2,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use log::{error, info};
-use sail_celeborn::common::PartitionSplitMode;
 use sail_celeborn::lifecycle::{
     LifecycleManager, LifecycleManagerActor, LifecycleManagerOptions, LocalLifecycleManager,
 };
 use sail_celeborn::master::MasterClientOptions;
 use sail_celeborn::shuffle::{ShuffleClient, ShuffleClientActor, ShuffleClientOptions};
 use sail_common::actor::{Actor, ActorAction, ActorContext};
-use sail_common::config::CelebornPartitionSplitMode;
 
 use crate::driver::job_scheduler::{JobScheduler, JobSchedulerOptions};
 use crate::driver::task_assigner::{TaskAssigner, TaskAssignerOptions};
@@ -88,12 +86,8 @@ impl Actor for DriverActor {
                     Some(endpoint_resolver) => options.with_endpoint_resolver(endpoint_resolver),
                     None => options,
                 };
-                let partition_split_mode = match partition_split_mode {
-                    CelebornPartitionSplitMode::Soft => PartitionSplitMode::Soft,
-                    CelebornPartitionSplitMode::Hard => PartitionSplitMode::Hard,
-                };
                 let options =
-                    options.with_partition_split(*partition_split_threshold, partition_split_mode);
+                    options.with_partition_split(*partition_split_threshold, *partition_split_mode);
                 let handle = ctx.children_mut().spawn::<LifecycleManagerActor>(options);
                 let lifecycle_manager = LocalLifecycleManager::new(handle);
                 self.extensions.lifecycle_manager = Some(lifecycle_manager.clone());

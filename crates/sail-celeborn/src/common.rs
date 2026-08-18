@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
+use std::str::FromStr;
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 
@@ -11,6 +13,29 @@ use crate::protocol::proto::{PbPartitionLocation, PbUserIdentifier};
 pub enum PartitionSplitMode {
     Soft = 0,
     Hard = 1,
+}
+
+impl Display for PartitionSplitMode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Soft => f.write_str("soft"),
+            Self::Hard => f.write_str("hard"),
+        }
+    }
+}
+
+impl FromStr for PartitionSplitMode {
+    type Err = CelebornError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "soft" => Ok(Self::Soft),
+            "hard" => Ok(Self::Hard),
+            _ => Err(CelebornError::InvalidArgument(format!(
+                "partition split mode must be `soft` or `hard` but got {value}"
+            ))),
+        }
+    }
 }
 
 /// Slots reserved by the Celeborn master for a shuffle.

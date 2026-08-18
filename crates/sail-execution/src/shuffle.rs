@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use sail_celeborn::common::PartitionSplitMode;
 use sail_celeborn::endpoint::{EndpointResolver, StaticEndpointResolver};
 use sail_common::config::CelebornPartitionSplitMode;
 
@@ -17,7 +18,7 @@ pub enum ShuffleBackendKind {
         master_port: u16,
         endpoint_overrides: Vec<ShuffleEndpointOverride>,
         partition_split_threshold: i64,
-        partition_split_mode: CelebornPartitionSplitMode,
+        partition_split_mode: PartitionSplitMode,
     },
 }
 
@@ -52,7 +53,10 @@ impl From<&sail_common::config::ShuffleBackend> for ShuffleBackendKind {
                     })
                     .collect(),
                 partition_split_threshold: celeborn.partition_split_threshold,
-                partition_split_mode: celeborn.partition_split_mode,
+                partition_split_mode: match celeborn.partition_split_mode {
+                    CelebornPartitionSplitMode::Soft => PartitionSplitMode::Soft,
+                    CelebornPartitionSplitMode::Hard => PartitionSplitMode::Hard,
+                },
             },
         }
     }
@@ -121,7 +125,7 @@ impl From<sail_common::config::ShuffleCompression> for ShuffleCompression {
 
 #[cfg(test)]
 mod tests {
-    use super::{CelebornPartitionSplitMode, ShuffleBackendKind, ShuffleEndpointOverride};
+    use super::{PartitionSplitMode, ShuffleBackendKind, ShuffleEndpointOverride};
 
     #[test]
     fn test_celeborn_endpoint_overrides_string() {
@@ -135,7 +139,7 @@ mod tests {
                 external_port: 32000,
             }],
             partition_split_threshold: 1_i64 << 30,
-            partition_split_mode: CelebornPartitionSplitMode::Soft,
+            partition_split_mode: PartitionSplitMode::Soft,
         };
 
         assert_eq!(

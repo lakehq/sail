@@ -5,9 +5,9 @@ use futures::stream::{self, BoxStream};
 use sail_common::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
 
+use crate::common::{PartitionLocation, SlotReservation};
 use crate::error::{CelebornError, CelebornResult};
 use crate::lifecycle::ReviveRequest;
-use crate::master::{PartitionLocation, SlotReservation};
 use crate::protocol::StatusCode;
 use crate::shuffle::ShuffleClientMessage;
 use crate::shuffle::actor::ShuffleClientActor;

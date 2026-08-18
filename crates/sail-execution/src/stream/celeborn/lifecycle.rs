@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
+use sail_celeborn::common::{PartitionLocation, SlotReservation, WorkerSlotLocations};
 use sail_celeborn::error::{CelebornError, CelebornResult};
 use sail_celeborn::lifecycle::{LifecycleManager, ReviveRequest};
-use sail_celeborn::master::{PartitionLocation, SlotReservation};
 
 use crate::driver::CelebornLifecycleManagerClient;
 use crate::driver::r#gen::CelebornPartitionLocation;
@@ -54,14 +54,13 @@ impl LifecycleManager for RemoteLifecycleManager {
                 Ok((location.id, location))
             })
             .collect::<CelebornResult<HashMap<_, _>>>()?;
-        let mut worker_locations =
-            HashMap::<String, sail_celeborn::master::WorkerSlotLocations>::new();
+        let mut worker_locations = HashMap::<String, WorkerSlotLocations>::new();
         for location in response.all_primary_locations {
             let location = PartitionLocation::try_from(location)?;
             let worker_id = location.worker_id();
             worker_locations
                 .entry(worker_id)
-                .or_insert_with(|| sail_celeborn::master::WorkerSlotLocations {
+                .or_insert_with(|| WorkerSlotLocations {
                     primary_locations: Vec::new(),
                     replica_locations: Vec::new(),
                 })

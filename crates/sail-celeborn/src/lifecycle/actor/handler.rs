@@ -2,10 +2,10 @@ use log::warn;
 use sail_common::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
 
+use crate::common::{PartitionLocation, SlotReservation, UserIdentifier, WorkerSlotLocations};
 use crate::error::{CelebornError, CelebornResult};
 use crate::lifecycle::actor::{LifecycleManagerActor, ShuffleKey};
 use crate::lifecycle::{LifecycleManagerMessage, ReviveRequest};
-use crate::master::{PartitionLocation, SlotReservation, UserIdentifier, WorkerSlotLocations};
 use crate::protocol::StatusCode;
 use crate::worker::{WorkerClient, WorkerClientOptions};
 

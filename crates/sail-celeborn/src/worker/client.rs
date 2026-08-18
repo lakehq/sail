@@ -4,10 +4,9 @@ use std::time::Duration;
 use futures::stream::{self, BoxStream};
 use prost::Message;
 
-use crate::common::PartitionSplitMode;
+use crate::common::{PartitionLocation, PartitionSplitMode, UserIdentifier};
 use crate::endpoint::EndpointResolver;
 use crate::error::{CelebornError, CelebornResult};
-use crate::master::{PartitionLocation, UserIdentifier};
 use crate::protocol::StatusCode;
 use crate::protocol::proto::{
     MessageType, PbCommitFiles, PbCommitFilesResponse, PbOpenStream, PbReserveSlots,
