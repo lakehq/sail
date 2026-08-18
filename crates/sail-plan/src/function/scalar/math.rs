@@ -408,21 +408,19 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
     // Spark's `div` (IntegralDivide) accepts only BIGINT, DECIMAL and the two ANSI
     // interval families, and rejects everything else during analysis — before any
     // value-dependent path, so a zero divisor cannot shadow the type check.
-    // Spark reports this through two `DATATYPE_MISMATCH` sub-classes and the wording
-    // differs: `BINARY_OP_WRONG_TYPE` when both operands share an unacceptable type,
-    // `BINARY_OP_DIFF_TYPES` when they differ (Expression.scala:840-857). Both messages
-    // carry "due to data type mismatch", which is what the `.feature` asserts against
-    // either engine.
-    let same_operand_type = matches!((&dividend_type, &divisor_type), (Ok(l), Ok(r)) if l == r);
-    let reject = move || {
-        Err(PlanError::unsupported(if same_operand_type {
-            "div: cannot resolve the operands due to data type mismatch: the binary \
-             operator requires the input type BIGINT, DECIMAL, INTERVAL YEAR TO MONTH \
-             or INTERVAL DAY TO SECOND"
-        } else {
-            "div: cannot resolve the operands due to data type mismatch: the left and \
-             right operands of the binary operator have incompatible types"
-        }))
+    // Spark splits this across two `DATATYPE_MISMATCH` sub-classes (Expression.scala:840-857),
+    // but it picks between them from the operand types AFTER coercion, and that coercion is
+    // ANSI-dependent: measured on the JVM, `BOOLEAN div STRING` and `DATE div STRING` report
+    // DIFF_TYPES outside ANSI and WRONG_TYPE under it, while `DECIMAL div STRING` reports
+    // WRONG_TYPE in both. Choosing from the types Sail sees here gets roughly a third of the
+    // matrix wrong, so this deliberately emits ONE message rather than a heuristic that looks
+    // precise and is not. It keeps "due to data type mismatch", the substring both engines
+    // share and the only part the `.feature` can assert against either.
+    let reject = || {
+        Err(PlanError::unsupported(
+            "div: cannot resolve the operands due to data type mismatch: div accepts \
+             BIGINT, DECIMAL, INTERVAL YEAR TO MONTH and INTERVAL DAY TO SECOND",
+        ))
     };
     // STRING operands, measured against the JVM across the whole matrix:
     //   - outside ANSI, `StringPromotionTypeCoercion` casts the string to DOUBLE, which
