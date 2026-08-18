@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
@@ -134,8 +135,28 @@ impl UserDefinedLogicalNodeCore for SessionAggregateNode {
     }
 
     fn necessary_children_exprs(&self, _output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {
-        // Keep every input column: keys, time, end, and any aggregate inputs are all
-        // needed by the merge, so none can be pruned.
-        Some(vec![(0..self.input.schema().fields().len()).collect()])
+        // Only the keys, time/end, and aggregate inputs are needed; the rest of
+        // the desugar's `*` projection can be pruned before the repartition +
+        // sort below. The output schema does not depend on the input width, so
+        // the cloned schema in `with_exprs_and_inputs` stays valid.
+        let input_schema = self.input.schema();
+        let mut needed = BTreeSet::new();
+        for name in self
+            .partition_columns
+            .iter()
+            .chain([&self.time_column, &self.end_column])
+        {
+            let index = input_schema
+                .fields()
+                .iter()
+                .position(|field| field.name() == name)?;
+            needed.insert(index);
+        }
+        for expr in &self.aggregate_exprs {
+            for column in expr.column_refs() {
+                needed.insert(input_schema.maybe_index_of_column(column)?);
+            }
+        }
+        Some(vec![needed.into_iter().collect()])
     }
 }

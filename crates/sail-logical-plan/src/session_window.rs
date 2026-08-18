@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
@@ -139,9 +140,29 @@ impl UserDefinedLogicalNodeCore for SessionWindowNode {
         )
     }
 
-    fn necessary_children_exprs(&self, _output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {
-        // Keep every input column: the merge needs the group/time/end columns, and
-        // the appended struct is built from them, so none can be pruned away.
-        Some(vec![(0..self.input.schema().fields().len()).collect()])
+    fn necessary_children_exprs(&self, output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {
+        // The merge needs only the group/time/end columns, so input columns no
+        // parent asks for can be pruned — otherwise the desugar's `*` projection
+        // rides through the repartition + sort below this node.
+        // `with_exprs_and_inputs` recomputes the schema for the pruned input.
+        let input_schema = self.input.schema();
+        let num_input_fields = input_schema.fields().len();
+        let mut needed: BTreeSet<usize> = output_columns
+            .iter()
+            .copied()
+            .filter(|i| *i < num_input_fields)
+            .collect();
+        for name in self
+            .partition_columns
+            .iter()
+            .chain([&self.time_column, &self.end_column])
+        {
+            let index = input_schema
+                .fields()
+                .iter()
+                .position(|field| field.name() == name)?;
+            needed.insert(index);
+        }
+        Some(vec![needed.into_iter().collect()])
     }
 }
