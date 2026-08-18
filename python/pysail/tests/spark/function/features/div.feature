@@ -554,6 +554,44 @@ Feature: div (integer division) comprehensive tests
         | result |
         | 2      |
 
+    # Outside ANSI the legacy promotion casts the STRING operand to DOUBLE, which `div`
+    # does not accept, so Spark rejects every one of these at analysis. Sail's divisor
+    # guard coerces the string instead and produces a value — including a NULL for the
+    # zero and NULL-string cases, which reads as a successful query.
+    @sail-bug
+    Scenario Outline: div <case> is rejected under ANSI false
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT div(<args>) AS result
+        """
+      Then query error due to data type mismatch
+
+      Examples:
+        | case                | args                              |
+        | BIGINT by STRING    | CAST(5 AS BIGINT), '2'            |
+        | DECIMAL by STRING   | CAST(5 AS DECIMAL(5,2)), '2'      |
+        | INT by STRING zero  | 5, '0'                            |
+        | INT by NULL STRING  | 5, CAST(NULL AS STRING)           |
+
+    # Under ANSI the promotion widens the STRING to the other operand's numeric type, so
+    # these resolve and evaluate. Sail fails to coerce them instead.
+    @sail-bug
+    Scenario Outline: div <case> is accepted under ANSI true
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT div(<args>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case               | args                    | result |
+        | BIGINT by STRING   | CAST(5 AS BIGINT), '2'  | 2      |
+        | INT by NULL STRING | 5, CAST(NULL AS STRING) | NULL   |
+
     @sail-bug
     Scenario: div STRING by INT literal is accepted under ANSI true
       Given config spark.sql.ansi.enabled = true
@@ -794,11 +832,13 @@ Feature: div (integer division) comprehensive tests
         | -2147483648 |
 
     # `checkDivideOverflow` is enabled only when the dividend is LONG, never for an
-    # interval, so Spark wraps here instead of raising. Sail's day-time path divides
-    # through a checked Int64 kernel and raises.
+    # interval, so Spark wraps here instead of raising — in BOTH ANSI modes, since the
+    # gate does not consult `failOnError` for this operand type. Sail's day-time path
+    # divides through a checked Int64 kernel and raises either way, so both modes are
+    # pinned: a fix that only covered the ANSI half would otherwise look complete.
     @sail-bug
-    Scenario: div DAY-TIME interval wraps instead of overflowing under ANSI true
-      Given config spark.sql.ansi.enabled = true
+    Scenario Outline: div DAY-TIME interval wraps instead of overflowing under ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
       When query
         """
         SELECT div(
@@ -809,6 +849,11 @@ Feature: div (integer division) comprehensive tests
       Then query result
         | result               |
         | -9223372036854775808 |
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
 
     # Spark divides on BigDecimal and only then narrows with `Decimal.toLong`, which
     # discards the high-order bits. Sail casts the decimal quotient to BIGINT and the
@@ -829,22 +874,29 @@ Feature: div (integer division) comprehensive tests
   # anchored at the start on purpose: a substring alone still matches a prefixed message,
   # so only the anchor discriminates the shape Spark actually emits.
   #
-  # The leading `.` stands in for the literal `[` of the error class: this step's patterns
-  # go through an extra escaping pass, so a backslash would be doubled and never match.
+  # The pattern lives on the step line rather than in the Examples table because a
+  # backslash placed in a table cell reaches `re.search` doubled and never matches.
   Rule: div reports zero division and overflow exactly as Spark does
 
-    Scenario Outline: div over <family> reports <condition> with no wrapper prefix
+    Scenario Outline: div over <family> reports division by zero with no wrapper prefix
       Given config spark.sql.ansi.enabled = true
       When query
         """
         SELECT div(<args>) AS result
         """
-      Then query error <pattern>
+      Then query error ^\[DIVIDE_BY_ZERO\] Division by zero
 
       Examples:
-        | family        | condition           | args                                                                 | pattern                                        |
-        | BIGINT        | division by zero    | CAST(5 AS BIGINT), CAST(0 AS BIGINT)                                 | ^.DIVIDE_BY_ZERO. Division by zero           |
-        | DECIMAL       | division by zero    | CAST(5.5 AS DECIMAL(5,2)), CAST(0.0 AS DECIMAL(5,2))                 | ^.DIVIDE_BY_ZERO. Division by zero           |
-        | INTERVAL DAY  | division by zero    | INTERVAL '10' DAY, INTERVAL '0' DAY                                  | ^.DIVIDE_BY_ZERO. Division by zero           |
-        | INTERVAL YEAR | division by zero    | INTERVAL '10' YEAR, INTERVAL '0' YEAR                                | ^.DIVIDE_BY_ZERO. Division by zero           |
-        | BIGINT        | integral overflow   | CAST(-9223372036854775808 AS BIGINT), CAST(-1 AS BIGINT)             | ^.ARITHMETIC_OVERFLOW. Overflow in integral divide |
+        | family        | args                                                 |
+        | BIGINT        | CAST(5 AS BIGINT), CAST(0 AS BIGINT)                 |
+        | DECIMAL       | CAST(5.5 AS DECIMAL(5,2)), CAST(0.0 AS DECIMAL(5,2)) |
+        | INTERVAL DAY  | INTERVAL '10' DAY, INTERVAL '0' DAY                  |
+        | INTERVAL YEAR | INTERVAL '10' YEAR, INTERVAL '0' YEAR                |
+
+    Scenario: div reports integral overflow with no wrapper prefix
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT div(CAST(-9223372036854775808 AS BIGINT), CAST(-1 AS BIGINT)) AS result
+        """
+      Then query error ^\[ARITHMETIC_OVERFLOW\] Overflow in integral divide

@@ -30,6 +30,10 @@ const INTEGRAL_DIVIDE_OVERFLOW_MESSAGE: &str =
 /// "Compute error: ..."), which would corrupt the Spark message. `raise_error` — used by
 /// the plan-side zero guard — raises `DataFusionError::Execution`, which reaches the user
 /// unprefixed, so map kernel errors onto it and keep every `div` path byte-identical.
+///
+/// The match is deliberately broad: the kernels below build a `ComputeError` only for the
+/// two Spark messages above, so anything else reaching here is an Arrow-authored failure
+/// (a length mismatch, say) that loses its "Compute error:" label but keeps its text.
 fn spark_error(e: ArrowError) -> DataFusionError {
     match e {
         ArrowError::ComputeError(message) => DataFusionError::Execution(message),
