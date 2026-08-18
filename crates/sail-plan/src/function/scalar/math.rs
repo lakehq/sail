@@ -406,21 +406,24 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let divisor_type = divisor.get_type(function_context.schema);
 
     // Spark's `div` (IntegralDivide) accepts only BIGINT, DECIMAL and the two ANSI
-    // interval families, and rejects anything else during analysis. Floating point is
-    // the case Sail can otherwise reach, so reject it before any value-dependent path.
-    let reject = || {
-        Err(PlanError::unsupported(
-            "div due to data type mismatch: the binary operator requires the input type \
-             (\"BIGINT\" or \"DECIMAL\" or \"INTERVAL YEAR TO MONTH\" or \
-             \"INTERVAL DAY TO SECOND\")",
-        ))
+    // interval families, and rejects everything else during analysis — before any
+    // value-dependent path, so a zero divisor cannot shadow the type check.
+    // Spark reports this through two `DATATYPE_MISMATCH` sub-classes and the wording
+    // differs: `BINARY_OP_WRONG_TYPE` when both operands share an unacceptable type,
+    // `BINARY_OP_DIFF_TYPES` when they differ (Expression.scala:840-857). Both messages
+    // carry "due to data type mismatch", which is what the `.feature` asserts against
+    // either engine.
+    let same_operand_type = matches!((&dividend_type, &divisor_type), (Ok(l), Ok(r)) if l == r);
+    let reject = move || {
+        Err(PlanError::unsupported(if same_operand_type {
+            "div: cannot resolve the operands due to data type mismatch: the binary \
+             operator requires the input type BIGINT, DECIMAL, INTERVAL YEAR TO MONTH \
+             or INTERVAL DAY TO SECOND"
+        } else {
+            "div: cannot resolve the operands due to data type mismatch: the left and \
+             right operands of the binary operator have incompatible types"
+        }))
     };
-    for t in [&dividend_type, &divisor_type] {
-        if let Ok(DataType::Float16 | DataType::Float32 | DataType::Float64) = t {
-            return reject();
-        }
-    }
-
     // STRING operands, measured against the JVM across the whole matrix:
     //   - outside ANSI, `StringPromotionTypeCoercion` casts the string to DOUBLE, which
     //     `div` does not accept, so *every* combination involving a string is rejected;
@@ -456,6 +459,31 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
             ),
             _ => return reject(),
         };
+
+    // Spark's accepted set, verbatim from `IntegralDivide.inputType` (arithmetic.scala:890):
+    // LONG, DECIMAL and the two ANSI interval families — Sail resolves DAY TO SECOND to
+    // `Duration`. An allow-list rejects FLOAT/DOUBLE, BOOLEAN, DATE and BINARY alike,
+    // where a float-only deny-list let the rest reach DataFusion and fail downstream.
+    // `Err` still falls through, so an unresolved type keeps the behaviour below.
+    for t in [&dividend_type, &divisor_type] {
+        let accepted = match t {
+            Err(_) => true,
+            // An untyped NULL is accepted: Spark rewrites `NullType` to the expected
+            // concrete type for `ExpectsInputTypes` (TypeCoercionHelper.scala:570-578).
+            Ok(DataType::Null) => true,
+            Ok(t) => {
+                t.is_integer()
+                    || matches!(t, DataType::Decimal128(_, _) | DataType::Decimal256(_, _))
+                    || matches!(
+                        t,
+                        DataType::Interval(IntervalUnit::YearMonth) | DataType::Duration(_)
+                    )
+            }
+        };
+        if !accepted {
+            return reject();
+        }
+    }
 
     // Spark evaluates the divisor first but still lets a NULL dividend win over a zero
     // divisor, so the zero policy has to see BOTH operands.

@@ -121,6 +121,29 @@ Feature: div (integer division) comprehensive tests
         | result |
         | NULL   |
 
+    # An untyped NULL is not one of the four types `IntegralDivide` accepts, but Spark
+    # rewrites `NullType` to the expected concrete type before the check, so it resolves
+    # in either position and in both ANSI modes. This is what keeps a type allow-list
+    # from rejecting it.
+    Scenario Outline: div with an untyped NULL <position> returns NULL under ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT div(<args>) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+      Examples:
+        | position   | ansi  | args    |
+        | dividend   | true  | NULL, 5 |
+        | dividend   | false | NULL, 5 |
+        | divisor    | true  | 5, NULL |
+        | divisor    | false | 5, NULL |
+        | both sides | true  | NULL, NULL |
+        | both sides | false | NULL, NULL |
+
     Scenario: div untyped NULL dividend
       When query
         """
@@ -598,7 +621,7 @@ Feature: div (integer division) comprehensive tests
         """
         SELECT div(5, 'abc') AS result
         """
-      Then query error .*
+      Then query error (?i)cannot (be )?cast
 
     Scenario: div INT by STRING zero errors under ANSI true
       Given config spark.sql.ansi.enabled = true
@@ -879,8 +902,11 @@ Feature: div (integer division) comprehensive tests
   # anchored at the start on purpose: a substring alone still matches a prefixed message,
   # so only the anchor discriminates the shape Spark actually emits.
   #
-  # The pattern lives on the step line rather than in the Examples table because a
-  # backslash placed in a table cell reaches `re.search` doubled and never matches.
+  # The pattern lives on the step line rather than in the Examples table: measured
+  # end to end, a backslash written in a cell arrives at `re.search` doubled and never
+  # matches, while the same bytes on a step line work. The gherkin parser, `render_string`
+  # and `parsers.parse` each preserve it in isolation, so it is the composition — do not
+  # "simplify" this back into the table without re-running it.
   Rule: div reports zero division and overflow exactly as Spark does
 
     Scenario Outline: div over <family> reports division by zero with no wrapper prefix
