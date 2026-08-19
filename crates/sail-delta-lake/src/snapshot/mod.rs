@@ -70,7 +70,7 @@ pub(crate) use config::{
     CatalogManagedCommitFile, CatalogManagedCommitSet, catalog_managed_commit_file_name,
     catalog_managed_commit_path,
 };
-pub(crate) use metadata_aggregate::GroupedCountMetadata;
+pub(crate) use metadata_aggregate::{GroupedCountMetadata, GroupedCountMetadataRow};
 
 pub struct DeltaSnapshot {
     version: i64,

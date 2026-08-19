@@ -10,11 +10,23 @@ use crate::datasource::{DeltaScanConfig, df_logical_schema, get_pushdown_filters
 use crate::delta_log::LogStoreRef;
 use crate::table::DeltaSnapshot;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub(crate) enum DeltaFileSelection {
     #[default]
     Snapshot,
     Selected(Arc<[usize]>),
+}
+
+impl std::fmt::Debug for DeltaFileSelection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Snapshot => f.write_str("Snapshot"),
+            Self::Selected(indices) => f
+                .debug_struct("Selected")
+                .field("file_count", &indices.len())
+                .finish(),
+        }
+    }
 }
 
 /// Logical-only Delta table source used in DataFusion logical plans.

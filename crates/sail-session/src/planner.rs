@@ -39,6 +39,7 @@ use sail_data_source::formats::console::ConsolePhysicalPlanner;
 use sail_data_source::formats::noop::NoopPhysicalPlanner;
 use sail_data_source::formats::python::PythonPhysicalPlanner;
 use sail_data_source::listing::planner::ListingPhysicalPlanner;
+use sail_delta_lake::logical::DeltaPartialGroupedAggregateRewriter;
 use sail_delta_lake::physical::DeltaPhysicalPlanner;
 use sail_iceberg::IcebergPhysicalPlanner;
 use sail_logical_plan::barrier::BarrierNode;
@@ -87,9 +88,9 @@ impl QueryPlanner for ExtensionQueryPlanner {
         logical_plan: &LogicalPlan,
         session_state: &SessionState,
     ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
-        // TODO: show rewriters and the final logical plan in `EXPLAIN`
-        // Note: the rewriter list is currently empty but may be useful for future logical rewrites.
-        let rewriters: Vec<Box<dyn LogicalRewriter>> = vec![];
+        // TODO: show rewriters and the final logical plan in `EXPLAIN`.
+        let rewriters: Vec<Box<dyn LogicalRewriter>> =
+            vec![Box::new(DeltaPartialGroupedAggregateRewriter)];
         let mut logical_plan = logical_plan.clone();
         for rewriter in rewriters {
             logical_plan = rewriter.rewrite(logical_plan)?.data
