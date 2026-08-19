@@ -8804,7 +8804,7 @@
                     "nonTerminal": "Assignment"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -8826,7 +8826,7 @@
                     "nonTerminal": "ColumnAlteration"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -8848,7 +8848,7 @@
                     "nonTerminal": "ColumnDefinition"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -8870,7 +8870,7 @@
                     "nonTerminal": "Expression"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -8892,7 +8892,7 @@
                     "nonTerminal": "FunctionArgument"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -8914,7 +8914,7 @@
                     "nonTerminal": "GroupingExpr"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -8936,7 +8936,7 @@
                     "nonTerminal": "GroupingSet"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -8958,7 +8958,7 @@
                     "nonTerminal": "Identifier"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -8980,7 +8980,7 @@
                     "nonTerminal": "Identifier"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Period)"
@@ -9002,7 +9002,7 @@
                     "nonTerminal": "NamedExpr"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -9024,7 +9024,7 @@
                     "nonTerminal": "NamedQuery"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -9046,7 +9046,7 @@
                     "nonTerminal": "NamedWindow"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -9068,7 +9068,7 @@
                     "nonTerminal": "ObjectName"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -9090,7 +9090,7 @@
                     "nonTerminal": "OrderByExpr"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -9112,7 +9112,7 @@
                     "nonTerminal": "PartitionByItem"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -9134,7 +9134,7 @@
                     "nonTerminal": "PartitionValue"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -9156,7 +9156,7 @@
                     "nonTerminal": "PropertyKey"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -9178,7 +9178,7 @@
                     "nonTerminal": "PropertyKeyValue"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -9200,7 +9200,7 @@
                     "nonTerminal": "SortColumn"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -9222,7 +9222,7 @@
                     "nonTerminal": "StructField"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -9244,7 +9244,7 @@
                     "nonTerminal": "TableWithJoins"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -9266,7 +9266,7 @@
                     "nonTerminal": "Tuple(IdentList, Option(Tuple(Option(Keyword(As)), Identifier)))"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -9288,7 +9288,7 @@
                     "nonTerminal": "Tuple(Identifier, Option(Tuple(Option(Keyword(As)), Identifier)))"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -9310,7 +9310,7 @@
                     "nonTerminal": "ViewColumn"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
