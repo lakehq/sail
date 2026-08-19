@@ -84,11 +84,33 @@ impl FromStr for IsolationLevel {
     }
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
+pub enum CheckpointPolicy {
+    #[default]
+    Classic,
+    V2,
+}
+
+impl FromStr for CheckpointPolicy {
+    type Err = DeltaTableError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "classic" => Ok(Self::Classic),
+            "v2" => Ok(Self::V2),
+            _ => Err(DeltaTableError::generic(format!(
+                "invalid value for delta.checkpointPolicy: {value}; expected classic or v2"
+            ))),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Default)]
 // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties.rs#L31-L180>
 pub struct TableProperties {
     pub append_only: Option<bool>,
     pub checkpoint_interval: Option<NonZeroU64>,
+    pub checkpoint_policy: Option<CheckpointPolicy>,
     pub checkpoint_write_stats_as_json: Option<bool>,
     pub checkpoint_write_stats_as_struct: Option<bool>,
     pub write_checksum_file_enabled: Option<bool>,
@@ -148,6 +170,10 @@ impl TableProperties {
     pub fn checkpoint_interval(&self) -> NonZeroU64 {
         self.checkpoint_interval
             .unwrap_or(DEFAULT_CHECKPOINT_INTERVAL)
+    }
+
+    pub fn checkpoint_policy(&self) -> CheckpointPolicy {
+        self.checkpoint_policy.unwrap_or_default()
     }
 
     pub fn write_checksum_file_enabled(&self) -> bool {
@@ -219,6 +245,9 @@ fn canonicalize_table_property_key(key: &str) -> Option<&'static str> {
         "delta.appendonly" | "append_only" | "appendonly" => Some("delta.appendOnly"),
         "delta.checkpointinterval" | "checkpoint_interval" | "checkpointinterval" => {
             Some("delta.checkpointInterval")
+        }
+        "delta.checkpointpolicy" | "checkpoint_policy" | "checkpointpolicy" => {
+            Some("delta.checkpointPolicy")
         }
         "delta.checkpoint.writestatsasjson"
         | "checkpoint_write_stats_as_json"
@@ -319,6 +348,7 @@ fn validate_table_property(key: &str, value: &str) -> DeltaResult<()> {
                 ))
             })
         }
+        "delta.checkpointPolicy" => CheckpointPolicy::from_str(value).map(|_| ()),
         "delta.inCommitTimestampEnablementVersion" => {
             parse_non_negative_i64(value).map(|_| ()).ok_or_else(|| {
                 DeltaTableError::generic(format!(
@@ -353,6 +383,9 @@ fn try_parse_table_property(props: &mut TableProperties, key: &str, value: &str)
     match key {
         "delta.appendOnly" => props.append_only = Some(parse_bool(value)?),
         "delta.checkpointInterval" => props.checkpoint_interval = Some(parse_positive_int(value)?),
+        "delta.checkpointPolicy" => {
+            props.checkpoint_policy = CheckpointPolicy::from_str(value).ok()
+        }
         "delta.checkpoint.writeStatsAsJson" => {
             props.checkpoint_write_stats_as_json = Some(parse_bool(value)?)
         }
@@ -474,7 +507,9 @@ mod tests {
 
     #[test]
     fn test_checkpoint_interval_default_is_ten() {
-        assert_eq!(TableProperties::default().checkpoint_interval().get(), 10);
+        let properties = TableProperties::default();
+        assert_eq!(properties.checkpoint_interval().get(), 10);
+        assert_eq!(properties.checkpoint_policy(), CheckpointPolicy::Classic);
     }
 
     #[test]
@@ -487,6 +522,7 @@ mod tests {
         let props = canonicalize_and_validate_table_properties([
             ("column_mapping_mode", "name"),
             ("checkpoint_interval", "7"),
+            ("checkpoint_policy", "v2"),
             ("write_checksum_file_enabled", "false"),
             ("enable_in_commit_timestamps", "true"),
             ("enable_type_widening", "true"),
@@ -501,6 +537,11 @@ mod tests {
         assert_eq!(
             props.get("delta.checkpointInterval"),
             Some(&"7".to_string())
+        );
+        assert_eq!(props.get("delta.checkpointPolicy"), Some(&"v2".to_string()));
+        assert_eq!(
+            TableProperties::from([("delta.checkpointPolicy", "v2")]).checkpoint_policy(),
+            CheckpointPolicy::V2
         );
         assert_eq!(
             props.get("delta.writeChecksumFile.enabled"),
@@ -526,11 +567,21 @@ mod tests {
     fn test_invalid_modeled_property_is_rejected() {
         let result =
             canonicalize_and_validate_table_properties([("delta.checkpointInterval", "0")]);
-        assert!(result.is_err());
-        if let Err(err) = result {
+        assert!(
+            matches!(&result, Err(err) if err.to_string().contains(
+                "invalid value for delta.checkpointInterval"
+            )),
+            "unexpected checkpoint interval result: {result:?}"
+        );
+
+        for invalid in ["V2", "Classic", " v2", "v2 ", "invalid"] {
+            let result =
+                canonicalize_and_validate_table_properties([("checkpoint_policy", invalid)]);
             assert!(
-                err.to_string()
-                    .contains("invalid value for delta.checkpointInterval")
+                matches!(&result, Err(err) if err.to_string().contains(
+                    "invalid value for delta.checkpointPolicy"
+                )),
+                "unexpected checkpoint policy result for {invalid}: {result:?}"
             );
         }
     }

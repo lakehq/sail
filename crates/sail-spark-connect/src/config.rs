@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use sail_plan::config::{DefaultTimestampType, PlanConfig};
+use sail_plan::config::{
+    DefaultTimestampType, MapKeyDedupPolicy, PlanConfig, StoreAssignmentPolicy,
+};
 use sail_python_udf::config::PySparkUdfConfig;
 
 use crate::error::{SparkError, SparkResult};
@@ -264,6 +266,31 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             .transpose()?
         {
             output.ansi_mode = value;
+        }
+
+        if let Some(value) = config.get_option(SparkConfigKey::SPARK_SQL_STORE_ASSIGNMENT_POLICY) {
+            output.store_assignment_policy = match value.trim().to_ascii_uppercase().as_str() {
+                "ANSI" => StoreAssignmentPolicy::Ansi,
+                "STRICT" => StoreAssignmentPolicy::Strict,
+                "LEGACY" => StoreAssignmentPolicy::Legacy,
+                _ => {
+                    return Err(SparkError::invalid(format!(
+                        "invalid store assignment policy: {value}"
+                    )));
+                }
+            };
+        }
+
+        if let Some(value) = config.get_option(SparkConfigKey::SPARK_SQL_MAP_KEY_DEDUP_POLICY) {
+            output.map_key_dedup_policy = match value.trim().to_ascii_uppercase().as_str() {
+                "EXCEPTION" => MapKeyDedupPolicy::Exception,
+                "LAST_WIN" => MapKeyDedupPolicy::LastWin,
+                _ => {
+                    return Err(SparkError::invalid(format!(
+                        "invalid map key dedup policy: {value}"
+                    )));
+                }
+            };
         }
 
         if let Some(value) = config

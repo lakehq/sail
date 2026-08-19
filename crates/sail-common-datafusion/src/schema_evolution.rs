@@ -98,7 +98,7 @@ fn create_schema_evolution_adapter(
     timezone_mode: SchemaEvolutionTimezoneMode,
 ) -> Result<Arc<dyn PhysicalExprAdapter>> {
     let (column_mapping, default_values) =
-        create_column_mapping(&logical_file_schema, &physical_file_schema);
+        create_column_mapping(&logical_file_schema, &physical_file_schema, matching);
 
     Ok(Arc::new(SchemaEvolutionPhysicalExprAdapter {
         logical_file_schema,
@@ -113,17 +113,18 @@ fn create_schema_evolution_adapter(
 fn create_column_mapping(
     logical_schema: &Schema,
     physical_schema: &Schema,
+    matching: StructFieldMatching,
 ) -> (Vec<Option<usize>>, Vec<Option<ScalarValue>>) {
     let mut column_mapping = Vec::with_capacity(logical_schema.fields().len());
     let mut default_values = Vec::with_capacity(logical_schema.fields().len());
 
     for logical_field in logical_schema.fields() {
-        match physical_schema.index_of(logical_field.name()) {
-            Ok(physical_index) => {
+        match find_matching_struct_field(physical_schema.fields(), logical_field, matching) {
+            Some((physical_index, _)) => {
                 column_mapping.push(Some(physical_index));
                 default_values.push(None);
             }
-            Err(_) => {
+            None => {
                 column_mapping.push(None);
                 let default_value = if logical_field.is_nullable() {
                     Some(
@@ -225,18 +226,20 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
             None => return Ok(None),
         };
 
-        let physical_field = match self.physical_file_schema.field_with_name(column.name()) {
-            Ok(field) => field,
+        let logical_field_index = match self.logical_file_schema.index_of(column.name()) {
+            Ok(index) => index,
             Err(_) => return Ok(None),
         };
+        let physical_field_index = match self.column_mapping.get(logical_field_index) {
+            Some(Some(index)) => *index,
+            _ => return Ok(None),
+        };
+        let physical_field = self.physical_file_schema.field(physical_field_index);
         let physical_struct_fields = match physical_field.data_type() {
             DataType::Struct(fields) => fields,
             _ => return Ok(None),
         };
-        let logical_field = match self.logical_file_schema.field_with_name(column.name()) {
-            Ok(field) => field,
-            Err(_) => return Ok(None),
-        };
+        let logical_field = self.logical_file_schema.field(logical_field_index);
         let logical_struct_fields = match logical_field.data_type() {
             DataType::Struct(fields) => fields,
             _ => return Ok(None),
@@ -324,20 +327,21 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
         physical_field: &Field,
         physical_index: usize,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-        let needs_index_update = column.index() != physical_index;
+        let needs_column_update =
+            column.index() != physical_index || column.name() != physical_field.name();
         let needs_type_cast = logical_field.data_type() != physical_field.data_type();
 
-        match (needs_index_update, needs_type_cast) {
+        match (needs_column_update, needs_type_cast) {
             (false, false) => Ok(Transformed::no(expr)),
             (true, false) => {
                 let new_column =
-                    Column::new_with_schema(logical_field.name(), self.physical_file_schema)?;
+                    Column::new_with_schema(physical_field.name(), self.physical_file_schema)?;
                 Ok(Transformed::yes(Arc::new(new_column)))
             }
             (false, true) => self.apply_type_cast(expr, logical_field, physical_field),
             (true, true) => {
                 let new_column =
-                    Column::new_with_schema(logical_field.name(), self.physical_file_schema)?;
+                    Column::new_with_schema(physical_field.name(), self.physical_file_schema)?;
                 self.apply_type_cast(Arc::new(new_column), logical_field, physical_field)
             }
         }
@@ -1072,6 +1076,49 @@ mod tests {
             Field::new(name, DataType::Int64, true)
                 .with_metadata(HashMap::from([(metadata_key.to_string(), id.to_string())])),
         )
+    }
+
+    #[test]
+    fn maps_top_level_columns_by_field_id() -> Result<()> {
+        let logical_schema = Arc::new(Schema::new(vec![
+            field_with_id("renamed_b", PARQUET_FIELD_ID_META_KEY, 2),
+            field_with_id("renamed_a", PARQUET_FIELD_ID_META_KEY, 1),
+        ]));
+        let physical_schema = Arc::new(Schema::new(vec![
+            field_with_id("old_a", PARQUET_FIELD_ID_META_KEY, 1),
+            field_with_id("old_b", PARQUET_FIELD_ID_META_KEY, 2),
+        ]));
+        let adapter = create_schema_evolution_adapter(
+            logical_schema,
+            Arc::clone(&physical_schema),
+            StructFieldMatching::FieldId,
+            SchemaEvolutionTimezoneMode::Strict,
+        )?;
+
+        let rewritten = adapter.rewrite(Arc::new(Column::new("renamed_b", 0)))?;
+        let column = rewritten
+            .downcast_ref::<Column>()
+            .expect("rewritten column");
+        assert_eq!(column.name(), "old_b");
+        assert_eq!(column.index(), 1);
+
+        let renamed_in_place = Arc::new(Schema::new(vec![
+            field_with_id("renamed_a", PARQUET_FIELD_ID_META_KEY, 1),
+            field_with_id("renamed_b", PARQUET_FIELD_ID_META_KEY, 2),
+        ]));
+        let adapter = create_schema_evolution_adapter(
+            renamed_in_place,
+            physical_schema,
+            StructFieldMatching::FieldId,
+            SchemaEvolutionTimezoneMode::Strict,
+        )?;
+        let rewritten = adapter.rewrite(Arc::new(Column::new("renamed_a", 0)))?;
+        let column = rewritten
+            .downcast_ref::<Column>()
+            .expect("rewritten column");
+        assert_eq!(column.name(), "old_a");
+        assert_eq!(column.index(), 0);
+        Ok(())
     }
 
     #[test]

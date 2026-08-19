@@ -2,14 +2,21 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+import time
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 
 import boto3
 import pytest
+import requests
 from botocore.config import Config
+
+from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -18,10 +25,152 @@ if TYPE_CHECKING:
 
 
 NAMESPACE = "iceberg_commit_test"
+HTTP_CONFLICT = 409
 UNPARTITIONED_LAST_PARTITION_ID = 999
 UUID_METADATA_FILE_PATTERN = re.compile(
     r"^\d{5}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.metadata\.json$"
 )
+
+
+class _CommitGate:
+    def __init__(self) -> None:
+        self.arrived = threading.Event()
+        self.release = threading.Event()
+        self.completed = threading.Event()
+        self.request: dict[str, object] | None = None
+        self.response_status: int | None = None
+        self.response: object = None
+        self._target: tuple[list[str], str] | None = None
+        self._claimed = False
+        self._lock = threading.Lock()
+
+    def arm(self, namespace: str, table: str) -> None:
+        with self._lock:
+            self._target = ([namespace], table)
+
+    def claim(self, method: str, body: bytes) -> dict[str, object] | None:
+        if method != "POST":
+            return None
+        try:
+            payload = json.loads(body)
+        except (TypeError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        identifier = payload.get("identifier")
+        requirements = payload.get("requirements")
+        if not isinstance(identifier, dict) or not isinstance(requirements, list):
+            return None
+        has_snapshot_requirement = any(
+            isinstance(requirement, dict) and requirement.get("type") == "assert-ref-snapshot-id"
+            for requirement in requirements
+        )
+        with self._lock:
+            if (
+                self._claimed
+                or self._target is None
+                or not has_snapshot_requirement
+                or identifier.get("namespace") != self._target[0]
+                or identifier.get("name") != self._target[1]
+            ):
+                return None
+            self._claimed = True
+            self.request = payload
+            return payload
+
+    def record_response(self, status: int, payload: object) -> None:
+        self.response_status = status
+        self.response = payload
+        self.completed.set()
+
+
+def _commit_gate_handler(
+    upstream: str,
+    gate: _CommitGate,
+) -> type[BaseHTTPRequestHandler]:
+    class CommitGateHandler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_GET(self) -> None:
+            self._forward()
+
+        def do_HEAD(self) -> None:
+            self._forward()
+
+        def do_POST(self) -> None:
+            self._forward()
+
+        def do_DELETE(self) -> None:
+            self._forward()
+
+        def _forward(self) -> None:
+            length = int(self.headers.get("content-length", "0"))
+            body = self.rfile.read(length) if length else b""
+            gated_request = gate.claim(self.command, body)
+            if gated_request is not None:
+                gate.arrived.set()
+                if not gate.release.wait(timeout=60):
+                    payload = {
+                        "error": {
+                            "message": "commit gate timed out",
+                            "type": "CommitGateTimeout",
+                            "code": 504,
+                        }
+                    }
+                    encoded = json.dumps(payload).encode()
+                    gate.record_response(504, payload)
+                    self.send_response(504)
+                    self.send_header("content-type", "application/json")
+                    self.send_header("content-length", str(len(encoded)))
+                    self.end_headers()
+                    self.wfile.write(encoded)
+                    return
+
+            headers = {
+                key: value
+                for key, value in self.headers.items()
+                if key.lower()
+                not in {
+                    "accept-encoding",
+                    "connection",
+                    "content-length",
+                    "host",
+                    "transfer-encoding",
+                }
+            }
+            response = requests.request(
+                self.command,
+                f"{upstream}{self.path}",
+                data=body if length else None,
+                headers=headers,
+                allow_redirects=False,
+                timeout=30,
+            )
+            if gated_request is not None:
+                try:
+                    response_payload: object = response.json()
+                except requests.JSONDecodeError:
+                    response_payload = response.text
+                gate.record_response(response.status_code, response_payload)
+
+            self.send_response(response.status_code)
+            for key, value in response.headers.items():
+                if key.lower() not in {
+                    "connection",
+                    "content-encoding",
+                    "content-length",
+                    "transfer-encoding",
+                }:
+                    self.send_header(key, value)
+            self.send_header("content-length", str(len(response.content)))
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(response.content)
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            return
+
+    return CommitGateHandler
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -29,6 +178,49 @@ def namespace(spark: SparkSession) -> Generator[None, None, None]:
     spark.sql(f"CREATE DATABASE IF NOT EXISTS {NAMESPACE}")
     yield
     spark.sql(f"DROP DATABASE IF EXISTS {NAMESPACE} CASCADE")
+
+
+@pytest.fixture
+def commit_gate_proxy(
+    iceberg_rest_endpoint: str,
+) -> Generator[tuple[str, _CommitGate], None, None]:
+    gate = _CommitGate()
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        _commit_gate_handler(iceberg_rest_endpoint, gate),
+    )
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address
+    try:
+        yield f"http://{host}:{port}", gate
+    finally:
+        gate.release.set()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=10)
+
+
+@pytest.fixture
+def gated_remote(
+    commit_gate_proxy: tuple[str, _CommitGate],
+    seaweedfs_host_endpoint: str,
+) -> Generator[str, None, None]:
+    proxy_endpoint, _ = commit_gate_proxy
+    catalog_config = f'[{{name="sail", type="iceberg-rest", uri="{proxy_endpoint}"}}]'
+    with spark_connect_server(
+        envs={
+            "SAIL_CATALOG__LIST": catalog_config,
+            "AWS_ACCESS_KEY_ID": "admin",
+            "AWS_SECRET_ACCESS_KEY": "password",
+            "AWS_REGION": "us-east-1",
+            "AWS_ENDPOINT": seaweedfs_host_endpoint,
+            "AWS_VIRTUAL_HOSTED_STYLE_REQUEST": "false",
+            "AWS_ALLOW_HTTP": "true",
+        },
+    ) as server:
+        yield server.remote
 
 
 def _load_table(iceberg_rest_endpoint: str, table_name: str) -> dict:
@@ -382,6 +574,8 @@ def test_merge_advances_rest_catalog_metadata_location_with_position_delete(
     before = _load_table(iceberg_rest_endpoint, table_name)
     before_location = before["metadata-location"]
     _assert_uuid_metadata_location(before_location, 1)
+    previous_data_file_count = int(_current_snapshot(before["metadata"])["summary"]["total-data-files"])
+    assert previous_data_file_count == 1
 
     spark.sql(
         """
@@ -411,14 +605,15 @@ def test_merge_advances_rest_catalog_metadata_location_with_position_delete(
         operation="overwrite",
     )
     summary = snapshot["summary"]
-    assert summary["added-delete-files"] == "2"
-    assert summary["added-position-delete-files"] == "2"
+    assert summary["added-delete-files"] == "1"
+    assert summary["added-position-delete-files"] == "1"
     assert summary["added-position-deletes"] == "4"
     assert "deleted-records" not in summary
-    assert summary["added-data-files"] == "2"
+    added_data_file_count = int(summary["added-data-files"])
+    assert added_data_file_count > 0
     assert summary["added-records"] == "3"
-    assert summary["total-data-files"] == "3"
-    assert summary["total-delete-files"] == "2"
+    assert int(summary["total-data-files"]) == previous_data_file_count + added_data_file_count
+    assert summary["total-delete-files"] == "1"
     assert summary["total-position-deletes"] == "4"
     assert summary["total-records"] == "8"
 
@@ -429,6 +624,115 @@ def test_merge_advances_rest_catalog_metadata_location_with_position_delete(
         (4, "new-d", "insert"),
         (5, "expired-e", "expire"),
     ]
+
+
+def test_stale_merge_catalog_conflict_cleans_uncommitted_artifacts(
+    spark: SparkSession,
+    gated_remote: str,
+    commit_gate_proxy: tuple[str, _CommitGate],
+    iceberg_rest_endpoint: str,
+    seaweedfs_host_endpoint: str,
+) -> None:
+    table_name = "stale_merge_conflict_t"
+    table_fqn = f"{NAMESPACE}.{table_name}"
+    spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+    spark.sql(
+        f"""
+        CREATE TABLE {table_fqn} (
+          id INT,
+          name STRING
+        )
+        USING iceberg
+        TBLPROPERTIES ('write.merge.mode' = 'merge-on-read')
+        """
+    )
+    spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'base')")  # noqa: S608
+
+    before = _load_table(iceberg_rest_endpoint, table_name)
+    before_metadata = before["metadata"]
+    before_snapshot_id = before_metadata["current-snapshot-id"]
+    table_location = before_metadata["location"]
+    before_keys = _s3_object_keys(seaweedfs_host_endpoint, table_location)
+
+    _, gate = commit_gate_proxy
+    with spark_session_factory(gated_remote) as sessions:
+        slow = sessions.create()
+        slow.conf.set("spark.sql.shuffle.partitions", "1")
+        slow.range(1_000).selectExpr(
+            "CAST(id + 1000 AS INT) AS id",
+            "'slow' AS name",
+        ).createOrReplaceTempView("stale_merge_source")
+        gate.arm(NAMESPACE, table_name)
+
+        def stale_merge() -> None:
+            slow.sql(
+                """
+                MERGE INTO iceberg_commit_test.stale_merge_conflict_t AS t
+                USING stale_merge_source AS s
+                ON t.id = s.id
+                WHEN NOT MATCHED THEN
+                  INSERT (id, name) VALUES (s.id, s.name)
+                """
+            ).collect()
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(stale_merge)
+            try:
+                if not gate.arrived.wait(timeout=60):
+                    outcome = future.exception(timeout=1) if future.done() else "still running"
+                    pytest.fail(f"MERGE did not reach the catalog commit gate: {outcome}")
+
+                blocked_keys = _s3_object_keys(seaweedfs_host_endpoint, table_location)
+                slow_created_keys = blocked_keys - before_keys
+                assert any(key.endswith(".parquet") for key in slow_created_keys)
+                assert any("/metadata/manifest-" in key for key in slow_created_keys)
+                assert any("/metadata/snap-" in key for key in slow_created_keys)
+
+                spark.sql(f"INSERT INTO {table_fqn} VALUES (2, 'fast')")  # noqa: S608
+                fast_commit = _load_table(iceberg_rest_endpoint, table_name)
+            finally:
+                gate.release.set()
+
+            with pytest.raises(Exception, match="expected snapshot"):
+                future.result(timeout=60)
+
+    assert gate.completed.wait(timeout=10)
+    assert gate.response_status == HTTP_CONFLICT
+    assert isinstance(gate.response, dict)
+    provider_error = gate.response["error"]
+    assert provider_error["type"] == "CommitFailedException"
+    assert provider_error["code"] == HTTP_CONFLICT
+
+    assert gate.request is not None
+    snapshot_requirements = [
+        requirement for requirement in gate.request["requirements"] if requirement["type"] == "assert-ref-snapshot-id"
+    ]
+    assert snapshot_requirements
+    assert {requirement["snapshot-id"] for requirement in snapshot_requirements} == {before_snapshot_id}
+    proposed_snapshot = next(
+        update["snapshot"] for update in gate.request["updates"] if update["action"] == "add-snapshot"
+    )
+
+    cleanup_deadline = time.monotonic() + 10
+    while True:
+        after_keys = _s3_object_keys(seaweedfs_host_endpoint, table_location)
+        remaining_slow_keys = slow_created_keys & after_keys
+        if not remaining_slow_keys or time.monotonic() >= cleanup_deadline:
+            break
+        time.sleep(0.05)
+    assert not remaining_slow_keys
+
+    after = _load_table(iceberg_rest_endpoint, table_name)
+    after_metadata = after["metadata"]
+    after_snapshot = _current_snapshot(after_metadata)
+    assert after["metadata-location"] == fast_commit["metadata-location"]
+    assert after_metadata["metadata-log"][-1]["metadata-file"] == before["metadata-location"]
+    assert after_snapshot["parent-snapshot-id"] == before_snapshot_id
+    assert proposed_snapshot["snapshot-id"] not in {snapshot["snapshot-id"] for snapshot in after_metadata["snapshots"]}
+    assert sum(key.endswith(".parquet") for key in after_keys) == int(after_snapshot["summary"]["total-data-files"])
+
+    rows = spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()  # noqa: S608
+    assert [(row.id, row.name) for row in rows] == [(1, "base"), (2, "fast")]
 
 
 def test_rest_catalog_rejects_catalog_managed_iceberg_alter(

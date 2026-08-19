@@ -13,19 +13,17 @@ use sail_telemetry::{TracingExecOptions, trace_execution_plan};
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::oneshot;
 
-use crate::driver::{DriverActor, DriverComponents, DriverEvent, DriverHandle, DriverOptions};
+use crate::driver::{DriverActor, DriverComponents, DriverHandle, DriverMessage, DriverOptions};
 use crate::job_graph::{JobGraph, JobGraphOptions};
 use crate::shuffle::ShuffleBackendKind;
 
-fn explain_job_graph(plan: Arc<dyn ExecutionPlan>, use_blocking_shuffle: bool) -> Result<String> {
-    JobGraph::try_new(
-        plan,
-        JobGraphOptions {
-            use_blocking_shuffle,
-        },
-    )
-    .map(|graph| graph.to_string())
-    .map_err(|e| DataFusionError::External(Box::new(e)))
+fn explain_job_graph(
+    plan: Arc<dyn ExecutionPlan>,
+    shuffle_backend: ShuffleBackendKind,
+) -> Result<String> {
+    JobGraph::try_new(plan, JobGraphOptions { shuffle_backend })
+        .map(|graph| graph.to_string())
+        .map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
 pub struct LocalJobRunner {
@@ -54,7 +52,7 @@ impl StateObservable<JobRunnerObserver> for LocalJobRunner {
 #[tonic::async_trait]
 impl JobRunner for LocalJobRunner {
     fn explain(&self, plan: Arc<dyn ExecutionPlan>) -> Result<String> {
-        explain_job_graph(plan, false)
+        explain_job_graph(plan, ShuffleBackendKind::Flight)
     }
 
     async fn execute(
@@ -126,9 +124,9 @@ impl StateObservable<JobRunnerObserver> for ClusterJobRunner {
     async fn observe(&self, observer: JobRunnerObserver) {
         let result = self
             .driver
-            .send(DriverEvent::ObserveState { observer })
+            .send(DriverMessage::ObserveState { observer })
             .await;
-        if let Err(SendError(DriverEvent::ObserveState { observer })) = result {
+        if let Err(SendError(DriverMessage::ObserveState { observer })) = result {
             observer.fail(internal_datafusion_err!(
                 "failed to observe state for cluster job runner"
             ));
@@ -139,10 +137,7 @@ impl StateObservable<JobRunnerObserver> for ClusterJobRunner {
 #[tonic::async_trait]
 impl JobRunner for ClusterJobRunner {
     fn explain(&self, plan: Arc<dyn ExecutionPlan>) -> Result<String> {
-        explain_job_graph(
-            plan,
-            matches!(&self.shuffle_backend, ShuffleBackendKind::Storage { .. }),
-        )
+        explain_job_graph(plan, self.shuffle_backend.clone())
     }
 
     /// Executes a plan on the cluster. This is where the cool stuff happens.
@@ -153,7 +148,7 @@ impl JobRunner for ClusterJobRunner {
     ) -> Result<SendableRecordBatchStream> {
         let (tx, rx) = oneshot::channel();
         self.driver
-            .send(DriverEvent::ExecuteJob {
+            .send(DriverMessage::ExecuteJob {
                 plan,
                 context: ctx.task_ctx(),
                 result: tx,

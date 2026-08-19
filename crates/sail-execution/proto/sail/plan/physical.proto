@@ -70,6 +70,7 @@ message ExtendedPhysicalPlanNode {
     RemoteCheckpointCommitExecNode remote_checkpoint_commit = 55;
     IcebergMergeMetadataExecNode iceberg_merge_metadata = 56;
     IcebergEqualityDeleteWriterExecNode iceberg_equality_delete_writer = 57;
+    PartitionedTopKExecNode partitioned_top_k = 58;
   }
 }
 
@@ -97,7 +98,12 @@ message ExtendedPhysicalExprNode {
     HigherOrderUdfExprNode higher_order_udf = 2;
     LambdaExprNode lambda = 3;
     LambdaVariableExprNode lambda_variable = 4;
+    IcebergPartitionTransformExprNode iceberg_partition_transform = 5;
   }
+}
+
+message IcebergPartitionTransformExprNode {
+  string transform = 1;
 }
 
 enum StructFieldMatching {
@@ -220,6 +226,9 @@ message ExtendedScalarUdf {
     SparkFloorUdf spark_floor = 34;
     SparkTryToTimestampUdf spark_try_to_timestamp = 35;
     SparkDateFormatUdf spark_date_format = 36;
+    SparkMapFromArraysUdf spark_map_from_arrays = 37;
+    SparkMapFromEntriesUdf spark_map_from_entries = 38;
+    StrToMapUdf str_to_map = 39;
   }
 }
 
@@ -296,6 +305,18 @@ message SparkUnixTimestampUdf {
 
 message SparkDateFormatUdf {
   string session_timezone = 1;
+}
+
+message SparkMapFromArraysUdf {
+  bool last_value_wins = 1;
+}
+
+message SparkMapFromEntriesUdf {
+  bool last_value_wins = 1;
+}
+
+message StrToMapUdf {
+  bool last_value_wins = 1;
 }
 
 message StructFunctionUdf {
@@ -709,6 +730,12 @@ message PartialSortExecNode {
   uint64 common_prefix_length = 3;
 }
 
+message PartitionedTopKExecNode {
+  LexOrdering expr = 1;
+  uint64 partition_prefix_len = 2;
+  uint64 fetch = 3;
+}
+
 message AppendMode {}
 message OverwriteMode {}
 message OverwriteIfMode {
@@ -958,7 +985,7 @@ message IcebergWriterExecNode {
   PhysicalSinkMode sink_mode = 4;
   bool table_exists = 5;
   string options = 6;
-  bytes logical_input_schema = 7;
+  string write_context_json = 7;
   string lakehouse_table_json = 8;
   bool merge_row_intents = 9;
 }
@@ -1025,6 +1052,7 @@ message IcebergEqualityDeleteWriterExecNode {
   optional string write_data_path = 4;
   optional string write_folder_storage_path = 5;
   string lakehouse_table_json = 6;
+  string write_context_json = 7;
 }
 
 message DeltaLogReplayExecNode {

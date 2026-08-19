@@ -72,6 +72,9 @@ Feature: try_sum
          |-- sum_x: decimal(38,0) (nullable = true)
         """
 
+    # A GROUP BY key over an inline-table column stays non-nullable in Spark; Sail widens it.
+    @sail-bug
+    @function(nullability)
     Scenario: try_sum doctest #16 (schema)
       When query
         """
@@ -80,6 +83,6 @@ Feature: try_sum
       Then query schema
         """
         root
-         |-- g: string (nullable = true)
+         |-- g: string (nullable = false)
          |-- sum_x: long (nullable = true)
         """

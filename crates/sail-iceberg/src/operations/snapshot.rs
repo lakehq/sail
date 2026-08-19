@@ -13,7 +13,9 @@
 use std::collections::BTreeMap;
 
 use bytes::Bytes;
+use futures::StreamExt;
 use object_store::ObjectStoreExt;
+use object_store::path::Path as ObjectPath;
 use serde::{Deserialize, Serialize};
 
 use super::{ActionCommit, Transaction};
@@ -338,6 +340,40 @@ pub struct SnapshotProducer<'a> {
     pub row_lineage_start_row_id: Option<i64>,
 }
 
+pub(crate) struct PreparedSnapshotCommit {
+    action_commit: ActionCommit,
+    store_ctx: StoreContext,
+    created_paths: Vec<ObjectPath>,
+}
+
+impl PreparedSnapshotCommit {
+    pub(crate) fn action_commit(&self) -> &ActionCommit {
+        &self.action_commit
+    }
+
+    pub(crate) fn into_action_commit(self) -> ActionCommit {
+        self.action_commit
+    }
+
+    pub(crate) async fn cleanup(self) {
+        cleanup_created_paths(&self.store_ctx, &self.created_paths).await;
+    }
+}
+
+async fn cleanup_created_paths(store_ctx: &StoreContext, paths: &[ObjectPath]) {
+    let paths = paths.iter().rev().cloned().collect::<Vec<_>>();
+    let locations = futures::stream::iter(paths.into_iter().map(Ok));
+    let mut deletions = store_ctx.prefixed.delete_stream(Box::pin(locations));
+    while let Some(result) = deletions.next().await {
+        match result {
+            Ok(_) | Err(object_store::Error::NotFound { .. }) => {}
+            Err(error) => {
+                log::warn!("Failed to remove an uncommitted Iceberg object: {error}");
+            }
+        }
+    }
+}
+
 impl<'a> SnapshotProducer<'a> {
     pub fn new(
         tx: &'a Transaction,
@@ -391,6 +427,39 @@ impl<'a> SnapshotProducer<'a> {
     }
 
     pub async fn commit(self, update_kind: SnapshotUpdateKind) -> Result<ActionCommit, String> {
+        Ok(self.prepare(update_kind).await?.into_action_commit())
+    }
+
+    pub(crate) async fn prepare(
+        self,
+        update_kind: SnapshotUpdateKind,
+    ) -> Result<PreparedSnapshotCommit, String> {
+        let store_ctx = self
+            .store_ctx
+            .clone()
+            .ok_or_else(|| "store context not available".to_string())?;
+        let mut created_paths = Vec::new();
+        match self
+            .build_action_commit(update_kind, &mut created_paths)
+            .await
+        {
+            Ok(action_commit) => Ok(PreparedSnapshotCommit {
+                action_commit,
+                store_ctx,
+                created_paths,
+            }),
+            Err(error) => {
+                cleanup_created_paths(&store_ctx, &created_paths).await;
+                Err(error)
+            }
+        }
+    }
+
+    async fn build_action_commit(
+        self,
+        update_kind: SnapshotUpdateKind,
+        created_paths: &mut Vec<ObjectPath>,
+    ) -> Result<ActionCommit, String> {
         let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
         let changes =
             SnapshotChanges::from_added_files(&self.added_data_files, &self.added_delete_files);
@@ -573,6 +642,7 @@ impl<'a> SnapshotProducer<'a> {
                 )
                 .await
                 .map_err(|e| format!("{}", e))?;
+            created_paths.push(manifest_path);
 
             let mut manifest_file_builder = crate::spec::manifest_list::ManifestFile::builder()
                 .with_manifest_path(join_table_uri(
@@ -613,6 +683,7 @@ impl<'a> SnapshotProducer<'a> {
                 )
                 .await
                 .map_err(|e| format!("{}", e))?;
+            created_paths.push(manifest_path);
             let added_delete_rows = added_delete_files
                 .iter()
                 .map(|df| df.record_count as i64)
@@ -680,6 +751,7 @@ impl<'a> SnapshotProducer<'a> {
             )
             .await
             .map_err(|e| format!("{}", e))?;
+        created_paths.push(list_path);
 
         let manifest_list_uri =
             join_table_uri(self.tx.table_uri(), &list_rel, &self.write_path_mode);
@@ -750,7 +822,16 @@ impl<'a> SnapshotProducer<'a> {
 #[expect(clippy::expect_used)]
 mod tests {
     use std::collections::HashMap;
+    use std::ops::Range;
     use std::sync::Arc;
+
+    use futures::TryStreamExt;
+    use futures::stream::BoxStream;
+    use object_store::path::Path;
+    use object_store::{
+        CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+        PutMultipartOptions, PutOptions, PutPayload, PutResult,
+    };
 
     use super::*;
     use crate::spec::manifest::ManifestMetadata;
@@ -758,6 +839,89 @@ mod tests {
     use crate::spec::types::values::{Literal, PrimitiveLiteral};
     use crate::spec::types::{NestedField, PrimitiveType, Type};
     use crate::spec::{DataContentType, DataFileFormat, Transform};
+
+    #[derive(Debug)]
+    struct ManifestListRejectingStore {
+        memory_store: Arc<object_store::memory::InMemory>,
+    }
+
+    impl std::fmt::Display for ManifestListRejectingStore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "ManifestListRejectingStore")
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ObjectStore for ManifestListRejectingStore {
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: PutPayload,
+            opts: PutOptions,
+        ) -> object_store::Result<PutResult> {
+            if location.as_ref().contains("/metadata/snap-") {
+                return Err(object_store::Error::Generic {
+                    store: "fail-manifest-list",
+                    source: Box::new(std::io::Error::other("injected manifest-list failure")),
+                });
+            }
+            self.memory_store.put_opts(location, payload, opts).await
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            location: &Path,
+            opts: PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            self.memory_store.put_multipart_opts(location, opts).await
+        }
+
+        async fn get_opts(
+            &self,
+            location: &Path,
+            options: GetOptions,
+        ) -> object_store::Result<GetResult> {
+            self.memory_store.get_opts(location, options).await
+        }
+
+        async fn get_ranges(
+            &self,
+            location: &Path,
+            ranges: &[Range<u64>],
+        ) -> object_store::Result<Vec<Bytes>> {
+            self.memory_store.get_ranges(location, ranges).await
+        }
+
+        fn delete_stream(
+            &self,
+            locations: BoxStream<'static, object_store::Result<Path>>,
+        ) -> BoxStream<'static, object_store::Result<Path>> {
+            self.memory_store.delete_stream(locations)
+        }
+
+        fn list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+            self.memory_store.list(prefix)
+        }
+
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> object_store::Result<ListResult> {
+            self.memory_store.list_with_delimiter(prefix).await
+        }
+
+        async fn copy_opts(
+            &self,
+            from: &Path,
+            to: &Path,
+            options: CopyOptions,
+        ) -> object_store::Result<()> {
+            self.memory_store.copy_opts(from, to, options).await
+        }
+    }
 
     fn nullable_manifest_list_bytes(manifest_path: &str, manifest_length: i64) -> Vec<u8> {
         #[derive(serde::Serialize)]
@@ -999,6 +1163,126 @@ mod tests {
                 .expect("v3 snapshot commit must reject position delete files");
             assert!(error.contains("v3"));
             assert!(error.contains("position delete"));
+        });
+    }
+
+    #[test]
+    fn snapshot_producer_removes_manifests_when_manifest_list_write_fails() {
+        futures::executor::block_on(async {
+            let table_url =
+                url::Url::parse("file:///tmp/iceberg-manifest-cleanup/").expect("table URL");
+            let memory_store = Arc::new(object_store::memory::InMemory::new());
+            let store: Arc<dyn ObjectStore> = Arc::new(ManifestListRejectingStore {
+                memory_store: Arc::clone(&memory_store),
+            });
+            let store_ctx = StoreContext::new(store, &table_url).expect("store context");
+            let schema = Schema::builder().build().expect("schema");
+            let partition_spec = PartitionSpec::builder().with_spec_id(0).build();
+            let metadata = ManifestMetadata::new(
+                Arc::new(schema),
+                0,
+                partition_spec.clone(),
+                FormatVersion::V2,
+                ManifestContentType::Data,
+            );
+            let parent_snapshot = SnapshotBuilder::new()
+                .with_snapshot_id(0)
+                .with_sequence_number(0)
+                .with_manifest_list(String::new())
+                .with_summary(crate::spec::snapshots::Summary::new(Operation::Append))
+                .build()
+                .expect("parent snapshot");
+            let transaction = Transaction::new(table_url.to_string(), parent_snapshot, 0);
+            let mut data_file = delete_file("data.parquet", 0);
+            data_file.content = DataContentType::Data;
+            data_file.referenced_data_file = None;
+
+            let error = SnapshotProducer::new(
+                &transaction,
+                vec![data_file],
+                Some(store_ctx),
+                Some(metadata),
+            )
+            .with_bootstrap(true)
+            .with_partition_specs(vec![partition_spec])
+            .commit(SnapshotUpdateKind::FastAppend)
+            .await
+            .err()
+            .expect("manifest-list write must fail");
+            assert!(error.contains("injected manifest-list failure"));
+
+            let remaining_paths = memory_store
+                .list(None)
+                .map_ok(|metadata| metadata.location.to_string())
+                .try_collect::<Vec<_>>()
+                .await
+                .expect("list object store");
+            assert!(
+                remaining_paths.is_empty(),
+                "failed snapshot left uncommitted objects: {remaining_paths:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn prepared_snapshot_cleanup_removes_uncommitted_manifests_and_list() {
+        futures::executor::block_on(async {
+            let table_url =
+                url::Url::parse("file:///tmp/iceberg-prepared-cleanup/").expect("table URL");
+            let memory_store = Arc::new(object_store::memory::InMemory::new());
+            let store: Arc<dyn ObjectStore> = memory_store.clone();
+            let store_ctx = StoreContext::new(store, &table_url).expect("store context");
+            let schema = Schema::builder().build().expect("schema");
+            let partition_spec = PartitionSpec::builder().with_spec_id(0).build();
+            let metadata = ManifestMetadata::new(
+                Arc::new(schema),
+                0,
+                partition_spec.clone(),
+                FormatVersion::V2,
+                ManifestContentType::Data,
+            );
+            let parent_snapshot = SnapshotBuilder::new()
+                .with_snapshot_id(0)
+                .with_sequence_number(0)
+                .with_manifest_list(String::new())
+                .with_summary(crate::spec::snapshots::Summary::new(Operation::Append))
+                .build()
+                .expect("parent snapshot");
+            let transaction = Transaction::new(table_url.to_string(), parent_snapshot, 0);
+            let mut data_file = delete_file("data.parquet", 0);
+            data_file.content = DataContentType::Data;
+            data_file.referenced_data_file = None;
+
+            let prepared_snapshot = SnapshotProducer::new(
+                &transaction,
+                vec![data_file],
+                Some(store_ctx),
+                Some(metadata),
+            )
+            .with_bootstrap(true)
+            .with_partition_specs(vec![partition_spec])
+            .prepare(SnapshotUpdateKind::FastAppend)
+            .await
+            .expect("prepare snapshot");
+            assert!(
+                memory_store
+                    .list(None)
+                    .try_next()
+                    .await
+                    .expect("list store")
+                    .is_some()
+            );
+
+            prepared_snapshot.cleanup().await;
+
+            assert!(
+                memory_store
+                    .list(None)
+                    .try_next()
+                    .await
+                    .expect("list store")
+                    .is_none()
+            );
         });
     }
 

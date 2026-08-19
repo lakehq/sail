@@ -403,7 +403,7 @@ def _sanitize_iceberg_metadata(metadata: dict) -> dict:
     sanitized = dict(metadata)
 
     # Replace volatile IDs with placeholders
-    if "current-snapshot-id" in sanitized:
+    if sanitized.get("current-snapshot-id") not in (None, -1):
         sanitized["current-snapshot-id"] = "<snapshot-id>"
 
     # Replace UUIDs with placeholders

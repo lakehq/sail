@@ -19,9 +19,11 @@ pub mod equality_delete_writer_exec;
 pub mod manifest_scan_exec;
 pub mod merge_metadata_exec;
 pub(crate) mod merge_row_projection;
+pub mod partition_transform_expr;
 pub mod plan_builder;
 mod position_delete_writer;
 pub mod scan_by_data_files_exec;
+pub(crate) mod write_context;
 mod write_location;
 mod writer_exec;
 mod writer_options;
@@ -32,7 +34,11 @@ pub use discovery_exec::IcebergDiscoveryExec;
 pub use equality_delete_writer_exec::IcebergEqualityDeleteWriterExec;
 pub use manifest_scan_exec::IcebergManifestScanExec;
 pub use merge_metadata_exec::IcebergMergeMetadataExec;
+pub use partition_transform_expr::IcebergPartitionTransformExpr;
 pub use plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
 pub use scan_by_data_files_exec::IcebergScanByDataFilesExec;
+pub use write_context::{
+    IcebergBaseWriteContext, IcebergWriteContext, prepare_iceberg_write_context,
+};
 pub use writer_exec::IcebergWriterExec;
 pub use writer_options::IcebergWriterExecOptions;

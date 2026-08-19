@@ -95,6 +95,34 @@ Feature: Delta Lake CHECK Constraints
         | id | value |
         | 0  | bad   |
 
+    Scenario: ADD CONSTRAINT canonicalizes names and rejects case-insensitive duplicates
+      Given statement template
+        """
+        CREATE TABLE delta_check_constraints_test (
+          id INT,
+          value STRING
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_check_constraints_test VALUES (1, 'existing')
+        """
+      Given statement
+        """
+        ALTER TABLE delta_check_constraints_test
+        ADD CONSTRAINT ÄRule_ID CHECK (id > 0)
+        """
+      Then delta log latest effective protocol and metadata contains
+        | path                   | value                                            |
+        | metaData.configuration | {"delta.constraints.ärule_id":"id > 0"}       |
+      Given statement with error already exists
+        """
+        ALTER TABLE delta_check_constraints_test
+        ADD CONSTRAINT äRULE_id CHECK (id > 1)
+        """
+
     Scenario: Direct mutation of delta.constraints table properties is rejected
       Given statement template
         """
@@ -207,3 +235,57 @@ Feature: Delta Lake CHECK Constraints
         WHEN NOT MATCHED THEN INSERT *
         """
       Then query error DELTA_VIOLATE_CONSTRAINT_WITH_VALUES
+
+  Rule: MERGE respects NOT NULL constraints
+
+    Background:
+      Given variable location for temporary directory delta_not_null_merge
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_not_null_merge_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_not_null_merge_test (
+          id INT NOT NULL,
+          value STRING
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        """
+
+    Scenario: MERGE inserts valid rows into a table with a NOT NULL column
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW src_delta_not_null_merge AS
+        SELECT 1 AS id, 'valid' AS value
+        """
+      Given statement
+        """
+        MERGE INTO delta_not_null_merge_test AS t
+        USING src_delta_not_null_merge AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED THEN INSERT (id, value) VALUES (s.id, s.value)
+        """
+      When query
+        """
+        SELECT id, value FROM delta_not_null_merge_test
+        """
+      Then query result ordered
+        | id | value |
+        | 1  | valid |
+
+    Scenario: MERGE rejects null values for non-nullable target columns
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW src_delta_not_null_merge AS
+        SELECT CAST(NULL AS INT) AS id, 'invalid' AS value
+        """
+      When query
+        """
+        MERGE INTO delta_not_null_merge_test AS t
+        USING src_delta_not_null_merge AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED THEN INSERT (id, value) VALUES (s.id, s.value)
+        """
+      Then query error DELTA_NOT_NULL_CONSTRAINT_VIOLATED.*column: id

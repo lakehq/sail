@@ -41,7 +41,9 @@ use datafusion::physical_plan::limit::GlobalLimitExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
 use object_store::ObjectMeta;
-use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
+use sail_common_datafusion::schema_evolution::{
+    SchemaEvolutionPhysicalExprAdapterFactoryWithMatching, StructFieldMatching,
+};
 use url::Url;
 
 use crate::datasource::expressions::simplify_expr;
@@ -67,6 +69,12 @@ use crate::spec::{
 };
 use crate::utils::conversions::primitive_to_scalar_default;
 use crate::utils::get_object_store_from_session;
+
+fn iceberg_schema_evolution_adapter() -> Arc<dyn PhysicalExprAdapterFactory> {
+    Arc::new(SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(
+        StructFieldMatching::FieldId,
+    ))
+}
 
 /// Iceberg table provider for DataFusion
 #[derive(Debug, Clone)]
@@ -938,8 +946,7 @@ impl TableProvider for IcebergTableProvider {
                 .with_statistics(table_stats)
                 .with_projection_indices(expanded_projection)?
                 .with_limit(limit)
-                .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})
-                    as Arc<dyn PhysicalExprAdapterFactory>))
+                .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                 .build();
             return Ok(DataSourceExec::from_data_source(file_scan_config));
         }
@@ -967,8 +974,7 @@ impl TableProvider for IcebergTableProvider {
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(file_groups)
-                    .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})
-                        as Arc<dyn PhysicalExprAdapterFactory>))
+                    .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                     .build();
             branches.push(DataSourceExec::from_data_source(file_scan_config));
         }
@@ -984,8 +990,7 @@ impl TableProvider for IcebergTableProvider {
                     // Position deletes require the original file order and absolute offsets.
                     .with_partitioned_by_file_group(true)
                     .with_preserve_order(true)
-                    .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})
-                        as Arc<dyn PhysicalExprAdapterFactory>))
+                    .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                     .build();
             let data_scan: Arc<dyn ExecutionPlan> =
                 DataSourceExec::from_data_source(file_scan_config);
@@ -1171,8 +1176,7 @@ impl IcebergTableProvider {
                     // into byte ranges whose streams would each start at position zero.
                     .with_partitioned_by_file_group(true)
                     .with_preserve_order(true)
-                    .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})
-                        as Arc<dyn PhysicalExprAdapterFactory>))
+                    .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                     .build();
             let data_scan = DataSourceExec::from_data_source(file_scan_config);
             branches.push(Arc::new(
@@ -1194,8 +1198,7 @@ impl IcebergTableProvider {
                     // original file order and absolute offsets.
                     .with_partitioned_by_file_group(true)
                     .with_preserve_order(true)
-                    .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})
-                        as Arc<dyn PhysicalExprAdapterFactory>))
+                    .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                     .build();
             let data_scan: Arc<dyn ExecutionPlan> =
                 DataSourceExec::from_data_source(file_scan_config);

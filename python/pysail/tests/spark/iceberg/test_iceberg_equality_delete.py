@@ -85,6 +85,13 @@ def _append_equality_delete_snapshot(
     data_dir.mkdir(parents=True, exist_ok=True)
 
     delete_file_path = data_dir / f"equality-delete-{uuid.uuid4()}.parquet"
+    assert delete_rows.num_columns == len(equality_ids)
+    fields = []
+    for field, field_id in zip(delete_rows.schema, equality_ids, strict=True):
+        metadata = dict(field.metadata or {})
+        metadata[b"PARQUET:field_id"] = str(field_id).encode()
+        fields.append(field.with_metadata(metadata))
+    delete_rows = pa.Table.from_arrays(delete_rows.columns, schema=pa.schema(fields))
     pq.write_table(delete_rows, delete_file_path)
 
     metadata = _find_latest_metadata(table_path)
@@ -449,6 +456,39 @@ def test_iceberg_unpartitioned_equality_delete_filters_matching_rows_and_records
         assert entries[0].data_file.content == DataFileContent.EQUALITY_DELETES
         assert entries[0].data_file.equality_ids == [1]
         assert entries[0].sequence_number == _current_snapshot(_find_latest_metadata(table_path))["sequence-number"]
+    finally:
+        catalog.drop_table(identifier)
+
+
+def test_iceberg_equality_delete_binds_columns_by_field_id_after_rename(spark, tmp_path):
+    catalog = create_sql_catalog(tmp_path)
+    identifier = "default.equality_delete_renamed_column"
+    table = catalog.create_table(
+        identifier=identifier,
+        schema=Schema(
+            NestedField(1, "id", LongType(), required=False),
+            NestedField(2, "name", StringType(), required=False),
+        ),
+        properties={"format-version": "2"},
+    )
+    try:
+        table.append(pa.table({"id": [1, 2, 3], "name": ["keep-1", "drop", "keep-3"]}))
+        table.update_schema().rename_column("id", "renamed_id").commit()
+        table = catalog.load_table(identifier)
+
+        _append_equality_delete_snapshot(table, pa.table({"id": [2]}), [1])
+
+        rows = [
+            tuple(row)
+            for row in (
+                spark.read.format("iceberg")
+                .load(table.location())
+                .select("renamed_id", "name")
+                .orderBy("renamed_id")
+                .collect()
+            )
+        ]
+        assert rows == [(1, "keep-1"), (3, "keep-3")]
     finally:
         catalog.drop_table(identifier)
 

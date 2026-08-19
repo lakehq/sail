@@ -1290,31 +1290,7 @@ impl PlanResolver<'_> {
         let mut out = Vec::with_capacity(info.columns.len());
         for column in &info.columns {
             let expr = if let Some(default) = column.default.as_deref() {
-                let ast_expr =
-                    sail_sql_analyzer::parser::parse_expression(default).map_err(|e| {
-                        PlanError::invalid(format!(
-                            "failed to parse default expression `{default}`: {e}"
-                        ))
-                    })?;
-                let spec_expr = sail_sql_analyzer::expression::from_ast_expression(ast_expr)
-                    .map_err(|e| {
-                        PlanError::invalid(format!(
-                            "failed to analyze default expression `{default}`: {e}"
-                        ))
-                    })?;
-                // A column reference can never be a valid default value. Such text
-                // comes from metadata that stored a raw string value (e.g. the
-                // JSON-encoded string `"hello"` for an Iceberg column default)
-                // rather than SQL expression text, so it is interpreted as a
-                // string literal.
-                let spec_expr = if matches!(spec_expr, spec::Expr::UnresolvedAttribute { .. }) {
-                    spec::Expr::Literal(spec::Literal::Utf8 {
-                        value: Some(default.to_string()),
-                    })
-                } else {
-                    spec_expr
-                };
-                self.resolve_expression(spec_expr, &empty_schema, state)
+                self.resolve_column_default_expression(default, &empty_schema, state)
                     .await?
             } else {
                 lit(ScalarValue::try_from(column.field().data_type())?)
@@ -1322,6 +1298,36 @@ impl PlanResolver<'_> {
             out.push(expr);
         }
         Ok(out)
+    }
+
+    pub(super) async fn resolve_column_default_expression(
+        &self,
+        default: &str,
+        empty_schema: &datafusion_common::DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Expr> {
+        let ast_expr = sail_sql_analyzer::parser::parse_expression(default).map_err(|error| {
+            PlanError::invalid(format!(
+                "failed to parse default expression `{default}`: {error}"
+            ))
+        })?;
+        let spec_expr =
+            sail_sql_analyzer::expression::from_ast_expression(ast_expr).map_err(|error| {
+                PlanError::invalid(format!(
+                    "failed to analyze default expression `{default}`: {error}"
+                ))
+            })?;
+        // A column reference cannot be a default value. Raw string defaults in
+        // format metadata parse as unresolved attributes, so treat them as literals.
+        let spec_expr = if matches!(spec_expr, spec::Expr::UnresolvedAttribute { .. }) {
+            spec::Expr::Literal(spec::Literal::Utf8 {
+                value: Some(default.to_string()),
+            })
+        } else {
+            spec_expr
+        };
+        self.resolve_expression(spec_expr, empty_schema, state)
+            .await
     }
 
     fn rewrite_default_column_values_in_input(
@@ -1467,7 +1473,9 @@ impl PlanResolver<'_> {
         }
     }
 
-    fn expr_contains_default_column_value(expr: &Expr) -> datafusion_common::Result<bool> {
+    pub(super) fn expr_contains_default_column_value(
+        expr: &Expr,
+    ) -> datafusion_common::Result<bool> {
         let mut found = false;
         expr.apply(|expr| {
             if Self::is_default_column_value_expr(expr) {
@@ -1480,7 +1488,7 @@ impl PlanResolver<'_> {
         Ok(found)
     }
 
-    fn is_standalone_default_column_value_expr(expr: &Expr) -> bool {
+    pub(super) fn is_standalone_default_column_value_expr(expr: &Expr) -> bool {
         if Self::is_default_column_value_expr(expr) {
             return true;
         }
@@ -1491,7 +1499,7 @@ impl PlanResolver<'_> {
         }
     }
 
-    fn is_default_column_value_expr(expr: &Expr) -> bool {
+    pub(super) fn is_default_column_value_expr(expr: &Expr) -> bool {
         matches!(
             expr,
             Expr::Placeholder(placeholder)

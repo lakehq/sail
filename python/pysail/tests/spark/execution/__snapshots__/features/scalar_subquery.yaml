@@ -614,7 +614,7 @@ data:
     inputs=[StageInput(stage=0, mode=Shuffle)]
     mode=Pipelined
     partitions=4
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     SortExec: expr=[#9@0 ASC], preserve_partitioning=[true]
       ProjectionExec: expr=[#2@0 as #9, #3@1 as #10]
@@ -629,7 +629,7 @@ data:
     inputs=[StageInput(stage=1, mode=Merge)]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[#9@0 as k, #10@1 as v]
       SortPreservingMergeExec: [#9@0 ASC]
@@ -1144,7 +1144,7 @@ data:
     inputs=[StageInput(stage=0, mode=Shuffle), StageInput(stage=2, mode=Shuffle)]
     mode=Pipelined
     partitions=4
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     SortExec: expr=[#9@0 ASC, #10@1 ASC], preserve_partitioning=[true]
       ProjectionExec: expr=[#2@0 as #9, #3@1 as #10, #8@2 as #11]
@@ -1156,7 +1156,7 @@ data:
     inputs=[StageInput(stage=3, mode=Merge)]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[#9@0 as k, #10@1 as v, #11@2 as mx]
       SortPreservingMergeExec: [#9@0 ASC, #10@1 ASC]
@@ -1671,7 +1671,7 @@ data:
     inputs=[StageInput(stage=0, mode=Shuffle), StageInput(stage=2, mode=Shuffle)]
     mode=Pipelined
     partitions=4
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     SortExec: expr=[#9@0 ASC], preserve_partitioning=[true]
       ProjectionExec: expr=[#2@0 as #9, #3@1 as #10, #8@2 as #11]
@@ -1683,7 +1683,7 @@ data:
     inputs=[StageInput(stage=3, mode=Merge)]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[#9@0 as k, #10@1 as v, #11@2 as mx]
       SortPreservingMergeExec: [#9@0 ASC]
@@ -2432,7 +2432,7 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[min(u.#9)@0 as #10]
       AggregateExec: mode=Single, gby=[], aggr=[min(u.#9)]
@@ -2453,7 +2453,7 @@ data:
     inputs=[StageInput(stage=1, mode=Shuffle), StageInput(stage=0, mode=Broadcast)]
     mode=Pipelined
     partitions=4
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ScalarSubqueryExec: subqueries=1
       SortExec: expr=[#12@0 ASC], preserve_partitioning=[true]
@@ -2470,7 +2470,7 @@ data:
     inputs=[StageInput(stage=2, mode=Merge)]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[#12@0 as k, #13@1 as v]
       SortPreservingMergeExec: [#12@0 ASC]
@@ -3075,7 +3075,7 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[min(u.#9)@0 as #10]
       AggregateExec: mode=Single, gby=[], aggr=[min(u.#9)]
@@ -3117,7 +3117,7 @@ data:
     inputs=[StageInput(stage=1, mode=Shuffle), StageInput(stage=3, mode=Shuffle)]
     mode=Pipelined
     partitions=4
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     SortExec: expr=[#12@0 ASC, #13@1 ASC], preserve_partitioning=[true]
       ProjectionExec: expr=[#2@0 as #12, #3@1 as #13, #11@2 as #14]
@@ -3129,11 +3129,444 @@ data:
     inputs=[StageInput(stage=4, mode=Merge)]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[#12@0 as k, #13@1 as v, #14@2 as shifted]
       SortPreservingMergeExec: [#12@0 ASC, #13@1 ASC]
         StageInputExec: input=0, partitioning=Hash([#12@0], 4)
+---
+name: "test_empty_scalar_subquery_makes_a_nonnull_projection_nullable"
+data:
+  |-
+    == Codegen ==
+    Whole-stage codegen is not supported; showing physical plan instead.
+  
+    == Plan Steps ==
+    initial_logical_plan:
+    Sort: #3 ASC NULLS FIRST
+      Projection: o.#0 AS v AS #3, o.#0 + (<subquery>) AS shifted AS #4
+        Subquery:
+          Projection: i.#1 AS #2
+            SubqueryAlias: i
+              Projection: range.id AS #1
+                TableScan: range
+        SubqueryAlias: o
+          Projection: range.id AS #0
+            TableScan: range
+  
+    logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after resolve_grouping_function:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after type_coercion:
+    SAME TEXT AS ABOVE
+  
+    analyzed_logical_plan:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after decorrelate_lateral_projection:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after rewrite_set_comparison:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after optimize_unions:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after unions_to_filter:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after simplify_expressions:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after replace_distinct_aggregate:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after scalar_subquery_to_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after decorrelate_lateral_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after extract_equijoin_predicate:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_duplicated_expr:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_filter:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_cross_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_limit:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after propagate_empty_relation:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after filter_null_join_keys:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_outer_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after push_down_limit:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after push_down_filter:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after single_distinct_aggregation_to_group_by:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_group_by_constant:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after common_sub_expression_eliminate:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after extract_leaf_expressions:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after optimize_projections:
+    Sort: #3 ASC NULLS FIRST
+      Projection: o.#0 AS v AS #3, o.#0 + (<subquery>) AS shifted AS #4
+        Subquery:
+          Projection: i.#1 AS #2
+            SubqueryAlias: i
+              Projection: range.id AS #1
+                TableScan: range projection=[id]
+        SubqueryAlias: o
+          Projection: range.id AS #0
+            TableScan: range projection=[id]
+  
+    logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after decorrelate_lateral_projection:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after rewrite_set_comparison:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after optimize_unions:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after unions_to_filter:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after simplify_expressions:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after replace_distinct_aggregate:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after scalar_subquery_to_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after decorrelate_lateral_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after extract_equijoin_predicate:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_duplicated_expr:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_filter:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_cross_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_limit:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after propagate_empty_relation:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after filter_null_join_keys:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_outer_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after push_down_limit:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after push_down_filter:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after single_distinct_aggregation_to_group_by:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_group_by_constant:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after common_sub_expression_eliminate:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after extract_leaf_expressions:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+  
+    logical_plan:
+    Sort: #3 ASC NULLS FIRST
+      Projection: o.#0 AS v AS #3, o.#0 + (<subquery>) AS shifted AS #4
+        Subquery:
+          Projection: i.#1 AS #2
+            SubqueryAlias: i
+              Projection: range.id AS #1
+                TableScan: range projection=[id]
+        SubqueryAlias: o
+          Projection: range.id AS #0
+            TableScan: range projection=[id]
+  
+    initial_physical_plan:
+    ScalarSubqueryExec: subqueries=1
+      SortExec: expr=[#3@0 ASC], preserve_partitioning=[false]
+        ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4]
+          ProjectionExec: expr=[id@0 as #0]
+            RangeExec
+      ProjectionExec: expr=[#1@0 as #2]
+        ProjectionExec: expr=[id@0 as #1]
+          RangeExec
+  
+  
+    initial_physical_plan_with_stats:
+    ScalarSubqueryExec: subqueries=1, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+      SortExec: expr=[#3@0 ASC], preserve_partitioning=[false], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+        ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+          ProjectionExec: expr=[id@0 as #0], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+            RangeExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+      ProjectionExec: expr=[#1@0 as #2], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+        ProjectionExec: expr=[id@0 as #1], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+          RangeExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+  
+  
+    initial_physical_plan_with_schema:
+    ScalarSubqueryExec: subqueries=1, schema=[#3:Int64, #4:Int64;N]
+      SortExec: expr=[#3@0 ASC], preserve_partitioning=[false], schema=[#3:Int64, #4:Int64;N]
+        ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4], schema=[#3:Int64, #4:Int64;N]
+          ProjectionExec: expr=[id@0 as #0], schema=[#0:Int64]
+            RangeExec, schema=[id:Int64]
+      ProjectionExec: expr=[#1@0 as #2], schema=[#2:Int64]
+        ProjectionExec: expr=[id@0 as #1], schema=[#1:Int64]
+          RangeExec, schema=[id:Int64]
+  
+  
+    physical_plan after OutputRequirements:
+    OutputRequirementExec: order_by=[], dist_by=Unspecified
+      ScalarSubqueryExec: subqueries=1
+        SortExec: expr=[#3@0 ASC], preserve_partitioning=[false]
+          ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4]
+            ProjectionExec: expr=[id@0 as #0]
+              RangeExec
+        ProjectionExec: expr=[#1@0 as #2]
+          ProjectionExec: expr=[id@0 as #1]
+            RangeExec
+  
+  
+    physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after join_selection:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after FilterPushdown:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after EnforceDistribution:
+    OutputRequirementExec: order_by=[], dist_by=Unspecified
+      ScalarSubqueryExec: subqueries=1
+        SortExec: expr=[#3@0 ASC], preserve_partitioning=[false]
+          CoalescePartitionsExec
+            ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4]
+              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                ProjectionExec: expr=[id@0 as #0]
+                  RangeExec
+        ProjectionExec: expr=[#1@0 as #2]
+          ProjectionExec: expr=[id@0 as #1]
+            RangeExec
+  
+  
+    physical_plan after CombinePartialFinalAggregate:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after EnforceSorting:
+    OutputRequirementExec: order_by=[], dist_by=Unspecified
+      ScalarSubqueryExec: subqueries=1
+        SortPreservingMergeExec: [#3@0 ASC]
+          SortExec: expr=[#3@0 ASC], preserve_partitioning=[true]
+            ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4]
+              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                ProjectionExec: expr=[id@0 as #0]
+                  RangeExec
+        ProjectionExec: expr=[#1@0 as #2]
+          ProjectionExec: expr=[id@0 as #1]
+            RangeExec
+  
+  
+    physical_plan after OptimizeAggregateOrder:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after WindowTopN:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after ProjectionPushdown:
+    OutputRequirementExec: order_by=[], dist_by=Unspecified
+      ScalarSubqueryExec: subqueries=1
+        SortPreservingMergeExec: [#3@0 ASC]
+          SortExec: expr=[#3@0 ASC], preserve_partitioning=[true]
+            ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4]
+              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                ProjectionExec: expr=[id@0 as #0]
+                  RangeExec
+        ProjectionExec: expr=[id@0 as #2]
+          RangeExec
+  
+  
+    physical_plan after OutputRequirements:
+    ScalarSubqueryExec: subqueries=1
+      SortPreservingMergeExec: [#3@0 ASC]
+        SortExec: expr=[#3@0 ASC], preserve_partitioning=[true]
+          ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4]
+            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+              ProjectionExec: expr=[id@0 as #0]
+                RangeExec
+      ProjectionExec: expr=[id@0 as #2]
+        RangeExec
+  
+  
+    physical_plan after LimitAggregation:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after LimitPushPastWindows:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after HashJoinBuffering:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after LimitPushdown:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after TopKRepartition:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after ProjectionPushdown:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after PushdownSort:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after EnsureCooperative:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+  
+    physical_plan after RewriteExplicitRepartition:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after RewriteCollectLeftHashJoin:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after EnforceBarrierPartitioning:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after SanityCheckPlan:
+    SAME TEXT AS ABOVE
+  
+    physical_plan:
+    ProjectionExec: expr=[#3@0 as v, #4@1 as shifted]
+      ScalarSubqueryExec: subqueries=1
+        SortPreservingMergeExec: [#3@0 ASC]
+          SortExec: expr=[#3@0 ASC], preserve_partitioning=[true]
+            ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4]
+              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                ProjectionExec: expr=[id@0 as #0]
+                  RangeExec
+        ProjectionExec: expr=[id@0 as #2]
+          RangeExec
+  
+  
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as v, #4@1 as shifted]
+      ScalarSubqueryExec: subqueries=1
+        SortPreservingMergeExec: [#3@0 ASC]
+          SortExec: expr=[#3@0 ASC], preserve_partitioning=[true]
+            ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4]
+              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                ProjectionExec: expr=[id@0 as #0]
+                  RangeExec
+        ProjectionExec: expr=[id@0 as #2]
+          RangeExec
+  
+  
+    == Distributed Plan ==
+    === stage 0 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    ProjectionExec: expr=[id@0 as #2]
+      RangeExec
+  
+    === stage 1 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=4)
+    placement=Worker
+    ProjectionExec: expr=[id@0 as #0]
+      RangeExec
+  
+    === stage 2 ===
+    inputs=[StageInput(stage=1, mode=Shuffle), StageInput(stage=0, mode=Broadcast)]
+    mode=Pipelined
+    partitions=4
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    ScalarSubqueryExec: subqueries=1
+      SortExec: expr=[#3@0 ASC], preserve_partitioning=[true]
+        ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4]
+          StageInputExec: input=0, partitioning=RoundRobinBatch(4)
+      StageInputExec: input=1, partitioning=UnknownPartitioning(1)
+  
+    === stage 3 ===
+    inputs=[StageInput(stage=2, mode=Merge)]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    ProjectionExec: expr=[#3@0 as v, #4@1 as shifted]
+      SortPreservingMergeExec: [#3@0 ASC]
+        StageInputExec: input=0, partitioning=RoundRobinBatch(4)
 ---
 name: "test_empty_scalar_subquery_result"
 data:
@@ -3542,7 +3975,7 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=4)
+    distribution=RoundRobinBatch(channels=4)
     placement=Worker
     ProjectionExec: expr=[column1@0 as #3]
       FilterExec: column1@0 > 100
@@ -3552,7 +3985,7 @@ data:
     inputs=[StageInput(stage=0, mode=Shuffle)]
     mode=Pipelined
     partitions=4
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[CAST(#3@0 AS Int64) as #4]
       StageInputExec: input=0, partitioning=RoundRobinBatch(4)
@@ -3561,7 +3994,7 @@ data:
     inputs=[StageInput(stage=1, mode=Broadcast)]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[#5@0 as v, #6@1 as shifted]
       ScalarSubqueryExec: subqueries=1
@@ -4017,7 +4450,7 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[min(s.#3)@0 as #4]
       AggregateExec: mode=Single, gby=[], aggr=[min(s.#3)]
@@ -4028,7 +4461,7 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[max(u.#6)@0 as #7]
       AggregateExec: mode=Single, gby=[], aggr=[max(u.#6)]
@@ -4039,7 +4472,7 @@ data:
     inputs=[StageInput(stage=0, mode=Broadcast), StageInput(stage=1, mode=Broadcast)]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[#8@0 as total]
       ScalarSubqueryExec: subqueries=2
@@ -4531,7 +4964,7 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[min(u.#5)@0 as #6]
       AggregateExec: mode=Single, gby=[], aggr=[min(u.#5)]
@@ -4542,7 +4975,7 @@ data:
     inputs=[StageInput(stage=0, mode=Broadcast)]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ScalarSubqueryExec: subqueries=1
       ProjectionExec: expr=[CAST(min(s.#3)@0 + scalar_subquery(<pending>) AS Int64) as #7]
@@ -4555,7 +4988,7 @@ data:
     inputs=[StageInput(stage=1, mode=Broadcast)]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[#8@0 as v, #9@1 as shifted]
       ScalarSubqueryExec: subqueries=1
@@ -4970,7 +5403,7 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[min(s.#3)@0 as #4]
       AggregateExec: mode=Single, gby=[], aggr=[min(s.#3)]
@@ -4981,7 +5414,7 @@ data:
     inputs=[StageInput(stage=0, mode=Broadcast)]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[#5@0 as v, #6@1 as maybe_shifted]
       ScalarSubqueryExec: subqueries=1
@@ -5403,7 +5836,7 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[min(s.#5)@0 as #6]
       AggregateExec: mode=Single, gby=[], aggr=[min(s.#5)]
@@ -5426,7 +5859,7 @@ data:
     inputs=[StageInput(stage=1, mode=Shuffle), StageInput(stage=0, mode=Broadcast)]
     mode=Pipelined
     partitions=4
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[#7@0 as k, #8@1 as n]
       ScalarSubqueryExec: subqueries=1
@@ -5889,7 +6322,7 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[min(s.#5)@0 as #6]
       AggregateExec: mode=Single, gby=[], aggr=[min(s.#5)]
@@ -5900,7 +6333,7 @@ data:
     inputs=[StageInput(stage=0, mode=Broadcast)]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[#7@0 as joined]
       ScalarSubqueryExec: subqueries=1
@@ -6368,7 +6801,7 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[max(s.#5)@0 as #6]
       AggregateExec: mode=Single, gby=[], aggr=[max(s.#5)]
@@ -6379,7 +6812,7 @@ data:
     inputs=[StageInput(stage=0, mode=Broadcast)]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=4)
+    distribution=RoundRobinBatch(channels=4)
     placement=Worker
     ScalarSubqueryExec: subqueries=1
       ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
@@ -6400,7 +6833,7 @@ data:
     inputs=[StageInput(stage=2, mode=Shuffle)]
     mode=Pipelined
     partitions=4
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[#7@0 as k, #8@1 as total]
       ProjectionExec: expr=[#2@0 as #7, sum(t.#3)@1 as #8]
@@ -6820,7 +7253,7 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[min(s.#3)@0 as #4]
       AggregateExec: mode=Single, gby=[], aggr=[min(s.#3)]
@@ -6843,7 +7276,7 @@ data:
     inputs=[StageInput(stage=1, mode=Shuffle)]
     mode=Pipelined
     partitions=4
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[#5@0 as g, #6@1 as n]
       ProjectionExec: expr=[g@0 as #5, count(Int64(1))@1 as #6]
@@ -7263,7 +7696,7 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[min(s.#5)@0 as #6]
       AggregateExec: mode=Single, gby=[], aggr=[min(s.#5)]
@@ -7286,7 +7719,7 @@ data:
     inputs=[StageInput(stage=1, mode=Shuffle), StageInput(stage=0, mode=Broadcast)]
     mode=Pipelined
     partitions=4
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[#7@0 as k, #8@1 as total]
       ScalarSubqueryExec: subqueries=1
@@ -7733,7 +8166,7 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[CAST(min(s.#5)@0 AS Int64) as #6]
       AggregateExec: mode=Single, gby=[], aggr=[min(s.#5)]
@@ -7754,7 +8187,7 @@ data:
     inputs=[StageInput(stage=1, mode=Shuffle), StageInput(stage=0, mode=Broadcast)]
     mode=Pipelined
     partitions=4
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[#7@0 as k, #8@1 as total]
       ScalarSubqueryExec: subqueries=1
@@ -8251,7 +8684,7 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[min(s.#5)@0 as #6]
       AggregateExec: mode=Single, gby=[], aggr=[min(s.#5)]
@@ -8262,7 +8695,7 @@ data:
     inputs=[StageInput(stage=0, mode=Broadcast)]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[#7@0 as v, #8@1 as w]
       ScalarSubqueryExec: subqueries=1
@@ -8728,7 +9161,7 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[min(s.#5)@0 as #6]
       AggregateExec: mode=Single, gby=[], aggr=[min(s.#5)]
@@ -8739,7 +9172,7 @@ data:
     inputs=[StageInput(stage=0, mode=Broadcast)]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[#7@0 as v, #8@1 as w]
       ScalarSubqueryExec: subqueries=1
@@ -9190,7 +9623,7 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[min(s.#5)@0 as #6]
       AggregateExec: mode=Single, gby=[], aggr=[min(s.#5)]
@@ -9213,7 +9646,7 @@ data:
     inputs=[StageInput(stage=1, mode=Shuffle)]
     mode=Pipelined
     partitions=4
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[#9@0 as k, #10@1 as total]
       ProjectionExec: expr=[#7@0 as #9, sum(p.#8)@1 as #10]
@@ -9626,7 +10059,7 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[min(s.#4)@0 as #5]
       AggregateExec: mode=Single, gby=[], aggr=[min(s.#4)]
@@ -9637,7 +10070,7 @@ data:
     inputs=[StageInput(stage=0, mode=Broadcast)]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[#2@0 as v]
       ScalarSubqueryExec: subqueries=1
@@ -10038,7 +10471,7 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[min(s.#3)@0 as #4]
       AggregateExec: mode=Single, gby=[], aggr=[min(s.#3)]
@@ -10049,7 +10482,7 @@ data:
     inputs=[StageInput(stage=0, mode=Broadcast)]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[#5@0 as total]
       ScalarSubqueryExec: subqueries=1
@@ -10458,7 +10891,7 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[min(s.#3)@0 as #4]
       AggregateExec: mode=Single, gby=[], aggr=[min(s.#3)]
@@ -10469,7 +10902,7 @@ data:
     inputs=[StageInput(stage=0, mode=Broadcast)]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[#6@0 as v, #7@1 as total]
       ScalarSubqueryExec: subqueries=1
@@ -10903,7 +11336,7 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[min(s.#3)@0 as #4]
       AggregateExec: mode=Single, gby=[], aggr=[min(s.#3)]
@@ -10914,7 +11347,7 @@ data:
     inputs=[StageInput(stage=0, mode=Broadcast)]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[#6@0 as v, #7@1 as rn]
       ScalarSubqueryExec: subqueries=1
@@ -11365,7 +11798,7 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[min(s.#3)@0 as #4]
       AggregateExec: mode=Single, gby=[], aggr=[min(s.#3)]
@@ -11376,7 +11809,7 @@ data:
     inputs=[StageInput(stage=0, mode=Broadcast)]
     mode=Pipelined
     partitions=1
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[#6@0 as v, #7@1 as n]
       ScalarSubqueryExec: subqueries=1

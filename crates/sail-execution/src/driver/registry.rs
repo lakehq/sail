@@ -1,20 +1,21 @@
 use std::collections::HashMap;
 
+use sail_celeborn::lifecycle::LifecycleManagerActor;
 use sail_common::actor::ActorHandle;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::oneshot;
 use tonic::async_trait;
 
-use crate::driver::{DriverActor, DriverEvent};
+use crate::driver::{DriverActor, DriverMessage};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::DriverId;
 
 /// A handle for managing a driver actor.
 ///
 /// This wrapper lets the session manager own the driver lifecycle without exposing
-/// [`DriverActor`] or [`DriverEvent`] outside the `sail-execution` crate.
+/// [`DriverActor`] or [`DriverMessage`] outside the `sail-execution` crate.
 /// Keeping the underlying actor handle private prevents callers from sending arbitrary
-/// driver events and avoids coupling session management to the driver actor implementation.
+/// driver messages and avoids coupling session management to the driver actor implementation.
 #[derive(Clone)]
 pub struct DriverHandle {
     handle: ActorHandle<DriverActor>,
@@ -25,12 +26,25 @@ impl DriverHandle {
         Self { handle }
     }
 
-    pub(crate) async fn send(&self, event: DriverEvent) -> Result<(), SendError<DriverEvent>> {
-        self.handle.send(event).await
+    pub(crate) async fn send(
+        &self,
+        message: DriverMessage,
+    ) -> Result<(), SendError<DriverMessage>> {
+        self.handle.send(message).await
+    }
+
+    pub(crate) async fn celeborn_lifecycle_manager(
+        &self,
+    ) -> ExecutionResult<Option<ActorHandle<LifecycleManagerActor>>> {
+        let (result, receiver) = oneshot::channel();
+        self.send(DriverMessage::CelebornGetLifecycleManager { result })
+            .await
+            .map_err(ExecutionError::from)?;
+        receiver.await.map_err(ExecutionError::from)
     }
 
     pub async fn activate(&self) -> ExecutionResult<()> {
-        self.send(DriverEvent::Activate)
+        self.send(DriverMessage::Activate)
             .await
             .map_err(ExecutionError::from)
     }
@@ -38,7 +52,7 @@ impl DriverHandle {
     pub async fn shutdown(&self) -> ExecutionResult<()> {
         // A closed channel means that the driver actor has already stopped.
         // Shutdown is intentionally idempotent, so this is still a success.
-        let _ = self.send(DriverEvent::Shutdown { result: None }).await;
+        let _ = self.send(DriverMessage::Shutdown { result: None }).await;
         Ok(())
     }
 
@@ -46,7 +60,7 @@ impl DriverHandle {
     pub async fn shutdown_and_wait(&self) -> ExecutionResult<()> {
         let (tx, rx) = oneshot::channel();
         if self
-            .send(DriverEvent::Shutdown { result: Some(tx) })
+            .send(DriverMessage::Shutdown { result: Some(tx) })
             .await
             .is_ok()
         {

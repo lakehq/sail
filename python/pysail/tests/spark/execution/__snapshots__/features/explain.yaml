@@ -352,7 +352,7 @@ data:
     inputs=[StageInput(stage=0, mode=Shuffle)]
     mode=Pipelined
     partitions=4
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[#4@0 as k, #5@1 as total]
       ProjectionExec: expr=[#2@0 as #4, sum(t.#3)@1 as #5]
