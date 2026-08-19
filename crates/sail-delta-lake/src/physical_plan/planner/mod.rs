@@ -56,4 +56,12 @@ impl<'a> DeltaPhysicalPlanner<'a> {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         op_write::build_write_plan(&self.ctx, input, sink_mode, sort_order).await
     }
+
+    pub async fn create_optimize_plan(
+        &self,
+        input: Arc<dyn ExecutionPlan>,
+        sink_mode: PhysicalSinkMode,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        op_write::build_optimize_plan(&self.ctx, input, sink_mode).await
+    }
 }

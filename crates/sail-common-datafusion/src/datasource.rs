@@ -298,6 +298,16 @@ pub struct DeleteInfo {
     pub options: Vec<OptionLayer>,
 }
 
+/// Information required to optimize a table-format data layout.
+#[derive(Debug, Clone)]
+pub struct OptimizeInfo {
+    pub input: LogicalPlan,
+    pub path: String,
+    pub partition_by: Vec<CatalogPartitionField>,
+    pub options: Vec<OptionLayer>,
+    pub lakehouse_table: Option<LakehouseExecutionContext>,
+}
+
 /// Information required to create a logical MERGE plan for a table format.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct MergeInfo {
@@ -529,6 +539,12 @@ pub trait TableFormat: Send + Sync {
     async fn create_merger(&self, ctx: &dyn Session, info: MergeInfo) -> Result<LogicalPlan> {
         let _ = (ctx, info);
         not_impl_err!("MERGE is not yet implemented for {} format", self.name())
+    }
+
+    /// Creates a logical plan for table layout optimization.
+    async fn create_optimizer(&self, ctx: &dyn Session, info: OptimizeInfo) -> Result<LogicalPlan> {
+        let _ = (ctx, info);
+        not_impl_err!("OPTIMIZE is not yet implemented for {} format", self.name())
     }
 
     /// Alters table-format storage metadata for an existing table.

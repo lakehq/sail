@@ -1029,6 +1029,12 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
+        Statement::Optimize { optimize: _, table } => {
+            let node = spec::CommandNode::Optimize(spec::Optimize {
+                table: from_ast_object_name(table)?,
+            });
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::LoadData {
             load_data: _,
             local,

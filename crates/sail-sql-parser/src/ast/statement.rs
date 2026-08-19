@@ -13,12 +13,12 @@ use crate::ast::keywords::{
     Exists, Explain, Extended, External, Fields, Fileformat, First, For, Format, Formatted, From,
     Function, Functions, Generated, Global, Identity, If, In, Increment, Inpath, Inputformat,
     Insert, Into, Is, Items, Keys, Lazy, Like, Lines, Load, Local, Location, Map, Matched, Merge,
-    Name, Namespace, Namespaces, Noscan, Not, Null, On, Options, Or, Outputformat, Overwrite,
-    Partition, Partitioned, Partitions, Properties, Purge, Recover, Refresh, Rename, Replace,
-    Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show, Sorted, Source, Start,
-    Statistics, Stored, System, Table, Tables, Target, Tblproperties, Temp, Temporary, Terminated,
-    Then, Time, To, Type, Uncache, Unset, Update, Use, User, Using, Values, Verbose, View, Views,
-    When, With, Zone,
+    Name, Namespace, Namespaces, Noscan, Not, Null, On, Optimize, Options, Or, Outputformat,
+    Overwrite, Partition, Partitioned, Partitions, Properties, Purge, Recover, Refresh, Rename,
+    Replace, Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show, Sorted, Source,
+    Start, Statistics, Stored, System, Table, Tables, Target, Tblproperties, Temp, Temporary,
+    Terminated, Then, Time, To, Type, Uncache, Unset, Update, Use, User, Using, Values, Verbose,
+    View, Views, When, With, Zone,
 };
 use crate::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
 use crate::ast::operator::{
@@ -267,6 +267,10 @@ pub enum Statement {
         alias: Option<DeleteTableAlias>,
         #[parser(function = |(_, _, e, _), o| compose(e, o))]
         r#where: Option<WhereClause>,
+    },
+    Optimize {
+        optimize: Optimize,
+        table: ObjectName,
     },
     LoadData {
         load_data: (Load, Data),

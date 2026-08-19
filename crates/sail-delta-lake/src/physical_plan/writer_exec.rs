@@ -798,10 +798,18 @@ impl DeltaWriterExec {
             }
 
             let close_start = Instant::now();
-            let add_actions = writer
+            let mut add_actions = writer
                 .close()
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            if operation
+                .as_ref()
+                .is_some_and(|operation| !operation.changes_data())
+            {
+                for add in &mut add_actions {
+                    add.data_change = false;
+                }
+            }
             let close_time_ms = close_start.elapsed().as_millis() as u64;
 
             let num_added_files: u64 = add_actions.len() as u64;

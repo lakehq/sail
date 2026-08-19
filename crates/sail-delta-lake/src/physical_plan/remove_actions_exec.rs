@@ -39,6 +39,7 @@ use crate::transaction::OperationMetrics;
 pub struct DeltaRemoveActionsExec {
     input: Arc<dyn ExecutionPlan>,
     partition_value_columns: Option<Vec<(String, String)>>,
+    data_change: bool,
     metrics: ExecutionPlanMetricsSet,
     cache: Arc<PlanProperties>,
 }
@@ -67,9 +68,15 @@ impl DeltaRemoveActionsExec {
         Ok(Self {
             input,
             partition_value_columns,
+            data_change: true,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
         })
+    }
+
+    pub fn with_data_change(mut self, data_change: bool) -> Self {
+        self.data_change = data_change;
+        self
     }
 
     pub(crate) async fn create_remove_actions(adds: Vec<Add>) -> Result<Vec<Remove>> {
@@ -128,10 +135,13 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
         if children.len() != 1 {
             return internal_err!("DeltaRemoveActionsExec requires exactly one child");
         }
-        Ok(Arc::new(DeltaRemoveActionsExec::try_new(
-            children[0].clone(),
-            self.partition_value_columns.clone(),
-        )?))
+        Ok(Arc::new(
+            DeltaRemoveActionsExec::try_new(
+                children[0].clone(),
+                self.partition_value_columns.clone(),
+            )?
+            .with_data_change(self.data_change),
+        ))
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -149,6 +159,7 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
 
         let mut stream = self.input.execute(0, context)?;
         let partition_value_columns = self.partition_value_columns.clone();
+        let data_change = self.data_change;
 
         let output_rows = MetricBuilder::new(&self.metrics).output_rows(partition);
         let output_bytes = MetricBuilder::new(&self.metrics).output_bytes(partition);
@@ -185,7 +196,12 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
             let scan_time_ms = exec_start.elapsed().as_millis() as u64;
 
             let num_removed_files: u64 = adds_to_remove.len() as u64;
-            let remove_actions = Self::create_remove_actions(adds_to_remove).await?;
+            let mut remove_actions = Self::create_remove_actions(adds_to_remove).await?;
+            if !data_change {
+                for remove in &mut remove_actions {
+                    remove.data_change = false;
+                }
+            }
 
             // For execution metrics, treat removed files/bytes as this node's "output".
             output_rows.add(usize::try_from(num_removed_files).unwrap_or(usize::MAX));

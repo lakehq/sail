@@ -490,6 +490,7 @@ pub enum CommandNode {
         table_alias: Option<Identifier>,
         condition: Option<ExprWithSource>,
     },
+    Optimize(Optimize),
     AlterTable {
         table: ObjectName,
         if_exists: bool,
@@ -1407,6 +1408,12 @@ pub struct Delete {
     pub table: ObjectName,
     pub table_alias: Option<Identifier>,
     pub condition: Option<ExprWithSource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Optimize {
+    pub table: ObjectName,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

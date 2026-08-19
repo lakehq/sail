@@ -427,6 +427,7 @@ impl OperationMetrics {
             // tableSizeAfterRestore. Requires the restore exec to aggregate these
             // counts from the snapshot diff it produces.
             DeltaOperation::Restore { .. }
+            | DeltaOperation::Optimize {}
             | DeltaOperation::Write { .. }
             | DeltaOperation::Create { .. }
             | DeltaOperation::SetTableProperties { .. }

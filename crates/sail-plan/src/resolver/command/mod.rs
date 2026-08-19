@@ -20,6 +20,7 @@ mod explain;
 mod function;
 mod insert;
 mod merge;
+mod optimize;
 mod show;
 mod variable;
 mod with_relations;
@@ -296,6 +297,7 @@ impl PlanResolver<'_> {
                 };
                 self.resolve_command_delete(delete, state).await
             }
+            CommandNode::Optimize(optimize) => self.resolve_command_optimize(optimize, state).await,
             CommandNode::AlterTable {
                 table,
                 if_exists,

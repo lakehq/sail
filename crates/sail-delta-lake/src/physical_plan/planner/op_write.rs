@@ -10,6 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
@@ -18,6 +19,7 @@ use datafusion::logical_expr::Expr;
 use datafusion::physical_expr::expressions::NotExpr;
 use datafusion::physical_expr::{LexRequirement, PhysicalExpr};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::union::UnionExec;
@@ -28,8 +30,8 @@ use sail_common_datafusion::logical_expr::ExprWithSource;
 use super::context::PlannerContext;
 use super::metadata_predicate::{build_metadata_filter, predicate_requires_stats};
 use super::utils::{
-    LogReplayOptions, align_schemas_for_union, build_log_replay_pipeline_with_options,
-    build_standard_write_layers,
+    LogReplayOptions, align_schemas_for_union, build_log_replay_pipeline,
+    build_log_replay_pipeline_with_options, build_standard_write_layers,
 };
 use crate::physical_plan::{
     DeltaCommitExec, DeltaDiscoveryExec, DeltaRemoveActionsExec, DeltaScanByAddsExec,
@@ -55,6 +57,98 @@ pub async fn build_write_plan(
         }
         _ => build_standard_plan(ctx, input, sink_mode, sort_order).await,
     }
+}
+
+pub async fn build_optimize_plan(
+    ctx: &PlannerContext<'_>,
+    input: Arc<dyn ExecutionPlan>,
+    sink_mode: PhysicalSinkMode,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    if !matches!(sink_mode, PhysicalSinkMode::Overwrite) {
+        return datafusion_common::plan_err!("invalid sink mode for Delta OPTIMIZE: {sink_mode:?}");
+    }
+    let table = ctx.open_table().await?;
+    let snapshot = table
+        .snapshot()
+        .map_err(|e| DataFusionError::External(Box::new(e)))?
+        .clone();
+    let partition_columns = snapshot.metadata().partition_columns().clone();
+    let mut seen = HashSet::new();
+    let has_multiple_files = snapshot.adds().iter().any(|add| {
+        let partition = partition_columns
+            .iter()
+            .map(|column| {
+                add.partition_values
+                    .get(column)
+                    .and_then(|value| value.as_deref())
+            })
+            .collect::<Vec<_>>();
+        !seen.insert(partition)
+    });
+    if !has_multiple_files {
+        return Ok(Arc::new(EmptyExec::new(input.schema())));
+    }
+
+    let input_schema = input.schema();
+    let plan = create_projection(input, partition_columns.clone())?;
+    let plan = create_repartition(plan, partition_columns.clone(), 1)?;
+    let plan = create_sort(plan, partition_columns.clone(), None)?;
+    let writer_schema = plan.schema();
+    let operation = DeltaOperation::Optimize {};
+    let writer_options = DeltaWriterExecOptions::from(ctx.options().clone())
+        .with_generation_expressions(ctx.generation_expressions().clone())
+        .with_identity_columns(ctx.identity_columns().clone());
+    let write_context = crate::physical_plan::prepare_delta_write_context(
+        ctx.table_url(),
+        Some(snapshot.as_ref()),
+        &writer_options,
+        ctx.metadata_configuration(),
+        &partition_columns,
+        &sink_mode,
+        true,
+        &writer_schema,
+        Some(operation),
+    )?;
+    let writer: Arc<dyn ExecutionPlan> = Arc::new(DeltaWriterExec::new(
+        plan,
+        ctx.table_url().clone(),
+        writer_options,
+        ctx.metadata_configuration().clone(),
+        partition_columns.clone(),
+        sink_mode.clone(),
+        true,
+        writer_schema,
+        write_context.clone(),
+        ctx.lakehouse_table().cloned(),
+    )?);
+
+    let meta_scan = build_log_replay_pipeline(ctx, &snapshot).await?;
+    let adds: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
+        meta_scan,
+        ctx.table_url().clone(),
+        None,
+        None,
+        snapshot.version(),
+        partition_columns.clone(),
+        true,
+    )?);
+    let removes: Arc<dyn ExecutionPlan> = Arc::new(
+        DeltaRemoveActionsExec::try_new(adds, Some(snapshot.physical_partition_columns()))?
+            .with_data_change(false),
+    );
+    let actions = UnionExec::try_new(vec![writer, removes])?;
+
+    Ok(Arc::new(DeltaCommitExec::new(
+        Arc::new(CoalescePartitionsExec::new(actions)),
+        ctx.table_url().clone(),
+        partition_columns,
+        true,
+        input_schema,
+        sink_mode,
+        ctx.options().user_metadata.clone(),
+        write_context.commit_context.clone(),
+        ctx.lakehouse_table().cloned(),
+    )))
 }
 
 async fn build_standard_plan(

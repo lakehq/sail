@@ -39,6 +39,27 @@ def _latest_commit_info(table_location: Path) -> dict:
     raise AssertionError(msg)
 
 
+def _latest_commit_file_actions(table_location: Path) -> list[dict]:
+    logs = sorted(path for path in (table_location / "_delta_log").glob("*.json") if path.stem.isdigit())
+    assert logs, f"no delta logs found in {table_location / '_delta_log'}"
+    with logs[-1].open("r", encoding="utf-8") as f:
+        return [json.loads(line) for line in f]
+
+
+def _active_data_files(table_location: Path) -> set[str]:
+    active: set[str] = set()
+    logs = sorted(path for path in (table_location / "_delta_log").glob("*.json") if path.stem.isdigit())
+    for log in logs:
+        with log.open("r", encoding="utf-8") as f:
+            for line in f:
+                action = json.loads(line)
+                if add := action.get("add"):
+                    active.add(add["path"])
+                elif remove := action.get("remove"):
+                    active.discard(remove["path"])
+    return active
+
+
 def _first_commit_actions(table_location: Path) -> dict:
     """Extract protocol and metaData from the first delta log commit (version 0)."""
     log_dir = table_location / "_delta_log"
@@ -397,6 +418,31 @@ def delta_log_assert(
         obj = _pick_paths(obj, paths)
 
     assert obj == snapshot
+
+
+@then("delta log latest commit rewrites files without data changes")
+def delta_log_latest_commit_rewrites_without_data_changes(variables: dict) -> None:
+    location = variables.get("location")
+    assert location is not None, "expected variable `location` to be defined for delta log inspection"
+    actions = _latest_commit_file_actions(Path(location.path))
+    file_actions = [action[key] for action in actions for key in ("add", "remove") if key in action]
+    assert file_actions, "expected latest Delta commit to contain add/remove actions"
+    assert all(action.get("dataChange") is False for action in file_actions)
+
+
+@then(parsers.parse("delta log commit count is {count:d}"))
+def delta_log_commit_count(variables: dict, count: int) -> None:
+    location = variables.get("location")
+    assert location is not None, "expected variable `location` to be defined for delta log inspection"
+    commits = [path for path in (Path(location.path) / "_delta_log").glob("*.json") if path.stem.isdigit()]
+    assert len(commits) == count
+
+
+@then(parsers.parse("delta active data files count is {count:d}"))
+def delta_active_data_files_count(variables: dict, count: int) -> None:
+    location = variables.get("location")
+    assert location is not None, "expected variable `location` to be defined for delta log inspection"
+    assert len(_active_data_files(Path(location.path))) == count
 
 
 @then(parsers.parse("delta log JSON file {filename} in {location_var} matches snapshot"))

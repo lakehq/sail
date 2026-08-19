@@ -169,4 +169,9 @@ mod tests {
         );
         Ok(())
     }
+
+    #[test]
+    fn test_parse_optimize() -> SqlResult<()> {
+        parse_one_statement("OPTIMIZE catalog.schema.events").map(|_| ())
+    }
 }

@@ -5612,6 +5612,14 @@
               }
             },
             {
+              "name": "Keyword(Optimize)",
+              "node": {
+                "terminal": {
+                  "keyword": "OPTIMIZE"
+                }
+              }
+            },
+            {
               "name": "Keyword(Options)",
               "node": {
                 "terminal": {
@@ -10158,6 +10166,16 @@
                       },
                       {
                         "nonTerminal": "Option(WhereClause)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Optimize)"
+                      },
+                      {
+                        "nonTerminal": "ObjectName"
                       }
                     ]
                   },

@@ -25,8 +25,8 @@ use sail_common_datafusion::column_features::{
     ColumnFeatureKey, ColumnFeatures, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
 };
 use sail_common_datafusion::datasource::{
-    BucketBy, CATALOG_TABLE_OPTION, DeleteInfo, MergeInfo, OptionLayer, PhysicalSinkMode, SinkInfo,
-    SinkMode, SourceInfo, TableFormat, TableFormatAlterTableOperation,
+    BucketBy, CATALOG_TABLE_OPTION, DeleteInfo, MergeInfo, OptimizeInfo, OptionLayer,
+    PhysicalSinkMode, SinkInfo, SinkMode, SourceInfo, TableFormat, TableFormatAlterTableOperation,
     TableFormatCreateTableColumn, TableFormatCreateTableInfo, TableFormatCreateTableResult,
     TableFormatMetadata, TableFormatRegistry, create_sort_order, find_path_in_options,
 };
@@ -426,6 +426,7 @@ impl TableFormat for DeltaTableFormat {
                     sort_order,
                     options,
                     lakehouse_table,
+                    optimize: false,
                 },
             )),
         }))
@@ -462,6 +463,35 @@ impl TableFormat for DeltaTableFormat {
 
     async fn create_merger(&self, _ctx: &dyn Session, info: MergeInfo) -> Result<LogicalPlan> {
         crate::logical::merge::expand_merge_node(info)
+    }
+
+    async fn create_optimizer(
+        &self,
+        _ctx: &dyn Session,
+        info: OptimizeInfo,
+    ) -> Result<LogicalPlan> {
+        let OptimizeInfo {
+            input,
+            path,
+            partition_by,
+            options,
+            lakehouse_table,
+        } = info;
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(DeltaWriteNode::new(
+                Arc::new(input),
+                DeltaWriteNodeOptions {
+                    path,
+                    mode: SinkMode::Overwrite,
+                    partition_by,
+                    bucket_by: None,
+                    sort_order: vec![],
+                    options,
+                    lakehouse_table,
+                    optimize: true,
+                },
+            )),
+        }))
     }
 
     async fn alter_table(
@@ -539,6 +569,7 @@ pub struct DeltaWriteNodeOptions {
     #[educe(PartialEq(ignore), Hash(ignore), PartialOrd(ignore))]
     pub options: Vec<OptionLayer>,
     pub lakehouse_table: Option<LakehouseExecutionContext>,
+    pub optimize: bool,
 }
 
 #[derive(Clone, Debug, Educe)]
@@ -609,6 +640,7 @@ pub(crate) async fn plan_delta_write(
         sort_order,
         options,
         lakehouse_table,
+        optimize,
     } = node.options().clone();
 
     if is_flow_event_schema(logical_input.schema().as_arrow()) {
@@ -659,6 +691,7 @@ pub(crate) async fn plan_delta_write(
         table_url.clone(),
         object_store,
         lakehouse_planning_context,
+        optimize,
     )
     .await
     {
@@ -669,6 +702,9 @@ pub(crate) async fn plan_delta_write(
         Err(err) => return Err(DataFusionError::External(Box::new(err))),
     };
     let table_exists = table.is_some();
+    if optimize && !table_exists {
+        return plan_err!("OPTIMIZE requires an existing Delta table at path: {table_url}");
+    }
     let table_snapshot = table
         .as_ref()
         .map(|table| {
@@ -765,9 +801,13 @@ pub(crate) async fn plan_delta_write(
     .with_lakehouse_table(lakehouse_table);
     let planner_ctx = PlannerContext::new(ctx, table_config);
     let planner = DeltaPhysicalPlanner::new(planner_ctx);
-    planner
-        .create_plan(physical_input, mode, physical_sort)
-        .await
+    if optimize {
+        planner.create_optimize_plan(physical_input, mode).await
+    } else {
+        planner
+            .create_plan(physical_input, mode, physical_sort)
+            .await
+    }
 }
 
 async fn open_delta_write_planning_table(
@@ -775,11 +815,12 @@ async fn open_delta_write_planning_table(
     table_url: Url,
     object_store: Arc<dyn object_store::ObjectStore>,
     lakehouse_table: Option<&LakehouseExecutionContext>,
+    require_files: bool,
 ) -> std::result::Result<DeltaTable, DeltaTableError> {
     // Only partition columns and table existence are needed at planning time;
     // skip replaying Add/Remove file actions unless a later physical plan needs them.
     let mut table_config = DeltaSnapshotConfig {
-        require_files: false,
+        require_files,
         ..Default::default()
     };
 
