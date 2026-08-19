@@ -68,6 +68,82 @@ Feature: Delta Lake read path (driver vs metadata-as-data)
         | id | event_time          |
         | 1  | 2024-05-01 12:00:00 |
 
+    Scenario: Implicit string-to-timestamp comparison uses the session time zone
+      When query
+        """
+        SELECT COUNT(*) AS cnt
+        FROM delta_read_driver_timestamp_path
+        WHERE event_time > '2024-05-01 13:00:00'
+        """
+      Then query result
+        | cnt |
+        | 0   |
+      When query
+        """
+        SELECT COUNT(*) AS cnt
+        FROM delta_read_driver_timestamp_path
+        WHERE event_time = CONCAT('2024-05-01 12:00:', '00')
+        """
+      Then query result
+        | cnt |
+        | 1   |
+      When query
+        """
+        SELECT COUNT(*) AS cnt
+        FROM delta_read_driver_timestamp_path
+        WHERE TIMESTAMP '2024-05-01 12:00:00.123456' =
+              '2024-05-01 12:00:00.123456789'
+        """
+      Then query result
+        | cnt |
+        | 1   |
+
+    Scenario: Timestamp IN uses the ANSI common type
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT TIMESTAMP '2024-05-01 12:00:00.123456'
+               IN ('2024-05-01 12:00:00.123456789') AS matched
+        """
+      Then query result
+        | matched |
+        | false   |
+      When query
+        """
+        SELECT TIMESTAMP '2024-05-01 12:00:00'
+               IN ('2024-05-01 12:00:00', 1) AS matched
+        """
+      Then query result
+        | matched |
+        | true    |
+      When query
+        """
+        SELECT COUNT(*) AS matched
+        FROM VALUES (TIMESTAMP '2024-05-01 12:00:00.123456') AS t(event_time)
+        WHERE event_time IN (SELECT '2024-05-01 12:00:00.123456789')
+        """
+      Then query result
+        | matched |
+        | 0       |
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT TIMESTAMP '2024-05-01 12:00:00.123456'
+               IN ('2024-05-01 12:00:00.123456789') AS matched
+        """
+      Then query result
+        | matched |
+        | true    |
+      When query
+        """
+        SELECT COUNT(*) AS matched
+        FROM VALUES (TIMESTAMP '2024-05-01 12:00:00.123456') AS t(event_time)
+        WHERE event_time IN (SELECT '2024-05-01 12:00:00.123456789')
+        """
+      Then query result
+        | matched |
+        | 1       |
+
   Rule: EXPLAIN shows metadata-as-data path when table has metadataAsDataRead option
     Background:
       Given variable location for temporary directory delta_read_metadata
@@ -77,24 +153,43 @@ Feature: Delta Lake read path (driver vs metadata-as-data)
         """
       Given statement template
         """
-        CREATE TABLE delta_read_metadata_path (
-          id INT,
-          name STRING,
-          value INT
-        )
+        CREATE TABLE delta_read_metadata_path
         USING DELTA LOCATION {{ location.sql }}
         OPTIONS (metadataAsDataRead 'true')
-        """
-      Given statement
-        """
-        INSERT INTO delta_read_metadata_path
-        SELECT * FROM VALUES (1, 'a', 10), (2, 'b', 20)
+        AS SELECT * FROM VALUES
+          (1, 'a', 10),
+          (2, 'b', 20)
+        AS t(id, name, value)
         """
 
     Scenario: EXPLAIN SELECT with metadataAsDataRead true uses discovery and log replay
       When query
         """
         EXPLAIN SELECT * FROM delta_read_metadata_path
+        """
+      Then query plan matches snapshot
+
+    Scenario: Metadata pruning does not assume arbitrary casts preserve bounds
+      Given statement
+        """
+        INSERT INTO delta_read_metadata_path VALUES (3, 'c', 2), (4, 'd', 10)
+        """
+      When query
+        """
+        SELECT id
+        FROM delta_read_metadata_path
+        WHERE CAST(value AS STRING) < '2'
+        ORDER BY id
+        """
+      Then query result ordered
+        | id |
+        | 1  |
+        | 4  |
+
+    Scenario: EXPLAIN CODEGEN shows the distributed metadata replay stages
+      When query
+        """
+        EXPLAIN CODEGEN SELECT * FROM delta_read_metadata_path
         """
       Then query plan matches snapshot
 

@@ -25,14 +25,14 @@ use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::projection::ProjectionExec;
-use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
+use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_functions_nested::extract::array_element_udf;
 use datafusion_functions_nested::map_extract::map_extract_udf;
-use datafusion_physical_expr::expressions::Column as PhysicalColumn;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
+use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use url::Url;
 
 use super::context::PlannerContext;
@@ -73,6 +73,28 @@ pub struct LogReplayOptions {
 pub struct LogReplayFilter {
     pub predicate: Arc<dyn PhysicalExpr>,
     pub table_schema: SchemaRef,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplayPipelineMode {
+    Sort,
+    Hash,
+    HashCommits,
+}
+
+fn select_replay_pipeline_mode(
+    strategy: DeltaLogReplayStrategy,
+    has_checkpoint: bool,
+) -> ReplayPipelineMode {
+    match strategy {
+        DeltaLogReplayStrategy::Sort => ReplayPipelineMode::Sort,
+        DeltaLogReplayStrategy::Hash if has_checkpoint => ReplayPipelineMode::Hash,
+        DeltaLogReplayStrategy::Hash => ReplayPipelineMode::HashCommits,
+        // Commit file count does not bound the number of actions or hash-table memory. Keep the
+        // default path spill-friendly; hash replay remains available through the explicit Hash
+        // strategy.
+        DeltaLogReplayStrategy::Auto => ReplayPipelineMode::Sort,
+    }
 }
 
 impl Default for LogReplayOptions {
@@ -485,14 +507,12 @@ async fn build_log_replay_pipeline_with_files(
     final_proj.push((path_expr, PATH_COLUMN.to_string()));
     final_proj.push((size_expr, "size_bytes".to_string()));
     final_proj.push((Arc::clone(&mod_time_expr), "modification_time".to_string()));
+    let unknown_commit_metadata = simplify(Expr::Literal(ScalarValue::Int64(None), None))?;
     final_proj.push((
-        Arc::new(Column::new(COL_LOG_VERSION, log_version_idx)) as Arc<dyn PhysicalExpr>,
+        Arc::clone(&unknown_commit_metadata),
         COMMIT_VERSION_COLUMN.to_string(),
     ));
-    final_proj.push((
-        Arc::clone(&mod_time_expr),
-        COMMIT_TIMESTAMP_COLUMN.to_string(),
-    ));
+    final_proj.push((unknown_commit_metadata, COMMIT_TIMESTAMP_COLUMN.to_string()));
     for (logical, physical) in &partition_columns {
         final_proj.push((part_expr_for(logical, physical)?, logical.clone()));
     }
@@ -552,7 +572,7 @@ async fn build_log_replay_pipeline_with_files(
     }
 
     // Replay key columns (consumed by replay; stripped from replay output schema).
-    final_proj.push((replay_path, COL_REPLAY_PATH.to_string()));
+    final_proj.push((Arc::clone(&replay_path), COL_REPLAY_PATH.to_string()));
     final_proj.push((is_remove, COL_LOG_IS_REMOVE.to_string()));
     final_proj.push((
         Arc::new(Column::new(COL_LOG_VERSION, log_version_idx)) as Arc<dyn PhysicalExpr>,
@@ -573,24 +593,15 @@ async fn build_log_replay_pipeline_with_files(
     let build_branch = |scan: Arc<dyn ExecutionPlan>,
                         sort: bool|
      -> Result<Arc<dyn ExecutionPlan>> {
-        // Preserve existing behavior: fan out to target partitions early for stable EXPLAIN and
-        // better parallelism. (This is a shuffle, but not a pipeline breaker like SortExec.)
-        let plan: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+        // Keep the raw-row hash repartition through distribution enforcement. The explicit node
+        // is rewritten to an executable repartition after ProjectionExec maps its expression to
+        // COL_REPLAY_PATH.
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(ExplicitRepartitionExec::new(
             scan,
-            Partitioning::RoundRobinBatch(log_partitions),
-        )?);
-
+            Partitioning::Hash(vec![Arc::clone(&replay_path)], log_partitions),
+        ));
         let plan: Arc<dyn ExecutionPlan> =
             Arc::new(ProjectionExec::try_new(final_proj.clone(), plan)?);
-
-        // Hash partition by replay_path so all actions for the same path are co-located.
-        let replay_path_idx = plan.schema().index_of(COL_REPLAY_PATH)?;
-        let replay_expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> =
-            Arc::new(PhysicalColumn::new(COL_REPLAY_PATH, replay_path_idx));
-        let plan: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
-            plan,
-            Partitioning::Hash(vec![replay_expr], log_partitions),
-        )?);
 
         if !sort {
             return Ok(plan);
@@ -634,48 +645,63 @@ async fn build_log_replay_pipeline_with_files(
     };
 
     let replay_strategy = ctx.options().delta_log_replay_strategy;
-    let replay_hash_threshold = ctx.options().delta_log_replay_hash_threshold.get();
     let has_checkpoint = !checkpoint_files.is_empty();
-    let use_hash = match replay_strategy {
-        DeltaLogReplayStrategy::Sort => false,
-        DeltaLogReplayStrategy::Hash => has_checkpoint,
-        DeltaLogReplayStrategy::Auto => {
-            has_checkpoint && commit_files.len() <= replay_hash_threshold
+    let replay_mode = select_replay_pipeline_mode(replay_strategy, has_checkpoint);
+
+    let replay: Arc<dyn ExecutionPlan> = match replay_mode {
+        ReplayPipelineMode::Sort => {
+            let mut scans = Vec::with_capacity(2);
+            if let Some(checkpoint_scan) = checkpoint_scan_opt {
+                scans.push(checkpoint_scan);
+            }
+            if let Some(commit_scan) = commit_scan_opt {
+                scans.push(commit_scan);
+            }
+            let scan = match scans.len() {
+                0 => empty_scan(Arc::clone(&input_schema)),
+                1 => scans.remove(0),
+                _ => UnionExec::try_new(scans)?,
+            };
+            let input = build_branch(scan, true)?;
+            Arc::new(DeltaLogReplayExec::new(
+                input,
+                table_url,
+                version,
+                replay_partition_cols,
+                checkpoint_files,
+                commit_files,
+            ))
         }
-    };
-
-    let replay: Arc<dyn ExecutionPlan> = if has_checkpoint {
-        // Hash replay: stream checkpoint, build small commit-side map, then emit commit-only adds.
-        let checkpoint_scan =
-            checkpoint_scan_opt.unwrap_or_else(|| empty_scan(Arc::clone(&input_schema)));
-        let commit_scan = commit_scan_opt.unwrap_or_else(|| empty_scan(Arc::clone(&input_schema)));
-
-        let checkpoint_branch = build_branch(checkpoint_scan, false)?;
-        let commit_branch = build_branch(commit_scan, !use_hash)?;
-
-        Arc::new(DeltaLogReplayExec::new_hash(
-            checkpoint_branch,
-            commit_branch,
-            table_url,
-            version,
-            replay_partition_cols,
-            checkpoint_files,
-            commit_files,
-        ))
-    } else {
-        // Sort replay (spill-friendly): for commit-only scenarios, avoid building a potentially
-        // large in-memory map.
-        let commit_scan = commit_scan_opt.unwrap_or_else(|| empty_scan(Arc::clone(&input_schema)));
-        let commit_branch = build_branch(commit_scan, true)?;
-
-        Arc::new(DeltaLogReplayExec::new(
-            commit_branch,
-            table_url,
-            version,
-            replay_partition_cols,
-            checkpoint_files,
-            commit_files,
-        ))
+        ReplayPipelineMode::Hash => {
+            let checkpoint_scan =
+                checkpoint_scan_opt.unwrap_or_else(|| empty_scan(Arc::clone(&input_schema)));
+            let commit_scan =
+                commit_scan_opt.unwrap_or_else(|| empty_scan(Arc::clone(&input_schema)));
+            let checkpoint = build_branch(checkpoint_scan, false)?;
+            let commits = build_branch(commit_scan, false)?;
+            Arc::new(DeltaLogReplayExec::try_new_hash(
+                checkpoint,
+                commits,
+                table_url,
+                version,
+                replay_partition_cols,
+                checkpoint_files,
+                commit_files,
+            )?)
+        }
+        ReplayPipelineMode::HashCommits => {
+            let commit_scan =
+                commit_scan_opt.unwrap_or_else(|| empty_scan(Arc::clone(&input_schema)));
+            let commits = build_branch(commit_scan, false)?;
+            Arc::new(DeltaLogReplayExec::new_hash_commits(
+                commits,
+                table_url,
+                version,
+                replay_partition_cols,
+                checkpoint_files,
+                commit_files,
+            ))
+        }
     };
 
     let replay: Arc<dyn ExecutionPlan> = if let Some(filter) = options.log_filter {

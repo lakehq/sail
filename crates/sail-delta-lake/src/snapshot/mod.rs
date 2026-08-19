@@ -1018,6 +1018,7 @@ mod tests {
     use std::collections::{BTreeMap, HashMap};
     use std::sync::Arc;
 
+    use datafusion::common::stats::Precision;
     use object_store::ObjectStore;
     use object_store::memory::InMemory;
     use once_cell::sync::OnceCell;
@@ -1029,8 +1030,9 @@ mod tests {
     use crate::logical::table_source::DeltaTableSource;
     use crate::snapshot::{CatalogManagedCommitSet, DeltaSnapshotConfig};
     use crate::spec::{
-        Add, ColumnMappingMode, ColumnMetadataKey, DataType, DomainMetadata, Metadata,
-        MetadataValue, Protocol, StructField, StructType, TableFeature, TableProperties,
+        Add, ColumnMappingMode, ColumnMetadataKey, DataType, DeletionVectorDescriptor,
+        DomainMetadata, Metadata, MetadataValue, Protocol, StorageType, StructField, StructType,
+        TableFeature, TableProperties,
     };
     use crate::table::{ChangeDataFeedSupport, RowTrackingToken};
 
@@ -1094,6 +1096,25 @@ mod tests {
         }
     }
 
+    fn stats_add(path: &str, stats: Option<&str>, deletion_cardinality: Option<i64>) -> Add {
+        Add {
+            path: path.to_string(),
+            partition_values: HashMap::new(),
+            size: 10,
+            modification_time: 0,
+            data_change: true,
+            stats: stats.map(str::to_string),
+            deletion_vector: deletion_cardinality.map(|cardinality| DeletionVectorDescriptor {
+                storage_type: StorageType::Inline,
+                path_or_inline_dv: "encoded-dv".to_string(),
+                offset: None,
+                size_in_bytes: 1,
+                cardinality,
+            }),
+            ..Default::default()
+        }
+    }
+
     #[expect(clippy::unwrap_used)]
     fn test_log_store() -> LogStoreRef {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
@@ -1103,6 +1124,100 @@ mod tests {
             &Url::parse("memory:///").unwrap(),
             &StorageConfig,
         )
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn snapshot_statistics_subtract_deletion_vector_cardinality() {
+        let snapshot = test_snapshot_with_adds(
+            Protocol::new(3, 7, Some(vec![TableFeature::DeletionVectors]), None),
+            test_metadata([]),
+            Vec::new(),
+            vec![
+                stats_add(
+                    "plain.parquet",
+                    Some(
+                        r#"{"numRecords":5,"minValues":{"id":1},"maxValues":{"id":5},"nullCount":{"id":0}}"#,
+                    ),
+                    None,
+                ),
+                stats_add(
+                    "dv.parquet",
+                    Some(
+                        r#"{"numRecords":4,"tightBounds":false,"minValues":{"id":6},"maxValues":{"id":9},"nullCount":{"id":0}}"#,
+                    ),
+                    Some(1),
+                ),
+            ],
+        );
+
+        let statistics = snapshot.pruning_stats().unwrap().statistics().unwrap();
+
+        assert_eq!(statistics.num_rows, Precision::Exact(8));
+        assert_eq!(
+            statistics.column_statistics[0].null_count,
+            Precision::Exact(0)
+        );
+        assert!(matches!(
+            statistics.column_statistics[0].min_value,
+            Precision::Inexact(_)
+        ));
+        assert!(matches!(
+            statistics.column_statistics[0].max_value,
+            Precision::Inexact(_)
+        ));
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn snapshot_statistics_reject_invalid_deletion_vector_cardinality() {
+        let snapshot = test_snapshot_with_adds(
+            Protocol::new(3, 7, Some(vec![TableFeature::DeletionVectors]), None),
+            test_metadata([]),
+            Vec::new(),
+            vec![stats_add(
+                "invalid.parquet",
+                Some(r#"{"numRecords":2,"nullCount":{"id":0}}"#),
+                Some(3),
+            )],
+        );
+
+        let statistics = snapshot.pruning_stats().unwrap().statistics().unwrap();
+
+        assert_eq!(statistics.num_rows, Precision::Absent);
+        assert_eq!(
+            statistics.column_statistics[0].null_count,
+            Precision::Absent
+        );
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn snapshot_statistics_require_complete_bounds_for_nonnull_files() {
+        let snapshot = test_snapshot_with_adds(
+            Protocol::new(1, 2, None, None),
+            test_metadata([]),
+            Vec::new(),
+            vec![
+                stats_add(
+                    "bounded.parquet",
+                    Some(
+                        r#"{"numRecords":2,"minValues":{"id":10},"maxValues":{"id":20},"nullCount":{"id":0}}"#,
+                    ),
+                    None,
+                ),
+                stats_add(
+                    "missing-bounds.parquet",
+                    Some(r#"{"numRecords":2,"nullCount":{"id":0}}"#),
+                    None,
+                ),
+            ],
+        );
+
+        let statistics = snapshot.pruning_stats().unwrap().statistics().unwrap();
+
+        assert_eq!(statistics.column_statistics[0].min_value, Precision::Absent);
+        assert_eq!(statistics.column_statistics[0].max_value, Precision::Absent);
     }
 
     #[test]

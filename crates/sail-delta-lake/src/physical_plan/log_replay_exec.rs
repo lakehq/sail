@@ -13,8 +13,8 @@ use datafusion::physical_expr::{LexOrdering, OrderingRequirements, PhysicalSortE
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
-    PlanProperties, SendableRecordBatchStream,
+    DisplayAs, DisplayFormatType, EmptyRecordBatchStream, ExecutionPlan, ExecutionPlanProperties,
+    Partitioning, PlanProperties, SendableRecordBatchStream,
 };
 use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
@@ -25,6 +25,13 @@ use crate::physical_plan::{COL_LOG_IS_REMOVE, COL_LOG_VERSION, COL_REPLAY_PATH};
 
 const OUTPUT_BATCH_ROWS: usize = 8192;
 const MAX_COMMIT_REPLAY_ENTRIES: usize = 5_000_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeltaLogReplayMode {
+    Sort,
+    Hash,
+    HashCommits,
+}
 
 #[derive(Debug, Clone)]
 enum ReplayMode {
@@ -37,9 +44,13 @@ enum ReplayMode {
         checkpoint: Arc<dyn ExecutionPlan>,
         commits: Arc<dyn ExecutionPlan>,
     },
+    /// Hash-based replay for commit-only logs.
+    HashCommits { commits: Arc<dyn ExecutionPlan> },
 }
 
-/// A unary node that filters Delta log rows into the active set (tombstone replay).
+/// A physical node that filters Delta log rows into the active set (tombstone replay).
+/// Sort and commit-only hash replay use one input; checkpoint-aware hash replay uses separate
+/// checkpoint and commit inputs.
 ///
 /// Input:
 /// - `__sail_delta_replay_path` (Utf8): derived file path key
@@ -97,7 +108,7 @@ impl DeltaLogReplayExec {
         }
     }
 
-    pub fn new_hash(
+    pub fn try_new_hash(
         checkpoint: Arc<dyn ExecutionPlan>,
         commits: Arc<dyn ExecutionPlan>,
         table_url: Url,
@@ -105,20 +116,28 @@ impl DeltaLogReplayExec {
         partition_columns: Vec<String>,
         checkpoint_files: Vec<String>,
         commit_files: Vec<String>,
-    ) -> Self {
+    ) -> Result<Self> {
+        if checkpoint.schema() != commits.schema() {
+            return Err(DataFusionError::Plan(
+                "DeltaLogReplayExec hash inputs must have the same schema".to_string(),
+            ));
+        }
+        let checkpoint_partitions = checkpoint.output_partitioning().partition_count();
+        let commit_partitions = commits.output_partitioning().partition_count();
+        if checkpoint_partitions != commit_partitions {
+            return Err(DataFusionError::Plan(format!(
+                "DeltaLogReplayExec hash inputs must have the same partition count: checkpoint={checkpoint_partitions}, commits={commit_partitions}"
+            )));
+        }
         let schema = Self::output_schema(&checkpoint.schema());
-        let output_partitions = checkpoint
-            .output_partitioning()
-            .partition_count()
-            .max(commits.output_partitioning().partition_count())
-            .max(1);
+        let output_partitions = checkpoint_partitions.max(1);
         let cache = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(output_partitions),
             EmissionType::Final,
             Boundedness::Bounded,
         ));
-        Self {
+        Ok(Self {
             mode: ReplayMode::Hash {
                 checkpoint,
                 commits,
@@ -129,6 +148,41 @@ impl DeltaLogReplayExec {
             checkpoint_files,
             commit_files,
             cache,
+        })
+    }
+
+    pub fn new_hash_commits(
+        commits: Arc<dyn ExecutionPlan>,
+        table_url: Url,
+        version: i64,
+        partition_columns: Vec<String>,
+        checkpoint_files: Vec<String>,
+        commit_files: Vec<String>,
+    ) -> Self {
+        let schema = Self::output_schema(&commits.schema());
+        let output_partitions = commits.output_partitioning().partition_count().max(1);
+        let cache = Arc::new(PlanProperties::new(
+            EquivalenceProperties::new(schema),
+            Partitioning::UnknownPartitioning(output_partitions),
+            EmissionType::Final,
+            Boundedness::Bounded,
+        ));
+        Self {
+            mode: ReplayMode::HashCommits { commits },
+            table_url,
+            version,
+            partition_columns,
+            checkpoint_files,
+            commit_files,
+            cache,
+        }
+    }
+
+    pub fn mode(&self) -> DeltaLogReplayMode {
+        match self.mode {
+            ReplayMode::Sort { .. } => DeltaLogReplayMode::Sort,
+            ReplayMode::Hash { .. } => DeltaLogReplayMode::Hash,
+            ReplayMode::HashCommits { .. } => DeltaLogReplayMode::HashCommits,
         }
     }
 
@@ -579,6 +633,7 @@ impl ExecutionPlan for DeltaLogReplayExec {
 
         match &self.mode {
             ReplayMode::Sort { input } => vec![dist_for(input)],
+            ReplayMode::HashCommits { commits } => vec![dist_for(commits)],
             ReplayMode::Hash {
                 checkpoint,
                 commits,
@@ -591,6 +646,7 @@ impl ExecutionPlan for DeltaLogReplayExec {
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         match &self.mode {
             ReplayMode::Hash { .. } => vec![None, None],
+            ReplayMode::HashCommits { .. } => vec![None],
             ReplayMode::Sort { input } => {
                 // The streaming replay logic relies on all rows for the same `COL_REPLAY_PATH`
                 // being adjacent within each partition, so we require a local ordering by:
@@ -645,6 +701,7 @@ impl ExecutionPlan for DeltaLogReplayExec {
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         match &self.mode {
             ReplayMode::Sort { input } => vec![input],
+            ReplayMode::HashCommits { commits } => vec![commits],
             ReplayMode::Hash {
                 checkpoint,
                 commits,
@@ -665,9 +722,17 @@ impl ExecutionPlan for DeltaLogReplayExec {
                 self.checkpoint_files.clone(),
                 self.commit_files.clone(),
             ))),
-            (ReplayMode::Hash { .. }, 2) => Ok(Arc::new(Self::new_hash(
+            (ReplayMode::Hash { .. }, 2) => Ok(Arc::new(Self::try_new_hash(
                 Arc::clone(&children[0]),
                 Arc::clone(&children[1]),
+                self.table_url.clone(),
+                self.version,
+                self.partition_columns.clone(),
+                self.checkpoint_files.clone(),
+                self.commit_files.clone(),
+            )?)),
+            (ReplayMode::HashCommits { .. }, 1) => Ok(Arc::new(Self::new_hash_commits(
+                Arc::clone(&children[0]),
                 self.table_url.clone(),
                 self.version,
                 self.partition_columns.clone(),
@@ -679,6 +744,9 @@ impl ExecutionPlan for DeltaLogReplayExec {
             }
             (ReplayMode::Hash { .. }, _) => {
                 internal_err!("DeltaLogReplayExec (hash) expects exactly two children")
+            }
+            (ReplayMode::HashCommits { .. }, _) => {
+                internal_err!("DeltaLogReplayExec (hash commits) expects exactly one child")
             }
         }
     }
@@ -812,6 +880,79 @@ impl ExecutionPlan for DeltaLogReplayExec {
 
                 Ok(Box::pin(RecordBatchStreamAdapter::new(output_schema, s)))
             }
+            ReplayMode::HashCommits { commits } => {
+                let input_schema = commits.schema();
+                let commits_stream = commits.execute(partition, context)?;
+                let checkpoint_stream: SendableRecordBatchStream =
+                    Box::pin(EmptyRecordBatchStream::new(input_schema));
+                let state = HashReplayState::new(
+                    commits_stream,
+                    checkpoint_stream,
+                    Arc::clone(&output_schema),
+                );
+
+                let s = stream::try_unfold(state, |mut st| async move {
+                    loop {
+                        if st.out_rows >= OUTPUT_BATCH_ROWS {
+                            let out = st.take_output_batch()?;
+                            return Ok(Some((out, st)));
+                        }
+
+                        match st.stage {
+                            HashReplayStage::Build => match st.commits.try_next().await? {
+                                Some(batch) => {
+                                    st.process_commits_batch(&batch)?;
+                                    continue;
+                                }
+                                None => {
+                                    st.stage = HashReplayStage::Probe;
+                                    continue;
+                                }
+                            },
+                            HashReplayStage::Probe => match st.checkpoint.try_next().await? {
+                                Some(batch) => {
+                                    st.process_checkpoint_batch(&batch)?;
+                                    continue;
+                                }
+                                None => {
+                                    st.stage = HashReplayStage::Emit;
+                                    continue;
+                                }
+                            },
+                            HashReplayStage::Emit => {
+                                st.finalize_emit_rows();
+                                let mut iter = match st.emit_rows.take() {
+                                    Some(iter) => iter,
+                                    None => {
+                                        st.stage = HashReplayStage::Done;
+                                        continue;
+                                    }
+                                };
+                                while st.out_rows < OUTPUT_BATCH_ROWS {
+                                    match iter.next() {
+                                        Some(row) => st.push_payload_row(row),
+                                        None => break,
+                                    }
+                                }
+                                let is_exhausted = iter.as_slice().is_empty();
+                                st.emit_rows = Some(iter);
+                                if is_exhausted {
+                                    st.stage = HashReplayStage::Done;
+                                }
+                            }
+                            HashReplayStage::Done => {
+                                if st.out_rows > 0 {
+                                    let out = st.take_output_batch()?;
+                                    return Ok(Some((out, st)));
+                                }
+                                return Ok(None);
+                            }
+                        }
+                    }
+                });
+
+                Ok(Box::pin(RecordBatchStreamAdapter::new(output_schema, s)))
+            }
         }
     }
 }
@@ -822,8 +963,14 @@ impl DisplayAs for DeltaLogReplayExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(
                     f,
-                    "DeltaLogReplayExec(table_path={}, version={})",
-                    self.table_url, self.version
+                    "DeltaLogReplayExec(table_path={}, version={}, mode={})",
+                    self.table_url,
+                    self.version,
+                    match self.mode() {
+                        DeltaLogReplayMode::Sort => "sort",
+                        DeltaLogReplayMode::Hash => "hash",
+                        DeltaLogReplayMode::HashCommits => "hash-commits",
+                    }
                 )
             }
             DisplayFormatType::TreeRender => {
@@ -833,6 +980,7 @@ impl DisplayAs for DeltaLogReplayExec {
                 match &self.mode {
                     ReplayMode::Sort { .. } => writeln!(f, "mode=sort")?,
                     ReplayMode::Hash { .. } => writeln!(f, "mode=hash")?,
+                    ReplayMode::HashCommits { .. } => writeln!(f, "mode=hash-commits")?,
                 }
                 if !self.checkpoint_files.is_empty() {
                     writeln!(f, "checkpoint_files=[{}]", self.checkpoint_files.join(", "))?;
@@ -1156,7 +1304,7 @@ mod tests {
         let checkpoint_plan: Arc<dyn ExecutionPlan> = Arc::new(OneBatchExec::new(checkpoint_batch));
         let commits_plan: Arc<dyn ExecutionPlan> = Arc::new(OneBatchExec::new(commits_batch));
 
-        let exec = Arc::new(DeltaLogReplayExec::new_hash(
+        let exec = Arc::new(DeltaLogReplayExec::try_new_hash(
             checkpoint_plan,
             commits_plan,
             #[expect(clippy::unwrap_used)]
@@ -1165,7 +1313,7 @@ mod tests {
             vec![],
             vec![],
             vec![],
-        ));
+        )?);
 
         let ctx = Arc::new(TaskContext::default());
         let mut stream = exec.execute(0, ctx)?;
@@ -1224,7 +1372,7 @@ mod tests {
         let checkpoint_plan: Arc<dyn ExecutionPlan> = Arc::new(OneBatchExec::new(checkpoint_batch));
         let commits_plan: Arc<dyn ExecutionPlan> = Arc::new(OneBatchExec::new(empty_commits_batch));
 
-        let exec = Arc::new(DeltaLogReplayExec::new_hash(
+        let exec = Arc::new(DeltaLogReplayExec::try_new_hash(
             checkpoint_plan,
             commits_plan,
             #[expect(clippy::unwrap_used)]
@@ -1233,7 +1381,7 @@ mod tests {
             vec![],
             vec![],
             vec![],
-        ));
+        )?);
 
         let ctx = Arc::new(TaskContext::default());
         let mut stream = exec.execute(0, ctx)?;
@@ -1306,7 +1454,7 @@ mod tests {
         let checkpoint_plan: Arc<dyn ExecutionPlan> = Arc::new(OneBatchExec::new(checkpoint_batch));
         let commits_plan: Arc<dyn ExecutionPlan> = Arc::new(OneBatchExec::new(commits_batch));
 
-        let exec = Arc::new(DeltaLogReplayExec::new_hash(
+        let exec = Arc::new(DeltaLogReplayExec::try_new_hash(
             checkpoint_plan,
             commits_plan,
             #[expect(clippy::unwrap_used)]
@@ -1315,7 +1463,7 @@ mod tests {
             vec![],
             vec![],
             vec![],
-        ));
+        )?);
 
         let ctx = Arc::new(TaskContext::default());
         let mut stream = exec.execute(0, ctx)?;
@@ -1379,7 +1527,7 @@ mod tests {
         let checkpoint_plan: Arc<dyn ExecutionPlan> = Arc::new(OneBatchExec::new(checkpoint_batch));
         let commits_plan: Arc<dyn ExecutionPlan> = Arc::new(OneBatchExec::new(commits_batch));
 
-        let exec = Arc::new(DeltaLogReplayExec::new_hash(
+        let exec = Arc::new(DeltaLogReplayExec::try_new_hash(
             checkpoint_plan,
             commits_plan,
             #[expect(clippy::unwrap_used)]
@@ -1388,7 +1536,7 @@ mod tests {
             vec![],
             vec![],
             vec![],
-        ));
+        )?);
 
         let ctx = Arc::new(TaskContext::default());
         let mut stream = exec.execute(0, ctx)?;
@@ -1444,7 +1592,7 @@ mod tests {
         let checkpoint_plan: Arc<dyn ExecutionPlan> = Arc::new(OneBatchExec::new(checkpoint_batch));
         let commits_plan: Arc<dyn ExecutionPlan> = Arc::new(OneBatchExec::new(commits_batch));
 
-        let exec = Arc::new(DeltaLogReplayExec::new_hash(
+        let exec = Arc::new(DeltaLogReplayExec::try_new_hash(
             checkpoint_plan,
             commits_plan,
             Url::parse("file:///tmp/delta").unwrap(),
@@ -1452,7 +1600,7 @@ mod tests {
             vec![],
             vec![],
             vec![],
-        ));
+        )?);
 
         let ctx = Arc::new(TaskContext::default());
         let mut stream = exec.execute(0, ctx)?;
@@ -1505,7 +1653,7 @@ mod tests {
         let checkpoint_plan: Arc<dyn ExecutionPlan> = Arc::new(OneBatchExec::new(checkpoint_batch));
         let commits_plan: Arc<dyn ExecutionPlan> = Arc::new(OneBatchExec::new(commits_batch));
 
-        let exec = Arc::new(DeltaLogReplayExec::new_hash(
+        let exec = Arc::new(DeltaLogReplayExec::try_new_hash(
             checkpoint_plan,
             commits_plan,
             Url::parse("file:///tmp/delta").unwrap(),
@@ -1513,7 +1661,7 @@ mod tests {
             vec![],
             vec![],
             vec![],
-        ));
+        )?);
 
         let ctx = Arc::new(TaskContext::default());
         let mut stream = exec.execute(0, ctx)?;
@@ -1553,7 +1701,7 @@ mod tests {
         let checkpoint_plan: Arc<dyn ExecutionPlan> = Arc::new(OneBatchExec::new(checkpoint_batch));
         let commits_plan: Arc<dyn ExecutionPlan> = Arc::new(OneBatchExec::new(commits_batch));
 
-        let exec = Arc::new(DeltaLogReplayExec::new_hash(
+        let exec = Arc::new(DeltaLogReplayExec::try_new_hash(
             checkpoint_plan,
             commits_plan,
             Url::parse("file:///tmp/delta").unwrap(),
@@ -1561,7 +1709,7 @@ mod tests {
             vec![],
             vec![],
             vec![],
-        ));
+        )?);
 
         let ctx = Arc::new(TaskContext::default());
         let mut stream = exec.execute(0, ctx)?;
@@ -1584,6 +1732,104 @@ mod tests {
 
     #[tokio::test]
     #[expect(clippy::unwrap_used)]
+    async fn hash_commits_replay_uses_newest_action_and_add_wins_ties() -> Result<()> {
+        let add_fields: Fields = vec![
+            Arc::new(Field::new(FIELD_NAME_PATH, DataType::Utf8, true)),
+            Arc::new(Field::new(FIELD_NAME_SIZE, DataType::Int64, true)),
+        ]
+        .into();
+        let add_struct = struct_array_with_validity(
+            add_fields,
+            vec![
+                Arc::new(StringArray::from(vec![
+                    None,
+                    Some("a"),
+                    Some("b"),
+                    None,
+                    Some("c"),
+                    Some("c"),
+                ])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![
+                    None,
+                    Some(30),
+                    Some(10),
+                    None,
+                    Some(10),
+                    Some(20),
+                ])) as ArrayRef,
+            ],
+            vec![false, true, true, false, true, true],
+        );
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("add", add_struct.data_type().clone(), true),
+            Field::new(COL_REPLAY_PATH, DataType::Utf8, false),
+            Field::new(COL_LOG_IS_REMOVE, DataType::Boolean, true),
+            Field::new(COL_LOG_VERSION, DataType::Int64, false),
+        ]));
+        let commits = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(add_struct) as ArrayRef,
+                Arc::new(StringArray::from(vec![
+                    Some("a"),
+                    Some("a"),
+                    Some("b"),
+                    Some("b"),
+                    Some("c"),
+                    Some("c"),
+                ])) as ArrayRef,
+                Arc::new(BooleanArray::from(vec![
+                    true, false, false, true, false, false,
+                ])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![3, 3, 1, 2, 1, 2])) as ArrayRef,
+            ],
+        )
+        .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+        let commits_plan: Arc<dyn ExecutionPlan> = Arc::new(OneBatchExec::new(commits));
+        let exec = Arc::new(DeltaLogReplayExec::new_hash_commits(
+            commits_plan,
+            Url::parse("file:///tmp/delta").unwrap(),
+            3,
+            vec![],
+            vec![],
+            vec![],
+        ));
+
+        assert_eq!(exec.mode(), DeltaLogReplayMode::HashCommits);
+        assert_eq!(exec.children().len(), 1);
+        assert_eq!(exec.required_input_ordering(), vec![None]);
+
+        let mut stream = exec.execute(0, Arc::new(TaskContext::default()))?;
+        let out = stream.try_next().await?.unwrap();
+        assert_eq!(out.num_rows(), 2);
+        assert!(stream.try_next().await?.is_none());
+        let add = out
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let paths = add
+            .column_by_name(FIELD_NAME_PATH)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let sizes = add
+            .column_by_name(FIELD_NAME_SIZE)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let mut active = (0..out.num_rows())
+            .map(|row| (paths.value(row).to_string(), sizes.value(row)))
+            .collect::<Vec<_>>();
+        active.sort();
+        assert_eq!(active, vec![("a".to_string(), 30), ("c".to_string(), 20)]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[expect(clippy::unwrap_used)]
     async fn hash_replay_required_input_ordering_is_none_for_hash_mode() -> Result<()> {
         let add_fields: Fields =
             vec![Arc::new(Field::new(FIELD_NAME_PATH, DataType::Utf8, true))].into();
@@ -1599,7 +1845,7 @@ mod tests {
         let commits_plan: Arc<dyn ExecutionPlan> =
             Arc::new(OneBatchExec::new(RecordBatch::new_empty(schema)));
 
-        let exec = Arc::new(DeltaLogReplayExec::new_hash(
+        let exec = Arc::new(DeltaLogReplayExec::try_new_hash(
             checkpoint_plan,
             commits_plan,
             Url::parse("file:///tmp/delta").unwrap(),
@@ -1607,7 +1853,7 @@ mod tests {
             vec![],
             vec![],
             vec![],
-        ));
+        )?);
 
         let ordering = exec.required_input_ordering();
         assert_eq!(ordering.len(), 2);

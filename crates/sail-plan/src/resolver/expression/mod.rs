@@ -8,6 +8,7 @@ use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
+use crate::resolver::expression::predicate::coerce_timestamp_string_comparisons;
 use crate::resolver::state::PlanResolverState;
 
 mod attribute;
@@ -104,7 +105,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<NamedExpr> {
         use spec::Expr;
 
-        match expr {
+        let named_expression = match expr {
             Expr::Literal(literal) => self.resolve_expression_literal(literal, state),
             Expr::UnresolvedAttribute {
                 name,
@@ -337,7 +338,17 @@ impl PlanResolver<'_> {
             Expr::NamedArgument { .. } => Err(PlanError::invalid(
                 "named argument expression can only be used in UDF arguments",
             )),
-        }
+        }?;
+        let expression = coerce_timestamp_string_comparisons(
+            named_expression.expr,
+            schema,
+            &self.config.session_timezone,
+            self.config.ansi_mode,
+        )?;
+        Ok(NamedExpr {
+            expr: expression,
+            ..named_expression
+        })
     }
 
     pub(super) async fn resolve_named_expressions(

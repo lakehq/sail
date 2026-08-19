@@ -61,7 +61,7 @@ struct ScanByAddsStreamState {
     scan_config: DeltaScanConfig,
     lakehouse_table: Option<LakehouseExecutionContext>,
     catalog_managed_commits: Option<CatalogManagedCommitSet>,
-    limit: Option<usize>,
+    remaining_rows: Option<usize>,
     pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
 
     // Lazy init
@@ -103,7 +103,7 @@ impl ScanByAddsStreamState {
             scan_config,
             lakehouse_table,
             catalog_managed_commits,
-            limit,
+            remaining_rows: limit,
             pushdown_filter,
             table_opened: false,
             snapshot: None,
@@ -168,6 +168,7 @@ impl ScanByAddsStreamState {
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let partition_columns = snapshot_state.metadata().partition_columns().clone();
         let session_state = SessionStateBuilder::new()
+            .with_config(self.context.session_config().clone())
             .with_runtime_env(self.context.runtime_env().clone())
             .build();
 
@@ -256,7 +257,8 @@ impl ScanByAddsStreamState {
         // Split adds into files with deletion vectors and files without.
         // Files without DVs are scanned in bulk (fast path). Files with DVs are scanned
         // individually so that we can track per-file row indices and filter deleted rows.
-        let adds = std::mem::take(&mut self.pending_adds);
+        let chunk_len = self.pending_adds.len().min(ADD_SCAN_CHUNK_FILES);
+        let adds = self.pending_adds.drain(..chunk_len).collect::<Vec<_>>();
         let mut all_streams: Vec<SendableRecordBatchStream> = Vec::new();
         let row_index_column = self
             .scan_config
@@ -466,8 +468,19 @@ impl ScanByAddsStreamState {
             FileScanParams {
                 pruning_mask: None,
                 projection: Some(&file_projection),
-                limit: self.limit,
-                pushdown_filter: self.pushdown_filter.clone(),
+                // Limit must be applied after DV filtering, otherwise deleted rows consume the
+                // physical-file limit and valid rows can be missed.
+                limit: None,
+                // A DV and a projected row index both use absolute physical row positions. A
+                // Parquet predicate can skip rows or row groups before those positions are
+                // assigned, so retain the outer DataFusion filter for these scans.
+                pushdown_filter: if row_index_name.is_some()
+                    || adds.iter().any(|add| add.deletion_vector.is_some())
+                {
+                    None
+                } else {
+                    self.pushdown_filter.clone()
+                },
                 sort_order: None,
                 table_stats_mode: TableStatsMode::AddsOnly,
             },
@@ -806,10 +819,30 @@ impl ExecutionPlan for DeltaScanByAddsExec {
 
         let s = stream::try_unfold(state, |mut st| async move {
             loop {
+                // Stop before decoding another Add batch or opening another DV/file stream.
+                if st.remaining_rows == Some(0) {
+                    return Ok(None);
+                }
+
                 // Drain current scan stream first.
                 if let Some(scan) = &mut st.current_scan {
                     match scan.try_next().await? {
-                        Some(batch) => return Ok(Some((batch, st))),
+                        Some(batch) => {
+                            let Some(remaining_rows) = st.remaining_rows.as_mut() else {
+                                return Ok(Some((batch, st)));
+                            };
+                            if *remaining_rows == 0 {
+                                return Ok(None);
+                            }
+                            let output_rows = batch.num_rows().min(*remaining_rows);
+                            *remaining_rows -= output_rows;
+                            let batch = if output_rows == batch.num_rows() {
+                                batch
+                            } else {
+                                batch.slice(0, output_rows)
+                            };
+                            return Ok(Some((batch, st)));
+                        }
                         None => {
                             st.current_scan = None;
                             continue;
