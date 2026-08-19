@@ -491,6 +491,207 @@ fn parse_unqualified_interval_string_full(s: &str, negated: bool) -> SqlResult<I
     from_ast_signed_interval(value)
 }
 
+/// A calendar interval with Spark `stringToInterval` bucketing: the unit the
+/// user wrote decides the bucket (year/month → `months`, week/day → `days`,
+/// sub-day units → `microseconds`), and nothing is rebucketed across the day
+/// boundary. This is the semantics `session_window`/`window` gaps need — a
+/// `'1 day'` gap spans a calendar day across a DST transition while a
+/// `'25 hours'` gap spans 25 absolute hours. The typed SQL literal paths keep
+/// the legacy [IntervalValue] shapes from [parse_unqualified_interval_string].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CalendarInterval {
+    pub months: i32,
+    pub days: i32,
+    pub microseconds: i64,
+}
+
+pub fn parse_calendar_interval_string(s: &str) -> SqlResult<CalendarInterval> {
+    if let Some(value) = parse_calendar_interval_string_fast(s) {
+        return Ok(value);
+    }
+    let IntervalLiteral {
+        interval: _,
+        value: interval,
+    } = parse_interval_literal(s)?;
+    match interval {
+        IntervalExpr::MultiUnit { head, tail } => {
+            from_ast_multi_unit_calendar(std::iter::once(head).chain(tail))
+        }
+        // Shapes Spark's `stringToInterval` does not accept (qualified forms
+        // like `'1 2:03:04' day to second`); keep accepting them with the
+        // legacy conversion, whose day-time part is absolute microseconds.
+        other => match from_ast_signed_interval(Signed::Positive(other))? {
+            IntervalValue::YearMonth { months } => Ok(CalendarInterval {
+                months,
+                days: 0,
+                microseconds: 0,
+            }),
+            IntervalValue::Microsecond { microseconds } => Ok(CalendarInterval {
+                months: 0,
+                days: 0,
+                microseconds,
+            }),
+            IntervalValue::MonthDayNanosecond {
+                months,
+                days,
+                nanoseconds,
+            } => Ok(CalendarInterval {
+                months,
+                days,
+                microseconds: nanoseconds / 1_000,
+            }),
+        },
+    }
+}
+
+/// Per-unit bucketing over the same term scanner as the fast interval parser;
+/// declines (`None`) anything the scanner does not recognize.
+fn parse_calendar_interval_string_fast(s: &str) -> Option<CalendarInterval> {
+    let mut words = s.split_ascii_whitespace().peekable();
+    if words
+        .peek()
+        .is_some_and(|w| w.eq_ignore_ascii_case("interval"))
+    {
+        words.next();
+    }
+    let mut months: i32 = 0;
+    let mut days: i32 = 0;
+    let mut delta = TimeDelta::zero();
+    let mut seen = false;
+    while let Some(value_word) = words.next() {
+        let (neg, int_part, fraction) = parse_value_word(value_word)?;
+        let unit = parse_unit_word(words.next()?)?;
+        if fraction.is_some() && unit != Unit::Second {
+            return None;
+        }
+        seen = true;
+        use Unit::*;
+        match unit {
+            Year | Month => {
+                let mut value: i32 = int_part.parse().ok()?;
+                if neg {
+                    value = value.checked_neg()?;
+                }
+                if matches!(unit, Year) {
+                    value = value.checked_mul(12)?;
+                }
+                months = months.checked_add(value)?;
+            }
+            Week | Day => {
+                let mut value: i32 = int_part.parse().ok()?;
+                if neg {
+                    value = value.checked_neg()?;
+                }
+                if matches!(unit, Week) {
+                    value = value.checked_mul(7)?;
+                }
+                days = days.checked_add(value)?;
+            }
+            Hour | Minute | Second | Millisecond | Microsecond => {
+                let mut value: i64 = int_part.parse().ok()?;
+                if neg {
+                    value = value.checked_neg()?;
+                }
+                let part = match unit {
+                    Hour => TimeDelta::try_hours(value)?,
+                    Minute => TimeDelta::try_minutes(value)?,
+                    Second => TimeDelta::try_seconds(value)?.checked_add(
+                        &TimeDelta::microseconds(if neg {
+                            fraction_microseconds(fraction)?.checked_neg()?
+                        } else {
+                            fraction_microseconds(fraction)?
+                        }),
+                    )?,
+                    Millisecond => TimeDelta::try_milliseconds(value)?,
+                    _ => TimeDelta::microseconds(value),
+                };
+                delta = delta.checked_add(&part)?;
+            }
+        }
+    }
+    if !seen {
+        return None;
+    }
+    Some(CalendarInterval {
+        months,
+        days,
+        microseconds: delta.num_microseconds()?,
+    })
+}
+
+/// AST-side counterpart of [parse_calendar_interval_string_fast] for strings
+/// the fast scanner declines.
+fn from_ast_multi_unit_calendar(
+    values: impl Iterator<Item = IntervalValueWithUnit>,
+) -> SqlResult<CalendarInterval> {
+    let error = || SqlError::invalid("multi-unit interval");
+    let mut months = 0i32;
+    let mut days = 0i32;
+    let mut delta = TimeDelta::zero();
+    for value in values {
+        let IntervalValueWithUnit { value, unit } = value;
+        match unit {
+            IntervalUnit::Year(_) | IntervalUnit::Years(_) => {
+                let value: i32 = parse_signed_value(value)?;
+                let m = value.checked_mul(12).ok_or_else(error)?;
+                months = months.checked_add(m).ok_or_else(error)?;
+            }
+            IntervalUnit::Month(_) | IntervalUnit::Months(_) => {
+                let value: i32 = parse_signed_value(value)?;
+                months = months.checked_add(value).ok_or_else(error)?;
+            }
+            IntervalUnit::Week(_) | IntervalUnit::Weeks(_) => {
+                let value: i32 = parse_signed_value(value)?;
+                let d = value.checked_mul(7).ok_or_else(error)?;
+                days = days.checked_add(d).ok_or_else(error)?;
+            }
+            IntervalUnit::Day(_) | IntervalUnit::Days(_) => {
+                let value: i32 = parse_signed_value(value)?;
+                days = days.checked_add(value).ok_or_else(error)?;
+            }
+            IntervalUnit::Hour(_) | IntervalUnit::Hours(_) => {
+                let value: i64 = parse_signed_value(value)?;
+                let hours = TimeDelta::try_hours(value).ok_or_else(error)?;
+                delta = delta.checked_add(&hours).ok_or_else(error)?;
+            }
+            IntervalUnit::Minute(_) | IntervalUnit::Minutes(_) => {
+                let value: i64 = parse_signed_value(value)?;
+                let minutes = TimeDelta::try_minutes(value).ok_or_else(error)?;
+                delta = delta.checked_add(&minutes).ok_or_else(error)?;
+            }
+            IntervalUnit::Second(_) | IntervalUnit::Seconds(_) => {
+                let value: Signed<DecimalSecond> = parse_signed_value(value)?;
+                let negated = value.is_negative();
+                let value = value.into_inner();
+                let seconds = TimeDelta::seconds(value.seconds as i64);
+                let microseconds = TimeDelta::microseconds(value.microseconds as i64);
+                if negated {
+                    delta = delta.checked_sub(&seconds).ok_or_else(error)?;
+                    delta = delta.checked_sub(&microseconds).ok_or_else(error)?;
+                } else {
+                    delta = delta.checked_add(&seconds).ok_or_else(error)?;
+                    delta = delta.checked_add(&microseconds).ok_or_else(error)?;
+                }
+            }
+            IntervalUnit::Millisecond(_) | IntervalUnit::Milliseconds(_) => {
+                let value: i64 = parse_signed_value(value)?;
+                let milliseconds = TimeDelta::try_milliseconds(value).ok_or_else(error)?;
+                delta = delta.checked_add(&milliseconds).ok_or_else(error)?;
+            }
+            IntervalUnit::Microsecond(_) | IntervalUnit::Microseconds(_) => {
+                let value: i64 = parse_signed_value(value)?;
+                let microseconds = TimeDelta::microseconds(value);
+                delta = delta.checked_add(&microseconds).ok_or_else(error)?;
+            }
+        }
+    }
+    Ok(CalendarInterval {
+        months,
+        days,
+        microseconds: delta.num_microseconds().ok_or_else(error)?,
+    })
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Unit {
     Year,
@@ -860,6 +1061,46 @@ mod tests {
             parse_unqualified_interval_string("1 hour 2 seconds", false)?,
             parse_unqualified_interval_string("-1 hour -2 seconds", true)?
         );
+        Ok(())
+    }
+
+    /// Spark `stringToInterval` bucketing: the unit written decides the
+    /// bucket; sub-day amounts are never rebucketed into days (and days never
+    /// collapse into microseconds).
+    #[test]
+    fn test_calendar_interval_bucketing() -> SqlResult<()> {
+        const HOUR: i64 = 3_600_000_000;
+        for (s, months, days, micros) in [
+            ("1 day", 0, 1, 0),
+            ("interval 1 day", 0, 1, 0),
+            ("25 hours", 0, 0, 25 * HOUR),
+            ("1 day 2 hours", 0, 1, 2 * HOUR),
+            ("2 weeks", 0, 14, 0),
+            ("-2 days", 0, -2, 0),
+            ("1 month -30 days", 1, -30, 0),
+            ("1 month 25 hours", 1, 0, 25 * HOUR),
+            ("1.5 seconds", 0, 0, 1_500_000),
+            ("-1.5 seconds", 0, 0, -1_500_000),
+            ("1 year 1 microsecond", 12, 0, 1),
+        ] {
+            let v = parse_calendar_interval_string(s)?;
+            assert_eq!(
+                (v.months, v.days, v.microseconds),
+                (months, days, micros),
+                "{s}"
+            );
+        }
+        assert!(parse_calendar_interval_string("garbage").is_err());
+        Ok(())
+    }
+
+    /// The fast scanner and the AST fallback agree; exercise the fallback via
+    /// a quoted value the scanner declines.
+    #[test]
+    fn test_calendar_interval_fallback_matches_fast() -> SqlResult<()> {
+        let fast = parse_calendar_interval_string("1 day 2 hours")?;
+        let full = parse_calendar_interval_string("'1' day '2' hours")?;
+        assert_eq!(fast, full);
         Ok(())
     }
 }

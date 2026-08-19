@@ -317,6 +317,22 @@ Feature: session_window() gap-based sessionization
         | 2021-01-01 00:00:00 | 2021-01-01 00:00:00 | 2   |
         | 2021-01-02 00:00:00 | 2021-01-01 00:00:00 | 1   |
 
+  Rule: Invalid dynamic gap values
+
+    Scenario: an invalid gap string in a column drops the row, not the query
+      When query
+        """
+        SELECT session_window.start, session_window.end, count(*) AS cnt
+        FROM VALUES (TIMESTAMP '2021-01-01 00:00:00', '5 minutes'),
+                    (TIMESTAMP '2021-01-01 00:00:10', 'garbage'),
+                    (TIMESTAMP '2021-01-01 00:04:30', '5 minutes') AS t(b, g)
+        GROUP BY session_window(b, g)
+        ORDER BY start
+        """
+      Then query result
+        | start               | end                 | cnt |
+        | 2021-01-01 00:00:00 | 2021-01-01 00:09:30 | 2   |
+
   Rule: Aggregates
 
     # Spark evaluates the marker inside an aggregate argument with per-row

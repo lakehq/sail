@@ -14,7 +14,7 @@ use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_sql_analyzer::literal::interval::IntervalValue;
+use sail_sql_analyzer::literal::interval::{IntervalValue, parse_calendar_interval_string};
 use sail_sql_analyzer::parser::parse_interval;
 
 /// Parses interval strings with per-batch memoization of distinct values.
@@ -148,6 +148,85 @@ define_interval_udf!(
     ScalarValue::IntervalMonthDayNano,
 );
 
+/// Lenient variant of [`SparkCalendarInterval`] for the `session_window` gap:
+/// Spark casts the gap with `safeStringToInterval`, which yields NULL for an
+/// invalid string (even under ANSI), and the desugar's `end > time` filter
+/// then drops the row — an invalid gap must not fail the query.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct SparkTryCalendarInterval {
+    signature: Signature,
+}
+
+impl Default for SparkTryCalendarInterval {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SparkTryCalendarInterval {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::coercible(
+                vec![Coercion::new_exact(TypeSignatureClass::Native(
+                    logical_string(),
+                ))],
+                Volatility::Immutable,
+            ),
+        }
+    }
+}
+
+impl ScalarUDFImpl for SparkTryCalendarInterval {
+    fn name(&self) -> &str {
+        "spark_try_calendar_interval"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Interval(IntervalUnit::MonthDayNano))
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+        fn parse(s: &str) -> Option<IntervalMonthDayNano> {
+            string_to_calendar_interval(s).ok()
+        }
+        fn parse_all<'a>(
+            values: impl Iterator<Item = Option<&'a str>>,
+        ) -> PrimitiveArray<IntervalMonthDayNanoType> {
+            // NULL results are memoized too: an invalid string is
+            // deterministically NULL, unlike a transient error.
+            let mut cache: HashMap<&'a str, Option<IntervalMonthDayNano>> = HashMap::new();
+            values
+                .map(|value| value.and_then(|s| *cache.entry(s).or_insert_with(|| parse(s))))
+                .collect()
+        }
+        match args.one()? {
+            ColumnarValue::Array(array) => {
+                let array = match array.data_type() {
+                    DataType::Utf8 => parse_all(as_string_array(&array)?.iter()),
+                    DataType::LargeUtf8 => parse_all(as_large_string_array(&array)?.iter()),
+                    DataType::Utf8View => parse_all(as_string_view_array(&array)?.iter()),
+                    _ => return exec_err!("expected string array for intervals"),
+                };
+                Ok(ColumnarValue::Array(Arc::new(array)))
+            }
+            ColumnarValue::Scalar(scalar) => {
+                let value = match scalar.try_as_str() {
+                    Some(x) => x.and_then(parse),
+                    _ => return exec_err!("expected string scalar for intervals"),
+                };
+                Ok(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(
+                    value,
+                )))
+            }
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkDayTimeIntervalToCalendarInterval {
     signature: Signature,
@@ -249,26 +328,15 @@ fn string_to_day_time_interval(value: &str) -> Result<i64> {
 }
 
 fn string_to_calendar_interval(value: &str) -> Result<IntervalMonthDayNano> {
-    let interval = parse_interval(value).map_err(|e| exec_datafusion_err!("{e}"))?;
-    match interval {
-        IntervalValue::YearMonth { months } => Ok(IntervalMonthDayNano {
-            months,
-            days: 0,
-            nanoseconds: 0,
-        }),
-        IntervalValue::Microsecond { microseconds } => {
-            day_time_interval_to_calendar_interval(microseconds)
-        }
-        IntervalValue::MonthDayNanosecond {
-            months,
-            days,
-            nanoseconds,
-        } => Ok(IntervalMonthDayNano {
-            months,
-            days,
-            nanoseconds,
-        }),
-    }
+    // Spark bucketing: the unit the user wrote decides the bucket; sub-day
+    // amounts stay absolute microseconds and are never rebucketed into days.
+    let interval =
+        parse_calendar_interval_string(value).map_err(|e| exec_datafusion_err!("{e}"))?;
+    Ok(IntervalMonthDayNano {
+        months: interval.months,
+        days: interval.days,
+        nanoseconds: interval.microseconds * 1_000,
+    })
 }
 
 fn day_time_interval_to_calendar_interval(microseconds: i64) -> Result<IntervalMonthDayNano> {

@@ -164,7 +164,7 @@ use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
 use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkDayTimeIntervalToCalendarInterval,
-    SparkYearMonthInterval,
+    SparkTryCalendarInterval, SparkYearMonthInterval,
 };
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
 use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
@@ -3107,6 +3107,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_calendar_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkCalendarInterval::new())))
             }
+            "spark_try_calendar_interval" => {
+                Ok(Arc::new(ScalarUDF::from(SparkTryCalendarInterval::new())))
+            }
             "spark_date_format" | "date_format" => {
                 // Use UTC as default timezone when creating from name only
                 Ok(Arc::new(ScalarUDF::from(SparkDateFormat::new(Arc::from(
@@ -3195,6 +3198,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkBitwiseNot>()
             || node_inner.is::<SparkBRound>()
             || node_inner.is::<SparkCalendarInterval>()
+            || node_inner.is::<SparkTryCalendarInterval>()
             || node_inner.is::<SparkConcat>()
             || node_inner.is::<SparkConv>()
             || node_inner.is::<SparkCrc32>()
@@ -6747,4 +6751,5 @@ mod tests {
 
         Ok(())
     }
+
 }

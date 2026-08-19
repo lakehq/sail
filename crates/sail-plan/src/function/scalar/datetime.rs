@@ -18,7 +18,7 @@ use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_format::SparkDateFormat;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
 use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
-use sail_function::scalar::datetime::spark_interval::SparkCalendarInterval;
+use sail_function::scalar::datetime::spark_interval::SparkTryCalendarInterval;
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
 use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp_ntz::SparkMakeTimestampNtz;
@@ -34,7 +34,7 @@ use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
 use sail_function::scalar::datetime::spark_year::SparkYear;
 use sail_function::scalar::datetime::timestamp_now::TimestampNow;
 use sail_function::scalar::explode::{Explode, ExplodeKind};
-use sail_sql_analyzer::literal::interval::IntervalValue;
+use sail_sql_analyzer::literal::interval::{IntervalValue, parse_calendar_interval_string};
 use sail_sql_analyzer::parser::parse_interval;
 
 use crate::config::DefaultTimestampType;
@@ -1169,19 +1169,18 @@ fn session_window_gap(gap: Expr, schema: &DFSchemaRef) -> PlanResult<Expr> {
     // filter then drops every row, matching Spark.
     if let Expr::Literal(value, _) = &gap {
         if let Some(s) = value.try_as_str().flatten() {
-            let (months, days, nanos) = match parse_interval(s)
-                .map_err(|e| PlanError::invalid(format!("invalid session_window gap {s:?}: {e}")))?
-            {
-                IntervalValue::YearMonth { months } => (months, 0, 0),
-                IntervalValue::Microsecond { microseconds } => (0, 0, microseconds * 1_000),
-                IntervalValue::MonthDayNanosecond {
-                    months,
-                    days,
-                    nanoseconds,
-                } => (months, days, nanoseconds),
-            };
+            // Spark bucketing: the unit the user wrote decides the bucket, so
+            // a `'1 day'` gap is a calendar day (25h across a DST fall-back)
+            // while `'25 hours'` is 25 absolute hours.
+            let interval = parse_calendar_interval_string(s).map_err(|e| {
+                PlanError::invalid(format!("invalid session_window gap {s:?}: {e}"))
+            })?;
             return Ok(lit(ScalarValue::IntervalMonthDayNano(Some(
-                IntervalMonthDayNano::new(months, days, nanos),
+                IntervalMonthDayNano::new(
+                    interval.months,
+                    interval.days,
+                    interval.microseconds * 1_000,
+                ),
             ))));
         }
         if let ScalarValue::IntervalYearMonth(_) = value {
@@ -1207,8 +1206,11 @@ fn session_window_gap(gap: Expr, schema: &DFSchemaRef) -> PlanResult<Expr> {
         // constant-fold to interval literals at plan time, so only non-literal
         // branches parse per row.
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+            // Lenient parse (NULL on invalid input, like Spark's cast to
+            // CalendarInterval): a malformed gap drops the row via the
+            // `end > time` filter instead of failing the query.
             let parse =
-                |e: Expr| ScalarUDF::new_from_impl(SparkCalendarInterval::new()).call(vec![e]);
+                |e: Expr| ScalarUDF::new_from_impl(SparkTryCalendarInterval::new()).call(vec![e]);
             if let Expr::Case(case) = gap {
                 let when_then_expr = case
                     .when_then_expr
