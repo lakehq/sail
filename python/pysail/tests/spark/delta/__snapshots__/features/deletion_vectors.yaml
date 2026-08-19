@@ -423,8 +423,8 @@ data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#3@0 as cnt]
-      ProjectionExec: expr=[2 as #3]
-        PlaceholderRowExec
+      ProjectionExec: expr=[count(Int64(1))@0 as #3]
+        DataSourceExec: partitions=1, partition_sizes=[1]
 ---
 name: "test_explain_delete_on_dv_table_shows_deletionvectorwriterexec"
 data:
