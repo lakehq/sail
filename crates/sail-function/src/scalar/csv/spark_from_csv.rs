@@ -19,7 +19,7 @@ use sail_sql_analyzer::data_type::from_ast_data_type;
 use sail_sql_analyzer::parser as sail_parser;
 
 use crate::functions_nested_utils::*;
-use crate::functions_utils::make_scalar_function;
+use crate::functions_utils::{as_nullable_fields, make_scalar_function};
 use crate::scalar::csv::options::{
     CsvFunction, find_option, find_option_with_alias, reject_null_entries, validate_options,
 };
@@ -179,6 +179,9 @@ impl ScalarUDFImpl for SparkFromCSV {
             );
         };
 
+        // Spark discards the DDL's nullability here: `CsvToStructs` derives its output type
+        // from `schema.asNullable`, because a missing or corrupt field parses to NULL.
+        // <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/csvExpressions.scala#L84>
         let dt = DataType::Struct(parse_fields(schema_str, &self.session_timezone)?);
         Ok(Arc::new(Field::new(self.name(), dt, true)))
     }
@@ -560,7 +563,7 @@ fn parse_fields(schema: &str, session_timezone: &str) -> Result<Fields> {
         let dt = spec_to_arrow_data_type(&f.data_type, session_timezone)?;
         out.push(Arc::new(Field::new(name, dt, f.nullable)));
     }
-    Ok(Fields::from(out))
+    Ok(as_nullable_fields(&Fields::from(out)))
 }
 
 /// Parses a raw SQL type string into an Arrow `DataType`.

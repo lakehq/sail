@@ -398,7 +398,6 @@ Feature: from_xml parses an XML string into a struct value
     # (`schema.asNullable`, xmlExpressions.scala:75), so a NOT NULL field in the DDL is ignored.
     # `asNullable` recurses into structs, arrays and maps.
 
-    @sail-bug
     Scenario: a NOT NULL field in the XML schema is forced nullable
       When query
         """
@@ -411,7 +410,6 @@ Feature: from_xml parses an XML string into a struct value
          |    |-- a: integer (nullable = true)
         """
 
-    @sail-bug
     Scenario: a NOT NULL field nested in an XML struct is forced nullable
       When query
         """
@@ -437,7 +435,6 @@ Feature: from_xml parses an XML string into a struct value
         | result |
         | {NULL} |
 
-    @sail-bug
     Scenario: a null value under a NOT NULL XML field is returned
       When query
         """
@@ -447,7 +444,6 @@ Feature: from_xml parses an XML string into a struct value
         | result |
         | {NULL} |
 
-    @sail-bug
     Scenario: a null value nested under a NOT NULL XML field is returned
       When query
         """

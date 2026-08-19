@@ -18,7 +18,7 @@ use sail_sql_analyzer::data_type::from_ast_data_type;
 use sail_sql_analyzer::parser as sail_parser;
 use xee_xpath::Documents;
 
-use crate::functions_utils::make_scalar_function;
+use crate::functions_utils::{as_nullable, make_scalar_function};
 use crate::scalar::datetime::format::{DateTimeFormat, ParsedDateTime};
 
 #[cfg(test)]
@@ -198,6 +198,9 @@ impl ScalarUDFImpl for SparkFromXml {
                 );
             }
         };
+        // Spark discards the DDL's nullability here: `XmlToStructs` derives its output type
+        // from `schema.asNullable`, because a missing or corrupt field parses to NULL.
+        // <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/xmlExpressions.scala#L75>
         let dt = parse_xml_schema(schema_str, &self.session_timezone)?;
         Ok(Arc::new(Field::new(self.name(), dt, true)))
     }
@@ -303,6 +306,10 @@ fn spark_from_xml_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Arr
     finish_struct_builder(builder)
 }
 
+/// The DDL's nullability is deliberately discarded: Spark keeps a `schema.asNullable`
+/// and uses it for BOTH the declared output type and the parser, so a `NOT NULL` in the
+/// schema argument is ignored -- a missing or malformed field still parses to NULL.
+/// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/xmlExpressions.scala#L75>
 fn parse_xml_schema(schema: &str, session_timezone: &str) -> Result<DataType> {
     let schema = schema.trim();
     let ast_result = sail_parser::parse_data_type(schema)
@@ -311,7 +318,10 @@ fn parse_xml_schema(schema: &str, session_timezone: &str) -> Result<DataType> {
         .map_err(|e| DataFusionError::Plan(format!("Failed to parse schema '{schema}': {e}")))?;
     let spec_dt = from_ast_data_type(ast)
         .map_err(|e| DataFusionError::Plan(format!("Failed to analyze schema '{schema}': {e}")))?;
-    spec_to_arrow_data_type(&spec_dt, session_timezone)
+    Ok(as_nullable(&spec_to_arrow_data_type(
+        &spec_dt,
+        session_timezone,
+    )?))
 }
 
 fn spec_to_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Result<DataType> {

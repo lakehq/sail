@@ -139,3 +139,36 @@ Feature: from_csv column display name matches Spark
         | from_csv doctest #3 (result) | '42;3.14;2024-12-01 10:00:00', 'id INT, value DOUBLE, timestamp TIMESTAMP', map('sep', ';')                                           | {42, 3.14, 2024-12-01 10:00:00} | struct<id:int,value:double,timestamp:timestamp> |
         | from_csv doctest #4 (result) | '42;3.14;2024/12/01 10:00:00', 'id INT, value DOUBLE, timestamp TIMESTAMP', map('sep', ';', 'timestampFormat', 'yyyy/MM/dd HH:mm:ss') | {42, 3.14, 2024-12-01 10:00:00} | struct<id:int,value:double,timestamp:timestamp> |
         | from_csv doctest #5 (result) | '26/08/2015', 'time TIMESTAMP', map('timestampFormat', 'dd/MM/yyyy')                                                                  | {2015-08-26 00:00:00}           | struct<time:timestamp>                          |
+
+  Rule: A NOT NULL in the schema argument is ignored
+
+    # `CsvToStructs` forces the user-supplied schema nullable before using it
+    # (`schema.asNullable`, csvExpressions.scala:84 and :97), so a NOT NULL field in the DDL is
+    # ignored -- a missing or malformed field still parses to NULL, and honouring the flag would
+    # put a real NULL under a non-nullable Arrow field.
+    #
+    # Asserted by VALUE rather than by `query schema` on purpose: Sail also diverges on the
+    # OUTER struct's flag (Spark declares it non-nullable, see the two @sail-bug scenarios in the
+    # Output schema rule above), so a schema assertion here would stack two independent bugs
+    # behind one tag. The value path isolates this one.
+
+    Scenario: a missing field under a NOT NULL schema yields NULL
+      When query
+        """
+        SELECT from_csv('', 'a INT NOT NULL') AS result
+        """
+      Then query result
+        | result |
+        | {NULL} |
+
+    # Control: without NOT NULL the same query must give the same answer. If this one ever
+    # diverges from the scenario above, the NOT NULL flag is being honoured again.
+    Scenario: a missing field under a plain schema yields NULL
+      When query
+        """
+        SELECT from_csv('', 'a INT') AS result
+        """
+      Then query result
+        | result |
+        | {NULL} |
+
