@@ -127,12 +127,8 @@ impl ScalarUDFImpl for SparkAESEncrypt {
         )
     }
 
-    /// Spark: `AesEncrypt` is `RuntimeReplaceable` with no `nullable` of its own, so the rule is
-    /// `replacement.nullable`. Its replacement is a `StaticInvoke` that does not pass
-    /// `returnNullable`, which defaults to `true`, and `StaticInvoke.nullable` is
-    /// `needNullCheck || returnNullable` — so `true` regardless of the arguments.
-    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/misc.scala#L451>
-    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/Expression.scala#L455>
+    /// Spark: `AesEncrypt` is `RuntimeReplaceable` over a `StaticInvoke` that leaves
+    /// `returnNullable` at its `true` default, so `nullable = true` whatever the arguments.
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/objects/objects.scala#L334>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         if args.arg_fields.len() < 2 || args.arg_fields.len() > 6 {
@@ -642,12 +638,8 @@ impl ScalarUDFImpl for SparkAESDecrypt {
         )
     }
 
-    /// Spark: `AesDecrypt` is `RuntimeReplaceable` with no `nullable` of its own, so the rule is
-    /// `replacement.nullable`. Its replacement is a `StaticInvoke` that does not pass
-    /// `returnNullable`, which defaults to `true`, and `StaticInvoke.nullable` is
-    /// `needNullCheck || returnNullable` — so `true` regardless of the arguments.
-    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/misc.scala#L531>
-    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/Expression.scala#L455>
+    /// Spark: `AesDecrypt` is `RuntimeReplaceable` over a `StaticInvoke` that leaves
+    /// `returnNullable` at its `true` default, so `nullable = true` whatever the arguments.
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/objects/objects.scala#L334>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         if args.arg_fields.len() < 2 || args.arg_fields.len() > 5 {
@@ -1130,11 +1122,8 @@ impl ScalarUDFImpl for SparkTryAESDecrypt {
         )
     }
 
-    /// Spark: `TryAesDecrypt` is `RuntimeReplaceable` with no `nullable` of its own, and neither
-    /// does the `InheritAnalysisRules` it mixes in, so the rule is `replacement.nullable`. Its
-    /// replacement is `TryEval(AesDecrypt(...))`, and `TryEval.nullable = true`.
-    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/misc.scala#L587>
-    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/Expression.scala#L455>
+    /// Spark: `TryAesDecrypt` is `RuntimeReplaceable` over `TryEval(AesDecrypt(...))`, whose
+    /// `nullable = true` is unconditional.
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/TryEval.scala#L50>
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(self.name(), DataType::Binary, true)))

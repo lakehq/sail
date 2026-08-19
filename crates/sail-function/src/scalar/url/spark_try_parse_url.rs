@@ -44,13 +44,9 @@ impl ScalarUDFImpl for SparkTryParseUrl {
         )
     }
 
-    /// Spark: `TryParseUrl` declares no `nullable` of its own, and neither does the
-    /// `InheritAnalysisRules` it mixes in, so the rule comes from `RuntimeReplaceable`:
-    /// `replacement.nullable`. Its replacement is `ParseUrl(children, failOnError = false)`,
-    /// and `ParseUrl.nullable = true`, unconditional.
-    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/urlExpressions.scala#L184>
+    /// Spark: `TryParseUrl` is `RuntimeReplaceable` over `ParseUrl`, whose
+    /// `nullable = true` is unconditional.
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/urlExpressions.scala#L221>
-    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/Expression.scala#L455>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let arg_types = args
             .arg_fields

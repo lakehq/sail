@@ -49,15 +49,9 @@ impl ScalarUDFImpl for SparkIntervalDiv {
         )
     }
 
-    /// Spark: `div` between two intervals is `IntegralDivide` — its `inputType` admits
-    /// `YearMonthIntervalType` and `DayTimeIntervalType` and its `dataType` is `LongType`. It
-    /// extends `DivModLike`, whose `nullable = true` is unconditional: a zero divisor yields
-    /// NULL, and ANSI does not narrow the declared flag.
-    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L890>
+    /// Spark: `div` on intervals is `IntegralDivide`, which extends `DivModLike`:
+    /// `nullable = true`, unconditional (ANSI does not narrow it).
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L658>
-    ///
-    /// Declared here rather than left to DataFusion's default: the default happens to agree
-    /// today, but nothing pins it, and a change upstream would break parity in silence.
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(self.name(), DataType::Int64, true)))
     }

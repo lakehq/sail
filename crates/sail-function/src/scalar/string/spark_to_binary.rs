@@ -209,12 +209,9 @@ impl ScalarUDFImpl for SparkTryToBinary {
         )
     }
 
-    /// Spark: `TryToBinary` is `RuntimeReplaceable` with no `nullable` of its own, and neither
-    /// does the `InheritAnalysisRules` it mixes in, so the rule is `replacement.nullable`. Every
-    /// constructor wraps the strict expression in `TryEval`, and `TryEval.nullable = true`.
-    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/TryEval.scala#L264>
+    /// Spark: `TryToBinary` is `RuntimeReplaceable` over `TryEval`, whose
+    /// `nullable = true` is unconditional.
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/TryEval.scala#L50>
-    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/Expression.scala#L455>
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(self.name(), DataType::Binary, true)))
     }
