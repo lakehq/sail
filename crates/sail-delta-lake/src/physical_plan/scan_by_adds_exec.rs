@@ -444,7 +444,6 @@ impl ScanByAddsStreamState {
             adds,
             &scan_config,
             FileScanParams {
-                pruning_mask: None,
                 projection: Some(&file_projection),
                 // Limit must be applied after DV filtering, otherwise deleted rows consume the
                 // physical-file limit and valid rows can be missed.

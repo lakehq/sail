@@ -10,6 +10,13 @@ use crate::datasource::{DeltaScanConfig, df_logical_schema, get_pushdown_filters
 use crate::delta_log::LogStoreRef;
 use crate::table::DeltaSnapshot;
 
+#[derive(Clone, Debug, Default)]
+pub(crate) enum DeltaFileSelection {
+    #[default]
+    Snapshot,
+    Selected(Arc<[usize]>),
+}
+
 /// Logical-only Delta table source used in DataFusion logical plans.
 ///
 /// This avoids coupling logical planning / optimization with `TableProvider::scan`
@@ -20,6 +27,7 @@ pub struct DeltaTableSource {
     log_store: LogStoreRef,
     config: DeltaScanConfig,
     schema: SchemaRef,
+    file_selection: DeltaFileSelection,
 }
 
 impl std::fmt::Debug for DeltaTableSource {
@@ -27,6 +35,7 @@ impl std::fmt::Debug for DeltaTableSource {
         f.debug_struct("DeltaTableSource")
             .field("snapshot_version", &self.snapshot.version())
             .field("config", &self.config)
+            .field("file_selection", &self.file_selection)
             .field(
                 "schema_fields",
                 &self
@@ -60,6 +69,7 @@ impl DeltaTableSource {
             log_store,
             config,
             schema,
+            file_selection: DeltaFileSelection::Snapshot,
         })
     }
 
@@ -73,6 +83,35 @@ impl DeltaTableSource {
 
     pub fn config(&self) -> &DeltaScanConfig {
         &self.config
+    }
+
+    pub(crate) fn file_selection(&self) -> &DeltaFileSelection {
+        &self.file_selection
+    }
+
+    pub(crate) fn try_select_files(&self, indices: Vec<usize>) -> DeltaResult<Self> {
+        if !self.snapshot.load_config().require_files {
+            return Err(crate::spec::DeltaError::generic(
+                "Delta file selection requires an eagerly loaded snapshot",
+            ));
+        }
+        let mut previous = None;
+        for &index in &indices {
+            if index >= self.snapshot.adds().len() {
+                return Err(crate::spec::DeltaError::generic(format!(
+                    "Delta file selection index {index} is out of range"
+                )));
+            }
+            if previous.is_some_and(|previous| previous >= index) {
+                return Err(crate::spec::DeltaError::generic(
+                    "Delta file selection indices must be sorted and unique",
+                ));
+            }
+            previous = Some(index);
+        }
+        let mut source = self.clone();
+        source.file_selection = DeltaFileSelection::Selected(indices.into());
+        Ok(source)
     }
 }
 
@@ -98,12 +137,13 @@ impl MergeCapableSource for DeltaTableSource {
     fn with_file_column(&self, name: &str) -> Result<Arc<dyn TableSource>> {
         let mut new_config = self.config.clone();
         new_config.file_column_name = Some(name.to_string());
-        let new_source = DeltaTableSource::try_new(
+        let mut new_source = DeltaTableSource::try_new(
             Arc::clone(&self.snapshot),
             self.log_store.clone(),
             new_config,
         )
         .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
+        new_source.file_selection = self.file_selection.clone();
         Ok(Arc::new(new_source))
     }
 
@@ -114,12 +154,13 @@ impl MergeCapableSource for DeltaTableSource {
     fn with_row_index_column(&self, name: &str) -> Result<Arc<dyn TableSource>> {
         let mut new_config = self.config.clone();
         new_config.row_index_column_name = Some(name.to_string());
-        let new_source = DeltaTableSource::try_new(
+        let mut new_source = DeltaTableSource::try_new(
             Arc::clone(&self.snapshot),
             self.log_store.clone(),
             new_config,
         )
         .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
+        new_source.file_selection = self.file_selection.clone();
         Ok(Arc::new(new_source))
     }
 }
