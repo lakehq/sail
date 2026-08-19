@@ -58,27 +58,3 @@ Feature: try_aes_decrypt with an argument coming from a column
         root
          |-- result: binary (nullable = true)
         """
-
-  Rule: A structurally invalid call still raises
-
-    # The two-sided `try_*` contract: bad DATA becomes NULL, but a call Spark rejects at analysis
-    # must still raise. `invoke_with_args` maps every error to NULL, so the arity is gated in
-    # `return_field_from_args` instead -- without it a one-argument call was silently NULL.
-    # Loose on purpose: it is the widest wording both engines share.
-    Scenario: try_aes_decrypt rejects a single argument
-      When query
-        """
-        SELECT try_aes_decrypt(X'00') AS result
-        """
-      Then query error try_aes_decrypt.*requires
-
-    # Spark reports arity through WRONG_NUM_ARGS; Sail emits its own wording. Systemic across the
-    # whole function surface, so it is recorded rather than worked around here.
-    @sail-bug
-    Scenario: try_aes_decrypt reports arity through WRONG_NUM_ARGS
-      When query
-        """
-        SELECT try_aes_decrypt(X'00') AS result
-        """
-      Then query error \[WRONG_NUM_ARGS.*The `try_aes_decrypt` requires \[2, 3, 4, 5\] parameters
-

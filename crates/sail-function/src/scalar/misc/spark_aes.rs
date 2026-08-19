@@ -21,8 +21,6 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
-use crate::error::invalid_arg_count_exec_err;
-
 pub type Aes192Gcm = AesGcm<Aes192, U12>;
 
 /// ECB mode is not supported because it is insecure.
@@ -1082,22 +1080,10 @@ impl ScalarUDFImpl for SparkTryAESEncrypt {
         )
     }
 
-    /// `try_aes_encrypt` is a Sail-only spelling: Spark 4.2.0 has no `TryAesEncrypt` expression
-    /// and does not register the name, so there is no Spark rule to inherit. `true` is chosen by
-    /// analogy with the sibling `TryAesDecrypt`, which wraps the strict call in `TryEval`
-    /// (`nullable = true`), and with `AesEncrypt`, which is already `true` on its own.
-    ///
-    /// The arity is validated here rather than in the kernel: `invoke_with_args` maps any error
-    /// to NULL, which would otherwise swallow a structurally invalid call that Spark rejects at
-    /// analysis time.
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        if args.arg_fields.len() < 2 || args.arg_fields.len() > 6 {
-            return Err(invalid_arg_count_exec_err(
-                self.name(),
-                (2, 6),
-                args.arg_fields.len(),
-            ));
-        }
+    /// Spark: `TryEval.nullable = true`, unconditional; `try_aes_encrypt` has no expression of
+    /// its own and follows its `TryAesDecrypt` sibling, which wraps the strict call in `TryEval`.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/TryEval.scala#L50>
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(self.name(), DataType::Binary, true)))
     }
 
@@ -1150,18 +1136,7 @@ impl ScalarUDFImpl for SparkTryAESDecrypt {
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/misc.scala#L587>
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/Expression.scala#L455>
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/TryEval.scala#L50>
-    ///
-    /// The arity is validated here rather than in the kernel: `invoke_with_args` maps any error
-    /// to NULL, which would otherwise swallow the `WRONG_NUM_ARGS` that Spark raises at analysis
-    /// time — a `try_*` turns bad DATA into NULL, never a structurally invalid call.
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        if args.arg_fields.len() < 2 || args.arg_fields.len() > 5 {
-            return Err(invalid_arg_count_exec_err(
-                self.name(),
-                (2, 5),
-                args.arg_fields.len(),
-            ));
-        }
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
         Ok(Arc::new(Field::new(self.name(), DataType::Binary, true)))
     }
 

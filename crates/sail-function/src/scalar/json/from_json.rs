@@ -21,7 +21,7 @@ use sail_sql_analyzer::parser as sail_parser;
 use serde_json::Value;
 
 use crate::functions_nested_utils::*;
-use crate::functions_utils::{as_nullable, make_scalar_function};
+use crate::functions_utils::make_scalar_function;
 use crate::scalar::datetime::format::DateTimeFormat;
 
 /// UDF implementation of `from_json`, similar to Spark's `from_json`.
@@ -154,9 +154,6 @@ impl ScalarUDFImpl for SparkFromJson {
             );
         };
 
-        // Spark discards the DDL's nullability here: `JsonToStructs` derives its output type
-        // from `schema.asNullable`, because a missing or corrupt field parses to NULL.
-        // <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/jsonExpressions.scala#L271>
         let dt = parse_schema_to_data_type(schema_str, &self.session_timezone)?;
         Ok(Arc::new(Field::new(self.name(), dt, true)))
     }
@@ -978,11 +975,6 @@ fn parse_timestamp(
 /// Parses a schema string into an Arrow DataType. The schema may be a bare field list
 /// like "a INT, b DOUBLE" (interpreted as a STRUCT), or a full type string like
 /// "ARRAY<INT>" or "MAP<STRING, INT>".
-///
-/// The DDL's nullability is deliberately discarded: Spark keeps a `schema.asNullable`
-/// and uses it for BOTH the declared output type and the parser, so a `NOT NULL` in the
-/// schema argument is ignored -- a missing or malformed field still parses to NULL.
-/// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/jsonExpressions.scala#L271>
 fn parse_schema_to_data_type(schema: &str, session_timezone: &str) -> Result<DataType> {
     let schema = schema.trim();
 
@@ -1004,10 +996,7 @@ fn parse_schema_to_data_type(schema: &str, session_timezone: &str) -> Result<Dat
         ast.map_err(|e| DataFusionError::Plan(format!("Failed to parse schema '{schema}': {e}")))?;
     let spec_dt = from_ast_data_type(ast)
         .map_err(|e| DataFusionError::Plan(format!("Failed to analyze schema '{schema}': {e}")))?;
-    Ok(as_nullable(&spec_to_arrow_data_type(
-        &spec_dt,
-        session_timezone,
-    )?))
+    spec_to_arrow_data_type(&spec_dt, session_timezone)
 }
 
 /// Parses a Spark JSON schema string into an Arrow DataType.
