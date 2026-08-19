@@ -32,7 +32,7 @@ impl PlanResolver<'_> {
         if plan_id.is_none()
             && let [first, rest @ ..] = name.parts()
             && let Some((declared, field)) = state
-                .resolve_lambda_parameter(first.as_ref())
+                .resolve_lambda_parameter(first.as_ref(), |a, b| self.match_lambda_parameter(a, b))
                 .map(|(param, field)| (param.to_string(), field.cloned()))
         {
             let display = rest
@@ -107,8 +107,8 @@ impl PlanResolver<'_> {
                 candidates
                     .iter()
                     .filter_map(|(q, name, inner)| {
-                        if qualifier_matches(q.as_ref(), qualifier)
-                            && info.matches(name.as_ref(), plan_id)
+                        if self.match_attribute_qualifier(q.as_ref(), qualifier)
+                            && self.match_field(info, name.as_ref(), plan_id)
                         {
                             let expr = Self::resolve_potentially_nested_field(
                                 col((qualifier, field)),
@@ -184,7 +184,7 @@ impl PlanResolver<'_> {
                 if !info.is_hidden() {
                     return None;
                 }
-                if info.matches(name.as_ref(), plan_id) {
+                if self.match_field(info, name.as_ref(), plan_id) {
                     Some((
                         name.as_ref().to_string(),
                         expr::Expr::Column(Column::new_unqualified(field.name())),
@@ -221,8 +221,8 @@ impl PlanResolver<'_> {
                 candidates
                     .iter()
                     .filter(|(q, name)| {
-                        qualifier_matches(q.as_ref(), qualifier)
-                            && info.matches(name.as_ref(), None)
+                        self.match_attribute_qualifier(q.as_ref(), qualifier)
+                            && self.match_field(info, name.as_ref(), None)
                     })
                     .map(|(_, name)| {
                         (
@@ -333,41 +333,5 @@ impl PlanResolver<'_> {
             ));
         }
         out
-    }
-}
-
-/// Returns whether the qualifier matches the target qualifier.
-/// Identifiers are case-insensitive.
-/// Note that the match is not symmetric, so please ensure the arguments are in the correct order.
-pub(super) fn qualifier_matches(
-    qualifier: Option<&TableReference>,
-    target: Option<&TableReference>,
-) -> bool {
-    let table_matches = |table: &str| {
-        target
-            .map(|x| x.table())
-            .is_some_and(|x| x.eq_ignore_ascii_case(table))
-    };
-    let schema_matches = |schema: &str| {
-        target
-            .and_then(|x| x.schema())
-            .is_some_and(|x| x.eq_ignore_ascii_case(schema))
-    };
-    let catalog_matches = |catalog: &str| {
-        target
-            .and_then(|x| x.catalog())
-            .is_some_and(|x| x.eq_ignore_ascii_case(catalog))
-    };
-    match qualifier {
-        Some(TableReference::Bare { table }) => table_matches(table),
-        Some(TableReference::Partial { schema, table }) => {
-            schema_matches(schema) && table_matches(table)
-        }
-        Some(TableReference::Full {
-            catalog,
-            schema,
-            table,
-        }) => catalog_matches(catalog) && schema_matches(schema) && table_matches(table),
-        None => true,
     }
 }

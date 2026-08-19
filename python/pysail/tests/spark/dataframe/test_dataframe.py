@@ -3,7 +3,10 @@ import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql import Row
 from pyspark.sql.functions import col, lit, row_number
+from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 from pyspark.sql.window import Window
+
+from pysail.testing.spark.utils.common import is_jvm_spark
 
 
 def test_dataframe_drop(spark):
@@ -113,6 +116,73 @@ def test_dataframe_with_column_alias(spark):
     )
 
 
+def test_with_column_matches_name_case_insensitively(spark):
+    df = spark.createDataFrame([(1, 10), (2, 20)], ["a", "b"])
+
+    # The existing column is replaced in place, and it takes the new name.
+    replaced = df.withColumn("A", col("a") + 1)
+    assert replaced.columns == ["A", "b"]
+    assert [r.asDict() for r in replaced.orderBy("A").collect()] == [{"A": 2, "b": 10}, {"A": 3, "b": 20}]
+
+    assert df.withColumn("a", col("a") + 1).columns == ["a", "b"]
+    assert df.withColumn("zz", lit(1)).columns == ["a", "b", "zz"]
+    assert df.withColumns({"A": lit(1), "B": lit(2)}).columns == ["A", "B"]
+
+    with pytest.raises(Exception, match="COLUMN_ALREADY_EXISTS"):
+        _ = df.withColumns({"a": lit(1), "A": lit(2)}).columns
+
+    # The first duplicate in alphabetical order is the one reported.
+    with pytest.raises(Exception, match="The column `a` already exists"):
+        _ = df.withColumns({"z": lit(1), "a": lit(2), "Z": lit(3), "A": lit(4)}).columns
+
+
+def test_with_columns_renamed_matches_name_case_insensitively(spark):
+    df = spark.createDataFrame([(1, 10)], ["a", "b"])
+
+    assert df.withColumnRenamed("A", "z").columns == ["z", "b"]
+    assert df.withColumnRenamed("a", "z").columns == ["z", "b"]
+    # A name that matches no column is ignored.
+    assert df.withColumnRenamed("nope", "z").columns == ["a", "b"]
+    assert df.withColumnsRenamed({"A": "z", "B": "y"}).columns == ["z", "y"]
+
+    # The renames are applied in order to the output of the previous one, so the second
+    # entry no longer matches the column that the first one renamed.
+    assert df.withColumnsRenamed({"A": "z", "a": "y"}).columns == ["z", "b"]
+    # Spark 3.5 rejected the resulting duplicate name with COLUMN_ALREADY_EXISTS;
+    # Spark 4 allows it, and we follow the latest behavior.
+    assert df.withColumnsRenamed({"a": "b", "b": "c"}).columns == ["c", "c"]
+
+
+def test_with_column_case_sensitive(spark):
+    spark.conf.set("spark.sql.caseSensitive", "true")
+    try:
+        df = spark.createDataFrame([(1, 10)], ["a", "b"])
+        # The names no longer match, so the column is appended instead of replaced.
+        assert df.withColumn("A", lit(1)).columns == ["a", "b", "A"]
+        assert df.withColumns({"a": lit(1), "A": lit(2)}).columns == ["a", "b", "A"]
+        # A rename that matches no column is ignored.
+        assert df.withColumnRenamed("A", "z").columns == ["a", "b"]
+        assert df.withColumnRenamed("a", "z").columns == ["z", "b"]
+    finally:
+        spark.conf.unset("spark.sql.caseSensitive")
+
+
+def test_with_column_matches_non_ascii_names(spark):
+    assert spark.sql("SELECT 1 AS `Ä`").withColumn("ä", lit(2)).columns == ["ä"]
+    assert spark.sql("SELECT 1 AS `ä`").withColumnsRenamed({"Ä": "z"}).columns == ["z"]
+
+    with pytest.raises(Exception, match="COLUMN_ALREADY_EXISTS"):
+        _ = spark.range(1).withColumns({"Ä": lit(1), "ä": lit(2)}).columns
+
+
+def test_with_metadata_matches_name_case_insensitively(spark):
+    df = spark.createDataFrame([(1, 10)], ["a", "b"])
+
+    annotated = df.withMetadata("A", {"m": "x"})
+    assert annotated.columns == ["A", "b"]
+    assert annotated.schema["A"].metadata == {"m": "x"}
+
+
 def test_with_metadata(spark):
     df = spark.sql("SELECT 1 AS a")
     assert df.schema["a"].metadata == {}
@@ -148,3 +218,180 @@ def test_map_in_pandas_reordering_does_not_satisfy_window_ordering(spark):
     expected = pd.DataFrame({"id": [0, 1, 2, 3], "rn": [1, 2, 3, 4]}).astype({"rn": "int32"})
 
     assert_frame_equal(actual, expected)
+
+
+def test_with_column_matches_name_like_java_case_folding(spark):
+    # The Spark analyzer resolver uses `String.equalsIgnoreCase`, which folds a character
+    # through its *simple* case mappings. `İ` has a simple lowercase mapping to `i`, even
+    # though its full lowercase mapping is `i` followed by a combining dot above.
+    assert spark.sql("SELECT 1 AS `İ`").withColumn("i", lit(2)).columns == ["i"]
+    assert spark.sql("SELECT 1 AS `İ`").withColumn("i", lit(2)).collect() == [Row(i=2)]
+    assert spark.sql("SELECT 1 AS `i`").withColumn("İ", lit(2)).columns == ["İ"]
+    assert spark.sql("SELECT 1 AS `İ`").withColumnsRenamed({"i": "z"}).columns == ["z"]
+
+    # Duplicates are detected by lowercasing the names instead of using the resolver, and the
+    # full lowercase mappings of `İ` and `i` differ, so these names are not duplicates.
+    assert spark.range(1).withColumns({"İ": lit(1), "i": lit(2)}).columns == ["id", "İ", "i"]
+
+
+def test_with_columns_discards_alias_already_matched_by_another_alias(spark):
+    # Both names match the `id` column through the resolver, but they are not duplicates
+    # because their lowercase forms differ. Only the first one replaces the column, and the
+    # other one is discarded rather than appended.
+    # U+0131 is the Turkish dotless i. It is written as an escape so the source stays ASCII:
+    # spelling it literally is what the confusable-character lint objects to, and the whole
+    # point of these cases is that it looks like an ASCII i without folding to one.
+    dotless_id = "\u0131d"
+    df = spark.range(1)
+    assert df.withColumns({"id": lit(1), dotless_id: lit(2)}).columns == ["id"]
+    assert df.withColumns({"id": lit(1), dotless_id: lit(2)}).collect() == [Row(id=1)]
+    assert df.withColumns({dotless_id: lit(1), "Id": lit(2)}).columns == [dotless_id]
+    assert df.withColumns({dotless_id: lit(1), "Id": lit(2)}).collect() == [Row(**{dotless_id: 1})]
+
+
+def metadata_df(spark):
+    return spark.range(1).select(col("id").alias("a")).withMetadata("a", {"k": "1"})
+
+
+def test_with_column_metadata(spark):
+    df = metadata_df(spark)
+    assert df.schema["a"].metadata == {"k": "1"}
+
+    assert df.withMetadata("a", {}).schema["a"].metadata == {}
+    assert df.withMetadata("a", {"m": "2"}).schema["a"].metadata == {"m": "2"}
+    # A rename keeps the column, so its metadata is preserved.
+    assert df.withColumnRenamed("a", "z").schema["z"].metadata == {"k": "1"}
+
+
+def test_with_column_does_not_inherit_metadata(spark):
+    df = metadata_df(spark)
+
+    assert df.withColumn("a", col("a")).schema["a"].metadata == {}
+    assert df.withColumn("A", col("a")).schema["A"].metadata == {}
+    assert df.withColumn("c", col("a")).schema["c"].metadata == {}
+    assert df.withColumns({"a": col("a")}).schema["a"].metadata == {}
+
+
+def test_drop_matches_non_ascii_names(spark):
+    assert spark.sql("SELECT 1 AS `Ä`").drop("ä").columns == []
+    assert spark.sql("SELECT 1 AS `İ`").drop("i").columns == []
+    assert spark.sql("SELECT 1 AS `\u0131d`").drop("Id").columns == []
+    # U+13A0 is the Cherokee capital letter A; it folds to its lowercase form U+AB70.
+    assert spark.sql("SELECT 1 AS `\u13a0`").drop("\uab70").columns == []
+    # `ﬁ` has no simple case mapping, so it does not match `FI`.
+    assert spark.sql("SELECT 1 AS `ﬁ`").drop("FI").columns == ["ﬁ"]
+
+
+def test_replace_subset_matches_name_exactly(spark):
+    df = spark.createDataFrame([("x",)], ["s"])
+
+    assert df.replace("x", "y", subset=["s"]).collect() == [Row(s="y")]
+    # The name is resolved case-insensitively, so it is not an error, but only a column whose
+    # name matches exactly is replaced.
+    assert df.replace("x", "y", subset=["S"]).collect() == [Row(s="x")]
+    assert spark.createDataFrame([("x",)], ["Ä"]).replace("x", "y", subset=["ä"]).collect() == [Row(Ä="x")]
+
+    with pytest.raises(Exception, match="UNRESOLVED_COLUMN"):
+        df.replace("x", "y", subset=["nope"]).collect()
+
+
+def test_column_resolution_is_case_sensitive_when_configured(spark):
+    spark.conf.set("spark.sql.caseSensitive", "true")
+    try:
+        df = spark.createDataFrame([(1, 10)], ["a", "b"])
+
+        assert df.select(col("a")).columns == ["a"]
+        # The name no longer matches, so the column cannot be resolved at all.
+        with pytest.raises(Exception, match=r"[\"`]A[\"`]"):
+            df.select(col("A")).collect()
+        with pytest.raises(Exception, match=r"[\"`]A[\"`]"):
+            df.filter(col("A") > 0).collect()
+        with pytest.raises(Exception, match=r"[\"`]A[\"`]"):
+            df.withMetadata("A", {"m": "x"}).collect()
+
+        # A name that matches no column is ignored by `drop`.
+        assert df.drop("A").columns == ["a", "b"]
+        assert df.drop("a").columns == ["b"]
+    finally:
+        spark.conf.unset("spark.sql.caseSensitive")
+
+
+def test_attribute_reference_does_not_use_the_resolver_alone(spark):
+    # An attribute is looked up in a map keyed by the lowercased name and the candidates are
+    # then filtered with the resolver, so a name matches only when it matches both ways.
+    # `İ` and `i` match the resolver but their lowercase forms differ, so they do not match.
+    df = spark.sql("SELECT 1 AS `İ`")
+    for reference in (lambda: df.select("i"), lambda: df.filter(col("i") > 0), lambda: df.groupBy("i").count()):
+        with pytest.raises(Exception, match=r"[\"`]i[\"`]"):
+            reference().collect()
+
+    dotless = spark.sql("SELECT 1 AS `\u0131d`")
+    with pytest.raises(Exception, match=r"[\"`]Id[\"`]"):
+        dotless.select("Id").collect()
+
+    # The operations that select the output columns by name use the resolver alone, so the very
+    # same names do match there.
+    assert df.drop("i").columns == []
+    assert df.withColumn("i", lit(2)).columns == ["i"]
+    assert dotless.withColumnsRenamed({"Id": "z"}).columns == ["z"]
+
+    # The lowercase forms agree for ASCII, so both rules accept it.
+    assert spark.sql("SELECT 1 AS a").select("A").collect() == [Row(A=1)]
+
+
+def test_to_schema_matches_name_like_the_analyzer(spark):
+    src = spark.sql("SELECT 1 AS `Ä`, 2 AS b")
+    target = StructType([StructField("b", IntegerType()), StructField("ä", IntegerType())])
+    assert src.to(target).columns == ["b", "ä"]
+    assert src.to(target).collect() == [Row(b=2, ä=1)]
+
+
+def test_to_schema_fills_missing_nullable_field(spark):
+    # `Project.reorderFields` only rejects a missing target field when it is non-nullable.
+    # A nullable one is filled with a NULL literal of the target type.
+    src = spark.sql("SELECT 1 AS a")
+    target = StructType([StructField("a", IntegerType()), StructField("zz", StringType(), True)])
+
+    assert src.to(target).columns == ["a", "zz"]
+    assert src.to(target).collect() == [Row(a=1, zz=None)]
+
+
+def test_to_schema_rejects_ambiguous_name(spark):
+    # The target name is matched against every input column, and more than one match is an error
+    # rather than a silent pick of the first one.
+    src = spark.sql("SELECT 1 AS a, 2 AS A")
+    target = StructType([StructField("a", IntegerType())])
+
+    with pytest.raises(Exception, match="AMBIGUOUS_COLUMN_OR_FIELD"):
+        src.to(target).collect()
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_to_schema_reorders_nested_struct_fields(spark):
+    # The reconciliation recurses into structs, so the nested fields are matched by name, not by
+    # position, and they take the name of the target field.
+    src = spark.sql("SELECT named_struct('x', 1, 'y', 'a') AS s")
+    nested = StructType([StructField("Y", StringType()), StructField("X", IntegerType())])
+    target = StructType([StructField("s", nested)])
+
+    assert src.to(target).schema.simpleString() == "struct<s:struct<Y:string,X:int>>"
+    assert src.to(target).collect() == [Row(s=Row(Y="a", X=1))]
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_to_schema_rejects_nullable_column_for_non_nullable_field(spark):
+    # A nullable input column cannot be narrowed to a non-nullable target field.
+    src = spark.sql("SELECT CAST(NULL AS INT) AS a")
+    target = StructType([StructField("a", IntegerType(), False)])
+
+    with pytest.raises(Exception, match="NULLABLE_COLUMN_OR_FIELD"):
+        src.to(target).collect()
+
+
+def test_replace_rejects_ambiguous_subset_name(spark):
+    # The subset name is resolved as an attribute reference, which fails when it matches more
+    # than one column of the input.
+    df = spark.sql("SELECT 'x' AS a, 'x' AS A")
+
+    with pytest.raises(Exception, match="AMBIGUOUS_REFERENCE"):
+        df.replace("x", "y", subset=["a"]).collect()
