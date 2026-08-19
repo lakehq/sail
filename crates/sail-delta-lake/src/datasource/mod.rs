@@ -21,7 +21,7 @@
 use std::collections::HashSet;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::common::stats::Statistics;
+use datafusion::common::stats::{ColumnStatistics, Statistics};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 pub use sail_common_datafusion::datasource::MERGE_FILE_COLUMN as PATH_COLUMN;
 use serde::{Deserialize, Serialize};
@@ -61,14 +61,24 @@ impl DeltaSnapshot {
         if !self.load_config().require_files {
             return None;
         }
-        if adds == self.adds() {
+        let mut statistics = if adds == self.adds() {
             self.pruning_stats().ok()?.statistics()
         } else {
             let files = self.build_files_batch_from_adds(adds).ok()?;
             SnapshotPruningStats::try_new(&files, self)
                 .ok()?
                 .statistics()
-        }
+        }?;
+        // ProjectionExec propagates extrema and null counts through casts without proving that
+        // the cast is total or order preserving. Delta's typed logical resolver consumes the exact
+        // evidence; physical statistics remain estimates so the generic aggregate rule cannot
+        // turn an unsafe projected cast into a literal.
+        statistics.column_statistics = statistics
+            .column_statistics
+            .into_iter()
+            .map(ColumnStatistics::to_inexact)
+            .collect();
+        Some(statistics)
     }
 }
 
