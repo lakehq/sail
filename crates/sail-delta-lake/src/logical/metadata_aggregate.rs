@@ -1,18 +1,21 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::DataType;
+use datafusion::common::stats::Precision;
 use datafusion::common::tree_node::Transformed;
 use datafusion::common::{Column, DataFusionError, Result, ScalarValue};
+use datafusion::functions::core::getfield::GetFieldFunc;
 use datafusion::functions_aggregate::expr_fn::sum;
 use datafusion::logical_expr::logical_plan::{
-    Aggregate, EmptyRelation, Projection, TableScan, Union,
+    Aggregate, EmptyRelation, Projection, TableScan, Union, Values,
 };
 use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, TableSource};
 use log::debug;
 use sail_common_datafusion::logical_rewriter::LogicalRewriter;
 
 use crate::logical::table_source::{DeltaFileSelection, DeltaTableSource};
-use crate::snapshot::{GroupedCountMetadata, GroupedCountMetadataRow};
+use crate::snapshot::{GroupedCountMetadata, GroupedCountMetadataRow, SnapshotPruningStats};
 
 const MAX_METADATA_GROUPS: usize = 100_000;
 const LARGE_METADATA_SAVINGS_BYTES: u64 = 64 * 1024 * 1024;
@@ -20,11 +23,11 @@ const COUNT_WEIGHT_COLUMN: &str = "__sail_delta_count_weight";
 const COUNT_SUM_COLUMN: &str = "__sail_delta_count_sum";
 
 #[derive(Debug, Default)]
-pub struct DeltaPartialGroupedAggregateRewriter;
+pub struct DeltaMetadataAggregateRewriter;
 
-impl LogicalRewriter for DeltaPartialGroupedAggregateRewriter {
+impl LogicalRewriter for DeltaMetadataAggregateRewriter {
     fn name(&self) -> &str {
-        "delta_partial_grouped_metadata_aggregate"
+        "delta_metadata_aggregate"
     }
 
     fn rewrite(&self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
@@ -32,7 +35,11 @@ impl LogicalRewriter for DeltaPartialGroupedAggregateRewriter {
             let LogicalPlan::Aggregate(aggregate) = &plan else {
                 return Ok(Transformed::no(plan));
             };
-            match rewrite_grouped_count(aggregate)? {
+            let rewritten = match rewrite_exact_ungrouped_aggregate(aggregate)? {
+                Some(rewritten) => Some(rewritten),
+                None => rewrite_grouped_count(aggregate)?,
+            };
+            match rewritten {
                 Some(rewritten) => Ok(Transformed::yes(rewritten)),
                 None => Ok(Transformed::no(plan)),
             }
@@ -106,6 +113,480 @@ impl<'a> DeltaAggregateInput<'a> {
                 )?))
             }
         }
+    }
+
+    fn source_expression(
+        &self,
+        expression: &Expr,
+        source: &DeltaTableSource,
+    ) -> Option<DeltaSourceExpression> {
+        match self {
+            Self::Scan(scan) => resolve_scan_expression(scan, expression, source),
+            Self::Projection { projection, scan } => {
+                resolve_projection_expression(projection, scan, expression, source)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum DeltaSourceExpression {
+    Literal(ScalarValue),
+    Column {
+        logical_path: Vec<String>,
+        data_type: DataType,
+    },
+    Cast {
+        expression: Box<Self>,
+        data_type: DataType,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct DeltaValueStatistics {
+    data_type: DataType,
+    null_count: Precision<usize>,
+    min_value: Precision<ScalarValue>,
+    max_value: Precision<ScalarValue>,
+}
+
+fn resolve_projection_expression(
+    projection: &Projection,
+    scan: &TableScan,
+    expression: &Expr,
+    source: &DeltaTableSource,
+) -> Option<DeltaSourceExpression> {
+    resolve_expression(expression, &|column| {
+        let index = projection.schema.index_of_column(column).ok()?;
+        resolve_scan_expression(scan, projection.expr.get(index)?, source)
+    })
+}
+
+fn resolve_scan_expression(
+    scan: &TableScan,
+    expression: &Expr,
+    source: &DeltaTableSource,
+) -> Option<DeltaSourceExpression> {
+    resolve_expression(expression, &|column| {
+        let projected_index = scan.projected_schema.index_of_column(column).ok()?;
+        let source_index = match &scan.projection {
+            Some(projection) => *projection.get(projected_index)?,
+            None => projected_index,
+        };
+        let scan_field = scan.source.schema().fields().get(source_index)?.clone();
+        let snapshot_field = source
+            .snapshot()
+            .schema()
+            .fields()
+            .iter()
+            .find(|field| field.name() == scan_field.name())?;
+        if scan_field.data_type() != snapshot_field.data_type() {
+            return None;
+        }
+        Some(DeltaSourceExpression::Column {
+            logical_path: vec![snapshot_field.name().clone()],
+            data_type: snapshot_field.data_type().clone(),
+        })
+    })
+}
+
+fn resolve_expression(
+    expression: &Expr,
+    resolve_column: &impl Fn(&Column) -> Option<DeltaSourceExpression>,
+) -> Option<DeltaSourceExpression> {
+    match expression {
+        Expr::Alias(alias) => resolve_expression(alias.expr.as_ref(), resolve_column),
+        Expr::Literal(value, _) => Some(DeltaSourceExpression::Literal(value.clone())),
+        Expr::Column(column) => resolve_column(column),
+        Expr::Cast(cast) => Some(DeltaSourceExpression::Cast {
+            expression: Box::new(resolve_expression(cast.expr.as_ref(), resolve_column)?),
+            data_type: cast.field.data_type().clone(),
+        }),
+        Expr::TryCast(cast) => Some(DeltaSourceExpression::Cast {
+            expression: Box::new(resolve_expression(cast.expr.as_ref(), resolve_column)?),
+            data_type: cast.field.data_type().clone(),
+        }),
+        Expr::ScalarFunction(function) if function.func.inner().is::<GetFieldFunc>() => {
+            let [base, field] = function.args.as_slice() else {
+                return None;
+            };
+            let field_name = match field {
+                Expr::Literal(ScalarValue::Utf8(Some(value)), _)
+                | Expr::Literal(ScalarValue::LargeUtf8(Some(value)), _)
+                | Expr::Literal(ScalarValue::Utf8View(Some(value)), _) => value,
+                _ => return None,
+            };
+            let DeltaSourceExpression::Column {
+                mut logical_path,
+                data_type,
+            } = resolve_expression(base, resolve_column)?
+            else {
+                return None;
+            };
+            let DataType::Struct(fields) = data_type else {
+                return None;
+            };
+            let field = fields.iter().find(|field| field.name() == field_name)?;
+            logical_path.push(field.name().clone());
+            Some(DeltaSourceExpression::Column {
+                logical_path,
+                data_type: field.data_type().clone(),
+            })
+        }
+        _ => None,
+    }
+}
+
+fn rewrite_exact_ungrouped_aggregate(aggregate: &Aggregate) -> Result<Option<LogicalPlan>> {
+    if !aggregate.group_expr.is_empty() || aggregate.aggr_expr.is_empty() {
+        return Ok(None);
+    }
+    let Some(input) = DeltaAggregateInput::try_new(aggregate.input.as_ref()) else {
+        return Ok(None);
+    };
+    let scan = input.scan();
+    if !scan.filters.is_empty() || scan.fetch.is_some() {
+        return Ok(None);
+    }
+    let Some(source) = scan.source.downcast_ref::<DeltaTableSource>() else {
+        return Ok(None);
+    };
+    if !source.snapshot().load_config().require_files
+        || !matches!(source.file_selection(), DeltaFileSelection::Snapshot)
+    {
+        return Ok(None);
+    }
+    let Ok(snapshot_stats) = source.snapshot().pruning_stats() else {
+        return Ok(None);
+    };
+    let Some(row_count) = snapshot_stats.exact_num_records() else {
+        return Ok(None);
+    };
+
+    let values = aggregate
+        .aggr_expr
+        .iter()
+        .zip(aggregate.schema.fields())
+        .map(|(expression, field)| {
+            exact_aggregate_value(
+                expression,
+                field.data_type(),
+                &input,
+                source,
+                &snapshot_stats,
+                row_count,
+            )
+        })
+        .collect::<Option<Vec<_>>>();
+    let Some(values) = values else {
+        return Ok(None);
+    };
+
+    let values = values
+        .into_iter()
+        .map(|value| Expr::Literal(value, None))
+        .collect::<Vec<_>>();
+    debug!(
+        "resolved {} Delta aggregate expressions from exact snapshot statistics",
+        values.len()
+    );
+    // Values preserves the Aggregate schema by ordinal, including duplicate internal expression
+    // names introduced by leaf extraction, without requiring an executable aggregate or scan.
+    Ok(Some(LogicalPlan::Values(Values {
+        schema: Arc::clone(&aggregate.schema),
+        values: vec![values],
+    })))
+}
+
+fn exact_aggregate_value(
+    expression: &Expr,
+    output_type: &DataType,
+    input: &DeltaAggregateInput<'_>,
+    source: &DeltaTableSource,
+    snapshot_stats: &SnapshotPruningStats<'_>,
+    row_count: usize,
+) -> Option<ScalarValue> {
+    let expression = match expression {
+        Expr::Alias(alias) => alias.expr.as_ref(),
+        expression => expression,
+    };
+    let Expr::AggregateFunction(function) = expression else {
+        return None;
+    };
+    if function.params.filter.is_some()
+        || !function.params.order_by.is_empty()
+        || function.params.null_treatment.is_some()
+    {
+        return None;
+    }
+
+    if function.func.name().eq_ignore_ascii_case("count") {
+        return exact_count_value(
+            &function.params.args,
+            function.params.distinct,
+            input,
+            source,
+            snapshot_stats,
+            row_count,
+        );
+    }
+    if function.func.name().eq_ignore_ascii_case("min") {
+        return exact_extreme_value(
+            function.params.args.as_slice(),
+            output_type,
+            input,
+            source,
+            snapshot_stats,
+            row_count,
+            true,
+        );
+    }
+    if function.func.name().eq_ignore_ascii_case("max") {
+        return exact_extreme_value(
+            function.params.args.as_slice(),
+            output_type,
+            input,
+            source,
+            snapshot_stats,
+            row_count,
+            false,
+        );
+    }
+    None
+}
+
+fn exact_count_value(
+    arguments: &[Expr],
+    distinct: bool,
+    input: &DeltaAggregateInput<'_>,
+    source: &DeltaTableSource,
+    snapshot_stats: &SnapshotPruningStats<'_>,
+    row_count: usize,
+) -> Option<ScalarValue> {
+    let as_count = |value: usize| {
+        i64::try_from(value)
+            .ok()
+            .map(|value| ScalarValue::Int64(Some(value)))
+    };
+    if row_count == 0 {
+        return as_count(0);
+    }
+    if arguments
+        .iter()
+        .any(|argument| constant_scalar(argument).is_some_and(|value| value.is_null()))
+    {
+        return as_count(0);
+    }
+
+    if distinct {
+        let [argument] = arguments else {
+            return None;
+        };
+        return constant_scalar(argument).and_then(|value| as_count(usize::from(!value.is_null())));
+    }
+
+    let mut nullable_count = None;
+    for argument in arguments {
+        let expression = input.source_expression(argument, source)?;
+        let statistics = exact_value_statistics(expression, snapshot_stats, row_count)?;
+        let Precision::Exact(null_count) = statistics.null_count else {
+            return None;
+        };
+        if null_count == row_count {
+            return as_count(0);
+        }
+        if null_count == 0 {
+            continue;
+        }
+        if nullable_count.replace(null_count).is_some() {
+            // Independent null counts do not describe the overlap between two nullable values.
+            return None;
+        }
+    }
+    as_count(row_count.checked_sub(nullable_count.unwrap_or(0))?)
+}
+
+fn exact_extreme_value(
+    arguments: &[Expr],
+    output_type: &DataType,
+    input: &DeltaAggregateInput<'_>,
+    source: &DeltaTableSource,
+    snapshot_stats: &SnapshotPruningStats<'_>,
+    row_count: usize,
+    minimum: bool,
+) -> Option<ScalarValue> {
+    let [argument] = arguments else {
+        return None;
+    };
+    if row_count == 0 {
+        return ScalarValue::try_new_null(output_type).ok();
+    }
+    let expression = input.source_expression(argument, source)?;
+    let statistics = exact_value_statistics(expression, snapshot_stats, row_count)?;
+    if matches!(statistics.null_count, Precision::Exact(nulls) if nulls == row_count) {
+        return ScalarValue::try_new_null(output_type).ok();
+    }
+    let bound = if minimum {
+        statistics.min_value
+    } else {
+        statistics.max_value
+    };
+    let Precision::Exact(value) = bound else {
+        return None;
+    };
+    value.cast_to(output_type).ok()
+}
+
+fn exact_value_statistics(
+    expression: DeltaSourceExpression,
+    snapshot_stats: &SnapshotPruningStats<'_>,
+    row_count: usize,
+) -> Option<DeltaValueStatistics> {
+    match expression {
+        DeltaSourceExpression::Literal(value) => Some(literal_statistics(value, row_count)),
+        DeltaSourceExpression::Column {
+            logical_path,
+            data_type,
+        } => {
+            let column = snapshot_stats.exact_column_stats(&logical_path)?;
+            if column.data_type != data_type {
+                return None;
+            }
+            Some(DeltaValueStatistics {
+                data_type,
+                null_count: column.statistics.null_count,
+                min_value: column.statistics.min_value,
+                max_value: column.statistics.max_value,
+            })
+        }
+        DeltaSourceExpression::Cast {
+            expression,
+            data_type,
+        } => {
+            let statistics = exact_value_statistics(*expression, snapshot_stats, row_count)?;
+            cast_value_statistics(statistics, data_type, row_count)
+        }
+    }
+}
+
+fn literal_statistics(value: ScalarValue, row_count: usize) -> DeltaValueStatistics {
+    let data_type = value.data_type();
+    let is_null = value.is_null();
+    let bound = if row_count > 0 && !is_null {
+        Precision::Exact(value)
+    } else {
+        Precision::Absent
+    };
+    DeltaValueStatistics {
+        data_type,
+        null_count: Precision::Exact(if is_null { row_count } else { 0 }),
+        min_value: bound.clone(),
+        max_value: bound,
+    }
+}
+
+fn cast_value_statistics(
+    statistics: DeltaValueStatistics,
+    target_type: DataType,
+    row_count: usize,
+) -> Option<DeltaValueStatistics> {
+    if statistics.data_type == target_type {
+        return Some(statistics);
+    }
+    if matches!(statistics.null_count, Precision::Exact(nulls) if nulls == row_count) {
+        return Some(DeltaValueStatistics {
+            data_type: target_type,
+            null_count: statistics.null_count,
+            min_value: Precision::Absent,
+            max_value: Precision::Absent,
+        });
+    }
+
+    let singleton = match (&statistics.min_value, &statistics.max_value) {
+        (Precision::Exact(min), Precision::Exact(max)) if min == max => Some(min),
+        _ => None,
+    };
+    if let Some(value) = singleton {
+        let value = value.cast_to(&target_type).ok()?;
+        return Some(DeltaValueStatistics {
+            data_type: target_type,
+            null_count: statistics.null_count,
+            min_value: Precision::Exact(value.clone()),
+            max_value: Precision::Exact(value),
+        });
+    }
+    if !safe_monotonic_cast(&statistics.data_type, &target_type) {
+        return None;
+    }
+    Some(DeltaValueStatistics {
+        data_type: target_type.clone(),
+        null_count: statistics.null_count,
+        min_value: cast_exact_bound(statistics.min_value, &target_type),
+        max_value: cast_exact_bound(statistics.max_value, &target_type),
+    })
+}
+
+fn cast_exact_bound(
+    bound: Precision<ScalarValue>,
+    target_type: &DataType,
+) -> Precision<ScalarValue> {
+    match bound {
+        Precision::Exact(value) => value
+            .cast_to(target_type)
+            .map(Precision::Exact)
+            .unwrap_or(Precision::Absent),
+        Precision::Inexact(_) | Precision::Absent => Precision::Absent,
+    }
+}
+
+fn safe_monotonic_cast(source: &DataType, target: &DataType) -> bool {
+    fn signed_width(data_type: &DataType) -> Option<u8> {
+        Some(match data_type {
+            DataType::Int8 => 8,
+            DataType::Int16 => 16,
+            DataType::Int32 => 32,
+            DataType::Int64 => 64,
+            _ => return None,
+        })
+    }
+    fn unsigned_width(data_type: &DataType) -> Option<u8> {
+        Some(match data_type {
+            DataType::UInt8 => 8,
+            DataType::UInt16 => 16,
+            DataType::UInt32 => 32,
+            DataType::UInt64 => 64,
+            _ => return None,
+        })
+    }
+
+    if source == target {
+        return true;
+    }
+    if let (Some(source), Some(target)) = (signed_width(source), signed_width(target)) {
+        return source <= target;
+    }
+    if let (Some(source), Some(target)) = (unsigned_width(source), unsigned_width(target)) {
+        return source <= target;
+    }
+    matches!(
+        (source, target),
+        (DataType::Decimal32(source_precision, source_scale), DataType::Decimal32(target_precision, target_scale))
+            | (DataType::Decimal64(source_precision, source_scale), DataType::Decimal64(target_precision, target_scale))
+            | (DataType::Decimal128(source_precision, source_scale), DataType::Decimal128(target_precision, target_scale))
+            | (DataType::Decimal256(source_precision, source_scale), DataType::Decimal256(target_precision, target_scale))
+            if source_scale == target_scale && source_precision <= target_precision
+    )
+}
+
+fn constant_scalar(expression: &Expr) -> Option<ScalarValue> {
+    match expression {
+        Expr::Alias(alias) => constant_scalar(alias.expr.as_ref()),
+        Expr::Literal(value, _) => Some(value.clone()),
+        Expr::Cast(cast) => constant_scalar(cast.expr.as_ref())
+            .and_then(|value| value.cast_to(cast.field.data_type()).ok()),
+        Expr::TryCast(cast) => constant_scalar(cast.expr.as_ref())
+            .and_then(|value| value.cast_to(cast.field.data_type()).ok()),
+        _ => None,
     }
 }
 
