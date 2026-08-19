@@ -515,8 +515,9 @@ class JdbcDataSource(DataSource):
         return JdbcDataSourceReader(**resolved)
 
     def writer(self, schema: pa.Schema, overwrite: bool) -> DataSourceArrowWriter:  # noqa: FBT001
-        if overwrite:
-            msg = "JDBC writes currently support only append mode"
+        save_mode = self.options.get("__sail_save_mode", "overwrite" if overwrite else "append")
+        if save_mode != "append":
+            msg = "JDBC writes currently support only explicit append mode"
             raise ValueError(msg)
 
         resolved = self._resolve_options()

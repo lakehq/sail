@@ -12,7 +12,7 @@ use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext
 use datafusion::logical_expr::{Extension, LogicalPlan, TableSource, UserDefinedLogicalNode};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
-use datafusion_common::{DFSchema, DFSchemaRef, Result, internal_err, plan_err};
+use datafusion_common::{DFSchema, DFSchemaRef, Result, internal_err};
 use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
 use educe::Educe;
 use sail_common_datafusion::datasource::{
@@ -25,11 +25,15 @@ use super::discovery::DATA_SOURCE_REGISTRY;
 use super::executor::InProcessExecutor;
 use super::table_provider::PythonTableProvider;
 
-fn validate_jdbc_write_mode(name: &str, mode: &SinkMode) -> Result<()> {
-    if name.eq_ignore_ascii_case("jdbc") && !matches!(mode, SinkMode::Append) {
-        return plan_err!("JDBC writes currently support only explicit append mode");
+fn sink_mode_name(mode: &SinkMode) -> &'static str {
+    match mode {
+        SinkMode::ErrorIfExists => "errorifexists",
+        SinkMode::IgnoreIfExists => "ignore",
+        SinkMode::Append => "append",
+        SinkMode::Overwrite | SinkMode::OverwriteIf { .. } | SinkMode::OverwritePartitions => {
+            "overwrite"
+        }
     }
-    Ok(())
 }
 
 /// DataSource implementation for a Python data source.
@@ -228,8 +232,6 @@ impl DataSource for PythonDataSourceAdapter {
             ..
         } = info;
 
-        validate_jdbc_write_mode(&self.name, &mode)?;
-
         // Warn about unsupported partitionBy (PySpark compat: silently ignored)
         if !partition_by.is_empty() {
             log::warn!(
@@ -343,12 +345,16 @@ impl ExtensionPlanner for PythonPhysicalPlanner {
             node.mode,
             SinkMode::Overwrite | SinkMode::OverwriteIf { .. } | SinkMode::OverwritePartitions
         );
-        let opaque_options: Vec<HashMap<String, String>> = node
+        let mut opaque_options: Vec<HashMap<String, String>> = node
             .options
             .clone()
             .into_iter()
             .map(|l| l.into_opaque_options())
             .collect();
+        opaque_options.push(HashMap::from([(
+            "__sail_save_mode".to_string(),
+            sink_mode_name(&node.mode).to_string(),
+        )]));
         let adapter = PythonDataSourceAdapter {
             name: node.name.clone(),
             pickled_class: node.pickled_class.clone(),
@@ -390,10 +396,10 @@ mod tests {
     }
 
     #[test]
-    fn test_jdbc_write_mode_accepts_only_append() {
-        assert!(validate_jdbc_write_mode("jdbc", &SinkMode::Append).is_ok());
-        assert!(validate_jdbc_write_mode("JDBC", &SinkMode::ErrorIfExists).is_err());
-        assert!(validate_jdbc_write_mode("jdbc", &SinkMode::Overwrite).is_err());
-        assert!(validate_jdbc_write_mode("other", &SinkMode::Overwrite).is_ok());
+    fn test_sink_mode_name_preserves_all_v1_modes() {
+        assert_eq!(sink_mode_name(&SinkMode::ErrorIfExists), "errorifexists");
+        assert_eq!(sink_mode_name(&SinkMode::IgnoreIfExists), "ignore");
+        assert_eq!(sink_mode_name(&SinkMode::Append), "append");
+        assert_eq!(sink_mode_name(&SinkMode::Overwrite), "overwrite");
     }
 }
