@@ -49,7 +49,7 @@ use variant_shredding::{
 };
 
 use crate::conversion::ScalarExt;
-use crate::spec::{Add, DeltaError as DeltaTableError};
+use crate::spec::{Add, ColumnName, DeltaError as DeltaTableError};
 
 /// Trait for creating hive partition paths from partition values
 pub trait PartitionsExt {
@@ -94,7 +94,7 @@ pub struct WriterConfig {
     /// Number of indexed columns for statistics
     pub num_indexed_cols: i32,
     /// Specific columns to collect stats from
-    pub stats_columns: Option<Vec<String>>,
+    pub stats_columns: Option<Vec<ColumnName>>,
     /// Top-level data columns that must not appear in Delta stats.
     pub stats_excluded_columns: HashSet<String>,
     /// Variant shredding behavior for data files written by this writer.
@@ -111,7 +111,7 @@ impl WriterConfig {
         target_file_size: u64,
         write_batch_size: usize,
         num_indexed_cols: i32,
-        stats_columns: Option<Vec<String>>,
+        stats_columns: Option<Vec<ColumnName>>,
         stats_excluded_columns: HashSet<String>,
         variant_shredding: VariantShreddingConfig,
     ) -> Self {
@@ -352,7 +352,7 @@ pub struct PartitionWriter {
     part_counter: usize,
     files_written: Vec<Add>,
     num_indexed_cols: i32,
-    stats_columns: Option<Vec<String>>,
+    stats_columns: Option<Vec<ColumnName>>,
     stats_excluded_columns: HashSet<String>,
 }
 
@@ -361,7 +361,7 @@ impl PartitionWriter {
         object_store: Arc<dyn ObjectStore>,
         config: PartitionWriterConfig,
         num_indexed_cols: i32,
-        stats_columns: Option<Vec<String>>,
+        stats_columns: Option<Vec<ColumnName>>,
         stats_excluded_columns: HashSet<String>,
     ) -> Result<Self, DeltaTableError> {
         let physical_file_schema = config.file_schema.clone();

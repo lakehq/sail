@@ -49,6 +49,17 @@ def _latest_added_parquet_files(base: Path) -> list[Path]:
     return []
 
 
+def _latest_add_stats(base: Path) -> dict:
+    for log_file in sorted((base / "_delta_log").glob("*.json"), reverse=True):
+        with log_file.open("r", encoding="utf-8") as f:
+            for line in f:
+                action = json.loads(line)
+                if stats := action.get("add", {}).get("stats"):
+                    return json.loads(stats)
+    message = f"add stats not found in {base / '_delta_log'}"
+    raise AssertionError(message)
+
+
 def _assert_parquet_struct_matches_delta(
     arrow_type: pa.Schema | pa.StructType,
     delta_type: dict,
@@ -136,6 +147,34 @@ def test_create_table_with_column_mapping_name(spark, tmp_path: Path):
     assert config.get("delta.columnMapping.mode") == "name"
     assert "delta.columnMapping.maxColumnId" in config
     assert int(config["delta.columnMapping.maxColumnId"]) >= 2  # noqa: PLR2004
+
+
+def test_explicit_stats_columns_follow_nested_physical_names(spark, tmp_path: Path):
+    base = tmp_path / "delta_cm_explicit_stats"
+    source = spark.createDataFrame(
+        [Row(id=1, payload=Row(value=10, ignored=20), other=30)]
+    )
+    (
+        source.write.format("delta")
+        .mode("overwrite")
+        .option("delta.columnMapping.mode", "name")
+        .option("delta.dataSkippingStatsColumns", "PAYLOAD.VALUE")
+        .save(str(base))
+    )
+
+    schema = json.loads(_latest_metadata(base)["schemaString"])
+    payload = next(field for field in schema["fields"] if field["name"] == "payload")
+    payload_physical = payload["metadata"]["delta.columnMapping.physicalName"]
+    value = next(field for field in payload["type"]["fields"] if field["name"] == "value")
+    value_physical = value["metadata"]["delta.columnMapping.physicalName"]
+
+    stats = _latest_add_stats(base)
+    assert stats["minValues"] == {payload_physical: {value_physical: 10}}
+    assert stats["maxValues"] == {payload_physical: {value_physical: 10}}
+    assert stats["nullCount"] == {payload_physical: {value_physical: 0}}
+    assert spark.read.format("delta").load(str(base)).select("payload.value").collect() == [
+        Row(value=10)
+    ]
 
 
 def test_create_and_append_with_column_mapping_id(spark, tmp_path: Path):
