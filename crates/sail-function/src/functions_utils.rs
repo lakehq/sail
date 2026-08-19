@@ -1,4 +1,6 @@
 /// [Credit]: <https://github.com/apache/datafusion/blob/e6e1eb229440591263c82bb2b913a4d5a16f9b70/datafusion/functions/src/utils.rs>
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
 use datafusion::arrow::array::ArrayRef;
@@ -64,7 +66,7 @@ const MAX_DISTINCT: usize = 128;
 /// for low-cardinality inputs (patterns, formats); per-row-unique inputs just
 /// pay overhead.
 pub(crate) struct StrMemo<'a, T> {
-    cache: std::collections::HashMap<&'a str, T>,
+    cache: HashMap<&'a str, T>,
     /// Value computed for a key seen once the cache is full, so
     /// `get_or_try_insert_ref` can still hand out a reference.
     overflow: Option<T>,
@@ -73,7 +75,7 @@ pub(crate) struct StrMemo<'a, T> {
 impl<'a, T> StrMemo<'a, T> {
     pub(crate) fn new() -> Self {
         Self {
-            cache: std::collections::HashMap::new(),
+            cache: HashMap::new(),
             overflow: None,
         }
     }
@@ -88,13 +90,30 @@ impl<'a, T> StrMemo<'a, T> {
         key: &'a str,
         compute: impl FnOnce(&str) -> Result<T>,
     ) -> Result<&T> {
-        use std::collections::hash_map::Entry;
         if self.cache.len() >= MAX_DISTINCT && !self.cache.contains_key(key) {
             return Ok(self.overflow.insert(compute(key)?));
         }
         match self.cache.entry(key) {
             Entry::Occupied(entry) => Ok(entry.into_mut()),
             Entry::Vacant(entry) => Ok(entry.insert(compute(key)?)),
+        }
+    }
+
+    /// Resolves the value for one row: a pre-compiled scalar if there is one,
+    /// otherwise the per-batch memoized value for the row's key. `key` is
+    /// evaluated only on the memoized path, so scalar inputs may be length-1
+    /// arrays while the row index ranges over the whole batch. The value is
+    /// returned by reference: cloning a `Regex` per row would discard its
+    /// internal lazy-DFA cache and rebuild the automaton on every match.
+    pub(crate) fn resolve<'m>(
+        &'m mut self,
+        scalar: Option<&'m T>,
+        key: impl FnOnce() -> &'a str,
+        compute: impl FnOnce(&str) -> Result<T>,
+    ) -> Result<&'m T> {
+        match scalar {
+            Some(value) => Ok(value),
+            None => self.get_or_try_insert_ref(key(), compute),
         }
     }
 }
