@@ -212,6 +212,8 @@ fn constant_group_value(
 
     let min = stats.min_value(column.physical_name)?;
     let max = stats.max_value(column.physical_name)?;
+    // Delta may truncate string bounds, but truncation cannot make both bounds equal. Equality
+    // therefore still proves that every non-null value in the file is the same value.
     if min != max {
         return None;
     }
