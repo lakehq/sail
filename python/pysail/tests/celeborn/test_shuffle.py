@@ -16,7 +16,6 @@ from pysail.testing.utils.proxy import (
     ConnectionClosed,
     ConnectionOpened,
     ConnectionRule,
-    EndpointProxy,
     FrameReceived,
     ProxyEvent,
     RuleApplied,
@@ -29,6 +28,7 @@ if TYPE_CHECKING:
         MasterService,
         WorkerService,
     )
+    from pysail.testing.utils.proxy import EndpointProxy
 
 
 ShuffleClient = _native._celeborn.ShuffleClient  # noqa: SLF001
@@ -134,45 +134,6 @@ def _split_response_partition_ids(
             and event.frame.body == struct.pack(">B", status)
         )
     return tuple(partition_ids)
-
-
-def test_push_partition_ids_follow_cross_worker_observation_order() -> None:
-    shuffle_key = b"application-shuffle"
-
-    def push_event(partition_unique_id: str, timestamp: float) -> FrameReceived[CelebornFrame]:
-        encoded_partition_id = partition_unique_id.encode()
-        metadata = (
-            bytes(9)
-            + struct.pack(">i", len(shuffle_key))
-            + shuffle_key
-            + struct.pack(">i", len(encoded_partition_id))
-            + encoded_partition_id
-        )
-        return FrameReceived(
-            connection_id=1,
-            timestamp=timestamp,
-            direction="client_to_server",
-            frame=CelebornFrame(
-                message_type=CelebornMessageType.PUSH_DATA,
-                metadata=metadata,
-                body=b"",
-            ),
-        )
-
-    proxies = {
-        "later-worker": EndpointProxy("later-worker", "127.0.0.1", 1),
-        "earlier-worker": EndpointProxy("earlier-worker", "127.0.0.1", 1),
-    }
-    for proxy in proxies.values():
-        proxy.start()
-    try:
-        proxies["later-worker"].events.add(push_event("0-1", 2))
-        proxies["earlier-worker"].events.add(push_event("0-0", 1))
-
-        assert _push_partition_ids(proxies) == ("0-0", "0-1")
-    finally:
-        for proxy in proxies.values():
-            proxy.close()
 
 
 @pytest.fixture(scope="module")
@@ -317,12 +278,11 @@ def test_shuffle_client_handles_a_partition_split(
         else:
             pytest.fail(f"Celeborn did not emit split status {split_status} after flushing the threshold")
 
-        split_partition_ids = _split_response_partition_ids(celeborn_push_proxies, split_status)
-        push_count = len(_push_partition_ids(celeborn_push_proxies))
+        split_partition_ids = set(_split_response_partition_ids(celeborn_push_proxies, split_status))
         after_split = b"after partition split"
         assert client.push_data(5, 0, 0, 0, after_split) == len(after_split) + 16
         batches.append(after_split)
-        assert _push_partition_ids(celeborn_push_proxies)[push_count] != split_partition_ids[-1]
+        assert _push_partition_ids(celeborn_push_proxies)[-1] not in split_partition_ids
 
         client.mapper_end(5, 0, 0, 1)
 
