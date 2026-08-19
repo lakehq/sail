@@ -1,6 +1,6 @@
 use std::cell::Cell;
 
-use pyo3::{ffi, Python};
+use pyo3::{Python, ffi};
 
 thread_local! {
     static THREAD_STATE_PINNED: Cell<bool> = const { Cell::new(false) };
