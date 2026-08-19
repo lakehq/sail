@@ -134,8 +134,8 @@ impl ScalarUDFImpl for PySparkUDF {
             args, number_rows, ..
         } = args;
         let args: Vec<ArrayRef> = ColumnarValue::values_to_arrays(&args)?;
-        let udf = Python::attach(|py| self.udf(py))?;
-        let data = Python::attach(|py| -> PyUdfResult<_> {
+        let udf = crate::threadstate::attach_persistent(|py| self.udf(py))?;
+        let data = crate::threadstate::attach_persistent(|py| -> PyUdfResult<_> {
             let output = udf.call1(
                 py,
                 (

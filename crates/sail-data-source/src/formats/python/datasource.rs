@@ -70,7 +70,7 @@ impl PythonDataSource {
             Self::validate_python_version(&python_ver)?;
 
             // Get DataSource name via Python call
-            let name = Python::attach(|py| {
+            let name = sail_python_udf::threadstate::attach_persistent(|py| {
                 let ds = Self::deserialize_datasource(py, &command)?;
                 let name_obj = ds.call_method0("name").map_err(|e| {
                     PythonDataSourceError::PythonError(format!("Failed to call name(): {}", e))
@@ -148,7 +148,7 @@ impl PythonDataSource {
                     let ctx = PythonDataSourceContext::new(&self.name, "schema");
 
                     // Call Python schema() method using cached datasource
-                    Python::attach(|py| {
+                    sail_python_udf::threadstate::attach_persistent(|py| {
                         let ds = self.get_cached_datasource(py)?;
 
                         // Call schema() method
@@ -259,7 +259,7 @@ impl PythonDataSource {
         {
             let ctx = PythonDataSourceContext::new(&self.name, "partitioning");
 
-            Python::attach(|py| {
+            sail_python_udf::threadstate::attach_persistent(|py| {
                 let ds = self.get_cached_datasource(py)?;
 
                 // Call partitioning() method

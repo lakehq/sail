@@ -165,7 +165,7 @@ impl PythonDataSourceStream {
         // Track time waiting for GIL
         let gil_wait_start = Instant::now();
 
-        let result = Python::attach(|py| -> Result<()> {
+        let result = sail_python_udf::threadstate::attach_persistent(|py| -> Result<()> {
             // Record GIL wait time (time from start to acquiring GIL)
             let gil_acquired = Instant::now();
             metrics.gil_wait_ns.fetch_add(

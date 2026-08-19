@@ -8,6 +8,7 @@ mod lazy;
 mod name;
 mod python;
 mod stream;
+pub mod threadstate;
 pub mod udf;
 
 pub use name::{get_udf_display_name, get_udf_name};

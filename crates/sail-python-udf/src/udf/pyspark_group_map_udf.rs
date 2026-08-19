@@ -137,7 +137,7 @@ impl AggregateUDFImpl for PySparkGroupMapUDF {
 
     fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let field = get_list_field(&self.output_type)?;
-        let udf = Python::attach(|py| self.udf(py))?;
+        let udf = crate::threadstate::attach_persistent(|py| self.udf(py))?;
         let aggregator = Box::new(PySparkGroupMapper {
             udf,
             field,
@@ -164,7 +164,7 @@ struct PySparkGroupMapper {
 
 impl BatchAggregator for PySparkGroupMapper {
     fn call(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
-        let data = Python::attach(|py| -> PyUdfResult<_> {
+        let data = crate::threadstate::attach_persistent(|py| -> PyUdfResult<_> {
             let output = self
                 .udf
                 .call1(py, (args.try_to_py(py, self.large_var_types)?,))?;

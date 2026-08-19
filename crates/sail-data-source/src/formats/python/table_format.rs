@@ -79,7 +79,7 @@ impl PythonTableFormat {
     fn get_python_version() -> Result<String> {
         use pyo3::prelude::*;
 
-        Python::attach(|py| {
+        sail_python_udf::threadstate::attach_persistent(|py| {
             let sys = py.import("sys").map_err(py_err)?;
             let version_info = sys.getattr("version_info").map_err(py_err)?;
             let major: u32 = version_info
@@ -136,7 +136,7 @@ impl PythonTableFormat {
 
         let python_ver = Self::get_python_version()?;
 
-        Python::attach(|py| {
+        sail_python_udf::threadstate::attach_persistent(|py| {
             // Use pyspark.cloudpickle (PySpark is a hard requirement)
             let cloudpickle = import_cloudpickle(py)?;
 

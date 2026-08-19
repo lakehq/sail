@@ -7709,6 +7709,7 @@ dependencies = [
  "sail-common-datafusion",
  "sail-physical-plan",
  "sail-pyarrow",
+ "sail-python-udf",
  "sail-sql-analyzer",
  "serde",
  "thiserror 2.0.20",

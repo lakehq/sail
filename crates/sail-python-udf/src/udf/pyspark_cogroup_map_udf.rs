@@ -167,13 +167,13 @@ impl ScalarUDFImpl for PySparkCoGroupMapUDF {
                 right.len()
             );
         }
-        let udf = Python::attach(|py| self.udf(py))?;
+        let udf = crate::threadstate::attach_persistent(|py| self.udf(py))?;
         let field = get_list_field(self.output_type())?;
         let arrays = (0..left.len())
             .map(|i| {
                 let left = Self::get_group(&left, i)?;
                 let right = Self::get_group(&right, i)?;
-                let data = Python::attach(|py| -> PyUdfResult<_> {
+                let data = crate::threadstate::attach_persistent(|py| -> PyUdfResult<_> {
                     let output = udf.call1(
                         py,
                         (

@@ -477,7 +477,7 @@ pub fn convert_rows_to_batch(schema: &SchemaRef, pickled_rows: &[Vec<u8>]) -> Re
         return Ok(RecordBatch::new_empty(schema.clone()));
     }
 
-    Python::attach(|py| {
+    sail_python_udf::threadstate::attach_persistent(|py| {
         let cloudpickle = import_cloudpickle(py)?;
 
         // Unpickle all rows
@@ -701,7 +701,7 @@ mod tests {
     #[expect(clippy::unwrap_used)]
     fn test_rust_record_batch_to_py() {
         init_python();
-        Python::attach(|py| {
+        sail_python_udf::threadstate::attach_persistent(|py| {
             // Create a simple RecordBatch
             let schema = Arc::new(Schema::new(vec![
                 Field::new("id", DataType::Int32, false),
@@ -736,7 +736,7 @@ mod tests {
     #[expect(clippy::unwrap_used)]
     fn test_record_batch_to_py_rows() {
         init_python();
-        Python::attach(|py| {
+        sail_python_udf::threadstate::attach_persistent(|py| {
             // Create a simple RecordBatch
             let schema = Arc::new(Schema::new(vec![
                 Field::new("id", DataType::Int32, false),
@@ -784,7 +784,7 @@ mod tests {
     #[expect(clippy::unwrap_used)]
     fn test_record_batch_to_py_rows_with_nulls() {
         init_python();
-        Python::attach(|py| {
+        sail_python_udf::threadstate::attach_persistent(|py| {
             // Create a RecordBatch with nulls
             let schema = Arc::new(Schema::new(vec![
                 Field::new("id", DataType::Int32, false),
