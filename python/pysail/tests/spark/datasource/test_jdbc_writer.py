@@ -12,6 +12,20 @@ if pyspark_version() < (4, 1):
 from pysail.spark.datasource.jdbc import JdbcDataSource
 
 
+@pytest.mark.parametrize("mode", ["errorifexists", "ignore"])
+def test_postgres_writer_requires_explicit_append(mode):
+    datasource = JdbcDataSource(
+        options={
+            "url": "jdbc:postgresql://localhost:5432/db",
+            "dbtable": "events",
+            "__sail_save_mode": mode,
+        }
+    )
+
+    with pytest.raises(ValueError, match="only explicit append mode"):
+        datasource.writer(pa.schema({"id": pa.int64()}), overwrite=False)
+
+
 def test_postgres_writer_streams_arrow_batches(monkeypatch):
     calls = []
 
