@@ -1230,6 +1230,89 @@ mod tests {
 
     #[test]
     #[expect(clippy::unwrap_used)]
+    fn snapshot_statistics_ignore_fully_deleted_files() {
+        let snapshot = test_snapshot_with_adds(
+            Protocol::new(3, 7, Some(vec![TableFeature::DeletionVectors]), None),
+            test_metadata([]),
+            Vec::new(),
+            vec![
+                stats_add(
+                    "live.parquet",
+                    Some(
+                        r#"{"numRecords":2,"minValues":{"id":10},"maxValues":{"id":20},"nullCount":{"id":0}}"#,
+                    ),
+                    None,
+                ),
+                stats_add(
+                    "deleted.parquet",
+                    Some(
+                        r#"{"numRecords":2,"tightBounds":false,"minValues":{"id":-100},"maxValues":{"id":100}}"#,
+                    ),
+                    Some(2),
+                ),
+            ],
+        );
+
+        let statistics = snapshot.pruning_stats().unwrap().statistics().unwrap();
+        let id = &statistics.column_statistics[0];
+
+        assert_eq!(statistics.num_rows, Precision::Exact(2));
+        assert_eq!(id.null_count, Precision::Exact(0));
+        assert_eq!(id.min_value, Precision::Exact(ScalarValue::Int64(Some(10))));
+        assert_eq!(id.max_value, Precision::Exact(ScalarValue::Int64(Some(20))));
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn snapshot_statistics_derive_partition_column_values() {
+        let metadata = Metadata::try_new(
+            None,
+            None,
+            StructType::try_new([
+                StructField::not_null("id", DataType::LONG),
+                StructField::nullable("region", DataType::STRING),
+            ])
+            .unwrap(),
+            vec!["region".to_string()],
+            0,
+            HashMap::new(),
+        )
+        .unwrap();
+        let mut west = stats_add(
+            "region=west/part.parquet",
+            Some(r#"{"numRecords":3,"nullCount":{"id":0}}"#),
+            None,
+        );
+        west.partition_values = HashMap::from([("region".to_string(), Some("west".to_string()))]);
+        let mut null_region = stats_add(
+            "region=null/part.parquet",
+            Some(r#"{"numRecords":2,"nullCount":{"id":0}}"#),
+            None,
+        );
+        null_region.partition_values = HashMap::from([("region".to_string(), None)]);
+        let snapshot = test_snapshot_with_adds(
+            Protocol::new(1, 2, None, None),
+            metadata,
+            Vec::new(),
+            vec![west, null_region],
+        );
+
+        let statistics = snapshot.pruning_stats().unwrap().statistics().unwrap();
+        let region = &statistics.column_statistics[1];
+
+        assert_eq!(region.null_count, Precision::Exact(2));
+        assert_eq!(
+            region.min_value,
+            Precision::Exact(ScalarValue::Utf8(Some("west".to_string())))
+        );
+        assert_eq!(
+            region.max_value,
+            Precision::Exact(ScalarValue::Utf8(Some("west".to_string())))
+        );
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
     fn selected_add_statistics_only_describe_the_selected_files() {
         let snapshot = test_snapshot_with_adds(
             Protocol::new(3, 7, Some(vec![TableFeature::DeletionVectors]), None),

@@ -26,8 +26,8 @@ use arrow_schema::DataType as ArrowDataType;
 use datafusion::arrow::array::{
     Array, ArrayRef, BooleanArray, Int64Array, RecordBatch, StringArray, StructArray, UInt64Array,
 };
+use datafusion::common::Column;
 use datafusion::common::scalar::ScalarValue;
-use datafusion::common::{Column, DataFusionError};
 use datafusion::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion::physical_optimizer::pruning::PruningStatistics;
 use datafusion::physical_plan::Accumulator;
@@ -162,12 +162,15 @@ impl<'a> SnapshotPruningStats<'a> {
     }
 
     fn column_null_count(&self, name: &str) -> Precision<usize> {
+        let Some(file_rows) = self.file_row_counts() else {
+            return Precision::Absent;
+        };
+        if file_rows.iter().all(|counts| counts.logical == 0) {
+            return Precision::Exact(0);
+        }
         let Some(null_counts) = nested_struct_column_exact_or_path(self.stats, name)
             .and_then(|column| column.as_any().downcast_ref::<Int64Array>())
         else {
-            return Precision::Absent;
-        };
-        let Some(file_rows) = self.file_row_counts() else {
             return Precision::Absent;
         };
         if null_counts.len() != file_rows.len() {
@@ -176,6 +179,9 @@ impl<'a> SnapshotPruningStats<'a> {
 
         let mut total = 0usize;
         for (row, counts) in file_rows.iter().copied().enumerate() {
+            if counts.logical == 0 {
+                continue;
+            }
             if null_counts.is_null(row) {
                 return Precision::Absent;
             }
@@ -219,92 +225,101 @@ impl<'a> SnapshotPruningStats<'a> {
         };
         let array_ref = array.as_ref();
 
-        if array_ref.data_type().is_primitive() {
-            let Some(file_rows) = self.file_row_counts() else {
-                return Precision::Absent;
-            };
-            if array_ref.len() != file_rows.len() {
-                return Precision::Absent;
-            }
-            let null_counts = nested_column(self.stats, STATS_FIELD_NULL_COUNT, name)
-                .ok()
-                .and_then(|column| column.as_any().downcast_ref::<Int64Array>());
-            for (row, counts) in file_rows.iter().copied().enumerate() {
-                if counts.logical == 0 || !array_ref.is_null(row) {
-                    continue;
-                }
-                let Some(null_counts) = null_counts else {
-                    return Precision::Absent;
-                };
-                if row >= null_counts.len() || null_counts.is_null(row) {
-                    return Precision::Absent;
-                }
-                let Ok(physical_nulls) = usize::try_from(null_counts.value(row)) else {
-                    return Precision::Absent;
-                };
-                let maximum_nulls = if counts.wide_bounds {
-                    counts.physical
-                } else {
-                    counts.logical
-                };
-                if physical_nulls > maximum_nulls {
-                    return Precision::Absent;
-                }
-                let all_logical_rows_are_null = if counts.wide_bounds {
-                    physical_nulls == counts.physical
-                } else {
-                    physical_nulls == counts.logical
-                };
-                if !all_logical_rows_are_null {
-                    return Precision::Absent;
-                }
-            }
-
-            let accumulator: Option<Box<dyn Accumulator>> = match fun_type {
-                AccumulatorType::Min => MinAccumulator::try_new(array_ref.data_type())
-                    .map_or(None, |a| Some(Box::new(a))),
-                AccumulatorType::Max => MaxAccumulator::try_new(array_ref.data_type())
-                    .map_or(None, |a| Some(Box::new(a))),
-            };
-
-            if let Some(mut accumulator) = accumulator {
-                return accumulator
-                    .update_batch(std::slice::from_ref(array))
-                    .ok()
-                    .and_then(|_| accumulator.evaluate().ok())
-                    .map(Precision::Exact)
-                    .unwrap_or(Precision::Absent);
-            }
-
+        if !array_ref.data_type().is_primitive() {
+            // Independent child extrema cannot be combined into a lexicographically valid Struct
+            // extremum. Nested leaves require a separate typed path consumer.
             return Precision::Absent;
         }
 
-        match array_ref.data_type() {
-            ArrowDataType::Struct(fields) => fields
-                .iter()
-                .map(|f| {
-                    self.column_bounds(path_step, &format!("{name}.{}", f.name()), fun_type.clone())
-                })
-                .map(|s| match s {
-                    Precision::Exact(s) => Some(s),
-                    _ => None,
-                })
-                .collect::<Option<Vec<_>>>()
-                .map(|o| {
-                    let arrays = match o
-                        .into_iter()
-                        .map(|sv| sv.to_array())
-                        .collect::<Result<Vec<_>, DataFusionError>>()
-                    {
-                        Ok(arrays) => arrays,
-                        Err(_) => return Precision::Absent,
-                    };
-                    let sa = StructArray::new(fields.clone(), arrays, None);
-                    Precision::Exact(ScalarValue::Struct(Arc::new(sa)))
-                })
-                .unwrap_or(Precision::Absent),
-            _ => Precision::Absent,
+        let Some(file_rows) = self.file_row_counts() else {
+            return Precision::Absent;
+        };
+        if array_ref.len() != file_rows.len() {
+            return Precision::Absent;
         }
+        let null_counts = nested_column(self.stats, STATS_FIELD_NULL_COUNT, name)
+            .ok()
+            .and_then(|column| column.as_any().downcast_ref::<Int64Array>());
+        for (row, counts) in file_rows.iter().enumerate() {
+            if counts.logical == 0 || !array_ref.is_null(row) {
+                continue;
+            }
+            let Some(null_counts) = null_counts else {
+                return Precision::Absent;
+            };
+            if row >= null_counts.len() || null_counts.is_null(row) {
+                return Precision::Absent;
+            }
+            let Ok(physical_nulls) = usize::try_from(null_counts.value(row)) else {
+                return Precision::Absent;
+            };
+            let maximum_nulls = if counts.wide_bounds {
+                counts.physical
+            } else {
+                counts.logical
+            };
+            if physical_nulls > maximum_nulls {
+                return Precision::Absent;
+            }
+            let all_logical_rows_are_null = if counts.wide_bounds {
+                physical_nulls == counts.physical
+            } else {
+                physical_nulls == counts.logical
+            };
+            if !all_logical_rows_are_null {
+                return Precision::Absent;
+            }
+        }
+
+        exact_bounds_for_live_files(array, file_rows, fun_type)
+    }
+
+    fn partition_null_count(&self, name: &str) -> Precision<usize> {
+        let Some(file_rows) = self.file_row_counts() else {
+            return Precision::Absent;
+        };
+        let Ok(partition_values) =
+            batch_column::<StructArray>(self.data, FIELD_NAME_PARTITION_VALUES_PARSED)
+        else {
+            return Precision::Absent;
+        };
+        let Some(values) = nested_struct_column_exact_or_path(partition_values, name) else {
+            return Precision::Absent;
+        };
+        if values.len() != file_rows.len() {
+            return Precision::Absent;
+        }
+        file_rows
+            .iter()
+            .enumerate()
+            .try_fold(0usize, |total, (row, counts)| {
+                let file_nulls = if counts.logical > 0 && values.is_null(row) {
+                    counts.logical
+                } else {
+                    0
+                };
+                total.checked_add(file_nulls)
+            })
+            .map(Precision::Exact)
+            .unwrap_or(Precision::Absent)
+    }
+
+    fn partition_bounds(&self, name: &str, fun_type: AccumulatorType) -> Precision<ScalarValue> {
+        let Some(file_rows) = self.file_row_counts() else {
+            return Precision::Absent;
+        };
+        let Ok(partition_values) =
+            batch_column::<StructArray>(self.data, FIELD_NAME_PARTITION_VALUES_PARSED)
+        else {
+            return Precision::Absent;
+        };
+        let Some(values) = nested_struct_column_exact_or_path(partition_values, name) else {
+            return Precision::Absent;
+        };
+        if values.len() != file_rows.len() {
+            return Precision::Absent;
+        }
+        exact_bounds_for_live_files(values, file_rows, fun_type)
     }
 
     fn num_records(&self) -> Precision<usize> {
@@ -338,11 +353,24 @@ impl<'a> SnapshotPruningStats<'a> {
                 arrow_field_physical_name(field, self.snapshot.effective_column_mapping_mode())
             })
             .unwrap_or(name);
-        let null_count_col = format!("{STATS_FIELD_NULL_COUNT}.{stats_name}");
-        let null_count = self.column_null_count(&null_count_col);
+        let is_partition = self
+            .snapshot
+            .metadata()
+            .partition_columns()
+            .iter()
+            .any(|partition| partition == name);
+        let null_count = if is_partition {
+            self.partition_null_count(stats_name)
+        } else {
+            let null_count_col = format!("{STATS_FIELD_NULL_COUNT}.{stats_name}");
+            self.column_null_count(&null_count_col)
+        };
 
-        let min_value =
-            self.column_bounds(STATS_FIELD_MIN_VALUES, stats_name, AccumulatorType::Min);
+        let min_value = if is_partition {
+            self.partition_bounds(stats_name, AccumulatorType::Min)
+        } else {
+            self.column_bounds(STATS_FIELD_MIN_VALUES, stats_name, AccumulatorType::Min)
+        };
         let mut min_value = match &min_value {
             Precision::Exact(value) if value.is_null() => Precision::Absent,
             // TODO this is a hack, we should not be casting here but rather when we read the checkpoint data.
@@ -353,8 +381,11 @@ impl<'a> SnapshotPruningStats<'a> {
             _ => min_value,
         };
 
-        let max_value =
-            self.column_bounds(STATS_FIELD_MAX_VALUES, stats_name, AccumulatorType::Max);
+        let max_value = if is_partition {
+            self.partition_bounds(stats_name, AccumulatorType::Max)
+        } else {
+            self.column_bounds(STATS_FIELD_MAX_VALUES, stats_name, AccumulatorType::Max)
+        };
         let mut max_value = match &max_value {
             Precision::Exact(value) if value.is_null() => Precision::Absent,
             Precision::Exact(ScalarValue::TimestampNanosecond(a, b)) => Precision::Exact(
@@ -363,15 +394,10 @@ impl<'a> SnapshotPruningStats<'a> {
             _ => max_value,
         };
 
-        let is_partition = self
-            .snapshot
-            .metadata()
-            .partition_columns()
-            .iter()
-            .any(|partition| partition == name);
-        let has_wide_bounds = self
-            .file_row_counts()
-            .is_none_or(|rows| rows.iter().any(|counts| counts.wide_bounds));
+        let has_wide_bounds = self.file_row_counts().is_none_or(|rows| {
+            rows.iter()
+                .any(|counts| counts.logical > 0 && counts.wide_bounds)
+        });
         if !is_partition && has_wide_bounds {
             min_value = min_value.to_inexact();
             max_value = max_value.to_inexact();
@@ -453,6 +479,37 @@ impl<'a> SnapshotPruningStats<'a> {
             .ok()
             .cloned()
     }
+}
+
+fn exact_bounds_for_live_files(
+    values: &ArrayRef,
+    file_rows: &[FileRowCounts],
+    accumulator_type: AccumulatorType,
+) -> Precision<ScalarValue> {
+    if !file_rows.iter().any(|counts| counts.logical > 0) {
+        return Precision::Absent;
+    }
+    let live_files =
+        BooleanArray::from_iter(file_rows.iter().map(|counts| Some(counts.logical > 0)));
+    let Ok(values) = ::datafusion::arrow::compute::filter(values.as_ref(), &live_files) else {
+        return Precision::Absent;
+    };
+    let accumulator: Option<Box<dyn Accumulator>> =
+        match accumulator_type {
+            AccumulatorType::Min => MinAccumulator::try_new(values.data_type())
+                .map_or(None, |value| Some(Box::new(value))),
+            AccumulatorType::Max => MaxAccumulator::try_new(values.data_type())
+                .map_or(None, |value| Some(Box::new(value))),
+        };
+    let Some(mut accumulator) = accumulator else {
+        return Precision::Absent;
+    };
+    accumulator
+        .update_batch(std::slice::from_ref(&values))
+        .ok()
+        .and_then(|_| accumulator.evaluate().ok())
+        .map(Precision::Exact)
+        .unwrap_or(Precision::Absent)
 }
 
 fn batch_column<'a, T: Array + 'static>(batch: &'a RecordBatch, name: &str) -> DeltaResult<&'a T> {

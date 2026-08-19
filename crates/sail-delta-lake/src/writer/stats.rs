@@ -20,13 +20,12 @@
 
 use std::cmp::min;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::ops::{AddAssign, Not};
+use std::ops::AddAssign;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use datafusion::common::scalar::ScalarValue;
 use indexmap::IndexMap;
-use log::warn;
 use parquet::basic::{LogicalType, TimeUnit, Type};
 use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use parquet::file::statistics::Statistics;
@@ -37,7 +36,8 @@ use sail_common::spec::SAIL_LIST_FIELD_NAME;
 use crate::conversion::ScalarExt;
 use crate::deletion_vector::z85;
 use crate::spec::{
-    Add, ColumnCountStat, ColumnValueStat, DeltaError as DeltaTableError, StatValue, Stats,
+    Add, ColumnCountStat, ColumnName, ColumnValueStat, DeltaError as DeltaTableError, StatValue,
+    Stats,
 };
 
 /// Creates an [`Add`] log action struct with statistics.
@@ -47,7 +47,7 @@ pub fn create_add(
     size: i64,
     file_metadata: &ParquetMetaData,
     num_indexed_cols: i32,
-    stats_columns: &Option<Vec<String>>,
+    stats_columns: &Option<Vec<ColumnName>>,
     stats_excluded_columns: &HashSet<String>,
 ) -> Result<Add, DeltaTableError> {
     let stats = stats_from_file_metadata(
@@ -102,7 +102,7 @@ fn stats_from_file_metadata(
     partition_values: &IndexMap<String, ScalarValue>,
     file_metadata: &ParquetMetaData,
     num_indexed_cols: i32,
-    stats_columns: &Option<Vec<String>>,
+    stats_columns: &Option<Vec<ColumnName>>,
     stats_excluded_columns: &HashSet<String>,
 ) -> Result<Stats, DeltaTableError> {
     let schema_descriptor = file_metadata.file_metadata().schema_descr();
@@ -125,7 +125,7 @@ fn stats_from_metadata(
     row_group_metadata: Vec<RowGroupMetaData>,
     num_rows: i64,
     num_indexed_cols: i32,
-    stats_columns: &Option<Vec<String>>,
+    stats_columns: &Option<Vec<ColumnName>>,
     stats_excluded_columns: &HashSet<String>,
 ) -> Result<Stats, DeltaTableError> {
     let mut min_values: HashMap<String, ColumnValueStat> = HashMap::new();
@@ -146,28 +146,29 @@ fn stats_from_metadata(
             return Ok(());
         }
 
-        let maybe_stats: Option<AggregatedStats> = row_group_metadata
-            .iter()
-            .flat_map(|g| {
-                g.column(idx).statistics().into_iter().filter_map(|s| {
-                    let logical_type = column_descr.logical_type_ref();
-                    let is_binary = matches!(&column_descr.physical_type(), Type::BYTE_ARRAY)
-                        && matches!(logical_type, Some(LogicalType::String)).not();
-                    if is_binary {
-                        warn!(
-                            "Skipping column {} because it's a binary field.",
-                            column_descr.name()
-                        );
-                        None
-                    } else {
-                        Some(AggregatedStats::from((s, logical_type)))
-                    }
-                })
-            })
-            .reduce(|mut left, right| {
-                left += right;
-                left
-            });
+        let logical_type = column_descr.logical_type_ref();
+        let is_binary = matches!(&column_descr.physical_type(), Type::BYTE_ARRAY)
+            && !matches!(logical_type, Some(LogicalType::String));
+        let mut maybe_stats: Option<AggregatedStats> = None;
+        for group in &row_group_metadata {
+            let Some(statistics) = group.column(idx).statistics() else {
+                // A file statistic is exact only when every row group contributes evidence.
+                maybe_stats = None;
+                break;
+            };
+            let mut next = AggregatedStats::from((statistics, logical_type));
+            if is_binary {
+                // Delta does not define ordered bounds for binary values, but their null count is
+                // still useful and independent of ordering.
+                next.min = None;
+                next.max = None;
+            }
+            if let Some(current) = maybe_stats.as_mut() {
+                *current += next;
+            } else {
+                maybe_stats = Some(next);
+            }
+        }
 
         if let Some(stats) = maybe_stats {
             apply_min_max_for_column(
@@ -189,7 +190,10 @@ fn stats_from_metadata(
             .iter()
             .enumerate()
             .filter_map(|(index, col)| {
-                if stats_cols.contains(&col.name().to_string()) {
+                if stats_cols
+                    .iter()
+                    .any(|configured| col.path().parts().starts_with(configured.path()))
+                {
                     Some(index)
                 } else {
                     None
@@ -259,15 +263,13 @@ fn apply_variant_stats_from_footer(
         }
         let metadata_path = vec![top_level_column.clone(), "metadata".to_string()];
         if let Some(index) = column_indices.get(&metadata_path) {
-            let null_count = row_group_metadata
-                .iter()
-                .filter_map(|group| group.column(*index).statistics())
-                .filter_map(|stats| stats.null_count_opt())
-                .sum::<u64>();
-            null_counts.insert(
-                top_level_column.clone(),
-                ColumnCountStat::Value(null_count as i64),
-            );
+            let null_count = row_group_metadata.iter().try_fold(0u64, |total, group| {
+                let count = group.column(*index).statistics()?.null_count_opt()?;
+                total.checked_add(count)
+            });
+            if let Some(null_count) = null_count.and_then(|value| i64::try_from(value).ok()) {
+                null_counts.insert(top_level_column.clone(), ColumnCountStat::Value(null_count));
+            }
         }
     }
 
@@ -308,23 +310,28 @@ fn apply_variant_stats_from_footer(
         let mut aggregated: Option<AggregatedStats> = None;
         let mut valid = true;
         for group in row_group_metadata {
-            let value_null_count = group
+            let Some(value_null_count) = group
                 .column(*value_index)
                 .statistics()
                 .and_then(|stats| stats.null_count_opt())
-                .unwrap_or_default();
+            else {
+                valid = false;
+                break;
+            };
             if value_null_count != group.num_rows() as u64 {
                 valid = false;
                 break;
             }
 
-            if let Some(stats) = group.column(typed_value_index).statistics() {
-                let next = AggregatedStats::from((stats, column_descr.logical_type_ref()));
-                if let Some(current) = aggregated.as_mut() {
-                    *current += next;
-                } else {
-                    aggregated = Some(next);
-                }
+            let Some(stats) = group.column(typed_value_index).statistics() else {
+                valid = false;
+                break;
+            };
+            let next = AggregatedStats::from((stats, column_descr.logical_type_ref()));
+            if let Some(current) = aggregated.as_mut() {
+                *current += next;
+            } else {
+                aggregated = Some(next);
             }
         }
         if !valid {
@@ -671,13 +678,13 @@ impl From<StatsScalar> for serde_json::Value {
 struct AggregatedStats {
     pub min: Option<StatsScalar>,
     pub max: Option<StatsScalar>,
-    pub null_count: u64,
+    pub null_count: Option<u64>,
 }
 
 impl From<(&Statistics, Option<&LogicalType>)> for AggregatedStats {
     fn from(value: (&Statistics, Option<&LogicalType>)) -> Self {
         let (stats, logical_type) = value;
-        let null_count = stats.null_count_opt().unwrap_or_default();
+        let null_count = stats.null_count_opt();
         if stats.min_bytes_opt().is_some() && stats.max_bytes_opt().is_some() {
             let min = StatsScalar::try_from_stats(stats, logical_type, true).ok();
             let max = StatsScalar::try_from_stats(stats, logical_type, false).ok();
@@ -706,7 +713,7 @@ impl AddAssign for AggregatedStats {
                     Some(rhs)
                 }
             }
-            (lhs, rhs) => lhs.or(rhs),
+            _ => None,
         };
         self.max = match (self.max.take(), rhs.max) {
             (Some(lhs), Some(rhs)) => {
@@ -716,10 +723,12 @@ impl AddAssign for AggregatedStats {
                     Some(rhs)
                 }
             }
-            (lhs, rhs) => lhs.or(rhs),
+            _ => None,
         };
-
-        self.null_count += rhs.null_count;
+        self.null_count = self
+            .null_count
+            .zip(rhs.null_count)
+            .and_then(|(left, right)| left.checked_add(right));
     }
 }
 
@@ -762,8 +771,12 @@ fn apply_min_max_for_column(
     if column_descr.max_rep_level() > 0 {
         let key = get_list_field_name(&column_descr);
 
-        if let Some(key) = key {
-            null_counts.insert(key, ColumnCountStat::Value(statistics.null_count as i64));
+        if let Some(key) = key
+            && let Some(null_count) = statistics
+                .null_count
+                .and_then(|value| i64::try_from(value).ok())
+        {
+            null_counts.insert(key, ColumnCountStat::Value(null_count));
         }
 
         return Ok(());
@@ -784,7 +797,12 @@ fn apply_min_max_for_column(
                 max_values.insert(key.clone(), max);
             }
 
-            null_counts.insert(key, ColumnCountStat::Value(statistics.null_count as i64));
+            if let Some(null_count) = statistics
+                .null_count
+                .and_then(|value| i64::try_from(value).ok())
+            {
+                null_counts.insert(key, ColumnCountStat::Value(null_count));
+            }
 
             Ok(())
         }
@@ -884,5 +902,22 @@ mod tests {
             timestamp_ntz_json,
             serde_json::Value::String(expected.format("%Y-%m-%dT%H:%M:%S%.3f").to_string())
         );
+    }
+
+    #[test]
+    fn aggregated_stats_require_every_row_group_field() {
+        let complete = Statistics::int32(Some(1), Some(3), None, Some(0), false);
+        let missing_bounds = Statistics::int32(None, None, None, Some(2), false);
+        let missing_null_count = Statistics::int32(Some(0), Some(4), None, None, false);
+
+        let mut bounds = AggregatedStats::from((&complete, None));
+        bounds += AggregatedStats::from((&missing_bounds, None));
+        assert_eq!(bounds.min, None);
+        assert_eq!(bounds.max, None);
+        assert_eq!(bounds.null_count, Some(2));
+
+        let mut nulls = AggregatedStats::from((&complete, None));
+        nulls += AggregatedStats::from((&missing_null_count, None));
+        assert_eq!(nulls.null_count, None);
     }
 }
