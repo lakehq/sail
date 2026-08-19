@@ -456,20 +456,68 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         ignore_nulls,
         filter,
         order_by,
-        function_context: _,
+        function_context,
     } = input;
     let null_treatment = get_null_treatment(ignore_nulls);
     // For COUNT(DISTINCT *), the resolver already expanded the wildcard to column references
     // (with hidden-column filtering). For COUNT(*), convert to COUNT(1).
-    let args = transform_count_star_wildcard_expr(arguments);
-    // Spark counts every row for a non-null literal. Use DataFusion's canonical COUNT(*)
-    // expansion so its aggregate-statistics rule recognizes all literal types consistently.
-    let args = match args.as_slice() {
-        [expr::Expr::Literal(value, _)] if !distinct && !value.is_null() => {
-            vec![expr::Expr::Literal(COUNT_STAR_EXPANSION, None)]
+    let mut args = transform_count_star_wildcard_expr(arguments);
+    if args.is_empty() {
+        if function_context
+            .plan_config
+            .legacy_allow_parameterless_count
+        {
+            args.push(lit(ScalarValue::Null));
+        } else {
+            return Err(PlanError::invalid(
+                "The `count` function requires at least one parameter; set \
+                 `spark.sql.legacy.allowParameterlessCount` to true to restore the legacy \
+                 COUNT() result of zero",
+            ));
         }
-        _ => args,
+    }
+
+    let filter = match filter {
+        Some(filter)
+            if matches!(
+                filter.as_ref(),
+                expr::Expr::Literal(ScalarValue::Boolean(Some(true)), _)
+            ) =>
+        {
+            None
+        }
+        Some(filter)
+            if matches!(
+                filter.as_ref(),
+                expr::Expr::Literal(ScalarValue::Boolean(Some(false) | None), _)
+                    | expr::Expr::Literal(ScalarValue::Null, _)
+            ) =>
+        {
+            args = vec![lit(ScalarValue::Null)];
+            None
+        }
+        filter => filter,
     };
+
+    if !distinct {
+        let mut nullable_args = Vec::with_capacity(args.len());
+        for argument in args {
+            if argument.nullable(function_context.schema)? {
+                if !matches!(&argument, expr::Expr::Column(column) if nullable_args.iter().any(
+                    |existing| matches!(existing, expr::Expr::Column(other) if other == column)
+                )) {
+                    nullable_args.push(argument);
+                }
+            }
+        }
+        // COUNT only tests whether every argument is non-null. Arguments proven non-null can be
+        // removed; an empty remainder is DataFusion's canonical COUNT(*) expansion.
+        args = if nullable_args.is_empty() {
+            vec![expr::Expr::Literal(COUNT_STAR_EXPANSION, None)]
+        } else {
+            nullable_args
+        };
+    }
     // TODO: remove StructFunction call when count distinct from multiple arguments is implemented
     // https://github.com/apache/datafusion/blob/58ddf0d4390c770bc571f3ac2727c7de77aa25ab/datafusion/functions-aggregate/src/count.rs#L333
     let args = if distinct && (args.len() > 1) {
@@ -506,6 +554,32 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
             filter,
             order_by,
             null_treatment,
+        },
+    }))
+}
+
+fn min_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    duplicate_agnostic_extreme(input, min_max::min_udaf)
+}
+
+fn max_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    duplicate_agnostic_extreme(input, min_max::max_udaf)
+}
+
+fn duplicate_agnostic_extreme(
+    input: AggFunctionInput,
+    function: fn() -> Arc<AggregateUDF>,
+) -> PlanResult<expr::Expr> {
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: function(),
+        params: AggregateFunctionParams {
+            args: input.arguments,
+            // Duplicate elimination cannot change an extremum, and retaining DISTINCT creates
+            // an avoidable grouped aggregate that prevents exact-statistics substitution.
+            distinct: false,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
         },
     }))
 }
@@ -844,12 +918,12 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("last", F::custom(last_value)),
         ("last_value", F::custom(last_value)),
         ("listagg", F::custom(listagg)),
-        ("max", F::default(min_max::max_udaf)),
+        ("max", F::custom(max_value)),
         ("max_by", F::custom(max_by)),
         ("mean", F::default(average::avg_udaf)),
         ("measure", F::unknown("measure")),
         ("median", F::custom(median)),
-        ("min", F::default(min_max::min_udaf)),
+        ("min", F::custom(min_value)),
         ("min_by", F::custom(min_by)),
         ("mode", F::custom(mode)),
         ("percentile", F::custom(percentile_exact)),
