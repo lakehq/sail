@@ -188,6 +188,60 @@ Feature: Delta Lake read path (driver vs metadata-as-data)
         | 3  | c    | 30    |
         | 4  | d    | 40    |
 
+  Rule: Grouped counts use constant-file statistics on the driver path
+    Background:
+      Given variable location for temporary directory delta_grouped_metadata
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_grouped_metadata_count
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_grouped_metadata_count (
+          id INT,
+          provider STRING,
+          file_id INT
+        )
+        USING DELTA
+        PARTITIONED BY (file_id)
+        LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_grouped_metadata_count VALUES
+          (1, 'fb', 1),
+          (2, 'fb', 1),
+          (3, 'yt', 2),
+          (4, 'yt', 2),
+          (5, 'yt', 2),
+          (6, 'in', 3),
+          (7, 'fb', 4),
+          (8, 'in', 4)
+        """
+
+    Scenario: Grouped count combines metadata-only and residual files
+      When query
+        """
+        SELECT COUNT(1) AS cnt, provider
+        FROM delta_grouped_metadata_count
+        GROUP BY provider
+        ORDER BY provider
+        """
+      Then query result ordered
+        | cnt | provider |
+        | 3   | fb       |
+        | 2   | in       |
+        | 3   | yt       |
+
+    Scenario: EXPLAIN grouped count shows metadata rows and a residual scan
+      When query
+        """
+        EXPLAIN SELECT COUNT(1) AS cnt, provider
+        FROM delta_grouped_metadata_count
+        GROUP BY provider
+        """
+      Then query plan matches snapshot
+
   Rule: Append-only table with no remove actions is readable on metadata-as-data path
     Background:
       Given variable location for temporary directory delta_read_metadata_append_only
