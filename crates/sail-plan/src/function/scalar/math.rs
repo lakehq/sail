@@ -449,20 +449,20 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let divisor_is_null = matches!(divisor_type.as_ref().ok(), Some(DataType::Null));
     let (mut dividend, mut divisor) = (dividend, divisor);
     let (mut dividend_type, mut divisor_type) = (dividend_type, divisor_type);
-    if dividend_is_null && divisor_is_null {
-        dividend = cast(dividend, DataType::Int64);
-        divisor = cast(divisor, DataType::Int64);
-        dividend_type = Ok(DataType::Int64);
-        divisor_type = Ok(DataType::Int64);
-    } else if dividend_is_null {
-        if let Some(t) = divisor_type.as_ref().ok().cloned() {
-            dividend = cast(dividend, t.clone());
-            dividend_type = Ok(t);
+    let null_target = match (dividend_is_null, divisor_is_null) {
+        (true, true) => Some(DataType::Int64),
+        (true, false) => divisor_type.as_ref().ok().cloned(),
+        (false, true) => dividend_type.as_ref().ok().cloned(),
+        (false, false) => None,
+    };
+    if let Some(target) = null_target {
+        if dividend_is_null {
+            dividend = cast(dividend, target.clone());
+            dividend_type = Ok(target.clone());
         }
-    } else if divisor_is_null {
-        if let Some(t) = dividend_type.as_ref().ok().cloned() {
-            divisor = cast(divisor, t.clone());
-            divisor_type = Ok(t);
+        if divisor_is_null {
+            divisor = cast(divisor, target.clone());
+            divisor_type = Ok(target);
         }
     }
 
