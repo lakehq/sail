@@ -185,7 +185,7 @@ Feature: Delta Lake Deletion Vectors (Merge-on-Read)
         | 3   | 7     |
       When query
         """
-        SELECT COUNT(*) AS cnt FROM delta_dv_read
+        SELECT COUNT(1) AS cnt FROM delta_dv_read
         """
       Then query result
         | cnt |
@@ -355,7 +355,7 @@ Feature: Delta Lake Deletion Vectors (Merge-on-Read)
         """
       Then query plan matches snapshot
 
-    Scenario: EXPLAIN COUNT(1) after DV delete uses logical row-count metadata
+    Scenario: EXPLAIN COUNT literal after delete uses logical DV statistics
       Given statement
         """
         DELETE FROM delta_dv_explain WHERE id = 1
@@ -364,6 +364,20 @@ Feature: Delta Lake Deletion Vectors (Merge-on-Read)
         """
         EXPLAIN
         SELECT COUNT(1) AS cnt FROM delta_dv_explain
+        """
+      Then query plan matches snapshot
+
+    Scenario: EXPLAIN CODEGEN filtered DV scan retains estimated statistics
+      Given statement
+        """
+        DELETE FROM delta_dv_explain WHERE id = 1
+        """
+      When query
+        """
+        EXPLAIN CODEGEN
+        SELECT COUNT(*) AS cnt
+        FROM delta_dv_explain
+        WHERE value > 100
         """
       Then query plan matches snapshot
 

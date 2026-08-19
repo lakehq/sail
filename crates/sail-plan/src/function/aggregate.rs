@@ -463,7 +463,7 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     // (with hidden-column filtering). For COUNT(*), convert to COUNT(1).
     let args = transform_count_star_wildcard_expr(arguments);
     // Spark counts every row for a non-null literal. Use DataFusion's canonical COUNT(*)
-    // expansion so its aggregate-statistics rule recognizes COUNT(1).
+    // expansion so its aggregate-statistics rule recognizes all literal types consistently.
     let args = match args.as_slice() {
         [expr::Expr::Literal(value, _)] if !distinct && !value.is_null() => {
             vec![expr::Expr::Literal(COUNT_STAR_EXPANSION, None)]
