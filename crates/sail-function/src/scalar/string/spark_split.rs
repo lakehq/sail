@@ -190,21 +190,34 @@ mod tests {
     /// null inputs yield null outputs.
     #[test]
     fn split_with_column_pattern() -> Result<()> {
-        let values: ArrayRef = Arc::new(StringArray::from(vec![Some("a-b-c"), Some("a:b"), None]));
-        let formats: ArrayRef = Arc::new(StringArray::from(vec![Some("-"), Some(":"), Some("-")]));
-        let limits: ArrayRef = Arc::new(Int32Array::from(vec![-1, -1, -1]));
+        let values: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("a-b-c"),
+            Some("a:b"),
+            None,
+            Some("x-y"),
+        ]));
+        let formats: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("-"),
+            Some(":"),
+            Some("-"),
+            Some("-"),
+        ]));
+        let limits: ArrayRef = Arc::new(Int32Array::from(vec![-1, -1, -1, -1]));
         let output = spark_split_inner(&[values, formats, limits])?;
         let output = output
             .as_any()
             .downcast_ref::<ListArray>()
             .expect("list output");
-        assert_eq!(output.len(), 3);
+        assert_eq!(output.len(), 4);
         let first = output.value(0);
         let first = first
             .as_any()
             .downcast_ref::<StringArray>()
             .expect("string parts");
-        assert_eq!((first.len(), first.value(0), first.value(2)), (3, "a", "c"));
+        assert_eq!(
+            (first.len(), first.value(0), first.value(1), first.value(2)),
+            (3, "a", "b", "c")
+        );
         let second = output.value(1);
         let second = second
             .as_any()
@@ -215,6 +228,17 @@ mod tests {
             (2, "a", "b")
         );
         assert!(output.is_null(2));
+        // Row 3 reuses "-" after row 0 compiled it: the memoized regex must
+        // split exactly as a fresh compile would.
+        let fourth = output.value(3);
+        let fourth = fourth
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("string parts");
+        assert_eq!(
+            (fourth.len(), fourth.value(0), fourth.value(1)),
+            (2, "x", "y")
+        );
         Ok(())
     }
 }

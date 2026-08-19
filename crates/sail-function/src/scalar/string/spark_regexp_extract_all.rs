@@ -443,9 +443,9 @@ mod tests {
 
     #[test]
     fn extract_all_with_column_pattern() -> Result<()> {
-        let values = strings(vec![Some("1a2"), Some("3b4")]);
-        let patterns = strings(vec![Some("[0-9]"), Some("[a-z]")]);
-        let idx: ArrayRef = Arc::new(Int64Array::from(vec![0i64, 0]));
+        let values = strings(vec![Some("1a2"), Some("3b4"), Some("5c6")]);
+        let patterns = strings(vec![Some("[0-9]"), Some("[a-z]"), Some("[0-9]")]);
+        let idx: ArrayRef = Arc::new(Int64Array::from(vec![0i64, 0, 0]));
         let output = regexp_extract_all_inner(&[values, patterns, idx])?;
         let output = output
             .as_any()
@@ -466,6 +466,17 @@ mod tests {
             .downcast_ref::<StringArray>()
             .expect("string matches");
         assert_eq!((letters.len(), letters.value(0)), (1, "b"));
+        // Row 2 reuses "[0-9]" after row 0 compiled it: the memoized regex
+        // must extract exactly as a fresh compile would.
+        let reused = output.value(2);
+        let reused = reused
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("string matches");
+        assert_eq!(
+            (reused.len(), reused.value(0), reused.value(1)),
+            (2, "5", "6")
+        );
         Ok(())
     }
 }
