@@ -1,5 +1,13 @@
 # serializer version: 1
 ---
+name: "test_distinct_literal_counts_use_snapshot_cardinality"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#6@0 as one_count]
+      ProjectionExec: expr=[CASE WHEN count(Int64(1))@0 > 0 THEN 1 ELSE 0 END as #6]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
 name: "test_exact_and_residual_aggregates_share_one_global_aggregate_row"
 data:
   |-
@@ -485,3 +493,14 @@ data:
     == Physical Plan ==
     ProjectionExec: expr=[#2@0 as id, #3@1 as event_time]
       DataSourceExec: file_groups={1 group: [[<tmp>/delta_read_driver_timestamp/part-<id>.snappy.parquet]]}, projection=[id@0 as #2, event_time@1 as #3], file_type=parquet
+---
+name: "test_independent_nullable_arguments_retain_row_evaluation"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#6@0 as joint_count]
+      ProjectionExec: expr=[count(delta_exact_aggregates.#1,delta_exact_aggregates.#2)@0 as #6]
+        AggregateExec: mode=Final, gby=[], aggr=[count(delta_exact_aggregates.#1,delta_exact_aggregates.#2)]
+          CoalescePartitionsExec
+            AggregateExec: mode=Partial, gby=[], aggr=[count(delta_exact_aggregates.#1,delta_exact_aggregates.#2)]
+              DataSourceExec: file_groups={2 groups: [[<tmp>/delta_exact_aggregates/part=10/part-<id>.snappy.parquet], [<tmp>/delta_exact_aggregates/part=2/part-<id>.snappy.parquet]]}, projection=[nullable_value@1 as #1, other_nullable@2 as #2], file_type=parquet

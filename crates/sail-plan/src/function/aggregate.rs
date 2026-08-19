@@ -452,7 +452,7 @@ fn try_avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let AggFunctionInput {
         arguments,
-        distinct,
+        mut distinct,
         ignore_nulls,
         filter,
         order_by,
@@ -500,9 +500,25 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     };
 
     if args.iter().all(is_typed_null_literal) {
-        // Keep one NULL argument so both distinct and non-distinct forms retain COUNT's zero
-        // result without constructing a non-null struct around multiple typed NULLs.
+        // Keep an aggregate in the plan so global COUNT still emits one row on empty input.
         args = vec![lit(ScalarValue::Null)];
+        distinct = false;
+    }
+
+    if distinct && order_by.is_empty() && args.iter().all(is_non_null_literal) {
+        // A distinct tuple of constants contributes exactly one value when the filtered input is
+        // non-empty. Express that through row COUNT so exact table cardinality can answer it.
+        let rows = expr::Expr::AggregateFunction(AggregateFunction {
+            func: count::count_udaf(),
+            params: AggregateFunctionParams {
+                args: vec![expr::Expr::Literal(COUNT_STAR_EXPANSION, None)],
+                distinct: false,
+                filter,
+                order_by,
+                null_treatment,
+            },
+        });
+        return Ok(when(rows.gt(lit(0_i64)), lit(1_i64)).otherwise(lit(0_i64))?);
     }
 
     if !distinct {
@@ -570,6 +586,14 @@ fn is_typed_null_literal(expression: &expr::Expr) -> bool {
         expr::Expr::Literal(value, _) => value.is_null(),
         expr::Expr::Cast(cast) => is_typed_null_literal(cast.expr.as_ref()),
         expr::Expr::TryCast(cast) => is_typed_null_literal(cast.expr.as_ref()),
+        _ => false,
+    }
+}
+
+fn is_non_null_literal(expression: &expr::Expr) -> bool {
+    match expression {
+        expr::Expr::Alias(alias) => is_non_null_literal(alias.expr.as_ref()),
+        expr::Expr::Literal(value, _) => !value.is_null(),
         _ => false,
     }
 }
