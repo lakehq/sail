@@ -4,8 +4,8 @@ use futures::stream::BoxStream;
 use sail_common::telemetry::SpanAssociation;
 use tokio::sync::oneshot;
 
+use crate::common::{PartitionLocation, SlotReservation};
 use crate::error::CelebornResult;
-use crate::master::{PartitionLocation, SlotReservation};
 
 pub enum ShuffleClientMessage {
     GetShuffleId {

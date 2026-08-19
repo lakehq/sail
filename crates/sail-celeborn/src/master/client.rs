@@ -4,6 +4,7 @@ use std::time::Duration;
 use prost::Message;
 use uuid::Uuid;
 
+use crate::common::{PartitionLocation, SlotReservation, UserIdentifier, WorkerSlotLocations};
 use crate::error::{CelebornError, CelebornResult};
 use crate::protocol::StatusCode;
 use crate::protocol::proto::{
@@ -13,8 +14,6 @@ use crate::protocol::proto::{
 use crate::protocol::transport::{TransportConnection, TransportMessage};
 
 const MASTER_ENDPOINT_NAME: &str = "MasterEndpoint";
-
-use super::{PartitionLocation, SlotReservation, UserIdentifier, WorkerSlotLocations};
 
 /// The master endpoint and timeout used by a [`MasterClient`].
 #[derive(Debug, Clone)]
