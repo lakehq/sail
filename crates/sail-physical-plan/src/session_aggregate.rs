@@ -9,15 +9,13 @@ use datafusion::arrow::array::{
 use datafusion::arrow::compute::{SortOptions, filter_record_batch, partition};
 use datafusion::arrow::datatypes::{DataType, Fields, SchemaRef, TimeUnit};
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::config::ConfigOptions;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::functions::core::get_field;
 use datafusion::logical_expr::Accumulator;
 use datafusion::physical_expr::aggregate::AggregateFunctionExpr;
-use datafusion::physical_expr::expressions::{Column, lit};
+use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::{
-    Distribution, EquivalenceProperties, LexOrdering, OrderingRequirements, PhysicalExpr,
-    PhysicalSortExpr, ScalarFunctionExpr,
+    Distribution, EquivalenceProperties, LexOrdering, OrderingRequirements, Partitioning,
+    PhysicalExpr, PhysicalSortExpr,
 };
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
@@ -55,21 +53,20 @@ pub struct SessionAggregateExec {
     required_ordering: Option<OrderingRequirements>,
 }
 
-/// The emitted per-partition ordering: `(partition_columns..., session start)`
-/// — sessions close in scan order of the `(keys, time)`-sorted input. Note this
-/// follows `partition_columns` order, not `group_columns` order. Returns `None`
-/// (caller declares no ordering) if a column or the `get_field` expression
-/// cannot be built.
-fn output_ordering(
-    schema: &SchemaRef,
-    partition_columns: &[String],
-    session_output: &str,
-) -> Option<LexOrdering> {
+/// The emitted per-partition ordering: the `partition_columns` prefix —
+/// sessions close in scan order of the `(keys, time)`-sorted input. The output
+/// is also ordered by `session.start` within each key, but declaring that
+/// component needs a `get_field` expression built with the session's
+/// `ConfigOptions` (`ScalarFunctionExpr` equality compares config options, so
+/// one built from defaults never matches planner-built expressions and only
+/// adds comparison cost); threading the config here is a follow-up. Returns
+/// `None` when there are no keys.
+fn output_ordering(schema: &SchemaRef, partition_columns: &[String]) -> Option<LexOrdering> {
     let options = SortOptions {
         descending: false,
         nulls_first: false,
     };
-    let mut sort_exprs: Vec<PhysicalSortExpr> = Vec::with_capacity(partition_columns.len() + 1);
+    let mut sort_exprs: Vec<PhysicalSortExpr> = Vec::with_capacity(partition_columns.len());
     for name in partition_columns {
         let idx = schema.index_of(name).ok()?;
         sort_exprs.push(PhysicalSortExpr {
@@ -77,22 +74,6 @@ fn output_ordering(
             options,
         });
     }
-    let session_idx = schema.index_of(session_output).ok()?;
-    let args: Vec<Arc<dyn PhysicalExpr>> = vec![
-        Arc::new(Column::new(session_output, session_idx)),
-        lit("start"),
-    ];
-    let start = ScalarFunctionExpr::try_new(
-        get_field(),
-        args,
-        schema.as_ref(),
-        Arc::new(ConfigOptions::default()),
-    )
-    .ok()?;
-    sort_exprs.push(PhysicalSortExpr {
-        expr: Arc::new(start),
-        options,
-    });
     LexOrdering::new(sort_exprs)
 }
 
@@ -116,18 +97,46 @@ impl SessionAggregateExec {
                 aggregates.len()
             );
         }
+        if !group_columns.iter().any(|c| c == &session_output) {
+            return internal_err!(
+                "SessionAggregateExec group columns {group_columns:?} must contain the session \
+                 output column {session_output:?}"
+            );
+        }
         // Rows shrink to one per session but stay key-partitioned; report the
-        // input partitioning and the `(keys..., start)` ordering so parents can
-        // reuse both.
-        let eq_properties = match output_ordering(&schema, &partition_columns, &session_output) {
+        // input partitioning and the keys-prefix ordering so parents can reuse
+        // both. The input hash exprs are bound to input-schema indices,
+        // so rebind them to the output schema (columns move and most input
+        // columns disappear); anything that does not survive degrades to
+        // unknown partitioning instead of advertising dangling indices.
+        let eq_properties = match output_ordering(&schema, &partition_columns) {
             Some(ordering) => {
                 EquivalenceProperties::new_with_orderings(schema.clone(), vec![ordering])
             }
             None => EquivalenceProperties::new(schema.clone()),
         };
+        let partitioning = match input.output_partitioning() {
+            Partitioning::Hash(exprs, n) => {
+                let remapped = exprs
+                    .iter()
+                    .map(|e| {
+                        e.downcast_ref::<Column>().and_then(|c| {
+                            schema.index_of(c.name()).ok().map(|idx| {
+                                Arc::new(Column::new(c.name(), idx)) as Arc<dyn PhysicalExpr>
+                            })
+                        })
+                    })
+                    .collect::<Option<Vec<_>>>();
+                match remapped {
+                    Some(exprs) => Partitioning::Hash(exprs, *n),
+                    None => Partitioning::UnknownPartitioning(*n),
+                }
+            }
+            other => other.clone(),
+        };
         let properties = Arc::new(PlanProperties::new(
             eq_properties,
-            input.output_partitioning().clone(),
+            partitioning,
             input.pipeline_behavior(),
             input.boundedness(),
         ));
@@ -611,6 +620,10 @@ impl Stream for SessionAggregateStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        // Polling a terminated stream again is formally unspecified.
+        if self.finished {
+            return Poll::Ready(None);
+        }
         loop {
             match self.input.as_mut().poll_next(cx) {
                 Poll::Pending => return Poll::Pending,
@@ -781,6 +794,65 @@ mod tests {
                 "session {i}"
             );
         }
+        Ok(())
+    }
+
+    /// The advertised output partitioning must be rebound to the output
+    /// schema: group columns move (the session struct is first here), so the
+    /// input's hash exprs carry stale indices.
+    #[test]
+    fn output_partitioning_rebinds_to_output_schema() -> Result<()> {
+        use datafusion::physical_plan::repartition::RepartitionExec;
+
+        let ts = DataType::Timestamp(TimeUnit::Microsecond, None);
+        let input_schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int32, true),
+            Field::new("#t", ts.clone(), true),
+            Field::new("#e0", ts.clone(), true),
+            Field::new("v", DataType::Int64, true),
+        ]));
+        let struct_type = DataType::Struct(Fields::from(vec![
+            Field::new("start", ts.clone(), true),
+            Field::new("end", ts, true),
+        ]));
+        let output_schema = Arc::new(Schema::new(vec![
+            Field::new("#w", struct_type, false),
+            Field::new("k", DataType::Int32, true),
+            Field::new("cnt", DataType::Int64, true),
+        ]));
+        let source = MemorySourceConfig::try_new_exec(&[vec![]], input_schema.clone(), None)?;
+        let input = Arc::new(RepartitionExec::try_new(
+            source,
+            Partitioning::Hash(
+                vec![Arc::new(Column::new("k", 0)) as Arc<dyn PhysicalExpr>],
+                4,
+            ),
+        )?);
+        let cnt = AggregateExprBuilder::new(
+            count_udaf(),
+            vec![Arc::new(Column::new("v", 3)) as Arc<dyn PhysicalExpr>],
+        )
+        .schema(input_schema.clone())
+        .alias("cnt")
+        .build()?;
+        let exec = SessionAggregateExec::try_new(
+            input,
+            vec!["k".to_string()],
+            "#t".to_string(),
+            "#e0".to_string(),
+            vec!["#w".to_string(), "k".to_string()],
+            "#w".to_string(),
+            vec![Arc::new(cnt)],
+            vec![None],
+            output_schema,
+        )?;
+        let Partitioning::Hash(exprs, 4) = exec.properties().output_partitioning() else {
+            return internal_err!("expected hash output partitioning");
+        };
+        let column = exprs[0]
+            .downcast_ref::<Column>()
+            .ok_or_else(|| datafusion_common::DataFusionError::Internal("not a column".into()))?;
+        assert_eq!((column.name(), column.index()), ("k", 1));
         Ok(())
     }
 

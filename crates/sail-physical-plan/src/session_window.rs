@@ -214,7 +214,9 @@ impl ExecutionPlan for SessionWindowExec {
         let end_idx = input_schema.index_of(&self.end_column)?;
 
         // The appended struct field and its timestamp timezone.
-        let out_field = self.schema.field(self.schema.fields().len() - 1);
+        let out_field = self
+            .schema
+            .field(self.schema.index_of(&self.output_column)?);
         let DataType::Struct(struct_fields) = out_field.data_type() else {
             return exec_err!("SessionWindowExec output column must be a struct");
         };
@@ -447,6 +449,10 @@ impl Stream for SessionWindowStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        // Polling a terminated stream again is formally unspecified.
+        if self.finished {
+            return Poll::Ready(None);
+        }
         loop {
             match self.input.as_mut().poll_next(cx) {
                 Poll::Pending => return Poll::Pending,
