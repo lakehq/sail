@@ -20,12 +20,15 @@ Feature: count aggregate function
     Scenario: count preserves typed null semantics
       When query
         """
-        SELECT COUNT(CAST(NULL AS INT)) AS typed_null_count
+        SELECT
+          COUNT(CAST(NULL AS INT)) AS typed_null_count,
+          COUNT(CAST(NULL AS INT), CAST(NULL AS STRING)) AS typed_null_multi_count,
+          COUNT(DISTINCT CAST(NULL AS INT), CAST(NULL AS STRING)) AS typed_null_distinct_count
         FROM VALUES (1), (2), (3) AS t(id)
         """
       Then query result
-        | typed_null_count |
-        | 0                |
+        | typed_null_count | typed_null_multi_count | typed_null_distinct_count |
+        | 0                | 0                      | 0                         |
 
     Scenario: count literals over empty input return zero
       When query
