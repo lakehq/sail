@@ -1230,6 +1230,35 @@ mod tests {
 
     #[test]
     #[expect(clippy::unwrap_used)]
+    fn selected_add_statistics_only_describe_the_selected_files() {
+        let snapshot = test_snapshot_with_adds(
+            Protocol::new(3, 7, Some(vec![TableFeature::DeletionVectors]), None),
+            test_metadata([]),
+            Vec::new(),
+            vec![
+                stats_add(
+                    "unselected.parquet",
+                    Some(r#"{"numRecords":100,"nullCount":{"id":0}}"#),
+                    None,
+                ),
+                stats_add(
+                    "selected.parquet",
+                    Some(r#"{"numRecords":5,"tightBounds":false,"nullCount":{"id":0}}"#),
+                    Some(2),
+                ),
+            ],
+        );
+
+        let statistics = snapshot
+            .datafusion_table_statistics_for_adds(&snapshot.adds()[1..])
+            .unwrap();
+
+        assert_eq!(statistics.num_rows, Precision::Exact(3));
+        assert_eq!(statistics.total_byte_size, Precision::Inexact(10));
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
     fn grouped_count_metadata_splits_constant_and_residual_files() {
         let metadata = test_metadata_with_schema(
             StructType::try_new([StructField::nullable("provider", DataType::STRING)]).unwrap(),

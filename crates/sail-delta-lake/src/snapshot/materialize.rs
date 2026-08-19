@@ -20,7 +20,7 @@ use crate::spec::{
 };
 
 impl DeltaSnapshot {
-    pub(super) fn build_files_batch_from_adds(&self, adds: &[Add]) -> DeltaResult<RecordBatch> {
+    pub(crate) fn build_files_batch_from_adds(&self, adds: &[Add]) -> DeltaResult<RecordBatch> {
         let raw = encode_snapshot_add_rows(adds)?;
         parse_scan_row_columns(raw, self)
     }
