@@ -418,6 +418,20 @@ data:
       ProjectionExec: expr=[3 as #1]
         PlaceholderRowExec
 ---
+name: "test_explain_grouped_count_shows_metadata_rows_and_a_residual_scan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as cnt, #4@1 as provider]
+      ProjectionExec: expr=[__sail_delta_count_sum@1 as #3, #1@0 as #4]
+        AggregateExec: mode=FinalPartitioned, gby=[#1@0 as #1], aggr=[sum(__sail_delta_count_weight) as __sail_delta_count_sum]
+          RepartitionExec: partitioning=Hash([#1@0], 4), input_partitions=2
+            AggregateExec: mode=Partial, gby=[#1@0 as #1], aggr=[sum(__sail_delta_count_weight) as __sail_delta_count_sum]
+              UnionExec
+                ProjectionExec: expr=[column1@0 as #1, column2@1 as __sail_delta_count_weight]
+                  DataSourceExec: partitions=1, partition_sizes=[1]
+                DataSourceExec: file_groups={1 group: [[<tmp>/delta_grouped_metadata/file_id=4/part-<id>.snappy.parquet]]}, projection=[provider@1 as #1, 1 as __sail_delta_count_weight], file_type=parquet
+---
 name: "test_explain_select_with_default_options_and_partition_filter_prunes_driver_file_scan"
 data:
   |-
