@@ -247,6 +247,7 @@ impl PlanResolver<'_> {
                 .map(|items| OptionLayer::OptionList { items })
                 .collect(),
             lakehouse_table: None,
+            write_case_sensitive: self.config.case_sensitive,
         };
         let mut preconditions = vec![];
         match target {
