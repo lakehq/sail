@@ -499,15 +499,21 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         filter => filter,
     };
 
+    if args.iter().all(is_typed_null_literal) {
+        // Keep one NULL argument so both distinct and non-distinct forms retain COUNT's zero
+        // result without constructing a non-null struct around multiple typed NULLs.
+        args = vec![lit(ScalarValue::Null)];
+    }
+
     if !distinct {
         let mut nullable_args = Vec::with_capacity(args.len());
         for argument in args {
-            if argument.nullable(function_context.schema)? {
-                if !matches!(&argument, expr::Expr::Column(column) if nullable_args.iter().any(
+            if argument.nullable(function_context.schema)?
+                && !matches!(&argument, expr::Expr::Column(column) if nullable_args.iter().any(
                     |existing| matches!(existing, expr::Expr::Column(other) if other == column)
-                )) {
-                    nullable_args.push(argument);
-                }
+                ))
+            {
+                nullable_args.push(argument);
             }
         }
         // COUNT only tests whether every argument is non-null. Arguments proven non-null can be
@@ -556,6 +562,16 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
             null_treatment,
         },
     }))
+}
+
+fn is_typed_null_literal(expression: &expr::Expr) -> bool {
+    match expression {
+        expr::Expr::Alias(alias) => is_typed_null_literal(alias.expr.as_ref()),
+        expr::Expr::Literal(value, _) => value.is_null(),
+        expr::Expr::Cast(cast) => is_typed_null_literal(cast.expr.as_ref()),
+        expr::Expr::TryCast(cast) => is_typed_null_literal(cast.expr.as_ref()),
+        _ => false,
+    }
 }
 
 fn min_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
