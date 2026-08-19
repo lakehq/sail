@@ -1368,6 +1368,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                             .udaf(udaf_name)
                             .or_else(|_| self.try_decode_udaf(udaf_name, &[]))?,
                     };
+                    // The fused operator feeds accumulators only the argument
+                    // expressions (no order-by columns appended, unlike
+                    // DataFusion's `AggregateExec`), so an ordering requirement
+                    // would be silently ignored — reject it instead.
+                    if !order_bys.is_empty() {
+                        return plan_err!(
+                            "SessionAggregateExec does not support ordered aggregates"
+                        );
+                    }
                     let aggregate = AggregateExprBuilder::new(udaf, args)
                         .schema(input_schema.clone())
                         .alias(agg.output_name)
@@ -6752,4 +6761,55 @@ mod tests {
         Ok(())
     }
 
+    /// Covers the unfused operator (no round-trip test existed), the keyless
+    /// (single-partition) shape, and a timezone-bearing session struct.
+    #[test]
+    fn test_round_trip_session_window_exec() -> Result<()> {
+        use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema, TimeUnit};
+        use datafusion::physical_plan::empty::EmptyExec;
+        use datafusion::prelude::SessionContext;
+        use sail_physical_plan::session_window::SessionWindowExec;
+
+        let tz: Arc<str> = Arc::from("America/New_York");
+        let ts = DataType::Timestamp(TimeUnit::Microsecond, Some(tz.clone()));
+        let input_schema = Arc::new(Schema::new(vec![
+            Field::new("#t", ts.clone(), true),
+            Field::new("#e0", ts.clone(), true),
+        ]));
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(input_schema.clone()));
+        let struct_type = DataType::Struct(Fields::from(vec![
+            Field::new("start", ts.clone(), true),
+            Field::new("end", ts, true),
+        ]));
+        let output_schema = Arc::new(Schema::new(vec![
+            Field::new("#t", input_schema.field(0).data_type().clone(), true),
+            Field::new("#e0", input_schema.field(1).data_type().clone(), true),
+            Field::new("#w", struct_type, false),
+        ]));
+        let exec = SessionWindowExec::try_new(
+            input,
+            vec![],
+            "#t".to_string(),
+            "#e0".to_string(),
+            "#w".to_string(),
+            output_schema.clone(),
+        )?;
+
+        let codec = RemoteExecutionCodec;
+        let mut buf = vec![];
+        codec.try_encode(Arc::new(exec) as Arc<dyn ExecutionPlan>, &mut buf)?;
+
+        let ctx = SessionContext::new().task_ctx();
+        let decoded = codec.try_decode(&buf, &[], &ctx)?;
+        let decoded = decoded
+            .downcast_ref::<SessionWindowExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan should be a SessionWindowExec"))?;
+
+        assert!(decoded.partition_columns().is_empty());
+        assert_eq!(decoded.time_column(), "#t");
+        assert_eq!(decoded.end_column(), "#e0");
+        assert_eq!(decoded.output_column(), "#w");
+        assert_eq!(decoded.schema(), output_schema);
+        Ok(())
+    }
 }
