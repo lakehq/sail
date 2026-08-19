@@ -148,7 +148,7 @@ impl PlanResolver<'_> {
                 .collect::<Vec<_>>();
             for agg in find_aggregate_exprs(&all_exprs) {
                 let references_session = agg
-                    .exists(|e| Ok(session_columns.iter().any(|c| e == *c)))
+                    .exists(|e| Ok(session_columns.contains(&e)))
                     .unwrap_or(false);
                 if references_session {
                     return Err(PlanError::AnalysisError(
