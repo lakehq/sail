@@ -277,15 +277,22 @@ fn rewrite_exact_ungrouped_aggregate(aggregate: &Aggregate) -> Result<Option<Log
                 row_count,
             )
         })
-        .collect::<Option<Vec<_>>>();
-    let Some(values) = values else {
+        .collect::<Vec<_>>();
+    let resolved_count = values.iter().filter(|value| value.is_some()).count();
+    if resolved_count == 0 {
+        return Ok(None);
+    }
+
+    if resolved_count != values.len() {
+        return build_residual_aggregate(aggregate, values).map(Some);
+    }
+    let Some(values) = values
+        .into_iter()
+        .map(|value| value.map(|value| Expr::Literal(value, None)))
+        .collect::<Option<Vec<_>>>()
+    else {
         return Ok(None);
     };
-
-    let values = values
-        .into_iter()
-        .map(|value| Expr::Literal(value, None))
-        .collect::<Vec<_>>();
     debug!(
         "resolved {} Delta aggregate expressions from exact snapshot statistics",
         values.len()
@@ -296,6 +303,60 @@ fn rewrite_exact_ungrouped_aggregate(aggregate: &Aggregate) -> Result<Option<Log
         schema: Arc::clone(&aggregate.schema),
         values: vec![values],
     })))
+}
+
+fn build_residual_aggregate(
+    aggregate: &Aggregate,
+    values: Vec<Option<ScalarValue>>,
+) -> Result<LogicalPlan> {
+    let residual_expr = aggregate
+        .aggr_expr
+        .iter()
+        .zip(&values)
+        .enumerate()
+        .filter(|(_, (_, value))| value.is_none())
+        .map(|(index, (expression, _))| {
+            let expression = match expression {
+                Expr::Alias(alias) => alias.expr.as_ref().clone(),
+                expression => expression.clone(),
+            };
+            expression.alias(format!("__sail_delta_residual_aggregate_{index}"))
+        })
+        .collect::<Vec<_>>();
+    let residual = LogicalPlan::Aggregate(Aggregate::try_new(
+        Arc::clone(&aggregate.input),
+        vec![],
+        residual_expr,
+    )?);
+    let residual_columns = residual.schema().columns();
+    let mut residual_index = 0;
+    let output_expr = values
+        .into_iter()
+        .zip(aggregate.schema.fields())
+        .map(|(value, field)| {
+            let expression = match value {
+                Some(value) => Expr::Literal(value, None),
+                None => {
+                    let column = Expr::Column(residual_columns[residual_index].clone());
+                    residual_index += 1;
+                    column
+                }
+            };
+            expression.alias(field.name())
+        })
+        .collect::<Vec<_>>();
+    debug!(
+        "resolved {} Delta aggregate expressions and retained {} residual expressions",
+        output_expr.len() - residual_columns.len(),
+        residual_columns.len()
+    );
+    // A global residual aggregate always emits one row, so it is also the row carrier for the
+    // metadata literals; no join or custom distributed operator is required.
+    Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
+        output_expr,
+        Arc::new(residual),
+        Arc::clone(&aggregate.schema),
+    )?))
 }
 
 fn exact_aggregate_value(
