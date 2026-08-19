@@ -109,7 +109,7 @@ impl From<PythonDataSourceError> for DataFusionError {
 pub fn format_py_error_with_traceback(e: pyo3::PyErr) -> String {
     use pyo3::types::PyTracebackMethods;
 
-    sail_python_udf::threadstate::attach_persistent(|py| {
+    sail_python_runtime::threadstate::attach_persistent(|py| {
         let traceback = e
             .traceback(py)
             .and_then(|tb| tb.format().ok())

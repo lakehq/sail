@@ -181,29 +181,30 @@ impl StreamUDF for PySparkUDTF {
     }
 
     fn invoke(&self, input: SendableRecordBatchStream) -> Result<SendableRecordBatchStream> {
-        let function = crate::threadstate::attach_persistent(|py| -> PyUdfResult<_> {
-            let udtf = PySparkUdtfPayload::load(py, &self.payload)?;
-            let udtf = match self.kind {
-                PySparkUdtfKind::Table => PySpark::table_udf(
-                    py,
-                    udtf,
-                    &self.input_types,
-                    self.passthrough_columns,
-                    &self.output_schema,
-                    &self.config,
-                )?,
-                PySparkUdtfKind::ArrowTable => PySpark::arrow_table_udf(
-                    py,
-                    udtf,
-                    &self.input_names,
-                    &self.input_types,
-                    self.passthrough_columns,
-                    &self.output_schema,
-                    &self.config,
-                )?,
-            };
-            Ok(udtf.unbind())
-        })?;
+        let function =
+            sail_python_runtime::threadstate::attach_persistent(|py| -> PyUdfResult<_> {
+                let udtf = PySparkUdtfPayload::load(py, &self.payload)?;
+                let udtf = match self.kind {
+                    PySparkUdtfKind::Table => PySpark::table_udf(
+                        py,
+                        udtf,
+                        &self.input_types,
+                        self.passthrough_columns,
+                        &self.output_schema,
+                        &self.config,
+                    )?,
+                    PySparkUdtfKind::ArrowTable => PySpark::arrow_table_udf(
+                        py,
+                        udtf,
+                        &self.input_names,
+                        &self.input_types,
+                        self.passthrough_columns,
+                        &self.output_schema,
+                        &self.config,
+                    )?,
+                };
+                Ok(udtf.unbind())
+            })?;
         Ok(Box::pin(PyMapStream::new(
             input,
             function,

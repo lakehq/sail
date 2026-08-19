@@ -240,7 +240,7 @@ impl PythonExecutor for InProcessExecutor {
 
         // Use spawn_blocking for GIL-bound operations
         tokio::task::spawn_blocking(move || {
-            sail_python_udf::threadstate::attach_persistent(|py| {
+            sail_python_runtime::threadstate::attach_persistent(|py| {
                 // Deserialize and call schema()
                 let datasource = deserialize_datasource(py, &command)?;
 
@@ -277,7 +277,7 @@ impl PythonExecutor for InProcessExecutor {
         let schema = schema.clone();
 
         tokio::task::spawn_blocking(move || {
-            sail_python_udf::threadstate::attach_persistent(|py| {
+            sail_python_runtime::threadstate::attach_persistent(|py| {
                 let datasource = deserialize_datasource(py, &command)?;
 
                 // Get datasource name for error context
@@ -449,7 +449,7 @@ impl PythonExecutor for InProcessExecutor {
         let schema = schema.clone();
 
         tokio::task::spawn_blocking(move || {
-            sail_python_udf::threadstate::attach_persistent(|py| {
+            sail_python_runtime::threadstate::attach_persistent(|py| {
                 let datasource = deserialize_datasource(py, &command)?;
 
                 // Get datasource name for error context
@@ -535,7 +535,7 @@ impl PythonExecutor for InProcessExecutor {
         let slow_write_warn_ms = self.slow_write_warn_ms;
 
         let result = tokio::task::spawn_blocking(move || {
-            sail_python_udf::threadstate::attach_persistent(|py| {
+            sail_python_runtime::threadstate::attach_persistent(|py| {
                 // Deserialize the writer
                 let writer = deserialize_object(py, &pickled_writer)?;
 
@@ -608,7 +608,7 @@ impl PythonExecutor for InProcessExecutor {
         let pickled_writer = pickled_writer.to_vec();
 
         tokio::task::spawn_blocking(move || {
-            sail_python_udf::threadstate::attach_persistent(|py| {
+            sail_python_runtime::threadstate::attach_persistent(|py| {
                 // Deserialize the writer
                 let writer = deserialize_object(py, &pickled_writer)?;
 
@@ -658,7 +658,7 @@ impl PythonExecutor for InProcessExecutor {
         let pickled_writer = pickled_writer.to_vec();
 
         tokio::task::spawn_blocking(move || {
-            sail_python_udf::threadstate::attach_persistent(|py| {
+            sail_python_runtime::threadstate::attach_persistent(|py| {
                 // Deserialize the writer (best-effort: abort must not propagate errors
                 // since the original error from write/commit is more important)
                 let writer = match deserialize_object(py, &pickled_writer) {

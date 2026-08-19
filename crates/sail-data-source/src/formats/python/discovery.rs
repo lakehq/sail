@@ -126,7 +126,7 @@ impl Default for PythonDataSourceRegistry {
 ///
 /// Scans the entry point group and registers found classes.
 pub fn discover_data_sources() -> Result<usize> {
-    sail_python_udf::threadstate::attach_persistent(|py| {
+    sail_python_runtime::threadstate::attach_persistent(|py| {
         let count = discover_from_entry_points(py).unwrap_or(0);
         Ok(count)
     })

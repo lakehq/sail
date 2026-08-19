@@ -1,0 +1,10 @@
+[package]
+name = "sail-python-runtime"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+pyo3 = { workspace = true }

@@ -77,14 +77,19 @@ impl StreamUDF for PySparkMapIterUDF {
     }
 
     fn invoke(&self, input: SendableRecordBatchStream) -> Result<SendableRecordBatchStream> {
-        let function = crate::threadstate::attach_persistent(|py| -> PyUdfResult<_> {
-            let udf = PySparkUdfPayload::load(py, &self.payload)?;
-            let udf = match self.kind {
-                PySparkMapIterKind::Pandas => PySpark::map_pandas_iter_udf(py, udf, &self.config)?,
-                PySparkMapIterKind::Arrow => PySpark::map_arrow_iter_udf(py, udf, &self.config)?,
-            };
-            Ok(udf.unbind())
-        })?;
+        let function =
+            sail_python_runtime::threadstate::attach_persistent(|py| -> PyUdfResult<_> {
+                let udf = PySparkUdfPayload::load(py, &self.payload)?;
+                let udf = match self.kind {
+                    PySparkMapIterKind::Pandas => {
+                        PySpark::map_pandas_iter_udf(py, udf, &self.config)?
+                    }
+                    PySparkMapIterKind::Arrow => {
+                        PySpark::map_arrow_iter_udf(py, udf, &self.config)?
+                    }
+                };
+                Ok(udf.unbind())
+            })?;
         Ok(Box::pin(PyMapStream::new(
             rename_record_batch_stream(input, &self.input_names)?,
             function,
