@@ -254,6 +254,7 @@ Feature: Delta Lake read path (driver vs metadata-as-data)
         CREATE TABLE delta_exact_aggregates (
           id INT,
           nullable_value INT,
+          other_nullable INT,
           all_null INT,
           payload STRUCT<score: INT>,
           part STRING
@@ -265,9 +266,9 @@ Feature: Delta Lake read path (driver vs metadata-as-data)
       Given statement
         """
         INSERT INTO delta_exact_aggregates VALUES
-          (1, 10, NULL, named_struct('score', 9), '10'),
-          (2, NULL, NULL, named_struct('score', 5), '2'),
-          (3, 30, NULL, named_struct('score', 7), '2')
+          (1, 10, NULL, NULL, named_struct('score', 9), '10'),
+          (2, NULL, 20, NULL, named_struct('score', 5), '2'),
+          (3, 30, 30, NULL, named_struct('score', 7), '2')
         """
 
     Scenario: Counts and extrema use row, partition, nested, literal, and cast statistics
@@ -326,6 +327,50 @@ Feature: Delta Lake read path (driver vs metadata-as-data)
       When query
         """
         EXPLAIN SELECT COUNT(*) AS rows, MIN(id) AS minimum, SUM(nullable_value) AS total
+        FROM delta_exact_aggregates
+        """
+      Then query plan matches snapshot
+
+    Scenario: Distinct literal counts use snapshot cardinality
+      When query
+        """
+        SELECT COUNT(DISTINCT 1) AS one_count, COUNT(DISTINCT NULL) AS null_count
+        FROM delta_exact_aggregates
+        """
+      Then query result
+        | one_count | null_count |
+        | 1         | 0          |
+      When query
+        """
+        EXPLAIN SELECT COUNT(DISTINCT 1) AS one_count
+        FROM delta_exact_aggregates
+        """
+      Then query plan matches snapshot
+      Given statement
+        """
+        DELETE FROM delta_exact_aggregates WHERE TRUE
+        """
+      When query
+        """
+        SELECT COUNT(DISTINCT 1) AS one_count, COUNT(DISTINCT NULL) AS null_count
+        FROM delta_exact_aggregates
+        """
+      Then query result
+        | one_count | null_count |
+        | 0         | 0          |
+
+    Scenario: Independent nullable arguments retain row evaluation
+      When query
+        """
+        SELECT COUNT(nullable_value, other_nullable) AS joint_count
+        FROM delta_exact_aggregates
+        """
+      Then query result
+        | joint_count |
+        | 1           |
+      When query
+        """
+        EXPLAIN SELECT COUNT(nullable_value, other_nullable) AS joint_count
         FROM delta_exact_aggregates
         """
       Then query plan matches snapshot

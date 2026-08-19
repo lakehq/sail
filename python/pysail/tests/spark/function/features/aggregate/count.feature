@@ -99,22 +99,29 @@ Feature: count aggregate function
     Scenario: distinct literals over non-empty input
       When query
         """
-        SELECT COUNT(DISTINCT 1) AS one_count, COUNT(DISTINCT NULL) AS null_count
+        SELECT
+          COUNT(DISTINCT 1) AS one_count,
+          COUNT(DISTINCT 1, 2) AS tuple_count,
+          COUNT(DISTINCT NULL) AS null_count,
+          COUNT(DISTINCT 1) FILTER (WHERE id = 2) AS filtered_count
         FROM VALUES (1), (2), (3) AS t(id)
         """
       Then query result
-        | one_count | null_count |
-        | 1         | 0          |
+        | one_count | tuple_count | null_count | filtered_count |
+        | 1         | 1           | 0          | 1              |
 
     Scenario: distinct literals over empty input
       When query
         """
-        SELECT COUNT(DISTINCT 1) AS one_count, COUNT(DISTINCT NULL) AS null_count
+        SELECT
+          COUNT(DISTINCT 1) AS one_count,
+          COUNT(DISTINCT 1, 2) AS tuple_count,
+          COUNT(DISTINCT NULL) AS null_count
         FROM (SELECT id FROM VALUES (1) AS t(id) WHERE FALSE)
         """
       Then query result
-        | one_count | null_count |
-        | 0         | 0          |
+        | one_count | tuple_count | null_count |
+        | 0         | 0           | 0          |
 
   Rule: parameterless count is not count star
 
