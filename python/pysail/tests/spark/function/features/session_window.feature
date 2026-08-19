@@ -214,6 +214,47 @@ Feature: session_window() gap-based sessionization
         | s                   | cnt |
         | 2021-01-01 00:00:00 | 2   |
 
+  Rule: Grouping forms
+
+    Scenario: session_window referenced by GROUP BY ordinal
+      When query
+        """
+        SELECT a, session_window.start, session_window.end, count(*) AS cnt
+        FROM VALUES ('A1', TIMESTAMP '2021-01-01 00:00:00'),
+                    ('A1', TIMESTAMP '2021-01-01 00:04:30'),
+                    ('A2', TIMESTAMP '2021-01-01 00:01:00') AS tab(a, b)
+        GROUP BY session_window(b, '5 minutes'), 1
+        ORDER BY a, start
+        """
+      Then query result
+        | a  | start               | end                 | cnt |
+        | A1 | 2021-01-01 00:00:00 | 2021-01-01 00:09:30 | 2   |
+        | A2 | 2021-01-01 00:01:00 | 2021-01-01 00:06:00 | 1   |
+
+    Scenario: session_window in the SELECT list referenced only by ordinal
+      When query
+        """
+        SELECT session_window(b, '5 minutes'), count(*) AS cnt
+        FROM VALUES (TIMESTAMP '2021-01-01 00:00:00'),
+                    (TIMESTAMP '2021-01-01 00:04:30') AS t(b)
+        GROUP BY 1
+        """
+      Then query result
+        | session_window                             | cnt |
+        | {2021-01-01 00:00:00, 2021-01-01 00:09:30} | 2   |
+
+    Scenario: session_window grouped by its SELECT-list alias
+      When query
+        """
+        SELECT session_window(b, '5 minutes') AS sw, count(*) AS cnt
+        FROM VALUES (TIMESTAMP '2021-01-01 00:00:00'),
+                    (TIMESTAMP '2021-01-01 00:04:30') AS t(b)
+        GROUP BY sw
+        """
+      Then query result
+        | sw                                         | cnt |
+        | {2021-01-01 00:00:00, 2021-01-01 00:09:30} | 2   |
+
   Rule: Expression grouping keys
 
     Scenario: a non-column grouping key (upper) partitions sessions and resolves in SELECT
@@ -277,6 +318,22 @@ Feature: session_window() gap-based sessionization
         | 2021-01-02 00:00:00 | 2021-01-01 00:00:00 | 1   |
 
   Rule: Aggregates
+
+    # Spark evaluates the marker inside an aggregate argument with per-row
+    # (pre-merge) semantics; Sail rejects that path instead of silently
+    # aggregating the merged struct.
+    @sail-only
+    Scenario: an aggregate over the session struct is rejected (per-row semantics)
+      When query
+        """
+        SELECT max(session_window(b, '5 minutes').start) AS m, count(*) AS cnt
+        FROM VALUES (TIMESTAMP '2021-01-01 00:00:00'),
+                    (TIMESTAMP '2021-01-01 00:04:30'),
+                    (TIMESTAMP '2021-01-01 00:10:00') AS t(b)
+        GROUP BY session_window(b, '5 minutes')
+        ORDER BY m
+        """
+      Then query error .*session_window inside an aggregate function.*
 
     Scenario: multiple aggregates are computed per session (fused path)
       When query
