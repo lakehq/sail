@@ -17,6 +17,9 @@ use datafusion::physical_expr::{
     Distribution, EquivalenceProperties, LexOrdering, OrderingRequirements, Partitioning,
     PhysicalExpr, PhysicalSortExpr,
 };
+use datafusion::physical_plan::metrics::{
+    BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
+};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
     RecordBatchStream,
@@ -51,6 +54,7 @@ pub struct SessionAggregateExec {
     /// so a missing column fails at construction instead of silently dropping
     /// the sort requirement.
     required_ordering: Option<OrderingRequirements>,
+    metrics: ExecutionPlanMetricsSet,
 }
 
 /// The emitted per-partition ordering: the `partition_columns` prefix —
@@ -170,6 +174,7 @@ impl SessionAggregateExec {
             schema,
             properties,
             required_ordering,
+            metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 
@@ -247,6 +252,10 @@ impl ExecutionPlan for SessionAggregateExec {
         vec![&self.input]
     }
 
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
+    }
+
     fn required_input_distribution(&self) -> Vec<Distribution> {
         match self.partition_exprs() {
             Ok(exprs) if !exprs.is_empty() => vec![Distribution::HashPartitioned(exprs)],
@@ -322,9 +331,13 @@ impl ExecutionPlan for SessionAggregateExec {
             );
         }
 
+        let baseline = BaselineMetrics::new(&self.metrics, partition);
+        let num_sessions = MetricBuilder::new(&self.metrics).counter("num_sessions", partition);
         let input = self.input.execute(partition, context)?;
         Ok(Box::pin(SessionAggregateStream {
             input,
+            baseline,
+            num_sessions,
             output_schema: self.schema.clone(),
             struct_fields: struct_fields.clone(),
             tz,
@@ -382,6 +395,9 @@ struct SessionAggregateStream {
     cur_key: Option<Vec<ScalarValue>>,
     cur_start: i64,
     cur_end: i64,
+    baseline: BaselineMetrics,
+    /// Closed (emitted) sessions.
+    num_sessions: Count,
     finished: bool,
 }
 
@@ -551,6 +567,7 @@ impl SessionAggregateStream {
     /// Build one output batch from finalized sessions, in output schema order:
     /// the group columns (the session struct among them), then the aggregates.
     fn build_batch(&self, rows: Vec<SessionRow>) -> Result<RecordBatch> {
+        self.num_sessions.add(rows.len());
         let mut columns: Vec<ArrayRef> = Vec::with_capacity(self.output_schema.fields().len());
 
         for source in &self.group_sources {
@@ -624,23 +641,32 @@ impl Stream for SessionAggregateStream {
         if self.finished {
             return Poll::Ready(None);
         }
+        let baseline = self.baseline.clone();
         loop {
             match self.input.as_mut().poll_next(cx) {
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
-                Poll::Ready(Some(Ok(batch))) => match self.process_batch(batch) {
-                    Ok(Some(out)) => return Poll::Ready(Some(Ok(out))),
-                    Ok(None) => continue,
-                    Err(e) => return Poll::Ready(Some(Err(e))),
-                },
+                Poll::Ready(Some(Ok(batch))) => {
+                    let _timer = baseline.elapsed_compute().timer();
+                    match self.process_batch(batch) {
+                        Ok(Some(out)) => {
+                            return baseline.record_poll(Poll::Ready(Some(Ok(out))));
+                        }
+                        Ok(None) => continue,
+                        Err(e) => return Poll::Ready(Some(Err(e))),
+                    }
+                }
                 Poll::Ready(None) => {
                     if self.finished {
                         return Poll::Ready(None);
                     }
                     self.finished = true;
+                    let _timer = baseline.elapsed_compute().timer();
                     match self.finalize() {
                         Ok(Some(row)) => match self.build_batch(vec![row]) {
-                            Ok(out) => return Poll::Ready(Some(Ok(out))),
+                            Ok(out) => {
+                                return baseline.record_poll(Poll::Ready(Some(Ok(out))));
+                            }
                             Err(e) => return Poll::Ready(Some(Err(e))),
                         },
                         Ok(None) => return Poll::Ready(None),
@@ -794,6 +820,12 @@ mod tests {
                 "session {i}"
             );
         }
+        let metrics = exec.metrics().expect("metrics");
+        assert_eq!(metrics.output_rows(), Some(4));
+        assert_eq!(
+            metrics.sum_by_name("num_sessions").map(|m| m.as_usize()),
+            Some(4)
+        );
         Ok(())
     }
 

@@ -13,6 +13,9 @@ use datafusion::physical_expr::{
     Distribution, EquivalenceProperties, LexOrdering, OrderingRequirements, PhysicalExpr,
     PhysicalSortExpr,
 };
+use datafusion::physical_plan::metrics::{
+    BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
+};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
     RecordBatchStream,
@@ -39,6 +42,7 @@ pub struct SessionWindowExec {
     /// so a missing column fails at construction instead of silently dropping
     /// the sort requirement.
     required_ordering: Option<OrderingRequirements>,
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl SessionWindowExec {
@@ -96,6 +100,7 @@ impl SessionWindowExec {
             schema,
             properties,
             required_ordering,
+            metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 
@@ -168,6 +173,10 @@ impl ExecutionPlan for SessionWindowExec {
         vec![true]
     }
 
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
+    }
+
     fn required_input_distribution(&self) -> Vec<Distribution> {
         // A session must never span partitions: hash-partition by the group
         // keys, or a single partition when there are none.
@@ -225,6 +234,8 @@ impl ExecutionPlan for SessionWindowExec {
             _ => return exec_err!("SessionWindowExec struct fields must be Timestamp(us, *)"),
         };
 
+        let baseline = BaselineMetrics::new(&self.metrics, partition);
+        let num_sessions = MetricBuilder::new(&self.metrics).counter("num_sessions", partition);
         let reservation = MemoryConsumer::new(format!("SessionWindowStream[{partition}]"))
             .register(context.memory_pool());
         let input = self.input.execute(partition, context)?;
@@ -240,6 +251,8 @@ impl ExecutionPlan for SessionWindowExec {
             open_rows: Vec::new(),
             reservation,
             buffered_bytes: 0,
+            baseline,
+            num_sessions,
             cur_key: None,
             cur_start: 0,
             cur_end: 0,
@@ -275,6 +288,9 @@ struct SessionWindowStream {
     reservation: MemoryReservation,
     /// Bytes currently held by `reservation` for `open_rows`.
     buffered_bytes: usize,
+    baseline: BaselineMetrics,
+    /// Closed (emitted) sessions.
+    num_sessions: Count,
     /// Group key of the open session.
     cur_key: Option<Vec<ScalarValue>>,
     /// Open session start (micros) = time of its first row.
@@ -316,6 +332,7 @@ impl SessionWindowStream {
         let batches = std::mem::take(&mut self.open_rows);
         self.reservation.shrink(self.buffered_bytes);
         self.buffered_bytes = 0;
+        self.num_sessions.add(1);
         let input_batch = concat_batches(&self.input_schema, &batches)?;
         let n = input_batch.num_rows();
         if n == 0 {
@@ -453,24 +470,33 @@ impl Stream for SessionWindowStream {
         if self.finished {
             return Poll::Ready(None);
         }
+        let baseline = self.baseline.clone();
         loop {
             match self.input.as_mut().poll_next(cx) {
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
-                Poll::Ready(Some(Ok(batch))) => match self.process_batch(batch) {
-                    Ok(Some(out)) => return Poll::Ready(Some(Ok(out))),
-                    // Whole batch merged into the still-open session; poll for more.
-                    Ok(None) => continue,
-                    Err(e) => return Poll::Ready(Some(Err(e))),
-                },
+                Poll::Ready(Some(Ok(batch))) => {
+                    let _timer = baseline.elapsed_compute().timer();
+                    match self.process_batch(batch) {
+                        Ok(Some(out)) => {
+                            return baseline.record_poll(Poll::Ready(Some(Ok(out))));
+                        }
+                        // Whole batch merged into the still-open session; poll for more.
+                        Ok(None) => continue,
+                        Err(e) => return Poll::Ready(Some(Err(e))),
+                    }
+                }
                 Poll::Ready(None) => {
                     if self.finished {
                         return Poll::Ready(None);
                     }
                     // Input exhausted: emit the final still-open session.
                     self.finished = true;
+                    let _timer = baseline.elapsed_compute().timer();
                     match self.build_output() {
-                        Ok(Some(out)) => return Poll::Ready(Some(Ok(out))),
+                        Ok(Some(out)) => {
+                            return baseline.record_poll(Poll::Ready(Some(Ok(out))));
+                        }
                         Ok(None) => return Poll::Ready(None),
                         Err(e) => return Poll::Ready(Some(Err(e))),
                     }
@@ -572,6 +598,12 @@ mod tests {
         for (i, (start, end)) in expected.iter().enumerate() {
             assert_eq!((starts.value(i), ends.value(i)), (*start, *end), "row {i}");
         }
+        let metrics = exec.metrics().expect("metrics");
+        assert_eq!(metrics.output_rows(), Some(6));
+        assert_eq!(
+            metrics.sum_by_name("num_sessions").map(|m| m.as_usize()),
+            Some(4)
+        );
         Ok(())
     }
 
