@@ -51,3 +51,38 @@ Feature: timestampadd function
         root
          |-- result: timestamp (nullable = true)
         """
+
+  @spark_null
+  Rule: Nullability through Spark's implicit casts
+  # Float/Double -> Integral is force-nullable (Cast.scala:471)
+
+    @sail-bug
+    Scenario Outline: timestampadd through a force-nullable implicit cast: <case>
+      When query
+        """
+        SELECT timestampadd(HOUR, <input>, TIMESTAMP '2024-01-15 10:00:00') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: timestamp (nullable = true)
+        """
+
+      Examples:
+        | case             | input             |
+        | DOUBLE -> BIGINT | CAST(1 AS DOUBLE) |
+
+    Scenario Outline: timestampadd without an implicit cast keeps its non-nullable schema
+      When query
+        """
+        SELECT timestampadd(HOUR, <input>, TIMESTAMP '2024-01-15 10:00:00') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: timestamp (nullable = false)
+        """
+
+      Examples:
+        | case    | input |
+        | no cast | 1     |

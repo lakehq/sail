@@ -1363,3 +1363,38 @@ Feature: to_char with an argument coming from a column
         SELECT to_char(encode('abc', 'utf-8'), CAST(NULL AS STRING)) AS r
         """
       Then query error (?i).*
+
+  @spark_null
+  Rule: Nullability through Spark's implicit casts
+  # String -> * is force-nullable (Cast.scala:458)
+
+    @sail-bug
+    Scenario Outline: to_char without an implicit cast keeps its non-nullable schema
+      When query
+        """
+        SELECT to_char(<input>, '99D99') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
+      Examples:
+        | case    | input |
+        | no cast | 78.12 |
+
+    Scenario Outline: to_char through a force-nullable implicit cast: <case>
+      When query
+        """
+        SELECT to_char(<input>, '99D99') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+      Examples:
+        | case                     | input   |
+        | STRING -> DECIMAL(38,18) | '78.12' |

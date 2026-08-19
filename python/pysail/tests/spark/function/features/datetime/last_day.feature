@@ -566,3 +566,38 @@ Feature: last_day comprehensive tests
         root
          |-- result: date (nullable = true)
         """
+
+  @spark_null
+  Rule: Nullability through Spark's implicit casts
+  # String -> * is force-nullable (Cast.scala:458)
+
+    @sail-bug
+    Scenario Outline: last_day without an implicit cast keeps its non-nullable schema
+      When query
+        """
+        SELECT last_day(<input>'2024-01-15') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: date (nullable = false)
+        """
+
+      Examples:
+        | case    | input |
+        | no cast | DATE  |
+
+    Scenario Outline: last_day through a force-nullable implicit cast: <case>
+      When query
+        """
+        SELECT last_day(<input>'2024-01-15') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: date (nullable = true)
+        """
+
+      Examples:
+        | case           | input |
+        | STRING -> DATE |       |

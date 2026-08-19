@@ -41,3 +41,25 @@ Feature: sequence output schema
          |-- result: array (nullable = true)
          |    |-- element: integer (containsNull = false)
         """
+
+  @spark_null
+  Rule: Nullability through Spark's implicit casts
+  # String -> * is force-nullable (Cast.scala:458)
+
+    @sail-bug
+    Scenario Outline: sequence loses non-nullability through Spark's implicit cast: <case>
+      When query
+        """
+        SELECT sequence(<input>, 5) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = <nullable>)
+         |    |-- element: <element> (containsNull = false)
+        """
+
+      Examples:
+        | case             | input | nullable | element |
+        | no cast          | 1     | false    | integer |
+        | STRING -> BIGINT | '1'   | true     | long    |

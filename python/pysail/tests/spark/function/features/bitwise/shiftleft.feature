@@ -35,3 +35,38 @@ Feature: shiftleft output schema
         root
          |-- result: integer (nullable = true)
         """
+
+  @spark_null
+  Rule: Nullability through Spark's implicit casts
+  # Float/Double -> Integral is force-nullable (Cast.scala:471)
+
+    @sail-bug
+    Scenario Outline: shiftleft through a force-nullable implicit cast: <case>
+      When query
+        """
+        SELECT shiftleft(<input>, 1) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = true)
+        """
+
+      Examples:
+        | case          | input             |
+        | DOUBLE -> INT | CAST(2 AS DOUBLE) |
+
+    Scenario Outline: shiftleft without an implicit cast keeps its non-nullable schema
+      When query
+        """
+        SELECT shiftleft(<input>, 1) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = false)
+        """
+
+      Examples:
+        | case    | input |
+        | no cast | 2     |

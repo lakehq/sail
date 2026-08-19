@@ -232,3 +232,40 @@ Feature: bin converts integral values to binary strings
         root
          |-- result: string (nullable = true)
         """
+
+  @spark_null
+  Rule: Nullability through Spark's implicit casts
+  # String -> * is force-nullable (Cast.scala:458)
+  # Float/Double -> Integral is force-nullable (Cast.scala:471)
+
+    @sail-bug
+    Scenario Outline: bin without an implicit cast keeps its non-nullable schema
+      When query
+        """
+        SELECT bin(<input>) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
+      Examples:
+        | case    | input |
+        | no cast | 5     |
+
+    Scenario Outline: bin loses non-nullability through Spark's implicit cast: <case>
+      When query
+        """
+        SELECT bin(<input>) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+
+      Examples:
+        | case             | input             |
+        | STRING -> BIGINT | '5'               |
+        | DOUBLE -> BIGINT | CAST(5 AS DOUBLE) |

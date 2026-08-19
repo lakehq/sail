@@ -35,3 +35,38 @@ Feature: positive output schema
         root
          |-- result: integer (nullable = true)
         """
+
+  @spark_null
+  Rule: Nullability through Spark's implicit casts
+  # String -> * is force-nullable (Cast.scala:458)
+
+    @sail-bug
+    Scenario Outline: positive through a force-nullable implicit cast: <case>
+      When query
+        """
+        SELECT positive(<input>) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: double (nullable = true)
+        """
+
+      Examples:
+        | case             | input |
+        | STRING -> DOUBLE | '1'   |
+
+    Scenario Outline: positive without an implicit cast keeps its non-nullable schema
+      When query
+        """
+        SELECT positive(<input>) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = false)
+        """
+
+      Examples:
+        | case    | input |
+        | no cast | 1     |

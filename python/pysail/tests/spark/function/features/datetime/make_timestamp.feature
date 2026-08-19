@@ -221,3 +221,38 @@ Feature: make_timestamp_ntz and try_make_timestamp_ntz functions
         root
          |-- result: timestamp (nullable = true)
         """
+
+  @spark_null
+  Rule: Nullability through Spark's implicit casts
+  # String -> * is force-nullable (Cast.scala:458)
+
+    @sail-bug
+    Scenario Outline: make_timestamp without an implicit cast keeps its non-nullable schema
+      When query
+        """
+        SELECT make_timestamp(<input>, 1, 15, 10, 0, 0) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: timestamp (nullable = false)
+        """
+
+      Examples:
+        | case    | input |
+        | no cast | 2024  |
+
+    Scenario Outline: make_timestamp through a force-nullable implicit cast: <case>
+      When query
+        """
+        SELECT make_timestamp(<input>, 1, 15, 10, 0, 0) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: timestamp (nullable = true)
+        """
+
+      Examples:
+        | case          | input  |
+        | STRING -> INT | '2024' |

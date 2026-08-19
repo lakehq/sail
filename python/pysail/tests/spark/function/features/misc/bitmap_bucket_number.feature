@@ -38,3 +38,24 @@ Feature: bitmap_bucket_number output schema
         root
          |-- result: long (nullable = true)
         """
+
+  @spark_null
+  Rule: Nullability through Spark's implicit casts
+  # Float/Double -> Integral is force-nullable (Cast.scala:471)
+
+    @sail-bug
+    Scenario Outline: bitmap_bucket_number loses non-nullability through Spark's implicit cast: <case>
+      When query
+        """
+        SELECT bitmap_bucket_number(<input>) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = <nullable>)
+        """
+
+      Examples:
+        | case             | input               | nullable |
+        | no cast          | 123                 | false    |
+        | DOUBLE -> BIGINT | CAST(123 AS DOUBLE) | true     |
