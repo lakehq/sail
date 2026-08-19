@@ -7,6 +7,8 @@ use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::execution::SessionState;
 use datafusion::execution::context::QueryPlanner;
+use datafusion::optimizer::optimize_projections::OptimizeProjections;
+use datafusion::optimizer::{Optimizer, OptimizerContext};
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion::physical_expr::{
@@ -92,8 +94,20 @@ impl QueryPlanner for ExtensionQueryPlanner {
         let rewriters: Vec<Box<dyn LogicalRewriter>> =
             vec![Box::new(DeltaMetadataAggregateRewriter)];
         let mut logical_plan = logical_plan.clone();
+        let mut rewritten = false;
         for rewriter in rewriters {
-            logical_plan = rewriter.rewrite(logical_plan)?.data
+            let transformed = rewriter.rewrite(logical_plan)?;
+            rewritten |= transformed.transformed;
+            logical_plan = transformed.data;
+        }
+        if rewritten {
+            // Delta metadata rewrites can remove aggregate inputs after the main optimizer pass.
+            // Re-run only projection cleanup so the eventual file scan reads the residual columns.
+            let optimizer = Optimizer::with_rules(vec![Arc::new(OptimizeProjections::new())]);
+            let optimizer_context = OptimizerContext::new_with_config_options(Arc::clone(
+                session_state.config_options(),
+            ));
+            logical_plan = optimizer.optimize(logical_plan, &optimizer_context, |_, _| {})?;
         }
         let extension_planners: Vec<Arc<dyn ExtensionPlanner + Send + Sync>> = vec![
             Arc::new(DeltaPhysicalPlanner),

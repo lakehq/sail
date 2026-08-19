@@ -311,6 +311,25 @@ Feature: Delta Lake read path (driver vs metadata-as-data)
         """
       Then query plan matches snapshot
 
+    Scenario: Exact and residual aggregates share one global aggregate row
+      When query
+        """
+        SELECT
+          COUNT(*) AS rows,
+          MIN(id) AS minimum,
+          SUM(nullable_value) AS total
+        FROM delta_exact_aggregates
+        """
+      Then query result
+        | rows | minimum | total |
+        | 3    | 1       | 40    |
+      When query
+        """
+        EXPLAIN SELECT COUNT(*) AS rows, MIN(id) AS minimum, SUM(nullable_value) AS total
+        FROM delta_exact_aggregates
+        """
+      Then query plan matches snapshot
+
     Scenario: Non-monotonic cast extrema retain the scan
       When query
         """
