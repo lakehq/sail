@@ -92,16 +92,20 @@ def _partition_unique_id(frame: CelebornFrame) -> str:
 
 
 def _push_partition_ids(proxies: dict[str, EndpointProxy]) -> tuple[str, ...]:
-    """Return every partition ID observed on proxied PUSH_DATA requests."""
-    return tuple(
-        _partition_unique_id(event.frame)
-        for proxy in proxies.values()
-        for event in proxy.events.snapshot()
-        if isinstance(event, FrameReceived)
-        and event.direction == "client_to_server"
-        and isinstance(event.frame, CelebornFrame)
-        and event.frame.message_type == CelebornMessageType.PUSH_DATA
+    """Return partition IDs for proxied PUSH_DATA requests in observation order."""
+    events = sorted(
+        (
+            event
+            for proxy in proxies.values()
+            for event in proxy.events.snapshot()
+            if isinstance(event, FrameReceived)
+            and event.direction == "client_to_server"
+            and isinstance(event.frame, CelebornFrame)
+            and event.frame.message_type == CelebornMessageType.PUSH_DATA
+        ),
+        key=lambda event: event.timestamp,
     )
+    return tuple(_partition_unique_id(event.frame) for event in events)
 
 
 def _split_response_partition_ids(
@@ -274,12 +278,11 @@ def test_shuffle_client_handles_a_partition_split(
         else:
             pytest.fail(f"Celeborn did not emit split status {split_status} after flushing the threshold")
 
-        split_partition_ids = _split_response_partition_ids(celeborn_push_proxies, split_status)
-        push_count = len(_push_partition_ids(celeborn_push_proxies))
+        split_partition_ids = set(_split_response_partition_ids(celeborn_push_proxies, split_status))
         after_split = b"after partition split"
         assert client.push_data(5, 0, 0, 0, after_split) == len(after_split) + 16
         batches.append(after_split)
-        assert _push_partition_ids(celeborn_push_proxies)[push_count] != split_partition_ids[-1]
+        assert _push_partition_ids(celeborn_push_proxies)[-1] not in split_partition_ids
 
         client.mapper_end(5, 0, 0, 1)
 
