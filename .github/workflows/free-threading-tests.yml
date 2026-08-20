@@ -47,5 +47,24 @@ jobs:
       # server in a single interpreter; in real deployments the server's
       # gRPC is implemented in Rust (tonic), so grpcio never enters the
       # free-threaded server process and no override is needed.
+      # The scope covers the Python execution surface, where free-threading
+      # actually matters: all UDF types, the Python data source, and the
+      # dedicated free-threading tests.
+      #
+      # The deselected tests are pandas>=3 test incompatibilities, not
+      # free-threading failures: their comparison helpers sort
+      # `to_dict(orient="records")` output whose missing-value handling
+      # changed in pandas 3, and they fail identically on this interpreter
+      # with the GIL enabled. The free-threaded environment cannot use
+      # pandas 2 (no cp314t wheels), so they are excluded until the tests
+      # support pandas 3.
       - name: Run Free-Threading Tests
-        run: hatch -e test-freethreaded run pytest --pyargs pysail.tests.test_free_threading -v
+        run: >-
+          hatch -e test-freethreaded run pytest --pyargs
+          pysail.tests.spark.udf
+          pysail.tests.spark.datasource
+          pysail.tests.test_free_threading
+          -v
+          -k "not test_csv_read_write_compressed
+          and not test_parquet_read_write_compressed
+          and not test_parquet_read_with_custom_extension"

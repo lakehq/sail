@@ -203,12 +203,21 @@ env-vars = { PYTHON_GIL = "0" }
 dependencies = [
     "pyspark-client==4.2.0",
     "pytest>=9.1,<10",
+    "pytest-bdd>=8.1,<9",
+    "syrupy>=5.0,<6",
+    "jinja2>=3.1,<4",
+    "jsonpath-ng>=1.6,<2",
+    "PyYAML>=6.0,<7",
     "testcontainers>=4,<5",
-    # Bumped relative to the `test` environment (pandas<3 / pyarrow>=24,<25):
-    # these are the minimum versions that publish cp314t (free-threaded)
-    # wheels.
+    # Without the extras used by the `test` environment: the Spark test
+    # machinery only needs the pure-Python core of pyiceberg.
+    "pyiceberg==0.11.1",
+    # Bumped relative to the `test` environment (pandas<3 / pyarrow>=24,<25 /
+    # pillow>=10.3,<11): these are the minimum versions that publish cp314t
+    # (free-threaded) wheels.
     "pandas>=3,<4",
     "pyarrow>=25,<26",
+    "pillow>=11.3,<13",
 ]
 path = ".venvs/test-freethreaded"
 
