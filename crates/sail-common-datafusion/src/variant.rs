@@ -10,6 +10,7 @@ use datafusion::arrow::datatypes::{
 };
 use parquet_variant::Variant;
 use parquet_variant_compute::{VariantArray, VariantType, shred_variant, unshred_variant};
+use serde::{Deserialize, Serialize};
 
 const MIN_FIELD_FREQUENCY: f64 = 0.10;
 const MAX_SHREDDED_FIELDS: usize = 300;
@@ -22,7 +23,7 @@ pub const VARIANT_TYPED_VALUE_FIELD_NAME: &str = "typed_value";
 pub const VARIANT_METADATA_MARKER_KEY: &str = "variant";
 pub const VARIANT_METADATA_MARKER_VALUE: &str = "true";
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VariantShreddingConfig {
     pub enabled: bool,
     pub inference_buffer_size: usize,

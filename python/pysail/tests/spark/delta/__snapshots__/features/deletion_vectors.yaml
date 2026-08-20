@@ -21,6 +21,14 @@ data:
     predicate: 'id = 2 '
   timestamp: <timestamp>
 ---
+name: "test_explain_count1_after_dv_delete_uses_logical_rowcount_metadata"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as cnt]
+      ProjectionExec: expr=[2 as #3]
+        PlaceholderRowExec
+---
 name: "test_explain_delete_on_dv_table_shows_deletionvectorwriterexec"
 data:
   |-

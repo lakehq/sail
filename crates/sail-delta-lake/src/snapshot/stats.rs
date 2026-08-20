@@ -40,9 +40,9 @@ use crate::datasource::pruning::{
 };
 use crate::schema::arrow_field_physical_name;
 use crate::spec::fields::{
-    FIELD_NAME_PARTITION_VALUES_PARSED, FIELD_NAME_SIZE, FIELD_NAME_STATS_PARSED,
-    STATS_FIELD_MAX_VALUES, STATS_FIELD_MIN_VALUES, STATS_FIELD_NULL_COUNT,
-    STATS_FIELD_NUM_RECORDS,
+    DV_FIELD_CARDINALITY, FIELD_NAME_DELETION_VECTOR, FIELD_NAME_PARTITION_VALUES_PARSED,
+    FIELD_NAME_SIZE, FIELD_NAME_STATS_PARSED, STATS_FIELD_MAX_VALUES, STATS_FIELD_MIN_VALUES,
+    STATS_FIELD_NULL_COUNT, STATS_FIELD_NUM_RECORDS,
 };
 use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
 
@@ -177,7 +177,26 @@ impl<'a> SnapshotPruningStats<'a> {
     }
 
     fn num_records(&self) -> Precision<usize> {
-        self.collect_count(STATS_FIELD_NUM_RECORDS)
+        // Delta numRecords counts physical Parquet rows; scan statistics describe rows left after DVs.
+        let Some(physical_rows) =
+            nested_struct_column_exact_or_path(self.stats, STATS_FIELD_NUM_RECORDS)
+                .and_then(|column| column.as_any().downcast_ref::<Int64Array>())
+        else {
+            return Precision::Absent;
+        };
+        if physical_rows.len() != self.data.num_rows() {
+            return Precision::Absent;
+        }
+        let deletion_vectors = match self.data.column_by_name(FIELD_NAME_DELETION_VECTOR) {
+            Some(column) => {
+                let Some(vectors) = column.as_any().downcast_ref::<StructArray>() else {
+                    return Precision::Absent;
+                };
+                Some(vectors)
+            }
+            None => None,
+        };
+        logical_num_records(physical_rows, deletion_vectors)
     }
 
     fn total_size_files(&self) -> Precision<usize> {
@@ -297,6 +316,40 @@ impl<'a> SnapshotPruningStats<'a> {
             .ok()
             .cloned()
     }
+}
+
+fn logical_num_records(
+    physical_rows: &Int64Array,
+    deletion_vectors: Option<&StructArray>,
+) -> Precision<usize> {
+    if deletion_vectors.is_some_and(|vectors| vectors.len() != physical_rows.len()) {
+        return Precision::Absent;
+    }
+    let cardinalities = deletion_vectors.and_then(|vectors| {
+        vectors
+            .column_by_name(DV_FIELD_CARDINALITY)
+            .and_then(|column| column.as_any().downcast_ref::<Int64Array>())
+    });
+    (0..physical_rows.len())
+        .try_fold(0usize, |total, row| {
+            if physical_rows.is_null(row) {
+                return None;
+            }
+            let physical = usize::try_from(physical_rows.value(row)).ok()?;
+            let deleted = match deletion_vectors {
+                Some(vectors) if !vectors.is_null(row) => {
+                    let cardinalities = cardinalities?;
+                    if row >= cardinalities.len() || cardinalities.is_null(row) {
+                        return None;
+                    }
+                    usize::try_from(cardinalities.value(row)).ok()?
+                }
+                _ => 0,
+            };
+            total.checked_add(physical.checked_sub(deleted)?)
+        })
+        .map(Precision::Exact)
+        .unwrap_or(Precision::Absent)
 }
 
 fn batch_column<'a, T: Array + 'static>(batch: &'a RecordBatch, name: &str) -> DeltaResult<&'a T> {

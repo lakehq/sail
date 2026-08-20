@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import socket
-import threading
+import struct
 import time
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -15,6 +14,8 @@ import pytest
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.network import Network
 from testcontainers.core.wait_strategies import LogMessageWaitStrategy
+
+from pysail.testing.utils.proxy import EndpointProxy, FrameDecoder, ProxyCodec
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -42,154 +43,108 @@ class WorkerService:
     replicate_port: int
 
 
+class CelebornMessageType:
+    """Celeborn transport message type identifiers used by the Netty codec."""
+
+    CHUNK_FETCH_REQUEST = 0
+    CHUNK_FETCH_SUCCESS = 1
+    CHUNK_FETCH_FAILURE = 2
+    RPC_REQUEST = 3
+    RPC_RESPONSE = 4
+    RPC_FAILURE = 5
+    OPEN_STREAM = 6
+    STREAM_HANDLE = 7
+    ONE_WAY_MESSAGE = 9
+    PUSH_DATA = 11
+    PUSH_MERGED_DATA = 12
+    REGION_START = 13
+    REGION_FINISH = 14
+    PUSH_DATA_HAND_SHAKE = 15
+    READ_ADD_CREDIT = 16
+    READ_DATA = 17
+    OPEN_STREAM_WITH_CREDIT = 18
+    BACKLOG_ANNOUNCEMENT = 19
+    TRANSPORTABLE_ERROR = 20
+    BUFFER_STREAM_END = 21
+    HEARTBEAT = 22
+    SEGMENT_START = 23
+    NOTIFY_REQUIRED_SEGMENT = 24
+    SUBPARTITION_READ_DATA = 25
+
+
+class CelebornStatus:
+    """Celeborn worker response status codes used by split tests."""
+
+    HARD_SPLIT = 21
+    SOFT_SPLIT = 22
+
+
 @dataclass(frozen=True)
-class PushFaultSnapshot:
-    dropped_workers: tuple[str, ...]
-    forwarded_workers: tuple[str, ...]
-    disconnected_workers: tuple[str, ...]
+class CelebornFrame:
+    """One complete Celeborn Netty transport frame.
 
-
-class PushFaultController:
-    """Coordinates one injected failure across all worker push proxies."""
-
-    def __init__(self) -> None:
-        self._drop_next_connection = False
-        self._lock = threading.Lock()
-        self._dropped_workers: list[str] = []
-        self._forwarded_workers: list[str] = []
-        self._disconnected_workers: list[str] = []
-
-    def reset(self) -> None:
-        with self._lock:
-            self._drop_next_connection = False
-            self._dropped_workers.clear()
-            self._forwarded_workers.clear()
-            self._disconnected_workers.clear()
-
-    def drop_next_connection(self) -> None:
-        with self._lock:
-            self._drop_next_connection = True
-
-    def consume_drop_next_connection(self, worker: str) -> bool:
-        with self._lock:
-            drop_connection = self._drop_next_connection
-            self._drop_next_connection = False
-            if drop_connection:
-                self._dropped_workers.append(worker)
-            return drop_connection
-
-    def record_forward(self, worker: str) -> None:
-        with self._lock:
-            self._forwarded_workers.append(worker)
-
-    def record_disconnect(self, worker: str) -> None:
-        with self._lock:
-            self._disconnected_workers.append(worker)
-
-    def snapshot(self) -> PushFaultSnapshot:
-        with self._lock:
-            return PushFaultSnapshot(
-                dropped_workers=tuple(self._dropped_workers),
-                forwarded_workers=tuple(self._forwarded_workers),
-                disconnected_workers=tuple(self._disconnected_workers),
-            )
-
-
-class FaultInjectingTcpProxy:
-    """A local TCP proxy that can reject one subsequent client connection.
-
-    The proxy lets integration tests simulate a failed push connection without
-    stopping a worker or waiting for Celeborn's worker-timeout detection.
+    ``metadata`` is the encoded ``Message`` header and ``body`` is the optional
+    managed-buffer payload.  They are intentionally left opaque so a test can
+    inspect, replace, or mutate them without reimplementing every Celeborn
+    transport message.
     """
 
-    def __init__(
-        self,
-        worker: str,
-        target_host: str,
-        target_port: int,
-        fault_controller: PushFaultController,
-    ) -> None:
-        self._worker = worker
-        self._target = (target_host, target_port)
-        self._fault_controller = fault_controller
-        self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._listener.bind(("127.0.0.1", 0))
-        self._listener.listen()
-        self._listener.settimeout(0.1)
-        self._lock = threading.Lock()
-        self._clients: set[socket.socket] = set()
-        self._closed = threading.Event()
-        self._thread = threading.Thread(target=self._serve, daemon=True)
+    message_type: int
+    metadata: bytes
+    body: bytes
 
-    @property
-    def host(self) -> str:
-        return "127.0.0.1"
 
-    @property
-    def port(self) -> int:
-        return int(self._listener.getsockname()[1])
+class CelebornFrameDecoder(FrameDecoder[CelebornFrame]):
+    """Decode Celeborn transport frames."""
 
-    def start(self) -> None:
-        self._thread.start()
+    _HEADER_SIZE = 9
+    _MAX_FRAME_SIZE = 2**31 - 1
 
-    def disconnect_clients(self) -> None:
-        """Close active client connections so the next push creates a new one."""
-        with self._lock:
-            clients = tuple(self._clients)
-        for client in clients:
-            self._fault_controller.record_disconnect(self._worker)
-            with suppress(OSError):
-                client.shutdown(socket.SHUT_RDWR)
-            client.close()
+    def __init__(self) -> None:
+        self._buffer = bytearray()
 
-    def close(self) -> None:
-        self._closed.set()
-        self._listener.close()
-        self._thread.join(timeout=1)
+    def feed(self, data: bytes) -> list[CelebornFrame]:
+        self._buffer.extend(data)
+        frames: list[CelebornFrame] = []
+        while len(self._buffer) >= self._HEADER_SIZE:
+            metadata_size, message_type, body_size = struct.unpack_from(">iBi", self._buffer)
+            frame_size = metadata_size + body_size
+            if metadata_size < 0 or body_size < 0 or not 0 < frame_size < self._MAX_FRAME_SIZE:
+                msg = f"invalid Celeborn frame size: metadata={metadata_size}, body={body_size}"
+                raise ValueError(msg)
+            total_size = self._HEADER_SIZE + frame_size
+            if len(self._buffer) < total_size:
+                break
+            metadata_end = self._HEADER_SIZE + metadata_size
+            frames.append(
+                CelebornFrame(
+                    message_type=message_type,
+                    metadata=bytes(self._buffer[self._HEADER_SIZE : metadata_end]),
+                    body=bytes(self._buffer[metadata_end:total_size]),
+                )
+            )
+            del self._buffer[:total_size]
+        return frames
 
-    def _serve(self) -> None:
-        while not self._closed.is_set():
-            try:
-                client, _ = self._listener.accept()
-            except TimeoutError:
-                continue
-            except OSError:
-                return
-            if self._fault_controller.consume_drop_next_connection(self._worker):
-                client.close()
-                continue
-            try:
-                upstream = socket.create_connection(self._target, timeout=1)
-            except OSError:
-                client.close()
-                continue
-            self._fault_controller.record_forward(self._worker)
-            with self._lock:
-                self._clients.add(client)
-            threading.Thread(target=self._relay, args=(client, upstream), daemon=True).start()
 
-    def _relay(self, client: socket.socket, upstream: socket.socket) -> None:
-        def copy(source: socket.socket, destination: socket.socket) -> None:
-            try:
-                while data := source.recv(64 * 1024):
-                    destination.sendall(data)
-            except OSError:
-                pass
-            finally:
-                with suppress(OSError):
-                    destination.shutdown(socket.SHUT_WR)
+class CelebornCodec(ProxyCodec[CelebornFrame]):
+    """Codec for Celeborn's framed Netty transport protocol."""
 
-        client_to_upstream = threading.Thread(target=copy, args=(client, upstream), daemon=True)
-        upstream_to_client = threading.Thread(target=copy, args=(upstream, client), daemon=True)
-        client_to_upstream.start()
-        upstream_to_client.start()
-        client_to_upstream.join()
-        upstream_to_client.join()
-        with self._lock:
-            self._clients.discard(client)
-        client.close()
-        upstream.close()
+    def decoder(self, direction: str) -> CelebornFrameDecoder:
+        del direction
+        return CelebornFrameDecoder()
+
+    def encode(self, frame: CelebornFrame) -> bytes:
+        return (
+            struct.pack(
+                ">iBi",
+                len(frame.metadata),
+                frame.message_type,
+                len(frame.body),
+            )
+            + frame.metadata
+            + frame.body
+        )
 
 
 def _wait_for_port(host: str, port: int, timeout: float = 60) -> None:
@@ -302,6 +257,12 @@ def _celeborn_endpoint_resolver(overrides: dict[tuple[str, int], tuple[str, int]
 
 
 @pytest.fixture(scope="session")
+def celeborn_frame_codec() -> CelebornCodec:
+    """Provide the codec used to inspect Celeborn transport frames."""
+    return CelebornCodec()
+
+
+@pytest.fixture(scope="session")
 def celeborn_endpoint_resolver(celeborn_workers: dict[str, WorkerService]) -> object:
     """Map Docker-network worker endpoints to the host-published ports."""
     return _celeborn_endpoint_resolver(
@@ -318,18 +279,18 @@ def celeborn_endpoint_resolver(celeborn_workers: dict[str, WorkerService]) -> ob
 
 
 @pytest.fixture
-def celeborn_push_fault_controller() -> PushFaultController:
-    return PushFaultController()
-
-
-@pytest.fixture
-def celeborn_push_fault_proxies(
+def celeborn_push_proxies(
     celeborn_workers: dict[str, WorkerService],
-    celeborn_push_fault_controller: PushFaultController,
-) -> Generator[dict[str, FaultInjectingTcpProxy], None, None]:
-    """Forward worker push traffic while allowing a test to drop one connection."""
+    celeborn_frame_codec: CelebornCodec,
+) -> Generator[dict[str, EndpointProxy], None, None]:
+    """Forward worker push traffic through general purpose endpoint proxies."""
     proxies = {
-        name: FaultInjectingTcpProxy(name, worker.host, worker.push_port, celeborn_push_fault_controller)
+        name: EndpointProxy(
+            name=f"{name}:push",
+            target_host=worker.host,
+            target_port=worker.push_port,
+            codec=celeborn_frame_codec,
+        )
         for name, worker in celeborn_workers.items()
     }
     for proxy in proxies.values():
@@ -342,17 +303,17 @@ def celeborn_push_fault_proxies(
 
 
 @pytest.fixture
-def celeborn_push_fault_endpoint_resolver(
+def celeborn_push_endpoint_resolver(
     celeborn_workers: dict[str, WorkerService],
-    celeborn_push_fault_proxies: dict[str, FaultInjectingTcpProxy],
+    celeborn_push_proxies: dict[str, EndpointProxy],
 ) -> object:
-    """Resolve worker endpoints through fault-injectable push proxies."""
+    """Resolve worker endpoints through the general purpose push proxies."""
     return _celeborn_endpoint_resolver(
         {(name, 12000): (worker.host, worker.rpc_port) for name, worker in celeborn_workers.items()}
         | {
             (name, 12001): (
-                celeborn_push_fault_proxies[name].host,
-                celeborn_push_fault_proxies[name].port,
+                celeborn_push_proxies[name].host,
+                celeborn_push_proxies[name].port,
             )
             for name in celeborn_workers
         }

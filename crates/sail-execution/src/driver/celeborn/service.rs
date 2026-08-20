@@ -1,8 +1,8 @@
 use std::fmt::Display;
 use std::sync::Arc;
 
+use sail_celeborn::common::PartitionLocation;
 use sail_celeborn::lifecycle::{LifecycleManagerActor, LifecycleManagerMessage, ReviveRequest};
-use sail_celeborn::master::PartitionLocation;
 use sail_common::actor::ActorHandle;
 use tokio::sync::oneshot;
 use tonic::{Request, Response, Status};

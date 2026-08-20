@@ -2,10 +2,10 @@ use log::warn;
 use sail_common::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
 
+use crate::common::{PartitionLocation, SlotReservation, UserIdentifier, WorkerSlotLocations};
 use crate::error::{CelebornError, CelebornResult};
 use crate::lifecycle::actor::{LifecycleManagerActor, ShuffleKey};
 use crate::lifecycle::{LifecycleManagerMessage, ReviveRequest};
-use crate::master::{PartitionLocation, SlotReservation, UserIdentifier, WorkerSlotLocations};
 use crate::protocol::StatusCode;
 use crate::worker::{WorkerClient, WorkerClientOptions};
 
@@ -81,6 +81,8 @@ impl LifecycleManagerActor {
         let hostname = self.options.hostname.clone();
         let user_identifier = self.user_identifier();
         let endpoint_resolver = self.options.endpoint_resolver.clone();
+        let partition_split_threshold = self.options.partition_split_threshold;
+        let partition_split_mode = self.options.partition_split_mode;
         let handle = ctx.handle().clone();
         ctx.spawn(async move {
             let result = async {
@@ -115,6 +117,8 @@ impl LifecycleManagerActor {
                         locations.primary_locations.clone(),
                         locations.replica_locations.clone(),
                         user_identifier.clone(),
+                        partition_split_threshold,
+                        partition_split_mode,
                     )
                     .await?;
                 }
@@ -207,6 +211,8 @@ impl LifecycleManagerActor {
         let hostname = self.options.hostname.clone();
         let user_identifier = self.user_identifier();
         let endpoint_resolver = self.options.endpoint_resolver.clone();
+        let partition_split_threshold = self.options.partition_split_threshold;
+        let partition_split_mode = self.options.partition_split_mode;
         let excluded_workers = self.excluded_workers.values().cloned().collect();
         let handle = ctx.handle().clone();
         ctx.spawn(async move {
@@ -246,6 +252,8 @@ impl LifecycleManagerActor {
                         locations.primary_locations.clone(),
                         locations.replica_locations.clone(),
                         user_identifier.clone(),
+                        partition_split_threshold,
+                        partition_split_mode,
                     )
                     .await?;
                 }

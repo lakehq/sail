@@ -154,17 +154,14 @@ fn ensure_partitioned_hash_join_if_build_side_emits_unmatched_rows(
             .map(|(l, r)| (Arc::clone(l), Arc::clone(r)))
             .unzip();
 
-        Ok(Transformed::yes(Arc::new(HashJoinExec::try_new(
-            repartition(Arc::clone(&join.left), left_exprs, partition_count)?,
-            repartition(Arc::clone(&join.right), right_exprs, partition_count)?,
-            join.on.clone(),
-            join.filter.clone(),
-            &join.join_type,
-            join.projection.as_deref().map(|p| p.to_vec()),
-            PartitionMode::Partitioned,
-            join.null_equality,
-            false,
-        )?)))
+        let left = repartition(Arc::clone(&join.left), left_exprs, partition_count)?;
+        let right = repartition(Arc::clone(&join.right), right_exprs, partition_count)?;
+        let join = join
+            .builder()
+            .with_new_children(vec![left, right])?
+            .with_partition_mode(PartitionMode::Partitioned)
+            .build_exec()?;
+        Ok(Transformed::yes(join))
     })?;
 
     Ok(result.data)
@@ -773,7 +770,7 @@ fn create_scalar_subquery_input(
         graph,
         OutputDistribution::RoundRobinBatch { channels: 1 },
         TaskPlacement::Worker,
-        OutputMode::Pipelined,
+        scalar_subquery_output_mode(graph),
     )?;
     // ScalarSubqueryExec reads the link as a scalar value on every output
     // partition, so the materialized stage is exposed as one broadcast input.
@@ -858,13 +855,18 @@ fn create_row_shuffle(
 }
 
 fn shuffle_output_mode(graph: &JobGraph) -> OutputMode {
-    if matches!(
-        graph.options.shuffle_backend,
-        ShuffleBackendKind::Celeborn { .. }
-    ) {
-        OutputMode::Blocking
-    } else {
-        OutputMode::Pipelined
+    match graph.options.shuffle_backend {
+        ShuffleBackendKind::Storage { .. } | ShuffleBackendKind::Flight => OutputMode::Pipelined,
+        ShuffleBackendKind::Celeborn { .. } => OutputMode::Blocking,
+    }
+}
+
+fn scalar_subquery_output_mode(graph: &JobGraph) -> OutputMode {
+    match graph.options.shuffle_backend {
+        ShuffleBackendKind::Flight => OutputMode::Pipelined,
+        ShuffleBackendKind::Storage { .. } | ShuffleBackendKind::Celeborn { .. } => {
+            OutputMode::Blocking
+        }
     }
 }
 
@@ -1000,13 +1002,14 @@ mod tests {
     use datafusion::physical_plan::union::UnionExec;
     use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties, displayable};
     use sail_catalog::command::CatalogCommand;
+    use sail_celeborn::common::PartitionSplitMode;
     use sail_physical_plan::barrier::BarrierExec;
     use sail_physical_plan::catalog_command::CatalogCommandExec;
     use sail_physical_plan::coalesce::CoalesceExec;
     use sail_physical_plan::remote_checkpoint::RemoteCheckpointCommitExec;
     use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
-    use super::{JobGraph, JobGraphOptions};
+    use super::{JobGraph, JobGraphOptions, create_scalar_subquery_input};
     use crate::job_graph::{InputMode, OutputDistribution, OutputMode, StageInput, TaskPlacement};
     use crate::plan::StageInputExec;
     use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
@@ -1041,6 +1044,8 @@ mod tests {
                 master_host: "localhost".to_string(),
                 master_port: 1,
                 endpoint_overrides: vec![],
+                partition_split_threshold: 1_i64 << 30,
+                partition_split_mode: PartitionSplitMode::Soft,
             },
         }
     }
@@ -1167,6 +1172,31 @@ mod tests {
                 mode: InputMode::Shuffle,
             }]
         ));
+    }
+
+    #[test]
+    fn test_scalar_subquery_input_uses_blocking_shuffle_backends() {
+        for (options, is_blocking) in [
+            (blocking_shuffle_options(), true),
+            (celeborn_shuffle_options(), true),
+            (flight_shuffle_options(), false),
+        ] {
+            let mut graph = JobGraph {
+                stages: vec![],
+                schema: schema(),
+                options,
+            };
+            let input = create_scalar_subquery_input(&empty_plan(), &mut graph).unwrap();
+
+            assert_eq!(
+                matches!(graph.stages()[0].mode, OutputMode::Blocking),
+                is_blocking
+            );
+            assert!(matches!(
+                input.downcast_ref::<StageInputExec<StageInput>>(),
+                Some(stage) if matches!(stage.input().mode, InputMode::Broadcast)
+            ));
+        }
     }
 
     #[test]

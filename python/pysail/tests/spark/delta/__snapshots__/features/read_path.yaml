@@ -1,5 +1,25 @@
 # serializer version: 1
 ---
+name: "test_explain_count1_on_csv_retains_the_file_scan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as cnt]
+      ProjectionExec: expr=[count(Int64(1))@0 as #1]
+        AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+          CoalescePartitionsExec
+            AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                DataSourceExec: file_groups={1 group: [[<tmp>/csv_count_scan/<id>_0.csv]]}, file_type=csv, has_header=false
+---
+name: "test_explain_count1_on_delta_replaces_the_data_scan_with_metadata"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as cnt]
+      ProjectionExec: expr=[3 as #1]
+        PlaceholderRowExec
+---
 name: "test_explain_select_with_default_options_and_partition_filter_prunes_driver_file_scan"
 data:
   |-

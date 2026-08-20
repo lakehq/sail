@@ -274,11 +274,9 @@ fn parquet_primitive_type_compatible(physical: &DataType, requested: &DataType) 
             *requested_precision,
             *requested_scale,
         ),
-        // Parquet timestamps may differ in storage precision, but Spark keeps the
-        // local-time-zone and no-time-zone families distinct.
-        (DataType::Timestamp(_, physical_timezone), DataType::Timestamp(_, requested_timezone)) => {
-            physical_timezone.is_some() == requested_timezone.is_some()
-        }
+        // INT96 carries no timezone marker, so the explicit schema determines the
+        // timestamp family. Spark permits the same reinterpretation for Parquet.
+        (DataType::Timestamp(_, _), DataType::Timestamp(_, _)) => true,
         (DataType::Date32, DataType::Timestamp(_, None)) => true,
         (physical, requested) if is_string_type(physical) && is_string_type(requested) => true,
         (physical, requested) if is_binary_type(physical) && is_binary_type(requested) => true,

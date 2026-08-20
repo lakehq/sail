@@ -16,8 +16,8 @@ use datafusion::datasource::file_format::file_compression_type::FileCompressionT
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::{
-    ArrowSource, AvroSource, CsvSource, FileScanConfig, FileScanConfigBuilder, FileSink,
-    FileSinkConfig, FileSource, JsonSource, ParquetSource,
+    ArrowSource, AvroSource, FileScanConfig, FileScanConfigBuilder, FileSink, FileSinkConfig,
+    FileSource, JsonSource, ParquetSource,
 };
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::{DataSource, DataSourceExec};
@@ -47,6 +47,7 @@ use datafusion::physical_plan::joins::SortMergeJoinExec;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion::physical_plan::sorts::partial_sort::PartialSortExec;
+use datafusion::physical_plan::sorts::partitioned_topk::{PartitionedTopKExec, WindowFnKind};
 use datafusion::physical_plan::work_table::WorkTableExec;
 use datafusion::physical_plan::{ExecutionPlan, PlanProperties};
 use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
@@ -98,6 +99,7 @@ use sail_common_datafusion::system::catalog::SystemTable;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_data_source::formats::binary::source::BinarySource;
 use sail_data_source::formats::console::ConsoleSinkExec;
+use sail_data_source::formats::csv::CsvSource;
 use sail_data_source::formats::noop::NoopSinkExec;
 use sail_data_source::formats::python::{
     InputPartition, PythonDataSourceExec, PythonDataSourceWriteCommitExec,
@@ -158,7 +160,8 @@ use sail_function::scalar::datetime::spark_date_format::SparkDateFormat;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
 use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_interval::{
-    SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
+    SparkCalendarInterval, SparkDayTimeInterval, SparkDayTimeIntervalToCalendarInterval,
+    SparkYearMonthInterval,
 };
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
 use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
@@ -182,6 +185,7 @@ use sail_function::scalar::geo::st_geomfromwkb::StGeomFromWKB;
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
 use sail_function::scalar::json::{SparkFromJson, SparkSchemaOfJson, SparkToJson};
 use sail_function::scalar::map::map_entries::SparkMapEntries;
+use sail_function::scalar::map::map_from::{SparkMapFromArrays, SparkMapFromEntries};
 use sail_function::scalar::map::str_to_map::StrToMap;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
@@ -215,6 +219,7 @@ use sail_function::scalar::misc::theta_sketch::{
 use sail_function::scalar::misc::version::SparkVersion;
 use sail_function::scalar::multi_expr::MultiExpr;
 use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
+use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 use sail_function::scalar::string::format_number::FormatNumber;
@@ -260,7 +265,7 @@ use sail_iceberg::physical_plan::{
     IcebergPartitionTransformExpr, IcebergScanByDataFilesExec, IcebergWriterExec,
 };
 use sail_iceberg::spec::Transform as IcebergTransform;
-use sail_iceberg::{IcebergWriterExecOptions, SnapshotUpdateKind};
+use sail_iceberg::{IcebergWriteContext, IcebergWriterExecOptions, SnapshotUpdateKind};
 use sail_logical_plan::range::Range;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
 use sail_physical_plan::barrier::BarrierExec;
@@ -331,7 +336,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     fn try_decode(
         &self,
         buf: &[u8],
-        _inputs: &[Arc<dyn ExecutionPlan>],
+        inputs: &[Arc<dyn ExecutionPlan>],
         ctx: &TaskContext,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -878,6 +883,54 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     join_type,
                     sort_options,
                     null_equality,
+                )?))
+            }
+            NodeKind::PartitionedTopK(r#gen::PartitionedTopKExecNode {
+                expr,
+                partition_prefix_len,
+                fetch,
+                window_fn_kind,
+            }) => {
+                let [input] = inputs else {
+                    return plan_err!(
+                        "PartitionedTopKExec requires exactly one input, got {}",
+                        inputs.len()
+                    );
+                };
+                let expr = expr.ok_or_else(|| {
+                    plan_datafusion_err!("PartitionedTopKExec is missing its sort ordering")
+                })?;
+                let expr = self.try_decode_lex_ordering(
+                    &expr,
+                    input.schema().as_ref(),
+                    ctx,
+                    proto_converter,
+                )?;
+                let window_fn_kind =
+                    Self::try_decode_partitioned_top_k_window_fn_kind(window_fn_kind)?;
+                let partition_prefix_len = usize::try_from(partition_prefix_len).map_err(|_| {
+                    plan_datafusion_err!(
+                        "PartitionedTopKExec partition prefix length is too large: {partition_prefix_len}"
+                    )
+                })?;
+                let fetch = usize::try_from(fetch).map_err(|_| {
+                    plan_datafusion_err!("PartitionedTopKExec fetch is too large: {fetch}")
+                })?;
+                if fetch == 0 {
+                    return plan_err!("PartitionedTopKExec fetch must be greater than zero");
+                }
+                if partition_prefix_len == 0 || partition_prefix_len >= expr.len() {
+                    return plan_err!(
+                        "PartitionedTopKExec partition prefix length must be between 1 and {}, got {partition_prefix_len}",
+                        expr.len().saturating_sub(1)
+                    );
+                }
+                Ok(Arc::new(PartitionedTopKExec::try_new(
+                    Arc::clone(input),
+                    expr,
+                    partition_prefix_len,
+                    fetch,
+                    window_fn_kind,
                 )?))
             }
             NodeKind::DeltaWriter(delta_writer) => {
@@ -1469,9 +1522,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 sink_mode,
                 table_exists,
                 options,
-                logical_input_schema,
                 lakehouse_table_json,
                 merge_row_intents,
+                write_context_json,
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -1498,11 +1551,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 {
                     options.lakehouse_table = Some(lakehouse_table);
                 }
-                let logical_input_schema = if logical_input_schema.is_empty() {
-                    None
-                } else {
-                    Some(Arc::new(try_decode_schema(&logical_input_schema)?))
-                };
+                if write_context_json.is_empty() {
+                    return plan_err!("Missing write_context for IcebergWriterExec");
+                }
+                let write_context: IcebergWriteContext = serde_json::from_str(&write_context_json)
+                    .map_err(|error| {
+                        plan_datafusion_err!("failed to decode Iceberg write context: {error}")
+                    })?;
 
                 let writer = if merge_row_intents {
                     IcebergWriterExec::new_merge(
@@ -1512,7 +1567,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         sink_mode,
                         table_exists,
                         options,
-                        logical_input_schema,
+                        write_context,
                     )?
                 } else {
                     IcebergWriterExec::new(
@@ -1522,8 +1577,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         sink_mode,
                         table_exists,
                         options,
-                        logical_input_schema,
-                    )
+                        write_context,
+                    )?
                 };
                 Ok(Arc::new(writer))
             }
@@ -1667,6 +1722,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 write_data_path,
                 write_folder_storage_path,
                 lakehouse_table_json,
+                write_context_json,
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -1675,14 +1731,22 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let table_properties =
                     self.try_decode_json(&table_properties_json, "Iceberg table properties")?;
                 let lakehouse_table = self.try_decode_lakehouse_table(&lakehouse_table_json)?;
+                if write_context_json.is_empty() {
+                    return plan_err!("Missing write_context for IcebergEqualityDeleteWriterExec");
+                }
+                let write_context: IcebergWriteContext = serde_json::from_str(&write_context_json)
+                    .map_err(|error| {
+                        plan_datafusion_err!("failed to decode Iceberg write context: {error}")
+                    })?;
                 Ok(Arc::new(IcebergEqualityDeleteWriterExec::new(
                     input,
                     table_url,
                     table_properties,
                     write_data_path,
                     write_folder_storage_path,
+                    write_context,
                     lakehouse_table,
-                )))
+                )?))
             }
             NodeKind::PythonDataSource(r#gen::PythonDataSourceExecNode {
                 pickled_reader,
@@ -1998,6 +2062,24 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 common_prefix_length,
             })
+        } else if let Some(top_k) = node.downcast_ref::<PartitionedTopKExec>() {
+            let expr = Some(self.try_encode_lex_ordering(top_k.expr(), proto_converter)?);
+            let partition_prefix_len =
+                u64::try_from(top_k.partition_prefix_len()).map_err(|_| {
+                    plan_datafusion_err!(
+                        "PartitionedTopKExec partition prefix length is too large: {}",
+                        top_k.partition_prefix_len()
+                    )
+                })?;
+            let fetch = u64::try_from(top_k.fetch()).map_err(|_| {
+                plan_datafusion_err!("PartitionedTopKExec fetch is too large: {}", top_k.fetch())
+            })?;
+            NodeKind::PartitionedTopK(r#gen::PartitionedTopKExecNode {
+                expr,
+                partition_prefix_len,
+                fetch,
+                window_fn_kind: Self::try_encode_partitioned_top_k_window_fn_kind(top_k.fn_kind()),
+            })
         } else if let Some(data_source) = node.downcast_ref::<RemoteDataSourceExec>() {
             let data_source = data_source.data_source();
             let (source, output_partitioning) =
@@ -2041,18 +2123,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         self,
                         proto_converter,
                     )?)?;
-                    let csv_options = CsvOptions {
-                        has_header: Some(csv_source.has_header()),
-                        delimiter: csv_source.delimiter(),
-                        quote: csv_source.quote(),
-                        terminator: csv_source.terminator(),
-                        escape: csv_source.escape(),
-                        comment: csv_source.comment(),
-                        newlines_in_values: Some(csv_source.newlines_in_values()),
-                        truncated_rows: Some(csv_source.truncate_rows()),
-                        compression: file_scan.file_compression_type.into(),
-                        ..Default::default()
-                    };
+                    let mut csv_options = csv_source.options().clone();
+                    csv_options.compression = file_scan.file_compression_type.into();
                     let options = try_encode_message(gen_datafusion_common::CsvOptions::try_from(
                         &csv_options,
                     )?)?;
@@ -2617,11 +2689,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let sink_mode = self.try_encode_physical_sink_mode(iceberg_writer_exec.sink_mode())?;
             let options = serde_json::to_string(iceberg_writer_exec.options())
                 .map_err(|e| plan_datafusion_err!("failed to encode Iceberg options: {e}"))?;
-            let logical_input_schema = iceberg_writer_exec
-                .logical_input_schema()
-                .map(|schema| try_encode_schema(schema.as_ref()))
-                .transpose()?
-                .unwrap_or_default();
+            let write_context_json = serde_json::to_string(iceberg_writer_exec.write_context())
+                .map_err(|error| {
+                    plan_datafusion_err!("failed to encode Iceberg write context: {error}")
+                })?;
             NodeKind::IcebergWriter(r#gen::IcebergWriterExecNode {
                 input,
                 table_url: iceberg_writer_exec.table_url().to_string(),
@@ -2633,10 +2704,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 sink_mode: Some(sink_mode),
                 table_exists: iceberg_writer_exec.table_exists(),
                 options,
-                logical_input_schema,
                 lakehouse_table_json: self
                     .try_encode_lakehouse_table(iceberg_writer_exec.lakehouse_table())?,
                 merge_row_intents: iceberg_writer_exec.reads_merge_row_intents(),
+                write_context_json,
             })
         } else if let Some(iceberg_commit_exec) = node.downcast_ref::<IcebergCommitExec>() {
             let input = try_encode_physical_plan_with_converter(
@@ -2741,6 +2812,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 equality_writer.table_properties(),
                 "Iceberg table properties",
             )?;
+            let write_context_json = serde_json::to_string(equality_writer.write_context())
+                .map_err(|error| {
+                    plan_datafusion_err!("failed to encode Iceberg write context: {error}")
+                })?;
             NodeKind::IcebergEqualityDeleteWriter(r#gen::IcebergEqualityDeleteWriterExecNode {
                 input,
                 table_url: equality_writer.table_url().to_string(),
@@ -2751,6 +2826,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map(ToString::to_string),
                 lakehouse_table_json: self
                     .try_encode_lakehouse_table(equality_writer.lakehouse_table())?,
+                write_context_json,
             })
         } else if let Some(python_exec) = node.downcast_ref::<PythonDataSourceExec>() {
             let schema = try_encode_schema(python_exec.schema().as_ref())?;
@@ -2963,6 +3039,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkDateFormat::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::SparkMapFromArrays(r#gen::SparkMapFromArraysUdf { last_value_wins }) => {
+                let udf = SparkMapFromArrays::new(last_value_wins);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::SparkMapFromEntries(r#gen::SparkMapFromEntriesUdf { last_value_wins }) => {
+                let udf = SparkMapFromEntries::new(last_value_wins);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::StrToMap(r#gen::StrToMapUdf { last_value_wins }) => {
+                let udf = StrToMap::new(last_value_wins);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
             UdfKind::StructFunction(r#gen::StructFunctionUdf { field_names }) => {
                 let udf = StructFunction::new(field_names);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
@@ -3089,6 +3177,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkArrayPosition::new())))
             }
             "spark_array_compact" => Ok(Arc::new(ScalarUDF::from(SparkArrayCompact::new()))),
+            "spark_cast_string_to_int32" => {
+                Ok(Arc::new(ScalarUDF::from(SparkCastStringToInt32::new())))
+            }
             "vector_inner_product" => Ok(Arc::new(ScalarUDF::from(VectorInnerProduct::new()))),
             "bitmap_count" => Ok(Arc::new(ScalarUDF::from(BitmapCount::new()))),
             "format_string" => Ok(Arc::new(ScalarUDF::from(FormatStringFunc::new()))),
@@ -3223,6 +3314,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkYearMonthInterval::new())))
             }
             "spark_day_time_interval" => Ok(Arc::new(ScalarUDF::from(SparkDayTimeInterval::new()))),
+            "spark_day_time_interval_to_calendar_interval" => Ok(Arc::new(ScalarUDF::from(
+                SparkDayTimeIntervalToCalendarInterval::new(),
+            ))),
             "spark_calendar_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkCalendarInterval::new())))
             }
@@ -3255,7 +3349,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_width_bucket" | "width_bucket" => {
                 Ok(Arc::new(ScalarUDF::from(SparkWidthBucket::new())))
             }
-            "str_to_map" => Ok(Arc::new(ScalarUDF::from(StrToMap::new()))),
             "parse_url" => Ok(Arc::new(ScalarUDF::from(ParseUrl::new()))),
             "try_parse_url" | "spark_try_parse_url" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryParseUrl::new())))
@@ -3277,6 +3370,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<ArrayIntersect>()
             || node_inner.is::<SparkArrayPosition>()
             || node_inner.is::<SparkArrayCompact>()
+            || node_inner.is::<SparkCastStringToInt32>()
             || node_inner.is::<VectorInnerProduct>()
             || node_inner.is::<BitmapCount>()
             || node_inner.is::<FormatStringFunc>()
@@ -3321,6 +3415,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkDatePart>()
             || node_inner.is::<SparkDateTrunc>()
             || node_inner.is::<SparkDayTimeInterval>()
+            || node_inner.is::<SparkDayTimeIntervalToCalendarInterval>()
             || node_inner.is::<SparkDecode>()
             || node_inner.is::<SparkElt>()
             || node_inner.is::<SparkEncode>()
@@ -3383,7 +3478,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkWidthBucket>()
             || node_inner.is::<SparkXxhash64>()
             || node_inner.is::<SparkYearMonthInterval>()
-            || node_inner.is::<StrToMap>()
             || node_inner.is::<SparkToJson>()
             || node_inner.is::<TryUrlDecode>()
             || node_inner.is::<UrlDecode>()
@@ -3395,6 +3489,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.name() == "json_length"
         {
             UdfKind::Standard(r#gen::StandardUdf {})
+        } else if let Some(func) = node_inner.downcast_ref::<SparkMapFromArrays>() {
+            UdfKind::SparkMapFromArrays(r#gen::SparkMapFromArraysUdf {
+                last_value_wins: func.last_value_wins(),
+            })
+        } else if let Some(func) = node_inner.downcast_ref::<SparkMapFromEntries>() {
+            UdfKind::SparkMapFromEntries(r#gen::SparkMapFromEntriesUdf {
+                last_value_wins: func.last_value_wins(),
+            })
+        } else if let Some(func) = node_inner.downcast_ref::<StrToMap>() {
+            UdfKind::StrToMap(r#gen::StrToMapUdf {
+                last_value_wins: func.last_value_wins(),
+            })
         } else if let Some(func) = node.inner().downcast_ref::<PySparkUDF>() {
             let kind = self.try_encode_pyspark_udf_kind(func.kind())?;
             let input_types = func
@@ -4723,6 +4829,25 @@ impl RemoteExecutionCodec {
         })
     }
 
+    fn try_decode_partitioned_top_k_window_fn_kind(kind: i32) -> Result<WindowFnKind> {
+        match r#gen::PartitionedTopKWindowFnKind::try_from(kind).map_err(|_| {
+            plan_datafusion_err!("invalid PartitionedTopKExec window function kind: {kind}")
+        })? {
+            r#gen::PartitionedTopKWindowFnKind::Unspecified => {
+                plan_err!("PartitionedTopKExec window function kind is unspecified")
+            }
+            r#gen::PartitionedTopKWindowFnKind::RowNumber => Ok(WindowFnKind::RowNumber),
+            r#gen::PartitionedTopKWindowFnKind::Rank => Ok(WindowFnKind::Rank),
+        }
+    }
+
+    fn try_encode_partitioned_top_k_window_fn_kind(kind: WindowFnKind) -> i32 {
+        (match kind {
+            WindowFnKind::RowNumber => r#gen::PartitionedTopKWindowFnKind::RowNumber,
+            WindowFnKind::Rank => r#gen::PartitionedTopKWindowFnKind::Rank,
+        }) as i32
+    }
+
     fn try_decode_lex_orderings(
         &self,
         lex_orderings: &[r#gen::LexOrdering],
@@ -5316,6 +5441,224 @@ mod tests {
     }
 
     #[test]
+    fn test_round_trip_partitioned_top_k_preserves_window_fn_kind() -> Result<()> {
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("partition", DataType::Int64, false),
+            Field::new("value", DataType::Int64, false),
+        ]));
+        let partition = Arc::new(Column::new("partition", 0)) as Arc<dyn PhysicalExpr>;
+        let value = Arc::new(Column::new("value", 1)) as Arc<dyn PhysicalExpr>;
+        let ordering = LexOrdering::new([
+            PhysicalSortExpr::new_default(partition),
+            PhysicalSortExpr::new_default(value),
+        ])
+        .ok_or_else(|| plan_datafusion_err!("expected non-empty top-k ordering"))?;
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema));
+        let codec = RemoteExecutionCodec;
+
+        for window_fn_kind in [WindowFnKind::RowNumber, WindowFnKind::Rank] {
+            let plan = Arc::new(PartitionedTopKExec::try_new(
+                Arc::clone(&input),
+                ordering.clone(),
+                1,
+                3,
+                window_fn_kind,
+            )?);
+            let bytes = try_encode_physical_plan(&codec, plan)?;
+            let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+            let decoded = decoded
+                .downcast_ref::<PartitionedTopKExec>()
+                .ok_or_else(|| plan_datafusion_err!("decoded plan is not a PartitionedTopKExec"))?;
+
+            assert_eq!(decoded.fn_kind(), window_fn_kind);
+            assert_eq!(decoded.partition_prefix_len(), 1);
+            assert_eq!(decoded.fetch(), 3);
+            assert_eq!(decoded.expr().len(), 2);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_decode_partitioned_top_k_rejects_invalid_window_fn_kind() -> Result<()> {
+        let Err(unspecified) = RemoteExecutionCodec::try_decode_partitioned_top_k_window_fn_kind(
+            r#gen::PartitionedTopKWindowFnKind::Unspecified as i32,
+        ) else {
+            return plan_err!("unspecified window function kind must be rejected");
+        };
+        assert!(unspecified.to_string().contains("unspecified"));
+
+        let Err(invalid) =
+            RemoteExecutionCodec::try_decode_partitioned_top_k_window_fn_kind(i32::MAX)
+        else {
+            return plan_err!("invalid window function kind must be rejected");
+        };
+        assert!(invalid.to_string().contains("invalid"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_iceberg_writer_preserves_write_context() -> Result<()> {
+        use datafusion::arrow::datatypes::{DataType, Field};
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let input_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+        let table_url = Url::parse("file:///tmp/iceberg-codec-context/")
+            .map_err(|error| plan_datafusion_err!("{error}"))?;
+        let options = IcebergWriterExecOptions {
+            write_data_path: Some("pinned-data".to_string()),
+            ..Default::default()
+        };
+        let write_context = sail_iceberg::physical_plan::prepare_iceberg_write_context(
+            &table_url,
+            None,
+            &options,
+            &[],
+            &PhysicalSinkMode::Append,
+            input_schema.as_ref(),
+        )?;
+        let expected_data_location = write_context.data_location.clone();
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(IcebergWriterExec::new(
+            Arc::new(EmptyExec::new(input_schema)),
+            table_url,
+            vec![],
+            PhysicalSinkMode::Append,
+            false,
+            options,
+            write_context,
+        )?);
+
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, plan)?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let writer = decoded
+            .downcast_ref::<IcebergWriterExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not an IcebergWriterExec"))?;
+
+        assert!(writer.write_context().base_table.is_none());
+        assert_eq!(writer.write_context().data_location, expected_data_location);
+        assert!(writer.write_context().commit_writer_schema);
+        assert!(writer.write_context().commit_writer_partition_spec);
+        assert!(
+            writer
+                .write_context()
+                .writer_schema
+                .field_id_by_name("id")
+                .is_some()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_iceberg_equality_delete_writer_preserves_write_context() -> Result<()> {
+        use datafusion::arrow::datatypes::{DataType, Field};
+        use datafusion::physical_plan::empty::EmptyExec;
+        use sail_iceberg::IcebergBaseWriteContext;
+        use sail_iceberg::spec::FormatVersion;
+
+        let input_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+        let table_url = Url::parse("file:///tmp/iceberg-equality-codec-context/")
+            .map_err(|error| plan_datafusion_err!("{error}"))?;
+        let options = IcebergWriterExecOptions::default();
+        let mut write_context = sail_iceberg::physical_plan::prepare_iceberg_write_context(
+            &table_url,
+            None,
+            &options,
+            &[],
+            &PhysicalSinkMode::Append,
+            input_schema.as_ref(),
+        )?;
+        let writer_partition_spec = write_context
+            .writer_partition_spec
+            .clone()
+            .ok_or_else(|| plan_datafusion_err!("missing writer partition spec"))?;
+        write_context.base_table = Some(IcebergBaseWriteContext {
+            format_version: FormatVersion::V2,
+            partition_specs: vec![writer_partition_spec],
+            default_spec_id: 0,
+            properties: HashMap::new(),
+            last_column_id: 1,
+            current_schema_id: 0,
+            last_partition_id: 999,
+            current_snapshot_id: Some(7),
+        });
+        write_context.commit_writer_schema = false;
+        write_context.commit_writer_partition_spec = false;
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(IcebergEqualityDeleteWriterExec::new(
+            Arc::new(EmptyExec::new(input_schema)),
+            table_url,
+            vec![],
+            None,
+            None,
+            write_context,
+            None,
+        )?);
+
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, plan)?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let writer = decoded
+            .downcast_ref::<IcebergEqualityDeleteWriterExec>()
+            .ok_or_else(|| {
+                plan_datafusion_err!("decoded plan is not an IcebergEqualityDeleteWriterExec")
+            })?;
+
+        let base_table = writer
+            .write_context()
+            .base_table
+            .as_ref()
+            .ok_or_else(|| plan_datafusion_err!("missing decoded base table context"))?;
+        assert_eq!(base_table.current_snapshot_id, Some(7));
+        assert!(!writer.write_context().commit_writer_schema);
+        assert!(!writer.write_context().commit_writer_partition_spec);
+        assert_eq!(
+            writer.write_context().data_location,
+            "file:///tmp/iceberg-equality-codec-context/data/"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_decode_iceberg_writer_rejects_missing_write_context() -> Result<()> {
+        use datafusion::arrow::datatypes::{DataType, Field};
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        use crate::proto::converter::RemotePhysicalProtoConverter;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+        let codec = RemoteExecutionCodec;
+        let input = try_encode_physical_plan(&codec, Arc::new(EmptyExec::new(schema)))?;
+        let sink_mode = codec.try_encode_physical_sink_mode(&PhysicalSinkMode::Append)?;
+        let node = ExtendedPhysicalPlanNode {
+            node_kind: Some(NodeKind::IcebergWriter(r#gen::IcebergWriterExecNode {
+                input,
+                table_url: "file:///tmp/missing-iceberg-context/".to_string(),
+                partition_columns: vec![],
+                sink_mode: Some(sink_mode),
+                table_exists: false,
+                options: String::new(),
+                lakehouse_table_json: String::new(),
+                merge_row_intents: false,
+                write_context_json: String::new(),
+            })),
+        };
+
+        let converter = RemotePhysicalProtoConverter::default();
+        let error = match codec.try_decode(
+            &node.encode_to_vec(),
+            &[],
+            &TaskContext::default(),
+            &converter,
+        ) {
+            Ok(_) => return plan_err!("missing Iceberg write context should be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("Missing write_context"));
+        Ok(())
+    }
+
+    #[test]
     fn test_struct_field_matching_proto_round_trip_and_default() -> Result<()> {
         for mode in [
             StructFieldMatching::Name,
@@ -5392,6 +5735,54 @@ mod tests {
                 );
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_csv_source_preserves_sail_source_and_options() -> Result<()> {
+        let table_schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)]));
+        let csv_options = CsvOptions {
+            has_header: Some(false),
+            delimiter: b'|',
+            quote: b'\'',
+            terminator: Some(b';'),
+            escape: Some(b'\\'),
+            double_quote: Some(false),
+            newlines_in_values: Some(true),
+            compression_level: Some(7),
+            schema_infer_max_rec: Some(123),
+            date_format: Some("yyyy-MM-dd".to_string()),
+            null_regex: Some("^(NULL|-)$".to_string()),
+            comment: Some(b'#'),
+            truncated_rows: Some(true),
+            ignore_leading_whitespace: Some(true),
+            ignore_trailing_whitespace: Some(true),
+            ..Default::default()
+        };
+        let mut expected_options = csv_options.clone();
+        expected_options.compression = CompressionTypeVariant::GZIP;
+        let source = Arc::new(CsvSource::new(table_schema).with_csv_options(csv_options));
+        let file_scan = FileScanConfigBuilder::new(
+            datafusion::execution::object_store::ObjectStoreUrl::local_filesystem(),
+            source,
+        )
+        .with_file_compression_type(FileCompressionType::GZIP)
+        .build();
+        let plan = DataSourceExec::from_data_source(file_scan) as Arc<dyn ExecutionPlan>;
+        let codec = RemoteExecutionCodec;
+
+        let bytes = crate::proto::encode_remote_physical_plan(&codec, plan)?;
+        let decoded =
+            crate::proto::decode_remote_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<DataSourceExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not a data source"))?;
+        let (file_scan, csv_source) = decoded
+            .downcast_to_file_source::<CsvSource>()
+            .ok_or_else(|| plan_datafusion_err!("decoded file source is not Sail CSV"))?;
+
+        assert_eq!(file_scan.file_compression_type, FileCompressionType::GZIP);
+        assert_eq!(csv_source.options(), &expected_options);
         Ok(())
     }
 
@@ -5518,6 +5909,16 @@ mod tests {
                 .is_some()
         );
         assert_eq!(decoded.name(), "spark_variant_explode");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_cast_string_to_int32_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkCastStringToInt32::new()))?;
+
+        downcast_udf::<SparkCastStringToInt32>(&decoded, "SparkCastStringToInt32")?;
+        assert_eq!(decoded.name(), "spark_cast_string_to_int32");
 
         Ok(())
     }
@@ -6641,6 +7042,21 @@ mod tests {
         assert_eq!(decoded.timezone(), Some("America/Los_Angeles"));
         assert!(decoded.is_try());
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_day_time_interval_to_calendar_interval_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(
+            SparkDayTimeIntervalToCalendarInterval::new(),
+        ))?;
+
+        assert!(
+            decoded
+                .inner()
+                .downcast_ref::<SparkDayTimeIntervalToCalendarInterval>()
+                .is_some()
+        );
         Ok(())
     }
 

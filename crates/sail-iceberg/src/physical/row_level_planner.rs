@@ -14,7 +14,8 @@ use crate::operations::SnapshotUpdateKind;
 use crate::options::r#gen::IcebergWriteOptions;
 use crate::physical_plan::merge_row_projection::IcebergMergeRowProjection;
 use crate::physical_plan::{
-    IcebergCommitExec, IcebergEqualityDeleteWriterExec, IcebergWriterExec, IcebergWriterExecOptions,
+    IcebergCommitExec, IcebergEqualityDeleteWriterExec, IcebergWriterExec,
+    IcebergWriterExecOptions, prepare_iceberg_write_context,
 };
 use crate::table::Table;
 use crate::table_format::{
@@ -62,6 +63,14 @@ async fn plan_iceberg_merge(
 
     let merge_projection = IcebergMergeRowProjection::try_new(write_plan.schema())?;
     let data_rows_schema = merge_projection.data_schema();
+    let write_context = prepare_iceberg_write_context(
+        &table_url,
+        Some(table.metadata()),
+        &writer_options,
+        &partition_columns,
+        &PhysicalSinkMode::Append,
+        data_rows_schema.as_ref(),
+    )?;
     let writer: Arc<dyn ExecutionPlan> = Arc::new(IcebergWriterExec::new_merge(
         write_plan,
         table_url.clone(),
@@ -69,7 +78,7 @@ async fn plan_iceberg_merge(
         PhysicalSinkMode::Append,
         true,
         writer_options.clone(),
-        Some(data_rows_schema),
+        write_context,
     )?);
 
     Ok(Arc::new(
@@ -111,6 +120,20 @@ async fn plan_iceberg_delete(
     let physical_delete = planner.create_physical_plan(&delete_plan, session).await?;
 
     let writer_options = resolve_row_level_writer_options(session, node)?;
+    let partition_columns = IcebergTableFormat::partition_columns_from_metadata(&table)?;
+    let current_schema = table.metadata().current_schema().ok_or_else(|| {
+        DataFusionError::Plan("Iceberg table metadata is missing current schema".to_string())
+    })?;
+    let current_arrow_schema =
+        crate::datasource::type_converter::iceberg_schema_to_arrow(current_schema)?;
+    let write_context = prepare_iceberg_write_context(
+        &table_url,
+        Some(table.metadata()),
+        &writer_options,
+        &partition_columns,
+        &PhysicalSinkMode::Append,
+        &current_arrow_schema,
+    )?;
 
     let delete_input: Arc<dyn ExecutionPlan> =
         Arc::new(CoalescePartitionsExec::new(physical_delete));
@@ -120,8 +143,9 @@ async fn plan_iceberg_delete(
         writer_options.table_properties.clone(),
         writer_options.write_data_path.clone(),
         writer_options.write_folder_storage_path.clone(),
+        write_context,
         writer_options.lakehouse_table.clone(),
-    ));
+    )?);
 
     Ok(Arc::new(
         IcebergCommitExec::new(

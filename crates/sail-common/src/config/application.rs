@@ -326,6 +326,25 @@ pub struct CelebornShuffleBackend {
     pub master_host: String,
     pub master_port: u16,
     pub endpoint_overrides: Vec<CelebornEndpointOverride>,
+    pub partition_split_threshold: i64,
+    pub partition_split_mode: CelebornPartitionSplitMode,
+}
+
+/// The behavior a Celeborn worker uses when a partition exceeds its split threshold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CelebornPartitionSplitMode {
+    Soft,
+    Hard,
+}
+
+impl std::fmt::Display for CelebornPartitionSplitMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Soft => f.write_str("soft"),
+            Self::Hard => f.write_str("hard"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -388,6 +407,8 @@ mod shuffle_backend {
                         master_host: String::new(),
                         master_port: 0,
                         endpoint_overrides: vec![],
+                        partition_split_threshold: 1_i64 << 30,
+                        partition_split_mode: super::CelebornPartitionSplitMode::Soft,
                     },
                 },
                 super::ShuffleBackend::Storage(storage) => ShuffleBackend {
@@ -397,6 +418,8 @@ mod shuffle_backend {
                         master_host: String::new(),
                         master_port: 0,
                         endpoint_overrides: vec![],
+                        partition_split_threshold: 1_i64 << 30,
+                        partition_split_mode: super::CelebornPartitionSplitMode::Soft,
                     },
                 },
                 super::ShuffleBackend::Celeborn(celeborn) => ShuffleBackend {
@@ -638,6 +661,8 @@ pub struct CatalogConfig {
 #[serde(deny_unknown_fields)]
 pub struct OptimizerConfig {
     pub enable_join_reorder: bool,
+    pub enable_join_swap: bool,
+    pub prefer_hash_join: bool,
     pub expand_views_at_output: bool,
 }
 
@@ -839,5 +864,7 @@ impl ClusterConfigEnv {
         SHUFFLE_BACKEND__CELEBORN__MASTER_HOST,
         SHUFFLE_BACKEND__CELEBORN__MASTER_PORT,
         SHUFFLE_BACKEND__CELEBORN__ENDPOINT_OVERRIDES,
+        SHUFFLE_BACKEND__CELEBORN__PARTITION_SPLIT_THRESHOLD,
+        SHUFFLE_BACKEND__CELEBORN__PARTITION_SPLIT_MODE,
     }
 }
