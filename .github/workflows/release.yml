@@ -234,13 +234,14 @@ jobs:
   # pip selects the cp314t wheel on free-threaded 3.14 interpreters (which
   # cannot use abi3 wheels) and the abi3 wheel everywhere else.
   #
-  # The interpreter setup (`3.14t` + `--interpreter python3.14t`) mirrors the
-  # free-threading test job in `free-threading-tests.yml`, which is exercised
-  # by pull request CI; the rest of the recipe mirrors the abi3 `build-wheel`
-  # job above. Windows is intentionally not covered yet: the free-threaded
-  # toolchain on Windows is unvalidated for this project (this job only runs
-  # on release, so it cannot be exercised by pull request CI), and it should
-  # not hold back the other platforms.
+  # This job only runs on release, so none of its platform legs are exercised
+  # by pull request CI. The interpreter setup (`3.14t` +
+  # `--interpreter python3.14t`) mirrors the free-threading test job in
+  # `free-threading-tests.yml`, which pull request CI does validate on Linux
+  # x86_64; the rest of the recipe mirrors the abi3 `build-wheel` job above.
+  # Windows is intentionally not covered yet: the free-threaded toolchain on
+  # Windows is unvalidated for this project, and it should not hold back the
+  # other platforms.
   build-wheel-freethreaded:
     name: Build Wheel (free-threaded)
     runs-on: ${{ matrix.platform.runner }}
