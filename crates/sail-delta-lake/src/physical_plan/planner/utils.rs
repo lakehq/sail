@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion::common::{
     Column as LogicalColumn, DataFusionError, Result, ScalarValue, ToDFSchema,
 };
@@ -46,6 +46,7 @@ use crate::physical_plan::{
 };
 use crate::schema::PhysicalPartitionColumn;
 use crate::spec::fields::{
+    DV_FIELD_OFFSET, DV_FIELD_PATH_OR_INLINE_DV, DV_FIELD_STORAGE_TYPE, FIELD_NAME_DELETION_VECTOR,
     FIELD_NAME_MODIFICATION_TIME, FIELD_NAME_PATH, FIELD_NAME_SIZE, FIELD_NAME_STATS,
 };
 use crate::table::DeltaSnapshot;
@@ -72,6 +73,131 @@ pub struct LogReplayOptions {
 pub struct LogReplayFilter {
     pub predicate: Arc<dyn PhysicalExpr>,
     pub table_schema: SchemaRef,
+}
+
+fn utf8_literal(value: &str) -> Expr {
+    Expr::Literal(ScalarValue::Utf8(Some(value.to_string())), None)
+}
+
+fn struct_field_expr(struct_expr: Expr, field_name: &str) -> Expr {
+    Expr::ScalarFunction(ScalarFunction::new_udf(
+        datafusion::functions::core::get_field(),
+        vec![struct_expr, utf8_literal(field_name)],
+    ))
+}
+
+fn concat_utf8(args: Vec<Expr>) -> Expr {
+    Expr::ScalarFunction(ScalarFunction::new_udf(
+        datafusion::functions::string::concat(),
+        args,
+    ))
+}
+
+fn first_matching_field<'a>(fields: &Fields, names: &'a [&str]) -> Option<&'a str> {
+    names
+        .iter()
+        .copied()
+        .find(|name| fields.iter().any(|field| field.name() == *name))
+}
+
+fn action_replay_key_expr(
+    action_expr: Expr,
+    action_is_not_null: Expr,
+    action_fields: &Fields,
+) -> Result<Expr> {
+    let path = Expr::Cast(Cast::new(
+        Box::new(struct_field_expr(action_expr.clone(), FIELD_NAME_PATH)),
+        DataType::Utf8,
+    ));
+    let path_bytes = Expr::ScalarFunction(ScalarFunction::new_udf(
+        datafusion::functions::string::octet_length(),
+        vec![path.clone()],
+    ));
+    let path_bytes = Expr::Cast(Cast::new(Box::new(path_bytes), DataType::Utf8));
+
+    let dv_identity = if let Some(dv_field_name) = first_matching_field(
+        action_fields,
+        &[FIELD_NAME_DELETION_VECTOR, "deletion_vector"],
+    ) {
+        let dv_field = action_fields
+            .iter()
+            .find(|field| field.name() == dv_field_name)
+            .ok_or_else(|| {
+                DataFusionError::Internal(format!(
+                    "deletion vector field '{dv_field_name}' disappeared from action schema"
+                ))
+            })?;
+        let DataType::Struct(dv_fields) = dv_field.data_type() else {
+            return Err(DataFusionError::Plan(format!(
+                "log replay expects '{dv_field_name}' to be Struct, got {}",
+                dv_field.data_type()
+            )));
+        };
+        let storage_type_field =
+            first_matching_field(dv_fields, &[DV_FIELD_STORAGE_TYPE, "storage_type"]).ok_or_else(
+                || DataFusionError::Plan("deletion vector is missing storageType".to_string()),
+            )?;
+        let path_or_inline_field = first_matching_field(
+            dv_fields,
+            &[DV_FIELD_PATH_OR_INLINE_DV, "path_or_inline_dv"],
+        )
+        .ok_or_else(|| {
+            DataFusionError::Plan("deletion vector is missing pathOrInlineDv".to_string())
+        })?;
+
+        let dv_expr = struct_field_expr(action_expr.clone(), dv_field_name);
+        let storage_type = Expr::Cast(Cast::new(
+            Box::new(struct_field_expr(dv_expr.clone(), storage_type_field)),
+            DataType::Utf8,
+        ));
+        let path_or_inline = Expr::Cast(Cast::new(
+            Box::new(struct_field_expr(dv_expr.clone(), path_or_inline_field)),
+            DataType::Utf8,
+        ));
+        let offset_suffix =
+            if let Some(offset_field) = first_matching_field(dv_fields, &[DV_FIELD_OFFSET]) {
+                let offset = struct_field_expr(dv_expr.clone(), offset_field);
+                Expr::Case(Case::new(
+                    None,
+                    vec![(
+                        Box::new(offset.clone().is_not_null()),
+                        Box::new(concat_utf8(vec![
+                            utf8_literal("@"),
+                            Expr::Cast(Cast::new(Box::new(offset), DataType::Utf8)),
+                        ])),
+                    )],
+                    Some(Box::new(utf8_literal(""))),
+                ))
+            } else {
+                utf8_literal("")
+            };
+        let unique_id = concat_utf8(vec![storage_type, path_or_inline, offset_suffix]);
+        Expr::Case(Case::new(
+            None,
+            vec![(
+                Box::new(action_is_not_null.clone().and(dv_expr.is_not_null())),
+                Box::new(concat_utf8(vec![utf8_literal("1:"), unique_id])),
+            )],
+            Some(Box::new(utf8_literal("0"))),
+        ))
+    } else {
+        utf8_literal("0")
+    };
+
+    // Length-prefix the path so the composite string remains injective even when a path contains
+    // delimiter-like text. The resulting Utf8 value is opaque to Sort/Hash replay operators.
+    let key = concat_utf8(vec![
+        path_bytes,
+        utf8_literal(":"),
+        path,
+        utf8_literal(":"),
+        dv_identity,
+    ]);
+    Ok(Expr::Case(Case::new(
+        None,
+        vec![(Box::new(action_is_not_null), Box::new(key))],
+        None,
+    )))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -309,7 +435,7 @@ async fn build_log_replay_pipeline_with_files(
 
     // Projection#1: build a compact log scan schema for streaming replay.
     //
-    // - replay_path = coalesce(get_field(add, 'path'), get_field(remove, 'path'))
+    // - replay_path is the Delta logical-file identity (path plus optional deletion-vector ID)
     // - is_remove  = remove_struct IS NOT NULL AND add_struct IS NULL
     // - __sail_delta_log_version is passed through from the scan as a partition column
     // - payload columns are extracted up-front so the sort/replay does not carry wide structs
@@ -383,26 +509,44 @@ async fn build_log_replay_pipeline_with_files(
         .map(|e| e.clone().is_not_null())
         .unwrap_or_else(|| lit_bool(false));
 
-    // NOTE: `get_field(struct, 'child')` does not apply the parent struct's
-    // null buffer to the returned child array. We must guard child extraction with the
-    // struct's validity to avoid spurious values.
-    let add_path = guard_with(
+    let add_field = input_schema.field_with_name("add")?;
+    let add_struct_fields = match add_field.data_type() {
+        DataType::Struct(fields) => fields,
+        other => {
+            return Err(DataFusionError::Plan(format!(
+                "log replay expects 'add' to be Struct, got {other}"
+            )));
+        }
+    };
+    let remove_struct_fields = if has_remove_column {
+        let remove_field = input_schema.field_with_name("remove")?;
+        match remove_field.data_type() {
+            DataType::Struct(fields) => Some(fields),
+            other => {
+                return Err(DataFusionError::Plan(format!(
+                    "log replay expects 'remove' to be Struct, got {other}"
+                )));
+            }
+        }
+    } else {
+        None
+    };
+
+    let add_key = action_replay_key_expr(
+        add_col_expr.clone(),
         add_is_not_null.clone(),
-        get_field_expr(add_col_expr.clone(), FIELD_NAME_PATH),
-    );
-    let remove_path = remove_col_expr
-        .as_ref()
-        .map(|e| {
-            guard_with(
-                remove_is_not_null.clone(),
-                get_field_expr(e.clone(), FIELD_NAME_PATH),
-            )
-        })
-        .unwrap_or_else(lit_utf8_null);
+        add_struct_fields,
+    )?;
+    let remove_key = match (remove_col_expr.as_ref(), remove_struct_fields) {
+        (Some(remove), Some(fields)) => {
+            action_replay_key_expr(remove.clone(), remove_is_not_null.clone(), fields)?
+        }
+        _ => lit_utf8_null(),
+    };
 
     let replay_path = simplify(Expr::ScalarFunction(ScalarFunction::new_udf(
         datafusion::functions::core::coalesce(),
-        vec![add_path, remove_path.clone()],
+        vec![add_key, remove_key],
     )))?;
 
     // Mark tombstones using the struct's own validity.
@@ -414,15 +558,6 @@ async fn build_log_replay_pipeline_with_files(
 
     // Extract a stable "metadata table" schema from `add` up-front so replay can stream
     // over narrow payload columns.
-    let add_field = input_schema.field_with_name("add")?;
-    let add_struct_fields = match add_field.data_type() {
-        DataType::Struct(fields) => fields,
-        other => {
-            return Err(DataFusionError::Plan(format!(
-                "log replay expects 'add' to be Struct, got {other}"
-            )));
-        }
-    };
     let has_add_field = |name: &str| add_struct_fields.iter().any(|f| f.name() == name);
     let mod_time_field = if has_add_field(FIELD_NAME_MODIFICATION_TIME) {
         FIELD_NAME_MODIFICATION_TIME
@@ -479,7 +614,7 @@ async fn build_log_replay_pipeline_with_files(
     };
 
     let part_values = guard_add(get_add_field(part_values_field));
-    let part_expr_for = |logical: &str, physical: &str| -> Result<Arc<dyn PhysicalExpr>> {
+    let part_expr_for = |physical: &str| -> Result<Arc<dyn PhysicalExpr>> {
         let extract_elem = |key: &str| {
             let extracted = Expr::ScalarFunction(ScalarFunction::new_udf(
                 map_extract_udf(),
@@ -490,17 +625,10 @@ async fn build_log_replay_pipeline_with_files(
                 vec![extracted, lit_i64(1)],
             ))
         };
-        let physical_elem = extract_elem(physical);
-        let elem = if physical == logical {
-            physical_elem
-        } else {
-            let logical_elem = extract_elem(logical);
-            Expr::ScalarFunction(ScalarFunction::new_udf(
-                datafusion::functions::core::coalesce(),
-                vec![physical_elem, logical_elem],
-            ))
-        };
-        simplify(Expr::Cast(Cast::new(Box::new(elem), DataType::Utf8)))
+        simplify(Expr::Cast(Cast::new(
+            Box::new(extract_elem(physical)),
+            DataType::Utf8,
+        )))
     };
 
     let mut final_proj: Vec<(Arc<dyn PhysicalExpr>, String)> =
@@ -518,7 +646,7 @@ async fn build_log_replay_pipeline_with_files(
     final_proj.push((unknown_commit_metadata, COMMIT_TIMESTAMP_COLUMN.to_string()));
     for column in &partition_columns {
         final_proj.push((
-            part_expr_for(&column.logical_name, &column.physical_name)?,
+            part_expr_for(&column.physical_name)?,
             column.logical_name.clone(),
         ));
     }

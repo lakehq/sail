@@ -53,7 +53,7 @@ enum ReplayMode {
 /// checkpoint and commit inputs.
 ///
 /// Input:
-/// - `__sail_delta_replay_path` (Utf8): derived file path key
+/// - `__sail_delta_replay_path` (Utf8): derived logical-file action key
 /// - `__sail_delta_is_remove` (Boolean): derived marker for `remove(path)`
 /// - `__sail_delta_log_version` (Int64): derived log version from `_delta_log` filename prefix
 /// - payload columns: any additional columns carried through for the winning `add` row

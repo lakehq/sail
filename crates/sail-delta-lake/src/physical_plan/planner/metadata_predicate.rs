@@ -20,7 +20,7 @@ use crate::spec::fields::{
     FIELD_NAME_STATS_PARSED, STATS_FIELD_MAX_VALUES, STATS_FIELD_MIN_VALUES,
     STATS_FIELD_NULL_COUNT, STATS_FIELD_NUM_RECORDS,
 };
-use crate::spec::{StructType, stats_schema};
+use crate::spec::{DataSkippingNumIndexedCols, StructType, stats_schema};
 use crate::table::DeltaSnapshot;
 
 pub(crate) fn predicate_requires_stats(expr: &Expr, partition_columns: &[String]) -> bool {
@@ -97,7 +97,15 @@ pub(crate) fn build_metadata_stats_schema(
     let physical_arrow = make_physical_arrow_schema(&logical_non_partition, mode);
     let physical_kernel = StructType::try_from(&physical_arrow)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let stats_schema = stats_schema(&physical_kernel, snapshot.table_properties())
+    // The parsing schema describes predicate-referenced columns, including columns for which an
+    // individual Add has no statistics. Missing JSON fields then materialize as NULL and keep the
+    // file conservatively. Applying the table's logical stats-column configuration after mapping
+    // this schema to physical names can instead omit the field and make get_field fail planning.
+    let mut parsing_properties = snapshot.table_properties().clone();
+    parsing_properties.data_skipping_stats_columns = None;
+    parsing_properties.data_skipping_num_indexed_cols =
+        Some(DataSkippingNumIndexedCols::AllColumns);
+    let stats_schema = stats_schema(&physical_kernel, &parsing_properties)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     Ok(Arc::new(
         ArrowSchema::try_from(&stats_schema).map_err(|e| DataFusionError::External(Box::new(e)))?,

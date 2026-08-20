@@ -191,7 +191,6 @@ pub fn build_file_scan_config(
         None => Arc::new(snapshot.schema().clone()),
     };
     let config = scan_config.clone();
-    let table_partition_cols = snapshot.metadata().partition_columns();
     let partition_columns_mapped = snapshot.physical_partition_columns();
     let physical_to_logical = physical_to_logical_name_map(snapshot);
     let logical_file_schema = logical_file_schema_for_scan(
@@ -265,11 +264,16 @@ pub fn build_file_scan_config(
     });
 
     // Build table partition columns schema
-    let mut table_partition_cols_schema = Vec::with_capacity(table_partition_cols.len());
-    for col in table_partition_cols {
-        let field = complete_schema.field_with_name(col).map_err(|_| {
-            DataFusionError::Plan(format!("Partition column {col} not found in schema"))
-        })?;
+    let mut table_partition_cols_schema = Vec::with_capacity(partition_columns_mapped.len());
+    for column in &partition_columns_mapped {
+        let field = complete_schema
+            .field_with_name(&column.logical_name)
+            .map_err(|_| {
+                DataFusionError::Plan(format!(
+                    "Partition column {} not found in schema",
+                    column.logical_name
+                ))
+            })?;
         let corrected = if config.wrap_partition_values {
             match field.data_type() {
                 ArrowDataType::Utf8
@@ -283,8 +287,13 @@ pub fn build_file_scan_config(
         } else {
             field.data_type().clone()
         };
-        table_partition_cols_schema
-            .push(Arc::new(field.as_ref().clone().with_data_type(corrected)));
+        table_partition_cols_schema.push(Arc::new(
+            field
+                .as_ref()
+                .clone()
+                .with_name(&column.physical_name)
+                .with_data_type(corrected),
+        ));
     }
 
     // Add file column to partition schema if configured
