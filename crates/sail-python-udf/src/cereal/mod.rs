@@ -4,6 +4,7 @@ use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyList, PyModule};
 use pyo3::{PyResult, Python, intern};
 use sail_common::spec;
+use sail_python_runtime::attach_persistent;
 
 use crate::conversion::TryToPy;
 use crate::error::{PyUdfError, PyUdfResult};
@@ -22,7 +23,7 @@ enum PySparkVersion {
 fn get_pyspark_version() -> PyUdfResult<PySparkVersion> {
     static PYSPARK_VERSION: PyOnceLock<PySparkVersion> = PyOnceLock::new();
 
-    Python::attach(|py| {
+    attach_persistent(|py| {
         PYSPARK_VERSION
             .get_or_try_init(py, || {
                 let module = PyModule::import(py, "pyspark")?;
@@ -151,7 +152,7 @@ fn should_write_config(eval_type: spec::PySparkUdfType) -> bool {
 /// This is used by PySpark 4.x's `read_udfs` to deserialize input type information
 /// for `SQL_ARROW_BATCHED_UDF`.
 fn build_input_types_json(input_types: &[DataType], large_var_types: bool) -> PyUdfResult<String> {
-    Python::attach(|py| -> PyResult<String> {
+    attach_persistent(|py| -> PyResult<String> {
         let types_module = PyModule::import(py, intern!(py, "pyspark.sql.types"))?;
         let struct_type_cls = types_module.getattr(intern!(py, "StructType"))?;
         let struct_field_cls = types_module.getattr(intern!(py, "StructField"))?;

@@ -9,6 +9,7 @@ use datafusion_common::arrow::array::make_array;
 use datafusion_common::exec_err;
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use pyo3::{Py, PyAny, Python};
+use sail_python_runtime::attach_persistent;
 
 use crate::array::{build_list_array, get_list_field, get_struct_array_type};
 use crate::cereal::pyspark_udf::PySparkUdfPayload;
@@ -167,23 +168,22 @@ impl ScalarUDFImpl for PySparkCoGroupMapUDF {
                 right.len()
             );
         }
-        let udf = sail_python_runtime::threadstate::attach_persistent(|py| self.udf(py))?;
+        let udf = attach_persistent(|py| self.udf(py))?;
         let field = get_list_field(self.output_type())?;
         let arrays = (0..left.len())
             .map(|i| {
                 let left = Self::get_group(&left, i)?;
                 let right = Self::get_group(&right, i)?;
-                let data =
-                    sail_python_runtime::threadstate::attach_persistent(|py| -> PyUdfResult<_> {
-                        let output = udf.call1(
-                            py,
-                            (
-                                left.try_to_py(py, self.config.arrow_use_large_var_types)?,
-                                right.try_to_py(py, self.config.arrow_use_large_var_types)?,
-                            ),
-                        )?;
-                        Ok(ArrayData::try_from_py(py, &output)?)
-                    })?;
+                let data = attach_persistent(|py| -> PyUdfResult<_> {
+                    let output = udf.call1(
+                        py,
+                        (
+                            left.try_to_py(py, self.config.arrow_use_large_var_types)?,
+                            right.try_to_py(py, self.config.arrow_use_large_var_types)?,
+                        ),
+                    )?;
+                    Ok(ArrayData::try_from_py(py, &output)?)
+                })?;
                 let array = cast(&make_array(data), field.data_type())?;
                 Ok(array)
             })

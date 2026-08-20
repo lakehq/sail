@@ -115,6 +115,11 @@ impl PyMapStream {
         // We have to spawn a thread instead of spawning a tokio task
         // due to the blocking operation inside the input iterator.
         let python_task = std::thread::spawn(move || {
+            // This thread is ours and the attachment below spans its entire
+            // life, so the thread state already survives every call made on it
+            // and is destroyed at thread exit. That is the behavior
+            // `attach_persistent` recreates for pooled threads, so this is the
+            // one Python entry point that does not need it.
             match Python::attach(|py| {
                 Self::run_python_task(
                     py,

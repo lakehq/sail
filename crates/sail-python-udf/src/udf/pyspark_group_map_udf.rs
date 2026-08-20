@@ -8,6 +8,7 @@ use datafusion_common::Result;
 use datafusion_expr::AggregateUDFImpl;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use pyo3::{Py, PyAny, Python};
+use sail_python_runtime::attach_persistent;
 
 use crate::accumulator::{BatchAggregateAccumulator, BatchAggregator};
 use crate::array::{build_singleton_list_array, get_list_field};
@@ -137,7 +138,7 @@ impl AggregateUDFImpl for PySparkGroupMapUDF {
 
     fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let field = get_list_field(&self.output_type)?;
-        let udf = sail_python_runtime::threadstate::attach_persistent(|py| self.udf(py))?;
+        let udf = attach_persistent(|py| self.udf(py))?;
         let aggregator = Box::new(PySparkGroupMapper {
             udf,
             field,
@@ -164,7 +165,7 @@ struct PySparkGroupMapper {
 
 impl BatchAggregator for PySparkGroupMapper {
     fn call(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
-        let data = sail_python_runtime::threadstate::attach_persistent(|py| -> PyUdfResult<_> {
+        let data = attach_persistent(|py| -> PyUdfResult<_> {
             let output = self
                 .udf
                 .call1(py, (args.try_to_py(py, self.large_var_types)?,))?;

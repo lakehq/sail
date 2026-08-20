@@ -28,6 +28,7 @@ use arrow_schema::SchemaRef;
 use datafusion_common::{DataFusionError, Result};
 use pyo3::prelude::*;
 use pyo3::types::PyAnyMethods;
+use sail_python_runtime::attach_persistent;
 
 /// Convert a Python PyArrow RecordBatch to a Rust Arrow RecordBatch.
 ///
@@ -477,7 +478,7 @@ pub fn convert_rows_to_batch(schema: &SchemaRef, pickled_rows: &[Vec<u8>]) -> Re
         return Ok(RecordBatch::new_empty(schema.clone()));
     }
 
-    sail_python_runtime::threadstate::attach_persistent(|py| {
+    attach_persistent(|py| {
         let cloudpickle = import_cloudpickle(py)?;
 
         // Unpickle all rows
@@ -701,7 +702,7 @@ mod tests {
     #[expect(clippy::unwrap_used)]
     fn test_rust_record_batch_to_py() {
         init_python();
-        sail_python_runtime::threadstate::attach_persistent(|py| {
+        attach_persistent(|py| {
             // Create a simple RecordBatch
             let schema = Arc::new(Schema::new(vec![
                 Field::new("id", DataType::Int32, false),
@@ -736,7 +737,7 @@ mod tests {
     #[expect(clippy::unwrap_used)]
     fn test_record_batch_to_py_rows() {
         init_python();
-        sail_python_runtime::threadstate::attach_persistent(|py| {
+        attach_persistent(|py| {
             // Create a simple RecordBatch
             let schema = Arc::new(Schema::new(vec![
                 Field::new("id", DataType::Int32, false),
@@ -784,7 +785,7 @@ mod tests {
     #[expect(clippy::unwrap_used)]
     fn test_record_batch_to_py_rows_with_nulls() {
         init_python();
-        sail_python_runtime::threadstate::attach_persistent(|py| {
+        attach_persistent(|py| {
             // Create a RecordBatch with nulls
             let schema = Arc::new(Schema::new(vec![
                 Field::new("id", DataType::Int32, false),

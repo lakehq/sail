@@ -14,6 +14,7 @@ use pyo3::prelude::PyModule;
 use pyo3::sync::PyOnceLock;
 use pyo3::types::PyAnyMethods;
 use pyo3::{Bound, Py, PyAny, PyResult, Python};
+use sail_python_runtime::attach_persistent;
 
 use super::error::py_err;
 
@@ -126,7 +127,7 @@ impl Default for PythonDataSourceRegistry {
 ///
 /// Scans the entry point group and registers found classes.
 pub fn discover_data_sources() -> Result<usize> {
-    sail_python_runtime::threadstate::attach_persistent(|py| {
+    attach_persistent(|py| {
         let count = discover_from_entry_points(py).unwrap_or(0);
         Ok(count)
     })

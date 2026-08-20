@@ -9,6 +9,7 @@ use datafusion_common::Result;
 use once_cell::sync::OnceCell;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
+use sail_python_runtime::attach_persistent;
 
 use super::arrow_utils::py_schema_to_rust;
 use super::error::{PythonDataSourceContext, PythonDataSourceError, import_cloudpickle};
@@ -70,7 +71,7 @@ impl PythonDataSource {
             Self::validate_python_version(&python_ver)?;
 
             // Get DataSource name via Python call
-            let name = sail_python_runtime::threadstate::attach_persistent(|py| {
+            let name = attach_persistent(|py| {
                 let ds = Self::deserialize_datasource(py, &command)?;
                 let name_obj = ds.call_method0("name").map_err(|e| {
                     PythonDataSourceError::PythonError(format!("Failed to call name(): {}", e))
@@ -148,7 +149,7 @@ impl PythonDataSource {
                     let ctx = PythonDataSourceContext::new(&self.name, "schema");
 
                     // Call Python schema() method using cached datasource
-                    sail_python_runtime::threadstate::attach_persistent(|py| {
+                    attach_persistent(|py| {
                         let ds = self.get_cached_datasource(py)?;
 
                         // Call schema() method
@@ -259,7 +260,7 @@ impl PythonDataSource {
         {
             let ctx = PythonDataSourceContext::new(&self.name, "partitioning");
 
-            sail_python_runtime::threadstate::attach_persistent(|py| {
+            attach_persistent(|py| {
                 let ds = self.get_cached_datasource(py)?;
 
                 // Call partitioning() method

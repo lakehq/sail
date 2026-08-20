@@ -1,3 +1,5 @@
 //! Low-level utilities for running Python code inside the engine's
 //! native runtime, shared by every crate that calls into Python.
-pub mod threadstate;
+pub mod thread_state;
+
+pub use crate::thread_state::attach_persistent;

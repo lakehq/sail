@@ -6,6 +6,7 @@ use datafusion_common::Result;
 use educe::Educe;
 use sail_common_datafusion::rename::record_batch::rename_record_batch_stream;
 use sail_common_datafusion::udf::StreamUDF;
+use sail_python_runtime::attach_persistent;
 
 use crate::cereal::pyspark_udf::PySparkUdfPayload;
 use crate::config::PySparkUdfConfig;
@@ -77,19 +78,14 @@ impl StreamUDF for PySparkMapIterUDF {
     }
 
     fn invoke(&self, input: SendableRecordBatchStream) -> Result<SendableRecordBatchStream> {
-        let function =
-            sail_python_runtime::threadstate::attach_persistent(|py| -> PyUdfResult<_> {
-                let udf = PySparkUdfPayload::load(py, &self.payload)?;
-                let udf = match self.kind {
-                    PySparkMapIterKind::Pandas => {
-                        PySpark::map_pandas_iter_udf(py, udf, &self.config)?
-                    }
-                    PySparkMapIterKind::Arrow => {
-                        PySpark::map_arrow_iter_udf(py, udf, &self.config)?
-                    }
-                };
-                Ok(udf.unbind())
-            })?;
+        let function = attach_persistent(|py| -> PyUdfResult<_> {
+            let udf = PySparkUdfPayload::load(py, &self.payload)?;
+            let udf = match self.kind {
+                PySparkMapIterKind::Pandas => PySpark::map_pandas_iter_udf(py, udf, &self.config)?,
+                PySparkMapIterKind::Arrow => PySpark::map_arrow_iter_udf(py, udf, &self.config)?,
+            };
+            Ok(udf.unbind())
+        })?;
         Ok(Box::pin(PyMapStream::new(
             rename_record_batch_stream(input, &self.input_names)?,
             function,

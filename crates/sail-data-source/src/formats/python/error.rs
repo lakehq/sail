@@ -3,6 +3,7 @@
 //! Provides structured error types with context for debugging Python datasource issues.
 
 use datafusion_common::DataFusionError;
+use sail_python_runtime::attach_persistent;
 use thiserror::Error;
 
 /// Result type alias for Python data source operations.
@@ -109,7 +110,7 @@ impl From<PythonDataSourceError> for DataFusionError {
 pub fn format_py_error_with_traceback(e: pyo3::PyErr) -> String {
     use pyo3::types::PyTracebackMethods;
 
-    sail_python_runtime::threadstate::attach_persistent(|py| {
+    attach_persistent(|py| {
         let traceback = e
             .traceback(py)
             .and_then(|tb| tb.format().ok())
