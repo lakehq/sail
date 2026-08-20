@@ -228,6 +228,102 @@ jobs:
           path: dist/*.whl
           retention-days: 7
 
+  # Free-threaded (no-GIL) wheels, built alongside the abi3 wheels above.
+  # Building for a free-threaded interpreter makes pyo3 drop the `abi3-py38`
+  # feature automatically, so this emits versioned `cp314-cp314t` wheels.
+  # pip selects the cp314t wheel on free-threaded 3.14 interpreters (which
+  # cannot use abi3 wheels) and the abi3 wheel everywhere else.
+  #
+  # The interpreter setup (`3.14t` + `--interpreter python3.14t`) mirrors the
+  # free-threading test job in `free-threading-tests.yml`, which is exercised
+  # by pull request CI; the rest of the recipe mirrors the abi3 `build-wheel`
+  # job above. Windows is intentionally not covered yet: the free-threaded
+  # toolchain on Windows is unvalidated for this project (this job only runs
+  # on release, so it cannot be exercised by pull request CI), and it should
+  # not hold back the other platforms.
+  build-wheel-freethreaded:
+    name: Build Wheel (free-threaded)
+    runs-on: ${{ matrix.platform.runner }}
+    needs:
+      - setup
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - runner: ubuntu-24.04-x64-8-core
+            target: x86_64
+            os: linux
+          # The x64 runner is used here since Maturin performs cross-compilation.
+          - runner: ubuntu-24.04-x64-8-core
+            target: aarch64
+            os: linux
+          - runner: macos-26-intel
+            target: x86_64
+            os: macos
+          - runner: macos-26
+            target: aarch64
+            os: macos
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          # The "t" suffix selects the free-threaded (no-GIL) interpreter.
+          python-version: "3.14t"
+
+      - name: Install protoc
+        id: protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist --interpreter python3.14t
+          rustup-components: rustfmt
+          # The abi3 build uses the `2_24` image for the aarch64 target, but
+          # that image generation predates free-threaded CPython and has no
+          # python3.14t, so we use `2_28` here.
+          manylinux: ${{ matrix.platform.target == 'aarch64' && matrix.platform.os == 'linux' && '2_28' || 'auto' }}
+          # See the abi3 `build-wheel` job for background on this script.
+          # The aarch64 cross-compilation container is Debian-based while the
+          # x86_64 container is not, hence the different package managers.
+          before-script-linux: |
+            protoc_version="${{ steps.protoc.outputs.version }}"
+            protoc_target="linux-x86_64"
+            platform_target="${{ matrix.platform.target }}"
+            case "${platform_target}" in
+              "aarch64")
+                apt-get update
+                apt-get install -y wget unzip pkg-config
+                ;;
+              "x86_64")
+                yum update -y
+                yum install -y wget unzip pkgconfig
+                ;;
+              *)
+                echo "Unsupported platform target: ${platform_target}"
+                exit 1
+                ;;
+            esac
+            wget -q -O /tmp/protoc.zip "https://github.com/protocolbuffers/protobuf/releases/download/v${protoc_version#v}/protoc-${protoc_version#v}-${protoc_target}.zip"
+            unzip /tmp/protoc.zip -d /usr/local 'bin/*' 'include/*'
+            rm /tmp/protoc.zip
+            protoc --version
+
+      - name: Upload Wheels
+        uses: actions/upload-artifact@v7
+        with:
+          # The `package-wheel-*` prefix matters: the test, review, and
+          # publish jobs download artifacts by that pattern, which is how
+          # these wheels reach PyPI alongside the abi3 wheels.
+          name: package-wheel-freethreaded-${{ matrix.platform.os }}-${{ matrix.platform.target }}
+          path: dist/*.whl
+          retention-days: 7
+
   # Here we test installation of packages from the `dist` directory.
   # Note that pip favors packages from the index over local packages specified via `-f` or `--find-links`.
   # But we cannot use `--no-index` since the dependencies are not available locally.
@@ -350,6 +446,11 @@ jobs:
     needs:
       - test-sdist
       - test-wheel
+      # The free-threaded wheels are not exercised by the wheel test job
+      # (which runs on a GIL interpreter and installs the abi3 wheel), but
+      # the review and publish jobs must wait for them so that the artifact
+      # download picks them up.
+      - build-wheel-freethreaded
     steps:
       - uses: actions/checkout@v7
 
