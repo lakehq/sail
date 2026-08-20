@@ -13,6 +13,7 @@ use datafusion::functions_window::nth_value::{first_value_udwf, last_value_udwf,
 use datafusion::functions_window::rank::{dense_rank_udwf, percent_rank_udwf, rank_udwf};
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion_common::ScalarValue;
+use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_expr::expr::{NullTreatment, WindowFunctionParams};
 use datafusion_expr::{
     AggregateUDF, ExprSchemable, WindowFrame, WindowFunctionDefinition, cast, expr, lit, when,
@@ -446,6 +447,12 @@ fn count(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         function_context: _,
     } = input;
     let args = transform_count_star_wildcard_expr(arguments);
+    let args = match args.as_slice() {
+        [expr::Expr::Literal(value, _)] if !distinct && !value.is_null() => {
+            vec![expr::Expr::Literal(COUNT_STAR_EXPANSION, None)]
+        }
+        _ => args,
+    };
     Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
         fun: WindowFunctionDefinition::AggregateUDF(count::count_udaf()),
         params: WindowFunctionParams {

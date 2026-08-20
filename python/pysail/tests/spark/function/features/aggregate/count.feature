@@ -141,3 +141,47 @@ Feature: count aggregate function
       Then query result
         | count |
         | 0     |
+
+  Rule: count plans use canonical aggregate expressions
+
+    Scenario: window count literals preserve row counts
+      When query
+        """
+        SELECT
+          id,
+          COUNT(1) OVER (PARTITION BY category) AS partition_count,
+          COUNT('x') OVER () AS total_count
+        FROM VALUES (1, 'a'), (2, 'a'), (3, 'b') AS t(id, category)
+        ORDER BY id
+        """
+      Then query result
+        | id | partition_count | total_count |
+        | 1  | 2               | 3           |
+        | 2  | 2               | 3           |
+        | 3  | 1               | 3           |
+
+    Scenario: EXPLAIN count normalization uses canonical aggregates
+      When query
+        """
+        EXPLAIN
+        SELECT
+          COUNT(1) AS row_count,
+          COUNT(CAST(NULL AS INT)) AS null_count,
+          COUNT(a, 1) AS nullable_count,
+          COUNT(DISTINCT 1) AS distinct_count,
+          COUNT(*) FILTER (WHERE FALSE) AS filtered_count
+        FROM VALUES (1), (NULL), (3) AS t(a)
+        """
+      Then query plan matches snapshot
+
+    Scenario: EXPLAIN window count literals use the canonical row count
+      When query
+        """
+        EXPLAIN
+        SELECT
+          id,
+          COUNT(1) OVER (PARTITION BY category) AS partition_count,
+          COUNT('x') OVER () AS total_count
+        FROM VALUES (1, 'a'), (2, 'a'), (3, 'b') AS t(id, category)
+        """
+      Then query plan matches snapshot
