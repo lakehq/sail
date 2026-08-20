@@ -63,9 +63,10 @@ use crate::table::{
     DeltaTable, catalog_managed_commit_context, create_delta_table_with_object_store,
     create_logstore_with_object_store, infer_delta_logical_metadata, infer_delta_logical_schema,
     load_catalog_managed_commits_for_snapshot, open_table_with_object_store_and_table_config,
+    open_table_with_object_store_and_table_config_at_version,
 };
 use crate::transaction::CommitBuilder;
-use crate::{DeltaTableError, create_delta_source};
+use crate::{DeltaTableError, DeltaTableSource, create_delta_source};
 
 /// Delta Lake implementation of [`TableFormat`].
 #[derive(Debug)]
@@ -426,7 +427,7 @@ impl TableFormat for DeltaTableFormat {
                     sort_order,
                     options,
                     lakehouse_table,
-                    optimize: false,
+                    optimize_version: None,
                 },
             )),
         }))
@@ -477,6 +478,7 @@ impl TableFormat for DeltaTableFormat {
             options,
             lakehouse_table,
         } = info;
+        let optimize_version = delta_snapshot_version(&input)?;
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(DeltaWriteNode::new(
                 Arc::new(input),
@@ -488,7 +490,7 @@ impl TableFormat for DeltaTableFormat {
                     sort_order: vec![],
                     options,
                     lakehouse_table,
-                    optimize: true,
+                    optimize_version: Some(optimize_version),
                 },
             )),
         }))
@@ -569,7 +571,7 @@ pub struct DeltaWriteNodeOptions {
     #[educe(PartialEq(ignore), Hash(ignore), PartialOrd(ignore))]
     pub options: Vec<OptionLayer>,
     pub lakehouse_table: Option<LakehouseExecutionContext>,
-    pub optimize: bool,
+    pub optimize_version: Option<i64>,
 }
 
 #[derive(Clone, Debug, Educe)]
@@ -640,8 +642,9 @@ pub(crate) async fn plan_delta_write(
         sort_order,
         options,
         lakehouse_table,
-        optimize,
+        optimize_version,
     } = node.options().clone();
+    let optimize = optimize_version.is_some();
 
     if is_flow_event_schema(logical_input.schema().as_arrow()) {
         return not_impl_err!("writing streaming data to Delta table");
@@ -692,6 +695,7 @@ pub(crate) async fn plan_delta_write(
         object_store,
         lakehouse_planning_context,
         optimize,
+        optimize_version,
     )
     .await
     {
@@ -816,6 +820,7 @@ async fn open_delta_write_planning_table(
     object_store: Arc<dyn object_store::ObjectStore>,
     lakehouse_table: Option<&LakehouseExecutionContext>,
     require_files: bool,
+    version: Option<i64>,
 ) -> std::result::Result<DeltaTable, DeltaTableError> {
     // Only partition columns and table existence are needed at planning time;
     // skip replaying Add/Remove file actions unless a later physical plan needs them.
@@ -835,13 +840,26 @@ async fn open_delta_write_planning_table(
             lakehouse_table,
             &table_url,
             log_store.clone(),
-            None,
+            version,
         )
         .await
         .map_err(DeltaTableError::from)?;
         let mut table = DeltaTable::new(log_store, table_config);
-        table.load().await?;
+        if let Some(version) = version {
+            table.load_version(version).await?;
+        } else {
+            table.load().await?;
+        }
         Ok(table)
+    } else if let Some(version) = version {
+        open_table_with_object_store_and_table_config_at_version(
+            table_url,
+            object_store,
+            Default::default(),
+            table_config,
+            version,
+        )
+        .await
     } else {
         open_table_with_object_store_and_table_config(
             table_url,
@@ -850,6 +868,27 @@ async fn open_delta_write_planning_table(
             table_config,
         )
         .await
+    }
+}
+
+fn delta_snapshot_version(plan: &LogicalPlan) -> Result<i64> {
+    fn collect(plan: &LogicalPlan, versions: &mut Vec<i64>) {
+        if let LogicalPlan::TableScan(scan) = plan
+            && let Some(source) = scan.source.downcast_ref::<DeltaTableSource>()
+        {
+            versions.push(source.snapshot().version());
+        }
+        for input in plan.inputs() {
+            collect(input, versions);
+        }
+    }
+
+    let mut versions = Vec::new();
+    collect(plan, &mut versions);
+    match versions.as_slice() {
+        [version] => Ok(*version),
+        [] => plan_err!("OPTIMIZE requires a Delta table scan"),
+        _ => plan_err!("OPTIMIZE requires exactly one Delta table scan"),
     }
 }
 

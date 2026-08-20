@@ -10,7 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
@@ -73,22 +73,15 @@ pub async fn build_optimize_plan(
         .map_err(|e| DataFusionError::External(Box::new(e)))?
         .clone();
     let partition_columns = snapshot.metadata().partition_columns().clone();
-    let mut seen = HashSet::new();
-    let has_multiple_files = snapshot.adds().iter().any(|add| {
-        let partition = partition_columns
-            .iter()
-            .map(|column| {
-                add.partition_values
-                    .get(column)
-                    .and_then(|value| value.as_deref())
-            })
-            .collect::<Vec<_>>();
-        !seen.insert(partition)
-    });
-    if !has_multiple_files {
+    if !has_compaction_candidates(
+        snapshot.adds(),
+        &snapshot.physical_partition_columns(),
+        ctx.options().target_file_size,
+    ) {
         return Ok(Arc::new(EmptyExec::new(input.schema())));
     }
 
+    // ponytail: rewrite the whole table; select only candidate bins when OPTIMIZE cost matters.
     let input_schema = input.schema();
     let plan = create_projection(input, partition_columns.clone())?;
     let plan = create_repartition(plan, partition_columns.clone(), 1)?;
@@ -149,6 +142,45 @@ pub async fn build_optimize_plan(
         write_context.commit_context.clone(),
         ctx.lakehouse_table().cloned(),
     )))
+}
+
+fn has_compaction_candidates(
+    adds: &[crate::spec::Add],
+    partition_columns: &[(String, String)],
+    target_file_size: u64,
+) -> bool {
+    if target_file_size == 0 {
+        return false;
+    }
+
+    let mut smallest_by_partition = HashMap::<Vec<Option<&str>>, [u64; 2]>::new();
+    for add in adds {
+        let size = u64::try_from(add.size).unwrap_or_default();
+        if size >= target_file_size {
+            continue;
+        }
+        let partition = partition_columns
+            .iter()
+            .map(|(_, physical)| {
+                add.partition_values
+                    .get(physical)
+                    .and_then(|value| value.as_deref())
+            })
+            .collect::<Vec<_>>();
+        let smallest = smallest_by_partition
+            .entry(partition)
+            .or_insert([u64::MAX; 2]);
+        if size < smallest[0] {
+            smallest[1] = smallest[0];
+            smallest[0] = size;
+        } else if size < smallest[1] {
+            smallest[1] = size;
+        }
+    }
+
+    smallest_by_partition.values().any(|[first, second]| {
+        *second != u64::MAX && first.saturating_add(*second) <= target_file_size
+    })
 }
 
 async fn build_standard_plan(
@@ -441,4 +473,47 @@ async fn build_old_data_plan(
     let filter_exec = Arc::new(FilterExec::try_new(negated_condition, scan_exec)?);
 
     Ok(filter_exec)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use crate::spec::Add;
+
+    use super::has_compaction_candidates;
+
+    fn add(path: &str, size: i64, partition: &str) -> Add {
+        Add {
+            path: path.to_string(),
+            size,
+            partition_values: HashMap::from([("part".to_string(), Some(partition.to_string()))]),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn finds_small_files_that_fit_one_target_file() {
+        let adds = [add("a", 30, "x"), add("b", 40, "x")];
+        assert!(has_compaction_candidates(
+            &adds,
+            &[("part".to_string(), "part".to_string())],
+            100,
+        ));
+    }
+
+    #[test]
+    fn leaves_healthy_files_and_separate_partitions_alone() {
+        let partitions = [("part".to_string(), "part".to_string())];
+        assert!(!has_compaction_candidates(
+            &[add("a", 60, "x"), add("b", 70, "x")],
+            &partitions,
+            100,
+        ));
+        assert!(!has_compaction_candidates(
+            &[add("a", 30, "x"), add("b", 40, "y")],
+            &partitions,
+            100,
+        ));
+    }
 }

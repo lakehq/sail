@@ -57,9 +57,24 @@ fn table_access_purpose(operation: LakehouseOperation) -> TableAccessPurpose {
         LakehouseOperation::Write
         | LakehouseOperation::WritePrecondition
         | LakehouseOperation::Create
-        | LakehouseOperation::Register => TableAccessPurpose::DataWrite,
-        LakehouseOperation::Alter | LakehouseOperation::Maintenance => {
-            TableAccessPurpose::MetadataRead
-        }
+        | LakehouseOperation::Register
+        | LakehouseOperation::Maintenance => TableAccessPurpose::DataWrite,
+        LakehouseOperation::Alter => TableAccessPurpose::MetadataRead,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sail_catalog::lakehouse::TableAccessPurpose;
+    use sail_common_datafusion::catalog::LakehouseOperation;
+
+    use super::table_access_purpose;
+
+    #[test]
+    fn maintenance_requests_data_write_access() {
+        assert_eq!(
+            table_access_purpose(LakehouseOperation::Maintenance),
+            TableAccessPurpose::DataWrite
+        );
     }
 }
