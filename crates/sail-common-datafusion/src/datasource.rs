@@ -451,22 +451,11 @@ impl DataSourceRegistry {
     }
 
     pub fn register_data_source(&self, source: Arc<dyn DataSource>) -> Result<()> {
-        let source_is_lake = source.clone().as_lake_source().is_some();
         let mut sources = self
             .sources
             .write()
             .map_err(|_| plan_datafusion_err!("data source registry poisoned"))?;
         let name = source.name().to_lowercase();
-        if sources
-            .get(&name)
-            .is_some_and(|registered| registered.clone().as_lake_source().is_some())
-            && !source_is_lake
-        {
-            return plan_err!(
-                "Data source '{}' is already registered as a lake source",
-                source.name()
-            );
-        }
         sources.insert(name, source);
         Ok(())
     }
@@ -657,16 +646,14 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_registration_cannot_replace_a_lake_source() -> Result<()> {
+    fn ordinary_data_source_registration_replaces_a_lake_source() -> Result<()> {
         let registry = DataSourceRegistry::new();
         registry.register_data_source(Arc::new(TestLakeSource))?;
-
-        assert!(matches!(
-            registry.register_data_source(Arc::new(TestDataSource)),
-            Err(datafusion_common::DataFusionError::Plan(_))
-        ));
-        assert!(registry.get_data_source("test").is_ok());
         assert!(registry.get_lake_source("test").is_ok());
+
+        registry.register_data_source(Arc::new(TestDataSource))?;
+        assert!(registry.get_data_source("test").is_ok());
+        assert!(registry.get_lake_source("test").is_err());
         Ok(())
     }
 
