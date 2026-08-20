@@ -395,6 +395,8 @@ impl From<CommonErrorCause> for SparkThrowable {
                     SparkThrowable::DateTimeException(x)
                 } else if is_array_index_out_of_bounds_error(&x) {
                     SparkThrowable::ArrayIndexOutOfBoundsException(x)
+                } else if is_arithmetic_error(&x) {
+                    SparkThrowable::ArithmeticException(x)
                 } else {
                     // TODO: handle situations where a different exception type is more appropriate.
                     SparkThrowable::AnalysisException(x)
@@ -411,6 +413,13 @@ fn is_timestamp_parse_error(message: &str) -> bool {
 
 fn is_array_index_out_of_bounds_error(message: &str) -> bool {
     message.contains("[INVALID_ARRAY_INDEX]")
+}
+
+/// `contains`, like the helper above, because messages can arrive with a wrapper prefix.
+/// The leading bracket keeps the match tag-exact; the interval conditions are also
+/// `ArithmeticException` in Spark but are out of scope here.
+fn is_arithmetic_error(message: &str) -> bool {
+    message.contains("[DIVIDE_BY_ZERO]") || message.contains("[ARITHMETIC_OVERFLOW]")
 }
 
 fn cast_error_to_throwable(message: String) -> SparkThrowable {

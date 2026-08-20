@@ -192,7 +192,7 @@ use sail_function::scalar::math::spark_bin::SparkBin;
 use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
-use sail_function::scalar::math::spark_div::SparkIntervalDiv;
+use sail_function::scalar::math::spark_div::{SparkIntegerDiv, SparkIntervalDiv};
 use sail_function::scalar::math::spark_negative::SparkNegative;
 use sail_function::scalar::math::spark_pmod::SparkPmod;
 use sail_function::scalar::math::spark_signum::SparkSignum;
@@ -2791,6 +2791,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     target_type,
                 ))));
             }
+            UdfKind::SparkIntegerDiv(r#gen::SparkIntegerDivUdf { ansi_mode }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkIntegerDiv::new(ansi_mode))));
+            }
+            UdfKind::SparkIntervalDiv(r#gen::SparkIntervalDivUdf { ansi_mode }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkIntervalDiv::new(ansi_mode))));
+            }
         };
         match name {
             "array_item_with_position" => {
@@ -2881,7 +2887,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "xpath" => Ok(Arc::new(ScalarUDF::from(Xpath::new()))),
             "spark_base64" | "base64" => Ok(Arc::new(ScalarUDF::from(SparkBase64::new()))),
             "spark_bround" | "bround" => Ok(Arc::new(ScalarUDF::from(SparkBRound::new()))),
-            "spark_interval_div" => Ok(Arc::new(ScalarUDF::from(SparkIntervalDiv::new()))),
             "spark_unbase64" | "unbase64" => Ok(Arc::new(ScalarUDF::from(SparkUnbase64::new()))),
             "spark_aes_encrypt" | "aes_encrypt" => {
                 Ok(Arc::new(ScalarUDF::from(SparkAESEncrypt::new())))
@@ -3049,7 +3054,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkEncode>()
             || node_inner.is::<SparkExpm1>()
             || node_inner.is::<SparkHex>()
-            || node_inner.is::<SparkIntervalDiv>()
             || node_inner.is::<SparkCastToVariant>()
             || node_inner.is::<SparkIsVariantNullUdf>()
             || node_inner.is::<SparkVariantExplodeUdf>()
@@ -3288,6 +3292,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<SparkStructRename>() {
             let target_type = self.try_encode_data_type(func.target_type())?;
             UdfKind::SparkStructRename(r#gen::SparkStructRenameUdf { target_type })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkIntegerDiv>() {
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkIntegerDiv(r#gen::SparkIntegerDivUdf { ansi_mode })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkIntervalDiv>() {
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkIntervalDiv(r#gen::SparkIntervalDivUdf { ansi_mode })
         } else {
             return Ok(());
         };

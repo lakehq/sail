@@ -22,7 +22,9 @@ use sail_function::scalar::math::spark_bin::SparkBin;
 use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
-use sail_function::scalar::math::spark_div::SparkIntervalDiv;
+use sail_function::scalar::math::spark_div::{
+    DIVIDE_BY_ZERO_MESSAGE, SparkIntegerDiv, SparkIntervalDiv,
+};
 use sail_function::scalar::math::spark_negative::SparkNegative;
 use sail_function::scalar::math::spark_pmod::SparkPmod;
 use sail_function::scalar::math::spark_signum::SparkSignum;
@@ -399,46 +401,165 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
     let (dividend, divisor) = arguments.two()?;
 
-    // Plan-time check for literal zero divisors.
-    if is_zero_literal(&divisor) {
-        if function_context.plan_config.ansi_mode {
-            return Err(PlanError::ArrowError(ArrowError::DivideByZero));
-        } else {
-            return Ok(Expr::Literal(ScalarValue::Null, None));
-        }
-    }
-
     let ansi_mode = function_context.plan_config.ansi_mode;
     let dividend_type = dividend.get_type(function_context.schema);
     let divisor_type = divisor.get_type(function_context.schema);
 
-    // Apply runtime zero-divisor guard to the divisor before building the division expression.
-    let effective_divisor_type = divisor_type.as_ref().cloned().unwrap_or(DataType::Int32);
-    let divisor = make_safe_divisor(
-        divisor,
-        &effective_divisor_type,
-        ansi_mode,
-        "Division by zero",
+    // Spark picks its `DATATYPE_MISMATCH` sub-class from the types AFTER coercion, which is
+    // ANSI-dependent, so one message rather than a heuristic. `analysis` maps to Spark's class.
+    let reject = || {
+        Err(PlanError::analysis(
+            "div: cannot resolve the operands due to data type mismatch: div accepts \
+             BIGINT, DECIMAL, INTERVAL YEAR TO MONTH and INTERVAL DAY TO SECOND",
+        ))
+    };
+    // Legacy promotion sends a STRING to DOUBLE, which `div` rejects; ANSI promotion widens
+    // it to LONG, but only when the other side is integral (`findWiderTypeForString`).
+    let dividend_is_string = matches!(
+        dividend_type.as_ref().ok(),
+        Some(DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)
     );
+    let divisor_is_string = matches!(
+        divisor_type.as_ref().ok(),
+        Some(DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)
+    );
+    let dividend_is_integral = dividend_type.as_ref().is_ok_and(DataType::is_integer);
+    let divisor_is_integral = divisor_type.as_ref().is_ok_and(DataType::is_integer);
+    let (dividend, divisor, dividend_type, divisor_type) =
+        match (dividend_is_string, divisor_is_string) {
+            (false, false) => (dividend, divisor, dividend_type, divisor_type),
+            (true, false) if ansi_mode && divisor_is_integral => (
+                cast(dividend, DataType::Int64),
+                divisor,
+                Ok(DataType::Int64),
+                divisor_type,
+            ),
+            (false, true) if ansi_mode && dividend_is_integral => (
+                dividend,
+                cast(divisor, DataType::Int64),
+                dividend_type,
+                Ok(DataType::Int64),
+            ),
+            _ => return reject(),
+        };
+
+    // Spark rewrites an untyped NULL to the expected concrete type rather than tolerating it
+    // (TypeCoercionHelper.scala:570-578); with both sides NULL it falls back to LONG.
+    let dividend_is_null = matches!(dividend_type.as_ref().ok(), Some(DataType::Null));
+    let divisor_is_null = matches!(divisor_type.as_ref().ok(), Some(DataType::Null));
+    let (mut dividend, mut divisor) = (dividend, divisor);
+    let (mut dividend_type, mut divisor_type) = (dividend_type, divisor_type);
+    let null_target = match (dividend_is_null, divisor_is_null) {
+        (true, true) => Some(DataType::Int64),
+        (true, false) => divisor_type.as_ref().ok().cloned(),
+        (false, true) => dividend_type.as_ref().ok().cloned(),
+        (false, false) => None,
+    };
+    if let Some(target) = null_target {
+        if dividend_is_null {
+            dividend = cast(dividend, target.clone());
+            dividend_type = Ok(target.clone());
+        }
+        if divisor_is_null {
+            divisor = cast(divisor, target.clone());
+            divisor_type = Ok(target);
+        }
+    }
+
+    // `IntegralDivide.inputType` (arithmetic.scala:890), checked on the PAIR: per-operand
+    // checks let a mixed pair through and it dies inside DataFusion instead of here.
+    let numeric = |t: &DataType| {
+        t.is_integer() || matches!(t, DataType::Decimal128(_, _) | DataType::Decimal256(_, _))
+    };
+    let accepted = match (&dividend_type, &divisor_type) {
+        (Err(_), _) | (_, Err(_)) => true,
+        (Ok(l), Ok(r)) => {
+            (numeric(l) && numeric(r))
+                || matches!((l, r), (DataType::Duration(_), DataType::Duration(_)))
+                || matches!(
+                    (l, r),
+                    (
+                        DataType::Interval(IntervalUnit::YearMonth),
+                        DataType::Interval(IntervalUnit::YearMonth)
+                    )
+                )
+        }
+    };
+    if !accepted {
+        return reject();
+    }
+
+    // A NULL dividend wins over a zero divisor (arithmetic.scala:664-684), so the zero policy
+    // needs both operands. The kernels own it for their arms; the Duration and fallback arms
+    // reach plain DataFusion arithmetic, so the guard is built here and tests the dividend too.
+    let null_if_zero = |divisor: Expr, divisor_type: &DataType| {
+        make_safe_divisor(divisor, divisor_type, false, "")
+    };
+    let kernel_guarded_divisor = |divisor: Expr, divisor_type: &DataType| {
+        if ansi_mode {
+            divisor
+        } else {
+            null_if_zero(divisor, divisor_type)
+        }
+    };
+    let plan_guarded_divisor = |divisor: Expr, divisor_type: &DataType, dividend: &Expr| {
+        if !ansi_mode {
+            return null_if_zero(divisor, divisor_type);
+        }
+        // Defensive: neither call site reaches this today.
+        if matches!(divisor_type, DataType::Interval(_) | DataType::Duration(_)) {
+            return divisor;
+        }
+        // The dividend is duplicated into the plan deliberately; a volatile one can disagree
+        // between the predicate and the division.
+        let raise = Expr::ScalarFunction(expr::ScalarFunction {
+            func: Arc::new(ScalarUDF::from(RaiseError::new())),
+            args: vec![lit(DIVIDE_BY_ZERO_MESSAGE)],
+        });
+        Expr::Case(expr::Case {
+            expr: None,
+            when_then_expr: vec![(
+                Box::new(
+                    divisor
+                        .clone()
+                        .eq(lit(0))
+                        .and(dividend.clone().is_not_null()),
+                ),
+                Box::new(raise),
+            )],
+            else_expr: Some(Box::new(divisor)),
+        })
+    };
 
     let div_expr = match (&dividend_type, &divisor_type) {
         // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
         //  Seems to be a bug in DataFusion.
         (Ok(DataType::Duration(_)), Ok(DataType::Duration(_))) => {
-            // Match duration because we cast Spark's DayTime interval to Duration.
-            cast(dividend, DataType::Int64) / cast(divisor, DataType::Int64)
+            // Sail resolves Spark's DAY TO SECOND to Duration; the guard needs the Int64 cast
+            // because `make_safe_divisor` skips Duration.
+            let dividend = cast(dividend, DataType::Int64);
+            let divisor =
+                plan_guarded_divisor(cast(divisor, DataType::Int64), &DataType::Int64, &dividend);
+            dividend / divisor
         }
-        // Handle Interval / Interval division using custom UDF
+        // The UDF owns its zero policy.
         (Ok(DataType::Interval(_)), Ok(DataType::Interval(_))) => {
-            let interval_div = Arc::new(ScalarUDF::from(SparkIntervalDiv::new()));
-            Expr::ScalarFunction(expr::ScalarFunction {
-                func: interval_div,
-                args: vec![dividend, divisor],
-            })
+            ScalarUDF::from(SparkIntervalDiv::new(ansi_mode)).call(vec![dividend, divisor])
+        }
+        // Integer operands: delegate to SparkIntegerDiv, which raises on a zero divisor
+        // under ANSI and handles the LONG_MIN / -1 overflow edge. Outside ANSI the zero
+        // has to become a NULL before it reaches the kernel.
+        (Ok(d), Ok(s)) if d.is_integer() && s.is_integer() => {
+            let divisor = kernel_guarded_divisor(divisor, s);
+            ScalarUDF::from(SparkIntegerDiv::new(ansi_mode)).call(vec![dividend, divisor])
         }
         // TODO: In case getting the type fails, we don't want to fail the query.
         //  Future work is needed here, ideally we create something like `Operator::SparkDivide`.
-        (Ok(_), Ok(_)) | (Err(_), _) | (_, Err(_)) => dividend / divisor,
+        (Ok(_), Ok(_)) | (Err(_), _) | (_, Err(_)) => {
+            let effective_divisor_type = divisor_type.as_ref().cloned().unwrap_or(DataType::Int32);
+            let divisor = plan_guarded_divisor(divisor, &effective_divisor_type, &dividend);
+            dividend / divisor
+        }
     };
 
     Ok(cast(div_expr, DataType::Int64))
