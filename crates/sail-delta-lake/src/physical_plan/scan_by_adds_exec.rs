@@ -70,7 +70,6 @@ struct ScanByAddsStreamState {
     log_store: Option<crate::delta_log::LogStoreRef>,
     session_state: Option<datafusion::execution::SessionState>,
     file_schema: Option<SchemaRef>,
-    partition_columns: Option<Vec<String>>,
 
     // control
     partition_scan: Option<bool>,
@@ -110,7 +109,6 @@ impl ScanByAddsStreamState {
             log_store: None,
             session_state: None,
             file_schema: None,
-            partition_columns: None,
             partition_scan: None,
             emitted_partition_empty: false,
             pending_adds: Vec::new(),
@@ -166,7 +164,6 @@ impl ScanByAddsStreamState {
         snapshot_state
             .ensure_data_read_supported()
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let partition_columns = snapshot_state.metadata().partition_columns().clone();
         let session_state = SessionStateBuilder::new()
             .with_config(self.context.session_config().clone())
             .with_runtime_env(self.context.runtime_env().clone())
@@ -207,7 +204,6 @@ impl ScanByAddsStreamState {
         self.snapshot = Some(snapshot_state);
         self.session_state = Some(session_state);
         self.file_schema = Some(file_schema);
-        self.partition_columns = Some(partition_columns);
         self.scan_config = scan_config;
         self.table_opened = true;
         Ok(())
@@ -507,11 +503,15 @@ impl ScanByAddsStreamState {
         batch: &RecordBatch,
     ) -> Result<Vec<crate::spec::Add>> {
         self.ensure_table().await?;
-        let partition_columns = self
-            .partition_columns
-            .clone()
-            .unwrap_or_else(|| meta_adds::infer_partition_columns_from_schema(&batch.schema()));
-        meta_adds::decode_adds_from_meta_batch(batch, Some(&partition_columns))
+        let partition_value_columns = self
+            .snapshot
+            .as_deref()
+            .ok_or_else(|| DataFusionError::Internal("missing snapshot".into()))?
+            .physical_partition_columns();
+        meta_adds::decode_adds_from_meta_batch_with_partition_value_columns(
+            batch,
+            Some(&partition_value_columns),
+        )
     }
 }
 

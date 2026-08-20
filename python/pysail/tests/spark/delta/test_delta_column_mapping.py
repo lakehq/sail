@@ -347,7 +347,7 @@ def test_nested_mapping_with_metadata_as_data_read(spark, tmp_path: Path):
         spark.read.format("delta")
         .option("metadataAsDataRead", "true")
         .load(str(base))
-        .where(F.col("payload.level.value") > 10)
+        .where(F.col("payload.level.value") > F.lit(10))
         .collect()
     )
     assert [row.asDict(recursive=True) for row in filtered] == [{"id": 2, "payload": {"level": {"value": 20}}}]
@@ -362,7 +362,7 @@ def test_dotted_column_mapping_with_metadata_as_data_filter(spark, tmp_path: Pat
         spark.read.format("delta")
         .option("metadataAsDataRead", "true")
         .load(str(base))
-        .where(F.col("`event.id`") == 2)
+        .where(F.col("`event.id`") == F.lit(2))
         .collect()
     )
 

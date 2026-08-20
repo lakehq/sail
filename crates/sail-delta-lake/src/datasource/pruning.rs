@@ -329,12 +329,12 @@ impl AddStatsPruningStatistics {
         }
 
         let field = self.field_for(column)?;
-        let logical_name = column.name();
         let storage_name = self.storage_name_for(column)?;
-        if self.adds.iter().any(|add| {
-            add.partition_values.contains_key(&storage_name)
-                || add.partition_values.contains_key(logical_name)
-        }) {
+        if self
+            .adds
+            .iter()
+            .any(|add| add.partition_values.contains_key(&storage_name))
+        {
             return None;
         }
 
@@ -343,13 +343,9 @@ impl AddStatsPruningStatistics {
             .stats
             .iter()
             .map(|stats| {
-                let value = stats.as_ref().and_then(|stats| {
-                    lookup(stats, &storage_name).or_else(|| {
-                        (storage_name != logical_name)
-                            .then(|| lookup(stats, logical_name))
-                            .flatten()
-                    })
-                });
+                let value = stats
+                    .as_ref()
+                    .and_then(|stats| lookup(stats, &storage_name));
                 has_value |= value.is_some_and(|value| {
                     !matches!(
                         value,
@@ -420,7 +416,6 @@ impl AddStatsPruningStatistics {
         }
 
         let field = self.field_for(column)?;
-        let logical_name = column.name();
         let storage_name = self.storage_name_for(column)?;
         let values: Option<Vec<Option<&str>>> = self
             .adds
@@ -428,7 +423,6 @@ impl AddStatsPruningStatistics {
             .map(|add| {
                 add.partition_values
                     .get(&storage_name)
-                    .or_else(|| add.partition_values.get(logical_name))
                     .map(|value| value.as_deref())
             })
             .collect();
@@ -532,21 +526,13 @@ impl AddStatsPruningStatistics {
             return Some(array);
         }
 
-        let logical_name = column.name();
         let storage_name = self.storage_name_for(column)?;
         self.build_array(column, false, |a, s, dt| {
-            if let Some(pv) = a
-                .partition_values
-                .get(&storage_name)
-                .or_else(|| a.partition_values.get(logical_name))
-            {
+            if let Some(pv) = a.partition_values.get(&storage_name) {
                 return Self::scalar_from_partition_value(dt, pv);
             }
             if let Some(s) = s
-                && let Some(v) = s
-                    .min_values
-                    .get(&storage_name)
-                    .or_else(|| s.min_values.get(logical_name))
+                && let Some(v) = s.min_values.get(&storage_name)
             {
                 return ScalarConverter::column_value_stat_to_arrow_scalar_value(v, dt)
                     .ok()
@@ -567,21 +553,13 @@ impl AddStatsPruningStatistics {
             return Some(widen_timestamp_max_stat(array));
         }
 
-        let logical_name = column.name();
         let storage_name = self.storage_name_for(column)?;
         self.build_array(column, false, |a, s, dt| {
-            if let Some(pv) = a
-                .partition_values
-                .get(&storage_name)
-                .or_else(|| a.partition_values.get(logical_name))
-            {
+            if let Some(pv) = a.partition_values.get(&storage_name) {
                 return Self::scalar_from_partition_value(dt, pv);
             }
             if let Some(s) = s
-                && let Some(v) = s
-                    .max_values
-                    .get(&storage_name)
-                    .or_else(|| s.max_values.get(logical_name))
+                && let Some(v) = s.max_values.get(&storage_name)
             {
                 return ScalarConverter::column_value_stat_to_arrow_scalar_value(v, dt)
                     .ok()
@@ -594,24 +572,16 @@ impl AddStatsPruningStatistics {
     }
 
     fn compute_null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        let logical_name = column.name();
         let storage_name = self.storage_name_for(column)?;
         self.build_count_array(column, |a, s| {
-            if let Some(pv) = a
-                .partition_values
-                .get(&storage_name)
-                .or_else(|| a.partition_values.get(logical_name))
-            {
+            if let Some(pv) = a.partition_values.get(&storage_name) {
                 if pv.is_none() {
                     return s.map(|s| s.num_records.max(0) as u64);
                 }
                 return Some(0);
             }
-            s.and_then(|s| {
-                s.null_count_value(&storage_name)
-                    .or_else(|| s.null_count_value(logical_name))
-            })
-            .map(|v| v.max(0) as u64)
+            s.and_then(|s| s.null_count_value(&storage_name))
+                .map(|v| v.max(0) as u64)
         })
     }
 }
@@ -814,6 +784,46 @@ mod tests {
             .ok_or_else(|| DataFusionError::Internal("array should be Int32".to_string()))?;
         assert_eq!(values.value(0), 10);
         assert_eq!(values.value(1), 20);
+        Ok(())
+    }
+
+    #[test]
+    fn mapped_stats_do_not_fallback_to_a_colliding_logical_name() -> Result<()> {
+        let physical_name_key = "delta.columnMapping.physicalName".to_string();
+        let source_physical_name = "col-source";
+        let target_physical_name = "col-target";
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("source", DataType::Int64, true).with_metadata(HashMap::from([(
+                physical_name_key.clone(),
+                source_physical_name.to_string(),
+            )])),
+            Field::new(source_physical_name, DataType::Int64, true).with_metadata(HashMap::from([
+                (physical_name_key, target_physical_name.to_string()),
+            ])),
+        ]));
+        let add = add_with_stats(
+            r#"{
+                "numRecords":1,
+                "minValues":{"col-source":0},
+                "maxValues":{"col-source":0},
+                "nullCount":{"col-source":0}
+            }"#,
+        );
+        let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(PhysicalColumn::new(source_physical_name, 1)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int64(Some(50)))),
+        ));
+
+        assert_eq!(
+            prune_adds_by_physical_predicate(
+                vec![add],
+                table_schema,
+                predicate,
+                ColumnMappingMode::Name,
+            )?,
+            vec![true]
+        );
         Ok(())
     }
 

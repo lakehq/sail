@@ -162,9 +162,9 @@ class YamlDataSerializer:
                 f.write(f"{cls._doc_divider}\n")
                 f.write(f"name: {_quote_yaml_string(snapshot.name)}\n")
                 f.write("data:\n")
-                for line in snapshot.data.splitlines():
-                    f.write(f"{cls._indent}{line}\n" if line else "\n")
-                if not snapshot.data.splitlines():
+                data_lines = snapshot.data.splitlines()
+                f.writelines(f"{cls._indent}{line}\n" if line else "\n" for line in data_lines)
+                if not data_lines:
                     f.write(f"{cls._indent}null\n")
 
     @classmethod

@@ -44,7 +44,6 @@ pub fn partitioned_file_from_action(
             action
                 .partition_values
                 .get(physical_name)
-                .or_else(|| action.partition_values.get(logical_name))
                 .and_then(|value| value.as_ref())
                 .map(|value| parse_optional_partition_value(Some(value), field.data_type()))
                 .unwrap_or_else(|| parse_optional_partition_value(None, field.data_type()))
@@ -85,4 +84,50 @@ pub fn adds_to_remove_actions(adds: Vec<Add>) -> Vec<Remove> {
     adds.into_iter()
         .map(|add| add.into_remove(deletion_timestamp))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::common::ScalarValue;
+
+    use super::partitioned_file_from_action;
+    use crate::spec::Add;
+
+    fn mapped_field(logical_name: &str, physical_name: &str) -> Field {
+        Field::new(logical_name, DataType::Int32, true).with_metadata(HashMap::from([(
+            "delta.columnMapping.physicalName".to_string(),
+            physical_name.to_string(),
+        )]))
+    }
+
+    #[test]
+    fn mapped_partition_values_do_not_fallback_to_a_colliding_logical_name() {
+        let schema = Schema::new(vec![
+            mapped_field("source", "col-source"),
+            mapped_field("col-source", "col-target"),
+        ]);
+        let partition_columns = vec![
+            ("source".to_string(), "col-source".to_string()),
+            ("col-source".to_string(), "col-target".to_string()),
+        ];
+        let action = Add {
+            path: "part-00000.parquet".to_string(),
+            partition_values: HashMap::from([("col-source".to_string(), Some("10".to_string()))]),
+            size: 1,
+            data_change: true,
+            ..Default::default()
+        };
+
+        #[expect(clippy::expect_used)]
+        let file = partitioned_file_from_action(&action, &partition_columns, &schema)
+            .expect("partition values should parse");
+
+        assert_eq!(
+            file.partition_values,
+            vec![ScalarValue::Int32(Some(10)), ScalarValue::Int32(None)]
+        );
+    }
 }

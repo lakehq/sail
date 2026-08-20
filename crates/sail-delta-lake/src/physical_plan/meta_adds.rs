@@ -52,28 +52,11 @@ pub fn infer_partition_columns_from_schema(schema: &SchemaRef) -> Vec<String> {
         .collect()
 }
 
-/// Decode a "metadata table" batch (path/size/modification_time/stats_json + partition columns)
-/// into Delta kernel `Add` actions.
+/// Decode a metadata-table batch into Delta `Add` actions.
 ///
-/// - If `partition_columns` is `Some`, we will only read those columns (when present).
-/// - If `partition_columns` is `None`, we will infer partition columns from the schema by
-///   excluding reserved meta columns.
-pub fn decode_adds_from_meta_batch(
-    batch: &RecordBatch,
-    partition_columns: Option<&[String]>,
-) -> Result<Vec<Add>> {
-    let partition_value_columns = partition_columns.map(|columns| {
-        columns
-            .iter()
-            .map(|name| (name.clone(), name.clone()))
-            .collect::<Vec<_>>()
-    });
-    decode_adds_from_meta_batch_with_partition_value_columns(
-        batch,
-        partition_value_columns.as_deref(),
-    )
-}
-
+/// Each partition pair maps an input batch column to the key stored in
+/// `Add.partitionValues`. If no mapping is supplied, partition columns are inferred and retain
+/// their input names.
 pub fn decode_adds_from_meta_batch_with_partition_value_columns(
     batch: &RecordBatch,
     partition_value_columns: Option<&[(String, String)]>,
@@ -358,7 +341,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn decode_adds_extracts_commit_metadata() -> Result<()> {
+    fn decode_adds_maps_partition_keys_and_extracts_commit_metadata() -> Result<()> {
         let tags = Arc::new(
             MapArray::new_from_strings(
                 vec!["purpose"].into_iter(),
@@ -398,7 +381,11 @@ mod tests {
         )
         .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
 
-        let adds = decode_adds_from_meta_batch(&batch, None)?;
+        let partition_value_columns = [("p".to_string(), "col-p".to_string())];
+        let adds = decode_adds_from_meta_batch_with_partition_value_columns(
+            &batch,
+            Some(&partition_value_columns),
+        )?;
         assert_eq!(adds.len(), 1);
         assert_eq!(adds[0].commit_version, Some(7));
         assert_eq!(adds[0].commit_timestamp, Some(42));
@@ -409,6 +396,10 @@ mod tests {
         assert_eq!(adds[0].base_row_id, Some(100));
         assert_eq!(adds[0].default_row_commit_version, Some(7));
         assert_eq!(adds[0].clustering_provider.as_deref(), Some("liquid"));
+        assert_eq!(
+            adds[0].partition_values,
+            HashMap::from([("col-p".to_string(), Some("p1".to_string()))])
+        );
         Ok(())
     }
 }
