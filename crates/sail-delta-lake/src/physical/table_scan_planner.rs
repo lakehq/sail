@@ -90,9 +90,7 @@ impl ExtensionPlanner for DeltaPhysicalPlanner {
             snapshot.load_config().require_files,
             source.file_selection(),
         ) {
-            (true, DeltaFileSelection::Snapshot) => {
-                DeltaFileSource::Eager(snapshot.shared_adds())
-            }
+            (true, DeltaFileSelection::Snapshot) => DeltaFileSource::Eager(snapshot.shared_adds()),
             (true, DeltaFileSelection::Selected(indices)) => {
                 let files = indices
                     .iter()

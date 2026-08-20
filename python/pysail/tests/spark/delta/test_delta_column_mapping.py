@@ -151,9 +151,7 @@ def test_create_table_with_column_mapping_name(spark, tmp_path: Path):
 
 def test_explicit_stats_columns_follow_nested_physical_names(spark, tmp_path: Path):
     base = tmp_path / "delta_cm_explicit_stats"
-    source = spark.createDataFrame(
-        [Row(id=1, payload=Row(value=10, ignored=20), other=30)]
-    )
+    source = spark.createDataFrame([Row(id=1, payload=Row(value=10, ignored=20), other=30)])
     (
         source.write.format("delta")
         .mode("overwrite")
@@ -172,9 +170,7 @@ def test_explicit_stats_columns_follow_nested_physical_names(spark, tmp_path: Pa
     assert stats["minValues"] == {payload_physical: {value_physical: 10}}
     assert stats["maxValues"] == {payload_physical: {value_physical: 10}}
     assert stats["nullCount"] == {payload_physical: {value_physical: 0}}
-    assert spark.read.format("delta").load(str(base)).select("payload.value").collect() == [
-        Row(value=10)
-    ]
+    assert spark.read.format("delta").load(str(base)).select("payload.value").collect() == [Row(value=10)]
 
 
 def test_create_and_append_with_column_mapping_id(spark, tmp_path: Path):
