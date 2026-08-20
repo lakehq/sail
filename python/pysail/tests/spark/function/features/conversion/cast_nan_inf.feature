@@ -22,8 +22,7 @@ Feature: CAST and type constructors with NaN and Infinity (issue #630)
         | FLOAT Infinity lowercase | 'infinity'  | Infinity  |
         | FLOAT normal value       | '42'        | 42.0      |
 
-    @sail-bug
-    # Sail does not trim spaces before parsing NaN
+    # Spark trims surrounding whitespace before parsing; Sail matches.
     Scenario: FLOAT NaN with spaces
       When query
         """
@@ -51,8 +50,7 @@ Feature: CAST and type constructors with NaN and Infinity (issue #630)
         | DOUBLE negative Infinity uppercase | '-INFINITY' | -Infinity |
         | DOUBLE normal value                | '3.14'      | 3.14      |
 
-    @sail-bug
-    # Sail does not trim spaces before parsing Infinity
+    # Spark trims surrounding whitespace before parsing; Sail matches.
     Scenario: DOUBLE Infinity with spaces
       When query
         """

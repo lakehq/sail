@@ -193,8 +193,8 @@ data:
 name: "test_derived_tpch_query_result[14]"
 data:
   |-
-    | promo_revenue |
-    | 14.5856344411 |
+    | promo_revenue   |
+    | 14.585634441128 |
 ---
 name: "test_derived_tpch_query_result[15]"
 data:
