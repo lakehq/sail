@@ -171,7 +171,7 @@ Feature: Delta Lake Deletion Vectors (Merge-on-Read)
         """
       When query
         """
-        SELECT COUNT(*) AS cnt, SUM(id) AS total FROM delta_dv_read
+        SELECT COUNT(1) AS cnt, SUM(id) AS total FROM delta_dv_read
         """
       Then query result
         | cnt | total |
@@ -215,6 +215,18 @@ Feature: Delta Lake Deletion Vectors (Merge-on-Read)
         """
         EXPLAIN
         SELECT * FROM delta_dv_explain ORDER BY id
+        """
+      Then query plan matches snapshot
+
+    Scenario: EXPLAIN COUNT(1) after DV delete uses logical row-count metadata
+      Given statement
+        """
+        DELETE FROM delta_dv_explain WHERE id = 1
+        """
+      When query
+        """
+        EXPLAIN
+        SELECT COUNT(1) AS cnt FROM delta_dv_explain
         """
       Then query plan matches snapshot
 
