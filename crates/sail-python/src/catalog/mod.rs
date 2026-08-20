@@ -3,6 +3,7 @@ use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use sail_catalog::error::{CatalogError, CatalogObject};
 
+mod glue;
 mod hms;
 mod iceberg;
 mod provider;
@@ -30,6 +31,7 @@ pub(super) fn register_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
         "ViewNotFoundError",
         parent.py().get_type::<ViewNotFoundError>(),
     )?;
+    glue::register_module(&module)?;
     hms::register_module(&module)?;
     iceberg::register_module(&module)?;
     parent.add_submodule(&module)?;

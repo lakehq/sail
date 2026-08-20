@@ -7454,7 +7454,6 @@ dependencies = [
  "aws-smithy-types",
  "sail-catalog",
  "sail-common-datafusion",
- "testcontainers",
  "tokio",
 ]
 
@@ -8098,6 +8097,7 @@ dependencies = [
  "log",
  "pyo3",
  "sail-catalog",
+ "sail-catalog-glue",
  "sail-catalog-hms",
  "sail-catalog-iceberg",
  "sail-celeborn",
