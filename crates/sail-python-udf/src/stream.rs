@@ -118,7 +118,7 @@ impl PyMapStream {
             // This thread is ours and the attachment below spans its entire
             // life, so the thread state already survives every call made on it
             // and is destroyed at thread exit. That is the behavior
-            // `attach_persistent` recreates for pooled threads, so this is the
+            // `pin_thread_state` recreates for pooled threads, so this is the
             // one Python entry point that does not need it.
             match Python::attach(|py| {
                 Self::run_python_task(

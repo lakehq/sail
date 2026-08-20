@@ -5,8 +5,8 @@ use pyo3::prelude::PyAnyMethods;
 use pyo3::types::PyModule;
 use pyo3::{Bound, IntoPyObject, PyAny, PyResult, Python, intern};
 use sail_common::spec;
+use sail_common_python::thread_state::pin_thread_state;
 use sail_pyarrow::FromPyArrow;
-use sail_python_runtime::attach_persistent;
 
 use crate::cereal::{
     PySparkVersion, build_input_types_json, check_python_udf_version, get_pyspark_version,
@@ -81,7 +81,8 @@ impl PySparkUdtfPayload {
         check_python_udf_version(python_version)?;
         let _ = eval_type; // eval_type is not needed for the analyze call itself
 
-        attach_persistent(|py| -> PyUdfResult<DataType> {
+        Python::attach(|py| -> PyUdfResult<DataType> {
+            pin_thread_state(py);
             // Load the UDTF handler by directly unpickling the command bytes.
             // The command is a CloudPickle-serialized UDTF class (compatible with pickle.loads).
             let cloudpickle = PyModule::import(py, intern!(py, "pyspark.cloudpickle"))
@@ -240,7 +241,8 @@ impl PySparkUdtfPayload {
         data.extend((command.len() as i32).to_be_bytes()); // length of the function
         data.extend_from_slice(command);
 
-        let type_string = attach_persistent(|py| -> PyResult<String> {
+        let type_string = Python::attach(|py| -> PyResult<String> {
+            pin_thread_state(py);
             let return_type = return_type.try_to_py(py, config.arrow_use_large_var_types)?;
             PyModule::import(py, intern!(py, "pyspark.sql.pandas.types"))?
                 .getattr(intern!(py, "from_arrow_type"))?

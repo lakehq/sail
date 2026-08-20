@@ -1,5 +1,5 @@
 [package]
-name = "sail-python-runtime"
+name = "sail-common-python"
 version = { workspace = true }
 edition = { workspace = true }
 

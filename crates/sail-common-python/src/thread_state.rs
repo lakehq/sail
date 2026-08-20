@@ -6,8 +6,16 @@ thread_local! {
     static THREAD_STATE_PINNED: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Attaches to the interpreter and runs `f`, keeping this OS thread's
-/// [`ffi::PyThreadState`] alive for the rest of the thread's life.
+/// Keeps the current OS thread's [`ffi::PyThreadState`] alive for the rest of
+/// the thread's life. Call it once at the top of a [`Python::attach`] closure
+/// on any thread the engine owns:
+///
+/// ```ignore
+/// Python::attach(|py| {
+///     pin_thread_state(py);
+///     // ... work with `py` ...
+/// })
+/// ```
 ///
 /// # Why this is needed
 ///
@@ -36,14 +44,14 @@ thread_local! {
 ///
 /// Every entry point that may make the *first* Python call on a thread the
 /// engine owns. Pinning is idempotent and costs one thread-local read after
-/// the first call, so preferring it over [`Python::attach`] everywhere on
-/// those paths is cheaper than auditing which call happens first.
+/// the first call, so calling it in every engine `Python::attach` closure is
+/// cheaper than auditing which call happens first.
 ///
-/// The one place that should keep using [`Python::attach`] directly is code
-/// that owns its thread and holds a single attachment for the whole life of
-/// that thread, such as `PyMapStream`: the attachment already spans every call
-/// and the thread state is destroyed at thread exit, which is exactly the
-/// behavior this helper recreates for pooled threads.
+/// The one place that does not need it is code that owns its thread and holds
+/// a single attachment for the whole life of that thread, such as
+/// `PyMapStream`: the attachment already spans every call and the thread state
+/// is destroyed at thread exit, which is exactly the behavior this recreates
+/// for pooled threads.
 ///
 /// # Lifetime and cost
 ///
@@ -60,23 +68,17 @@ thread_local! {
 /// Rust thread-local destructor, where a panic aborts the process, and it
 /// races interpreter finalization when Sail is embedded in a host Python
 /// process. Retaining the state is the safer trade.
-pub fn attach_persistent<F, R>(f: F) -> R
-where
-    F: for<'py> FnOnce(Python<'py>) -> R,
-{
-    Python::attach(|py| {
-        pin_thread_state(py);
-        f(py)
-    })
-}
-
-/// Takes one permanent reference to the current thread's Python thread state.
 ///
-/// Running inside [`Python::attach`] rather than before it is deliberate: the
-/// `py` token proves the interpreter is initialized and that this thread is
-/// attached, so the raw `PyGILState_Ensure` below cannot be reached during
-/// startup or interpreter finalization.
-fn pin_thread_state(_py: Python<'_>) {
+/// # Why a `Python` token instead of wrapping `Python::attach`
+///
+/// Taking a [`Python`] token rather than calling [`Python::attach`] internally
+/// lets it compose with other per-attach initialization at a call site instead
+/// of forcing another wrapper. Running inside an attach scope rather than
+/// before it is also what makes the raw FFI call sound: the `py` token proves
+/// the interpreter is initialized and that this thread is attached, so
+/// `PyGILState_Ensure` below cannot be reached during startup or interpreter
+/// finalization.
+pub fn pin_thread_state(_py: Python<'_>) {
     THREAD_STATE_PINNED.with(|pinned| {
         if pinned.get() {
             return;
@@ -102,7 +104,7 @@ mod tests {
     use pyo3::types::PyAnyMethods;
     use pyo3::{Py, PyAny, Python};
 
-    use super::attach_persistent;
+    use super::pin_thread_state;
 
     /// A value stored in a `threading.local` during one attachment must still
     /// be visible on the next attachment from the same thread.
@@ -127,10 +129,16 @@ mod tests {
         });
 
         // A thread of our own, so that the state under test is the one this
-        // helper creates rather than one the test harness already pinned.
+        // function creates rather than one the test harness already pinned.
         let survived = std::thread::spawn(move || {
-            attach_persistent(|py| local.bind(py).setattr("marker", 1).unwrap());
-            attach_persistent(|py| local.bind(py).hasattr("marker").unwrap())
+            Python::attach(|py| {
+                pin_thread_state(py);
+                local.bind(py).setattr("marker", 1).unwrap();
+            });
+            Python::attach(|py| {
+                pin_thread_state(py);
+                local.bind(py).hasattr("marker").unwrap()
+            })
         })
         .join()
         .unwrap();

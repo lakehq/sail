@@ -8,8 +8,9 @@ use datafusion::execution::SendableRecordBatchStream;
 use datafusion_common::{exec_err, plan_err};
 use datafusion_expr::Expr;
 use educe::Educe;
+use pyo3::Python;
 use sail_common_datafusion::udf::StreamUDF;
-use sail_python_runtime::attach_persistent;
+use sail_common_python::thread_state::pin_thread_state;
 
 use crate::cereal::pyspark_udtf::PySparkUdtfPayload;
 use crate::config::PySparkUdfConfig;
@@ -182,7 +183,8 @@ impl StreamUDF for PySparkUDTF {
     }
 
     fn invoke(&self, input: SendableRecordBatchStream) -> Result<SendableRecordBatchStream> {
-        let function = attach_persistent(|py| -> PyUdfResult<_> {
+        let function = Python::attach(|py| -> PyUdfResult<_> {
+            pin_thread_state(py);
             let udtf = PySparkUdtfPayload::load(py, &self.payload)?;
             let udtf = match self.kind {
                 PySparkUdtfKind::Table => PySpark::table_udf(

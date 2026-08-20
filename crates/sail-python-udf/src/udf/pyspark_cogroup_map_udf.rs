@@ -9,7 +9,7 @@ use datafusion_common::arrow::array::make_array;
 use datafusion_common::exec_err;
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use pyo3::{Py, PyAny, Python};
-use sail_python_runtime::attach_persistent;
+use sail_common_python::thread_state::pin_thread_state;
 
 use crate::array::{build_list_array, get_list_field, get_struct_array_type};
 use crate::cereal::pyspark_udf::PySparkUdfPayload;
@@ -168,13 +168,17 @@ impl ScalarUDFImpl for PySparkCoGroupMapUDF {
                 right.len()
             );
         }
-        let udf = attach_persistent(|py| self.udf(py))?;
+        let udf = Python::attach(|py| {
+            pin_thread_state(py);
+            self.udf(py)
+        })?;
         let field = get_list_field(self.output_type())?;
         let arrays = (0..left.len())
             .map(|i| {
                 let left = Self::get_group(&left, i)?;
                 let right = Self::get_group(&right, i)?;
-                let data = attach_persistent(|py| -> PyUdfResult<_> {
+                let data = Python::attach(|py| -> PyUdfResult<_> {
+                    pin_thread_state(py);
                     let output = udf.call1(
                         py,
                         (

@@ -7,7 +7,7 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::common::Result;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use pyo3::{Py, PyAny, Python};
-use sail_python_runtime::attach_persistent;
+use sail_common_python::thread_state::pin_thread_state;
 
 use crate::cereal::pyspark_udf::PySparkUdfPayload;
 use crate::config::PySparkUdfConfig;
@@ -135,8 +135,12 @@ impl ScalarUDFImpl for PySparkUDF {
             args, number_rows, ..
         } = args;
         let args: Vec<ArrayRef> = ColumnarValue::values_to_arrays(&args)?;
-        let udf = attach_persistent(|py| self.udf(py))?;
-        let data = attach_persistent(|py| -> PyUdfResult<_> {
+        let udf = Python::attach(|py| {
+            pin_thread_state(py);
+            self.udf(py)
+        })?;
+        let data = Python::attach(|py| -> PyUdfResult<_> {
+            pin_thread_state(py);
             let output = udf.call1(
                 py,
                 (

@@ -9,7 +9,7 @@ use datafusion::common::runtime::SpawnedTask;
 use datafusion::physical_plan::RecordBatchStream;
 use datafusion_common::Result;
 use futures::Stream;
-use sail_python_runtime::attach_persistent;
+use sail_common_python::thread_state::pin_thread_state;
 use tokio::sync::mpsc;
 
 const MAX_NANOS_U64: u128 = u64::MAX as u128;
@@ -166,7 +166,8 @@ impl PythonDataSourceStream {
         // Track time waiting for GIL
         let gil_wait_start = Instant::now();
 
-        let result = attach_persistent(|py| -> Result<()> {
+        let result = Python::attach(|py| -> Result<()> {
+            pin_thread_state(py);
             // Record GIL wait time (time from start to acquiring GIL)
             let gil_acquired = Instant::now();
             metrics.gil_wait_ns.fetch_add(

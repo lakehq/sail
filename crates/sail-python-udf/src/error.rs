@@ -1,8 +1,8 @@
 use datafusion_common::DataFusionError;
 use pyo3::prelude::{PyAnyMethods, PyModule};
-use pyo3::{PyErr, PyResult, intern};
+use pyo3::{PyErr, PyResult, Python, intern};
 use sail_common_datafusion::error::{PythonErrorCause, PythonErrorCauseExtractor};
-use sail_python_runtime::attach_persistent;
+use sail_common_python::thread_state::pin_thread_state;
 use thiserror::Error;
 
 pub type PyUdfResult<T> = Result<T, PyUdfError>;
@@ -52,7 +52,8 @@ pub struct PyErrExtractor;
 impl PythonErrorCauseExtractor for PyErrExtractor {
     fn extract(error: &(dyn std::error::Error + 'static)) -> Option<PythonErrorCause> {
         if let Some(e) = error.downcast_ref::<PyErr>() {
-            let traceback = attach_persistent(|py| -> PyResult<Vec<String>> {
+            let traceback = Python::attach(|py| -> PyResult<Vec<String>> {
+                pin_thread_state(py);
                 let traceback = PyModule::import(py, intern!(py, "traceback"))?;
                 let format_exception = traceback.getattr(intern!(py, "format_exception"))?;
                 format_exception.call1((e,))?.extract()
