@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -14,6 +13,8 @@ use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use sail_common_datafusion::utils::items::ItemTaker;
+
+use crate::functions_utils::StrMemo;
 use sail_sql_analyzer::literal::interval::{IntervalValue, parse_calendar_interval_string};
 use sail_sql_analyzer::parser::parse_interval;
 
@@ -33,18 +34,11 @@ where
     P: ArrowPrimitiveType,
     F: Fn(&str) -> Result<P::Native>,
 {
-    let mut cache: HashMap<&'a str, P::Native> = HashMap::new();
+    let mut memo: StrMemo<'a, P::Native> = StrMemo::new();
     values
         .map(|value| {
             value
-                .map(|s| match cache.get(s) {
-                    Some(v) => Ok(*v),
-                    None => {
-                        let v = parse(s)?;
-                        cache.insert(s, v);
-                        Ok(v)
-                    }
-                })
+                .map(|s| memo.get_or_try_insert_ref(s, &parse).copied())
                 .transpose()
         })
         .collect()
@@ -199,9 +193,14 @@ impl ScalarUDFImpl for SparkTryCalendarInterval {
         ) -> PrimitiveArray<IntervalMonthDayNanoType> {
             // NULL results are memoized too: an invalid string is
             // deterministically NULL, unlike a transient error.
-            let mut cache: HashMap<&'a str, Option<IntervalMonthDayNano>> = HashMap::new();
+            let mut memo: StrMemo<'a, Option<IntervalMonthDayNano>> = StrMemo::new();
             values
-                .map(|value| value.and_then(|s| *cache.entry(s).or_insert_with(|| parse(s))))
+                .map(|value| {
+                    value.and_then(|s| {
+                        memo.get_or_try_insert_ref(s, |s| Ok(parse(s)))
+                            .map_or(None, |v| *v)
+                    })
+                })
                 .collect()
         }
         match args.one()? {
