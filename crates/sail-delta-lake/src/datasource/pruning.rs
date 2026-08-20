@@ -163,7 +163,7 @@ pub async fn prune_files(
         let referenced_columns = crate::datasource::collect_physical_columns(&physical_predicate);
         let stats = AddStatsPruningStatistics::try_new(
             logical_schema.clone(),
-            all_files.clone(),
+            &all_files,
             referenced_columns,
             snapshot.effective_column_mapping_mode(),
         )?;
@@ -216,7 +216,7 @@ pub async fn prune_files(
 ///
 /// Returns a boolean mask aligned with `adds` where `true` means "keep".
 pub(crate) fn prune_adds_by_physical_predicate(
-    adds: Vec<Add>,
+    adds: &[Add],
     table_schema: SchemaRef,
     predicate: Arc<dyn datafusion_physical_expr::PhysicalExpr>,
     column_mapping_mode: ColumnMappingMode,
@@ -245,24 +245,24 @@ struct MaterializedColumnStats {
 }
 
 #[derive(Debug)]
-struct AddStatsPruningStatistics {
+struct AddStatsPruningStatistics<'adds> {
     table_schema: SchemaRef,
-    adds: Vec<Add>,
+    adds: &'adds [Add],
     stats: Vec<Option<Stats>>,
     referenced_columns: std::collections::HashSet<String>,
     materialized_columns: std::collections::HashMap<String, MaterializedColumnStats>,
     column_mapping_mode: ColumnMappingMode,
 }
 
-impl AddStatsPruningStatistics {
+impl<'adds> AddStatsPruningStatistics<'adds> {
     fn try_new(
         table_schema: SchemaRef,
-        adds: Vec<Add>,
+        adds: &'adds [Add],
         referenced_columns: std::collections::HashSet<String>,
         column_mapping_mode: ColumnMappingMode,
     ) -> Result<Self> {
         let mut stats = Vec::with_capacity(adds.len());
-        for a in &adds {
+        for a in adds {
             let parsed = a
                 .get_stats()
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -586,7 +586,7 @@ impl AddStatsPruningStatistics {
     }
 }
 
-impl PruningStatistics for AddStatsPruningStatistics {
+impl PruningStatistics for AddStatsPruningStatistics<'_> {
     fn min_values(&self, column: &Column) -> Option<datafusion::arrow::array::ArrayRef> {
         self.materialized_columns
             .get(column.name())
@@ -703,7 +703,7 @@ mod tests {
 
         let stats = AddStatsPruningStatistics::try_new(
             table_schema,
-            adds,
+            &adds,
             referenced_columns,
             ColumnMappingMode::None,
         )?;
@@ -735,7 +735,7 @@ mod tests {
 
         let stats = AddStatsPruningStatistics::try_new(
             table_schema,
-            adds,
+            &adds,
             referenced_columns,
             ColumnMappingMode::None,
         )?;
@@ -769,7 +769,7 @@ mod tests {
 
         let stats = AddStatsPruningStatistics::try_new(
             table_schema,
-            adds,
+            &adds,
             referenced_columns,
             ColumnMappingMode::None,
         )?;
@@ -817,7 +817,7 @@ mod tests {
 
         assert_eq!(
             prune_adds_by_physical_predicate(
-                vec![add],
+                &[add],
                 table_schema,
                 predicate,
                 ColumnMappingMode::Name,
@@ -852,7 +852,7 @@ mod tests {
         )];
         let stats = AddStatsPruningStatistics::try_new(
             table_schema,
-            adds,
+            &adds,
             HashSet::from(["payload".to_string()]),
             ColumnMappingMode::None,
         )?;
@@ -917,7 +917,7 @@ mod tests {
             let add = add_with_stats(&stats_json);
             let stats = AddStatsPruningStatistics::try_new(
                 Arc::clone(&table_schema),
-                vec![add.clone()],
+                std::slice::from_ref(&add),
                 HashSet::from(["event_time".to_string()]),
                 ColumnMappingMode::None,
             )?;
@@ -956,7 +956,7 @@ mod tests {
 
             assert_eq!(
                 prune_adds_by_physical_predicate(
-                    vec![add],
+                    std::slice::from_ref(&add),
                     table_schema,
                     predicate,
                     ColumnMappingMode::None,
@@ -980,7 +980,7 @@ mod tests {
         )];
         let stats = AddStatsPruningStatistics::try_new(
             table_schema,
-            adds,
+            &adds,
             HashSet::from(["partition_time".to_string()]),
             ColumnMappingMode::None,
         )?;

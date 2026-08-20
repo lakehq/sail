@@ -39,8 +39,9 @@ use crate::checkpoint::{
 use crate::delta_log::LogStore;
 use crate::delta_log::segment_files::ReplayedTableHeader;
 use crate::schema::{
-    arrow_field_physical_name, arrow_schema_reorder_partitions, protocol_supports_type_widening,
-    schema_contains_type_widening_metadata, validate_type_widening_metadata,
+    PhysicalPartitionColumn, arrow_field_physical_name, arrow_schema_reorder_partitions,
+    protocol_supports_type_widening, schema_contains_type_widening_metadata,
+    validate_type_widening_metadata,
 };
 pub use crate::snapshot::stats::SnapshotPruningStats;
 use crate::spec::fields::{
@@ -444,6 +445,10 @@ impl DeltaSnapshot {
         self.adds.as_ref()
     }
 
+    pub(crate) fn shared_adds(&self) -> Arc<Vec<Add>> {
+        Arc::clone(&self.adds)
+    }
+
     pub fn removes(&self) -> &[Remove] {
         self.removes.as_ref()
     }
@@ -586,7 +591,7 @@ impl DeltaSnapshot {
         }))
     }
 
-    pub fn physical_partition_columns(&self) -> Vec<(String, String)> {
+    pub fn physical_partition_columns(&self) -> Vec<PhysicalPartitionColumn> {
         let mode = self.effective_column_mapping_mode();
         self.metadata()
             .partition_columns()
@@ -597,7 +602,7 @@ impl DeltaSnapshot {
                     .field_with_name(logical)
                     .map(|field| arrow_field_physical_name(field, mode).to_string())
                     .unwrap_or_else(|_| logical.clone());
-                (logical.clone(), physical)
+                PhysicalPartitionColumn::new(logical, physical)
             })
             .collect()
     }

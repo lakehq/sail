@@ -15,7 +15,7 @@ use datafusion::physical_plan::filter::FilterExec;
 
 use crate::datasource::simplify_expr;
 use crate::physical_plan::DeltaMetadataStatsExec;
-use crate::schema::{arrow_field_physical_name, make_physical_arrow_schema};
+use crate::schema::{logical_to_physical_arrow_paths, make_physical_arrow_schema};
 use crate::spec::fields::{
     FIELD_NAME_STATS_PARSED, STATS_FIELD_MAX_VALUES, STATS_FIELD_MIN_VALUES,
     STATS_FIELD_NULL_COUNT, STATS_FIELD_NUM_RECORDS,
@@ -38,7 +38,10 @@ pub(crate) fn build_metadata_filter(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let partition_columns = snapshot.metadata().partition_columns().clone();
     let needs_stats = predicate_requires_stats(&predicate, &partition_columns);
-    let stats_paths = metadata_stats_paths(snapshot);
+    let stats_paths = logical_to_physical_arrow_paths(
+        snapshot.schema(),
+        snapshot.effective_column_mapping_mode(),
+    );
     let stats_schema = needs_stats
         .then(|| build_metadata_stats_schema(snapshot, &predicate))
         .transpose()?;
@@ -99,53 +102,6 @@ pub(crate) fn build_metadata_stats_schema(
     Ok(Arc::new(
         ArrowSchema::try_from(&stats_schema).map_err(|e| DataFusionError::External(Box::new(e)))?,
     ))
-}
-
-fn metadata_stats_paths(snapshot: &DeltaSnapshot) -> HashMap<Vec<String>, Vec<String>> {
-    let mode = snapshot.effective_column_mapping_mode();
-    let mut paths = snapshot
-        .schema()
-        .fields()
-        .iter()
-        .map(|field| {
-            (
-                vec![field.name().clone()],
-                vec![arrow_field_physical_name(field, mode).to_string()],
-            )
-        })
-        .collect::<HashMap<_, _>>();
-
-    fn add_nested_paths(
-        fields: &datafusion::arrow::datatypes::Fields,
-        mode: crate::spec::ColumnMappingMode,
-        logical_prefix: &[String],
-        physical_prefix: &[String],
-        paths: &mut HashMap<Vec<String>, Vec<String>>,
-    ) {
-        for field in fields {
-            let mut logical_path = logical_prefix.to_vec();
-            logical_path.push(field.name().clone());
-            let mut physical_path = physical_prefix.to_vec();
-            physical_path.push(arrow_field_physical_name(field, mode).to_string());
-            paths.insert(logical_path.clone(), physical_path.clone());
-            if let ArrowDataType::Struct(children) = field.data_type() {
-                add_nested_paths(children, mode, &logical_path, &physical_path, paths);
-            }
-        }
-    }
-
-    for field in snapshot.schema().fields() {
-        if let ArrowDataType::Struct(children) = field.data_type() {
-            add_nested_paths(
-                children,
-                mode,
-                std::slice::from_ref(field.name()),
-                &[arrow_field_physical_name(field, mode).to_string()],
-                &mut paths,
-            );
-        }
-    }
-    paths
 }
 
 fn rewrite_predicate_for_metadata(

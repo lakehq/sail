@@ -25,25 +25,26 @@ use object_store::ObjectMeta;
 
 /// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
 use crate::conversion::parse_optional_partition_value;
+use crate::schema::PhysicalPartitionColumn;
 use crate::spec::{Add, DeltaError as DeltaTableError, DeltaResult, Remove};
 
 /// Convert an Add action to a PartitionedFile for DataFusion scanning
 pub fn partitioned_file_from_action(
     action: &Add,
-    partition_columns: &[(String, String)],
+    partition_columns: &[PhysicalPartitionColumn],
     schema: &ArrowSchema,
 ) -> DeltaResult<PartitionedFile> {
     let partition_values = partition_columns
         .iter()
-        .map(|(logical_name, physical_name)| {
-            let field = match schema.field_with_name(logical_name) {
+        .map(|column| {
+            let field = match schema.field_with_name(&column.logical_name) {
                 Ok(field) => field,
                 Err(_) => return ScalarValue::Null,
             };
 
             action
                 .partition_values
-                .get(physical_name)
+                .get(&column.physical_name)
                 .and_then(|value| value.as_ref())
                 .map(|value| parse_optional_partition_value(Some(value), field.data_type()))
                 .unwrap_or_else(|| parse_optional_partition_value(None, field.data_type()))
@@ -94,6 +95,7 @@ mod tests {
     use datafusion::common::ScalarValue;
 
     use super::partitioned_file_from_action;
+    use crate::schema::PhysicalPartitionColumn;
     use crate::spec::Add;
 
     fn mapped_field(logical_name: &str, physical_name: &str) -> Field {
@@ -110,8 +112,8 @@ mod tests {
             mapped_field("col-source", "col-target"),
         ]);
         let partition_columns = vec![
-            ("source".to_string(), "col-source".to_string()),
-            ("col-source".to_string(), "col-target".to_string()),
+            PhysicalPartitionColumn::new("source", "col-source"),
+            PhysicalPartitionColumn::new("col-source", "col-target"),
         ];
         let action = Add {
             path: "part-00000.parquet".to_string(),

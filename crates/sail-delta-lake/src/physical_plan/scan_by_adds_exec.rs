@@ -250,9 +250,6 @@ impl ScanByAddsStreamState {
             .ok_or_else(|| DataFusionError::Internal("missing file_schema".into()))?
             .clone();
 
-        // Split adds into files with deletion vectors and files without.
-        // Files without DVs are scanned in bulk (fast path). Files with DVs are scanned
-        // individually so that we can track per-file row indices and filter deleted rows.
         let chunk_len = self.pending_adds.len().min(ADD_SCAN_CHUNK_FILES);
         let adds = self.pending_adds.drain(..chunk_len).collect::<Vec<_>>();
         let mut all_streams: Vec<SendableRecordBatchStream> = Vec::new();
@@ -261,140 +258,51 @@ impl ScanByAddsStreamState {
             .row_index_column_name
             .clone()
             .filter(|name| self.output_schema.field_with_name(name).is_ok());
-        if let Some(row_index_column) = row_index_column {
-            let bitmaps: Vec<Option<DeletionVectorBitmap>> =
-                if adds.iter().any(|add| add.deletion_vector.is_some()) {
-                    let table_url = self.table_url.clone();
-                    let object_store = self
-                        .context
-                        .runtime_env()
-                        .object_store_registry
-                        .get_store(&table_url)
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let bitmaps =
+            Self::load_deletion_vectors(Arc::clone(&self.context), self.table_url.clone(), &adds)
+                .await?;
 
-                    let dv_futures = adds.iter().map(|add| {
-                        let store = Arc::clone(&object_store);
-                        let url = table_url.clone();
-                        let dv_descriptor = add.deletion_vector.clone();
-                        async move {
-                            let Some(descriptor) = dv_descriptor else {
-                                return Ok(None);
-                            };
-                            let bitmap = crate::deletion_vector::read_deletion_vector(
-                                store.as_ref(),
-                                &url,
-                                &descriptor,
-                            )
-                            .await
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                            Ok::<_, DataFusionError>(Some(bitmap))
-                        }
-                    });
-                    futures::future::try_join_all(dv_futures).await?
-                } else {
-                    (0..adds.len()).map(|_| None).collect()
-                };
-
-            for (add, maybe_bitmap) in adds.iter().zip(bitmaps) {
-                let file_streams = self.build_bulk_scan(
-                    snapshot,
-                    log_store,
-                    session_state,
-                    std::slice::from_ref(add),
-                    file_schema.clone(),
-                )?;
-
-                let maybe_bitmap = maybe_bitmap.map(Arc::new);
-                for inner in file_streams {
-                    let stream = append_row_index_stream(inner, row_index_column.clone())?;
-                    if let Some(bitmap) = &maybe_bitmap {
-                        all_streams.push(dv_filter_stream(stream, Arc::clone(bitmap)));
-                    } else {
-                        all_streams.push(stream);
-                    }
-                }
-            }
-            let output_schema = Arc::clone(&self.output_schema);
-            let combined = stream::iter(all_streams)
-                .map(Ok::<_, DataFusionError>)
-                .try_flatten()
-                .and_then(move |batch| {
-                    let output_schema = Arc::clone(&output_schema);
-                    async move {
-                        let casted = restore_logical_record_batch(
-                            &batch,
-                            &output_schema,
-                            column_mapping_mode,
-                        )?;
-                        Ok(casted)
-                    }
-                });
-            self.current_scan = Some(Box::pin(RecordBatchStreamAdapter::new(
-                Arc::clone(&self.output_schema),
-                combined,
-            )));
-            return Ok(());
-        }
-        let (dv_adds, plain_adds): (Vec<_>, Vec<_>) =
-            adds.into_iter().partition(|a| a.deletion_vector.is_some());
-
-        // ── Fast path: bulk scan for files without deletion vectors ──────────
-        if !plain_adds.is_empty() {
-            let streams = self.build_bulk_scan(
+        if row_index_column.is_some() {
+            all_streams.extend(self.build_position_aware_scans(
                 snapshot,
                 log_store,
                 session_state,
-                &plain_adds,
-                file_schema.clone(),
-            )?;
-            all_streams.extend(streams);
-        }
-
-        // ── DV path: per-file scan with row-index filtering ─────────────────
-        if !dv_adds.is_empty() {
-            let table_url = self.table_url.clone();
-            let object_store = self
-                .context
-                .runtime_env()
-                .object_store_registry
-                .get_store(&table_url)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-            // Fetch all deletion vector bitmaps concurrently.
-            let dv_futures = dv_adds.iter().map(|add| {
-                let store = Arc::clone(&object_store);
-                let url = table_url.clone();
-                let dv_descriptor = add.deletion_vector.clone();
-                async move {
-                    let descriptor = dv_descriptor.ok_or_else(|| {
-                        DataFusionError::Internal("DV partition guarantees deletion vector".into())
-                    })?;
-                    let bitmap = crate::deletion_vector::read_deletion_vector(
-                        store.as_ref(),
-                        &url,
-                        &descriptor,
-                    )
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                    Ok::<_, DataFusionError>(bitmap)
+                &adds,
+                &bitmaps,
+                row_index_column.as_deref(),
+                file_schema,
+            )?);
+        } else {
+            let mut plain_adds = Vec::new();
+            let mut dv_adds = Vec::new();
+            let mut dv_bitmaps = Vec::new();
+            for (add, bitmap) in adds.into_iter().zip(bitmaps) {
+                if bitmap.is_some() {
+                    dv_adds.push(add);
+                    dv_bitmaps.push(bitmap);
+                } else {
+                    plain_adds.push(add);
                 }
-            });
-            let bitmaps = futures::future::try_join_all(dv_futures).await?;
+            }
 
-            for (add, bitmap) in dv_adds.iter().zip(bitmaps) {
-                let file_streams = self.build_bulk_scan(
+            if !plain_adds.is_empty() {
+                all_streams.extend(self.build_bulk_scan(
                     snapshot,
                     log_store,
                     session_state,
-                    std::slice::from_ref(add),
-                    file_schema.clone(),
-                )?;
-
-                let bitmap = Arc::new(bitmap);
-                for inner in file_streams {
-                    all_streams.push(dv_filter_stream(inner, Arc::clone(&bitmap)));
-                }
+                    &plain_adds,
+                    Arc::clone(&file_schema),
+                )?);
             }
+            all_streams.extend(self.build_position_aware_scans(
+                snapshot,
+                log_store,
+                session_state,
+                &dv_adds,
+                &dv_bitmaps,
+                None,
+                file_schema,
+            )?);
         }
 
         let output_schema = Arc::clone(&self.output_schema);
@@ -414,6 +322,80 @@ impl ScanByAddsStreamState {
             combined,
         )));
         Ok(())
+    }
+
+    async fn load_deletion_vectors(
+        context: Arc<TaskContext>,
+        table_url: Url,
+        adds: &[crate::spec::Add],
+    ) -> Result<Vec<Option<Arc<DeletionVectorBitmap>>>> {
+        if !adds.iter().any(|add| add.deletion_vector.is_some()) {
+            return Ok(vec![None; adds.len()]);
+        }
+
+        let object_store = context
+            .runtime_env()
+            .object_store_registry
+            .get_store(&table_url)
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        let bitmaps = adds.iter().map(|add| {
+            let object_store = Arc::clone(&object_store);
+            let table_url = table_url.clone();
+            let descriptor = add.deletion_vector.clone();
+            async move {
+                let Some(descriptor) = descriptor else {
+                    return Ok(None);
+                };
+                let bitmap = crate::deletion_vector::read_deletion_vector(
+                    object_store.as_ref(),
+                    &table_url,
+                    &descriptor,
+                )
+                .await
+                .map_err(|error| DataFusionError::External(Box::new(error)))?;
+                Ok::<_, DataFusionError>(Some(Arc::new(bitmap)))
+            }
+        });
+        futures::future::try_join_all(bitmaps).await
+    }
+
+    fn build_position_aware_scans(
+        &self,
+        snapshot: &DeltaSnapshot,
+        log_store: &LogStoreRef,
+        session_state: &dyn datafusion::catalog::Session,
+        adds: &[crate::spec::Add],
+        bitmaps: &[Option<Arc<DeletionVectorBitmap>>],
+        row_index_column: Option<&str>,
+        file_schema: SchemaRef,
+    ) -> Result<Vec<SendableRecordBatchStream>> {
+        if adds.len() != bitmaps.len() {
+            return internal_err!("deletion vector bitmap count does not match Add count");
+        }
+
+        let mut streams = Vec::new();
+        for (add, bitmap) in adds.iter().zip(bitmaps) {
+            let file_streams = self.build_bulk_scan(
+                snapshot,
+                log_store,
+                session_state,
+                std::slice::from_ref(add),
+                Arc::clone(&file_schema),
+            )?;
+            for stream in file_streams {
+                let stream = if let Some(column_name) = row_index_column {
+                    append_row_index_stream(stream, column_name.to_string())?
+                } else {
+                    stream
+                };
+                streams.push(if let Some(bitmap) = bitmap {
+                    dv_filter_stream(stream, Arc::clone(bitmap))
+                } else {
+                    stream
+                });
+            }
+        }
+        Ok(streams)
     }
 
     /// Build a bulk Parquet scan for a set of Add actions (no DV filtering).
@@ -668,14 +650,6 @@ impl DeltaScanByAddsExec {
             statistics,
             cache,
         }
-    }
-
-    pub fn with_table_statistics(mut self, table_statistics: Option<Statistics>) -> Self {
-        self.statistics = table_statistics
-            .as_ref()
-            .map(|s| map_statistics_to_schema(s, &self.table_schema, &self.output_schema))
-            .unwrap_or_else(|| Statistics::new_unknown(self.output_schema.as_ref()));
-        self
     }
 
     pub fn with_output_statistics(mut self, output_statistics: Option<Statistics>) -> Self {
@@ -1082,7 +1056,7 @@ mod tests {
             None,
             None,
         )
-        .with_table_statistics(Some(table_stats));
+        .with_output_statistics(Some(table_stats));
 
         let stats = scan.partition_statistics(None).ok();
         assert!(stats.is_some());

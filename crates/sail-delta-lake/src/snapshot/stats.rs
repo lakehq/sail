@@ -79,17 +79,20 @@ pub struct SnapshotPruningStats<'a> {
     snapshot: &'a DeltaSnapshot,
     sizes: &'a Int64Array,
     stats: &'a StructArray,
+    file_row_counts: Option<Arc<[FileRowCounts]>>,
 }
 
 impl<'a> SnapshotPruningStats<'a> {
     pub(crate) fn try_new(data: &'a RecordBatch, snapshot: &'a DeltaSnapshot) -> DeltaResult<Self> {
         let sizes = batch_column::<Int64Array>(data, FIELD_NAME_SIZE)?;
         let stats = batch_column::<StructArray>(data, FIELD_NAME_STATS_PARSED)?;
+        let file_row_counts = Self::build_file_row_counts(data, stats);
         Ok(Self {
             data,
             snapshot,
             sizes,
             stats,
+            file_row_counts,
         })
     }
 
@@ -98,20 +101,21 @@ impl<'a> SnapshotPruningStats<'a> {
         self.data.num_rows()
     }
 
-    fn file_row_counts(&self) -> Option<Vec<FileRowCounts>> {
+    fn build_file_row_counts(
+        data: &RecordBatch,
+        stats: &StructArray,
+    ) -> Option<Arc<[FileRowCounts]>> {
         // Delta numRecords remains the physical Parquet row count when a DV is present. Logical
         // output rows subtract the DV cardinality, while wide column stats still describe the
         // physical rows, so retain both counts.
-        let physical_rows =
-            nested_struct_column_exact_or_path(self.stats, STATS_FIELD_NUM_RECORDS)?
-                .as_any()
-                .downcast_ref::<Int64Array>()?;
-        if physical_rows.len() != self.data.num_rows() {
+        let physical_rows = nested_struct_column_exact_or_path(stats, STATS_FIELD_NUM_RECORDS)?
+            .as_any()
+            .downcast_ref::<Int64Array>()?;
+        if physical_rows.len() != data.num_rows() {
             return None;
         }
 
-        let deletion_vectors = self
-            .data
+        let deletion_vectors = data
             .column_by_name(FIELD_NAME_DELETION_VECTOR)
             .and_then(|column| column.as_any().downcast_ref::<StructArray>());
         let cardinalities = deletion_vectors.and_then(|vectors| {
@@ -119,7 +123,7 @@ impl<'a> SnapshotPruningStats<'a> {
                 .column_by_name(DV_FIELD_CARDINALITY)
                 .and_then(|column| column.as_any().downcast_ref::<Int64Array>())
         });
-        let tight_bounds = nested_struct_column_exact_or_path(self.stats, STATS_FIELD_TIGHT_BOUNDS)
+        let tight_bounds = nested_struct_column_exact_or_path(stats, STATS_FIELD_TIGHT_BOUNDS)
             .and_then(|column| column.as_any().downcast_ref::<BooleanArray>());
 
         (0..physical_rows.len())
@@ -149,7 +153,12 @@ impl<'a> SnapshotPruningStats<'a> {
                     wide_bounds: !tight,
                 })
             })
-            .collect()
+            .collect::<Option<Vec<_>>>()
+            .map(Arc::from)
+    }
+
+    fn file_row_counts(&self) -> Option<&[FileRowCounts]> {
+        self.file_row_counts.as_deref()
     }
 
     fn column_null_count(&self, name: &str) -> Precision<usize> {
@@ -166,7 +175,7 @@ impl<'a> SnapshotPruningStats<'a> {
         }
 
         let mut total = 0usize;
-        for (row, counts) in file_rows.into_iter().enumerate() {
+        for (row, counts) in file_rows.iter().copied().enumerate() {
             if null_counts.is_null(row) {
                 return Precision::Absent;
             }
@@ -220,7 +229,7 @@ impl<'a> SnapshotPruningStats<'a> {
             let null_counts = nested_column(self.stats, STATS_FIELD_NULL_COUNT, name)
                 .ok()
                 .and_then(|column| column.as_any().downcast_ref::<Int64Array>());
-            for (row, counts) in file_rows.into_iter().enumerate() {
+            for (row, counts) in file_rows.iter().copied().enumerate() {
                 if counts.logical == 0 || !array_ref.is_null(row) {
                     continue;
                 }
@@ -303,7 +312,7 @@ impl<'a> SnapshotPruningStats<'a> {
             return Precision::Absent;
         };
         file_rows
-            .into_iter()
+            .iter()
             .try_fold(0usize, |total, counts| total.checked_add(counts.logical))
             .map(Precision::Exact)
             .unwrap_or(Precision::Absent)
@@ -362,7 +371,7 @@ impl<'a> SnapshotPruningStats<'a> {
             .any(|partition| partition == name);
         let has_wide_bounds = self
             .file_row_counts()
-            .is_none_or(|rows| rows.into_iter().any(|counts| counts.wide_bounds));
+            .is_none_or(|rows| rows.iter().any(|counts| counts.wide_bounds));
         if !is_partition && has_wide_bounds {
             min_value = min_value.to_inexact();
             max_value = max_value.to_inexact();

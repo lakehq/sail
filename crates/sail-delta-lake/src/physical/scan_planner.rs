@@ -177,17 +177,17 @@ pub(crate) async fn plan_delta_scan(
     let (file_source, pruning_mask) = match file_source {
         DeltaFileSource::Eager(files) => {
             if let Some(predicate) = pruning_predicate.as_ref() {
-                let source_files = files.as_ref().clone();
                 let pruning_mask = crate::datasource::pruning::prune_adds_by_physical_predicate(
-                    source_files.clone(),
+                    files.as_ref(),
                     Arc::clone(&logical_schema),
                     Arc::clone(predicate),
                     kmode,
                 )?;
-                let pruned_files = source_files
-                    .into_iter()
+                let pruned_files = files
+                    .iter()
                     .zip(pruning_mask.iter().copied())
-                    .filter_map(|(add, keep)| keep.then_some(add))
+                    .filter(|(_, keep)| *keep)
+                    .map(|(add, _)| add.clone())
                     .collect::<Vec<_>>();
                 (
                     DeltaFileSource::Eager(Arc::new(pruned_files)),
@@ -207,7 +207,7 @@ pub(crate) async fn plan_delta_scan(
     let physical_partition_cols: HashSet<String> = snapshot
         .physical_partition_columns()
         .into_iter()
-        .map(|(_, physical)| physical)
+        .map(|column| column.physical_name)
         .collect();
 
     let file_fields = physical_arrow
@@ -411,10 +411,15 @@ fn build_eager_adds_input(
     let partitions = actions
         .into_iter()
         .map(|actions| {
-            actions
-                .chunks(EAGER_ADD_BATCH_FILES)
-                .map(|chunk| encode_actions(chunk.to_vec(), None))
-                .collect::<Result<Vec<_>>>()
+            let mut actions = actions.into_iter();
+            std::iter::from_fn(|| {
+                let chunk = actions
+                    .by_ref()
+                    .take(EAGER_ADD_BATCH_FILES)
+                    .collect::<Vec<_>>();
+                (!chunk.is_empty()).then(|| encode_actions(chunk, None))
+            })
+            .collect::<Result<Vec<_>>>()
         })
         .collect::<Result<Vec<_>>>()?;
     let input: Arc<dyn ExecutionPlan> =

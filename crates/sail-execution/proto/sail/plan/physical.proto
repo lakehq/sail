@@ -1055,23 +1055,21 @@ message IcebergEqualityDeleteWriterExecNode {
   string write_context_json = 7;
 }
 
-enum DeltaLogReplayMode {
-  DELTA_LOG_REPLAY_MODE_SORT = 0;
-  DELTA_LOG_REPLAY_MODE_HASH = 1;
-  DELTA_LOG_REPLAY_MODE_HASH_COMMITS = 2;
+message DeltaLogReplayHashInputs {
+  bytes checkpoint_input = 1;
+  bytes commits_input = 2;
 }
 
 message DeltaLogReplayExecNode {
-  // Sort and HashCommits use this input; checkpoint-aware Hash uses the two inputs below.
-  bytes input = 1;
-  string table_url = 2;
-  int64 version = 3;
-  repeated string partition_columns = 4;
-  repeated string checkpoint_files = 5;
-  repeated string commit_files = 6;
-  optional bytes checkpoint_input = 7;
-  optional bytes commits_input = 8;
-  DeltaLogReplayMode replay_mode = 9;
+  string table_url = 1;
+  int64 version = 2;
+  repeated string checkpoint_files = 3;
+  repeated string commit_files = 4;
+  oneof replay_input {
+    bytes sort_input = 5;
+    DeltaLogReplayHashInputs hash_inputs = 6;
+    bytes hash_commits_input = 7;
+  }
 }
 
 message DeletionVectorWriterExecNode {

@@ -87,7 +87,7 @@ impl ExtensionPlanner for DeltaPhysicalPlanner {
         let filters = unnormalize_cols(scan.filters.clone());
         let projection = scan.projection.clone();
         let file_source = if snapshot.load_config().require_files {
-            DeltaFileSource::Eager(Arc::new(snapshot.adds().to_vec()))
+            DeltaFileSource::Eager(snapshot.shared_adds())
         } else {
             DeltaFileSource::Replay
         };

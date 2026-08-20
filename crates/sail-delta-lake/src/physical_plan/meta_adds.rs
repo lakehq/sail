@@ -11,6 +11,7 @@ use datafusion_common::{DataFusionError, Result};
 use percent_encoding::percent_decode_str;
 
 use crate::datasource::{COMMIT_TIMESTAMP_COLUMN, COMMIT_VERSION_COLUMN, PATH_COLUMN};
+use crate::schema::PhysicalPartitionColumn;
 use crate::spec::fields::FIELD_NAME_STATS_PARSED;
 use crate::spec::{Add, DeletionVectorDescriptor, StorageType};
 
@@ -59,7 +60,7 @@ pub fn infer_partition_columns_from_schema(schema: &SchemaRef) -> Vec<String> {
 /// their input names.
 pub fn decode_adds_from_meta_batch_with_partition_value_columns(
     batch: &RecordBatch,
-    partition_value_columns: Option<&[(String, String)]>,
+    partition_value_columns: Option<&[PhysicalPartitionColumn]>,
 ) -> Result<Vec<Add>> {
     let path_arr = batch
         .column_by_name(PATH_COLUMN)
@@ -103,20 +104,20 @@ pub fn decode_adds_from_meta_batch_with_partition_value_columns(
         .column_by_name(COL_CLUSTERING_PROVIDER)
         .and_then(|c| c.as_any().downcast_ref::<StringArray>());
 
-    let partition_value_columns: Vec<(String, String)> = match partition_value_columns {
+    let partition_value_columns: Vec<PhysicalPartitionColumn> = match partition_value_columns {
         Some(cols) => cols.to_vec(),
         None => infer_partition_columns_from_schema(&batch.schema())
             .into_iter()
-            .map(|name| (name.clone(), name))
+            .map(|name| PhysicalPartitionColumn::new(name.clone(), name))
             .collect(),
     };
 
     let part_arrays: Vec<(String, Arc<dyn Array>)> = partition_value_columns
         .iter()
-        .filter_map(|(input_column, partition_value_key)| {
-            batch.column_by_name(input_column).map(|a| {
+        .filter_map(|column| {
+            batch.column_by_name(&column.logical_name).map(|a| {
                 let a = cast(a, &DataType::Utf8).unwrap_or_else(|_| Arc::clone(a));
-                (partition_value_key.clone(), a)
+                (column.physical_name.clone(), a)
             })
         })
         .collect();
@@ -381,7 +382,7 @@ mod tests {
         )
         .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
 
-        let partition_value_columns = [("p".to_string(), "col-p".to_string())];
+        let partition_value_columns = [PhysicalPartitionColumn::new("p", "col-p")];
         let adds = decode_adds_from_meta_batch_with_partition_value_columns(
             &batch,
             Some(&partition_value_columns),
