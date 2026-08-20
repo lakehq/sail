@@ -842,6 +842,24 @@
     Whether to enable cost-based join reorder in the query optimizer.
   experimental: true
 
+- key: optimizer.enable_join_swap
+  type: boolean
+  default: "true"
+  description: |
+    Whether to allow swapping join inputs using available statistics.
+    Disable this to preserve the SQL join input order for hash joins. This is distinct from
+    `optimizer.enable_join_reorder` that enables a more sophisticated cost-based join reorder
+    algorithm that can reorder multiple joins.
+  experimental: true
+
+- key: optimizer.prefer_hash_join
+  type: boolean
+  default: "true"
+  description: |
+    Whether to prefer hash join over sort-merge join when both inputs require repartitioning.
+    Hash join is generally faster but can require substantially more memory.
+  experimental: true
+
 - key: optimizer.expand_views_at_output
   type: boolean
   default: "true"

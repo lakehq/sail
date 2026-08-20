@@ -177,6 +177,8 @@ impl ServerSessionFactory {
 
     fn apply_optimizer_config(&mut self, config: &mut SessionConfig) {
         let optimizer = &mut config.options_mut().optimizer;
+        optimizer.join_reordering = self.config.optimizer.enable_join_swap;
+        optimizer.prefer_hash_join = self.config.optimizer.prefer_hash_join;
         optimizer.expand_views_at_output = self.config.optimizer.expand_views_at_output;
         match &self.config.mode {
             ExecutionMode::Local => {}
