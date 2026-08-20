@@ -29,20 +29,17 @@ pytestmark = pytest.mark.skipif(
             id="else_bigint_at_max",
         ),
         pytest.param(
-            "SELECT CASE WHEN c THEN CAST(1 AS SMALLINT) ELSE CAST(70000 AS INT) END AS r "
-            "FROM VALUES (false) AS t(c)",
+            "SELECT CASE WHEN c THEN CAST(1 AS SMALLINT) ELSE CAST(70000 AS INT) END AS r FROM VALUES (false) AS t(c)",
             70000,
             id="else_int_past_smallint",
         ),
         pytest.param(
-            "SELECT CASE WHEN c THEN CAST(1 AS TINYINT) ELSE CAST(300 AS BIGINT) END AS r "
-            "FROM VALUES (false) AS t(c)",
+            "SELECT CASE WHEN c THEN CAST(1 AS TINYINT) ELSE CAST(300 AS BIGINT) END AS r FROM VALUES (false) AS t(c)",
             300,
             id="else_bigint_past_tinyint",
         ),
         pytest.param(
-            "SELECT CASE WHEN c THEN CAST(1 AS INT) ELSE CAST(2.5 AS DOUBLE) END AS r "
-            "FROM VALUES (false) AS t(c)",
+            "SELECT CASE WHEN c THEN CAST(1 AS INT) ELSE CAST(2.5 AS DOUBLE) END AS r FROM VALUES (false) AS t(c)",
             2.5,
             id="else_double_against_int",
         ),

@@ -72,11 +72,9 @@ fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr_fn::coalesce(arguments))
 }
 
-/// Unifies the result branches of `CASE`/`IF`, in the order the two steps require.
-///
-/// String and temporal branches must be homogenised FIRST: DataFusion's `type_union_coercion`
-/// answers `Date32` for `(Utf8, Date32)`, the opposite of Spark's non-ANSI `stringPromotion`, so
-/// running the type fold first would type a string/date conditional as `date`.
+/// Unifies the result branches of `CASE`/`IF`. The order matters: `type_union_coercion` answers
+/// `Date32` for `(Utf8, Date32)`, the opposite of Spark's non-ANSI `stringPromotion`, so the
+/// string/temporal pass has to run first.
 fn coerce_conditional_branches(
     values: Vec<expr::Expr>,
     function_context: &FunctionContextInput<'_>,
@@ -85,12 +83,9 @@ fn coerce_conditional_branches(
     coerce_branch_values(values, function_context)
 }
 
-/// Casts the result branches of `CASE`/`IF` to their common type.
-///
-/// Spark's `CaseWhenCoercion` and `IfCoercion` unify every `THEN` value **and** the `ELSE` value
-/// before the expression is typed, and leave the branches untouched when the values have no common
-/// type. `Expr::Case::get_type` instead reports the type of the first non-null `THEN` branch, so
-/// without this the resolved plan carries a narrower type than Spark declares.
+/// Casts the result branches to their common type, the way `CaseWhenCoercion` / `IfCoercion` do
+/// (`TypeCoercionHelper.scala:498-538`). Without this the plan takes `Expr::Case::get_type`, which
+/// reports the first non-null `THEN` branch and ignores the `ELSE`.
 fn coerce_branch_values(
     values: Vec<expr::Expr>,
     function_context: &FunctionContextInput<'_>,
@@ -108,54 +103,29 @@ fn coerce_branch_values(
         .collect::<Result<Vec<_>, _>>()?)
 }
 
-/// The type Spark gives a conditional whose branches have the types `data_types`.
+/// The type Spark gives a conditional, folding the branches left to right as `findWiderCommonType`
+/// does. `None` means no common type, and the caller then leaves the branches alone the way Spark's
+/// `.getOrElse(c)` does. Spark's non-ANSI string partition is not reproduced.
 ///
-/// Folds the branches left to right, as Spark's ANSI `findWiderCommonType` does
-/// (<https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/AnsiTypeCoercion.scala#L150-L156>). The non-ANSI dialect first partitions the string-typed
-/// branches and folds those ahead of the rest, because `findWiderTypeForTwo` is not associative
-/// for `StringType` (<https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/TypeCoercion.scala#L175-L186>); that partition is not reproduced here, and is
-/// currently masked by `coerce_string_temporal_values`, which already homogenises the string and
-/// temporal branches before this runs.
-///
-/// Returns `None` when the branches have no common type, so the caller leaves them untouched and
-/// the mismatch is reported later, the way Spark's `.getOrElse(c)` does.
-///
-/// `Decimal256` is decided for the whole slice at once. Spark decimals never exceed 38 digits, so
-/// a wider one describes a value Spark has no type for and the rules below would narrow it; Sail
-/// does accept such decimals (`CAST(1 AS DECIMAL(50, 10))`, which Spark rejects outright), so they
-/// reach here. Applying that exception per PAIR instead would let a fold alternate between two
-/// rule sets and make the answer depend on the order the branches are written in — the very thing
-/// this module exists to remove, and the check reaches inside containers for the same reason: the
-/// rules below recurse into element types, so a `Decimal256` element must switch them off too.
+/// A `Decimal256` anywhere in any branch switches the rules below off for the WHOLE conditional.
+/// Spark has no such type, so they would only narrow it, and deciding per pair instead would let a
+/// fold alternate between two rule sets and depend on branch order.
 fn common_branch_type(data_types: &[DataType]) -> Option<DataType> {
     let (first, rest) = data_types.split_first()?;
     if data_types.iter().any(contains_decimal256_type) {
-        return rest
-            .iter()
-            .try_fold(first.clone(), |left, right| {
-                type_union_coercion(&left, right)
-            });
+        return rest.iter().try_fold(first.clone(), |left, right| {
+            type_union_coercion(&left, right)
+        });
     }
     rest.iter().try_fold(first.clone(), |left, right| {
         branch_type_coercion(&left, right)
     })
 }
 
-/// The wider of two branch types, following Spark where `type_union_coercion` does not.
-///
-/// Two arms of Spark's `findWiderTypeForDecimal` (<https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/TypeCoercionHelper.scala#L186-L198>) disagree
-/// with DataFusion, and both decide the type a conditional reports:
-///
-/// * a float against a decimal widens to `DOUBLE` (<https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/TypeCoercionHelper.scala#L194>), whereas DataFusion turns the float
-///   into `Decimal128(30, 15)` — which then overflows on values Spark represents perfectly well;
-/// * once the widened precision passes 38, Spark drops fractional digits to keep the integral
-///   ones (`DecimalType.boundedPreferIntegralDigits`, <https://github.com/apache/spark/blob/v4.2.0/sql/api/src/main/scala/org/apache/spark/sql/types/DecimalType.scala#L148-L158>), whereas
-///   DataFusion clamps precision and scale independently and so drops the integral digits.
-///
-/// Every other pair is left to `type_union_coercion`, and both rules also reach the element type
-/// of a container: Spark unifies `array`/`map`/`struct` branches by recursing `findWiderTypeForTwo`
-/// into the element (`findTypeForComplex`), whereas `type_union_coercion` recurses into itself and
-/// so would answer the element with DataFusion's rules.
+/// The wider of two branch types, following the two arms of Spark's `findWiderTypeForDecimal`
+/// (`TypeCoercionHelper.scala:186-198`) that DataFusion answers differently. Both also reach a
+/// container's element type, since `findTypeForComplex` recurses into it. Everything else is left
+/// to `type_union_coercion`.
 fn branch_type_coercion(left: &DataType, right: &DataType) -> Option<DataType> {
     if (left.is_floating() && right.is_decimal()) || (left.is_decimal() && right.is_floating()) {
         return Some(DataType::Float64);
@@ -167,14 +137,9 @@ fn branch_type_coercion(left: &DataType, right: &DataType) -> Option<DataType> {
     Some(coerce_nested_types(left, right, coerced))
 }
 
-/// Replaces the element type DataFusion chose for a container with the one Spark's rules give.
-///
-/// The container shape — field names, `containsNull`, `valueContainsNull`, the fixed-size length —
-/// is left exactly as `type_union_coercion` decided it; only the element data type is substituted.
-/// Matching on the COERCED type rather than on the inputs matters: DataFusion legitimately answers
-/// a different container variant than either branch (`List` for two `FixedSizeList`s of different
-/// lengths, `LargeList` for a `List` against a `LargeList`), and requiring all three to agree would
-/// silently skip the substitution exactly there.
+/// Substitutes the element type of a container, keeping the shape `type_union_coercion` decided.
+/// Matching on the COERCED type is deliberate: DataFusion can answer a different container variant
+/// than either branch, and requiring all three to agree would skip the substitution exactly there.
 fn coerce_nested_types(left: &DataType, right: &DataType, coerced: DataType) -> DataType {
     if let (Some(left_field), Some(right_field), Some(coerced_field)) = (
         container_element_field(left),
@@ -194,8 +159,7 @@ fn coerce_nested_types(left: &DataType, right: &DataType, coerced: DataType) -> 
     coerced
 }
 
-/// The single field a container holds its elements in: the element for a list, the key-value
-/// entries struct for a map.
+/// The field a container holds its elements in: the element for a list, the entries struct for a map.
 fn container_element_field(data_type: &DataType) -> Option<&FieldRef> {
     match data_type {
         DataType::List(field)
@@ -224,19 +188,10 @@ fn coerce_element_field(left: &Field, right: &Field, coerced: &Field) -> Field {
     }
 }
 
-/// `None` when the branches do not name their fields the same way at the same positions.
-///
-/// DataFusion pairs struct fields by NAME and emits them in the left branch's order, so pairing
-/// them positionally here would coerce fields that are not the same column and attach the answer
-/// to a third field's name. Spark rejects such branches outright — `findTypeForComplex` requires
-/// `resolver(field1.name, field2.name)` at every position — so leaving DataFusion's answer alone
-/// is both safe and the closer of the two to Spark.
-///
-/// The comparison is case-insensitive because Spark's resolver is: under the default
-/// `spark.sql.caseSensitive = false`, `struct<A: …>` and `struct<a: …>` are the same field and
-/// Spark merges them. DataFusion's own name matching is case-sensitive, so it reaches those two
-/// through its positional path — which pairs them the way Spark does, and is therefore safe to
-/// build on.
+/// `None` when the fields are not named the same way at the same positions. DataFusion pairs struct
+/// fields by NAME, so pairing them positionally here would coerce fields that are not the same
+/// column; Spark rejects those branches outright, so standing aside is the closer answer. The
+/// comparison ignores case because Spark's resolver does under the default `caseSensitive = false`.
 fn coerce_struct_fields(left: &Fields, right: &Fields, coerced: &Fields) -> Option<Fields> {
     if left.len() != right.len() || left.len() != coerced.len() {
         return None;
@@ -261,8 +216,9 @@ fn coerce_struct_fields(left: &Fields, right: &Fields, coerced: &Fields) -> Opti
     ))
 }
 
-/// Spark's `widerDecimalType` (<https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/DecimalPrecisionTypeCoercion.scala#L195-L199>), applied only when
-/// the result overflows 38 digits — below that DataFusion already agrees with Spark.
+/// Spark's `widerDecimalType` (`DecimalPrecisionTypeCoercion.scala:195-199`), applied only past 38
+/// digits — below that DataFusion already agrees. Assumes the non-legacy `boundedPreferIntegralDigits`,
+/// which is the default (`spark.sql.legacy.decimal.retainFractionDigitsOnTruncate = false`).
 fn wider_decimal_type(left: &DataType, right: &DataType) -> Option<DataType> {
     let (left_precision, left_scale) = decimal_type_for(left)?;
     let (right_precision, right_scale) = decimal_type_for(right)?;
@@ -278,9 +234,8 @@ fn wider_decimal_type(left: &DataType, right: &DataType) -> Option<DataType> {
     Some(DataType::Decimal128(ARROW_DECIMAL128_MAX_PRECISION, scale))
 }
 
-/// The decimal Spark uses for a type: decimals as they are, integrals via `DecimalType.forType`.
-/// Anything else has no decimal form, and neither does `Decimal256` — `common_branch_type` keeps
-/// those out of these rules entirely, and answering `None` holds that line here too.
+/// The decimal Spark uses for a type: decimals as they are, integrals via `DecimalType.forType`
+/// (`DecimalType.scala:133-140`). `Decimal256` answers `None`, holding `common_branch_type`'s line.
 fn decimal_type_for(data_type: &DataType) -> Option<(i32, i32)> {
     match data_type {
         DataType::Decimal32(precision, scale)
