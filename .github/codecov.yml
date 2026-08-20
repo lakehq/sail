@@ -14,8 +14,6 @@ ignore:
 flags:
   rust-unit-tests:
     carryforward: true
-  rust-slow-tests:
-    carryforward: true
   python-unit-tests:
     carryforward: true
   spark-tests:
