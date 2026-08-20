@@ -192,10 +192,9 @@ env.CI.installer = "uv"
 
 [tool.hatch.envs.test-freethreaded]
 # The environment for the free-threading tests, on a free-threaded (no-GIL)
-# interpreter. PYTHON_GIL=0 keeps the GIL disabled even though the Spark
-# Connect client imports grpcio, which does not yet declare free-threading
-# support (grpc/grpc#38762) and would otherwise re-enable it; the tests
-# colocate the client and the in-process server in a single interpreter.
+# interpreter. PYTHON_GIL=0: grpcio (used by the Spark Connect client) does
+# not yet support free-threading (grpc/grpc#38762) and would otherwise
+# re-enable the GIL.
 python = "3.14t"
 installer = "pip"
 skip-install = true

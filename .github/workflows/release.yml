@@ -228,20 +228,8 @@ jobs:
           path: dist/*.whl
           retention-days: 7
 
-  # Free-threaded (no-GIL) wheels, built alongside the abi3 wheels above.
-  # Building for a free-threaded interpreter makes pyo3 drop the `abi3-py38`
-  # feature automatically, so this emits versioned `cp314-cp314t` wheels.
-  # pip selects the cp314t wheel on free-threaded 3.14 interpreters (which
-  # cannot use abi3 wheels) and the abi3 wheel everywhere else.
-  #
-  # This job only runs on release, so none of its platform legs are exercised
-  # by pull request CI. The interpreter setup (`3.14t` +
-  # `--interpreter python3.14t`) mirrors the free-threading test job in
-  # `free-threading-tests.yml`, which pull request CI does validate on Linux
-  # x86_64; the rest of the recipe mirrors the abi3 `build-wheel` job above.
-  # Windows is intentionally not covered yet: the free-threaded toolchain on
-  # Windows is unvalidated for this project, and it should not hold back the
-  # other platforms.
+  # Free-threaded (cp314t) wheels, published alongside the abi3 wheels.
+  # pip picks cp314t on free-threaded 3.14 interpreters, abi3 elsewhere.
   build-wheel-freethreaded:
     name: Build Wheel (free-threaded)
     runs-on: ${{ matrix.platform.runner }}
@@ -289,7 +277,6 @@ jobs:
           # that image generation predates free-threaded CPython and has no
           # python3.14t, so we use `2_28` here.
           manylinux: ${{ matrix.platform.target == 'aarch64' && matrix.platform.os == 'linux' && '2_28' || 'auto' }}
-          # See the abi3 `build-wheel` job for background on this script.
           # The aarch64 cross-compilation container is Debian-based while the
           # x86_64 container is not, hence the different package managers.
           before-script-linux: |
@@ -447,10 +434,9 @@ jobs:
     needs:
       - test-sdist
       - test-wheel
-      # The free-threaded wheels are not exercised by the wheel test job
-      # (which runs on a GIL interpreter and installs the abi3 wheel), but
-      # the review and publish jobs must wait for them so that the artifact
-      # download picks them up.
+      # The review and publish jobs depend on these wheels so that the
+      # artifact download includes them (the wheel test job runs on a GIL
+      # interpreter and skips them).
       - build-wheel-freethreaded
     steps:
       - uses: actions/checkout@v7

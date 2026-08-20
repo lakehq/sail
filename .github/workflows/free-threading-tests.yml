@@ -24,10 +24,8 @@ jobs:
           cache-key: rust-build-free-threaded
           install-testing-tools: false
 
-      # Build a versioned cp314t wheel. pyo3 automatically drops the
-      # `abi3-py38` feature when building for a free-threaded interpreter,
-      # so no feature changes are needed; the build recipe is otherwise
-      # identical to the abi3 build in `rust-build.yml`.
+      # pyo3 drops the abi3 feature for free-threaded targets, so this emits
+      # a cp314t wheel.
       - name: Build Python Package
         uses: PyO3/maturin-action@v1
         with:
@@ -39,25 +37,10 @@ jobs:
       - name: Install Package
         run: hatch -e test-freethreaded run install-pysail
 
-      # The `test-freethreaded` Hatch environment sets PYTHON_GIL=0, which
-      # keeps the GIL disabled even though the Spark Connect client imports
-      # grpcio: grpcio does not yet declare free-threading support
-      # (grpc/grpc#38762) and would otherwise re-enable the GIL. This is only
-      # needed because the tests colocate the client and the in-process
-      # server in a single interpreter; in real deployments the server's
-      # gRPC is implemented in Rust (tonic), so grpcio never enters the
-      # free-threaded server process and no override is needed.
-      # The scope covers the Python execution surface, where free-threading
-      # actually matters: all UDF types, the Python data source, and the
-      # dedicated free-threading tests.
-      #
-      # The deselected tests are pandas>=3 test incompatibilities, not
-      # free-threading failures: their comparison helpers sort
-      # `to_dict(orient="records")` output whose missing-value handling
-      # changed in pandas 3, and they fail identically on this interpreter
-      # with the GIL enabled. The free-threaded environment cannot use
-      # pandas 2 (no cp314t wheels), so they are excluded until the tests
-      # support pandas 3.
+      # The deselected tests fail because of pandas>=3 (which this
+      # environment must use; pandas 2 has no cp314t wheels), not because of
+      # free-threading: they fail identically with the GIL enabled.
+      # Re-include them when the tests support pandas 3.
       - name: Run Free-Threading Tests
         run: >-
           hatch -e test-freethreaded run pytest --pyargs
