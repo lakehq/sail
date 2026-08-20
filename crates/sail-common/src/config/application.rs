@@ -661,6 +661,8 @@ pub struct CatalogConfig {
 #[serde(deny_unknown_fields)]
 pub struct OptimizerConfig {
     pub enable_join_reorder: bool,
+    pub enable_join_swap: bool,
+    pub prefer_hash_join: bool,
     pub expand_views_at_output: bool,
 }
 
