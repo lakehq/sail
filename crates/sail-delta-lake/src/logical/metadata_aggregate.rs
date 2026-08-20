@@ -4,11 +4,11 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::stats::Precision;
 use datafusion::common::tree_node::Transformed;
-use datafusion::common::{Column, DataFusionError, Result, ScalarValue};
+use datafusion::common::{Column, DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion::functions::core::getfield::GetFieldFunc;
 use datafusion::functions_aggregate::expr_fn::sum;
 use datafusion::logical_expr::logical_plan::{
-    Aggregate, EmptyRelation, Projection, TableScan, Union, Values,
+    Aggregate, EmptyRelation, Projection, TableScan, Union,
 };
 use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, TableSource};
 use log::debug;
@@ -288,7 +288,12 @@ fn rewrite_exact_ungrouped_aggregate(aggregate: &Aggregate) -> Result<Option<Log
     }
     let Some(values) = values
         .into_iter()
-        .map(|value| value.map(|value| Expr::Literal(value, None)))
+        .zip(aggregate.schema.iter())
+        .map(|(value, (qualifier, field))| {
+            value.map(|value| {
+                Expr::Literal(value, None).alias_qualified(qualifier.cloned(), field.name())
+            })
+        })
         .collect::<Option<Vec<_>>>()
     else {
         return Ok(None);
@@ -297,12 +302,15 @@ fn rewrite_exact_ungrouped_aggregate(aggregate: &Aggregate) -> Result<Option<Log
         "resolved {} Delta aggregate expressions from exact snapshot statistics",
         values.len()
     );
-    // Values preserves the Aggregate schema by ordinal, including duplicate internal expression
-    // names introduced by leaf extraction, without requiring an executable aggregate or scan.
-    Ok(Some(LogicalPlan::Values(Values {
-        schema: Arc::clone(&aggregate.schema),
-        values: vec![values],
-    })))
+    // Preserve the Aggregate schema by ordinal, including duplicate internal expression names and
+    // typed NULLs, while representing the result as literals over one placeholder row.
+    let row = LogicalPlan::EmptyRelation(EmptyRelation {
+        produce_one_row: true,
+        schema: Arc::new(DFSchema::empty()),
+    });
+    Ok(Some(LogicalPlan::Projection(
+        Projection::try_new_with_schema(values, Arc::new(row), Arc::clone(&aggregate.schema))?,
+    )))
 }
 
 fn build_residual_aggregate(
