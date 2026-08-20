@@ -1,0 +1,1168 @@
+# serializer version: 1
+---
+name: "test_p1_and_p2_combined_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#0@0 as id]
+      FilterExec: #0@0 % 2 = 0
+        ExplicitRepartitionExec: partitioning=RoundRobinBatch(5), input_partitions=1
+          RangeExec
+---
+name: "test_p1_eliminates_rr_repartition_above_hash_explicit_plan"
+data:
+  |-
+    == Codegen ==
+    Whole-stage codegen is not supported; showing physical plan instead.
+  
+    == Plan Steps ==
+    initial_logical_plan:
+    Filter: #0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0)
+      ExplicitRepartition: kind=hash, n=Some(3), expr=[#0]
+        Range: start=0, end=6, step=1, num_partitions=1
+  
+    logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after resolve_grouping_function:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after type_coercion:
+    Filter: #0 % CAST(CASE WHEN Int32(2) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(2) END AS Int64) = CAST(Int32(0) AS Int64)
+      ExplicitRepartition: kind=hash, n=Some(3), expr=[#0]
+        Range: start=0, end=6, step=1, num_partitions=1
+  
+    analyzed_logical_plan:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after decorrelate_lateral_projection:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after rewrite_set_comparison:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after optimize_unions:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after unions_to_filter:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after simplify_expressions:
+    Filter: #0 % Int64(2) = Int64(0)
+      ExplicitRepartition: kind=hash, n=Some(3), expr=[#0]
+        Range: start=0, end=6, step=1, num_partitions=1
+  
+    logical_plan after replace_distinct_aggregate:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after scalar_subquery_to_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after decorrelate_lateral_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after extract_equijoin_predicate:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_duplicated_expr:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_filter:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_cross_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_limit:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after propagate_empty_relation:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after filter_null_join_keys:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_outer_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after push_down_limit:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after push_down_filter:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after single_distinct_aggregation_to_group_by:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_group_by_constant:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after common_sub_expression_eliminate:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after extract_leaf_expressions:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after decorrelate_lateral_projection:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after rewrite_set_comparison:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after optimize_unions:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after unions_to_filter:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after simplify_expressions:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after replace_distinct_aggregate:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after scalar_subquery_to_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after decorrelate_lateral_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after extract_equijoin_predicate:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_duplicated_expr:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_filter:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_cross_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_limit:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after propagate_empty_relation:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after filter_null_join_keys:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_outer_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after push_down_limit:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after push_down_filter:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after single_distinct_aggregation_to_group_by:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_group_by_constant:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after common_sub_expression_eliminate:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after extract_leaf_expressions:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+  
+    logical_plan:
+    Filter: #0 % Int64(2) = Int64(0)
+      ExplicitRepartition: kind=hash, n=Some(3), expr=[#0]
+        Range: start=0, end=6, step=1, num_partitions=1
+  
+    initial_physical_plan:
+    FilterExec: #0@0 % 2 = 0
+      ExplicitRepartitionExec
+        RangeExec
+  
+  
+    initial_physical_plan_with_stats:
+    FilterExec: #0@0 % 2 = 0, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+      ExplicitRepartitionExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+        RangeExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+  
+  
+    initial_physical_plan_with_schema:
+    FilterExec: #0@0 % 2 = 0, schema=[#0:Int64]
+      ExplicitRepartitionExec, schema=[#0:Int64]
+        RangeExec, schema=[#0:Int64]
+  
+  
+    physical_plan after OutputRequirements:
+    OutputRequirementExec: order_by=[], dist_by=Unspecified
+      FilterExec: #0@0 % 2 = 0
+        ExplicitRepartitionExec
+          RangeExec
+  
+  
+    physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after join_selection:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after FilterPushdown:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after EnforceDistribution:
+    OutputRequirementExec: order_by=[], dist_by=Unspecified
+      FilterExec: #0@0 % 2 = 0
+        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=3
+          ExplicitRepartitionExec
+            RangeExec
+  
+  
+    physical_plan after EliminateRedundantRepartition:
+    OutputRequirementExec: order_by=[], dist_by=Unspecified
+      FilterExec: #0@0 % 2 = 0
+        ExplicitRepartitionExec
+          RangeExec
+  
+  
+    physical_plan after CombinePartialFinalAggregate:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after EnforceSorting:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after OptimizeAggregateOrder:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after WindowTopN:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after ProjectionPushdown:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after OutputRequirements:
+    FilterExec: #0@0 % 2 = 0
+      ExplicitRepartitionExec
+        RangeExec
+  
+  
+    physical_plan after LimitAggregation:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after LimitPushPastWindows:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after HashJoinBuffering:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after LimitPushdown:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after TopKRepartition:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after ProjectionPushdown:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after PushdownSort:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after EnsureCooperative:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+  
+    physical_plan after RewriteExplicitRepartition:
+    FilterExec: #0@0 % 2 = 0
+      RepartitionExec: partitioning=Hash([#0@0], 3), input_partitions=1
+        RangeExec
+  
+  
+    physical_plan after RewriteCollectLeftHashJoin:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after EnforceBarrierPartitioning:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after SanityCheckPlan:
+    SAME TEXT AS ABOVE
+  
+    physical_plan:
+    ProjectionExec: expr=[#0@0 as id]
+      FilterExec: #0@0 % 2 = 0
+        RepartitionExec: partitioning=Hash([#0@0], 3), input_partitions=1
+          RangeExec
+  
+  
+    == Physical Plan ==
+    ProjectionExec: expr=[#0@0 as id]
+      FilterExec: #0@0 % 2 = 0
+        RepartitionExec: partitioning=Hash([#0@0], 3), input_partitions=1
+          RangeExec
+  
+  
+    == Distributed Plan ==
+    === stage 0 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=Hash(keys=[#0@0], channels=3)
+    placement=Worker
+    RangeExec
+  
+    === stage 1 ===
+    inputs=[StageInput(stage=0, mode=Shuffle)]
+    mode=Pipelined
+    partitions=3
+    distribution=RoundRobin(channels=1)
+    placement=Worker
+    ProjectionExec: expr=[#0@0 as id]
+      FilterExec: #0@0 % 2 = 0
+        StageInputExec: input=0, partitioning=Hash([#0@0], 3)
+---
+name: "test_p1_eliminates_rr_repartition_above_rr_explicit_plan"
+data:
+  |-
+    == Codegen ==
+    Whole-stage codegen is not supported; showing physical plan instead.
+  
+    == Plan Steps ==
+    initial_logical_plan:
+    Filter: #0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0)
+      ExplicitRepartition: kind=round_robin, n=Some(3), expr=[]
+        Range: start=0, end=6, step=1, num_partitions=1
+  
+    logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after resolve_grouping_function:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after type_coercion:
+    Filter: #0 % CAST(CASE WHEN Int32(2) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(2) END AS Int64) = CAST(Int32(0) AS Int64)
+      ExplicitRepartition: kind=round_robin, n=Some(3), expr=[]
+        Range: start=0, end=6, step=1, num_partitions=1
+  
+    analyzed_logical_plan:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after decorrelate_lateral_projection:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after rewrite_set_comparison:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after optimize_unions:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after unions_to_filter:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after simplify_expressions:
+    Filter: #0 % Int64(2) = Int64(0)
+      ExplicitRepartition: kind=round_robin, n=Some(3), expr=[]
+        Range: start=0, end=6, step=1, num_partitions=1
+  
+    logical_plan after replace_distinct_aggregate:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after scalar_subquery_to_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after decorrelate_lateral_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after extract_equijoin_predicate:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_duplicated_expr:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_filter:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_cross_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_limit:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after propagate_empty_relation:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after filter_null_join_keys:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_outer_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after push_down_limit:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after push_down_filter:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after single_distinct_aggregation_to_group_by:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_group_by_constant:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after common_sub_expression_eliminate:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after extract_leaf_expressions:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after decorrelate_lateral_projection:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after rewrite_set_comparison:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after optimize_unions:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after unions_to_filter:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after simplify_expressions:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after replace_distinct_aggregate:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after scalar_subquery_to_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after decorrelate_lateral_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after extract_equijoin_predicate:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_duplicated_expr:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_filter:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_cross_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_limit:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after propagate_empty_relation:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after filter_null_join_keys:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_outer_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after push_down_limit:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after push_down_filter:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after single_distinct_aggregation_to_group_by:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_group_by_constant:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after common_sub_expression_eliminate:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after extract_leaf_expressions:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+  
+    logical_plan:
+    Filter: #0 % Int64(2) = Int64(0)
+      ExplicitRepartition: kind=round_robin, n=Some(3), expr=[]
+        Range: start=0, end=6, step=1, num_partitions=1
+  
+    initial_physical_plan:
+    FilterExec: #0@0 % 2 = 0
+      ExplicitRepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1
+        RangeExec
+  
+  
+    initial_physical_plan_with_stats:
+    FilterExec: #0@0 % 2 = 0, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+      ExplicitRepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+        RangeExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+  
+  
+    initial_physical_plan_with_schema:
+    FilterExec: #0@0 % 2 = 0, schema=[#0:Int64]
+      ExplicitRepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1, schema=[#0:Int64]
+        RangeExec, schema=[#0:Int64]
+  
+  
+    physical_plan after OutputRequirements:
+    OutputRequirementExec: order_by=[], dist_by=Unspecified
+      FilterExec: #0@0 % 2 = 0
+        ExplicitRepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1
+          RangeExec
+  
+  
+    physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after join_selection:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after FilterPushdown:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after EnforceDistribution:
+    OutputRequirementExec: order_by=[], dist_by=Unspecified
+      FilterExec: #0@0 % 2 = 0
+        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=3
+          ExplicitRepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1
+            RangeExec
+  
+  
+    physical_plan after EliminateRedundantRepartition:
+    OutputRequirementExec: order_by=[], dist_by=Unspecified
+      FilterExec: #0@0 % 2 = 0
+        ExplicitRepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1
+          RangeExec
+  
+  
+    physical_plan after CombinePartialFinalAggregate:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after EnforceSorting:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after OptimizeAggregateOrder:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after WindowTopN:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after ProjectionPushdown:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after OutputRequirements:
+    FilterExec: #0@0 % 2 = 0
+      ExplicitRepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1
+        RangeExec
+  
+  
+    physical_plan after LimitAggregation:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after LimitPushPastWindows:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after HashJoinBuffering:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after LimitPushdown:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after TopKRepartition:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after ProjectionPushdown:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after PushdownSort:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after EnsureCooperative:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+  
+    physical_plan after RewriteExplicitRepartition:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after RewriteCollectLeftHashJoin:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after EnforceBarrierPartitioning:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after SanityCheckPlan:
+    SAME TEXT AS ABOVE
+  
+    physical_plan:
+    ProjectionExec: expr=[#0@0 as id]
+      FilterExec: #0@0 % 2 = 0
+        ExplicitRepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1
+          RangeExec
+  
+  
+    == Physical Plan ==
+    ProjectionExec: expr=[#0@0 as id]
+      FilterExec: #0@0 % 2 = 0
+        ExplicitRepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1
+          RangeExec
+  
+  
+    == Distributed Plan ==
+    === stage 0 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinRow(channels=3)
+    placement=Worker
+    RangeExec
+  
+    === stage 1 ===
+    inputs=[StageInput(stage=0, mode=Shuffle)]
+    mode=Pipelined
+    partitions=3
+    distribution=RoundRobin(channels=1)
+    placement=Worker
+    ProjectionExec: expr=[#0@0 as id]
+      FilterExec: #0@0 % 2 = 0
+        StageInputExec: input=0, partitioning=RoundRobinBatch(3)
+---
+name: "test_p1_eliminates_rr_repartition_above_unknown_explicit_plan"
+data:
+  |-
+    == Codegen ==
+    Whole-stage codegen is not supported; showing physical plan instead.
+  
+    == Plan Steps ==
+    initial_logical_plan:
+    Filter: #0 = Int32(4)
+      ExplicitRepartition: kind=coalesce, n=Some(1), expr=[]
+        Filter: #0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0)
+          Range: start=0, end=6, step=1, num_partitions=1
+  
+    logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after resolve_grouping_function:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after type_coercion:
+    Filter: #0 = CAST(Int32(4) AS Int64)
+      ExplicitRepartition: kind=coalesce, n=Some(1), expr=[]
+        Filter: #0 % CAST(CASE WHEN Int32(2) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(2) END AS Int64) = CAST(Int32(0) AS Int64)
+          Range: start=0, end=6, step=1, num_partitions=1
+  
+    analyzed_logical_plan:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after decorrelate_lateral_projection:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after rewrite_set_comparison:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after optimize_unions:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after unions_to_filter:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after simplify_expressions:
+    Filter: #0 = Int64(4)
+      ExplicitRepartition: kind=coalesce, n=Some(1), expr=[]
+        Filter: #0 % Int64(2) = Int64(0)
+          Range: start=0, end=6, step=1, num_partitions=1
+  
+    logical_plan after replace_distinct_aggregate:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after scalar_subquery_to_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after decorrelate_lateral_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after extract_equijoin_predicate:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_duplicated_expr:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_filter:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_cross_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_limit:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after propagate_empty_relation:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after filter_null_join_keys:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_outer_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after push_down_limit:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after push_down_filter:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after single_distinct_aggregation_to_group_by:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_group_by_constant:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after common_sub_expression_eliminate:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after extract_leaf_expressions:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after decorrelate_lateral_projection:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after rewrite_set_comparison:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after optimize_unions:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after unions_to_filter:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after simplify_expressions:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after replace_distinct_aggregate:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after scalar_subquery_to_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after decorrelate_lateral_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after extract_equijoin_predicate:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_duplicated_expr:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_filter:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_cross_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_limit:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after propagate_empty_relation:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after filter_null_join_keys:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_outer_join:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after push_down_limit:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after push_down_filter:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after single_distinct_aggregation_to_group_by:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after eliminate_group_by_constant:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after common_sub_expression_eliminate:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after extract_leaf_expressions:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+  
+    logical_plan:
+    Filter: #0 = Int64(4)
+      ExplicitRepartition: kind=coalesce, n=Some(1), expr=[]
+        Filter: #0 % Int64(2) = Int64(0)
+          Range: start=0, end=6, step=1, num_partitions=1
+  
+    initial_physical_plan:
+    FilterExec: #0@0 = 4
+      ExplicitRepartitionExec
+        FilterExec: #0@0 % 2 = 0
+          RangeExec
+  
+  
+    initial_physical_plan_with_stats:
+    FilterExec: #0@0 = 4, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]: Min=Exact(Int64(4)) Max=Exact(Int64(4)) Distinct=Exact(1))]]
+      ExplicitRepartitionExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+        FilterExec: #0@0 % 2 = 0, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+          RangeExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+  
+  
+    initial_physical_plan_with_schema:
+    FilterExec: #0@0 = 4, schema=[#0:Int64]
+      ExplicitRepartitionExec, schema=[#0:Int64]
+        FilterExec: #0@0 % 2 = 0, schema=[#0:Int64]
+          RangeExec, schema=[#0:Int64]
+  
+  
+    physical_plan after OutputRequirements:
+    OutputRequirementExec: order_by=[], dist_by=Unspecified
+      FilterExec: #0@0 = 4
+        ExplicitRepartitionExec
+          FilterExec: #0@0 % 2 = 0
+            RangeExec
+  
+  
+    physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after join_selection:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after FilterPushdown:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after EnforceDistribution:
+    OutputRequirementExec: order_by=[], dist_by=Unspecified
+      FilterExec: #0@0 = 4
+        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+          ExplicitRepartitionExec
+            FilterExec: #0@0 % 2 = 0
+              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                RangeExec
+  
+  
+    physical_plan after EliminateRedundantRepartition:
+    OutputRequirementExec: order_by=[], dist_by=Unspecified
+      FilterExec: #0@0 = 4
+        ExplicitRepartitionExec
+          FilterExec: #0@0 % 2 = 0
+            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+              RangeExec
+  
+  
+    physical_plan after CombinePartialFinalAggregate:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after EnforceSorting:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after OptimizeAggregateOrder:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after WindowTopN:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after ProjectionPushdown:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after OutputRequirements:
+    FilterExec: #0@0 = 4
+      ExplicitRepartitionExec
+        FilterExec: #0@0 % 2 = 0
+          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+            RangeExec
+  
+  
+    physical_plan after LimitAggregation:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after LimitPushPastWindows:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after HashJoinBuffering:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after LimitPushdown:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after TopKRepartition:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after ProjectionPushdown:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after PushdownSort:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after EnsureCooperative:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+  
+    physical_plan after RewriteExplicitRepartition:
+    FilterExec: #0@0 = 4
+      CoalescePartitionsExec
+        FilterExec: #0@0 % 2 = 0
+          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+            RangeExec
+  
+  
+    physical_plan after RewriteCollectLeftHashJoin:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after EnforceBarrierPartitioning:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after SanityCheckPlan:
+    SAME TEXT AS ABOVE
+  
+    physical_plan:
+    ProjectionExec: expr=[#0@0 as id]
+      FilterExec: #0@0 = 4
+        CoalescePartitionsExec
+          FilterExec: #0@0 % 2 = 0
+            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+              RangeExec
+  
+  
+    == Physical Plan ==
+    ProjectionExec: expr=[#0@0 as id]
+      FilterExec: #0@0 = 4
+        CoalescePartitionsExec
+          FilterExec: #0@0 % 2 = 0
+            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+              RangeExec
+  
+  
+    == Distributed Plan ==
+    === stage 0 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobin(channels=4)
+    placement=Worker
+    RangeExec
+  
+    === stage 1 ===
+    inputs=[StageInput(stage=0, mode=Shuffle)]
+    mode=Pipelined
+    partitions=4
+    distribution=RoundRobin(channels=1)
+    placement=Worker
+    FilterExec: #0@0 % 2 = 0
+      StageInputExec: input=0, partitioning=RoundRobinBatch(4)
+  
+    === stage 2 ===
+    inputs=[StageInput(stage=1, mode=Shuffle)]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobin(channels=1)
+    placement=Worker
+    ProjectionExec: expr=[#0@0 as id]
+      FilterExec: #0@0 = 4
+        StageInputExec: input=0, partitioning=UnknownPartitioning(1)
+---
+name: "test_p1_keeps_hash_repartition_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as id1, #3@1 as id2]
+      HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@0, #3@0)]
+        RepartitionExec: partitioning=Hash([#1@0], 4), input_partitions=3
+          ExplicitRepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1
+            ProjectionExec: expr=[id@0 as #1]
+              RangeExec
+        RepartitionExec: partitioning=Hash([#3@0], 4), input_partitions=1
+          ProjectionExec: expr=[id@0 as #3]
+            RangeExec
+---
+name: "test_p1_keeps_rr_repartition_when_child_is_not_explicit_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#0@0 as id]
+      FilterExec: #0@0 % 2 = 0
+        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+          RangeExec
+---
+name: "test_p2_collapses_chain_of_three_explicits_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#0@0 as id]
+      ExplicitRepartitionExec: partitioning=RoundRobinBatch(7), input_partitions=1
+        RangeExec
+---
+name: "test_p2_collapses_hash_over_hash_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#0@0 as id]
+      RepartitionExec: partitioning=Hash([#0@0], 5), input_partitions=1
+        RangeExec
+---
+name: "test_p2_collapses_hash_over_rr_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#0@0 as id]
+      RepartitionExec: partitioning=Hash([#0@0], 5), input_partitions=1
+        RangeExec
+---
+name: "test_p2_collapses_hash_over_unknown_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#0@0 as id]
+      RepartitionExec: partitioning=Hash([#0@0], 5), input_partitions=4
+        FilterExec: #0@0 % 2 = 0
+          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+            RangeExec
+---
+name: "test_p2_collapses_rr_over_hash_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#0@0 as id]
+      ExplicitRepartitionExec: partitioning=RoundRobinBatch(5), input_partitions=1
+        RangeExec
+---
+name: "test_p2_collapses_rr_over_rr_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#0@0 as id]
+      ExplicitRepartitionExec: partitioning=RoundRobinBatch(5), input_partitions=1
+        RangeExec
+---
+name: "test_p2_collapses_rr_over_unknown_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#0@0 as id]
+      ExplicitRepartitionExec: partitioning=RoundRobinBatch(5), input_partitions=4
+        FilterExec: #0@0 % 2 = 0
+          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+            RangeExec
+---
+name: "test_p2_collapses_unknown_over_unknown_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#0@0 as id]
+      CoalesceExec: partitions=2
+        FilterExec: #0@0 % 2 = 0
+          ExplicitRepartitionExec: partitioning=RoundRobinBatch(5), input_partitions=1
+            RangeExec
+---
+name: "test_p2_keeps_unknown_over_hash_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#0@0 as id]
+      CoalesceExec: partitions=3
+        RepartitionExec: partitioning=Hash([#0@0], 5), input_partitions=1
+          RangeExec
+---
+name: "test_p2_keeps_unknown_over_rr_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#0@0 as id]
+      CoalesceExec: partitions=3
+        ExplicitRepartitionExec: partitioning=RoundRobinBatch(5), input_partitions=1
+          RangeExec
+---
+name: "test_p2_noop_when_child_is_not_explicit_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#0@0 as id]
+      ExplicitRepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=4
+        FilterExec: #0@0 % 2 = 0
+          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+            RangeExec

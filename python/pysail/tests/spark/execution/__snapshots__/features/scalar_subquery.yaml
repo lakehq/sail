@@ -472,6 +472,9 @@ data:
                         DataSourceExec: partitions=1, partition_sizes=[1]
   
   
+    physical_plan after EliminateRedundantRepartition:
+    SAME TEXT AS ABOVE
+  
     physical_plan after CombinePartialFinalAggregate:
     SAME TEXT AS ABOVE
   
@@ -982,6 +985,9 @@ data:
                       ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                         DataSourceExec: partitions=1, partition_sizes=[1]
   
+  
+    physical_plan after EliminateRedundantRepartition:
+    SAME TEXT AS ABOVE
   
     physical_plan after CombinePartialFinalAggregate:
     SAME TEXT AS ABOVE
@@ -1509,6 +1515,9 @@ data:
                       ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                         DataSourceExec: partitions=1, partition_sizes=[1]
   
+  
+    physical_plan after EliminateRedundantRepartition:
+    SAME TEXT AS ABOVE
   
     physical_plan after CombinePartialFinalAggregate:
     SAME TEXT AS ABOVE
@@ -2257,6 +2266,9 @@ data:
                 DataSourceExec: partitions=1, partition_sizes=[1]
   
   
+    physical_plan after EliminateRedundantRepartition:
+    SAME TEXT AS ABOVE
+  
     physical_plan after CombinePartialFinalAggregate:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
@@ -2899,6 +2911,9 @@ data:
               ProjectionExec: expr=[column1@0 as #9]
                 DataSourceExec: partitions=1, partition_sizes=[1]
   
+  
+    physical_plan after EliminateRedundantRepartition:
+    SAME TEXT AS ABOVE
   
     physical_plan after CombinePartialFinalAggregate:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
@@ -3868,6 +3883,9 @@ data:
                 DataSourceExec: partitions=1, partition_sizes=[1]
   
   
+    physical_plan after EliminateRedundantRepartition:
+    SAME TEXT AS ABOVE
+  
     physical_plan after CombinePartialFinalAggregate:
     SAME TEXT AS ABOVE
   
@@ -4325,6 +4343,9 @@ data:
     SAME TEXT AS ABOVE
   
     physical_plan after EnforceDistribution:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after EliminateRedundantRepartition:
     SAME TEXT AS ABOVE
   
     physical_plan after CombinePartialFinalAggregate:
@@ -4826,6 +4847,9 @@ data:
     physical_plan after EnforceDistribution:
     SAME TEXT AS ABOVE
   
+    physical_plan after EliminateRedundantRepartition:
+    SAME TEXT AS ABOVE
+  
     physical_plan after CombinePartialFinalAggregate:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
@@ -5290,6 +5314,9 @@ data:
     physical_plan after EnforceDistribution:
     SAME TEXT AS ABOVE
   
+    physical_plan after EliminateRedundantRepartition:
+    SAME TEXT AS ABOVE
+  
     physical_plan after CombinePartialFinalAggregate:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
@@ -5720,6 +5747,9 @@ data:
               ProjectionExec: expr=[column1@0 as #5]
                 DataSourceExec: partitions=1, partition_sizes=[1]
   
+  
+    physical_plan after EliminateRedundantRepartition:
+    SAME TEXT AS ABOVE
   
     physical_plan after CombinePartialFinalAggregate:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
@@ -6194,6 +6224,9 @@ data:
     SAME TEXT AS ABOVE
   
     physical_plan after EnforceDistribution:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after EliminateRedundantRepartition:
     SAME TEXT AS ABOVE
   
     physical_plan after CombinePartialFinalAggregate:
@@ -6678,6 +6711,9 @@ data:
                 DataSourceExec: partitions=1, partition_sizes=[1]
   
   
+    physical_plan after EliminateRedundantRepartition:
+    SAME TEXT AS ABOVE
+  
     physical_plan after CombinePartialFinalAggregate:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
@@ -7138,6 +7174,9 @@ data:
                 DataSourceExec: partitions=1, partition_sizes=[1]
   
   
+    physical_plan after EliminateRedundantRepartition:
+    SAME TEXT AS ABOVE
+  
     physical_plan after CombinePartialFinalAggregate:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
@@ -7580,6 +7619,9 @@ data:
               ProjectionExec: expr=[column1@0 as #5]
                 DataSourceExec: partitions=1, partition_sizes=[1]
   
+  
+    physical_plan after EliminateRedundantRepartition:
+    SAME TEXT AS ABOVE
   
     physical_plan after CombinePartialFinalAggregate:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
@@ -8046,6 +8088,9 @@ data:
               ProjectionExec: expr=[column1@0 as #5]
                 DataSourceExec: partitions=1, partition_sizes=[1]
   
+  
+    physical_plan after EliminateRedundantRepartition:
+    SAME TEXT AS ABOVE
   
     physical_plan after CombinePartialFinalAggregate:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
@@ -8549,6 +8594,9 @@ data:
     physical_plan after EnforceDistribution:
     SAME TEXT AS ABOVE
   
+    physical_plan after EliminateRedundantRepartition:
+    SAME TEXT AS ABOVE
+  
     physical_plan after CombinePartialFinalAggregate:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
@@ -9038,6 +9086,9 @@ data:
     physical_plan after EnforceDistribution:
     SAME TEXT AS ABOVE
   
+    physical_plan after EliminateRedundantRepartition:
+    SAME TEXT AS ABOVE
+  
     physical_plan after CombinePartialFinalAggregate:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
@@ -9495,6 +9546,9 @@ data:
                 DataSourceExec: partitions=1, partition_sizes=[1]
   
   
+    physical_plan after EliminateRedundantRepartition:
+    SAME TEXT AS ABOVE
+  
     physical_plan after CombinePartialFinalAggregate:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
@@ -9946,6 +10000,9 @@ data:
     physical_plan after EnforceDistribution:
     SAME TEXT AS ABOVE
   
+    physical_plan after EliminateRedundantRepartition:
+    SAME TEXT AS ABOVE
+  
     physical_plan after CombinePartialFinalAggregate:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
@@ -10364,6 +10421,9 @@ data:
     physical_plan after EnforceDistribution:
     SAME TEXT AS ABOVE
   
+    physical_plan after EliminateRedundantRepartition:
+    SAME TEXT AS ABOVE
+  
     physical_plan after CombinePartialFinalAggregate:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
@@ -10778,6 +10838,9 @@ data:
     SAME TEXT AS ABOVE
   
     physical_plan after EnforceDistribution:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after EliminateRedundantRepartition:
     SAME TEXT AS ABOVE
   
     physical_plan after CombinePartialFinalAggregate:
@@ -11212,6 +11275,9 @@ data:
     SAME TEXT AS ABOVE
   
     physical_plan after EnforceDistribution:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after EliminateRedundantRepartition:
     SAME TEXT AS ABOVE
   
     physical_plan after CombinePartialFinalAggregate:
@@ -11670,6 +11736,9 @@ data:
     SAME TEXT AS ABOVE
   
     physical_plan after EnforceDistribution:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after EliminateRedundantRepartition:
     SAME TEXT AS ABOVE
   
     physical_plan after CombinePartialFinalAggregate:
