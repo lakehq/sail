@@ -1,0 +1,58 @@
+name: Free-Threading Tests
+
+on:
+  workflow_call:
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/adjust-swap-space
+
+      - uses: ./.github/actions/mount-target-directory
+
+      - uses: actions/setup-python@v6
+        with:
+          # The "t" suffix selects the free-threaded (no-GIL) interpreter.
+          python-version: "3.14t"
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: rust-build-free-threaded
+          install-testing-tools: false
+
+      # Build a versioned cp314t wheel. pyo3 automatically drops the
+      # `abi3-py38` feature when building for a free-threaded interpreter,
+      # so no feature changes are needed; the build recipe is otherwise
+      # identical to the abi3 build in `rust-build.yml`.
+      - name: Build Python Package
+        uses: PyO3/maturin-action@v1
+        with:
+          args: -i python3.14t
+
+      - name: Install Package and Test Dependencies
+        run: |
+          python -m venv .venv-ft
+          .venv-ft/bin/pip install pysail --no-index -f target/wheels
+          # `testcontainers` is imported unconditionally by the test suite's
+          # conftest (no containers are started by the free-threading tests).
+          # `pandas` and `pyarrow` are intentionally unpinned here: the
+          # versions pinned for the regular test matrix do not all publish
+          # cp314t wheels yet.
+          .venv-ft/bin/pip install "pyspark-client==4.2.0" "pytest>=9.1,<10" "testcontainers>=4,<5" pandas pyarrow
+
+      # PYTHON_GIL=0 keeps the GIL disabled even though the Spark Connect
+      # client imports grpcio, which does not yet declare free-threading
+      # support (grpc/grpc#38762) and would otherwise re-enable the GIL.
+      # This is only needed because the tests colocate the client and the
+      # in-process server in a single interpreter; in real deployments the
+      # server's gRPC is implemented in Rust (tonic), so grpcio never enters
+      # the free-threaded server process and no override is needed.
+      - name: Run Free-Threading Tests
+        env:
+          PYTHON_GIL: "0"
+        run: |
+          .venv-ft/bin/python -m pytest --pyargs pysail.tests.test_free_threading -v
