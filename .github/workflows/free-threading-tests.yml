@@ -33,26 +33,19 @@ jobs:
         with:
           args: -i python3.14t
 
-      - name: Install Package and Test Dependencies
-        run: |
-          python -m venv .venv-ft
-          .venv-ft/bin/pip install pysail --no-index -f target/wheels
-          # `testcontainers` is imported unconditionally by the test suite's
-          # conftest (no containers are started by the free-threading tests).
-          # `pandas` and `pyarrow` are intentionally unpinned here: the
-          # versions pinned for the regular test matrix do not all publish
-          # cp314t wheels yet.
-          .venv-ft/bin/pip install "pyspark-client==4.2.0" "pytest>=9.1,<10" "testcontainers>=4,<5" pandas pyarrow
+      - name: Install Hatch
+        uses: pypa/hatch@install
 
-      # PYTHON_GIL=0 keeps the GIL disabled even though the Spark Connect
-      # client imports grpcio, which does not yet declare free-threading
-      # support (grpc/grpc#38762) and would otherwise re-enable the GIL.
-      # This is only needed because the tests colocate the client and the
-      # in-process server in a single interpreter; in real deployments the
-      # server's gRPC is implemented in Rust (tonic), so grpcio never enters
-      # the free-threaded server process and no override is needed.
+      - name: Install Package
+        run: hatch -e test-freethreaded run install-pysail
+
+      # The `test-freethreaded` Hatch environment sets PYTHON_GIL=0, which
+      # keeps the GIL disabled even though the Spark Connect client imports
+      # grpcio: grpcio does not yet declare free-threading support
+      # (grpc/grpc#38762) and would otherwise re-enable the GIL. This is only
+      # needed because the tests colocate the client and the in-process
+      # server in a single interpreter; in real deployments the server's
+      # gRPC is implemented in Rust (tonic), so grpcio never enters the
+      # free-threaded server process and no override is needed.
       - name: Run Free-Threading Tests
-        env:
-          PYTHON_GIL: "0"
-        run: |
-          .venv-ft/bin/python -m pytest --pyargs pysail.tests.test_free_threading -v
+        run: hatch -e test-freethreaded run pytest --pyargs pysail.tests.test_free_threading -v

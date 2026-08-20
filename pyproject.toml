@@ -190,6 +190,28 @@ matrix.spark.extra-dependencies = [
 ]
 env.CI.installer = "uv"
 
+[tool.hatch.envs.test-freethreaded]
+# The environment for the free-threading tests, on a free-threaded (no-GIL)
+# interpreter. PYTHON_GIL=0 keeps the GIL disabled even though the Spark
+# Connect client imports grpcio, which does not yet declare free-threading
+# support (grpc/grpc#38762) and would otherwise re-enable it; the tests
+# colocate the client and the in-process server in a single interpreter.
+python = "3.14t"
+installer = "pip"
+skip-install = true
+env-vars = { PYTHON_GIL = "0" }
+dependencies = [
+    "pyspark-client==4.2.0",
+    "pytest>=9.1,<10",
+    "testcontainers>=4,<5",
+    # Bumped relative to the `test` environment (pandas<3 / pyarrow>=24,<25):
+    # these are the minimum versions that publish cp314t (free-threaded)
+    # wheels.
+    "pandas>=3,<4",
+    "pyarrow>=25,<26",
+]
+path = ".venvs/test-freethreaded"
+
 [tool.hatch.envs.test-spark]
 matrix-name-format = "{variable}-{value}"
 python = "3.11"
