@@ -1175,12 +1175,11 @@ fn session_window_gap(gap: Expr, schema: &DFSchemaRef) -> PlanResult<Expr> {
             let interval = parse_calendar_interval_string(s).map_err(|e| {
                 PlanError::invalid(format!("invalid session_window gap {s:?}: {e}"))
             })?;
+            let nanos = interval.microseconds.checked_mul(1_000).ok_or_else(|| {
+                PlanError::invalid(format!("session_window gap out of range: {s:?}"))
+            })?;
             return Ok(lit(ScalarValue::IntervalMonthDayNano(Some(
-                IntervalMonthDayNano::new(
-                    interval.months,
-                    interval.days,
-                    interval.microseconds * 1_000,
-                ),
+                IntervalMonthDayNano::new(interval.months, interval.days, nanos),
             ))));
         }
         if let ScalarValue::IntervalYearMonth(_) = value {
@@ -1193,8 +1192,13 @@ fn session_window_gap(gap: Expr, schema: &DFSchemaRef) -> PlanResult<Expr> {
             return Ok(lit(ScalarValue::IntervalMonthDayNano(Some(*v))));
         }
         let micros = window_interval_micros(&gap)?;
+        let nanos = micros.checked_mul(1_000).ok_or_else(|| {
+            PlanError::invalid(format!(
+                "session_window gap out of range: {micros} microseconds"
+            ))
+        })?;
         return Ok(lit(ScalarValue::IntervalMonthDayNano(Some(
-            IntervalMonthDayNano::new(0, 0, micros * 1_000),
+            IntervalMonthDayNano::new(0, 0, nanos),
         ))));
     }
     // Otherwise the gap is a per-row (dynamic) expression. Year-month *typed*

@@ -13,10 +13,10 @@ use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use sail_common_datafusion::utils::items::ItemTaker;
-
-use crate::functions_utils::StrMemo;
 use sail_sql_analyzer::literal::interval::{IntervalValue, parse_calendar_interval_string};
 use sail_sql_analyzer::parser::parse_interval;
+
+use crate::functions_utils::StrMemo;
 
 /// Parses interval strings with per-batch memoization of distinct values.
 ///
@@ -331,10 +331,14 @@ fn string_to_calendar_interval(value: &str) -> Result<IntervalMonthDayNano> {
     // amounts stay absolute microseconds and are never rebucketed into days.
     let interval =
         parse_calendar_interval_string(value).map_err(|e| exec_datafusion_err!("{e}"))?;
+    let nanoseconds = interval
+        .microseconds
+        .checked_mul(1_000)
+        .ok_or_else(|| exec_datafusion_err!("interval out of range: {value:?}"))?;
     Ok(IntervalMonthDayNano {
         months: interval.months,
         days: interval.days,
-        nanoseconds: interval.microseconds * 1_000,
+        nanoseconds,
     })
 }
 
@@ -377,6 +381,14 @@ mod tests {
         );
         assert!(invalid.is_err());
         Ok(())
+    }
+
+    /// A gap that fits i64 microseconds can still overflow the nanosecond
+    /// representation; the strict converter must error rather than wrap.
+    #[test]
+    fn calendar_interval_nanosecond_overflow_errors() {
+        assert!(string_to_calendar_interval("100000000000 hours").is_err());
+        assert!(string_to_calendar_interval("2000000 hours").is_ok());
     }
 
     #[test]
