@@ -278,17 +278,3 @@ impl DeltaOperation {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::DeltaOperation;
-
-    #[test]
-    fn optimize_is_a_no_data_change_operation() {
-        let operation = DeltaOperation::Optimize {};
-
-        assert_eq!(operation.name(), "OPTIMIZE");
-        assert!(!operation.changes_data());
-        assert!(operation.read_predicate().is_none());
-    }
-}

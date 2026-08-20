@@ -479,9 +479,8 @@ async fn build_old_data_plan(
 mod tests {
     use std::collections::HashMap;
 
-    use crate::spec::Add;
-
     use super::has_compaction_candidates;
+    use crate::spec::Add;
 
     fn add(path: &str, size: i64, partition: &str) -> Add {
         Add {

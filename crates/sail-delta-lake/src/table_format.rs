@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
+use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{DFSchema, DataFusionError, Result, not_impl_err, plan_err};
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::execution::SessionState;
@@ -872,19 +873,15 @@ async fn open_delta_write_planning_table(
 }
 
 fn delta_snapshot_version(plan: &LogicalPlan) -> Result<i64> {
-    fn collect(plan: &LogicalPlan, versions: &mut Vec<i64>) {
-        if let LogicalPlan::TableScan(scan) = plan
+    let mut versions = Vec::new();
+    plan.apply(|node| {
+        if let LogicalPlan::TableScan(scan) = node
             && let Some(source) = scan.source.downcast_ref::<DeltaTableSource>()
         {
             versions.push(source.snapshot().version());
         }
-        for input in plan.inputs() {
-            collect(input, versions);
-        }
-    }
-
-    let mut versions = Vec::new();
-    collect(plan, &mut versions);
+        Ok(TreeNodeRecursion::Continue)
+    })?;
     match versions.as_slice() {
         [version] => Ok(*version),
         [] => plan_err!("OPTIMIZE requires a Delta table scan"),

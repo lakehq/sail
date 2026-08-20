@@ -171,7 +171,14 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_optimize() -> SqlResult<()> {
-        parse_one_statement("OPTIMIZE catalog.schema.events").map(|_| ())
+    fn test_parse_optimize_rejects_unsupported_modifiers() {
+        for sql in [
+            "OPTIMIZE FULL events",
+            "OPTIMIZE events FULL",
+            "OPTIMIZE events WHERE id = 1",
+            "OPTIMIZE events ZORDER BY (id)",
+        ] {
+            assert!(parse_one_statement(sql).is_err(), "{sql}");
+        }
     }
 }
