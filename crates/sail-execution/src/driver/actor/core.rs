@@ -73,6 +73,8 @@ impl Actor for DriverActor {
             ShuffleBackendKind::Celeborn {
                 master_host,
                 master_port,
+                compression,
+                heartbeat_interval_secs,
                 partition_split_threshold,
                 partition_split_mode,
                 ..
@@ -88,6 +90,9 @@ impl Actor for DriverActor {
                 };
                 let options =
                     options.with_partition_split(*partition_split_threshold, *partition_split_mode);
+                let options = options.with_heartbeat_interval(std::time::Duration::from_secs(
+                    *heartbeat_interval_secs,
+                ));
                 let handle = ctx.children_mut().spawn::<LifecycleManagerActor>(options);
                 let lifecycle_manager = LocalLifecycleManager::new(handle);
                 self.extensions.lifecycle_manager = Some(lifecycle_manager.clone());
@@ -96,6 +101,7 @@ impl Actor for DriverActor {
                         application_id,
                         Arc::new(lifecycle_manager),
                         self.options.shuffle_backend.celeborn_endpoint_resolver(),
+                        *compression,
                     ),
                 ));
                 let streams = CelebornStreamManager::new(client);

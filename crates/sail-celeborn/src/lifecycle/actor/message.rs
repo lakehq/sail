@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use sail_common::telemetry::SpanAssociation;
 use tokio::sync::oneshot;
 
-use crate::common::{PartitionLocation, SlotReservation};
+use crate::common::{ApplicationMetrics, PartitionLocation, SlotReservation};
 use crate::error::CelebornResult;
 use crate::lifecycle::ReviveRequest;
 
@@ -58,6 +58,14 @@ pub enum LifecycleManagerMessage {
         result: CelebornResult<()>,
         reply: oneshot::Sender<CelebornResult<()>>,
     },
+    ReportMetrics {
+        metrics: ApplicationMetrics,
+        result: oneshot::Sender<CelebornResult<()>>,
+    },
+    Heartbeat,
+    HeartbeatComplete {
+        result: CelebornResult<()>,
+    },
     Stop {
         result: oneshot::Sender<()>,
     },
@@ -79,6 +87,9 @@ impl SpanAssociation for LifecycleManagerMessage {
             Self::MapperEndComplete { .. } => "MapperEndComplete",
             Self::UnregisterShuffle { .. } => "UnregisterShuffle",
             Self::UnregisterShuffleComplete { .. } => "UnregisterShuffleComplete",
+            Self::ReportMetrics { .. } => "ReportMetrics",
+            Self::Heartbeat => "Heartbeat",
+            Self::HeartbeatComplete { .. } => "HeartbeatComplete",
             Self::Stop { .. } => "Stop",
             Self::StopComplete { .. } => "StopComplete",
         }

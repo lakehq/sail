@@ -1,3 +1,3 @@
 mod client;
 
-pub use client::{WorkerClient, WorkerClientOptions};
+pub use client::{WorkerClient, WorkerClientOptions, WorkerClientPool};

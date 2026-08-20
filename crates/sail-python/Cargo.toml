@@ -19,6 +19,7 @@ sail-catalog-hms = { path = "../sail-catalog-hms" }
 sail-catalog-iceberg = { path = "../sail-catalog-iceberg" }
 
 arrow-schema = { workspace = true }
+bytes = { workspace = true }
 pyo3 = { workspace = true }
 tokio = { workspace = true }
 log = { workspace = true }

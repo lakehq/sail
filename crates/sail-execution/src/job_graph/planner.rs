@@ -1035,6 +1035,7 @@ mod tests {
             shuffle_backend: ShuffleBackendKind::Celeborn {
                 master_host: "localhost".to_string(),
                 master_port: 1,
+                compression: sail_celeborn::common::CompressionCodec::Lz4,
                 endpoint_overrides: vec![],
                 partition_split_threshold: 1_i64 << 30,
                 partition_split_mode: PartitionSplitMode::Soft,

@@ -42,11 +42,163 @@ impl FromStr for PartitionSplitMode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SlotReservation {
     /// Celeborn worker unique IDs that received slots.
-    pub worker_ids: Vec<String>,
+    pub worker_ids: Vec<WorkerIdentity>,
     /// Primary partition locations keyed by reduce partition ID.
     pub primary_locations: HashMap<i32, PartitionLocation>,
     /// Slots to reserve, grouped by the worker that owns them.
-    pub worker_locations: HashMap<String, WorkerSlotLocations>,
+    pub worker_locations: HashMap<WorkerIdentity, WorkerSlotLocations>,
+}
+
+/// The stable network identity of a Celeborn worker.
+///
+/// Partition locations include a partition ID and epoch. Those values are not part of the worker
+/// identity and must not determine which transport connections are reused.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct WorkerIdentity {
+    pub host: String,
+    pub rpc_port: u16,
+    pub push_port: u16,
+    pub fetch_port: u16,
+    pub replicate_port: u16,
+}
+
+impl Display for WorkerIdentity {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}:{}:{}:{}:{}",
+            self.host, self.rpc_port, self.push_port, self.fetch_port, self.replicate_port
+        )
+    }
+}
+
+impl FromStr for WorkerIdentity {
+    type Err = CelebornError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let mut parts = value.rsplitn(5, ':');
+        let replicate_port = parse_worker_port(value, "replicate", parts.next())?;
+        let fetch_port = parse_worker_port(value, "fetch", parts.next())?;
+        let push_port = parse_worker_port(value, "push", parts.next())?;
+        let rpc_port = parse_worker_port(value, "rpc", parts.next())?;
+        let host = parts
+            .next()
+            .filter(|host| !host.is_empty())
+            .ok_or_else(|| {
+                CelebornError::InvalidArgument(format!("invalid Celeborn worker identity: {value}"))
+            })?;
+        Ok(Self {
+            host: host.to_string(),
+            rpc_port,
+            push_port,
+            fetch_port,
+            replicate_port,
+        })
+    }
+}
+
+fn parse_worker_port(
+    worker_id: &str,
+    name: &str,
+    value: Option<&str>,
+) -> Result<u16, CelebornError> {
+    value
+        .ok_or_else(|| {
+            CelebornError::InvalidArgument(format!("invalid Celeborn worker identity: {worker_id}"))
+        })?
+        .parse::<u16>()
+        .map_err(|_| {
+            CelebornError::InvalidArgument(format!(
+                "invalid {name} port in Celeborn worker identity: {worker_id}"
+            ))
+        })
+}
+
+/// Compression applied to individual push-data batches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompressionCodec {
+    None,
+    Lz4,
+    Zstd { level: i8 },
+}
+
+/// Metrics sent with an application heartbeat.
+#[derive(Debug, Clone, Default)]
+pub struct ApplicationMetrics {
+    pub total_written: i64,
+    pub file_count: i64,
+    pub shuffle_count: i64,
+    pub application_count: i64,
+    pub shuffle_fallback_counts: HashMap<String, i64>,
+    pub application_fallback_counts: HashMap<String, i64>,
+}
+
+impl ApplicationMetrics {
+    pub fn for_written_data(bytes: usize) -> Self {
+        Self {
+            total_written: i64::try_from(bytes).unwrap_or(i64::MAX),
+            ..Default::default()
+        }
+    }
+
+    pub fn add_assign(&mut self, other: Self) {
+        self.total_written = self.total_written.saturating_add(other.total_written);
+        self.file_count = self.file_count.saturating_add(other.file_count);
+        self.shuffle_count = self.shuffle_count.saturating_add(other.shuffle_count);
+        self.application_count = self
+            .application_count
+            .saturating_add(other.application_count);
+        for (key, value) in other.shuffle_fallback_counts {
+            let count = self.shuffle_fallback_counts.entry(key).or_default();
+            *count = count.saturating_add(value);
+        }
+        for (key, value) in other.application_fallback_counts {
+            let count = self.application_fallback_counts.entry(key).or_default();
+            *count = count.saturating_add(value);
+        }
+    }
+}
+
+impl Default for CompressionCodec {
+    fn default() -> Self {
+        Self::Lz4
+    }
+}
+
+impl Display for CompressionCodec {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::None => f.write_str("none"),
+            Self::Lz4 => f.write_str("lz4"),
+            Self::Zstd { level } => write!(f, "zstd({level})"),
+        }
+    }
+}
+
+impl FromStr for CompressionCodec {
+    type Err = CelebornError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "none" => Ok(Self::None),
+            "lz4" => Ok(Self::Lz4),
+            value => value
+                .strip_prefix("zstd(")
+                .and_then(|value| value.strip_suffix(')'))
+                .ok_or_else(|| {
+                    CelebornError::InvalidArgument(format!(
+                        "invalid Celeborn compression codec: {value}"
+                    ))
+                })?
+                .parse::<i8>()
+                .map(|level| Self::Zstd { level })
+                .map_err(|_| {
+                    CelebornError::InvalidArgument(format!(
+                        "invalid Celeborn zstd compression level: {value}"
+                    ))
+                }),
+        }
+    }
 }
 
 /// The primary and replica slots that must be reserved on one worker.
@@ -91,11 +243,14 @@ impl PartitionLocation {
         format!("{}-{}", self.id, self.epoch)
     }
 
-    pub fn worker_id(&self) -> String {
-        format!(
-            "{}:{}:{}:{}:{}",
-            self.host, self.rpc_port, self.push_port, self.fetch_port, self.replicate_port,
-        )
+    pub fn worker_identity(&self) -> WorkerIdentity {
+        WorkerIdentity {
+            host: self.host.clone(),
+            rpc_port: self.rpc_port,
+            push_port: self.push_port,
+            fetch_port: self.fetch_port,
+            replicate_port: self.replicate_port,
+        }
     }
 
     pub fn set_epoch(&mut self, epoch: i32) {
@@ -147,5 +302,37 @@ impl TryFrom<PbPartitionLocation> for PartitionLocation {
                 .map(|peer| Self::try_from(*peer).map(Box::new))
                 .transpose()?,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CompressionCodec, WorkerIdentity};
+
+    #[test]
+    fn parses_compression_codecs() {
+        assert!(matches!("none".parse(), Ok(CompressionCodec::None)));
+        assert!(matches!("lz4".parse(), Ok(CompressionCodec::Lz4)));
+        assert!(matches!(
+            "zstd(1)".parse(),
+            Ok(CompressionCodec::Zstd { level: 1 })
+        ));
+        assert!("zstd".parse::<CompressionCodec>().is_err());
+    }
+
+    #[test]
+    fn parses_worker_identity() {
+        assert_eq!(
+            "worker:12000:12001:12002:12003"
+                .parse::<WorkerIdentity>()
+                .unwrap(),
+            WorkerIdentity {
+                host: "worker".to_string(),
+                rpc_port: 12000,
+                push_port: 12001,
+                fetch_port: 12002,
+                replicate_port: 12003,
+            }
+        );
     }
 }
