@@ -2,7 +2,7 @@ import threading
 
 import pandas as pd
 import pytest
-from pyspark.sql.functions import col, pandas_udf
+from pyspark.sql.functions import pandas_udf
 from pyspark.sql.types import LongType
 
 from pysail.testing.spark.utils.common import is_jvm_spark
@@ -30,11 +30,6 @@ def _call_count() -> int:
     return count
 
 
-@pandas_udf(LongType())
-def call_count(values: pd.Series) -> pd.Series:
-    return pd.Series([_call_count()] * len(values), dtype="int64")
-
-
 @pytest.mark.skipif(is_jvm_spark(), reason="asserts a property of the Sail in-process execution model")
 def test_thread_local_state_survives_between_udf_calls(spark):
     """Python state kept in a `threading.local` must survive between UDF calls.
@@ -45,6 +40,14 @@ def test_thread_local_state_survives_between_udf_calls(spark):
     that also caches a raw pointer outside the thread state is left holding a
     dangling pointer. See https://github.com/lakehq/sail/issues/2456.
     """
-    df = spark.range(0, ROW_COUNT).select(call_count(col("id")).alias("count"))
+
+    # Defined here rather than at module scope because `pandas_udf` picks its
+    # implementation when it is called: without an active session it builds the
+    # classic JVM-backed UDF, which cannot be applied to a Spark Connect frame.
+    @pandas_udf(LongType())
+    def call_count(values: pd.Series) -> pd.Series:
+        return pd.Series([_call_count()] * len(values), dtype="int64")
+
+    df = spark.range(0, ROW_COUNT).select(call_count("id").alias("count"))
     highest = df.agg({"count": "max"}).collect()[0][0]
     assert highest > 1, "every call saw an empty threading.local, so the thread state did not survive"
