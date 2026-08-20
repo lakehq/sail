@@ -9,6 +9,7 @@ use datafusion::functions_aggregate::{
     variance,
 };
 use datafusion::functions_nested::string::array_to_string;
+use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
 use datafusion_expr::{
@@ -461,6 +462,14 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     // For COUNT(DISTINCT *), the resolver already expanded the wildcard to column references
     // (with hidden-column filtering). For COUNT(*), convert to COUNT(1).
     let args = transform_count_star_wildcard_expr(arguments);
+    // Spark counts every row for a non-null literal. Use DataFusion's canonical COUNT(*)
+    // expansion so its aggregate-statistics rule recognizes COUNT(1).
+    let args = match args.as_slice() {
+        [expr::Expr::Literal(value, _)] if !distinct && !value.is_null() => {
+            vec![expr::Expr::Literal(COUNT_STAR_EXPANSION, None)]
+        }
+        _ => args,
+    };
     // TODO: remove StructFunction call when count distinct from multiple arguments is implemented
     // https://github.com/apache/datafusion/blob/58ddf0d4390c770bc571f3ac2727c7de77aa25ab/datafusion/functions-aggregate/src/count.rs#L333
     let args = if distinct && (args.len() > 1) {
