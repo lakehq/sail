@@ -434,8 +434,8 @@ data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#1@0 as cnt]
-      ProjectionExec: expr=[3 as #1]
-        PlaceholderRowExec
+      ProjectionExec: expr=[count(Int64(1))@0 as #1]
+        DataSourceExec: partitions=1, partition_sizes=[1]
 ---
 name: "test_explain_exact_aggregates_contains_no_delta_data_scan"
 data:
