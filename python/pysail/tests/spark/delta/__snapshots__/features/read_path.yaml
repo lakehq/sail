@@ -5,8 +5,8 @@ data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#6@0 as one_count]
-      ProjectionExec: expr=[CASE WHEN count(Int64(1))@0 > 0 THEN 1 ELSE 0 END as #6]
-        DataSourceExec: partitions=1, partition_sizes=[1]
+      ProjectionExec: expr=[CASE WHEN 3 > 0 THEN 1 ELSE 0 END as #6]
+        PlaceholderRowExec
 ---
 name: "test_exact_and_residual_aggregates_share_one_global_aggregate_row"
 data:
@@ -434,16 +434,16 @@ data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#1@0 as cnt]
-      ProjectionExec: expr=[count(Int64(1))@0 as #1]
-        DataSourceExec: partitions=1, partition_sizes=[1]
+      ProjectionExec: expr=[3 as #1]
+        PlaceholderRowExec
 ---
 name: "test_explain_exact_aggregates_contains_no_delta_data_scan"
 data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#6@0 as count(1), #7@1 as count(nullable_value), #8@2 as MIN(id), #9@3 as MAX(score)]
-      ProjectionExec: expr=[count(Int64(1))@0 as #6, count(delta_exact_aggregates.#1)@1 as #7, min(delta_exact_aggregates.#0)@2 as #8, max(__datafusion_extracted_1)@3 as #9]
-        DataSourceExec: partitions=1, partition_sizes=[1]
+      ProjectionExec: expr=[3 as #6, 2 as #7, 1 as #8, 9 as #9]
+        PlaceholderRowExec
 ---
 name: "test_explain_grouped_count_shows_metadata_rows_and_a_residual_scan"
 data:
