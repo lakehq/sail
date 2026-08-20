@@ -39,11 +39,13 @@ The "merge-on-read" mode refers to updating the table with deletion vectors. Thi
 
 ## Table Maintenance Operations
 
-| Feature    | Supported      |
-| ---------- | -------------- |
-| `VACUUM`   | :construction: |
-| `OPTIMIZE` | :construction: |
-| `RESTORE`  | :construction: |
+| Feature                       | Supported          |
+| ----------------------------- | ------------------ |
+| `VACUUM`                      | :construction:     |
+| `OPTIMIZE` (basic compaction) | :white_check_mark: |
+| `RESTORE`                     | :construction:     |
+
+`OPTIMIZE` supports named Delta tables. Path targets, `WHERE`, `ZORDER BY`, and `FULL` are not yet supported.
 
 ## Protocol Internals
 
