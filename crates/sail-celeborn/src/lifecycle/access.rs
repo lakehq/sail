@@ -1,11 +1,11 @@
 use sail_common::actor::ActorHandle;
 use tokio::sync::oneshot;
 
+use crate::common::{PartitionLocation, SlotReservation};
 use crate::error::{CelebornError, CelebornResult};
 use crate::lifecycle::{
     LifecycleManager, LifecycleManagerActor, LifecycleManagerMessage, ReviveRequest,
 };
-use crate::master::{PartitionLocation, SlotReservation};
 
 /// A lifecycle manager backed by a local actor.
 #[derive(Debug, Clone)]

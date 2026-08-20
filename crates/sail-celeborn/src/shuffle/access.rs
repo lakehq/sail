@@ -2,8 +2,8 @@ use futures::stream::{self, BoxStream};
 use sail_common::actor::ActorHandle;
 use tokio::sync::oneshot;
 
+use crate::common::SlotReservation;
 use crate::error::{CelebornError, CelebornResult};
-use crate::master::SlotReservation;
 use crate::shuffle::{ShuffleClientActor, ShuffleClientMessage};
 
 /// A local handle to a Celeborn shuffle client actor.
