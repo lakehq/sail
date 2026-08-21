@@ -515,9 +515,12 @@ pub(crate) async fn plan_iceberg_write(
         .as_ref()
         .map(IcebergTableFormat::partition_columns_from_metadata)
         .transpose()?;
-    let expected_snapshot_id = table
-        .as_ref()
-        .map(|table| table.metadata().current_snapshot_id);
+    let expected_snapshot_id = table.as_ref().map(|table| {
+        table
+            .metadata()
+            .current_snapshot()
+            .map(Snapshot::snapshot_id)
+    });
     let removed_data_file_paths = if let PhysicalSinkMode::OverwriteIf {
         condition: Some(condition),
         ..
