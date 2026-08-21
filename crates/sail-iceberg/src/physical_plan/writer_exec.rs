@@ -344,12 +344,9 @@ impl ExecutionPlan for IcebergWriterExec {
                     }
                 }
                 PhysicalSinkMode::Append => {}
-                PhysicalSinkMode::Overwrite => {}
-                PhysicalSinkMode::OverwriteIf { .. } | PhysicalSinkMode::OverwritePartitions => {
-                    return Err(DataFusionError::NotImplemented(
-                        "predicate or partition overwrite not implemented for Iceberg".to_string(),
-                    ));
-                }
+                PhysicalSinkMode::Overwrite
+                | PhysicalSinkMode::OverwriteIf { .. }
+                | PhysicalSinkMode::OverwritePartitions => {}
             }
 
             let data_location = write_context.data_location()?;

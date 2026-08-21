@@ -10,7 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -37,7 +37,7 @@ use crate::catalog_support::commit::{
     CatalogCommitOutcome, CatalogTableInfo, IcebergCatalogCommitCoordinator,
     IcebergCatalogCommitMode, catalog_requirements, table_metadata_location,
 };
-use crate::io::StoreContext;
+use crate::io::{StoreContext, load_manifest, load_manifest_list};
 use crate::operations::bootstrap::{
     NewTableMetadataStyle, PersistStrategy, bootstrap_first_snapshot,
     bootstrap_new_table_with_style, prepare_bootstrap_snapshot,
@@ -47,11 +47,13 @@ use crate::operations::{SnapshotProducer, SnapshotUpdateKind, Transaction};
 use crate::physical_plan::action_schema::{CommitMeta, decode_actions_and_meta_from_batch};
 use crate::physical_plan::commit::IcebergCommitInfo;
 use crate::spec::catalog::TableUpdate;
+use crate::spec::manifest::ManifestStatus;
 use crate::spec::metadata::table_metadata::SnapshotLog;
 use crate::spec::partition::{UnboundPartitionField, UnboundPartitionSpec};
 use crate::spec::snapshots::MAIN_BRANCH;
 use crate::spec::{
-    DataFile, PartitionSpec, Schema as IcebergSchema, TableMetadata, TableRequirement,
+    DataContentType, DataFile, FormatVersion, PartitionSpec, Schema as IcebergSchema,
+    TableMetadata, TableRequirement,
 };
 use crate::table::metadata_loader::{
     encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
@@ -135,6 +137,8 @@ pub struct IcebergCommitExec {
     lakehouse_table: Option<LakehouseExecutionContext>,
     snapshot_update_kind: SnapshotUpdateKind,
     expected_snapshot_id: Option<Option<i64>>,
+    removed_data_file_paths: Vec<String>,
+    dynamic_partition_overwrite: bool,
     cache: Arc<PlanProperties>,
 }
 
@@ -162,6 +166,8 @@ impl IcebergCommitExec {
             lakehouse_table,
             snapshot_update_kind,
             expected_snapshot_id: None,
+            removed_data_file_paths: Vec::new(),
+            dynamic_partition_overwrite: false,
             cache,
         }
     }
@@ -169,6 +175,24 @@ impl IcebergCommitExec {
     pub fn with_expected_snapshot_id(mut self, expected_snapshot_id: Option<Option<i64>>) -> Self {
         self.expected_snapshot_id = expected_snapshot_id;
         self
+    }
+
+    pub fn with_removed_data_file_paths(mut self, paths: Vec<String>) -> Self {
+        self.removed_data_file_paths = paths;
+        self
+    }
+
+    pub fn with_dynamic_partition_overwrite(mut self, enabled: bool) -> Self {
+        self.dynamic_partition_overwrite = enabled;
+        self
+    }
+
+    pub fn removed_data_file_paths(&self) -> &[String] {
+        &self.removed_data_file_paths
+    }
+
+    pub fn dynamic_partition_overwrite(&self) -> bool {
+        self.dynamic_partition_overwrite
     }
 
     pub fn table_url(&self) -> &Url {
@@ -428,6 +452,78 @@ impl IcebergCommitExec {
         table_metadata_location(table_url, metadata_file)
     }
 
+    async fn current_live_data_files(
+        store_ctx: &StoreContext,
+        table_metadata: &TableMetadata,
+    ) -> Result<Vec<DataFile>> {
+        let Some(snapshot) = table_metadata.current_snapshot() else {
+            return Ok(Vec::new());
+        };
+        let manifest_list = load_manifest_list(store_ctx, snapshot.manifest_list()).await?;
+        let mut live_data_files = Vec::new();
+        for manifest_file in manifest_list.entries() {
+            let manifest = load_manifest(store_ctx, &manifest_file.manifest_path).await?;
+            for entry in manifest.entries().iter().filter(|entry| {
+                matches!(
+                    entry.status,
+                    ManifestStatus::Added | ManifestStatus::Existing
+                )
+            }) {
+                if !matches!(entry.data_file.content, DataContentType::Data) {
+                    return Err(DataFusionError::Plan(
+                        "copy-on-write scoped overwrite is not supported for Iceberg tables with active delete files"
+                            .to_string(),
+                    ));
+                }
+                let mut file = entry.data_file.clone();
+                file.partition_spec_id = manifest_file.partition_spec_id;
+                live_data_files.push(file);
+            }
+        }
+        Ok(live_data_files)
+    }
+
+    fn dynamic_partition_overwrite_paths(
+        added_data_files: &[DataFile],
+        live_data_files: &[DataFile],
+        default_spec: &PartitionSpec,
+    ) -> Result<Vec<String>> {
+        if added_data_files.is_empty() {
+            return Ok(Vec::new());
+        }
+        let default_spec_id = default_spec.spec_id();
+        let partition_field_count = default_spec.fields().len();
+        if added_data_files.iter().any(|file| {
+            file.partition_spec_id != default_spec_id
+                || file.partition.len() != partition_field_count
+        }) {
+            return Err(DataFusionError::Plan(format!(
+                "dynamic partition overwrite produced files that do not match the default Iceberg partition spec {default_spec_id}"
+            )));
+        }
+        if live_data_files.iter().any(|file| {
+            file.partition_spec_id != default_spec_id
+                || file.partition.len() != partition_field_count
+        }) {
+            return Err(DataFusionError::NotImplemented(
+                "dynamic partition overwrite is not supported for Iceberg tables with incomparable live partition specs"
+                    .to_string(),
+            ));
+        }
+        let touched_partitions = added_data_files
+            .iter()
+            .map(|file| file.partition.clone())
+            .collect::<HashSet<_>>();
+        let mut paths = live_data_files
+            .iter()
+            .filter(|file| touched_partitions.contains(&file.partition))
+            .map(|file| file.file_path.clone())
+            .collect::<Vec<_>>();
+        paths.sort();
+        paths.dedup();
+        Ok(paths)
+    }
+
     fn merge_writer_commit_meta(
         accumulated: &mut Option<CommitMeta>,
         mut incoming: CommitMeta,
@@ -488,7 +584,9 @@ impl ExecutionPlan for IcebergCommitExec {
                 self.lakehouse_table.clone(),
                 self.snapshot_update_kind,
             )
-            .with_expected_snapshot_id(self.expected_snapshot_id),
+            .with_expected_snapshot_id(self.expected_snapshot_id)
+            .with_removed_data_file_paths(self.removed_data_file_paths.clone())
+            .with_dynamic_partition_overwrite(self.dynamic_partition_overwrite),
         ))
     }
 
@@ -514,6 +612,8 @@ impl ExecutionPlan for IcebergCommitExec {
         let lakehouse_table = self.lakehouse_table.clone();
         let snapshot_update_kind = self.snapshot_update_kind;
         let expected_snapshot_id = self.expected_snapshot_id;
+        let planned_removed_data_file_paths = self.removed_data_file_paths.clone();
+        let dynamic_partition_overwrite = self.dynamic_partition_overwrite;
         let schema = self.schema();
         let future = async move {
             let object_store = get_object_store_from_context(&context, &table_url)?;
@@ -582,6 +682,25 @@ impl ExecutionPlan for IcebergCommitExec {
             {
                 commit_info.requirements.push(requirement);
             }
+            if !matches!(snapshot_update_kind, SnapshotUpdateKind::CopyOnWrite)
+                && (dynamic_partition_overwrite || !planned_removed_data_file_paths.is_empty())
+            {
+                return Err(DataFusionError::Internal(
+                    "scoped overwrite requires a copy-on-write snapshot update".to_string(),
+                ));
+            }
+            if dynamic_partition_overwrite && !planned_removed_data_file_paths.is_empty() {
+                return Err(DataFusionError::Internal(
+                    "dynamic partition overwrite cannot carry planned removal paths".to_string(),
+                ));
+            }
+            if matches!(snapshot_update_kind, SnapshotUpdateKind::CopyOnWrite)
+                && commit_info.data_files.is_empty()
+                && planned_removed_data_file_paths.is_empty()
+            {
+                return commit_count_batch(schema, 0);
+            }
+            let mut removed_data_file_paths = planned_removed_data_file_paths;
 
             let catalog_table = commit_info
                 .lakehouse_table
@@ -717,6 +836,28 @@ impl ExecutionPlan for IcebergCommitExec {
                 let mut table_meta = TableMetadata::from_json(&bytes)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 Self::validate_requirements(Some(&table_meta), &commit_info.requirements)?;
+                if matches!(snapshot_update_kind, SnapshotUpdateKind::CopyOnWrite)
+                    && matches!(table_meta.format_version, FormatVersion::V3)
+                {
+                    return Err(DataFusionError::NotImplemented(
+                        "Iceberg v3 scoped overwrite is not supported until row lineage is preserved"
+                            .to_string(),
+                    ));
+                }
+                if dynamic_partition_overwrite {
+                    let default_spec = table_meta.default_partition_spec().ok_or_else(|| {
+                        DataFusionError::Plan(
+                            "Iceberg table metadata has no default partition spec".to_string(),
+                        )
+                    })?;
+                    let live_data_files =
+                        Self::current_live_data_files(&store_ctx, &table_meta).await?;
+                    removed_data_file_paths = Self::dynamic_partition_overwrite_paths(
+                        &commit_info.data_files,
+                        &live_data_files,
+                        default_spec,
+                    )?;
+                }
                 let original_format_version = table_meta.format_version;
                 let mut metadata_updates = Vec::new();
                 if let Some(new_schema) = commit_info.schema.clone() {
@@ -963,6 +1104,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     Some(manifest_meta),
                 )
                 .with_added_delete_files(commit_info.delete_files.clone())
+                .with_removed_data_file_paths(removed_data_file_paths.clone())
                 .with_partition_specs(table_meta.partition_specs.clone())
                 .with_row_lineage_start_row_id(row_lineage_start_row_id)
                 .prepare(commit_info.snapshot_update_kind)
@@ -1280,11 +1422,82 @@ mod tests {
     use crate::physical_plan::action_schema::{
         encode_add_data_files, encode_commit_meta, iceberg_action_schema,
     };
+    use crate::spec::transform::Transform;
+    use crate::spec::types::values::{Literal, PrimitiveLiteral};
     use crate::spec::types::{NestedField, PrimitiveType, Type};
     use crate::spec::{
         DataContentType, DataFileFormat, FormatVersion, Operation, SnapshotBuilder,
         SnapshotReference, SnapshotRetention,
     };
+
+    fn partitioned_data_file(path: &str, spec_id: i32, value: i32) -> DataFile {
+        DataFile {
+            content: DataContentType::Data,
+            file_path: path.to_string(),
+            file_format: DataFileFormat::Parquet,
+            partition: vec![Some(Literal::Primitive(PrimitiveLiteral::Int(value)))],
+            record_count: 1,
+            file_size_in_bytes: 1,
+            column_sizes: HashMap::new(),
+            value_counts: HashMap::new(),
+            null_value_counts: HashMap::new(),
+            nan_value_counts: HashMap::new(),
+            lower_bounds: HashMap::new(),
+            upper_bounds: HashMap::new(),
+            block_size_in_bytes: None,
+            key_metadata: None,
+            split_offsets: Vec::new(),
+            equality_ids: Vec::new(),
+            sort_order_id: None,
+            first_row_id: None,
+            partition_spec_id: spec_id,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
+        }
+    }
+
+    fn identity_partition_spec() -> PartitionSpec {
+        PartitionSpec::builder()
+            .with_spec_id(3)
+            .add_field(2, "part", Transform::Identity)
+            .build()
+    }
+
+    #[test]
+    fn dynamic_partition_overwrite_removes_only_touched_live_partitions() {
+        let spec = identity_partition_spec();
+        let added = vec![partitioned_data_file("new-2.parquet", 3, 2)];
+        let live = vec![
+            partitioned_data_file("old-1.parquet", 3, 1),
+            partitioned_data_file("old-2.parquet", 3, 2),
+            partitioned_data_file("old-3.parquet", 3, 3),
+        ];
+        let paths = IcebergCommitExec::dynamic_partition_overwrite_paths(&added, &live, &spec)
+            .expect("dynamic overwrite paths");
+        assert_eq!(paths, vec!["old-2.parquet"]);
+    }
+
+    #[test]
+    fn dynamic_partition_overwrite_rejects_mismatched_partition_spec() {
+        let spec = identity_partition_spec();
+        let added = vec![partitioned_data_file("new.parquet", 4, 2)];
+        let error = IcebergCommitExec::dynamic_partition_overwrite_paths(&added, &[], &spec)
+            .expect_err("mismatched spec must fail");
+        assert!(error.to_string().contains("default Iceberg partition spec 3"));
+    }
+
+    #[test]
+    fn empty_dynamic_overwrite_produces_no_removal_paths() {
+        let spec = identity_partition_spec();
+        let paths = IcebergCommitExec::dynamic_partition_overwrite_paths(
+            &[],
+            &[partitioned_data_file("old.parquet", 3, 1)],
+            &spec,
+        )
+        .expect("empty dynamic overwrite");
+        assert!(paths.is_empty());
+    }
 
     #[derive(Debug)]
     struct ConcurrentMetadataStore {

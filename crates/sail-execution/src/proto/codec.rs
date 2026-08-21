@@ -1443,6 +1443,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 validate_read_snapshot,
                 expected_snapshot_id,
                 snapshot_update_kind,
+                dynamic_partition_overwrite,
+                removed_data_file_paths,
             }) => {
                 let input = try_decode_physical_plan(ctx, self, &input)?;
                 let table_url = Url::parse(&table_url)
@@ -1455,7 +1457,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     IcebergCommitExec::new(input, table_url, lakehouse_table, snapshot_update_kind)
                         .with_expected_snapshot_id(
                             validate_read_snapshot.then_some(expected_snapshot_id),
-                        ),
+                        )
+                        .with_dynamic_partition_overwrite(dynamic_partition_overwrite)
+                        .with_removed_data_file_paths(removed_data_file_paths),
                 ))
             }
             NodeKind::IcebergManifestScan(r#gen::IcebergManifestScanExecNode {
@@ -2389,6 +2393,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 snapshot_update_kind: Self::try_encode_iceberg_snapshot_update_kind(
                     iceberg_commit_exec.snapshot_update_kind(),
                 ),
+                dynamic_partition_overwrite: iceberg_commit_exec.dynamic_partition_overwrite(),
+                removed_data_file_paths: iceberg_commit_exec.removed_data_file_paths().to_vec(),
             })
         } else if let Some(manifest_scan) = node.downcast_ref::<IcebergManifestScanExec>() {
             let snapshot_json = serde_json::to_string(manifest_scan.snapshot())
@@ -4164,6 +4170,10 @@ impl RemoteExecutionCodec {
                 Ok(SnapshotUpdateKind::FullOverwrite)
             }
             r#gen::IcebergSnapshotUpdateKind::RowDelta => Ok(SnapshotUpdateKind::RowDelta),
+            r#gen::IcebergSnapshotUpdateKind::CopyOnWrite => Ok(SnapshotUpdateKind::CopyOnWrite),
+            r#gen::IcebergSnapshotUpdateKind::CopyOnWriteDelete => {
+                Ok(SnapshotUpdateKind::CopyOnWriteDelete)
+            }
             r#gen::IcebergSnapshotUpdateKind::Unspecified => {
                 plan_err!("Iceberg snapshot update kind is unspecified")
             }
@@ -4175,6 +4185,10 @@ impl RemoteExecutionCodec {
             SnapshotUpdateKind::FastAppend => r#gen::IcebergSnapshotUpdateKind::FastAppend,
             SnapshotUpdateKind::FullOverwrite => r#gen::IcebergSnapshotUpdateKind::FullOverwrite,
             SnapshotUpdateKind::RowDelta => r#gen::IcebergSnapshotUpdateKind::RowDelta,
+            SnapshotUpdateKind::CopyOnWrite => r#gen::IcebergSnapshotUpdateKind::CopyOnWrite,
+            SnapshotUpdateKind::CopyOnWriteDelete => {
+                r#gen::IcebergSnapshotUpdateKind::CopyOnWriteDelete
+            }
         }) as i32
     }
 

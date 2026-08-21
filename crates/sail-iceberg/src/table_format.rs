@@ -453,9 +453,10 @@ pub(crate) async fn plan_iceberg_write(
         SinkMode::IgnoreIfExists => PhysicalSinkMode::IgnoreIfExists,
         SinkMode::Append => PhysicalSinkMode::Append,
         SinkMode::Overwrite => PhysicalSinkMode::Overwrite,
-        SinkMode::OverwriteIf { .. } | SinkMode::OverwritePartitions => {
-            return not_impl_err!("predicate or partition overwrite for Iceberg");
+        SinkMode::OverwriteIf { .. } => {
+            return not_impl_err!("predicate overwrite for Iceberg");
         }
+        SinkMode::OverwritePartitions => PhysicalSinkMode::OverwritePartitions,
     };
     validate_iceberg_lakehouse_storage_access(lakehouse_table.as_ref())?;
     let metadata_location = metadata_location_from_options(&options);
@@ -498,9 +499,6 @@ pub(crate) async fn plan_iceberg_write(
         PhysicalSinkMode::IgnoreIfExists if table_exists => {
             return Ok(Arc::new(EmptyExec::new(physical_input.schema())));
         }
-        PhysicalSinkMode::OverwriteIf { .. } | PhysicalSinkMode::OverwritePartitions => {
-            return not_impl_err!("predicate or partition overwrite for Iceberg");
-        }
         _ => {}
     }
 
@@ -516,6 +514,9 @@ pub(crate) async fn plan_iceberg_write(
         .as_ref()
         .map(IcebergTableFormat::partition_columns_from_metadata)
         .transpose()?;
+    let expected_snapshot_id = table
+        .as_ref()
+        .map(|table| table.metadata().current_snapshot_id);
 
     if let Some(existing_partitions) = &existing_partition_columns
         && !partition_by.is_empty()
@@ -571,7 +572,13 @@ pub(crate) async fn plan_iceberg_write(
         write_context,
     };
 
-    let builder = IcebergPlanBuilder::new(physical_input, table_config, mode, physical_sort, ctx);
+    let mut builder =
+        IcebergPlanBuilder::new(physical_input, table_config, mode.clone(), physical_sort, ctx);
+    if matches!(mode, PhysicalSinkMode::OverwritePartitions) {
+        builder = builder
+            .with_expected_snapshot_id(expected_snapshot_id)
+            .with_dynamic_partition_overwrite(true);
+    }
     builder.build().await
 }
 

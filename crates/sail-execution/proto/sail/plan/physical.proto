@@ -995,6 +995,8 @@ enum IcebergSnapshotUpdateKind {
   ICEBERG_SNAPSHOT_UPDATE_KIND_FAST_APPEND = 1;
   ICEBERG_SNAPSHOT_UPDATE_KIND_FULL_OVERWRITE = 2;
   ICEBERG_SNAPSHOT_UPDATE_KIND_ROW_DELTA = 3;
+  ICEBERG_SNAPSHOT_UPDATE_KIND_COPY_ON_WRITE = 4;
+  ICEBERG_SNAPSHOT_UPDATE_KIND_COPY_ON_WRITE_DELETE = 5;
 }
 
 message IcebergCommitExecNode {
@@ -1006,6 +1008,8 @@ message IcebergCommitExecNode {
   // Absent when validation is required and the target had no current snapshot.
   optional int64 expected_snapshot_id = 5;
   IcebergSnapshotUpdateKind snapshot_update_kind = 6;
+  bool dynamic_partition_overwrite = 7;
+  repeated string removed_data_file_paths = 8;
 }
 
 message IcebergManifestScanExecNode {
