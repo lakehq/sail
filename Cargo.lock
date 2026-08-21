@@ -7569,8 +7569,11 @@ dependencies = [
 name = "sail-celeborn"
 version = "0.7.0"
 dependencies = [
+ "bytes",
+ "crc32fast",
  "futures",
  "log",
+ "lz4_flex",
  "num_enum",
  "prost",
  "readonly",
@@ -7579,7 +7582,9 @@ dependencies = [
  "tokio",
  "tonic",
  "tonic-prost-build",
+ "twox-hash",
  "uuid",
+ "zstd",
 ]
 
 [[package]]
@@ -7767,6 +7772,7 @@ name = "sail-execution"
 version = "0.7.0"
 dependencies = [
  "arrow-flight",
+ "bytes",
  "chrono",
  "datafusion",
  "datafusion-proto",
@@ -8092,6 +8098,7 @@ name = "sail-python"
 version = "0.7.0"
 dependencies = [
  "arrow-schema",
+ "bytes",
  "fastrace",
  "futures",
  "log",
