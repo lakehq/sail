@@ -4,8 +4,8 @@ mod actor;
 pub use access::LocalLifecycleManager;
 pub use actor::{LifecycleManagerActor, LifecycleManagerMessage, LifecycleManagerOptions};
 
+use crate::common::{PartitionLocation, SlotReservation};
 use crate::error::CelebornResult;
-use crate::master::{PartitionLocation, SlotReservation};
 
 /// A failed push that needs a newer partition location.
 #[derive(Debug, Clone)]

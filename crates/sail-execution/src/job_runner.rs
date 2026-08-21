@@ -126,7 +126,9 @@ impl StateObservable<JobRunnerObserver> for ClusterJobRunner {
             .driver
             .send(DriverMessage::ObserveState { observer })
             .await;
-        if let Err(SendError(DriverMessage::ObserveState { observer })) = result {
+        if let Err(error) = result
+            && let SendError(DriverMessage::ObserveState { observer }) = *error
+        {
             observer.fail(internal_datafusion_err!(
                 "failed to observe state for cluster job runner"
             ));

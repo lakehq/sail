@@ -209,3 +209,48 @@ Feature: Delta Lake read path (driver vs metadata-as-data)
         | 2  | b    | 20    |
         | 3  | c    | 30    |
         | 4  | d    | 40    |
+
+  Rule: COUNT(1) uses exact Delta row-count metadata but scans CSV data
+    Background:
+      Given variable delta_count_location for temporary directory delta_count_metadata_only
+      Given variable csv_count_location for temporary directory csv_count_scan
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_count_metadata_only
+        """
+      Given final statement
+        """
+        DROP TABLE IF EXISTS csv_count_scan
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_count_metadata_only (id INT)
+        USING DELTA LOCATION {{ delta_count_location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_count_metadata_only VALUES (1), (2), (3)
+        """
+      Given statement template
+        """
+        CREATE TABLE csv_count_scan (id INT)
+        USING CSV LOCATION {{ csv_count_location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO csv_count_scan VALUES (1), (2), (3)
+        """
+
+    Scenario: EXPLAIN COUNT(1) on Delta replaces the data scan with metadata
+      When query
+        """
+        EXPLAIN SELECT COUNT(1) AS cnt FROM delta_count_metadata_only
+        """
+      Then query plan matches snapshot
+
+    Scenario: EXPLAIN COUNT(1) on CSV retains the file scan
+      When query
+        """
+        EXPLAIN SELECT COUNT(1) AS cnt FROM csv_count_scan
+        """
+      Then query plan matches snapshot
