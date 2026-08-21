@@ -131,6 +131,21 @@ fn expected_snapshot_requirement(
     })
 }
 
+fn validate_scoped_overwrite_format(
+    snapshot_update_kind: SnapshotUpdateKind,
+    format_version: FormatVersion,
+) -> Result<()> {
+    if matches!(snapshot_update_kind, SnapshotUpdateKind::CopyOnWrite)
+        && matches!(format_version, FormatVersion::V3)
+    {
+        return Err(DataFusionError::NotImplemented(
+            "Iceberg v3 scoped overwrite is not supported until row lineage is preserved"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 pub struct IcebergCommitExec {
     input: Arc<dyn ExecutionPlan>,
@@ -853,14 +868,10 @@ impl ExecutionPlan for IcebergCommitExec {
                 let mut table_meta = TableMetadata::from_json(&bytes)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 Self::validate_requirements(Some(&table_meta), &commit_info.requirements)?;
-                if matches!(snapshot_update_kind, SnapshotUpdateKind::CopyOnWrite)
-                    && matches!(table_meta.format_version, FormatVersion::V3)
-                {
-                    return Err(DataFusionError::NotImplemented(
-                        "Iceberg v3 scoped overwrite is not supported until row lineage is preserved"
-                            .to_string(),
-                    ));
-                }
+                validate_scoped_overwrite_format(
+                    snapshot_update_kind,
+                    table_meta.format_version,
+                )?;
                 if dynamic_partition_overwrite {
                     let default_spec = table_meta.default_partition_spec().ok_or_else(|| {
                         DataFusionError::Plan(
@@ -936,6 +947,12 @@ impl ExecutionPlan for IcebergCommitExec {
                         },
                     );
                 }
+                // Schema evolution can raise a loaded v2 table to v3. Re-check the effective
+                // version before row-lineage resolution or any manifest work.
+                validate_scoped_overwrite_format(
+                    snapshot_update_kind,
+                    table_meta.format_version,
+                )?;
                 let row_lineage_start_row_id = table_meta.row_lineage_start_row_id();
 
                 // If metadata exists but there is no current snapshot (e.g. from a CREATE TABLE),
@@ -1446,6 +1463,30 @@ mod tests {
         DataContentType, DataFileFormat, FormatVersion, Operation, SnapshotBuilder,
         SnapshotReference, SnapshotRetention,
     };
+
+    #[test]
+    fn scoped_overwrite_rejects_effective_v3_after_schema_evolution() {
+        let schema = IcebergSchema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![Arc::new(NestedField::required(
+                1,
+                "event_time",
+                Type::Primitive(PrimitiveType::TimestampNs),
+            ))])
+            .build()
+            .expect("v3 schema");
+        let effective = FormatVersion::V2.max(format_version_for_schema(&schema));
+        assert_eq!(effective, FormatVersion::V3);
+
+        for mode in ["predicate", "dynamic"] {
+            let error = validate_scoped_overwrite_format(
+                SnapshotUpdateKind::CopyOnWrite,
+                effective,
+            )
+            .expect_err(mode);
+            assert!(error.to_string().contains("v3 scoped overwrite"), "{mode}");
+        }
+    }
 
     fn partitioned_data_file(path: &str, spec_id: i32, value: i32) -> DataFile {
         DataFile {
