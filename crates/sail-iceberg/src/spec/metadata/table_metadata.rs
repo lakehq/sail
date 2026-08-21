@@ -97,6 +97,64 @@ pub struct TableMetadata {
     pub partition_statistics: Vec<PartitionStatisticsFile>,
 }
 
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn metadata_json(format_version: u8, sequence_number: i64) -> serde_json::Value {
+        json!({
+            "format-version": format_version,
+            "location": "file:///tmp/table",
+            "last-sequence-number": sequence_number,
+            "last-updated-ms": 0,
+            "last-column-id": 0,
+            "schemas": [{"type": "struct", "schema-id": 0, "fields": []}],
+            "current-schema-id": 0,
+            "partition-specs": [],
+            "default-spec-id": 0,
+            "last-partition-id": 0,
+            "properties": {},
+            "current-snapshot-id": 1,
+            "snapshots": [{
+                "snapshot-id": 1,
+                "sequence-number": sequence_number,
+                "timestamp-ms": 0,
+                "manifest-list": "metadata/snap.avro",
+                "summary": {"operation": "append"}
+            }],
+            "snapshot-log": [],
+            "metadata-log": []
+        })
+    }
+
+    #[test]
+    fn v1_sequence_numbers_are_normalized_and_omitted() -> Result<(), serde_json::Error> {
+        let input = serde_json::to_vec(&metadata_json(1, 7))?;
+        let metadata = TableMetadata::from_json(&input)?;
+        assert_eq!(metadata.last_sequence_number, 0);
+        assert_eq!(metadata.snapshots[0].sequence_number, 0);
+
+        let output_json = metadata.to_json()?;
+        let output: serde_json::Value = serde_json::from_slice(&output_json)?;
+        assert!(output.get("last-sequence-number").is_none());
+        assert!(output["snapshots"][0].get("sequence-number").is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn v2_zero_sequence_number_remains_required_at_table_level() -> Result<(), serde_json::Error> {
+        let input = serde_json::to_vec(&metadata_json(2, 0))?;
+        let metadata = TableMetadata::from_json(&input)?;
+        let output_json = metadata.to_json()?;
+        let output: serde_json::Value = serde_json::from_slice(&output_json)?;
+        assert_eq!(output["last-sequence-number"], 0);
+        assert_eq!(output["snapshots"][0]["sequence-number"], 0);
+        Ok(())
+    }
+}
+
 /// Snapshot log entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -198,6 +256,10 @@ impl TableMetadata {
                         | TableMetadataEnum::V2(t)
                         | TableMetadataEnum::V3(t) => t,
                     })
+                    .map(|mut metadata| {
+                        metadata.normalize_versioned_sequence_numbers();
+                        metadata
+                    })
             }
             Err(e) => {
                 log::trace!("Failed to parse as JSON: {:?}", e);
@@ -207,6 +269,7 @@ impl TableMetadata {
     }
 
     pub fn ensure_required_format_fields(&mut self) {
+        self.normalize_versioned_sequence_numbers();
         if self.format_version >= FormatVersion::V2 {
             if self.table_uuid.is_none() {
                 self.table_uuid = Some(Uuid::new_v4());
@@ -252,6 +315,31 @@ impl TableMetadata {
     pub fn to_json(&self) -> Result<Vec<u8>, serde_json::Error> {
         let mut metadata = self.clone();
         metadata.ensure_required_format_fields();
-        serde_json::to_vec(&metadata)
+        let mut value = serde_json::to_value(&metadata)?;
+        if metadata.format_version == FormatVersion::V1
+            && let Some(object) = value.as_object_mut()
+        {
+            object.remove("last-sequence-number");
+            if let Some(snapshots) = object
+                .get_mut("snapshots")
+                .and_then(serde_json::Value::as_array_mut)
+            {
+                for snapshot in snapshots {
+                    if let Some(snapshot) = snapshot.as_object_mut() {
+                        snapshot.remove("sequence-number");
+                    }
+                }
+            }
+        }
+        serde_json::to_vec(&value)
+    }
+
+    fn normalize_versioned_sequence_numbers(&mut self) {
+        if self.format_version == FormatVersion::V1 {
+            self.last_sequence_number = 0;
+            for snapshot in &mut self.snapshots {
+                snapshot.sequence_number = 0;
+            }
+        }
     }
 }

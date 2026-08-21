@@ -420,6 +420,88 @@ pub fn data_file_schema_v2(partition_type: &StructType) -> AvroSchema {
     })
 }
 
+pub fn data_file_schema_v1(partition_type: &StructType) -> AvroSchema {
+    let AvroSchema::Record(mut record) = data_file_schema_v2(partition_type) else {
+        unreachable!("data file schema must be an Avro record")
+    };
+    let partition_index = record
+        .fields
+        .iter()
+        .position(|field| field.name == "partition")
+        .unwrap_or_default();
+    record.fields[partition_index] = record_field(
+        "partition",
+        partition_record_schema(partition_type),
+        102,
+        true,
+    );
+    record.fields.retain(|field| {
+        !matches!(
+            field.name.as_str(),
+            "content"
+                | "equality_ids"
+                | "first_row_id"
+                | "referenced_data_file"
+                | "content_offset"
+                | "content_size_in_bytes"
+        )
+    });
+    let block_size_index = record
+        .fields
+        .iter()
+        .position(|field| field.name == "file_size_in_bytes")
+        .map_or(record.fields.len(), |index| index + 1);
+    record.fields.insert(
+        block_size_index,
+        record_field("block_size_in_bytes", AvroSchema::Long, 105, true),
+    );
+    for (position, field) in record.fields.iter_mut().enumerate() {
+        field.position = position;
+    }
+    record.lookup = record
+        .fields
+        .iter()
+        .enumerate()
+        .map(|(index, field)| (field.name.clone(), index))
+        .collect();
+    AvroSchema::Record(record)
+}
+
+pub fn manifest_entry_schema_v1(partition_type: &StructType) -> AvroSchema {
+    let fields = vec![
+        record_field("status", AvroSchema::Int, 0, true),
+        record_field("snapshot_id", AvroSchema::Long, 1, true),
+        AvroRecordField {
+            name: "data_file".to_string(),
+            doc: None,
+            default: None,
+            aliases: None,
+            order: RecordFieldOrder::Ignore,
+            position: 2,
+            schema: data_file_schema_v1(partition_type),
+            custom_attributes: BTreeMap::from([(
+                FIELD_ID_ATTR.to_string(),
+                JsonValue::Number(Number::from(2)),
+            )]),
+        },
+    ];
+    let lookup = fields
+        .iter()
+        .enumerate()
+        .map(|(index, field)| (field.name.clone(), index))
+        .collect();
+    AvroSchema::Record(RecordSchema {
+        #[expect(clippy::unwrap_used)]
+        name: Name::new("manifest_entry")
+            .unwrap_or_else(|_| Name::new("manifest_entry_fallback").unwrap()),
+        aliases: None,
+        doc: None,
+        fields,
+        lookup,
+        attributes: Default::default(),
+    })
+}
+
 pub fn manifest_entry_schema_v2(partition_type: &StructType) -> AvroSchema {
     let df_schema = data_file_schema_v2(partition_type);
     let fields = vec![

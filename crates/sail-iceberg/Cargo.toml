@@ -47,6 +47,7 @@ parquet = { workspace = true }
 bytes = { workspace = true }
 # indexmap = { workspace = true }
 log = { workspace = true }
+tokio = { workspace = true }
 # itertools = { workspace = true }
 # percent-encoding = { workspace = true }
 once_cell = { workspace = true }

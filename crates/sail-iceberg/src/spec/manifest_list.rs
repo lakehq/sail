@@ -87,9 +87,14 @@ impl ManifestList {
                 let mut entries = Vec::new();
                 for value in reader {
                     let value = value.map_err(|e| format!("Avro read value error: {e}"))?;
-                    let v1: _serde::ManifestFileV1 =
-                        avro_from_value(&value).map_err(|e| format!("Avro decode error: {e}"))?;
-                    entries.push(ManifestFile::from(v1));
+                    match avro_from_value::<_serde::ManifestFileV1>(&value) {
+                        Ok(v1) => entries.push(ManifestFile::from(v1)),
+                        Err(v1_error) => {
+                            let v2 = avro_from_value::<_serde::ManifestFileV2>(&value)
+                                .map_err(|_| format!("Avro decode error: {v1_error}"))?;
+                            entries.push(ManifestFile::from(v2));
+                        }
+                    }
                 }
                 Ok(ManifestList::new(entries))
             }
@@ -171,24 +176,25 @@ impl ManifestListWriter {
         use apache_avro::Writer;
 
         use crate::spec::manifest_list::schema::{
-            MANIFEST_LIST_AVRO_SCHEMA_V2, MANIFEST_LIST_AVRO_SCHEMA_V3,
+            MANIFEST_LIST_AVRO_SCHEMA_V1, MANIFEST_LIST_AVRO_SCHEMA_V2,
+            MANIFEST_LIST_AVRO_SCHEMA_V3,
         };
 
-        // TODO: Implement typed V1 writer; currently only V2 is supported.
         let schema = match version {
+            FormatVersion::V1 => &MANIFEST_LIST_AVRO_SCHEMA_V1,
+            FormatVersion::V2 => &MANIFEST_LIST_AVRO_SCHEMA_V2,
             FormatVersion::V3 => &MANIFEST_LIST_AVRO_SCHEMA_V3,
-            FormatVersion::V1 | FormatVersion::V2 => &MANIFEST_LIST_AVRO_SCHEMA_V2,
         };
         let mut writer = Writer::new(schema, Vec::new());
 
         for mf in &self.entries {
-            // Enforce required fields for V2
-            if mf.added_files_count.is_none()
-                || mf.existing_files_count.is_none()
-                || mf.deleted_files_count.is_none()
-                || mf.added_rows_count.is_none()
-                || mf.existing_rows_count.is_none()
-                || mf.deleted_rows_count.is_none()
+            if version >= FormatVersion::V2
+                && (mf.added_files_count.is_none()
+                    || mf.existing_files_count.is_none()
+                    || mf.deleted_files_count.is_none()
+                    || mf.added_rows_count.is_none()
+                    || mf.existing_rows_count.is_none()
+                    || mf.deleted_rows_count.is_none())
             {
                 return Err("Missing required V2 counts/rows fields".to_string());
             }
@@ -207,6 +213,25 @@ impl ManifestListWriter {
                     .collect()
             });
             match version {
+                FormatVersion::V1 => {
+                    let v1 = _serde::ManifestFileV1 {
+                        manifest_path: mf.manifest_path.clone(),
+                        manifest_length: mf.manifest_length,
+                        partition_spec_id: mf.partition_spec_id,
+                        added_snapshot_id: mf.added_snapshot_id,
+                        added_data_files_count: mf.added_files_count,
+                        existing_data_files_count: mf.existing_files_count,
+                        deleted_data_files_count: mf.deleted_files_count,
+                        added_rows_count: mf.added_rows_count,
+                        existing_rows_count: mf.existing_rows_count,
+                        deleted_rows_count: mf.deleted_rows_count,
+                        partitions,
+                        key_metadata: mf.key_metadata.clone(),
+                    };
+                    writer
+                        .append_ser(v1)
+                        .map_err(|e| format!("Avro append error: {e}"))?;
+                }
                 FormatVersion::V3 => {
                     let v3 = _serde::ManifestFileV3 {
                         manifest_path: mf.manifest_path.clone(),
@@ -230,7 +255,7 @@ impl ManifestListWriter {
                         .append_ser(v3)
                         .map_err(|e| format!("Avro append error: {e}"))?;
                 }
-                FormatVersion::V1 | FormatVersion::V2 => {
+                FormatVersion::V2 => {
                     let v2 = _serde::ManifestFileV2 {
                         manifest_path: mf.manifest_path.clone(),
                         manifest_length: mf.manifest_length,
@@ -860,10 +885,13 @@ pub(super) mod _serde {
         #[serde(rename = "added_snapshot_id")]
         pub added_snapshot_id: i64,
         #[serde(rename = "added_data_files_count")]
+        #[serde(alias = "added_files_count")]
         pub added_data_files_count: Option<i32>,
         #[serde(rename = "existing_data_files_count")]
+        #[serde(alias = "existing_files_count")]
         pub existing_data_files_count: Option<i32>,
         #[serde(rename = "deleted_data_files_count")]
+        #[serde(alias = "deleted_files_count")]
         pub deleted_data_files_count: Option<i32>,
         #[serde(rename = "added_rows_count")]
         pub added_rows_count: Option<i64>,
@@ -980,6 +1008,27 @@ impl From<_serde::ManifestFileV1> for ManifestFile {
 mod tests {
     use super::*;
 
+    fn manifest_file() -> ManifestFile {
+        ManifestFile {
+            manifest_path: "metadata/manifest.avro".to_string(),
+            manifest_length: 10,
+            partition_spec_id: 0,
+            content: ManifestContentType::Data,
+            sequence_number: 3,
+            min_sequence_number: 3,
+            added_snapshot_id: 7,
+            added_files_count: Some(1),
+            existing_files_count: Some(0),
+            deleted_files_count: Some(0),
+            added_rows_count: Some(2),
+            existing_rows_count: Some(0),
+            deleted_rows_count: Some(0),
+            partitions: None,
+            key_metadata: None,
+            first_row_id: None,
+        }
+    }
+
     fn v1_manifest_list_record_with_unknown_counts() -> AvroValue {
         AvroValue::Record(vec![
             (
@@ -1060,5 +1109,47 @@ mod tests {
             ManifestList::parse_manifest_v2_fallback(&AvroValue::Record(nullable_v2_fields))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn v1_writer_uses_v1_field_names_and_nullable_counts() -> Result<(), String> {
+        let mut writer = ManifestListWriter::new();
+        writer.append(manifest_file());
+        let bytes = writer.to_bytes(FormatVersion::V1)?;
+        let mut reader = AvroReader::new(bytes.as_slice()).map_err(|error| error.to_string())?;
+        let value = reader
+            .next()
+            .ok_or_else(|| "v1 manifest list has no entries".to_string())?
+            .map_err(|error| error.to_string())?;
+        let AvroValue::Record(fields) = value else {
+            return Err("manifest list entry is not a record".to_string());
+        };
+
+        assert!(fields.iter().any(|(name, value)| {
+            name == "added_data_files_count" && matches!(value, AvroValue::Union(_, _))
+        }));
+        assert!(!fields.iter().any(|(name, _)| name == "content"));
+
+        let parsed = ManifestList::parse_with_version(&bytes, FormatVersion::V1)?;
+        assert_eq!(
+            parsed.entries,
+            vec![ManifestFile {
+                sequence_number: 0,
+                min_sequence_number: 0,
+                ..manifest_file()
+            }]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn v1_reader_accepts_legacy_sail_v2_encoding() {
+        let mut writer = ManifestListWriter::new();
+        writer.append(manifest_file());
+        let bytes = writer.to_bytes(FormatVersion::V2).expect("legacy bytes");
+
+        let parsed = ManifestList::parse_with_version(&bytes, FormatVersion::V1)
+            .expect("legacy Sail v1 manifest list");
+        assert_eq!(parsed.entries, vec![manifest_file()]);
     }
 }

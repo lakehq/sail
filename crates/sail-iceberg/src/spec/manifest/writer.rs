@@ -79,6 +79,33 @@ impl ManifestWriter {
         self.entries.push(Arc::new(entry));
     }
 
+    pub fn add_entry(&mut self, entry: ManifestEntry) {
+        self.entries.push(Arc::new(entry));
+    }
+
+    pub fn add_existing_entry(&mut self, mut entry: ManifestEntry) -> Result<(), String> {
+        if entry.sequence_number.is_none() || entry.file_sequence_number.is_none() {
+            return Err(
+                "existing manifest entries require data and file sequence numbers".to_string(),
+            );
+        }
+        entry.status = ManifestStatus::Existing;
+        self.entries.push(Arc::new(entry));
+        Ok(())
+    }
+
+    pub fn add_deleted_entry(&mut self, mut entry: ManifestEntry) -> Result<(), String> {
+        if entry.sequence_number.is_none() || entry.file_sequence_number.is_none() {
+            return Err(
+                "deleted manifest entries require data and file sequence numbers".to_string(),
+            );
+        }
+        entry.status = ManifestStatus::Deleted;
+        entry.snapshot_id = self.snapshot_id;
+        self.entries.push(Arc::new(entry));
+        Ok(())
+    }
+
     pub fn finish(self) -> Manifest {
         Manifest::new(
             self.metadata,
@@ -125,13 +152,25 @@ impl ManifestWriter {
             .filter(|e| matches!(e.status, ManifestStatus::Deleted))
             .map(|e| e.data_file.record_count as i64)
             .sum();
+        let min_sequence_number = self
+            .entries
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry.status,
+                    ManifestStatus::Added | ManifestStatus::Existing
+                )
+            })
+            .map(|entry| entry.sequence_number.unwrap_or(sequence_number))
+            .min()
+            .unwrap_or(sequence_number);
         ManifestFile {
             manifest_path,
             manifest_length: 0,
             partition_spec_id: self.metadata.partition_spec.spec_id(),
-            content: ManifestContentType::Data,
+            content: self.metadata.content,
             sequence_number,
-            min_sequence_number: sequence_number,
+            min_sequence_number,
             added_snapshot_id: snapshot_id,
             added_files_count: Some(added),
             existing_files_count: Some(existing),
@@ -152,7 +191,12 @@ impl ManifestWriter {
             .partition_spec
             .partition_type(&self.metadata.schema)
             .map_err(|e| format!("Partition type error: {e}"))?;
-        let avro_schema = super::schema::manifest_entry_schema_v2(&partition_type);
+        let avro_schema = match self.metadata.format_version {
+            FormatVersion::V1 => super::schema::manifest_entry_schema_v1(&partition_type),
+            FormatVersion::V2 | FormatVersion::V3 => {
+                super::schema::manifest_entry_schema_v2(&partition_type)
+            }
+        };
         let mut writer = AvroWriter::new(&avro_schema, Vec::new());
 
         // Add user metadata per Iceberg spec
@@ -191,13 +235,20 @@ impl ManifestWriter {
                 .map_err(|e| format!("Avro add_user_metadata error: {e}"))?;
         }
 
-        for e in &self.entries {
-            let serde_entry =
-                super::_serde::ManifestEntryV2::from_entry((*e.clone()).clone(), &partition_type)?;
-            let value = to_value(serde_entry)
-                .map_err(|e| format!("Avro to_value error: {e}"))?
-                .resolve(&avro_schema)
-                .map_err(|e| format!("Avro resolve error: {e}"))?;
+        for entry in &self.entries {
+            let entry = entry.as_ref().clone();
+            let value = match self.metadata.format_version {
+                FormatVersion::V1 => to_value(super::_serde::ManifestEntryV1::from_entry(
+                    entry,
+                    &partition_type,
+                )?),
+                FormatVersion::V2 | FormatVersion::V3 => to_value(
+                    super::_serde::ManifestEntryV2::from_entry(entry, &partition_type)?,
+                ),
+            }
+            .map_err(|e| format!("Avro to_value error: {e}"))?
+            .resolve(&avro_schema)
+            .map_err(|e| format!("Avro resolve error: {e}"))?;
             writer
                 .append(value)
                 .map_err(|e| format!("Avro append error: {e}"))?;

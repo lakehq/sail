@@ -249,7 +249,7 @@ pub async fn bootstrap_new_table_with_style(
     .with_row_lineage_start_row_id(row_lineage_start_row_id)
     .with_write_path_mode(WritePathMode::Absolute);
 
-    let prepared_snapshot = snapshot_producer
+    let mut prepared_snapshot = snapshot_producer
         .prepare(commit_info.snapshot_update_kind)
         .await
         .map_err(DataFusionError::Execution)?;
@@ -315,6 +315,7 @@ pub async fn bootstrap_new_table_with_style(
     };
     table_metadata.ensure_required_format_fields();
 
+    prepared_snapshot.publication_started();
     let metadata_result = write_metadata_version(
         store_ctx,
         table_metadata,
@@ -322,8 +323,8 @@ pub async fn bootstrap_new_table_with_style(
         metadata_style,
     )
     .await;
-    if metadata_result.is_err() {
-        prepared_snapshot.cleanup().await;
+    if metadata_result.is_ok() {
+        prepared_snapshot.commit_succeeded();
     }
     metadata_result
 }
@@ -477,7 +478,7 @@ pub async fn bootstrap_first_snapshot(
         .format_version
         .max(format_version_for_schema(&iceberg_schema));
     table_metadata.format_version = format_version;
-    let prepared_snapshot =
+    let mut prepared_snapshot =
         prepare_bootstrap_snapshot(table_url, store_ctx, commit_info, &table_metadata).await?;
 
     let snapshot = match prepared_snapshot
@@ -538,10 +539,11 @@ pub async fn bootstrap_first_snapshot(
         PersistStrategy::NewVersion => NewTableMetadataStyle::Hadoop,
         PersistStrategy::NewUuidVersion => NewTableMetadataStyle::Uuid,
     };
+    prepared_snapshot.publication_started();
     let metadata_result =
         write_metadata_version(store_ctx, table_metadata, version, metadata_style).await;
-    if metadata_result.is_err() {
-        prepared_snapshot.cleanup().await;
+    if metadata_result.is_ok() {
+        prepared_snapshot.commit_succeeded();
     }
     metadata_result
 }
@@ -689,7 +691,7 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_metadata_failure_cleans_snapshot_artifacts() {
+    fn bootstrap_metadata_failure_preserves_snapshot_artifacts_when_publication_is_unknown() {
         futures::executor::block_on(async {
             let table_url =
                 Url::parse("file:///tmp/bootstrap-metadata-failure/").expect("table URL");
@@ -713,6 +715,7 @@ mod tests {
                 row_count: 0,
                 data_files: vec![],
                 delete_files: vec![],
+                removed_data_file_paths: vec![],
                 manifest_path: String::new(),
                 manifest_list_path: String::new(),
                 updates: vec![],
@@ -738,8 +741,68 @@ mod tests {
                 .try_collect::<Vec<_>>()
                 .await
                 .expect("list objects after failed bootstrap");
-            assert!(remaining.is_empty(), "remaining objects: {remaining:?}");
+            assert!(
+                remaining
+                    .iter()
+                    .any(|object| object.location.as_ref().contains("metadata/snap-")),
+                "snapshot artifacts were removed after an uncertain publication: {remaining:?}"
+            );
         });
+    }
+
+    #[tokio::test]
+    async fn successful_bootstrap_preserves_published_snapshot_artifacts() {
+        let table_url = Url::parse("file:///tmp/bootstrap-success/").expect("table URL");
+        let memory_store = Arc::new(object_store::memory::InMemory::new());
+        let store: Arc<dyn ObjectStore> = memory_store.clone();
+        let store_ctx = StoreContext::new(store, &table_url).expect("store context");
+        let schema = IcebergSchema::builder()
+            .with_schema_id(1)
+            .with_fields([Arc::new(NestedField::required(
+                1,
+                "id",
+                Type::Primitive(PrimitiveType::Int),
+            ))])
+            .build()
+            .expect("schema");
+        let commit_info = IcebergCommitInfo {
+            table_uri: table_url.to_string(),
+            row_count: 0,
+            data_files: vec![],
+            delete_files: vec![],
+            removed_data_file_paths: vec![],
+            manifest_path: String::new(),
+            manifest_list_path: String::new(),
+            updates: vec![],
+            requirements: vec![],
+            table_properties: vec![("format-version".to_string(), "2".to_string())],
+            lakehouse_table: None,
+            snapshot_update_kind: crate::operations::SnapshotUpdateKind::FastAppend,
+            schema: Some(schema),
+            partition_spec: Some(PartitionSpec::builder().with_spec_id(1).build()),
+        };
+
+        let result = bootstrap_new_table_with_style(
+            &table_url,
+            &store_ctx,
+            &commit_info,
+            NewTableMetadataStyle::Hadoop,
+        )
+        .await
+        .expect("bootstrap snapshot");
+        tokio::task::yield_now().await;
+
+        let snapshot = result
+            .table_metadata
+            .current_snapshot()
+            .expect("current snapshot");
+        let (manifest_store, manifest_list_path) = store_ctx
+            .resolve(snapshot.manifest_list())
+            .expect("manifest-list path");
+        manifest_store
+            .head(&manifest_list_path)
+            .await
+            .expect("published manifest list");
     }
 
     #[test]
