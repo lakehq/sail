@@ -33,6 +33,9 @@ pub const SOURCE_PRESENT_COLUMN: &str = "__sail_merge_source_row_present";
 pub const TARGET_PRESENT_COLUMN: &str = "__sail_merge_target_row_present";
 pub const TARGET_ROW_ID_COLUMN: &str = "__sail_merge_target_row_id";
 
+type GeneratedAssignmentMarker = (String, String);
+type MergeProjection = (Vec<Expr>, Vec<GeneratedAssignmentMarker>);
+
 use sail_common_datafusion::datasource::RowLevelOperationType;
 pub use sail_common_datafusion::datasource::{
     DeltaCheckConstraintExpr, MERGE_SOURCE_METRIC_COLUMN, MergeAssignment, MergeInfo,
@@ -302,6 +305,33 @@ pub fn expand_merge(
         })
         .collect();
 
+    if options.with_schema_evolution && merge_has_star_action(&options) {
+        for (source_field, source_name) in options
+            .resolved_source_schema
+            .fields()
+            .iter()
+            .zip(&desired_source_names)
+        {
+            if desired_target_names.iter().any(|target_name| {
+                merge_names_equal(target_name, source_name, options.case_sensitive)
+            }) {
+                continue;
+            }
+            if is_reserved_merge_column(
+                source_name,
+                path_column,
+                row_index_column,
+                row_delete_metadata_columns,
+            ) {
+                return plan_err!(
+                    "MERGE schema evolution cannot add reserved internal column '{source_name}'"
+                );
+            }
+            let null_value = ScalarValue::try_new_null(source_field.data_type())?;
+            target_proj_exprs.push(lit(null_value).alias(source_name.clone()));
+        }
+    }
+
     // Ensure MERGE metadata columns are preserved even when desired_target_names was shorter.
     let path_already_present = target_proj_exprs
         .iter()
@@ -548,7 +578,7 @@ pub fn expand_merge(
             .project(insert_projection_exprs)?
             .build()?;
         let insert_projected =
-            apply_generation_projection(insert_projected, &options.generated_column_exprs)?;
+            apply_generation_projection(insert_projected, &options.generated_column_exprs, &[])?;
 
         let noop_rows = Join::try_new(
             Arc::new(source_plan.clone()),
@@ -571,7 +601,7 @@ pub fn expand_merge(
             .project(noop_projection_exprs)?
             .build()?;
         let noop_projected =
-            apply_generation_projection(noop_projected, &options.generated_column_exprs)?;
+            apply_generation_projection(noop_projected, &options.generated_column_exprs, &[])?;
 
         let projected = LogicalPlanBuilder::from(insert_projected)
             .union(noop_projected)?
@@ -718,7 +748,7 @@ fn build_default_merge_expansion(
         .filter(active_expr)?
         .build()?;
 
-    let projection_exprs = build_merge_projection(
+    let (projection_exprs, generated_assignment_markers) = build_merge_projection(
         &options,
         target_schema,
         path_column,
@@ -729,7 +759,11 @@ fn build_default_merge_expansion(
     let projected = LogicalPlanBuilder::from(filtered)
         .project(projection_exprs.clone())?
         .build()?;
-    let projected = apply_generation_projection(projected, &options.generated_column_exprs)?;
+    let projected = apply_generation_projection(
+        projected,
+        &options.generated_column_exprs,
+        &generated_assignment_markers,
+    )?;
     // Count source rows from a metric-only branch instead of inferring them from
     // rewritten rows. Targeted rewrite can drop matched-but-unchanged rows from
     // untouched files, and conditional inserts can drop source-only rows. Aggregate
@@ -867,6 +901,17 @@ fn can_fast_append_insert_only(
     Ok(true)
 }
 
+fn merge_has_star_action(options: &MergeIntoOptions) -> bool {
+    options
+        .matched_clauses
+        .iter()
+        .any(|clause| matches!(clause.action, MergeMatchedAction::UpdateAll))
+        || options
+            .not_matched_by_target_clauses
+            .iter()
+            .any(|clause| matches!(clause.action, MergeNotMatchedByTargetAction::InsertAll))
+}
+
 fn insert_only_insert_filter(options: &MergeIntoOptions) -> Expr {
     let preds = options
         .not_matched_by_target_clauses
@@ -884,6 +929,7 @@ fn insert_only_insert_filter(options: &MergeIntoOptions) -> Expr {
 fn apply_generation_projection(
     plan: LogicalPlan,
     generated_column_exprs: &[(String, Expr)],
+    generated_assignment_markers: &[GeneratedAssignmentMarker],
 ) -> Result<LogicalPlan> {
     if generated_column_exprs.is_empty() {
         return Ok(plan);
@@ -895,9 +941,21 @@ fn apply_generation_projection(
     let schema = plan.schema().clone();
     let has_op_col = schema.has_column_with_unqualified_name(OPERATION_COLUMN);
     let insert_op_val = lit(RowLevelOperationType::Insert.as_i32());
+    let matched_update_op_val = lit(RowLevelOperationType::MatchedUpdate.as_i32());
+    let not_matched_by_source_update_op_val =
+        lit(RowLevelOperationType::NotMatchedBySourceUpdate.as_i32());
+    let marker_map = generated_assignment_markers
+        .iter()
+        .map(|(column, marker)| (column.as_str(), marker.as_str()))
+        .collect::<HashMap<_, _>>();
     let post_exprs: Vec<Expr> = schema
         .fields()
         .iter()
+        .filter(|field| {
+            !generated_assignment_markers
+                .iter()
+                .any(|(_, marker)| marker == field.name())
+        })
         .map(|f| {
             let name = f.name();
             if let Some(gen_expr) = gen_map.get(name.as_str()) {
@@ -907,36 +965,51 @@ fn apply_generation_projection(
                 // non-NULL value for the generated column that doesn't match the expression,
                 // raise an error instead of silently overwriting.
                 //
-                // For UPDATE rows, the generated column's current value is stale (from the
-                // existing target row) — always silently recompute from the expression.
-                //
-                // We distinguish INSERT from UPDATE via the operation column when available.
-                let mismatch_check =
-                    current_value
-                        .clone()
-                        .is_null()
-                        .or(Expr::BinaryExpr(BinaryExpr::new(
-                            Box::new(current_value),
-                            Operator::IsNotDistinctFrom,
-                            Box::new(gen_expr.clone()),
-                        )));
+                // UPDATE recomputes omitted generated columns, while explicit assignments must
+                // satisfy the generation expression and retain their supplied value.
+                let explicit_value_matches = Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(current_value.clone()),
+                    Operator::IsNotDistinctFrom,
+                    Box::new(gen_expr.clone()),
+                ));
                 let err_msg = format!(
                     "[DELTA_GENERATED_COLUMNS_VALUE_MISMATCH] \
                      CHECK constraint for generated column `{name}` violated: \
                      user-provided value does not match the generation expression."
                 );
                 let raise = ScalarUDF::from(RaiseError::new()).call(vec![lit(err_msg)]);
-                let enforced = when(mismatch_check, gen_expr.clone())
-                    .otherwise(raise)
-                    .map(|e| e.alias(name.clone()))?;
+                let explicit_update_value =
+                    when(explicit_value_matches.clone(), current_value.clone())
+                        .otherwise(raise.clone())
+                        .map(|e| e.alias(name.clone()))?;
+                let insert_value = when(
+                    current_value.clone().is_null().or(explicit_value_matches),
+                    gen_expr.clone(),
+                )
+                .otherwise(raise)
+                .map(|e| e.alias(name.clone()))?;
                 if has_op_col {
-                    // Only enforce for INSERT operations; UPDATE always recomputes silently.
-                    when(col(OPERATION_COLUMN).eq(insert_op_val.clone()), enforced)
-                        .otherwise(gen_expr.clone())
-                        .map(|e| e.alias(name.clone()))
+                    let update_op = col(OPERATION_COLUMN)
+                        .eq(matched_update_op_val.clone())
+                        .or(col(OPERATION_COLUMN).eq(not_matched_by_source_update_op_val.clone()));
+                    let explicit_update = marker_map
+                        .get(name.as_str())
+                        .map(|marker| col(*marker))
+                        .unwrap_or_else(|| lit(false));
+                    when(
+                        col(OPERATION_COLUMN).eq(insert_op_val.clone()),
+                        insert_value,
+                    )
+                    .when(
+                        update_op.clone().and(explicit_update),
+                        explicit_update_value,
+                    )
+                    .when(update_op, gen_expr.clone())
+                    .otherwise(current_value)
+                    .map(|e| e.alias(name.clone()))
                 } else {
                     // Insert-only path (fast-append): always enforce.
-                    Ok(enforced)
+                    Ok(insert_value)
                 }
             } else {
                 Ok(col(name.clone()))
@@ -968,6 +1041,27 @@ fn is_merge_metadata_column(
         || row_index_column.is_some_and(|column| name == column)
         || row_delete_metadata_columns.contains(&name)
         || name == TARGET_ROW_ID_COLUMN
+}
+
+fn is_reserved_merge_column(
+    name: &str,
+    path_column: &str,
+    row_index_column: Option<&str>,
+    row_delete_metadata_columns: &[&str],
+) -> bool {
+    is_merge_metadata_column(
+        name,
+        path_column,
+        row_index_column,
+        row_delete_metadata_columns,
+    ) || matches!(
+        name,
+        TARGET_PRESENT_COLUMN
+            | SOURCE_PRESENT_COLUMN
+            | TARGET_ROW_ID_COLUMN
+            | OPERATION_COLUMN
+            | MERGE_SOURCE_METRIC_COLUMN
+    )
 }
 
 fn merge_source_expr(options: &MergeIntoOptions, target_name: &str) -> Option<Expr> {
@@ -1365,7 +1459,7 @@ fn build_merge_projection(
     path_column: &str,
     row_index_column: Option<&str>,
     row_delete_metadata_columns: &[&str],
-) -> Result<Vec<Expr>> {
+) -> Result<MergeProjection> {
     let matched_base = col(TARGET_PRESENT_COLUMN)
         .is_not_null()
         .and(col(SOURCE_PRESENT_COLUMN).is_not_null());
@@ -1578,7 +1672,7 @@ fn build_merge_projection(
         options
             .matched_clauses
             .iter()
-            .zip(matched_clause_predicates)
+            .zip(&matched_clause_predicates)
             .map(|(clause, predicate)| {
                 let operation = match &clause.action {
                     MergeMatchedAction::UpdateAll | MergeMatchedAction::UpdateSet(_) => {
@@ -1586,14 +1680,17 @@ fn build_merge_projection(
                     }
                     MergeMatchedAction::Delete => RowLevelOperationType::MatchedDelete,
                 };
-                (Box::new(predicate), Box::new(lit(operation.as_i32())))
+                (
+                    Box::new(predicate.clone()),
+                    Box::new(lit(operation.as_i32())),
+                )
             }),
     );
     operation_branches.extend(
         options
             .not_matched_by_source_clauses
             .iter()
-            .zip(not_matched_by_source_clause_predicates)
+            .zip(&not_matched_by_source_clause_predicates)
             .map(|(clause, predicate)| {
                 let operation = match &clause.action {
                     MergeNotMatchedBySourceAction::UpdateSet(_) => {
@@ -1603,7 +1700,10 @@ fn build_merge_projection(
                         RowLevelOperationType::NotMatchedBySourceDelete
                     }
                 };
-                (Box::new(predicate), Box::new(lit(operation.as_i32())))
+                (
+                    Box::new(predicate.clone()),
+                    Box::new(lit(operation.as_i32())),
+                )
             }),
     );
     let op_expr = Expr::Case(Case {
@@ -1614,7 +1714,52 @@ fn build_merge_projection(
     projections.push(op_expr.alias(OPERATION_COLUMN));
     projections.push(lit(ScalarValue::Int64(None)).alias(MERGE_SOURCE_METRIC_COLUMN));
 
-    Ok(projections)
+    let mut generated_assignment_markers = Vec::new();
+    for (index, (generated_column, _)) in options.generated_column_exprs.iter().enumerate() {
+        let mut marker_name = format!("__sail_generated_explicit_{index}");
+        while target_schema.has_column_with_unqualified_name(&marker_name) {
+            marker_name.push('_');
+        }
+        let mut branches = Vec::new();
+        for (clause, predicate) in options
+            .matched_clauses
+            .iter()
+            .zip(&matched_clause_predicates)
+        {
+            if let MergeMatchedAction::UpdateSet(assignments) = &clause.action
+                && assignments.iter().any(|assignment| {
+                    merge_names_equal(&assignment.column, generated_column, options.case_sensitive)
+                })
+            {
+                branches.push((Box::new(predicate.clone()), Box::new(lit(true))));
+            }
+        }
+        for (clause, predicate) in options
+            .not_matched_by_source_clauses
+            .iter()
+            .zip(&not_matched_by_source_clause_predicates)
+        {
+            if let MergeNotMatchedBySourceAction::UpdateSet(assignments) = &clause.action
+                && assignments.iter().any(|assignment| {
+                    merge_names_equal(&assignment.column, generated_column, options.case_sensitive)
+                })
+            {
+                branches.push((Box::new(predicate.clone()), Box::new(lit(true))));
+            }
+        }
+        if branches.is_empty() {
+            continue;
+        }
+        let marker = Expr::Case(Case {
+            expr: None,
+            when_then_expr: branches,
+            else_expr: Some(Box::new(lit(false))),
+        });
+        projections.push(marker.alias(marker_name.clone()));
+        generated_assignment_markers.push((generated_column.clone(), marker_name));
+    }
+
+    Ok((projections, generated_assignment_markers))
 }
 
 fn build_rewrite_predicates(

@@ -43,18 +43,21 @@ impl UpdateStructField {
                     if field.name() == current_field {
                         field_found = true;
                         if field_names.len() == 1 {
-                            new_fields.push(Arc::new(new_field.clone()));
+                            new_fields.push(Arc::new(
+                                field
+                                    .as_ref()
+                                    .clone()
+                                    .with_data_type(new_field.data_type().clone()),
+                            ));
                         } else {
                             let new_data_type = Self::update_nested_field(
                                 field.data_type(),
                                 &field_names[1..],
                                 new_field,
                             )?;
-                            new_fields.push(Arc::new(Field::new(
-                                field.name(),
-                                new_data_type,
-                                field.is_nullable(),
-                            )));
+                            new_fields.push(Arc::new(
+                                field.as_ref().clone().with_data_type(new_data_type),
+                            ));
                         }
                     } else {
                         new_fields.push(Arc::clone(field));
@@ -96,6 +99,9 @@ impl UpdateStructField {
         }
 
         let struct_array = as_struct_array(&array)?;
+        let current_field_name = field_names
+            .first()
+            .ok_or_else(|| exec_datafusion_err!("empty attribute: {:?}", &field_names))?;
         let last_field_name = field_names
             .last()
             .ok_or_else(|| exec_datafusion_err!("empty attribute: {:?}", &field_names))?;
@@ -109,7 +115,7 @@ impl UpdateStructField {
         let mut new_arrays = Vec::new();
 
         for field in new_fields.iter() {
-            if field.name() == last_field_name {
+            if field.name() == current_field_name {
                 if field_names.len() == 1 {
                     new_arrays.push(Arc::clone(new_field_array));
                 } else {

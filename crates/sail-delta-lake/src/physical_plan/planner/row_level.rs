@@ -2,24 +2,23 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::catalog::Session;
+use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{DataFusionError, Result, internal_err, not_impl_err};
-use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::execution::SessionState;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::PhysicalPlanner;
 use sail_common_datafusion::datasource::{MergeStrategy, RowLevelCommand};
 use sail_data_source::options::ResolveOptions;
-use sail_data_source::resolve_listing_urls;
 use sail_logical_plan::row_level::RowLevelWriteNode;
-use url::Url;
 
 use crate::lake_source::{DeltaLakeSource, split_delta_write_options_and_table_properties};
+use crate::logical::table_source::DeltaTableSource;
 use crate::options::r#gen::DeltaWriteOptions;
 use crate::physical_plan::planner::{
     DeltaPlannerConfig, MergePredicateInfo, OperationOverride, PlannerContext, RowLevelTargetInfo,
-    RowLevelWriteInfo, plan_delete, plan_delete_mor, plan_merge, plan_merge_mor,
+    RowLevelWriteInfo, plan_delete, plan_delete_mor, plan_merge, plan_merge_mor, plan_update,
 };
-use crate::table::open_table_with_object_store;
+use crate::table::DeltaSnapshot;
 
 /// Creates a Delta physical execution plan for a unified `RowLevelWriteNode`.
 pub async fn create_row_level_write_physical_plan(
@@ -27,6 +26,7 @@ pub async fn create_row_level_write_physical_plan(
     planner: &dyn PhysicalPlanner,
     node: &RowLevelWriteNode,
 ) -> Result<Arc<dyn ExecutionPlan>> {
+    let target_snapshot = find_target_snapshot(node.raw_target())?;
     let target = RowLevelTargetInfo {
         table_name: node.target_table_name().to_vec(),
         path: node.target_location().to_string(),
@@ -47,7 +47,7 @@ pub async fn create_row_level_write_physical_plan(
                 with_schema_evolution: false,
                 operation_override: None,
             };
-            create_delta_row_level_writer(ctx, info).await
+            create_delta_row_level_writer(ctx, info, target_snapshot).await
         }
         RowLevelCommand::Merge => {
             let write_plan = node.write_plan().ok_or_else(|| {
@@ -94,23 +94,58 @@ pub async fn create_row_level_write_physical_plan(
                 with_schema_evolution: node.with_schema_evolution(),
                 operation_override: build_merge_operation_override(node),
             };
-            create_delta_row_level_writer(ctx, info).await
+            create_delta_row_level_writer(ctx, info, target_snapshot).await
         }
-        RowLevelCommand::Update => internal_err!("UPDATE is not yet implemented"),
+        RowLevelCommand::Update => {
+            let physical_write = planner
+                .create_physical_plan(
+                    node.write_plan().ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "UPDATE RowLevelWriteNode must have a write plan".into(),
+                        )
+                    })?,
+                    ctx,
+                )
+                .await?;
+            let physical_touched = match node.touched_files_plan() {
+                Some(plan) => Some(planner.create_physical_plan(plan, ctx).await?),
+                None => None,
+            };
+            let info = RowLevelWriteInfo {
+                command: RowLevelCommand::Update,
+                target,
+                condition: node.condition().cloned(),
+                expanded_input: Some(physical_write),
+                touched_file_plan: physical_touched,
+                deletion_vector_plan: None,
+                with_schema_evolution: false,
+                operation_override: Some(OperationOverride::Update {
+                    predicate: node
+                        .condition()
+                        .and_then(|condition| condition.source.clone()),
+                }),
+            };
+            create_delta_row_level_writer(ctx, info, target_snapshot).await
+        }
     }
 }
 
 async fn create_delta_row_level_writer(
     ctx: &dyn Session,
     info: RowLevelWriteInfo,
+    target_snapshot: Arc<DeltaSnapshot>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let effective_strategy = if matches!(
+    let effective_strategy = if row_level_operation_requires_eager(&info) {
+        MergeStrategy::Eager
+    } else if matches!(
         info.command,
         RowLevelCommand::Delete | RowLevelCommand::Merge
     ) {
-        detect_merge_strategy(ctx, &info)
-            .await
-            .unwrap_or(MergeStrategy::Eager)
+        if target_snapshot.verify_deletion_vectors().is_ok() {
+            MergeStrategy::MergeOnRead
+        } else {
+            MergeStrategy::Eager
+        }
     } else {
         MergeStrategy::Eager
     };
@@ -121,9 +156,12 @@ async fn create_delta_row_level_writer(
     match (effective_strategy, info.command) {
         (MergeStrategy::MergeOnRead, RowLevelCommand::Delete) => {
             let table_url = DeltaLakeSource::parse_table_url(ctx, vec![info.target.path]).await?;
-            let condition = info.condition.ok_or_else(|| {
-                DataFusionError::Plan("DELETE operation requires a WHERE condition".to_string())
-            })?;
+            let condition = info.condition.unwrap_or_else(|| {
+                sail_common_datafusion::logical_expr::ExprWithSource::new(
+                    datafusion_expr::lit(true),
+                    None,
+                )
+            });
             let delta_options = DeltaWriteOptions::resolve(ctx, target_options.clone())?;
             let delete_config = DeltaPlannerConfig::new(
                 table_url,
@@ -133,6 +171,7 @@ async fn create_delta_row_level_writer(
                 None,
                 true,
             )
+            .with_table_snapshot(Some(Arc::clone(&target_snapshot)))
             .with_lakehouse_table(lakehouse_table.clone());
             let delete_ctx = PlannerContext::new(ctx, delete_config);
             plan_delete_mor(&delete_ctx, condition).await
@@ -149,6 +188,7 @@ async fn create_delta_row_level_writer(
                 None,
                 true,
             )
+            .with_table_snapshot(Some(Arc::clone(&target_snapshot)))
             .with_lakehouse_table(lakehouse_table.clone());
             let merge_ctx = PlannerContext::new(ctx, merge_config);
             plan_merge_mor(&merge_ctx, info).await
@@ -158,9 +198,12 @@ async fn create_delta_row_level_writer(
         }
         (MergeStrategy::Eager, RowLevelCommand::Delete) => {
             let table_url = DeltaLakeSource::parse_table_url(ctx, vec![info.target.path]).await?;
-            let condition = info.condition.ok_or_else(|| {
-                DataFusionError::Plan("DELETE operation requires a WHERE condition".to_string())
-            })?;
+            let condition = info.condition.unwrap_or_else(|| {
+                sail_common_datafusion::logical_expr::ExprWithSource::new(
+                    datafusion_expr::lit(true),
+                    None,
+                )
+            });
             let delta_options = DeltaWriteOptions::resolve(ctx, target_options.clone())?;
             let delete_config = DeltaPlannerConfig::new(
                 table_url,
@@ -170,6 +213,7 @@ async fn create_delta_row_level_writer(
                 None,
                 true,
             )
+            .with_table_snapshot(Some(Arc::clone(&target_snapshot)))
             .with_lakehouse_table(lakehouse_table.clone());
             let delete_ctx = PlannerContext::new(ctx, delete_config);
             plan_delete(&delete_ctx, condition).await
@@ -186,14 +230,70 @@ async fn create_delta_row_level_writer(
                 None,
                 true,
             )
+            .with_table_snapshot(Some(Arc::clone(&target_snapshot)))
             .with_lakehouse_table(lakehouse_table.clone());
             let merge_ctx = PlannerContext::new(ctx, merge_config);
             plan_merge(&merge_ctx, info).await
         }
-        (_, RowLevelCommand::Update) => {
-            not_impl_err!("UPDATE is not yet implemented for Delta Lake")
+        (MergeStrategy::Eager, RowLevelCommand::Update) => {
+            let table_url =
+                DeltaLakeSource::parse_table_url(ctx, vec![info.target.path.clone()]).await?;
+            let delta_options = DeltaWriteOptions::resolve(ctx, target_options.clone())?;
+            let update_config = DeltaPlannerConfig::new(
+                table_url,
+                delta_options,
+                HashMap::new(),
+                info.target.partition_by.clone(),
+                None,
+                true,
+            )
+            .with_table_snapshot(Some(target_snapshot))
+            .with_lakehouse_table(lakehouse_table.clone());
+            let update_ctx = PlannerContext::new(ctx, update_config);
+            plan_update(&update_ctx, info).await
         }
     }
+}
+
+fn find_target_snapshot(plan: &datafusion_expr::LogicalPlan) -> Result<Arc<DeltaSnapshot>> {
+    let mut snapshot = None;
+    plan.apply(|node| {
+        if let datafusion_expr::LogicalPlan::TableScan(scan) = node
+            && let Some(source) = scan.source.downcast_ref::<DeltaTableSource>()
+        {
+            if let Some(existing) = &snapshot
+                && !Arc::ptr_eq(existing, source.snapshot())
+            {
+                return internal_err!("row-level target contains multiple Delta snapshots");
+            }
+            snapshot = Some(Arc::clone(source.snapshot()));
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    snapshot.ok_or_else(|| {
+        DataFusionError::Internal(
+            "row-level target does not contain a Delta table snapshot".to_string(),
+        )
+    })
+}
+
+fn row_level_operation_requires_eager(info: &RowLevelWriteInfo) -> bool {
+    if info.command == RowLevelCommand::Update {
+        return true;
+    }
+    let Some(OperationOverride::Merge {
+        matched_predicates,
+        not_matched_by_source_predicates,
+        ..
+    }) = info.operation_override.as_ref()
+    else {
+        return false;
+    };
+    matched_predicates
+        .iter()
+        .chain(not_matched_by_source_predicates)
+        .any(|predicate| predicate.action_type.eq_ignore_ascii_case("update"))
 }
 
 /// Build `OperationOverride::Merge` from the logical MERGE options on the write node.
@@ -256,35 +356,4 @@ fn build_merge_operation_override(node: &RowLevelWriteNode) -> Option<OperationO
         not_matched_predicates,
         not_matched_by_source_predicates,
     })
-}
-
-/// Detect the merge strategy for a Delta table by inspecting its snapshot properties.
-async fn detect_merge_strategy(
-    ctx: &dyn Session,
-    info: &RowLevelWriteInfo,
-) -> Result<MergeStrategy> {
-    let mut urls = resolve_listing_urls(ctx, vec![info.target.path.clone()]).await?;
-    let table_url = match (urls.pop(), urls.is_empty()) {
-        (Some(path), true) => <ListingTableUrl as AsRef<Url>>::as_ref(&path).clone(),
-        _ => return Ok(MergeStrategy::Eager),
-    };
-    let object_store = ctx
-        .runtime_env()
-        .object_store_registry
-        .get_store(&table_url)
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-    match open_table_with_object_store(table_url, object_store, Default::default()).await {
-        Ok(table) => {
-            let snapshot = table
-                .snapshot()
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            if snapshot.verify_deletion_vectors().is_ok() {
-                Ok(MergeStrategy::MergeOnRead)
-            } else {
-                Ok(MergeStrategy::Eager)
-            }
-        }
-        Err(_) => Ok(MergeStrategy::Eager),
-    }
 }

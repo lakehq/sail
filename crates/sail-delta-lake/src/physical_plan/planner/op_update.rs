@@ -12,16 +12,15 @@
 
 use std::sync::Arc;
 
-use datafusion::common::{DataFusionError, Result};
+use datafusion::common::Result;
 use datafusion::physical_plan::ExecutionPlan;
 
 use super::context::PlannerContext;
+use super::op_merge::{RowLevelWriteInfo, build_row_level_rewrite_plan};
 
 pub async fn build_update_plan(
-    _ctx: &PlannerContext<'_>,
-    _input: Arc<dyn ExecutionPlan>,
+    ctx: &PlannerContext<'_>,
+    info: RowLevelWriteInfo,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    Err(DataFusionError::NotImplemented(
-        "UPDATE planner not implemented".to_string(),
-    ))
+    build_row_level_rewrite_plan(ctx, info).await
 }

@@ -242,10 +242,14 @@ impl SinkInfo {
 }
 
 /// Information required to create a logical DELETE plan for a lake source.
-#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct DeleteInfo {
+    pub target_plan: Arc<LogicalPlan>,
     pub target: RowLevelTarget,
     pub condition: Option<ExprWithSource>,
+    pub input_schema: DFSchemaRef,
+    pub resolved_target_field_names: Vec<String>,
+    pub case_sensitive: bool,
 }
 
 /// Information required to create a logical UPDATE plan for a lake source.
@@ -257,6 +261,7 @@ pub struct UpdateInfo {
     pub assignments: Vec<UpdateAssignment>,
     pub input_schema: DFSchemaRef,
     pub resolved_target_field_names: Vec<String>,
+    pub case_sensitive: bool,
     pub generated_column_exprs: Vec<(String, Expr)>,
     pub check_constraint_exprs: Vec<DeltaCheckConstraintExpr>,
 }
