@@ -1174,7 +1174,7 @@ Feature: Delta Lake Merge
         | 4  | standard | 25     | insert_regular |
 
 
-  Rule: EXPLAIN shows visible delta log scan for MERGE on partitioned tables
+  Rule: MERGE target partition pruning respects target-only ON predicates
     Background:
       Given variable location for temporary directory merge_explain_partition_pushdown
       Given final statement
@@ -1201,7 +1201,8 @@ Feature: Delta Lake Merge
         SELECT * FROM VALUES
           (1, 2023, 100),
           (2, 2024, 200),
-          (3, 2024, 700)
+          (3, 2024, 700),
+          (5, 2024, 100)
         """
       Given statement
         """
@@ -1212,7 +1213,7 @@ Feature: Delta Lake Merge
         AS src(id, year, value)
         """
 
-    Scenario: EXPLAIN shows delta log meta scan under MERGE file lookup
+    Scenario: EXPLAIN prunes target files using a target-only ON predicate
       When query
         """
         EXPLAIN
@@ -1241,6 +1242,68 @@ Feature: Delta Lake Merge
         | 2  | 2024 | 250   |
         | 3  | 2024 | 700   |
         | 4  | 2024 | 900   |
+        | 5  | 2024 | 100   |
+
+    Scenario: EXPLAIN prunes target files for a path-based Delta target
+      When query template
+        """
+        EXPLAIN
+        MERGE INTO delta.`{{ location.string }}` AS t
+        USING src_merge_explain_partition_pushdown AS s
+        ON t.id = s.id AND t.year = 2024 AND t.value > 150
+        WHEN MATCHED THEN UPDATE SET value = s.value
+        WHEN NOT MATCHED THEN INSERT (id, year, value) VALUES (s.id, s.year, s.value)
+        """
+      Then query plan matches snapshot
+
+    Scenario: EXPLAIN keeps all target files when NOT MATCHED BY SOURCE can act
+      When query
+        """
+        EXPLAIN
+        MERGE INTO delta_merge_explain_partition_pushdown AS t
+        USING src_merge_explain_partition_pushdown AS s
+        ON t.id = s.id AND t.year = 2024
+        WHEN MATCHED THEN UPDATE SET value = s.value
+        WHEN NOT MATCHED BY SOURCE THEN UPDATE SET value = t.value + 1
+        """
+      Then query plan matches snapshot
+      Given statement
+        """
+        MERGE INTO delta_merge_explain_partition_pushdown AS t
+        USING src_merge_explain_partition_pushdown AS s
+        ON t.id = s.id AND t.year = 2024
+        WHEN MATCHED THEN UPDATE SET value = s.value
+        WHEN NOT MATCHED BY SOURCE THEN UPDATE SET value = t.value + 1
+        """
+      When query
+        """
+        SELECT id, year, value FROM delta_merge_explain_partition_pushdown ORDER BY id
+        """
+      Then query result ordered
+        | id | year | value |
+        | 1  | 2023 | 101   |
+        | 2  | 2024 | 250   |
+        | 3  | 2024 | 701   |
+        | 5  | 2024 | 101   |
+
+    Scenario: Non-partition target predicates do not filter rows before file rewrite
+      Given statement
+        """
+        MERGE INTO delta_merge_explain_partition_pushdown AS t
+        USING src_merge_explain_partition_pushdown AS s
+        ON t.id = s.id AND t.value > 150
+        WHEN MATCHED THEN UPDATE SET value = s.value
+        """
+      When query
+        """
+        SELECT id, year, value FROM delta_merge_explain_partition_pushdown ORDER BY id
+        """
+      Then query result ordered
+        | id | year | value |
+        | 1  | 2023 | 100   |
+        | 2  | 2024 | 250   |
+        | 3  | 2024 | 700   |
+        | 5  | 2024 | 100   |
 
 
   Rule: MERGE INTO with path-based target (delta.`/path/to/table` syntax)
