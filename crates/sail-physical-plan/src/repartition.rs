@@ -7,17 +7,20 @@ use datafusion::arrow::compute::take_arrays;
 use datafusion::arrow::datatypes::UInt32Type;
 use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion::common::runtime::SpawnedTask;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::Partitioning;
+use datafusion::physical_expr::{Partitioning, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::{
     CardinalityEffect, EvaluationType, SchedulingType,
 };
 use datafusion::physical_plan::projection::{
     ProjectionExec, all_columns, make_with_child, update_expr,
 };
+use datafusion::physical_plan::statistics::{ChildStats, StatisticsArgs};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    apply_expression_roots,
 };
 use datafusion_common::{Result, Statistics, internal_err, plan_err};
 use futures::{Stream, StreamExt};
@@ -440,6 +443,28 @@ impl ExecutionPlan for ExplicitRepartitionExec {
         vec![&self.input]
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        match self.properties.output_partitioning() {
+            Partitioning::Hash(expressions, _) => apply_expression_roots(expressions, f),
+            Partitioning::Range(range) => {
+                apply_expression_roots(range.ordering().iter().map(|sort_expr| &sort_expr.expr), f)
+            }
+            _ => Ok(TreeNodeRecursion::Continue),
+        }
+    }
+
+    #[expect(deprecated)]
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: datafusion::physical_plan::ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.with_new_children(children)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
@@ -474,9 +499,21 @@ impl ExecutionPlan for ExplicitRepartitionExec {
         }
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        if partition.is_none() {
-            self.input.partition_statistics(None)
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![if partition.is_none() {
+            ChildStats::At(None)
+        } else {
+            ChildStats::Skip
+        }]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        if args.partition().is_none() {
+            Ok(Arc::clone(&input_stats[0]))
         } else {
             Ok(Arc::new(Statistics::new_unknown(&self.schema())))
         }

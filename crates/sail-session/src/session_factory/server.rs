@@ -1,6 +1,7 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
+use datafusion::common::config::ConfigNonZeroUsize;
 use datafusion::common::parquet_config::DFParquetWriterVersion;
 use datafusion::common::{Result, internal_err};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
@@ -126,9 +127,9 @@ impl ServerSessionFactory {
             )))
             .with_extension(Arc::new(self.create_system_table_service(info)?))
             .with_extension(Arc::new(DeltaTableCache::default()));
-        self.apply_execution_config(&mut config);
+        self.apply_execution_config(&mut config)?;
         self.apply_execution_parquet_config(&mut config);
-        self.apply_optimizer_config(&mut config);
+        self.apply_optimizer_config(&mut config)?;
         let config = self.mutator.mutate_config(config, info)?;
         Ok(config)
     }
@@ -160,10 +161,10 @@ impl ServerSessionFactory {
         )))
     }
 
-    fn apply_execution_config(&mut self, config: &mut SessionConfig) {
+    fn apply_execution_config(&mut self, config: &mut SessionConfig) -> Result<()> {
         let execution = &mut config.options_mut().execution;
 
-        execution.batch_size = self.config.execution.batch_size;
+        execution.batch_size = ConfigNonZeroUsize::try_new(self.config.execution.batch_size)?;
         if self.config.execution.default_parallelism > 0 {
             execution.target_partitions = self.config.execution.default_parallelism;
         }
@@ -173,19 +174,15 @@ impl ServerSessionFactory {
             .execution
             .use_row_number_estimates_to_optimize_partitioning;
         execution.listing_table_ignore_subdirectory = false;
+        Ok(())
     }
 
-    fn apply_optimizer_config(&mut self, config: &mut SessionConfig) {
+    fn apply_optimizer_config(&mut self, config: &mut SessionConfig) -> Result<()> {
         let optimizer = &mut config.options_mut().optimizer;
         optimizer.join_reordering = self.config.optimizer.enable_join_swap;
         optimizer.prefer_hash_join = self.config.optimizer.prefer_hash_join;
         optimizer.expand_views_at_output = self.config.optimizer.expand_views_at_output;
-        match &self.config.mode {
-            ExecutionMode::Local => {}
-            ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster => {
-                optimizer.enable_dynamic_filter_pushdown = false;
-            }
-        }
+        disable_dynamic_filter_pushdown_for_cluster(config, &self.config.mode)
     }
 
     fn apply_execution_parquet_config(&mut self, config: &mut SessionConfig) {
@@ -237,4 +234,20 @@ impl ServerSessionFactory {
         parquet.content_defined_chunking.norm_level =
             self.config.parquet.content_defined_chunking.norm_level;
     }
+}
+
+fn disable_dynamic_filter_pushdown_for_cluster(
+    config: &mut SessionConfig,
+    mode: &ExecutionMode,
+) -> Result<()> {
+    if matches!(
+        mode,
+        ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster
+    ) {
+        config.options_mut().set(
+            "datafusion.optimizer.enable_dynamic_filter_pushdown",
+            "false",
+        )?;
+    }
+    Ok(())
 }

@@ -6,8 +6,8 @@ data:
     == Physical Plan ==
     ProjectionExec: expr=[#1@0 as id]
       SortPreservingMergeExec: [#1@0 ASC]
-        SortExec: expr=[#1@0 ASC], preserve_partitioning=[true]
-          ProjectionExec: expr=[id@0 as #1]
+        ProjectionExec: expr=[id@0 as #1]
+          SortExec: expr=[id@0 ASC], preserve_partitioning=[true]
             DeltaScanByAddsExec(table_path=file://<tmp>/delta_checkpoint_and_json_explain/, version=5, projection=Some([0]), limit=None, pushdown=false)
               DeltaDiscoveryExec(table_path=file://<tmp>/delta_checkpoint_and_json_explain/)
                 DeltaLogReplayExec(table_path=file://<tmp>/delta_checkpoint_and_json_explain/, version=5)
@@ -26,8 +26,8 @@ data:
     == Physical Plan ==
     ProjectionExec: expr=[#1@0 as id]
       SortPreservingMergeExec: [#1@0 ASC]
-        SortExec: expr=[#1@0 ASC], preserve_partitioning=[true]
-          ProjectionExec: expr=[id@0 as #1]
+        ProjectionExec: expr=[id@0 as #1]
+          SortExec: expr=[id@0 ASC], preserve_partitioning=[true]
             DeltaScanByAddsExec(table_path=file://<tmp>/delta_checkpoint_explain/, version=2, projection=Some([0]), limit=None, pushdown=false)
               DeltaDiscoveryExec(table_path=file://<tmp>/delta_checkpoint_explain/)
                 DeltaLogReplayExec(table_path=file://<tmp>/delta_checkpoint_explain/, version=2)

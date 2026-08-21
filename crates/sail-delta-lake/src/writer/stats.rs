@@ -499,20 +499,14 @@ impl StatsScalar {
                 let date = epoch_start + chrono::Duration::days(get_stat!(v) as i64);
                 Ok(Self::Date(date))
             }
-            (Statistics::Int32(v), Some(LogicalType::Decimal { scale, .. })) => {
-                let val = get_stat!(v) as f64 / 10.0_f64.powi(*scale);
+            (Statistics::Int32(v), Some(LogicalType::Decimal(decimal))) => {
+                let val = get_stat!(v) as f64 / 10.0_f64.powi(decimal.scale);
                 Ok(Self::Decimal(val))
             }
             (Statistics::Int32(v), _) => Ok(Self::Int32(get_stat!(v))),
-            (
-                Statistics::Int64(v),
-                Some(LogicalType::Timestamp {
-                    unit,
-                    is_adjusted_to_u_t_c,
-                }),
-            ) => {
+            (Statistics::Int64(v), Some(LogicalType::Timestamp(timestamp_type))) => {
                 let v = get_stat!(v);
-                let timestamp = match unit {
+                let timestamp = match timestamp_type.unit {
                     TimeUnit::MILLIS => chrono::DateTime::from_timestamp_millis(v),
                     TimeUnit::MICROS => chrono::DateTime::from_timestamp_micros(v),
                     TimeUnit::NANOS => {
@@ -524,14 +518,14 @@ impl StatsScalar {
                 let timestamp = timestamp.ok_or_else(|| {
                     DeltaTableError::generic(format!("Failed to parse timestamp: {v}"))
                 })?;
-                if *is_adjusted_to_u_t_c {
+                if timestamp_type.is_adjusted_to_u_t_c {
                     Ok(Self::Timestamp(timestamp.naive_utc()))
                 } else {
                     Ok(Self::TimestampNtz(timestamp.naive_utc()))
                 }
             }
-            (Statistics::Int64(v), Some(LogicalType::Decimal { scale, .. })) => {
-                let val = get_stat!(v) as f64 / 10.0_f64.powi(*scale);
+            (Statistics::Int64(v), Some(LogicalType::Decimal(decimal))) => {
+                let val = get_stat!(v) as f64 / 10.0_f64.powi(decimal.scale);
                 Ok(Self::Decimal(val))
             }
             (Statistics::Int64(v), _) => Ok(Self::Int64(get_stat!(v))),
@@ -559,7 +553,7 @@ impl StatsScalar {
                     ))),
                 }
             }
-            (Statistics::FixedLenByteArray(v), Some(LogicalType::Decimal { scale, precision })) => {
+            (Statistics::FixedLenByteArray(v), Some(LogicalType::Decimal(decimal))) => {
                 let val = if use_min {
                     v.min_bytes_opt()
                 } else {
@@ -571,14 +565,16 @@ impl StatsScalar {
                     i128::from_be_bytes(sign_extend_be(val)) as f64
                 } else {
                     return Err(DeltaTableError::generic(format!(
-                        "Decimal too large: {val:?}, precision: {precision}"
+                        "Decimal too large: {val:?}, precision: {}",
+                        decimal.precision
                     )));
                 };
 
-                let mut val = val / 10.0_f64.powi(*scale);
+                let mut val = val / 10.0_f64.powi(decimal.scale);
 
                 if val.is_normal()
-                    && (val.trunc() as i128).to_string().len() > (precision - scale) as usize
+                    && (val.trunc() as i128).to_string().len()
+                        > (decimal.precision - decimal.scale) as usize
                 {
                     val = f64::from_bits(val.to_bits() - 1);
                 }
@@ -843,14 +839,8 @@ mod tests {
         let micros = 1_700_000_000_123_456;
         let stats = Statistics::int64(Some(micros), Some(micros), None, Some(0), false);
 
-        let logical_timestamp = LogicalType::Timestamp {
-            is_adjusted_to_u_t_c: true,
-            unit: TimeUnit::MICROS,
-        };
-        let logical_timestamp_ntz = LogicalType::Timestamp {
-            is_adjusted_to_u_t_c: false,
-            unit: TimeUnit::MICROS,
-        };
+        let logical_timestamp = LogicalType::timestamp(true, TimeUnit::MICROS);
+        let logical_timestamp_ntz = LogicalType::timestamp(false, TimeUnit::MICROS);
 
         let expected = chrono::DateTime::from_timestamp_micros(micros)
             .expect("valid timestamp")
