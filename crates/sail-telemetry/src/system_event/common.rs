@@ -26,7 +26,7 @@ pub enum SystemEvent {
     SessionUpdated {
         session_id: String,
         status: String,
-        deleted_at: Option<DateTime<Utc>>,
+        updated_at: DateTime<Utc>,
     },
     JobCreated {
         session_id: String,
@@ -37,7 +37,7 @@ pub enum SystemEvent {
         session_id: String,
         job_id: u64,
         status: String,
-        stopped_at: Option<DateTime<Utc>>,
+        updated_at: DateTime<Utc>,
     },
     StageCreated {
         session_id: String,
@@ -56,7 +56,7 @@ pub enum SystemEvent {
         job_id: u64,
         stage: u64,
         status: String,
-        stopped_at: Option<DateTime<Utc>>,
+        updated_at: DateTime<Utc>,
     },
     TaskCreated {
         session_id: String,
@@ -73,7 +73,7 @@ pub enum SystemEvent {
         partition: u64,
         attempt: u64,
         status: String,
-        stopped_at: Option<DateTime<Utc>>,
+        updated_at: DateTime<Utc>,
     },
     WorkerCreated {
         session_id: String,
@@ -86,7 +86,7 @@ pub enum SystemEvent {
         host: Option<String>,
         port: Option<u16>,
         status: String,
-        stopped_at: Option<DateTime<Utc>>,
+        updated_at: DateTime<Utc>,
     },
 }
 

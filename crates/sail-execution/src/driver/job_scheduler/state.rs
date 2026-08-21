@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
 use datafusion::execution::TaskContext;
 use datafusion::physical_plan::ExecutionPlanProperties;
 use sail_common_datafusion::error::CommonErrorCause;
@@ -18,7 +17,6 @@ pub struct JobDescriptor {
     pub stages: Vec<StageDescriptor>,
     pub regions: Vec<TaskRegionDescriptor>,
     pub state: JobState,
-    pub stopped_at: Option<DateTime<Utc>>,
 }
 
 pub enum JobState {
@@ -52,7 +50,6 @@ impl JobDescriptor {
             let mut descriptor = StageDescriptor {
                 tasks: vec![],
                 state: StageState::Active,
-                stopped_at: None,
             };
             for _ in 0..stage.plan.output_partitioning().partition_count() {
                 descriptor.tasks.push(TaskDescriptor { attempts: vec![] });
@@ -72,7 +69,6 @@ impl JobDescriptor {
             stages,
             regions,
             state,
-            stopped_at: None,
         })
     }
 }
@@ -82,7 +78,6 @@ pub struct StageDescriptor {
     /// A list of tasks for each partition of the stage.
     pub tasks: Vec<TaskDescriptor>,
     pub state: StageState,
-    pub stopped_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -130,7 +125,6 @@ pub struct TaskAttemptDescriptor {
     /// This will always be false if the task does not belong to
     /// the final stages of the job.
     pub job_output_fetched: bool,
-    pub stopped_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Copy)]

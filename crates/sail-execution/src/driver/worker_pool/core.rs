@@ -49,7 +49,6 @@ impl WorkerPool {
             state: WorkerState::Pending,
             messages: vec![],
             peers: HashSet::new(),
-            stopped_at: None,
         };
         self.workers.insert(worker_id, descriptor);
         self.event_reporter.report(SystemEvent::WorkerCreated {
@@ -63,7 +62,7 @@ impl WorkerPool {
             host: None,
             port: None,
             status: WorkerState::Pending.status().to_string(),
-            stopped_at: None,
+            updated_at: Utc::now(),
         });
         ctx.send_with_delay(
             DriverMessage::ProbePendingWorker { worker_id },
@@ -137,7 +136,7 @@ impl WorkerPool {
                     host: Some(host),
                     port: Some(port),
                     status: worker.state.status().to_string(),
-                    stopped_at: worker.stopped_at,
+                    updated_at: Utc::now(),
                 });
                 Ok(())
             }
@@ -169,7 +168,6 @@ impl WorkerPool {
             WorkerState::Pending => {
                 warn!("trying to stop pending worker {worker_id}");
                 worker.state = WorkerState::Completed;
-                worker.stopped_at = Some(Utc::now());
                 worker.messages.extend(reason);
                 event_reporter.report(SystemEvent::WorkerUpdated {
                     session_id,
@@ -177,7 +175,7 @@ impl WorkerPool {
                     host: None,
                     port: None,
                     status: WorkerState::Completed.status().to_string(),
-                    stopped_at: worker.stopped_at,
+                    updated_at: Utc::now(),
                 });
             }
             WorkerState::Running { .. } => {
@@ -187,14 +185,13 @@ impl WorkerPool {
                     Err(e) => {
                         error!("failed to stop worker {worker_id}: {e}");
                         worker.state = WorkerState::Failed;
-                        worker.stopped_at = Some(Utc::now());
                         event_reporter.report(SystemEvent::WorkerUpdated {
                             session_id,
                             worker_id: u64::from(worker_id),
                             host: None,
                             port: None,
                             status: WorkerState::Failed.status().to_string(),
-                            stopped_at: worker.stopped_at,
+                            updated_at: Utc::now(),
                         });
                         return;
                     }
@@ -205,7 +202,6 @@ impl WorkerPool {
                     }
                 });
                 worker.state = WorkerState::Completed;
-                worker.stopped_at = Some(Utc::now());
                 worker.messages.extend(reason);
                 event_reporter.report(SystemEvent::WorkerUpdated {
                     session_id,
@@ -213,7 +209,7 @@ impl WorkerPool {
                     host: None,
                     port: None,
                     status: WorkerState::Completed.status().to_string(),
-                    stopped_at: worker.stopped_at,
+                    updated_at: Utc::now(),
                 });
             }
             WorkerState::Completed | WorkerState::Failed => {}
@@ -296,7 +292,7 @@ impl WorkerPool {
                 host: None,
                 port: None,
                 status: WorkerState::Failed.status().to_string(),
-                stopped_at: worker.stopped_at,
+                updated_at: Utc::now(),
             });
             true
         } else {

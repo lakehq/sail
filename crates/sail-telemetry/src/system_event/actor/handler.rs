@@ -154,11 +154,13 @@ impl SystemEventStore {
             SystemEvent::SessionUpdated {
                 session_id,
                 status,
-                deleted_at,
+                updated_at,
             } => {
                 if let Some(row) = self.sessions.get_mut(&SessionPrimaryKey { session_id }) {
                     row.status = status;
-                    row.deleted_at = deleted_at;
+                    if row.deleted_at.is_none() && is_session_deleted(&row.status) {
+                        row.deleted_at = Some(updated_at);
+                    }
                 }
             }
             SystemEvent::JobCreated {
@@ -183,11 +185,13 @@ impl SystemEventStore {
                 session_id,
                 job_id,
                 status,
-                stopped_at,
+                updated_at,
             } => {
                 if let Some(row) = self.jobs.get_mut(&JobPrimaryKey { session_id, job_id }) {
                     row.status = status;
-                    row.stopped_at = stopped_at;
+                    if row.stopped_at.is_none() && is_job_stopped(&row.status) {
+                        row.stopped_at = Some(updated_at);
+                    }
                 }
             }
             SystemEvent::StageCreated {
@@ -228,7 +232,7 @@ impl SystemEventStore {
                 job_id,
                 stage,
                 status,
-                stopped_at,
+                updated_at,
             } => {
                 if let Some(row) = self.stages.get_mut(&StagePrimaryKey {
                     session_id,
@@ -236,7 +240,9 @@ impl SystemEventStore {
                     stage,
                 }) {
                     row.status = status;
-                    row.stopped_at = stopped_at;
+                    if row.stopped_at.is_none() && is_stage_stopped(&row.status) {
+                        row.stopped_at = Some(updated_at);
+                    }
                 }
             }
             SystemEvent::TaskCreated {
@@ -273,7 +279,7 @@ impl SystemEventStore {
                 partition,
                 attempt,
                 status,
-                stopped_at,
+                updated_at,
             } => {
                 if let Some(row) = self.tasks.get_mut(&TaskPrimaryKey {
                     session_id,
@@ -283,7 +289,9 @@ impl SystemEventStore {
                     attempt,
                 }) {
                     row.status = status;
-                    row.stopped_at = stopped_at;
+                    if row.stopped_at.is_none() && is_task_stopped(&row.status) {
+                        row.stopped_at = Some(updated_at);
+                    }
                 }
             }
             SystemEvent::WorkerCreated {
@@ -312,7 +320,7 @@ impl SystemEventStore {
                 host,
                 port,
                 status,
-                stopped_at,
+                updated_at,
             } => {
                 if let Some(row) = self.workers.get_mut(&WorkerPrimaryKey {
                     session_id,
@@ -321,9 +329,31 @@ impl SystemEventStore {
                     row.host = host;
                     row.port = port;
                     row.status = status;
-                    row.stopped_at = stopped_at;
+                    if row.stopped_at.is_none() && is_worker_stopped(&row.status) {
+                        row.stopped_at = Some(updated_at);
+                    }
                 }
             }
         }
     }
+}
+
+fn is_session_deleted(status: &str) -> bool {
+    status == "DELETED"
+}
+
+fn is_job_stopped(status: &str) -> bool {
+    matches!(status, "SUCCEEDED" | "FAILED" | "CANCELED")
+}
+
+fn is_stage_stopped(status: &str) -> bool {
+    status == "INACTIVE"
+}
+
+fn is_task_stopped(status: &str) -> bool {
+    matches!(status, "SUCCEEDED" | "FAILED" | "CANCELED")
+}
+
+fn is_worker_stopped(status: &str) -> bool {
+    matches!(status, "COMPLETED" | "FAILED")
 }

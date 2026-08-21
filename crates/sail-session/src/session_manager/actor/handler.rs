@@ -38,7 +38,6 @@ impl SessionManagerActor {
         user_id: String,
         result: oneshot::Sender<SessionResult<SessionContext>>,
     ) -> ActorAction {
-        let is_new = !self.sessions.contains_key(&session_id);
         let context = if let Some(session) = self.sessions.get(&session_id) {
             if let ServerSessionState::Running { context, .. } = &session.state {
                 Ok(context.clone())
@@ -84,12 +83,20 @@ impl SessionManagerActor {
                         && let Err(e) = self.drivers.insert(driver_id, driver.clone())
                     {
                         let session = ServerSession {
-                            user_id,
-                            created_at: Utc::now(),
-                            deleted_at: None,
                             state: ServerSessionState::Failed,
                         };
-                        self.sessions.insert(session_id, session);
+                        let status = session.state.status().to_string();
+                        self.sessions.insert(session_id.clone(), session);
+                        self.event_reporter.report(SystemEvent::SessionCreated {
+                            session_id: session_id.clone(),
+                            user_id,
+                            created_at: Utc::now(),
+                        });
+                        self.event_reporter.report(SystemEvent::SessionUpdated {
+                            session_id: session_id.clone(),
+                            status,
+                            updated_at: Utc::now(),
+                        });
                         let driver = driver.clone();
                         ctx.spawn(async move {
                             if let Err(e) = driver.shutdown().await {
@@ -116,15 +123,23 @@ impl SessionManagerActor {
                                 });
                             }
                             let session = ServerSession {
-                                user_id,
-                                created_at: Utc::now(),
-                                deleted_at: None,
                                 state: ServerSessionState::Running {
                                     context: context.clone(),
                                     driver_id: registered_driver_id,
                                 },
                             };
-                            self.sessions.insert(session_id, session);
+                            let status = session.state.status().to_string();
+                            self.sessions.insert(session_id.clone(), session);
+                            self.event_reporter.report(SystemEvent::SessionCreated {
+                                session_id: session_id.clone(),
+                                user_id,
+                                created_at: Utc::now(),
+                            });
+                            self.event_reporter.report(SystemEvent::SessionUpdated {
+                                session_id: session_id.clone(),
+                                status,
+                                updated_at: Utc::now(),
+                            });
                             Ok(context)
                         }
                         Err(e) => {
@@ -138,12 +153,20 @@ impl SessionManagerActor {
                                 });
                             }
                             let session = ServerSession {
-                                user_id,
-                                created_at: Utc::now(),
-                                deleted_at: None,
                                 state: ServerSessionState::Failed,
                             };
-                            self.sessions.insert(session_id, session);
+                            let status = session.state.status().to_string();
+                            self.sessions.insert(session_id.clone(), session);
+                            self.event_reporter.report(SystemEvent::SessionCreated {
+                                session_id: session_id.clone(),
+                                user_id,
+                                created_at: Utc::now(),
+                            });
+                            self.event_reporter.report(SystemEvent::SessionUpdated {
+                                session_id: session_id.clone(),
+                                status,
+                                updated_at: Utc::now(),
+                            });
                             Err(e.into())
                         }
                     }
@@ -164,10 +187,6 @@ impl SessionManagerActor {
                 self.options.session_timeout,
             );
         }
-        if is_new {
-            self.report_session_created(&session_id);
-            self.report_session_updated(&session_id);
-        }
         let _ = result.send(context);
         ActorAction::Continue
     }
@@ -186,12 +205,16 @@ impl SessionManagerActor {
         {
             info!("removing idle session {session_id}");
             Self::delete_session(ctx, session_id.clone(), context);
-            session.deleted_at = Some(Utc::now());
             if let Some(driver_id) = *driver_id {
                 self.drivers.remove(driver_id);
             }
             session.state = ServerSessionState::Deleted;
-            self.report_session_updated(&session_id);
+            let status = session.state.status().to_string();
+            self.event_reporter.report(SystemEvent::SessionUpdated {
+                session_id: session_id.clone(),
+                status,
+                updated_at: Utc::now(),
+            });
         }
         ActorAction::Continue
     }
@@ -207,12 +230,16 @@ impl SessionManagerActor {
             if let ServerSessionState::Running { context, driver_id } = &mut session.state {
                 info!("removing session {session_id}");
                 Self::delete_session(ctx, session_id.clone(), context);
-                session.deleted_at = Some(Utc::now());
                 if let Some(driver_id) = *driver_id {
                     self.drivers.remove(driver_id);
                 }
                 session.state = ServerSessionState::Deleted;
-                self.report_session_updated(&session_id);
+                let status = session.state.status().to_string();
+                self.event_reporter.report(SystemEvent::SessionUpdated {
+                    session_id: session_id.clone(),
+                    status,
+                    updated_at: Utc::now(),
+                });
                 Ok(())
             } else {
                 Err(SessionError::invalid(format!(
@@ -251,30 +278,13 @@ impl SessionManagerActor {
             });
         }
         session.state = ServerSessionState::Failed;
-        self.report_session_updated(&session_id);
-        ActorAction::Continue
-    }
-
-    fn report_session_created(&self, session_id: &str) {
-        let Some(session) = self.sessions.get(session_id) else {
-            return;
-        };
-        self.event_reporter.report(SystemEvent::SessionCreated {
-            session_id: session_id.to_string(),
-            user_id: session.user_id.clone(),
-            created_at: session.created_at,
-        });
-    }
-
-    fn report_session_updated(&self, session_id: &str) {
-        let Some(session) = self.sessions.get(session_id) else {
-            return;
-        };
+        let status = session.state.status().to_string();
         self.event_reporter.report(SystemEvent::SessionUpdated {
-            session_id: session_id.to_string(),
-            status: session.state.status().to_string(),
-            deleted_at: session.deleted_at,
+            session_id,
+            status,
+            updated_at: Utc::now(),
         });
+        ActorAction::Continue
     }
 
     fn delete_session(ctx: &mut ActorContext<Self>, session_id: String, context: &SessionContext) {

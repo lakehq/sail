@@ -8219,6 +8219,7 @@ dependencies = [
  "sail-python-udf",
  "sail-session",
  "sail-sql-analyzer",
+ "sail-telemetry",
  "serde",
  "serde_json",
  "syn 2.0.119",

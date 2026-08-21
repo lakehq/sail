@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 
-use chrono::{DateTime, Utc};
 use tokio::time::Instant;
 
 use crate::id::WorkerId;
@@ -15,7 +14,6 @@ pub struct WorkerDescriptor {
     /// The list is only used by the driver to avoid redundant information
     /// when propagating worker locations when running tasks.
     pub peers: HashSet<WorkerId>,
-    pub stopped_at: Option<DateTime<Utc>>,
 }
 
 pub enum WorkerState {

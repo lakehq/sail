@@ -1,11 +1,7 @@
-use chrono::{DateTime, Utc};
 use datafusion::prelude::SessionContext;
 use sail_execution::DriverId;
 
 pub struct ServerSession {
-    pub user_id: String,
-    pub created_at: DateTime<Utc>,
-    pub deleted_at: Option<DateTime<Utc>>,
     pub state: ServerSessionState,
 }
 

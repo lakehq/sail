@@ -76,7 +76,7 @@ impl JobScheduler {
                 session_id: session_id.clone(),
                 job_id: u64::from(job_id),
                 status: job.state.status().to_string(),
-                stopped_at: job.stopped_at,
+                updated_at: Utc::now(),
             });
             for (stage_index, (stage, descriptor)) in
                 job.graph.stages().iter().zip(&job.stages).enumerate()
@@ -105,7 +105,7 @@ impl JobScheduler {
                     job_id: u64::from(job_id),
                     stage: stage_index as u64,
                     status: descriptor.state.status().to_string(),
-                    stopped_at: descriptor.stopped_at,
+                    updated_at: Utc::now(),
                 });
             }
         }
@@ -133,9 +133,6 @@ impl JobScheduler {
             return;
         };
         attempt.state = attempt.state.consolidate(state);
-        if attempt.state.is_terminal() && attempt.stopped_at.is_none() {
-            attempt.stopped_at = Some(Utc::now());
-        }
         attempt.messages.extend(message);
         if let Some(cause) = cause {
             attempt.cause = Some(cause);
@@ -147,7 +144,7 @@ impl JobScheduler {
             partition: key.partition as u64,
             attempt: key.attempt as u64,
             status: attempt.state.status().to_string(),
-            stopped_at: attempt.stopped_at,
+            updated_at: Utc::now(),
         });
     }
 
@@ -222,12 +219,11 @@ impl JobScheduler {
                 })
             }
             job.state = JobState::Failed;
-            job.stopped_at = Some(Utc::now());
             event_reporter.report(SystemEvent::JobUpdated {
                 session_id,
                 job_id: u64::from(job_id),
                 status: job.state.status().to_string(),
-                stopped_at: job.stopped_at,
+                updated_at: Utc::now(),
             });
             return actions;
         }
@@ -244,7 +240,7 @@ impl JobScheduler {
                 session_id,
                 job_id: u64::from(job_id),
                 status: job.state.status().to_string(),
-                stopped_at: job.stopped_at,
+                updated_at: Utc::now(),
             });
             return actions;
         }
@@ -316,7 +312,6 @@ impl JobScheduler {
                     for (a, attempt) in task.attempts.iter_mut().enumerate() {
                         if !attempt.state.is_terminal() {
                             attempt.state = TaskState::Canceled;
-                            attempt.stopped_at = Some(Utc::now());
                             event_reporter.report(SystemEvent::TaskUpdated {
                                 session_id: session_id.to_string(),
                                 job_id: u64::from(job_id),
@@ -324,7 +319,7 @@ impl JobScheduler {
                                 partition: t.partition as u64,
                                 attempt: a as u64,
                                 status: attempt.state.status().to_string(),
-                                stopped_at: attempt.stopped_at,
+                                updated_at: Utc::now(),
                             });
                             actions.push(JobAction::CancelTask {
                                 key: TaskKey {
@@ -370,13 +365,12 @@ impl JobScheduler {
 
             if all_consumers_succeeded && !stage.consumers.is_empty() {
                 job.stages[s].state = StageState::Inactive;
-                job.stages[s].stopped_at = Some(Utc::now());
                 event_reporter.report(SystemEvent::StageUpdated {
                     session_id: session_id.to_string(),
                     job_id: u64::from(job_id),
                     stage: s as u64,
                     status: job.stages[s].state.status().to_string(),
-                    stopped_at: job.stages[s].stopped_at,
+                    updated_at: Utc::now(),
                 });
                 actions.push(JobAction::CleanUpJob {
                     job_id,
@@ -430,7 +424,6 @@ impl JobScheduler {
                     messages: vec![],
                     cause: None,
                     job_output_fetched: false,
-                    stopped_at: None,
                 });
                 event_reporter.report(SystemEvent::TaskCreated {
                     session_id: session_id.to_string(),
@@ -622,16 +615,13 @@ impl JobScheduler {
         for (stage_id, stage) in job.stages.iter_mut().enumerate() {
             let was_active = matches!(stage.state, StageState::Active);
             stage.state = StageState::Inactive;
-            if stage.stopped_at.is_none() {
-                stage.stopped_at = Some(Utc::now());
-            }
             if was_active {
                 event_reporter.report(SystemEvent::StageUpdated {
                     session_id: session_id.clone(),
                     job_id: u64::from(job_id),
                     stage: stage_id as u64,
                     status: stage.state.status().to_string(),
-                    stopped_at: stage.stopped_at,
+                    updated_at: Utc::now(),
                 });
             }
         }
@@ -645,12 +635,11 @@ impl JobScheduler {
         } else {
             job.state = JobState::Canceled;
         }
-        job.stopped_at = Some(Utc::now());
         event_reporter.report(SystemEvent::JobUpdated {
             session_id,
             job_id: u64::from(job_id),
             status: job.state.status().to_string(),
-            stopped_at: job.stopped_at,
+            updated_at: Utc::now(),
         });
         actions
     }
@@ -704,31 +693,28 @@ impl JobScheduler {
                 // shuffle read nodes) are dropped. So the worker gRPC server will have no active
                 // clients subscribing to local streams, and the server can proceed with shutdown.
                 job.state = JobState::Canceled;
-                job.stopped_at = Some(Utc::now());
                 event_reporter.report(SystemEvent::JobUpdated {
                     session_id: session_id.to_string(),
                     job_id,
                     status: job.state.status().to_string(),
-                    stopped_at: job.stopped_at,
+                    updated_at: Utc::now(),
                 });
             }
             for (stage_id, stage) in job.stages.iter_mut().enumerate() {
                 if matches!(stage.state, StageState::Active) {
                     stage.state = StageState::Inactive;
-                    stage.stopped_at = Some(Utc::now());
                     event_reporter.report(SystemEvent::StageUpdated {
                         session_id: session_id.to_string(),
                         job_id,
                         stage: stage_id as u64,
                         status: stage.state.status().to_string(),
-                        stopped_at: stage.stopped_at,
+                        updated_at: Utc::now(),
                     });
                 }
                 for (partition, task) in stage.tasks.iter_mut().enumerate() {
                     for (attempt_id, attempt) in task.attempts.iter_mut().enumerate() {
                         if !attempt.state.is_terminal() {
                             attempt.state = TaskState::Canceled;
-                            attempt.stopped_at = Some(Utc::now());
                             event_reporter.report(SystemEvent::TaskUpdated {
                                 session_id: session_id.to_string(),
                                 job_id,
@@ -736,7 +722,7 @@ impl JobScheduler {
                                 partition: partition as u64,
                                 attempt: attempt_id as u64,
                                 status: attempt.state.status().to_string(),
-                                stopped_at: attempt.stopped_at,
+                                updated_at: Utc::now(),
                             });
                         }
                     }
