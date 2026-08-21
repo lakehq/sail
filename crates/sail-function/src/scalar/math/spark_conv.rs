@@ -41,7 +41,6 @@ impl ScalarUDFImpl for SparkConv {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match arg_types.first() {
             Some(DataType::Utf8) => Ok(DataType::Utf8),
-            Some(DataType::Utf8View) => Ok(DataType::Utf8View),
             Some(DataType::LargeUtf8) => Ok(DataType::LargeUtf8),
             _ => Ok(DataType::Utf8),
         }
@@ -114,7 +113,11 @@ impl ScalarUDFImpl for SparkConv {
 
         if valid_string && valid_from && valid_to {
             Ok(vec![
-                input_type.clone(),
+                if input_type == &DataType::Utf8View {
+                    DataType::Utf8
+                } else {
+                    input_type.clone()
+                },
                 from_base_type.clone(),
                 to_base_type.clone(),
             ])
@@ -252,6 +255,20 @@ fn to_radix_string(mut n: i64, radix: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn view_input_is_cast_at_the_function_boundary() -> Result<()> {
+        assert_eq!(
+            SparkConv::new().coerce_types(&[
+                DataType::Utf8View,
+                DataType::Int32,
+                DataType::Int32,
+            ])?,
+            vec![DataType::Utf8, DataType::Int32, DataType::Int32]
+        );
+        Ok(())
+    }
+
     #[test]
     fn test_to_radix_string_basic_cases() {
         assert_eq!(to_radix_string(10, 2), "1010");

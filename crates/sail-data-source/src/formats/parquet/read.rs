@@ -101,7 +101,7 @@ impl ReadFormat for ParquetReadFormat {
         };
 
         let merged = if options.global.schema_force_view_types {
-            datafusion::datasource::file_format::parquet::transform_schema_to_view(&merged)
+            transform_top_level_parquet_columns_to_view(&merged)
         } else {
             merged
         };
@@ -327,6 +327,10 @@ fn clear_metadata(schema: Schema) -> Schema {
     Schema::new(fields)
 }
 
+fn transform_top_level_parquet_columns_to_view(schema: &Schema) -> Schema {
+    datafusion::datasource::file_format::parquet::transform_schema_to_view(schema)
+}
+
 /// Parses `coerce_int96` setting into an Arrow [`TimeUnit`].
 ///
 /// This is adapted from DataFusion's Parquet data source implementation.
@@ -339,5 +343,37 @@ fn parse_coerce_int96_string(setting: &str) -> Result<TimeUnit> {
         _ => Err(DataFusionError::Configuration(format!(
             "Unknown or unsupported parquet `coerce_int96` setting: {setting}. Valid values are: ns, us, ms, and s."
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parquet_view_types_are_limited_to_top_level_columns() {
+        let nested = DataType::Struct(
+            vec![
+                Field::new("text", DataType::Utf8, true),
+                Field::new("bytes", DataType::Binary, true),
+                Field::new(
+                    "items",
+                    DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
+                    true,
+                ),
+            ]
+            .into(),
+        );
+        let schema = Schema::new(vec![
+            Field::new("text", DataType::Utf8, true),
+            Field::new("bytes", DataType::LargeBinary, true),
+            Field::new("nested", nested.clone(), true),
+        ]);
+
+        let transformed = transform_top_level_parquet_columns_to_view(&schema);
+
+        assert_eq!(transformed.field(0).data_type(), &DataType::Utf8View);
+        assert_eq!(transformed.field(1).data_type(), &DataType::BinaryView);
+        assert_eq!(transformed.field(2).data_type(), &nested);
     }
 }

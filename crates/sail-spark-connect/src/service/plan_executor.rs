@@ -1,7 +1,13 @@
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use datafusion::arrow::compute::concat_batches;
+use datafusion::arrow::datatypes::DataType;
+use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr::expressions::{CastExpr, Column};
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::prelude::SessionContext;
 use fastrace::Span;
 use fastrace::collector::SpanContext;
@@ -110,6 +116,54 @@ impl Stream for ExecutePlanResponseStream {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SparkConnectOutputEncodingPolicy {
+    expand_views: bool,
+    use_large_var_types: bool,
+}
+
+fn apply_spark_connect_output_encoding(
+    plan: Arc<dyn ExecutionPlan>,
+    policy: SparkConnectOutputEncodingPolicy,
+) -> SparkResult<Arc<dyn ExecutionPlan>> {
+    if !policy.expand_views {
+        return Ok(plan);
+    }
+
+    let mut changed = false;
+    let input_schema = plan.schema();
+    let expressions = input_schema
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(index, field)| {
+            let column = Arc::new(Column::new(field.name(), index)) as Arc<dyn PhysicalExpr>;
+            let target_type = match field.data_type() {
+                DataType::Utf8View if policy.use_large_var_types => Some(DataType::LargeUtf8),
+                DataType::Utf8View => Some(DataType::Utf8),
+                DataType::BinaryView if policy.use_large_var_types => Some(DataType::LargeBinary),
+                DataType::BinaryView => Some(DataType::Binary),
+                _ => None,
+            };
+            let expression = if let Some(target_type) = target_type {
+                changed = true;
+                let target_field = Arc::new(field.as_ref().clone().with_data_type(target_type));
+                Arc::new(CastExpr::new_with_target_field(column, target_field, None))
+                    as Arc<dyn PhysicalExpr>
+            } else {
+                column
+            };
+            (expression, field.name().to_string())
+        })
+        .collect::<Vec<_>>();
+
+    if changed {
+        Ok(Arc::new(ProjectionExec::try_new(expressions, plan)?))
+    } else {
+        Ok(plan)
+    }
+}
+
 async fn handle_execute_plan(
     ctx: &SessionContext,
     plan: spec::Plan,
@@ -120,7 +174,18 @@ async fn handle_execute_plan(
     let spark = ctx.extension::<SparkSession>()?;
     let service = ctx.extension::<JobService>()?;
     let operation_id = metadata.operation_id.clone();
-    let (plan, _) = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
+    let query_output = matches!(&mode, ExecutorMode::Query);
+    let plan_config = spark.plan_config()?;
+    let output_policy = SparkConnectOutputEncodingPolicy {
+        expand_views: spark.options().expand_views_at_output,
+        use_large_var_types: plan_config.arrow_use_large_var_types,
+    };
+    let (plan, _) = resolve_and_execute_plan(ctx, plan_config, plan).await?;
+    let plan = if query_output {
+        apply_spark_connect_output_encoding(plan, output_policy)?
+    } else {
+        plan
+    };
     let stream = {
         let span = Span::enter_with_parent("JobRunner::execute", &span);
         service.runner().execute(ctx, plan).in_span(span).await?
@@ -706,4 +771,73 @@ pub(crate) async fn handle_execute_register_datasource(
         metadata.operation_id,
         Box::pin(stream::iter(output.into_iter().map(Ok))),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::datatypes::{Field, Fields, Schema};
+    use datafusion::physical_plan::empty::EmptyExec;
+
+    use super::*;
+
+    fn view_plan() -> Arc<dyn ExecutionPlan> {
+        let nested = DataType::Struct(Fields::from(vec![Field::new(
+            "nested",
+            DataType::Utf8View,
+            true,
+        )]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("text", DataType::Utf8View, true),
+            Field::new("bytes", DataType::BinaryView, true),
+            Field::new("nested", nested, true),
+            Field::new("plain", DataType::Utf8, true),
+        ]));
+        Arc::new(EmptyExec::new(schema))
+    }
+
+    #[test]
+    fn output_encoding_materializes_only_top_level_views() -> SparkResult<()> {
+        for (use_large_var_types, expected_text, expected_bytes) in [
+            (false, DataType::Utf8, DataType::Binary),
+            (true, DataType::LargeUtf8, DataType::LargeBinary),
+        ] {
+            let input = view_plan();
+            let output = apply_spark_connect_output_encoding(
+                Arc::clone(&input),
+                SparkConnectOutputEncodingPolicy {
+                    expand_views: true,
+                    use_large_var_types,
+                },
+            )?;
+
+            let output_schema = output.schema();
+            assert!(output.downcast_ref::<ProjectionExec>().is_some());
+            assert_eq!(output_schema.field(0).data_type(), &expected_text);
+            assert_eq!(output_schema.field(1).data_type(), &expected_bytes);
+            assert_eq!(
+                output_schema.field(2).data_type(),
+                input.schema().field(2).data_type()
+            );
+            assert_eq!(output_schema.field(3).data_type(), &DataType::Utf8);
+            let DataType::Struct(nested) = output_schema.field(2).data_type() else {
+                return Err(SparkError::internal("nested field must remain a struct"));
+            };
+            assert_eq!(nested[0].data_type(), &DataType::Utf8View);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn disabled_output_encoding_preserves_the_plan() -> SparkResult<()> {
+        let input = view_plan();
+        let output = apply_spark_connect_output_encoding(
+            Arc::clone(&input),
+            SparkConnectOutputEncodingPolicy {
+                expand_views: false,
+                use_large_var_types: false,
+            },
+        )?;
+        assert!(Arc::ptr_eq(&input, &output));
+        Ok(())
+    }
 }

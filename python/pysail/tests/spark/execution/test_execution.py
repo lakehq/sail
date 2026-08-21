@@ -1,4 +1,6 @@
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pandas.testing import assert_frame_equal
@@ -45,6 +47,37 @@ def test_dataframe_operations(spark):
     expected = pd.DataFrame({"a": [2, 3], "b": ["world", "test"]}).astype({"a": "int64"})  # Spark Connect uses int64
 
     assert_frame_equal(result, expected)
+
+
+@pytest.mark.skipif(not hasattr(pa, "string_view"), reason="PyArrow view types are unavailable")
+def test_local_relation_normalizes_arrow_view_inputs(spark):
+    from pyspark.sql.connect.dataframe import DataFrame as ConnectDataFrame
+    from pyspark.sql.connect.plan import LocalRelation
+
+    nested_type = pa.struct([pa.field("value", pa.string_view())])
+    table = pa.table(
+        {
+            "id": pa.array([1, 2], type=pa.int32()),
+            "text": pa.array(["alpha", None], type=pa.string_view()),
+            "raw": pa.array([b"one", None], type=pa.binary_view()),
+            "nested": pa.array([{"value": "nested"}, None], type=nested_type),
+        }
+    )
+
+    df = ConnectDataFrame(LocalRelation(table), spark)
+    assert df.orderBy("id").collect() == [
+        Row(id=1, text="alpha", raw=b"one", nested=Row(value="nested")),
+        Row(id=2, text=None, raw=None, nested=None),
+    ]
+
+    if hasattr(df, "toArrow"):
+        arrow = df.toArrow()
+        use_large = spark.conf.get("spark.sql.execution.arrow.useLargeVarTypes").lower() == "true"
+        string_type = pa.large_string() if use_large else pa.string()
+        binary_type = pa.large_binary() if use_large else pa.binary()
+        assert arrow.schema.field("text").type == string_type
+        assert arrow.schema.field("raw").type == binary_type
+        assert arrow.schema.field("nested").type.field("value").type == string_type
 
 
 def test_aggregation_with_groupby(large_dataset):
@@ -232,6 +265,70 @@ def test_parquet_directory_scan_reads_each_file_once_in_cluster_mode(spark, tmp_
 
     rows = spark.read.parquet(str(path)).orderBy("id").collect()
     assert rows == [Row(id=1), Row(id=2)]
+
+
+def test_parquet_top_level_views_across_cluster_shuffle(spark, tmp_path):
+    path = tmp_path / "top_level_views.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "id": pa.array([1, 2, 3], type=pa.int32()),
+                "key": pa.array(["alpha", "beta", "alpha"], type=pa.string()),
+                "label": pa.array(["a11b22", "c33", None], type=pa.string()),
+                "raw": pa.array([b"one", b"two", None], type=pa.binary()),
+                "hex": pa.array(["10", "11", None], type=pa.string()),
+                "csv": pa.array(["alice,30", "bob,25", None], type=pa.string()),
+            }
+        ),
+        path,
+    )
+
+    result = (
+        spark.read.parquet(str(path))
+        .repartition(4, "key")
+        .select(
+            "id",
+            "key",
+            "raw",
+            F.concat("raw", "raw").alias("raw_concat"),
+            F.regexp_extract("label", r"([0-9]+)", 1).alias("first_match"),
+            F.regexp_extract_all("label", F.lit(r"([0-9]+)"), 1).alias("all_matches"),
+            F.split("label", r"[0-9]+").alias("parts"),
+            F.hash("key").alias("key_hash"),
+            F.hash("raw").alias("raw_hash"),
+            F.conv("hex", 16, 10).alias("decimal"),
+            F.unhex("hex").alias("decoded"),
+            F.from_csv("csv", "name STRING, age INT").alias("parsed"),
+        )
+    )
+    if hasattr(result, "toArrow"):
+        arrow = result.select("key", "raw").toArrow()
+        use_large = spark.conf.get("spark.sql.execution.arrow.useLargeVarTypes").lower() == "true"
+        assert arrow.schema.field("key").type == (pa.large_string() if use_large else pa.string())
+        assert arrow.schema.field("raw").type == (pa.large_binary() if use_large else pa.binary())
+
+    rows = result.orderBy("id").collect()
+
+    assert [(row.key, row.raw) for row in rows] == [
+        ("alpha", b"one"),
+        ("beta", b"two"),
+        ("alpha", None),
+    ]
+    assert [row.raw_concat for row in rows] == [b"oneone", b"twotwo", None]
+    assert [row.first_match for row in rows] == ["11", "33", None]
+    assert [row.all_matches for row in rows] == [["11", "22"], ["33"], None]
+    assert [row.parts for row in rows] == [["a", "b", ""], ["c", ""], None]
+    assert rows[0].key_hash == rows[2].key_hash
+    assert rows[0].key_hash != rows[1].key_hash
+    assert rows[0].raw_hash != rows[1].raw_hash
+    assert rows[2].raw_hash == 42  # Spark keeps the initial hash seed for null inputs.
+    assert [row.decimal for row in rows] == ["16", "17", None]
+    assert [row.decoded for row in rows] == [b"\x10", b"\x11", None]
+    assert [row.parsed for row in rows] == [
+        Row(name="alice", age=30),
+        Row(name="bob", age=25),
+        None,
+    ]
 
 
 def test_coalesce_plan_contains_dedicated_exec_in_cluster_mode(spark):

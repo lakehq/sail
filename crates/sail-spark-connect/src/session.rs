@@ -21,6 +21,7 @@ use crate::streaming::{
 #[derive(Debug, Clone)]
 pub(crate) struct SparkSessionOptions {
     pub execution_heartbeat_interval: Duration,
+    pub expand_views_at_output: bool,
 }
 
 /// A Spark session extension to the DataFusion [`SessionContext`].

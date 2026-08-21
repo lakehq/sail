@@ -436,13 +436,15 @@ fn concat_return_type(arg_types: &[DataType]) -> Result<DataType> {
         Ok(expr_type.unwrap_or_else(|| arg_types[0].clone()))
     } else if arg_types
         .iter()
-        .all(|arg_type| matches!(arg_type, DataType::Binary))
+        .all(|arg_type| matches!(arg_type, DataType::Binary | DataType::BinaryView))
     {
         Ok(DataType::Binary)
-    } else if arg_types
-        .iter()
-        .all(|arg_type| matches!(arg_type, DataType::Binary | DataType::LargeBinary))
-    {
+    } else if arg_types.iter().all(|arg_type| {
+        matches!(
+            arg_type,
+            DataType::Binary | DataType::LargeBinary | DataType::BinaryView
+        )
+    }) {
         Ok(DataType::LargeBinary)
     } else {
         Ok(arg_types
@@ -477,5 +479,23 @@ fn merge_list_types(left: &DataType, right: &DataType) -> Option<DataType> {
         }
         _ if left.equals_datatype(right) => Some(left.clone()),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn binary_views_are_materialized_at_the_concat_boundary() -> Result<()> {
+        assert_eq!(
+            concat_return_type(&[DataType::BinaryView, DataType::BinaryView])?,
+            DataType::Binary
+        );
+        assert_eq!(
+            concat_return_type(&[DataType::BinaryView, DataType::LargeBinary])?,
+            DataType::LargeBinary
+        );
+        Ok(())
     }
 }
