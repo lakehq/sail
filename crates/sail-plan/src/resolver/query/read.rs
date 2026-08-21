@@ -10,7 +10,7 @@ use rand::{RngExt, rng};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::{LakehouseOperation, TableColumnStatus, TableKind};
-use sail_common_datafusion::datasource::{OptionLayer, SourceInfo, TableFormatRegistry};
+use sail_common_datafusion::datasource::{DataSourceRegistry, OptionLayer, SourceInfo};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
@@ -41,11 +41,11 @@ impl PlanResolver<'_> {
         } = table;
 
         // Check if the name is in the form `<format>.<path>` where `<format>` is a
-        // registered table format. In that case, treat it as a direct data source read.
+        // registered data source. In that case, treat it as a direct data source read.
         if let [format, path] = name.parts() {
             let format = format.as_ref().to_ascii_lowercase();
-            let registry = self.ctx.extension::<TableFormatRegistry>()?;
-            if registry.get(&format).is_ok() {
+            let registry = self.ctx.extension::<DataSourceRegistry>()?;
+            if registry.get_data_source(&format).is_ok() {
                 let temporal_options = self
                     .resolve_time_travel_options(&format, temporal, state)
                     .await?;
@@ -130,9 +130,9 @@ impl PlanResolver<'_> {
                     ],
                     read_case_sensitive: self.config.case_sensitive,
                 };
-                let registry = self.ctx.extension::<TableFormatRegistry>()?;
+                let registry = self.ctx.extension::<DataSourceRegistry>()?;
                 let table_source = registry
-                    .get(&format)?
+                    .get_data_source(&format)?
                     .create_source(&self.ctx.state(), info)
                     .await?;
                 self.resolve_table_source_with_rename(
@@ -480,9 +480,9 @@ impl PlanResolver<'_> {
             }],
             read_case_sensitive: self.config.case_sensitive,
         };
-        let registry = self.ctx.extension::<TableFormatRegistry>()?;
+        let registry = self.ctx.extension::<DataSourceRegistry>()?;
         let table_source = registry
-            .get(&format)?
+            .get_data_source(&format)?
             .create_source(&self.ctx.state(), info)
             .await?;
         self.resolve_table_source_with_rename(
