@@ -151,10 +151,9 @@ fn coerce_nested_types(left: &DataType, right: &DataType, coerced: DataType) -> 
     }
     if let (DataType::Struct(left), DataType::Struct(right), DataType::Struct(coerced_fields)) =
         (left, right, &coerced)
+        && let Some(fields) = coerce_struct_fields(left, right, coerced_fields)
     {
-        if let Some(fields) = coerce_struct_fields(left, right, coerced_fields) {
-            return DataType::Struct(fields);
-        }
+        return DataType::Struct(fields);
     }
     coerced
 }
