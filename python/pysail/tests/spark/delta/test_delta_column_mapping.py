@@ -343,6 +343,30 @@ def test_nested_mapping_with_metadata_as_data_read(spark, tmp_path: Path):
         {"id": 1, "payload": {"level": {"value": 10}}},
         {"id": 2, "payload": {"level": {"value": 20}}},
     ]
+    filtered = (
+        spark.read.format("delta")
+        .option("metadataAsDataRead", "true")
+        .load(str(base))
+        .where(F.col("payload.level.value") > F.lit(10))
+        .collect()
+    )
+    assert [row.asDict(recursive=True) for row in filtered] == [{"id": 2, "payload": {"level": {"value": 20}}}]
+
+
+def test_dotted_column_mapping_with_metadata_as_data_filter(spark, tmp_path: Path):
+    base = tmp_path / "delta_cm_metadata_as_data_dotted"
+    source = spark.createDataFrame([(1, "a"), (2, "b")], ["event.id", "label"])
+    (source.write.format("delta").mode("overwrite").option("delta.columnMapping.mode", "name").save(str(base)))
+
+    rows = (
+        spark.read.format("delta")
+        .option("metadataAsDataRead", "true")
+        .load(str(base))
+        .where(F.col("`event.id`") == F.lit(2))
+        .collect()
+    )
+
+    assert [row.asDict() for row in rows] == [{"event.id": 2, "label": "b"}]
 
 
 def test_merge_array_of_struct_in_name_mode(spark, tmp_path: Path):
@@ -448,6 +472,20 @@ def test_partitioned_table_with_column_mapping_name(spark, tmp_path: Path):
         {"id": 3, "region": "us", "data": "c"},
         {"id": 4, "region": "asia", "data": "d"},
     ]
+
+    for metadata_as_data in ("false", "true"):
+        filtered = (
+            spark.read.format("delta")
+            .option("metadataAsDataRead", metadata_as_data)
+            .load(str(base))
+            .where(F.col("region") == "us")
+            .orderBy("id")
+            .collect()
+        )
+        assert [row.asDict() for row in filtered] == [
+            {"id": 1, "region": "us", "data": "a"},
+            {"id": 3, "region": "us", "data": "c"},
+        ]
 
 
 def test_remove_actions_for_partitioned_column_mapping_table_use_physical_keys(spark, tmp_path: Path):

@@ -110,9 +110,11 @@ use sail_data_source::listing::delete::FileDeleteExec;
 use sail_data_source::options::r#gen::RateReadOptions;
 use sail_delta_lake::physical_plan::{
     DeletionVectorRowsWriterExec, DeletionVectorWriterExec, DeltaCommitContext, DeltaCommitExec,
-    DeltaDiscoveryExec, DeltaLogReplayExec, DeltaMetadataStatsExec, DeltaRemoveActionsExec,
-    DeltaScanByAddsExec, DeltaSnapshotContext, DeltaWriteContext, DeltaWriterExec,
+    DeltaDiscoveryExec, DeltaLogReplayExec, DeltaLogReplayMode, DeltaMetadataStatsExec,
+    DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaSnapshotContext, DeltaWriteContext,
+    DeltaWriterExec,
 };
+use sail_delta_lake::schema::PhysicalPartitionColumn;
 use sail_delta_lake::spec::{
     Action, ColumnMappingMode, ColumnMetadataKey, DeltaOperation, StructType,
 };
@@ -1059,7 +1061,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let input = try_decode_physical_plan(ctx, self, &input)?;
                 let partition_value_columns = partition_value_columns_json
                     .as_deref()
-                    .map(serde_json::from_str::<Vec<(String, String)>>)
+                    .map(serde_json::from_str::<Vec<PhysicalPartitionColumn>>)
                     .transpose()
                     .map_err(|e| plan_datafusion_err!("{e}"))?;
                 Ok(Arc::new(DeltaRemoveActionsExec::try_new(
@@ -1068,46 +1070,51 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 )?))
             }
             NodeKind::DeltaLogReplay(r#gen::DeltaLogReplayExecNode {
-                input,
                 table_url,
                 version,
-                partition_columns,
                 checkpoint_files,
                 commit_files,
-                checkpoint_input,
-                commits_input,
+                replay_input,
             }) => {
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
-                match (checkpoint_input.as_ref(), commits_input.as_ref()) {
-                    (Some(checkpoint_input), Some(commits_input)) => {
+                match replay_input.ok_or_else(|| {
+                    plan_datafusion_err!("Delta log replay requires a replay input")
+                })? {
+                    r#gen::delta_log_replay_exec_node::ReplayInput::HashInputs(inputs) => {
                         let checkpoint_input =
-                            try_decode_physical_plan(ctx, self, checkpoint_input)?;
-                        let commits_input = try_decode_physical_plan(ctx, self, commits_input)?;
-                        Ok(Arc::new(DeltaLogReplayExec::new_hash(
+                            try_decode_physical_plan(ctx, self, &inputs.checkpoint_input)?;
+                        let commits_input =
+                            try_decode_physical_plan(ctx, self, &inputs.commits_input)?;
+                        Ok(Arc::new(DeltaLogReplayExec::try_new_hash(
                             checkpoint_input,
                             commits_input,
                             table_url,
                             version,
-                            partition_columns,
                             checkpoint_files,
                             commit_files,
-                        )))
+                        )?))
                     }
-                    (None, None) => {
+                    r#gen::delta_log_replay_exec_node::ReplayInput::SortInput(input) => {
                         let input = try_decode_physical_plan(ctx, self, &input)?;
                         Ok(Arc::new(DeltaLogReplayExec::new(
                             input,
                             table_url,
                             version,
-                            partition_columns,
                             checkpoint_files,
                             commit_files,
                         )))
                     }
-                    _ => plan_err!(
-                        "DeltaLogReplayExec requires both checkpoint_input and commits_input when hash replay is encoded"
-                    ),
+                    r#gen::delta_log_replay_exec_node::ReplayInput::HashCommitsInput(input) => {
+                        let commits = try_decode_physical_plan(ctx, self, &input)?;
+                        Ok(Arc::new(DeltaLogReplayExec::new_hash_commits(
+                            commits,
+                            table_url,
+                            version,
+                            checkpoint_files,
+                            commit_files,
+                        )))
+                    }
                 }
             }
             NodeKind::ConsoleSink(r#gen::ConsoleSinkExecNode { input }) => {
@@ -1319,7 +1326,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 };
                 let partition_value_columns = partition_value_columns_json
                     .as_deref()
-                    .map(serde_json::from_str::<Vec<(String, String)>>)
+                    .map(serde_json::from_str::<Vec<PhysicalPartitionColumn>>)
                     .transpose()
                     .map_err(|e| plan_datafusion_err!("{e}"))?;
                 Ok(Arc::new(DeletionVectorWriterExec::new(
@@ -1356,7 +1363,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 };
                 let partition_value_columns = partition_value_columns_json
                     .as_deref()
-                    .map(serde_json::from_str::<Vec<(String, String)>>)
+                    .map(serde_json::from_str::<Vec<PhysicalPartitionColumn>>)
                     .transpose()
                     .map_err(|e| plan_datafusion_err!("{e}"))?;
                 Ok(Arc::new(DeletionVectorRowsWriterExec::new(
@@ -2131,32 +2138,41 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             })
         } else if let Some(delta_log_replay_exec) = node.downcast_ref::<DeltaLogReplayExec>() {
             let children = delta_log_replay_exec.children();
-            let (input, checkpoint_input, commits_input) = match children.as_slice() {
-                [input] => (
-                    try_encode_physical_plan(self, (*input).clone())?,
-                    None,
-                    None,
-                ),
-                [checkpoint_input, commits_input] => (
-                    Vec::new(),
-                    Some(try_encode_physical_plan(self, (*checkpoint_input).clone())?),
-                    Some(try_encode_physical_plan(self, (*commits_input).clone())?),
-                ),
+            let replay_input = match (delta_log_replay_exec.mode(), children.as_slice()) {
+                (DeltaLogReplayMode::Sort, [input]) => {
+                    r#gen::delta_log_replay_exec_node::ReplayInput::SortInput(
+                        try_encode_physical_plan(self, (*input).clone())?,
+                    )
+                }
+                (DeltaLogReplayMode::Hash, [checkpoint_input, commits_input]) => {
+                    r#gen::delta_log_replay_exec_node::ReplayInput::HashInputs(
+                        r#gen::DeltaLogReplayHashInputs {
+                            checkpoint_input: try_encode_physical_plan(
+                                self,
+                                (*checkpoint_input).clone(),
+                            )?,
+                            commits_input: try_encode_physical_plan(
+                                self,
+                                (*commits_input).clone(),
+                            )?,
+                        },
+                    )
+                }
+                (DeltaLogReplayMode::HashCommits, [commits]) => {
+                    r#gen::delta_log_replay_exec_node::ReplayInput::HashCommitsInput(
+                        try_encode_physical_plan(self, (*commits).clone())?,
+                    )
+                }
                 _ => {
-                    return plan_err!(
-                        "DeltaLogReplayExec expects one child for sort replay or two children for hash replay"
-                    );
+                    return plan_err!("DeltaLogReplayExec children do not match its replay mode");
                 }
             };
             NodeKind::DeltaLogReplay(r#gen::DeltaLogReplayExecNode {
-                input,
                 table_url: delta_log_replay_exec.table_url().to_string(),
                 version: delta_log_replay_exec.version(),
-                partition_columns: delta_log_replay_exec.partition_columns().to_vec(),
                 checkpoint_files: delta_log_replay_exec.checkpoint_files().to_vec(),
                 commit_files: delta_log_replay_exec.commit_files().to_vec(),
-                checkpoint_input,
-                commits_input,
+                replay_input: Some(replay_input),
             })
         } else if let Some(console_sink) = node.downcast_ref::<ConsoleSinkExec>() {
             let input = try_encode_physical_plan(self, console_sink.input().clone())?;

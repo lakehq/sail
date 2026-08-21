@@ -77,24 +77,43 @@ Feature: Delta Lake read path (driver vs metadata-as-data)
         """
       Given statement template
         """
-        CREATE TABLE delta_read_metadata_path (
-          id INT,
-          name STRING,
-          value INT
-        )
+        CREATE TABLE delta_read_metadata_path
         USING DELTA LOCATION {{ location.sql }}
         OPTIONS (metadataAsDataRead 'true')
-        """
-      Given statement
-        """
-        INSERT INTO delta_read_metadata_path
-        SELECT * FROM VALUES (1, 'a', 10), (2, 'b', 20)
+        AS SELECT * FROM VALUES
+          (1, 'a', 10),
+          (2, 'b', 20)
+        AS t(id, name, value)
         """
 
     Scenario: EXPLAIN SELECT with metadataAsDataRead true uses discovery and log replay
       When query
         """
         EXPLAIN SELECT * FROM delta_read_metadata_path
+        """
+      Then query plan matches snapshot
+
+    Scenario: Metadata pruning does not assume arbitrary casts preserve bounds
+      Given statement
+        """
+        INSERT INTO delta_read_metadata_path VALUES (3, 'c', 2), (4, 'd', 10)
+        """
+      When query
+        """
+        SELECT id
+        FROM delta_read_metadata_path
+        WHERE CAST(value AS STRING) < '2'
+        ORDER BY id
+        """
+      Then query result ordered
+        | id |
+        | 1  |
+        | 4  |
+
+    Scenario: EXPLAIN CODEGEN shows the distributed metadata replay stages
+      When query
+        """
+        EXPLAIN CODEGEN SELECT * FROM delta_read_metadata_path
         """
       Then query plan matches snapshot
 
