@@ -706,8 +706,10 @@ impl<'a> SnapshotProducer<'a> {
             return Err("Iceberg removed data file path cannot be empty".to_string());
         }
         if update_kind.is_targeted_rewrite() {
-            if removed_data_file_paths.is_empty() {
-                return Err("Iceberg copy-on-write commit requires removed data files".to_string());
+            if removed_data_file_paths.is_empty() && self.added_data_files.is_empty() {
+                return Err(
+                    "Iceberg copy-on-write commit requires added or removed data files".to_string(),
+                );
             }
             if !self.added_delete_files.is_empty() {
                 return Err(
