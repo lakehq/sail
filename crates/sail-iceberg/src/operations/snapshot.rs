@@ -1334,12 +1334,8 @@ mod tests {
                 .build()
                 .expect("parent snapshot");
             let transaction = Transaction::new(table_url.to_string(), parent_snapshot, 1);
-            let producer = SnapshotProducer::new(
-                &transaction,
-                vec![],
-                Some(store_ctx.clone()),
-                None,
-            );
+            let producer =
+                SnapshotProducer::new(&transaction, vec![], Some(store_ctx.clone()), None);
             let mut created_paths = Vec::new();
             let error = producer
                 .rewrite_parent_manifests(

@@ -1462,13 +1462,85 @@ mod tests {
         assert_eq!(effective, FormatVersion::V3);
 
         for mode in ["predicate", "dynamic"] {
-            let error = validate_scoped_overwrite_format(
-                SnapshotUpdateKind::CopyOnWrite,
-                effective,
-            )
-            .expect_err(mode);
+            let error =
+                validate_scoped_overwrite_format(SnapshotUpdateKind::CopyOnWrite, effective)
+                    .expect_err(mode);
             assert!(error.to_string().contains("v3 scoped overwrite"), "{mode}");
         }
+    }
+
+    #[test]
+    fn scoped_overwrite_execute_rechecks_format_after_schema_evolution() {
+        futures::executor::block_on(async {
+            let table_url = Url::parse("file:///tmp/scoped-overwrite-v3/").expect("table URL");
+            let memory = Arc::new(object_store::memory::InMemory::new());
+            let store: Arc<dyn ObjectStore> = memory.clone();
+            let store_ctx = StoreContext::new(store, &table_url).expect("store context");
+            let initial_schema = IcebergSchema::builder()
+                .with_schema_id(0)
+                .with_fields([Arc::new(NestedField::required(
+                    1,
+                    "id",
+                    Type::Primitive(PrimitiveType::Int),
+                ))])
+                .build()
+                .expect("v2 schema");
+            let table_properties = vec![("format-version".to_string(), "2".to_string())];
+            crate::operations::bootstrap::bootstrap_empty_table_metadata(
+                &table_url,
+                &store_ctx,
+                initial_schema,
+                PartitionSpec::unpartitioned_spec(),
+                &table_properties,
+                NewTableMetadataStyle::Hadoop,
+            )
+            .await
+            .expect("bootstrap metadata");
+
+            let evolved_schema = IcebergSchema::builder()
+                .with_schema_id(1)
+                .with_fields([Arc::new(NestedField::required(
+                    1,
+                    "event_time",
+                    Type::Primitive(PrimitiveType::TimestampNs),
+                ))])
+                .build()
+                .expect("v3 schema");
+            let action_schema = iceberg_action_schema().expect("action schema");
+            let action_batch = encode_commit_meta(CommitMeta {
+                table_uri: table_url.to_string(),
+                row_count: 0,
+                requirements: vec![],
+                table_properties,
+                lakehouse_table: None,
+                schema: Some(evolved_schema),
+                partition_spec: None,
+            })
+            .expect("commit metadata action");
+            let input = MemorySourceConfig::try_new_exec(
+                &[vec![action_batch]],
+                Arc::clone(&action_schema),
+                None,
+            )
+            .expect("memory input");
+            let commit =
+                IcebergCommitExec::new(input, table_url, None, SnapshotUpdateKind::CopyOnWrite)
+                    .with_removed_data_file_paths(vec!["old.parquet".to_string()]);
+            let context = SessionContext::new();
+            context
+                .runtime_env()
+                .register_object_store(&Url::parse("file:///").expect("file store URL"), memory);
+
+            let mut output = commit
+                .execute(0, context.task_ctx())
+                .expect("commit stream");
+            let error = output
+                .next()
+                .await
+                .expect("commit result")
+                .expect_err("effective v3 scoped overwrite must fail");
+            assert!(error.to_string().contains("v3 scoped overwrite"));
+        });
     }
 
     fn partitioned_data_file(path: &str, spec_id: i32, value: i32) -> DataFile {
@@ -1525,7 +1597,11 @@ mod tests {
         let added = vec![partitioned_data_file("new.parquet", 4, 2)];
         let error = IcebergCommitExec::dynamic_partition_overwrite_paths(&added, &[], &spec)
             .expect_err("mismatched spec must fail");
-        assert!(error.to_string().contains("default Iceberg partition spec 3"));
+        assert!(
+            error
+                .to_string()
+                .contains("default Iceberg partition spec 3")
+        );
     }
 
     #[test]
