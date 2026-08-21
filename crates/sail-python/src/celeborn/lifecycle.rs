@@ -42,6 +42,7 @@ pub(super) struct PyLifecycleManager {
 
 #[pymethods]
 impl PyLifecycleManager {
+    #[expect(clippy::too_many_arguments)]
     #[new]
     #[pyo3(signature = (master_host, master_port, application_id, *, endpoint_resolver=None, partition_split_threshold=1073741824, partition_split_mode="soft".to_string(), compression="lz4".to_string(), heartbeat_interval_secs=10))]
     fn new(
