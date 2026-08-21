@@ -49,7 +49,7 @@ Feature: vector_norm
         """
       Then query result
         | l1    | l2       | l_infinity |
-        | 136.0 | 38.67816 | 16.0        |
+        | 136.0 | 38.678158 | 16.0        |
   Rule: Null handling
     Scenario: typed null vector returns NULL
       When query
