@@ -91,7 +91,6 @@ pub struct IcebergTableProvider {
     /// All partition specs referenced by the table
     partition_specs: Vec<PartitionSpec>,
     /// Default partition spec id (for schema ordering / partition metadata)
-    #[expect(dead_code)]
     default_spec_id: i32,
     /// Arrow schema for DataFusion
     arrow_schema: Arc<ArrowSchema>,
@@ -294,7 +293,6 @@ impl IcebergTableProvider {
         self.snapshot.as_ref()
     }
 
-    #[expect(dead_code)]
     pub(crate) async fn predicate_overwrite_paths(
         &self,
         session: &dyn Session,
