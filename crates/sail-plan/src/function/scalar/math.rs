@@ -1,14 +1,12 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit, i256};
-use datafusion::arrow::error::ArrowError;
+use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion::functions::expr_fn;
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::{
     BinaryExpr, Expr, ExprSchemable, Operator, ScalarUDF, cast, expr, lit, try_cast,
 };
 use datafusion_spark::function::math::expr_fn as math_fn;
-use half::f16;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::error::generic_exec_err;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
@@ -232,52 +230,6 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
     })
 }
 
-/// Check if an expression represents a zero literal value.
-/// Handles both direct literals and CAST expressions wrapping literals.
-fn is_zero_literal(expr: &Expr) -> bool {
-    // Helper to check if a ScalarValue is zero
-    fn is_scalar_zero(scalar: &ScalarValue) -> bool {
-        match scalar {
-            ScalarValue::Int8(Some(0))
-            | ScalarValue::Int16(Some(0))
-            | ScalarValue::Int32(Some(0))
-            | ScalarValue::Int64(Some(0))
-            | ScalarValue::UInt8(Some(0))
-            | ScalarValue::UInt16(Some(0))
-            | ScalarValue::UInt32(Some(0))
-            | ScalarValue::UInt64(Some(0))
-            | ScalarValue::Decimal128(Some(0), _, _) => true,
-            ScalarValue::Float32(Some(v)) if *v == 0.0 => true,
-            ScalarValue::Float64(Some(v)) if *v == 0.0 => true,
-            ScalarValue::Float16(Some(f)) if *f == f16::from_f32(0.0) => true,
-            ScalarValue::Decimal256(Some(v), _, _) if *v == i256::ZERO => true,
-            _ => false,
-        }
-    }
-
-    match expr {
-        // Direct literal
-        Expr::Literal(scalar, _) => is_scalar_zero(scalar),
-        // CAST(literal AS type) - unwrap the cast and check the inner literal
-        Expr::Cast(cast_expr) => {
-            if let Expr::Literal(scalar, _) = cast_expr.expr.as_ref() {
-                is_scalar_zero(scalar)
-            } else {
-                false
-            }
-        }
-        // TryCast is similar to Cast
-        Expr::TryCast(try_cast_expr) => {
-            if let Expr::Literal(scalar, _) = try_cast_expr.expr.as_ref() {
-                is_scalar_zero(scalar)
-            } else {
-                false
-            }
-        }
-        _ => false,
-    }
-}
-
 /// Returns a guarded divisor expression that handles division by zero at runtime.
 ///
 /// In non-ANSI mode: returns `nullif(divisor, 0)` — evaluates to NULL when divisor is zero.
@@ -332,15 +284,6 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
     } = input;
 
     let (dividend, divisor) = arguments.two()?;
-
-    // Plan-time check for literal zero divisors (fast path, better error UX).
-    if is_zero_literal(&divisor) {
-        if function_context.plan_config.ansi_mode {
-            return Err(PlanError::ArrowError(ArrowError::DivideByZero));
-        } else {
-            return Ok(Expr::Literal(ScalarValue::Null, None));
-        }
-    }
 
     let ansi_mode = function_context.plan_config.ansi_mode;
     let dividend_type = dividend.get_type(function_context.schema);
@@ -398,15 +341,6 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
     } = input;
 
     let (dividend, divisor) = arguments.two()?;
-
-    // Plan-time check for literal zero divisors.
-    if is_zero_literal(&divisor) {
-        if function_context.plan_config.ansi_mode {
-            return Err(PlanError::ArrowError(ArrowError::DivideByZero));
-        } else {
-            return Ok(Expr::Literal(ScalarValue::Null, None));
-        }
-    }
 
     let ansi_mode = function_context.plan_config.ansi_mode;
     let dividend_type = dividend.get_type(function_context.schema);
@@ -591,17 +525,6 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
     } = input;
 
     let (dividend, divisor) = arguments.two()?;
-
-    // Plan-time check for literal zero divisors.
-    if is_zero_literal(&divisor) {
-        if function_context.plan_config.ansi_mode {
-            return Err(PlanError::ArrowError(ArrowError::ArithmeticOverflow(
-                "Remainder by zero".to_string(),
-            )));
-        } else {
-            return Ok(Expr::Literal(ScalarValue::Null, None));
-        }
-    }
 
     let ansi_mode = function_context.plan_config.ansi_mode;
     let divisor_type = divisor.get_type(function_context.schema);

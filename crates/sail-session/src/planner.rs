@@ -8,12 +8,10 @@ use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::execution::SessionState;
 use datafusion::execution::context::QueryPlanner;
 use datafusion::physical_expr::expressions::Column;
-use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion::physical_expr::{
     LexOrdering, OrderingRequirements, PhysicalExpr, PhysicalSortExpr,
 };
 use datafusion::physical_optimizer::output_requirements::OutputRequirementExec;
-use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
@@ -77,6 +75,10 @@ use sail_physical_plan::streaming::limit::StreamLimitExec;
 use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
 use sail_plan::catalog::CatalogCommandNode;
 
+mod lazy_scalar;
+
+use lazy_scalar::lower_lazy_scalars;
+
 #[derive(Debug)]
 pub struct ExtensionQueryPlanner {}
 
@@ -108,56 +110,8 @@ impl QueryPlanner for ExtensionQueryPlanner {
         let plan = planner
             .create_physical_plan(&logical_plan, session_state)
             .await?;
-        ensure_scalar_subquery_nullability(plan)
+        lower_lazy_scalars(plan, session_state.config().target_partitions())
     }
-}
-
-fn ensure_scalar_subquery_nullability(
-    plan: Arc<dyn ExecutionPlan>,
-) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
-    plan.transform_up(|plan| {
-        let Some(projection) = plan.downcast_ref::<ProjectionExec>() else {
-            return Ok(Transformed::no(plan));
-        };
-
-        let mut changed = false;
-        let expressions = projection
-            .expr()
-            .iter()
-            .map(|projection_expr| {
-                let transformed = Arc::clone(&projection_expr.expr).transform_up(|expression| {
-                    let Some(scalar) = expression.downcast_ref::<ScalarSubqueryExpr>() else {
-                        return Ok(Transformed::no(expression));
-                    };
-                    if scalar.nullable() {
-                        return Ok(Transformed::no(expression));
-                    }
-                    Ok(Transformed::yes(Arc::new(ScalarSubqueryExpr::new(
-                        scalar.data_type().clone(),
-                        true,
-                        scalar.index(),
-                        scalar.results().clone(),
-                    ))
-                        as Arc<dyn PhysicalExpr>))
-                })?;
-                changed |= transformed.transformed;
-                Ok(ProjectionExpr::new(
-                    transformed.data,
-                    projection_expr.alias.clone(),
-                ))
-            })
-            .collect::<datafusion_common::Result<Vec<_>>>()?;
-
-        if changed {
-            Ok(Transformed::yes(Arc::new(ProjectionExec::try_new(
-                expressions,
-                Arc::clone(projection.input()),
-            )?) as Arc<dyn ExecutionPlan>))
-        } else {
-            Ok(Transformed::no(plan))
-        }
-    })
-    .data()
 }
 
 pub struct ExtensionPhysicalPlanner;

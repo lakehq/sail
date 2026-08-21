@@ -1,5 +1,7 @@
 use datafusion_expr::Expr;
 
+pub mod lazy_scalar;
+
 /// A logical expression with an optional SQL source string.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
 pub struct ExprWithSource {

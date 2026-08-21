@@ -2664,6 +2664,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkUnixTimestamp::new(Arc::from(session_timezone), ansi_mode);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::SparkSequence(r#gen::SparkSequenceUdf {
+                session_timezone,
+                ansi_mode,
+            }) => {
+                let udf = SparkSequence::new(Arc::from(session_timezone), ansi_mode);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
             UdfKind::SparkDateFormat(r#gen::SparkDateFormatUdf { session_timezone }) => {
                 let udf = SparkDateFormat::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
@@ -2934,7 +2941,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "spark_mask" | "mask" => Ok(Arc::new(ScalarUDF::from(SparkMask::new()))),
             "spark_concat_ws" | "concat_ws" => Ok(Arc::new(ScalarUDF::from(SparkConcatWs::new()))),
-            "spark_sequence" | "sequence" => Ok(Arc::new(ScalarUDF::from(SparkSequence::new()))),
             "spark_shuffle" | "shuffle" => Ok(Arc::new(ScalarUDF::from(SparkShuffle::new()))),
             "spark_encode" | "encode" => Ok(Arc::new(ScalarUDF::from(SparkEncode::new()))),
             "spark_elt" | "elt" => Ok(Arc::new(ScalarUDF::from(SparkElt::new()))),
@@ -3070,7 +3076,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkRegexpExtract>()
             || node_inner.is::<SparkRegexpExtractAll>()
             || node_inner.is::<SparkReverse>()
-            || node_inner.is::<SparkSequence>()
             || node_inner.is::<SparkSchemaOfCsv>()
             || node_inner.is::<SparkSchemaOfJson>()
             || node_inner.is::<SparkShuffle>()
@@ -3190,6 +3195,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let session_timezone = func.session_timezone().to_string();
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkUnixTimestamp(r#gen::SparkUnixTimestampUdf {
+                session_timezone,
+                ansi_mode,
+            })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkSequence>() {
+            let session_timezone = func.session_timezone().to_string();
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkSequence(r#gen::SparkSequenceUdf {
                 session_timezone,
                 ansi_mode,
             })
@@ -6473,6 +6485,59 @@ mod tests {
         assert!(decoded.ansi_mode());
 
         Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_sequence_preserves_options() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkSequence::new(
+            Arc::from("America/Los_Angeles"),
+            true,
+        )))?;
+
+        let decoded = downcast_udf::<SparkSequence>(&decoded, "SparkSequence")?;
+        assert_eq!(decoded.session_timezone(), "America/Los_Angeles");
+        assert!(decoded.ansi_mode());
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_lazy_scalar_sequence_expr() -> Result<()> {
+        use datafusion::arrow::array::Int64Array;
+        use datafusion::arrow::datatypes::{DataType, Field};
+        use datafusion::common::config::ConfigOptions;
+        use datafusion::physical_expr::expressions::{Column, Literal};
+        use sail_common_datafusion::logical_expr::lazy_scalar::LazyScalarEvaluationPolicy;
+        use sail_common_datafusion::physical_expr::lazy_scalar::LazyScalarExpr;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("stop", DataType::Int64, true)]));
+        let expression = Arc::new(LazyScalarExpr::try_new(
+            Arc::new(ScalarUDF::from(SparkSequence::new(
+                Arc::from("America/Los_Angeles"),
+                true,
+            ))),
+            vec![
+                Arc::new(Literal::new(ScalarValue::Int64(Some(1)))),
+                Arc::new(Column::new("stop", 0)),
+            ],
+            schema.as_ref(),
+            Arc::new(ConfigOptions::default()),
+            LazyScalarEvaluationPolicy::TryActiveRows,
+        )?) as Arc<dyn PhysicalExpr>;
+
+        let decoded = round_trip_expr(&expression, schema.as_ref())?;
+        let lazy = decoded
+            .downcast_ref::<LazyScalarExpr>()
+            .ok_or_else(|| plan_datafusion_err!("decoded expression is not LazyScalarExpr"))?;
+        let sequence = downcast_udf::<SparkSequence>(lazy.function(), "SparkSequence")?;
+        assert_eq!(sequence.session_timezone(), "America/Los_Angeles");
+        assert!(sequence.ansi_mode());
+        assert_eq!(lazy.policy(), LazyScalarEvaluationPolicy::TryActiveRows);
+        assert_same_result(
+            &expression,
+            &decoded,
+            schema,
+            vec![Arc::new(Int64Array::from(vec![Some(1), Some(3), None]))],
+        )
     }
 
     #[test]

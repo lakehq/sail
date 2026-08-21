@@ -230,7 +230,7 @@ impl PlanResolver<'_> {
             .collect();
         let array_column_name: String = state.register_field_name("array_value");
         let arr_expr: Expr = Expr::ScalarFunction(ScalarFunction {
-            func: Arc::new(ScalarUDF::from(SparkSequence::new())),
+            func: Arc::new(ScalarUDF::from(SparkSequence::new(Arc::from("UTC"), false))),
             args: vec![
                 Expr::Literal(ScalarValue::Int64(Some(1)), None),
                 col(rand_column_name),

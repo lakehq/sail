@@ -4,9 +4,11 @@ use datafusion::optimizer::{Analyzer, AnalyzerRule, Optimizer, OptimizerRule};
 
 mod lateral_join;
 mod resolve_lambda_variables;
+mod simplify_lazy_scalar;
 
 use lateral_join::DecorrelateLateralProjection;
 use resolve_lambda_variables::ResolveLambdaVariables;
+use simplify_lazy_scalar::SimplifyExpressions;
 
 pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
     // FIXME: Create analyzer rule for TypeCoercion in Sail
@@ -31,7 +33,13 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
     // in Filter/Aggregate) are left for DataFusion's `DecorrelateLateralJoin`.
     let mut custom: Vec<Arc<dyn OptimizerRule + Send + Sync>> =
         vec![Arc::new(DecorrelateLateralProjection::new())];
-    custom.extend(rules);
+    custom.extend(rules.into_iter().map(|rule| {
+        if rule.name() == "simplify_expressions" {
+            Arc::new(SimplifyExpressions::new()) as Arc<dyn OptimizerRule + Send + Sync>
+        } else {
+            rule
+        }
+    }));
     // `ResolveLambdaVariables` must run after the built-in rules: constant
     // folding can change the type or nullability of higher-order function
     // arguments, and the lambda variable fields must be refreshed to match.
