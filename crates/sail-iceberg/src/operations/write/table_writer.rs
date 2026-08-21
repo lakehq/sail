@@ -93,41 +93,30 @@ impl IcebergTableWriter {
 
         let spec = &self.config.partition_spec;
         let iceberg_schema = &self.config.iceberg_schema;
+        let padded = Self::align_batch_with_table_schema(
+            batch,
+            &self.config.table_schema,
+            self.config.iceberg_schema.as_ref(),
+        )
+        .map_err(|e| e.to_string())?;
+        let normalized = unshred_shredded_variants_for_write(&padded, &self.config.table_schema)?;
+        let aligned = cast_record_batch_relaxed_tz(&normalized, &self.config.table_schema)
+            .map_err(|e| e.to_string())?;
 
         if spec.fields.is_empty() {
             // Unpartitioned: write as-is once
             let partition_dir = String::new();
             let partition_values = Vec::new();
-            let padded = Self::align_batch_with_table_schema(
-                batch,
-                &self.config.table_schema,
-                self.config.iceberg_schema.as_ref(),
-            )
-            .map_err(|e| e.to_string())?;
-            let normalized =
-                unshred_shredded_variants_for_write(&padded, &self.config.table_schema)?;
-            let aligned = cast_record_batch_relaxed_tz(&normalized, &self.config.table_schema)
-                .map_err(|e| e.to_string())?;
             self.write_aligned_batch(partition_values, partition_dir, aligned)
                 .await?;
             return Ok(());
         }
 
-        let parts = split_record_batch_by_partition(batch, spec, iceberg_schema)?;
+        let parts = split_record_batch_by_partition(&aligned, spec, iceberg_schema)?;
         for p in parts.into_iter() {
             let partition_dir = p.partition_dir;
             let partition_values = p.partition_values;
-            let padded = Self::align_batch_with_table_schema(
-                &p.record_batch,
-                &self.config.table_schema,
-                self.config.iceberg_schema.as_ref(),
-            )
-            .map_err(|e| e.to_string())?;
-            let normalized =
-                unshred_shredded_variants_for_write(&padded, &self.config.table_schema)?;
-            let aligned = cast_record_batch_relaxed_tz(&normalized, &self.config.table_schema)
-                .map_err(|e| e.to_string())?;
-            self.write_aligned_batch(partition_values, partition_dir, aligned)
+            self.write_aligned_batch(partition_values, partition_dir, p.record_batch)
                 .await?;
         }
 

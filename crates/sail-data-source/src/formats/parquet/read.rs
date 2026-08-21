@@ -327,13 +327,13 @@ impl ParquetSchemaNormalizer {
         let fields = schema
             .fields()
             .iter()
-            .map(|field| self.normalize_field(field))
+            .map(|field| self.normalize_field(field, true))
             .collect::<Fields>();
         Schema::new_with_metadata(fields, schema.metadata().clone())
     }
 
-    fn normalize_field(&self, field: &FieldRef) -> FieldRef {
-        let data_type = self.normalize_data_type(field.data_type());
+    fn normalize_field(&self, field: &FieldRef, top_level: bool) -> FieldRef {
+        let data_type = self.normalize_data_type(field.data_type(), top_level);
         if &data_type == field.data_type() {
             Arc::clone(field)
         } else {
@@ -341,53 +341,69 @@ impl ParquetSchemaNormalizer {
         }
     }
 
-    fn normalize_data_type(&self, data_type: &DataType) -> DataType {
+    fn normalize_data_type(&self, data_type: &DataType, top_level: bool) -> DataType {
         let data_type = match data_type {
             DataType::Binary if self.binary_as_string => DataType::Utf8,
             DataType::LargeBinary if self.binary_as_string => DataType::LargeUtf8,
             DataType::BinaryView if self.binary_as_string => DataType::Utf8View,
-            DataType::List(field) => DataType::List(self.normalize_field(field)),
-            DataType::ListView(field) => DataType::ListView(self.normalize_field(field)),
+            DataType::List(field) => DataType::List(self.normalize_field(field, false)),
+            DataType::ListView(field) => DataType::ListView(self.normalize_field(field, false)),
             DataType::FixedSizeList(field, size) => {
-                DataType::FixedSizeList(self.normalize_field(field), *size)
+                DataType::FixedSizeList(self.normalize_field(field, false), *size)
             }
-            DataType::LargeList(field) => DataType::LargeList(self.normalize_field(field)),
-            DataType::LargeListView(field) => DataType::LargeListView(self.normalize_field(field)),
+            DataType::LargeList(field) => DataType::LargeList(self.normalize_field(field, false)),
+            DataType::LargeListView(field) => {
+                DataType::LargeListView(self.normalize_field(field, false))
+            }
             DataType::Struct(fields) => DataType::Struct(
                 fields
                     .iter()
-                    .map(|field| self.normalize_field(field))
+                    .map(|field| self.normalize_field(field, false))
                     .collect(),
             ),
             DataType::Union(fields, mode) => DataType::Union(
                 fields
                     .iter()
-                    .map(|(type_id, field)| (type_id, self.normalize_field(field)))
+                    .map(|(type_id, field)| (type_id, self.normalize_field(field, false)))
                     .collect(),
                 *mode,
             ),
             DataType::Dictionary(key, value) => DataType::Dictionary(
-                Box::new(self.normalize_data_type(key)),
-                Box::new(self.normalize_data_type(value)),
+                Box::new(self.normalize_data_type(key, top_level)),
+                Box::new(self.normalize_data_type(value, top_level)),
             ),
-            DataType::Map(field, sorted) => DataType::Map(self.normalize_field(field), *sorted),
+            DataType::Map(field, sorted) => {
+                DataType::Map(self.normalize_field(field, false), *sorted)
+            }
             DataType::RunEndEncoded(run_ends, values) => DataType::RunEndEncoded(
-                self.normalize_field(run_ends),
-                self.normalize_field(values),
+                self.normalize_field(run_ends, false),
+                self.normalize_field(values, false),
             ),
             data_type => data_type.clone(),
         };
 
-        if self.force_view_types {
-            match data_type {
-                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => DataType::Utf8View,
-                DataType::Binary | DataType::LargeBinary | DataType::BinaryView => {
-                    DataType::BinaryView
-                }
-                data_type => data_type,
+        match (self.force_view_types, top_level, data_type) {
+            (true, _, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) => {
+                DataType::Utf8View
             }
-        } else {
-            data_type
+            (
+                true,
+                true,
+                DataType::Binary
+                | DataType::LargeBinary
+                | DataType::BinaryView
+                | DataType::FixedSizeBinary(_),
+            ) => DataType::BinaryView,
+            (
+                _,
+                _,
+                DataType::Binary
+                | DataType::LargeBinary
+                | DataType::BinaryView
+                | DataType::FixedSizeBinary(_),
+            ) => DataType::Binary,
+            (false, _, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) => DataType::Utf8,
+            (_, _, data_type) => data_type,
         }
     }
 }
@@ -397,11 +413,50 @@ fn clear_metadata(schema: Schema) -> Schema {
     let fields = schema
         .fields()
         .iter()
-        .map(|field| {
-            Arc::new(field.as_ref().clone().with_metadata(Default::default())) // clear meta
-        })
+        .map(clear_field_metadata)
         .collect::<Fields>();
     Schema::new(fields)
+}
+
+fn clear_field_metadata(field: &FieldRef) -> FieldRef {
+    Arc::new(
+        field
+            .as_ref()
+            .clone()
+            .with_data_type(clear_data_type_metadata(field.data_type()))
+            .with_metadata(Default::default()),
+    )
+}
+
+fn clear_data_type_metadata(data_type: &DataType) -> DataType {
+    match data_type {
+        DataType::List(field) => DataType::List(clear_field_metadata(field)),
+        DataType::ListView(field) => DataType::ListView(clear_field_metadata(field)),
+        DataType::FixedSizeList(field, size) => {
+            DataType::FixedSizeList(clear_field_metadata(field), *size)
+        }
+        DataType::LargeList(field) => DataType::LargeList(clear_field_metadata(field)),
+        DataType::LargeListView(field) => DataType::LargeListView(clear_field_metadata(field)),
+        DataType::Struct(fields) => {
+            DataType::Struct(fields.iter().map(clear_field_metadata).collect::<Fields>())
+        }
+        DataType::Union(fields, mode) => DataType::Union(
+            fields
+                .iter()
+                .map(|(type_id, field)| (type_id, clear_field_metadata(field)))
+                .collect(),
+            *mode,
+        ),
+        DataType::Dictionary(key, value) => DataType::Dictionary(
+            Box::new(clear_data_type_metadata(key)),
+            Box::new(clear_data_type_metadata(value)),
+        ),
+        DataType::Map(field, sorted) => DataType::Map(clear_field_metadata(field), *sorted),
+        DataType::RunEndEncoded(run_ends, values) => {
+            DataType::RunEndEncoded(clear_field_metadata(run_ends), clear_field_metadata(values))
+        }
+        data_type => data_type.clone(),
+    }
 }
 
 /// Parses `coerce_int96` setting into an Arrow [`TimeUnit`].
@@ -416,5 +471,132 @@ fn parse_coerce_int96_string(setting: &str) -> Result<TimeUnit> {
         _ => Err(DataFusionError::Configuration(format!(
             "Unknown or unsupported parquet `coerce_int96` setting: {setting}. Valid values are: ns, us, ms, and s."
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    #[test]
+    fn parquet_schema_normalizer_canonicalizes_spark_types_without_views() {
+        let normalizer = ParquetSchemaNormalizer {
+            binary_as_string: false,
+            force_view_types: false,
+        };
+        let schema = normalizer.normalize_schema(Schema::new(vec![
+            Field::new("view_string", DataType::Utf8View, true),
+            Field::new("large_string", DataType::LargeUtf8, true),
+            Field::new("view_binary", DataType::BinaryView, true),
+            Field::new("large_binary", DataType::LargeBinary, true),
+            Field::new("fixed_binary", DataType::FixedSizeBinary(4), true),
+        ]));
+
+        assert_eq!(schema.field(0).data_type(), &DataType::Utf8);
+        assert_eq!(schema.field(1).data_type(), &DataType::Utf8);
+        assert_eq!(schema.field(2).data_type(), &DataType::Binary);
+        assert_eq!(schema.field(3).data_type(), &DataType::Binary);
+        assert_eq!(schema.field(4).data_type(), &DataType::Binary);
+    }
+
+    #[test]
+    fn parquet_schema_normalizer_keeps_nested_binary_offset_based() {
+        let normalizer = ParquetSchemaNormalizer {
+            binary_as_string: false,
+            force_view_types: true,
+        };
+        let schema = normalizer.normalize_schema(Schema::new(vec![
+            Field::new("top_string", DataType::Utf8, true),
+            Field::new("top_binary", DataType::FixedSizeBinary(4), true),
+            Field::new(
+                "nested",
+                DataType::Struct(
+                    vec![
+                        Field::new("string", DataType::LargeUtf8, true),
+                        Field::new("binary", DataType::BinaryView, true),
+                        Field::new("fixed", DataType::FixedSizeBinary(4), true),
+                    ]
+                    .into(),
+                ),
+                true,
+            ),
+        ]));
+
+        assert_eq!(schema.field(0).data_type(), &DataType::Utf8View);
+        assert_eq!(schema.field(1).data_type(), &DataType::BinaryView);
+        assert!(matches!(schema.field(2).data_type(), DataType::Struct(_)));
+        if let DataType::Struct(fields) = schema.field(2).data_type() {
+            assert_eq!(fields[0].data_type(), &DataType::Utf8View);
+            assert_eq!(fields[1].data_type(), &DataType::Binary);
+            assert_eq!(fields[2].data_type(), &DataType::Binary);
+        }
+    }
+
+    #[test]
+    fn parquet_schema_normalizer_applies_binary_as_string_before_canonicalization() {
+        let binary_schema = || Schema::new(vec![Field::new("value", DataType::Binary, true)]);
+        let fixed_schema = || {
+            Schema::new(vec![Field::new(
+                "value",
+                DataType::FixedSizeBinary(4),
+                true,
+            )])
+        };
+
+        let binary_normalizer = ParquetSchemaNormalizer {
+            binary_as_string: false,
+            force_view_types: true,
+        };
+        assert!(
+            Schema::try_merge([
+                binary_normalizer.normalize_schema(binary_schema()),
+                binary_normalizer.normalize_schema(fixed_schema()),
+            ])
+            .is_ok()
+        );
+
+        let string_normalizer = ParquetSchemaNormalizer {
+            binary_as_string: true,
+            force_view_types: true,
+        };
+        assert!(
+            Schema::try_merge([
+                string_normalizer.normalize_schema(binary_schema()),
+                string_normalizer.normalize_schema(fixed_schema()),
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn clear_metadata_recursively_clears_nested_fields() {
+        let metadata = HashMap::from([("source".to_string(), "one".to_string())]);
+        let schema = Schema::new_with_metadata(
+            vec![
+                Field::new(
+                    "nested",
+                    DataType::Struct(
+                        vec![
+                            Field::new("value", DataType::Utf8, true)
+                                .with_metadata(metadata.clone()),
+                        ]
+                        .into(),
+                    ),
+                    true,
+                )
+                .with_metadata(metadata.clone()),
+            ],
+            metadata,
+        );
+        let schema = clear_metadata(schema);
+
+        assert!(schema.metadata().is_empty());
+        assert!(schema.field(0).metadata().is_empty());
+        assert!(matches!(schema.field(0).data_type(), DataType::Struct(_)));
+        if let DataType::Struct(fields) = schema.field(0).data_type() {
+            assert!(fields[0].metadata().is_empty());
+        }
     }
 }

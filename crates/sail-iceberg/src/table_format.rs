@@ -122,6 +122,7 @@ impl TableFormat for IcebergTableFormat {
         };
         let SinkInfo {
             input,
+            arrow_use_large_var_types: _,
             mode,
             partition_by,
             bucket_by,

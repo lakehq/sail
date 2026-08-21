@@ -1,6 +1,10 @@
 use std::sync::Arc;
 
+use datafusion::optimizer::analyzer::type_coercion::TypeCoercion;
 use datafusion::optimizer::{Analyzer, AnalyzerRule, Optimizer, OptimizerRule};
+use datafusion_common::Result;
+use datafusion_common::config::ConfigOptions;
+use datafusion_expr::LogicalPlan;
 
 mod lateral_join;
 mod output_view_types;
@@ -9,6 +13,23 @@ mod resolve_lambda_variables;
 use lateral_join::DecorrelateLateralProjection;
 use output_view_types::ExpandViewTypesAtOutput;
 use resolve_lambda_variables::ResolveLambdaVariables;
+
+#[derive(Debug, Default)]
+struct SparkTypeCoercion {
+    type_coercion_rule: TypeCoercion,
+}
+
+impl AnalyzerRule for SparkTypeCoercion {
+    fn analyze(&self, plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan> {
+        let mut coercion_config = config.clone();
+        coercion_config.optimizer.expand_views_at_output = false;
+        self.type_coercion_rule.analyze(plan, &coercion_config)
+    }
+
+    fn name(&self) -> &str {
+        self.type_coercion_rule.name()
+    }
+}
 
 pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
     // FIXME: Create analyzer rule for TypeCoercion in Sail
@@ -19,7 +40,13 @@ pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
     } = Analyzer::default();
     let mut rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> =
         vec![Arc::new(ResolveLambdaVariables)];
-    rules.extend(built_in_rules);
+    rules.extend(built_in_rules.into_iter().map(|rule| {
+        if rule.name() == TypeCoercion::new().name() {
+            Arc::new(SparkTypeCoercion::default()) as Arc<dyn AnalyzerRule + Send + Sync>
+        } else {
+            rule
+        }
+    }));
     // Run this after the built-in analyzer rules so only the final root schema is expanded;
     // casting scan or intermediate schemas would discard the benefit of keeping view arrays.
     rules.push(Arc::new(ExpandViewTypesAtOutput));

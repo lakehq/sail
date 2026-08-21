@@ -10,11 +10,15 @@ use datafusion::catalog::Session;
 use datafusion::datasource::provider_as_source;
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::{Extension, LogicalPlan, TableSource, UserDefinedLogicalNode};
+use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr::expressions::{CastExpr, Column};
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
-use datafusion_common::{DFSchema, DFSchemaRef, Result, internal_err};
+use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, internal_err};
 use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
 use educe::Educe;
+use sail_common_datafusion::array::record_batch::normalize_spark_arrow_schema;
 use sail_common_datafusion::datasource::{
     OptionLayer, SinkInfo, SinkMode, SourceInfo, TableFormat, TableFormatRegistry,
 };
@@ -213,6 +217,7 @@ impl TableFormat for PythonTableFormat {
     async fn create_writer(&self, _ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
         let SinkInfo {
             input,
+            arrow_use_large_var_types,
             mode,
             partition_by,
             options,
@@ -236,6 +241,7 @@ impl TableFormat for PythonTableFormat {
                 Arc::new(input),
                 self.name.clone(),
                 self.pickled_class.clone(),
+                arrow_use_large_var_types,
                 mode,
                 options,
             )),
@@ -249,6 +255,7 @@ pub struct PythonWriteNode {
     input: Arc<LogicalPlan>,
     name: String,
     pickled_class: Option<Vec<u8>>,
+    arrow_use_large_var_types: bool,
     mode: SinkMode,
     options: Vec<OptionLayer>,
     #[educe(PartialOrd(ignore))]
@@ -260,6 +267,7 @@ impl PythonWriteNode {
         input: Arc<LogicalPlan>,
         name: String,
         pickled_class: Option<Vec<u8>>,
+        arrow_use_large_var_types: bool,
         mode: SinkMode,
         options: Vec<OptionLayer>,
     ) -> Self {
@@ -267,6 +275,7 @@ impl PythonWriteNode {
             input,
             name,
             pickled_class,
+            arrow_use_large_var_types,
             mode,
             options,
             schema: Arc::new(DFSchema::empty()),
@@ -301,6 +310,7 @@ impl UserDefinedLogicalNodeCore for PythonWriteNode {
             input: Arc::new(inputs.one()?),
             name: self.name.clone(),
             pickled_class: self.pickled_class.clone(),
+            arrow_use_large_var_types: self.arrow_use_large_var_types,
             mode: self.mode.clone(),
             options: self.options.clone(),
             schema: self.schema.clone(),
@@ -344,8 +354,9 @@ impl ExtensionPlanner for PythonPhysicalPlanner {
         let datasource = table_format.create_datasource(&opaque_options)?;
         let executor: Arc<dyn super::executor::PythonExecutor> =
             Arc::new(InProcessExecutor::from_app_config());
-        let schema = input.schema();
         let expected_partitions = input.properties().partitioning.partition_count();
+        let input = normalize_python_writer_input(input.clone(), node.arrow_use_large_var_types)?;
+        let schema = input.schema();
         let writer_plan = executor
             .get_writer(datasource.command(), &schema, overwrite)
             .await?;
@@ -365,6 +376,50 @@ impl ExtensionPlanner for PythonPhysicalPlanner {
             ),
         )))
     }
+}
+
+fn normalize_python_writer_input(
+    input: Arc<dyn ExecutionPlan>,
+    use_large_var_types: bool,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let input_schema = input.schema();
+    let output_schema = Arc::new(normalize_spark_arrow_schema(
+        input_schema.as_ref(),
+        use_large_var_types,
+    ));
+    if input_schema == output_schema {
+        return Ok(input);
+    }
+
+    let expressions = input_schema
+        .fields()
+        .iter()
+        .zip(output_schema.fields())
+        .enumerate()
+        .map(|(index, (input_field, output_field))| {
+            let column = Arc::new(Column::new(input_field.name(), index)) as Arc<dyn PhysicalExpr>;
+            let expression: Arc<dyn PhysicalExpr> = if input_field == output_field {
+                column
+            } else {
+                Arc::new(CastExpr::new_with_target_field(
+                    column,
+                    Arc::clone(output_field),
+                    None,
+                ))
+            };
+            (expression, output_field.name().clone())
+        })
+        .collect::<Vec<_>>();
+    let projection =
+        Arc::new(ProjectionExec::try_new(expressions, input)?) as Arc<dyn ExecutionPlan>;
+    if projection.schema() != output_schema {
+        return Err(DataFusionError::Plan(format!(
+            "Python writer projection produced schema {} instead of {}",
+            projection.schema(),
+            output_schema
+        )));
+    }
+    Ok(projection)
 }
 
 #[cfg(test)]

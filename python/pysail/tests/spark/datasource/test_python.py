@@ -1042,7 +1042,11 @@ def _create_writable_test_datasource():
             for row in iterator:
                 # Convert Row to dict for storage
                 self.data.append(dict(row.asDict()))
-            return {"partition_data": self.data, "count": len(self.data)}
+            return {
+                "partition_data": self.data,
+                "count": len(self.data),
+                "writer_schema": str(self.schema),
+            }
 
         def commit(self, messages):
             """Commit the write."""
@@ -1075,7 +1079,12 @@ def _create_writable_test_datasource():
                 self.batches.append(batch)
                 batch_count += 1
                 total_rows += batch.num_rows
-            return {"batch_count": batch_count, "total_rows": total_rows}
+            return {
+                "batch_count": batch_count,
+                "total_rows": total_rows,
+                "writer_schema": str(self.schema),
+                "batch_schemas": [str(batch.schema) for batch in self.batches],
+            }
 
         def commit(self, messages):
             """Commit the write."""
@@ -1164,6 +1173,79 @@ def test_python_arrow_write(spark, tmp_path):
     arrow_messages = _read_test_state(state_path).get("arrow_commit_messages")
     assert arrow_messages is not None
     assert len(arrow_messages) > 0
+
+
+@pytest.mark.parametrize("use_large_var_types", [False, True])
+def test_python_writers_materialize_parquet_view_types(spark, tmp_path, use_large_var_types):
+    parquet_path = tmp_path / "view_types.parquet"
+    row_state_path = tmp_path / "view_types_row_state.json"
+    arrow_state_path = tmp_path / "view_types_arrow_state.json"
+    writable_test_ds, datasource_name = _create_writable_test_datasource()
+    spark.dataSource.register(writable_test_ds)
+
+    key = "spark.sql.execution.arrow.useLargeVarTypes"
+    previous = spark.conf.get(key)
+    spark.conf.set(key, str(use_large_var_types).lower())
+    try:
+        spark.sql("SELECT 'top-level' AS label, CAST('bytes' AS BINARY) AS payload").write.parquet(str(parquet_path))
+        df = spark.read.parquet(str(parquet_path))
+
+        df.write.format(datasource_name).option("writer_type", "row").option("state_path", str(row_state_path)).save()
+        df.write.format(datasource_name).option("writer_type", "arrow").option(
+            "state_path", str(arrow_state_path)
+        ).save()
+    finally:
+        spark.conf.set(key, previous)
+
+    string_type = "large_string" if use_large_var_types else "string"
+    binary_type = "large_binary" if use_large_var_types else "binary"
+    expected_schema = f"label: {string_type} not null\npayload: {binary_type} not null"
+
+    row_messages = _read_test_state(row_state_path)["row_commit_messages"]
+    assert [row for message in row_messages for row in message["partition_data"]] == [
+        {"label": "top-level", "payload": "b'bytes'"}
+    ]
+    assert {message["writer_schema"] for message in row_messages} == {expected_schema}
+
+    arrow_messages = _read_test_state(arrow_state_path)["arrow_commit_messages"]
+    assert {message["writer_schema"] for message in arrow_messages} == {expected_schema}
+    assert {schema for message in arrow_messages for schema in message["batch_schemas"]} == {expected_schema}
+
+
+@pytest.mark.parametrize("use_large_var_types", [False, True])
+def test_python_arrow_writer_materializes_nested_parquet_view_types(spark, tmp_path, use_large_var_types):
+    parquet_path = tmp_path / "nested_view_types.parquet"
+    state_path = tmp_path / "nested_view_types_state.json"
+    writable_test_ds, datasource_name = _create_writable_test_datasource()
+    spark.dataSource.register(writable_test_ds)
+
+    key = "spark.sql.execution.arrow.useLargeVarTypes"
+    previous = spark.conf.get(key)
+    spark.conf.set(key, str(use_large_var_types).lower())
+    try:
+        spark.sql("SELECT 'top-level' AS label, CAST('bytes' AS BINARY) AS payload").write.parquet(str(parquet_path))
+        (
+            spark.read.parquet(str(parquet_path))
+            .selectExpr(
+                "named_struct('name', label, 'aliases', array(label), 'mapping', map(label, payload)) AS details"
+            )
+            .write.format(datasource_name)
+            .option("writer_type", "arrow")
+            .option("state_path", str(state_path))
+            .save()
+        )
+    finally:
+        spark.conf.set(key, previous)
+
+    expected_string = "large_string" if use_large_var_types else "string"
+    expected_binary = "large_binary" if use_large_var_types else "binary"
+    messages = _read_test_state(state_path)["arrow_commit_messages"]
+    schemas = {message["writer_schema"] for message in messages} | {
+        schema for message in messages for schema in message["batch_schemas"]
+    }
+    assert schemas
+    assert all("view" not in schema.lower() for schema in schemas)
+    assert all(expected_string in schema and expected_binary in schema for schema in schemas)
 
 
 def test_python_write_overwrite_mode(spark, tmp_path):

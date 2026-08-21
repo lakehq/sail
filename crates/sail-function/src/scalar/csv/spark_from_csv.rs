@@ -32,8 +32,8 @@ const DEFAULT_SESSION_TIMEZONE: &str = "UTC";
 /// and returns a `StructArray` with the parsed fields.
 ///
 /// Parameters include:
-/// - The first input is a `StringArray` containing the CSV-formatted values.
-/// - The second input is a `StringArray` specifying the schema for parsing, using SQL-like types
+/// - The first input is a string array containing the CSV-formatted values.
+/// - The second input is a string array specifying the schema for parsing, using SQL-like types
 ///   (e.g., "name STRING, age INT") for the CSV data.
 /// - Optionally, a third input can be provided as a `MapArray` containing options related to the parsing.
 ///   This may include a "sep" field to specify a custom separator, with the default being a comma (",").
@@ -195,16 +195,17 @@ impl ScalarUDFImpl for SparkFromCSV {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         match arg_types {
-            [DataType::Utf8, DataType::Utf8] | [DataType::LargeUtf8, DataType::Utf8] => {
-                Ok(vec![arg_types[0].clone(), arg_types[1].clone()])
-            }
+            [
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+            ] => Ok(vec![arg_types[0].clone(), DataType::Utf8]),
             [
                 DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
                 DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
                 DataType::Map(_, _),
             ] => Ok(vec![
                 arg_types[0].clone(),
-                arg_types[1].clone(),
+                DataType::Utf8,
                 arg_types[2].clone(),
             ]),
             _ => plan_err!(
@@ -225,7 +226,7 @@ impl ScalarUDFImpl for SparkFromCSV {
 ///
 /// # Parameters
 /// - `args`: An array of input arrays, where:
-///   - `args[0]` is a `StringArray` containing the CSV data lines.
+///   - `args[0]` is a string array containing the CSV data lines.
 ///   - `args[1]` is a `StringArray` containing the schema definition.
 ///   - `args[2]` (optional) is a `MapArray` of options like delimiters, timestamp formats, etc.
 ///
@@ -246,7 +247,6 @@ fn spark_from_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Arr
         );
     };
 
-    let array: &StringArray = downcast_arg!(&args[0], StringArray);
     let schema_str: &StringArray = downcast_arg!(&args[1], StringArray);
     let schema_str: &str = if schema_str.is_empty() {
         return exec_err!(
@@ -264,7 +264,7 @@ fn spark_from_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Arr
     let options: SparkFromCSVOptions = if let Some(options) = args.get(2) {
         let map = downcast_arg!(options, MapArray);
         reject_null_entries(map, CsvFunction::From)?;
-        if array.null_count() < array.len() {
+        if args[0].null_count() < args[0].len() {
             SparkFromCSVOptions::from_map(map)?
         } else {
             SparkFromCSVOptions::default()
@@ -275,24 +275,42 @@ fn spark_from_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Arr
 
     let fields: Fields = parse_fields(schema_str, session_timezone)?;
 
+    match args[0].data_type() {
+        DataType::Utf8 => parse_csv_rows(args[0].as_string::<i32>(), fields, &options),
+        DataType::LargeUtf8 => parse_csv_rows(args[0].as_string::<i64>(), fields, &options),
+        DataType::Utf8View => parse_csv_rows(args[0].as_string_view(), fields, &options),
+        data_type => exec_err!(
+            "`{}` function requires string input, got {data_type}",
+            SparkFromCSV::FROM_CSV_NAME
+        ),
+    }
+}
+
+fn parse_csv_rows<'a, S>(
+    array: &'a S,
+    fields: Fields,
+    options: &SparkFromCSVOptions,
+) -> Result<ArrayRef>
+where
+    S: Array,
+    &'a S: StringArrayType<'a>,
+{
     let mut children_scalars: Vec<Vec<ScalarValue>> =
         vec![Vec::with_capacity(array.len()); fields.len()];
     let mut validity: Vec<bool> = Vec::with_capacity(array.len());
 
-    for i in 0..array.len() {
-        if array.is_null(i) {
-            for j in 0..children_scalars.len() {
-                children_scalars[j].push(ScalarValue::try_new_null(fields[j].data_type())?);
-            }
-            validity.push(false);
-        } else {
-            let line: &str = array.value(i);
-            let values: Vec<ScalarValue> =
-                parse_csv_line_to_scalar_values(line, &options, &fields)?;
+    for row in array.iter() {
+        if let Some(line) = row {
+            let values: Vec<ScalarValue> = parse_csv_line_to_scalar_values(line, options, &fields)?;
             for (j, value) in values.into_iter().enumerate() {
                 children_scalars[j].push(value);
             }
             validity.push(true);
+        } else {
+            for j in 0..children_scalars.len() {
+                children_scalars[j].push(ScalarValue::try_new_null(fields[j].data_type())?);
+            }
+            validity.push(false);
         }
     }
 

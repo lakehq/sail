@@ -5,8 +5,8 @@
 //! and shuffles consume them. Spark's Arrow result mapping exposes `StringType` and `BinaryType`
 //! as offset-based `Utf8`/`LargeUtf8` and `Binary`/`LargeBinary`; it does not accept `Utf8View`
 //! or `BinaryView` for those logical types. `optimizer.expand_views_at_output` therefore coerces
-//! only the root output to `LargeUtf8` and `LargeBinary`, reusing an existing root projection when
-//! possible.
+//! only the root output to regular `Utf8` and `Binary`, reusing an existing root projection when
+//! possible. The Spark transport boundary applies the configured regular or large offset width.
 //!
 //! DataFusion's built-in output coercion handles top-level view fields only. Spark results can
 //! also contain views nested in lists, structs, maps, dictionaries, unions, and run-end encoded
@@ -88,11 +88,11 @@ fn expand_output_data_type(data_type: &DataType, transformed: &mut bool) -> Data
     match data_type {
         DataType::Utf8View => {
             *transformed = true;
-            DataType::LargeUtf8
+            DataType::Utf8
         }
         DataType::BinaryView => {
             *transformed = true;
-            DataType::LargeBinary
+            DataType::Binary
         }
         DataType::List(field) => DataType::List(expand_output_field(field, transformed)),
         DataType::ListView(field) => DataType::ListView(expand_output_field(field, transformed)),

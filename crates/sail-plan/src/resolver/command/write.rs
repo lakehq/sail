@@ -235,6 +235,7 @@ impl PlanResolver<'_> {
         let mut write_format = format.unwrap_or_default();
         let mut sink_info = SinkInfo {
             input: input.clone(),
+            arrow_use_large_var_types: self.config.arrow_use_large_var_types,
             // The mode will be set later so the value here is just a placeholder.
             mode: SinkMode::ErrorIfExists,
             partition_by: partition_by.clone(),

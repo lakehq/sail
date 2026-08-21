@@ -472,9 +472,11 @@
   type: boolean
   default: "true"
   description: |
-    (Reading) Whether to force view types for binary and string columns when reading Parquet files.
-    If the value is `true`, the Parquet reader will read columns of the `Utf8` or `Utf8Large` types as the `Utf8View` type,
-    and the `Binary` or `BinaryLarge` types as the `BinaryView` type.
+    (Reading) Whether to use view types where they are safe for binary and string columns when reading Parquet files.
+    If the value is `true`, string columns use `Utf8View`, top-level binary columns use `BinaryView`,
+    and nested binary columns remain offset-based for compatibility with Spark binary functions.
+    If the value is `false`, Spark-equivalent string and binary encodings are canonicalized to
+    regular `Utf8` and `Binary` types.
   experimental: true
 
 - key: parquet.binary_as_string
@@ -865,9 +867,9 @@
   default: "true"
   description: |
     Whether the optimizer should coerce view types to non-view types at query output.
-    If the value is `true`, `Utf8View` is coerced to `LargeUtf8` and `BinaryView` is coerced
-    to `LargeBinary` before results leave the query boundary. If the value is `false`, view
-    types pass through to the client.
+    If the value is `true`, Spark Connect emits regular `Utf8` and `Binary` arrays by default,
+    or `LargeUtf8` and `LargeBinary` when `spark.sql.execution.arrow.useLargeVarTypes` is enabled.
+    If the value is `false`, view types pass through to the client.
   experimental: true
 
 - key: spark.session_timeout_secs

@@ -16,6 +16,7 @@ pub mod predicate;
 pub mod spark_cast_string_to_int32;
 pub mod spark_struct_rename;
 pub mod spark_to_string;
+mod spark_type_coercion;
 pub mod string;
 pub mod struct_function;
 pub mod table_input;

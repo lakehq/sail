@@ -41,6 +41,7 @@ impl TableFormat for ConsoleTableFormat {
     async fn create_writer(&self, ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
         let SinkInfo {
             input,
+            arrow_use_large_var_types: _,
             mode,
             partition_by,
             bucket_by,

@@ -1,14 +1,20 @@
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use datafusion::arrow::compute::concat_batches;
+use datafusion::execution::SendableRecordBatchStream;
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::prelude::SessionContext;
 use fastrace::Span;
 use fastrace::collector::SpanContext;
 use fastrace::future::FutureExt;
-use futures::stream;
+use futures::{StreamExt, stream};
 use log::{debug, warn};
 use sail_common::spec;
+use sail_common_datafusion::array::record_batch::{
+    cast_record_batch_positionally, normalize_spark_arrow_schema,
+};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::job::JobService;
 use sail_plan::resolve_and_execute_plan;
@@ -110,6 +116,31 @@ impl Stream for ExecutePlanResponseStream {
     }
 }
 
+fn normalize_arrow_output_stream(
+    stream: SendableRecordBatchStream,
+    use_large_var_types: bool,
+) -> SparkResult<SendableRecordBatchStream> {
+    let input_schema = stream.schema();
+    let output_schema = Arc::new(normalize_spark_arrow_schema(
+        input_schema.as_ref(),
+        use_large_var_types,
+    ));
+    if output_schema == input_schema {
+        return Ok(stream);
+    }
+    let batches = {
+        let output_schema = Arc::clone(&output_schema);
+        stream.map(move |batch| {
+            batch
+                .and_then(|batch| cast_record_batch_positionally(batch, Arc::clone(&output_schema)))
+        })
+    };
+    Ok(Box::pin(RecordBatchStreamAdapter::new(
+        output_schema,
+        batches,
+    )))
+}
+
 async fn handle_execute_plan(
     ctx: &SessionContext,
     plan: spec::Plan,
@@ -120,10 +151,22 @@ async fn handle_execute_plan(
     let spark = ctx.extension::<SparkSession>()?;
     let service = ctx.extension::<JobService>()?;
     let operation_id = metadata.operation_id.clone();
-    let (plan, _) = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
+    let plan_config = spark.plan_config()?;
+    let use_large_var_types = plan_config.arrow_use_large_var_types;
+    let normalize_arrow_output = ctx
+        .state()
+        .config_options()
+        .optimizer
+        .expand_views_at_output;
+    let (plan, _) = resolve_and_execute_plan(ctx, plan_config, plan).await?;
     let stream = {
         let span = Span::enter_with_parent("JobRunner::execute", &span);
         service.runner().execute(ctx, plan).in_span(span).await?
+    };
+    let stream = if normalize_arrow_output {
+        normalize_arrow_output_stream(stream, use_large_var_types)?
+    } else {
+        stream
     };
     let _guard = span.set_local_parent();
     let executor = Executor::new(

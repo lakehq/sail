@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, StringArray, as_primitive_array};
+use datafusion::arrow::array::{
+    ArrayRef, AsArray, StringArray, StringArrayType, as_primitive_array,
+};
 use datafusion::arrow::datatypes::{DataType, Int32Type};
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::{Result, ScalarValue, exec_err};
@@ -38,13 +40,8 @@ impl ScalarUDFImpl for SparkConv {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match arg_types.first() {
-            Some(DataType::Utf8) => Ok(DataType::Utf8),
-            Some(DataType::Utf8View) => Ok(DataType::Utf8View),
-            Some(DataType::LargeUtf8) => Ok(DataType::LargeUtf8),
-            _ => Ok(DataType::Utf8),
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -172,29 +169,15 @@ fn invoke_vectorized(
     let result: StringArray = match array.data_type() {
         DataType::Utf8 => {
             let strings = as_generic_string_array::<i32>(array)?;
-            strings
-                .iter()
-                .map(|opt| {
-                    opt.and_then(|s| {
-                        i64::from_str_radix(s, from as u32)
-                            .ok()
-                            .map(|n| to_radix_string(n, to as u32))
-                    })
-                })
-                .collect()
+            convert_string_array(strings, from, to)
         }
         DataType::LargeUtf8 => {
             let strings = as_generic_string_array::<i64>(array)?;
-            strings
-                .iter()
-                .map(|opt| {
-                    opt.and_then(|s| {
-                        i64::from_str_radix(s, from as u32)
-                            .ok()
-                            .map(|n| to_radix_string(n, to as u32))
-                    })
-                })
-                .collect()
+            convert_string_array(strings, from, to)
+        }
+        DataType::Utf8View => {
+            let strings = array.as_string_view();
+            convert_string_array(strings, from, to)
         }
         DataType::Int32 => {
             let ints = as_primitive_array::<Int32Type>(array);
@@ -205,7 +188,7 @@ fn invoke_vectorized(
         _ => {
             return Err(unsupported_data_types_exec_err(
                 "spark_conv",
-                "(Utf8 | LargeUtf8 | Int32, Int32, Int32)",
+                "(Utf8 | Utf8View | LargeUtf8 | Int32, Int32, Int32)",
                 &[
                     array.data_type().clone(),
                     from_base.data_type(),
@@ -216,6 +199,22 @@ fn invoke_vectorized(
     };
 
     Ok(ColumnarValue::Array(Arc::new(result)))
+}
+
+fn convert_string_array<'a, S>(strings: &'a S, from: i32, to: i32) -> StringArray
+where
+    &'a S: StringArrayType<'a>,
+{
+    strings
+        .iter()
+        .map(|value| {
+            value.and_then(|value| {
+                i64::from_str_radix(value, from as u32)
+                    .ok()
+                    .map(|number| to_radix_string(number, to as u32))
+            })
+        })
+        .collect()
 }
 
 fn to_radix_string(mut n: i64, radix: u32) -> String {

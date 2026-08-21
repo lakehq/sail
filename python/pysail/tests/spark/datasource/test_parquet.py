@@ -8,6 +8,7 @@ import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql import Row
 
+from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 from pysail.testing.spark.utils.files import get_data_directory_size
 from pysail.testing.spark.utils.sql import escape_sql_identifier, escape_sql_string_literal
 
@@ -132,6 +133,167 @@ def test_parquet_read_options(spark, sample_df, tmp_path):
     read_df = spark.read.option("binaryAsString", "false").option("pruning", "true").parquet(path)
     assert sample_df.count() == read_df.count()
     assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
+
+
+@pytest.mark.parametrize(
+    ("use_large_var_types", "expected_string_type", "expected_binary_type"),
+    [
+        (False, pa.string(), pa.binary()),
+        (True, pa.large_string(), pa.large_binary()),
+    ],
+)
+def test_parquet_arrow_output_honors_large_var_types(
+    spark,
+    tmp_path,
+    use_large_var_types,
+    expected_string_type,
+    expected_binary_type,
+):
+    path = tmp_path / "parquet_arrow_output_var_types.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "label": ["value"],
+                "payload": [b"bytes"],
+            }
+        ),
+        path,
+    )
+
+    key = "spark.sql.execution.arrow.useLargeVarTypes"
+    previous = spark.conf.get(key)
+    spark.conf.set(key, str(use_large_var_types).lower())
+    try:
+        table, _ = (
+            spark.read.parquet(str(path))
+            .selectExpr(
+                "label",
+                "payload",
+                "named_struct('name', label, 'aliases', array(label), 'mapping', map(label, payload)) AS details",
+            )
+            ._to_table()  # noqa: SLF001
+        )
+    finally:
+        spark.conf.set(key, previous)
+
+    schema = table.schema
+    assert schema.field("label").type == expected_string_type
+    assert schema.field("payload").type == expected_binary_type
+    details_type = schema.field("details").type
+    assert details_type.field("name").type == expected_string_type
+    assert details_type.field("aliases").type.value_type == expected_string_type
+    mapping_type = details_type.field("mapping").type
+    assert mapping_type.key_type == expected_string_type
+    assert mapping_type.item_type == expected_binary_type
+
+
+def test_arrow_output_width_is_selected_per_action_for_regular_empty_and_command_results(spark):
+    df = spark.sql(
+        """
+        SELECT
+          'value' AS label,
+          CAST('bytes' AS BINARY) AS payload,
+          named_struct('items', array('nested'), 'mapping', map('key', CAST('value' AS BINARY)))
+            AS details
+        """
+    )
+    key = "spark.sql.execution.arrow.useLargeVarTypes"
+    previous = spark.conf.get(key)
+    try:
+        for use_large_var_types in (False, True):
+            spark.conf.set(key, str(use_large_var_types).lower())
+            expected_string = pa.large_string() if use_large_var_types else pa.string()
+            expected_binary = pa.large_binary() if use_large_var_types else pa.binary()
+
+            table, _ = df._to_table()  # noqa: SLF001
+            empty, _ = df.where("false")._to_table()  # noqa: SLF001
+            details = table.schema.field("details").type
+
+            assert table.schema.field("label").type == expected_string
+            assert table.schema.field("payload").type == expected_binary
+            assert details.field("items").type.value_type == expected_string
+            assert details.field("mapping").type.key_type == expected_string
+            assert details.field("mapping").type.item_type == expected_binary
+            assert empty.num_rows == 0
+            assert empty.schema.field("label").type == expected_string
+            assert empty.schema.field("payload").type == expected_binary
+            empty_details = empty.schema.field("details").type
+            assert empty_details.field("items").type.value_type == expected_string
+            assert empty_details.field("mapping").type.item_type == expected_binary
+
+            command, _ = spark.sql(
+                "CREATE OR REPLACE TEMP VIEW arrow_output_command AS SELECT 'value' AS value"
+            )._to_table()  # noqa: SLF001
+            assert command.to_pylist() == [{"value": True}]
+
+            show_tables, _ = spark.sql("SHOW TABLES")._to_table()  # noqa: SLF001
+            assert show_tables.schema.field(0).type == expected_string
+            assert show_tables.schema.field(1).type == expected_string
+    finally:
+        spark.sql("DROP VIEW IF EXISTS arrow_output_command").collect()
+        spark.conf.set(key, previous)
+
+
+def test_arrow_output_preserves_views_when_output_expansion_is_disabled(tmp_path):
+    path = tmp_path / "parquet_arrow_output_views_disabled.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "label": ["value"],
+                "payload": [b"bytes"],
+            }
+        ),
+        path,
+    )
+
+    envs = {"SAIL_OPTIMIZER__EXPAND_VIEWS_AT_OUTPUT": "false"}
+    with spark_connect_server(envs=envs) as server, spark_session_factory(server.remote) as sessions:
+        isolated_spark = sessions.create()
+        table, _ = isolated_spark.read.parquet(str(path))._to_table()  # noqa: SLF001
+
+    assert table.schema.field("label").type == pa.string_view()
+    assert table.schema.field("payload").type == pa.binary_view()
+    assert table.to_pylist() == [{"label": "value", "payload": b"bytes"}]
+
+
+@pytest.mark.parametrize("force_view_types", [False, True])
+@pytest.mark.parametrize(
+    ("left_type", "right_type", "left_value", "right_value"),
+    [
+        (pa.string(), pa.large_string(), "left", "right"),
+        (pa.string(), pa.string_view(), "left", "right"),
+        (pa.binary(), pa.large_binary(), b"left", b"right"),
+        (pa.binary(), pa.binary(4), b"left", b"rght"),
+    ],
+)
+def test_parquet_merge_canonicalizes_spark_equivalent_arrow_encodings(
+    spark,
+    tmp_path,
+    force_view_types,
+    left_type,
+    right_type,
+    left_value,
+    right_value,
+):
+    path = tmp_path / "spark_equivalent_arrow_encodings"
+    path.mkdir()
+    pq.write_table(
+        pa.Table.from_arrays([pa.array([left_value], type=left_type)], names=["value"]),
+        path / "left.parquet",
+    )
+    pq.write_table(
+        pa.Table.from_arrays([pa.array([right_value], type=right_type)], names=["value"]),
+        path / "right.parquet",
+    )
+
+    rows = (
+        spark.read.option("mergeSchema", "true")
+        .option("schema_force_view_types", str(force_view_types).lower())
+        .parquet(str(path))
+        .collect()
+    )
+
+    assert {row.value for row in rows} == {left_value, right_value}
 
 
 @pytest.mark.parametrize(

@@ -21,6 +21,7 @@ use datafusion_expr::{
 };
 
 use crate::functions_nested_utils::make_scalar_function;
+use crate::scalar::spark_type_coercion::spark_view_compatible_type;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayIntersect {
@@ -140,16 +141,21 @@ impl ScalarUDFImpl for ArrayIntersect {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        match arg_types.as_slice() {
-            [DataType::List(field), DataType::LargeList(_)] => Ok(vec![
-                DataType::LargeList(field.clone()),
-                arg_types[1].clone(),
-            ]),
-            [DataType::LargeList(_), DataType::List(field)] => Ok(vec![
-                arg_types[0].clone(),
-                DataType::LargeList(field.clone()),
-            ]),
-            _ => Ok(arg_types),
+        let left = &arg_types[0];
+        let right = &arg_types[1];
+        match (left, right) {
+            (DataType::Null, DataType::Null) => Ok(arg_types),
+            (DataType::Null, other) | (other, DataType::Null) => {
+                Ok(vec![other.clone(), other.clone()])
+            }
+            _ => {
+                let common_type = spark_view_compatible_type(left, right).ok_or_else(|| {
+                    DataFusionError::Plan(format!(
+                        "Spark `array_intersect` cannot find a common element type for '{left:?}' and '{right:?}'"
+                    ))
+                })?;
+                Ok(vec![common_type.clone(), common_type])
+            }
         }
     }
 }
@@ -472,6 +478,19 @@ mod tests {
                 ])?
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_intersect_coerces_view_and_regular_string_elements() -> Result<()> {
+        let udf = ArrayIntersect::new();
+        let view = DataType::List(Arc::new(Field::new("element", DataType::Utf8View, true)));
+        let regular = DataType::List(Arc::new(Field::new("element", DataType::Utf8, true)));
+
+        assert_eq!(
+            udf.coerce_types(&[view, regular.clone()])?,
+            vec![regular.clone(), regular]
+        );
         Ok(())
     }
 }

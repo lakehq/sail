@@ -135,6 +135,19 @@ impl SchemaEvolver {
             return true;
         }
 
+        if matches!(
+            (table_type, input_type),
+            (
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+            ) | (
+                DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
+                DataType::Binary | DataType::LargeBinary | DataType::BinaryView
+            )
+        ) {
+            return true;
+        }
+
         matches!(
             (table_type, input_type),
             (
@@ -168,7 +181,7 @@ impl SchemaEvolver {
             (table_type, input_type),
             (
                 DataType::FixedSizeBinary(_),
-                DataType::Binary | DataType::LargeBinary
+                DataType::Binary | DataType::LargeBinary | DataType::BinaryView
             )
         ) || Self::decimal_precision_contracts(table_type, input_type)
     }
@@ -235,7 +248,7 @@ impl SchemaEvolver {
                 }
                 table_fields.iter().zip(input_fields.iter()).all(|(t, i)| {
                     t.name() == i.name()
-                        && Self::nested_types_equivalent(t.data_type(), i.data_type())
+                        && Self::field_types_equivalent(t.data_type(), i.data_type())
                 })
             }
             (
@@ -247,7 +260,7 @@ impl SchemaEvolver {
                 | DataType::ListView(input_child)
                 | DataType::LargeList(input_child)
                 | DataType::LargeListView(input_child),
-            ) => Self::nested_types_equivalent(table_child.data_type(), input_child.data_type()),
+            ) => Self::field_types_equivalent(table_child.data_type(), input_child.data_type()),
             (
                 DataType::Map(table_entries, table_sorted),
                 DataType::Map(input_entries, input_sorted),
@@ -263,7 +276,7 @@ impl SchemaEvolver {
                     }
                     table_fields.iter().zip(input_fields.iter()).all(|(t, i)| {
                         t.name() == i.name()
-                            && Self::nested_types_equivalent(t.data_type(), i.data_type())
+                            && Self::field_types_equivalent(t.data_type(), i.data_type())
                     })
                 } else {
                     false
@@ -928,6 +941,79 @@ mod tests {
 
         SchemaEvolver::validate_exact_schema(table_schema.as_ref(), &iceberg_schema, &input_schema)
             .expect("int -> long promotion should be allowed");
+    }
+
+    #[test]
+    fn spark_view_types_are_equivalent_inside_iceberg_containers() {
+        let table_type = DataType::Struct(
+            vec![
+                Field::new("text", DataType::Utf8, true),
+                Field::new("bytes", DataType::Binary, true),
+                Field::new(
+                    "items",
+                    DataType::List(Arc::new(Field::new("element", DataType::Utf8, true))),
+                    true,
+                ),
+                Field::new(
+                    "mapping",
+                    DataType::Map(
+                        Arc::new(Field::new(
+                            "entries",
+                            DataType::Struct(
+                                vec![
+                                    Field::new("key", DataType::Utf8, false),
+                                    Field::new("value", DataType::Binary, true),
+                                ]
+                                .into(),
+                            ),
+                            false,
+                        )),
+                        false,
+                    ),
+                    true,
+                ),
+            ]
+            .into(),
+        );
+        let input_type = DataType::Struct(
+            vec![
+                Field::new("text", DataType::Utf8View, true),
+                Field::new("bytes", DataType::BinaryView, true),
+                Field::new(
+                    "items",
+                    DataType::List(Arc::new(Field::new("element", DataType::Utf8View, true))),
+                    true,
+                ),
+                Field::new(
+                    "mapping",
+                    DataType::Map(
+                        Arc::new(Field::new(
+                            "entries",
+                            DataType::Struct(
+                                vec![
+                                    Field::new("key", DataType::Utf8View, false),
+                                    Field::new("value", DataType::BinaryView, true),
+                                ]
+                                .into(),
+                            ),
+                            false,
+                        )),
+                        false,
+                    ),
+                    true,
+                ),
+            ]
+            .into(),
+        );
+
+        assert!(SchemaEvolver::field_types_equivalent(
+            &table_type,
+            &input_type
+        ));
+        assert!(SchemaEvolver::is_safe_write_cast(
+            &DataType::FixedSizeBinary(16),
+            &DataType::BinaryView,
+        ));
     }
 
     #[test]

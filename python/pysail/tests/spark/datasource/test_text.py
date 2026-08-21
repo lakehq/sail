@@ -23,6 +23,19 @@ def test_text_read_write_basic(spark, sample_df, tmp_path):
     assert sorted(joined_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
 
 
+def test_text_write_accepts_parquet_view_string(spark, tmp_path):
+    parquet_path = str(tmp_path / "text_view_source")
+    text_path = str(tmp_path / "text_view_output")
+    spark.createDataFrame([Row(value="alpha"), Row(value="beta")]).write.parquet(parquet_path)
+
+    spark.read.parquet(parquet_path).write.text(text_path)
+
+    assert sorted(spark.read.text(text_path).collect(), key=safe_sort_key) == [
+        Row(value="alpha"),
+        Row(value="beta"),
+    ]
+
+
 def test_text_path_glob_filter(spark, tmp_path):
     path = tmp_path / "text_path_glob_filter"
     path.mkdir()

@@ -4,8 +4,8 @@ use std::io::Write;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use datafusion::arrow::array::{Array, RecordBatch, StringArray};
-use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::array::{Array, AsArray, RecordBatch, StringArrayType};
+use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::arrow::error::ArrowError;
 use datafusion::common::runtime::SpawnedTask;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -73,18 +73,26 @@ impl<W: Write> TextWriter<W> {
         }
 
         let column = batch.column(0);
-        let string_array = column
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or_else(|| {
-                ArrowError::CastError("Failed to cast column to StringArray".to_string())
-            })?;
+        match column.data_type() {
+            DataType::Utf8 => self.write_strings(column.as_string::<i32>()),
+            DataType::LargeUtf8 => self.write_strings(column.as_string::<i64>()),
+            DataType::Utf8View => self.write_strings(column.as_string_view()),
+            data_type => Err(ArrowError::CastError(format!(
+                "Text data source requires a string column, got {data_type}"
+            ))
+            .into()),
+        }
+    }
 
+    fn write_strings<'a, S>(&mut self, string_array: &'a S) -> Result<()>
+    where
+        &'a S: StringArrayType<'a>,
+    {
         // BufWriter uses a buffer size of 8KB, so double this and flush once we have more than 8KB
         let mut buffer = Vec::with_capacity(16 * 1024);
-        for row_idx in 0..batch.num_rows() {
-            if !string_array.is_null(row_idx) {
-                buffer.extend_from_slice(string_array.value(row_idx).as_bytes());
+        for value in string_array.iter() {
+            if let Some(value) = value {
+                buffer.extend_from_slice(value.as_bytes());
             }
             if buffer.len() > 8 * 1024 {
                 self.writer.write_all(&buffer)?;
@@ -100,7 +108,7 @@ impl<W: Write> TextWriter<W> {
         Ok(())
     }
 
-    #[expect(unused)]
+    #[cfg_attr(not(test), expect(unused))]
     fn into_inner(self) -> W {
         self.writer
     }
@@ -211,5 +219,47 @@ impl DataSink for TextSink {
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
         FileSink::write_all(self, data, context).await
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod tests {
+    use datafusion::arrow::array::{ArrayRef, LargeStringArray, StringArray, StringViewArray};
+    use datafusion::arrow::datatypes::{Field, Schema};
+
+    use super::*;
+
+    #[test]
+    fn text_writer_accepts_all_spark_string_arrays() {
+        let arrays: Vec<ArrayRef> = vec![
+            Arc::new(StringArray::from(vec![
+                Some("short"),
+                None,
+                Some("long value"),
+            ])),
+            Arc::new(LargeStringArray::from(vec![
+                Some("short"),
+                None,
+                Some("long value"),
+            ])),
+            Arc::new(StringViewArray::from(vec![
+                Some("short"),
+                None,
+                Some("long value"),
+            ])),
+        ];
+
+        for array in arrays {
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "value",
+                array.data_type().clone(),
+                true,
+            )]));
+            let batch = RecordBatch::try_new(schema, vec![array]).unwrap();
+            let mut writer = TextWriter::new(Vec::new(), b'\n');
+            writer.write(&batch).unwrap();
+            assert_eq!(writer.into_inner(), b"short\n\nlong value\n");
+        }
     }
 }

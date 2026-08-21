@@ -16,9 +16,9 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, BooleanArray, Date32Array, Float32Array, Float64Array, Int32Array, Int64Array,
-    MapArray, StringArray, StructArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, new_empty_array,
+    Array, ArrayRef, AsArray, BooleanArray, Date32Array, FixedSizeBinaryArray, Float32Array,
+    Float64Array, Int32Array, Int64Array, MapArray, StructArray, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, new_empty_array,
 };
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
@@ -274,8 +274,10 @@ pub fn scalar_to_iceberg_literal(
         SV::UInt64(Some(v)) => Ok(Literal::Primitive(PL::Long(*v as i64))),
         SV::Float32(Some(v)) => Ok(Literal::Primitive(PL::Float(OrderedFloat(*v)))),
         SV::Float64(Some(v)) => Ok(Literal::Primitive(PL::Double(OrderedFloat(*v)))),
-        SV::Utf8(Some(s)) | SV::LargeUtf8(Some(s)) => Ok(Literal::Primitive(PL::String(s.clone()))),
-        SV::Binary(Some(b)) | SV::LargeBinary(Some(b)) => {
+        SV::Utf8(Some(s)) | SV::LargeUtf8(Some(s)) | SV::Utf8View(Some(s)) => {
+            Ok(Literal::Primitive(PL::String(s.clone())))
+        }
+        SV::Binary(Some(b)) | SV::LargeBinary(Some(b)) | SV::BinaryView(Some(b)) => {
             Ok(Literal::Primitive(PL::Binary(b.clone())))
         }
         SV::Date32(Some(v)) => Ok(Literal::Primitive(PL::Int(*v))),
@@ -347,9 +349,36 @@ pub fn array_value_to_literal(array: &ArrayRef, row: usize) -> Option<Literal> {
             ))))
         }
         ArrowDataType::Utf8 => {
-            let a = array.as_any().downcast_ref::<StringArray>()?;
+            let a = array.as_string::<i32>();
             Some(Literal::Primitive(PrimitiveLiteral::String(
                 a.value(row).to_string(),
+            )))
+        }
+        ArrowDataType::LargeUtf8 => {
+            let a = array.as_string::<i64>();
+            Some(Literal::Primitive(PrimitiveLiteral::String(
+                a.value(row).to_string(),
+            )))
+        }
+        ArrowDataType::Utf8View => {
+            let a = array.as_string_view();
+            Some(Literal::Primitive(PrimitiveLiteral::String(
+                a.value(row).to_string(),
+            )))
+        }
+        ArrowDataType::Binary => Some(Literal::Primitive(PrimitiveLiteral::Binary(
+            array.as_binary::<i32>().value(row).to_vec(),
+        ))),
+        ArrowDataType::LargeBinary => Some(Literal::Primitive(PrimitiveLiteral::Binary(
+            array.as_binary::<i64>().value(row).to_vec(),
+        ))),
+        ArrowDataType::BinaryView => Some(Literal::Primitive(PrimitiveLiteral::Binary(
+            array.as_binary_view().value(row).to_vec(),
+        ))),
+        ArrowDataType::FixedSizeBinary(_) => {
+            let a = array.as_any().downcast_ref::<FixedSizeBinaryArray>()?;
+            Some(Literal::Primitive(PrimitiveLiteral::Binary(
+                a.value(row).to_vec(),
             )))
         }
         ArrowDataType::Date32 => {
@@ -498,6 +527,24 @@ mod tests {
         assert_eq!(
             literal,
             Literal::Primitive(PrimitiveLiteral::Long(9_999_999))
+        );
+    }
+
+    #[test]
+    #[expect(clippy::expect_used)]
+    fn test_array_value_to_literal_supports_view_types() {
+        use datafusion::arrow::array::{BinaryViewArray, StringViewArray};
+
+        let strings = Arc::new(StringViewArray::from(vec![Some("partition")])) as ArrayRef;
+        assert_eq!(
+            array_value_to_literal(&strings, 0).expect("string literal"),
+            Literal::Primitive(PrimitiveLiteral::String("partition".to_string()))
+        );
+
+        let binary = Arc::new(BinaryViewArray::from(vec![Some(b"bytes".as_slice())])) as ArrayRef;
+        assert_eq!(
+            array_value_to_literal(&binary, 0).expect("binary literal"),
+            Literal::Primitive(PrimitiveLiteral::Binary(b"bytes".to_vec()))
         );
     }
 }

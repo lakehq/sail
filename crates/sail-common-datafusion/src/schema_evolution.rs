@@ -537,12 +537,9 @@ fn validate_map_entries_compatibility(
         return exec_err!("map entries must use struct types");
     };
 
-    for target_field in target_fields {
-        // Arrow map key/value fields are structural wrappers without column-mapping metadata.
-        match source_fields
-            .iter()
-            .find(|source| source.name() == target_field.name())
-        {
+    for (index, target_field) in target_fields.iter().enumerate() {
+        // Arrow map key/value fields are positional structural wrappers.
+        match source_fields.get(index) {
             Some(source_field)
                 if can_cast_field_with_schema_evolution(source_field, target_field, matching)? => {}
             Some(source_field) => {
@@ -826,10 +823,11 @@ fn cast_array_with_schema_evolution_inner(
         ),
         DataType::List(target_elem) => {
             let Some(source_list) = source.as_any().downcast_ref::<ListArray>() else {
-                return exec_err!(
-                    "Cannot cast column of type {} to list type. Source must be a list to cast to list.",
-                    source.data_type()
-                );
+                return Ok(cast_with_options(
+                    source,
+                    target_field.data_type(),
+                    cast_options,
+                )?);
             };
             let casted_values = cast_array_with_schema_evolution_inner(
                 source_list.values(),
@@ -914,10 +912,10 @@ fn cast_array_with_schema_evolution_inner(
             let mut kv_arrays: Vec<ArrayRef> = Vec::with_capacity(target_kv_fields.len());
             let mut kv_fields: Vec<Arc<Field>> = Vec::with_capacity(target_kv_fields.len());
 
-            for target_child in target_kv_fields {
-                // Match the synthetic key/value wrapper by name, then apply mapping recursively.
+            for (index, target_child) in target_kv_fields.iter().enumerate() {
+                // Arrow map key/value fields are positional structural wrappers.
                 kv_fields.push(Arc::clone(target_child));
-                match source_map.entries().column_by_name(target_child.name()) {
+                match source_map.entries().columns().get(index) {
                     Some(source_child) => kv_arrays.push(cast_array_with_schema_evolution_inner(
                         source_child,
                         target_child.as_ref(),

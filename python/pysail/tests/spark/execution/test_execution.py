@@ -1,4 +1,5 @@
 import pandas as pd
+import pyarrow as pa
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pandas.testing import assert_frame_equal
@@ -275,6 +276,52 @@ def test_parquet_utf8_view_across_cluster_shuffle(spark, tmp_path):
     result = df.repartition(4, "key").groupBy("key").count().orderBy("key").toPandas()
     expected = pd.DataFrame({"key": ["alpha", "beta"], "count": [2, 1]}).astype({"count": "int64"})
     assert_frame_equal(result, expected)
+
+
+@pytest.mark.parametrize(
+    ("use_large_var_types", "expected_string_type", "expected_binary_type"),
+    [
+        (False, pa.string(), pa.binary()),
+        (True, pa.large_string(), pa.large_binary()),
+    ],
+)
+def test_parquet_view_output_honors_arrow_width_config_across_cluster(
+    spark,
+    tmp_path,
+    use_large_var_types,
+    expected_string_type,
+    expected_binary_type,
+):
+    path = tmp_path / "view_output_width.parquet"
+    pd.DataFrame({"key": ["alpha"], "raw": [b"bytes"]}).to_parquet(path)
+
+    config_key = "spark.sql.execution.arrow.useLargeVarTypes"
+    previous_value = spark.conf.get(config_key)
+    spark.conf.set(config_key, str(use_large_var_types).lower())
+    try:
+        table, _ = (
+            spark.read.parquet(str(path))
+            .repartition(2, "key")
+            .select(
+                "key",
+                "raw",
+                F.struct(
+                    F.array("key").alias("items"),
+                    F.create_map("key", "raw").alias("mapping"),
+                ).alias("nested"),
+            )
+            ._to_table()  # noqa: SLF001
+        )
+    finally:
+        spark.conf.set(config_key, previous_value)
+
+    assert table.schema.field("key").type == expected_string_type
+    assert table.schema.field("raw").type == expected_binary_type
+    nested_type = table.schema.field("nested").type
+    assert nested_type.field("items").type.value_type == expected_string_type
+    mapping_type = nested_type.field("mapping").type
+    assert mapping_type.key_type == expected_string_type
+    assert mapping_type.item_type == expected_binary_type
 
 
 def test_coalesce_plan_contains_dedicated_exec_in_cluster_mode(spark):
