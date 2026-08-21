@@ -135,8 +135,21 @@ impl ReadFormat for ParquetReadFormat {
     }
 
     async fn scan(&self, ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {
-        let options = self.options.clone().into_table_options();
+        let mut options = self.options.clone().into_table_options();
         fail_for_encryption_factory(&options)?;
+
+        if options.global.pushdown_filters
+            && input
+                .schema
+                .file_schema()
+                .fields()
+                .iter()
+                .any(|field| matches!(field.data_type(), DataType::Struct(_)))
+        {
+            // Cached predicates cannot preserve definition levels for every projected struct
+            // shape, so decode the predicate and output independently.
+            options.global.max_predicate_cache_size = Some(0);
+        }
 
         let mut source =
             ParquetSource::new(input.schema).with_table_parquet_options(options.clone());

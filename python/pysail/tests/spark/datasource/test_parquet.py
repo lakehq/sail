@@ -19,6 +19,30 @@ def safe_sort_key(row):
     return tuple((v is not None, v) for v in row)
 
 
+def collect_arrow_physical_table(df):
+    to_table = getattr(type(df), "_to_table", None)
+    if to_table is None:
+        pytest.skip("PySpark does not expose DataFrame._to_table for Arrow physical schema assertions")
+    table, _ = to_table(df)
+    return table
+
+
+def normalize_spark_binary_value(value):
+    return bytes(value) if isinstance(value, bytearray) else value
+
+
+def regular_arrow_output_dataframe(spark):
+    return spark.sql(
+        """
+        SELECT
+          'value' AS label,
+          CAST('bytes' AS BINARY) AS payload,
+          named_struct('items', array('nested'), 'mapping', map('key', CAST('value' AS BINARY)))
+            AS details
+        """
+    )
+
+
 def test_parquet_read_write_basic(spark, sample_df, tmp_path):
     path = str(tmp_path / "parquet_basic")
     sample_df.write.parquet(path, mode="overwrite")
@@ -164,15 +188,12 @@ def test_parquet_arrow_output_honors_large_var_types(
     previous = spark.conf.get(key)
     spark.conf.set(key, str(use_large_var_types).lower())
     try:
-        table, _ = (
-            spark.read.parquet(str(path))
-            .selectExpr(
-                "label",
-                "payload",
-                "named_struct('name', label, 'aliases', array(label), 'mapping', map(label, payload)) AS details",
-            )
-            ._to_table()  # noqa: SLF001
+        df = spark.read.parquet(str(path)).selectExpr(
+            "label",
+            "payload",
+            "named_struct('name', label, 'aliases', array(label), 'mapping', map(label, payload)) AS details",
         )
+        table = collect_arrow_physical_table(df)
     finally:
         spark.conf.set(key, previous)
 
@@ -188,15 +209,7 @@ def test_parquet_arrow_output_honors_large_var_types(
 
 
 def test_arrow_output_width_is_selected_per_action_for_regular_empty_and_command_results(spark):
-    df = spark.sql(
-        """
-        SELECT
-          'value' AS label,
-          CAST('bytes' AS BINARY) AS payload,
-          named_struct('items', array('nested'), 'mapping', map('key', CAST('value' AS BINARY)))
-            AS details
-        """
-    )
+    df = regular_arrow_output_dataframe(spark)
     key = "spark.sql.execution.arrow.useLargeVarTypes"
     previous = spark.conf.get(key)
     try:
@@ -205,8 +218,8 @@ def test_arrow_output_width_is_selected_per_action_for_regular_empty_and_command
             expected_string = pa.large_string() if use_large_var_types else pa.string()
             expected_binary = pa.large_binary() if use_large_var_types else pa.binary()
 
-            table, _ = df._to_table()  # noqa: SLF001
-            empty, _ = df.where("false")._to_table()  # noqa: SLF001
+            table = collect_arrow_physical_table(df)
+            empty = collect_arrow_physical_table(df.where("false"))
             details = table.schema.field("details").type
 
             assert table.schema.field("label").type == expected_string
@@ -221,14 +234,40 @@ def test_arrow_output_width_is_selected_per_action_for_regular_empty_and_command
             assert empty_details.field("items").type.value_type == expected_string
             assert empty_details.field("mapping").type.item_type == expected_binary
 
-            command, _ = spark.sql(
-                "CREATE OR REPLACE TEMP VIEW arrow_output_command AS SELECT 'value' AS value"
-            )._to_table()  # noqa: SLF001
+            command = collect_arrow_physical_table(
+                spark.sql("CREATE OR REPLACE TEMP VIEW arrow_output_command AS SELECT 'value' AS value")
+            )
             assert command.to_pylist() == [{"value": True}]
 
-            show_tables, _ = spark.sql("SHOW TABLES")._to_table()  # noqa: SLF001
+            show_tables = collect_arrow_physical_table(spark.sql("SHOW TABLES"))
             assert show_tables.schema.field(0).type == expected_string
             assert show_tables.schema.field(1).type == expected_string
+    finally:
+        spark.sql("DROP VIEW IF EXISTS arrow_output_command").collect()
+        spark.conf.set(key, previous)
+
+
+def test_arrow_output_actions_preserve_values_when_width_changes(spark):
+    df = regular_arrow_output_dataframe(spark)
+    key = "spark.sql.execution.arrow.useLargeVarTypes"
+    previous = spark.conf.get(key)
+    try:
+        for use_large_var_types in (False, True):
+            spark.conf.set(key, str(use_large_var_types).lower())
+
+            rows = df.collect()
+            assert len(rows) == 1
+            row = rows[0]
+            assert row.label == "value"
+            assert bytes(row.payload) == b"bytes"
+            assert row.details["items"] == ["nested"]
+            assert bytes(row.details["mapping"]["key"]) == b"value"
+            assert df.where("false").collect() == []
+
+            command = spark.sql("CREATE OR REPLACE TEMP VIEW arrow_output_command AS SELECT 'value' AS value")
+            assert command.collect() == [Row(value=True)]
+            tables = spark.sql("SHOW TABLES").collect()
+            assert any(row[1] == "arrow_output_command" for row in tables)
     finally:
         spark.sql("DROP VIEW IF EXISTS arrow_output_command").collect()
         spark.conf.set(key, previous)
@@ -273,8 +312,8 @@ def test_arrow_output_policies_are_selected_per_action(tmp_path):
                 expected_string = pa.large_string() if use_large_var_types else pa.string()
                 expected_binary = pa.large_binary() if use_large_var_types else pa.binary()
 
-                view_table, _ = view_df._to_table()  # noqa: SLF001
-                offset_table, _ = offset_df._to_table()  # noqa: SLF001
+                view_table = collect_arrow_physical_table(view_df)
+                offset_table = collect_arrow_physical_table(offset_df)
 
                 assert view_table.schema.field("label").type == pa.string_view()
                 assert view_table.schema.field("payload").type == pa.binary_view()
@@ -299,14 +338,72 @@ def test_arrow_output_policies_are_selected_per_action(tmp_path):
 
             isolated_spark.conf.set(config_key, "false")
             isolated_spark.sql("SET datafusion.optimizer.expand_views_at_output = true").collect()
-            expanded_table, _ = view_df._to_table()  # noqa: SLF001
+            expanded_table = collect_arrow_physical_table(view_df)
             assert expanded_table.schema.field("label").type == pa.string()
             assert expanded_table.schema.field("payload").type == pa.binary()
 
             isolated_spark.sql("SET datafusion.optimizer.expand_views_at_output = false").collect()
-            preserved_table, _ = view_df._to_table()  # noqa: SLF001
+            preserved_table = collect_arrow_physical_table(view_df)
             assert preserved_table.schema.field("label").type == pa.string_view()
             assert preserved_table.schema.field("payload").type == pa.binary_view()
+        finally:
+            isolated_spark.conf.set(config_key, previous_value)
+
+
+def test_arrow_output_policy_changes_preserve_values_per_action(tmp_path):
+    path = tmp_path / "parquet_arrow_output_policy_values.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "label": ["value"],
+                "payload": [b"bytes"],
+            }
+        ),
+        path,
+    )
+
+    def assert_values(df):
+        rows = df.collect()
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.label == "value"
+        assert bytes(row.payload) == b"bytes"
+        assert row.nested["items"] == ["value"]
+        assert bytes(row.nested["mapping"]["value"]) == b"bytes"
+
+    envs = {"SAIL_OPTIMIZER__EXPAND_VIEWS_AT_OUTPUT": "false"}
+    with spark_connect_server(envs=envs) as server, spark_session_factory(server.remote) as sessions:
+        isolated_spark = sessions.create()
+        view_df = isolated_spark.read.parquet(str(path)).selectExpr(
+            "label",
+            "payload",
+            "named_struct('items', array(label), 'mapping', map(label, payload)) AS nested",
+        )
+        offset_df = isolated_spark.sql(
+            """
+            SELECT
+              'value' AS label,
+              CAST('bytes' AS BINARY) AS payload,
+              named_struct(
+                'items', array('value'),
+                'mapping', map('value', CAST('bytes' AS BINARY))
+              ) AS nested
+            """
+        )
+        config_key = "spark.sql.execution.arrow.useLargeVarTypes"
+        previous_value = isolated_spark.conf.get(config_key)
+        try:
+            for use_large_var_types in (False, True):
+                isolated_spark.conf.set(config_key, str(use_large_var_types).lower())
+                assert_values(view_df)
+                assert_values(offset_df)
+
+            isolated_spark.conf.set(config_key, "false")
+            isolated_spark.sql("SET datafusion.optimizer.expand_views_at_output = true").collect()
+            assert_values(view_df)
+
+            isolated_spark.sql("SET datafusion.optimizer.expand_views_at_output = false").collect()
+            assert_values(view_df)
         finally:
             isolated_spark.conf.set(config_key, previous_value)
 
@@ -348,7 +445,71 @@ def test_parquet_merge_canonicalizes_spark_equivalent_arrow_encodings(
         .collect()
     )
 
-    assert {row.value for row in rows} == {left_value, right_value}
+    assert {normalize_spark_binary_value(row.value) for row in rows} == {
+        normalize_spark_binary_value(left_value),
+        normalize_spark_binary_value(right_value),
+    }
+
+
+def test_parquet_nested_view_predicate_uses_row_pushdown(spark, tmp_path):
+    path = tmp_path / "nested_view_predicate_pushdown.parquet"
+    nested_type = pa.struct([("name", pa.string()), ("code", pa.int32())])
+    pq.write_table(
+        pa.Table.from_arrays(
+            [
+                pa.array([1, 2], type=pa.int32()),
+                pa.array([{"name": "keep", "code": 10}, {"name": "drop", "code": 20}], type=nested_type),
+            ],
+            names=["id", "s"],
+        ),
+        path,
+        row_group_size=2,
+    )
+
+    source = spark.read.option("schema_force_view_types", "true").option("pushdown_filters", "true").parquet(str(path))
+    source.createOrReplaceTempView("parquet_nested_view_pushdown")
+    try:
+        rows = spark.sql("SELECT id, s FROM parquet_nested_view_pushdown WHERE s.name = 'keep'").collect()
+        assert rows == [Row(id=1, s=Row(name="keep", code=10))]
+
+        analyzed_plan = spark.sql(
+            "EXPLAIN ANALYZE SELECT id, s FROM parquet_nested_view_pushdown WHERE s.name = 'keep'"
+        ).collect()[0][0]
+        assert "DataSourceExec:" in analyzed_plan
+        assert "predicate=" in analyzed_plan
+        assert "pushdown_rows_matched=1" in analyzed_plan
+        assert "pushdown_rows_pruned=1" in analyzed_plan
+    finally:
+        spark.catalog.dropTempView("parquet_nested_view_pushdown")
+
+
+def test_parquet_single_leaf_nested_view_predicate_uses_row_pushdown_without_cache(spark, tmp_path):
+    path = tmp_path / "single_leaf_nested_view_predicate.parquet"
+    nested_type = pa.struct([("name", pa.string())])
+    pq.write_table(
+        pa.Table.from_arrays(
+            [pa.array([{"name": "keep"}, {"name": "drop"}], type=nested_type)],
+            names=["s"],
+        ),
+        path,
+        row_group_size=2,
+    )
+
+    source = spark.read.option("schema_force_view_types", "true").option("pushdown_filters", "true").parquet(str(path))
+    source.createOrReplaceTempView("parquet_single_leaf_nested_view_pushdown")
+    try:
+        rows = spark.sql("SELECT s FROM parquet_single_leaf_nested_view_pushdown WHERE s.name = 'keep'").collect()
+        assert rows == [Row(s=Row(name="keep"))]
+
+        analyzed_plan = spark.sql(
+            "EXPLAIN ANALYZE SELECT s FROM parquet_single_leaf_nested_view_pushdown WHERE s.name = 'keep'"
+        ).collect()[0][0]
+        assert "DataSourceExec:" in analyzed_plan
+        assert "predicate=" in analyzed_plan
+        assert "pushdown_rows_matched=1" in analyzed_plan
+        assert "pushdown_rows_pruned=1" in analyzed_plan
+    finally:
+        spark.catalog.dropTempView("parquet_single_leaf_nested_view_pushdown")
 
 
 @pytest.mark.parametrize(

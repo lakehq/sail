@@ -115,6 +115,17 @@ Feature: View types are materialized at the Spark Arrow output boundary
       | intersection | concatenated |
       | [b]          | [a, b, c]    |
 
+  Scenario: A Parquet string array aggregates with a regular string zero
+    When query template
+      """
+      SELECT aggregate(details.strings, '', (acc, x) -> x) AS last_value
+      FROM parquet.`{{ location.string }}`
+      WHERE row_id = 0
+      """
+    Then query result
+      | last_value |
+      | b          |
+
   Scenario: Nested Parquet binary fields are accepted by sketch aggregates
     When query template
       """

@@ -6,6 +6,7 @@ including both Arrow RecordBatch and tuple-based paths.
 """
 
 import json
+import re
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,11 @@ def _update_test_state(path: str, **updates: Any) -> None:
     state = _read_test_state(path)
     state.update(updates)
     Path(path).write_text(json.dumps(state, default=str), encoding="utf-8")
+
+
+def _spark_variable_type_names(schema: str) -> set[str]:
+    names = ("string", "binary", "large_string", "large_binary")
+    return {name for name in names if re.search(rf"\b{name}\b", schema)}
 
 
 # ============================================================================
@@ -1237,15 +1243,14 @@ def test_python_arrow_writer_materializes_nested_parquet_view_types(spark, tmp_p
     finally:
         spark.conf.set(key, previous)
 
-    expected_string = "large_string" if use_large_var_types else "string"
-    expected_binary = "large_binary" if use_large_var_types else "binary"
+    expected_types = {"large_string", "large_binary"} if use_large_var_types else {"string", "binary"}
     messages = _read_test_state(state_path)["arrow_commit_messages"]
     schemas = {message["writer_schema"] for message in messages} | {
         schema for message in messages for schema in message["batch_schemas"]
     }
     assert schemas
     assert all("view" not in schema.lower() for schema in schemas)
-    assert all(expected_string in schema and expected_binary in schema for schema in schemas)
+    assert all(_spark_variable_type_names(schema) == expected_types for schema in schemas)
 
 
 def test_python_write_overwrite_mode(spark, tmp_path):

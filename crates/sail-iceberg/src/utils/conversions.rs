@@ -411,6 +411,70 @@ pub fn array_value_to_literal(array: &ArrayRef, row: usize) -> Option<Literal> {
     }
 }
 
+/// Extract a partition literal using the Iceberg source type to disambiguate Arrow physical
+/// representations that are shared by multiple Iceberg types.
+pub fn array_value_to_typed_literal(
+    array: &ArrayRef,
+    row: usize,
+    iceberg_type: &Type,
+) -> std::result::Result<Option<Literal>, String> {
+    if array.is_null(row) {
+        return Ok(None);
+    }
+
+    if let ArrowDataType::FixedSizeBinary(_) = array.data_type() {
+        let array = array
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .ok_or_else(|| "Failed to downcast FixedSizeBinary partition array".to_string())?;
+        let bytes = array.value(row);
+        return match iceberg_type {
+            Type::Primitive(PrimitiveType::Uuid) => {
+                let bytes: [u8; 16] = bytes.try_into().map_err(|_| {
+                    format!(
+                        "UUID partition value must be exactly 16 bytes, got {}",
+                        bytes.len()
+                    )
+                })?;
+                Ok(Some(Literal::Primitive(PrimitiveLiteral::UInt128(
+                    u128::from_be_bytes(bytes),
+                ))))
+            }
+            Type::Primitive(PrimitiveType::Fixed(expected_width)) => {
+                let actual_width = bytes.len() as u64;
+                if actual_width != *expected_width {
+                    return Err(format!(
+                        "Fixed partition value must be exactly {expected_width} bytes, got {actual_width}"
+                    ));
+                }
+                Ok(Some(Literal::Primitive(PrimitiveLiteral::Binary(
+                    bytes.to_vec(),
+                ))))
+            }
+            _ => Err(format!(
+                "Arrow FixedSizeBinary partition value is incompatible with Iceberg type {iceberg_type}"
+            )),
+        };
+    }
+
+    let literal = array_value_to_literal(array, row).ok_or_else(|| {
+        format!(
+            "Unsupported Arrow partition value type {}",
+            array.data_type()
+        )
+    })?;
+    match (iceberg_type, &literal) {
+        (Type::Primitive(primitive_type), Literal::Primitive(value))
+            if primitive_type.compatible(value) =>
+        {
+            Ok(Some(literal))
+        }
+        _ => Err(format!(
+            "Partition literal {literal:?} is incompatible with Iceberg type {iceberg_type}"
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

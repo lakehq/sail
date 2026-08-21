@@ -6,9 +6,16 @@ from pandas.testing import assert_frame_equal
 from pyspark.sql.types import Row, StringType
 from pyspark.sql.window import Window
 
+from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 from pysail.testing.spark.utils.common import is_jvm_spark
 
 pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode only")
+
+_VIEW_SHUFFLE_PARTITIONS = 4
+_VIEW_SHUFFLE_ROWS = 128
+_VIEW_BATCH_SIZE = 8
+_VIEW_LABEL = f"selected-label-{'l' * 48}"
+_VIEW_BINARY = f"selected-binary-{'b' * 48}".encode()
 
 
 def _partition_count(df):
@@ -16,6 +23,52 @@ def _partition_count(df):
         yield pd.DataFrame({"n": [1]})
 
     return df.mapInPandas(counter, schema="n: long").count()
+
+
+def _to_arrow_table(df):
+    if to_table := getattr(type(df), "_to_table", None):
+        table, _ = to_table(df)
+        return table
+
+    query = df._plan.to_proto(df._session.client)  # noqa: SLF001
+    table, _ = df._session.client.to_table(query)  # noqa: SLF001
+    return table
+
+
+@pytest.fixture
+def cross_worker_view_spark():
+    envs = {
+        "SAIL_MODE": "local-cluster",
+        "SAIL_CLUSTER__SHUFFLE_BACKEND__TYPE": "flight",
+        "SAIL_CLUSTER__WORKER_INITIAL_COUNT": str(_VIEW_SHUFFLE_PARTITIONS),
+        "SAIL_CLUSTER__WORKER_TASK_SLOTS": "1",
+        "SAIL_EXECUTION__BATCH_SIZE": str(_VIEW_BATCH_SIZE),
+        "SAIL_EXECUTION__DEFAULT_PARALLELISM": str(_VIEW_SHUFFLE_PARTITIONS),
+    }
+    with spark_connect_server(envs=envs) as server, spark_session_factory(server.remote) as sessions:
+        yield sessions.create()
+
+
+def _assert_cross_worker_flight_topology(spark):
+    expected_options = {
+        "cluster.shuffle_backend.type": "flight",
+        "cluster.worker_initial_count": str(_VIEW_SHUFFLE_PARTITIONS),
+        "cluster.worker_task_slots": "1",
+        "execution.batch_size": str(_VIEW_BATCH_SIZE),
+        "execution.default_parallelism": str(_VIEW_SHUFFLE_PARTITIONS),
+        "mode": "local_cluster",
+    }
+    quoted_option_keys = ", ".join(f"'{key}'" for key in expected_options)
+    query = f"SELECT key, value FROM system.session.options WHERE key IN ({quoted_option_keys})"  # noqa: S608
+    options = {row.key: row.value for row in spark.sql(query).collect()}
+    assert options == expected_options
+
+    running_workers = _to_arrow_table(
+        spark.table("system.cluster.workers")
+        .where((F.col("session_id") == spark.session_id) & (F.col("status") == "RUNNING"))
+        .select("worker_id")
+    )
+    assert len(set(running_workers.column("worker_id").to_pylist())) >= _VIEW_SHUFFLE_PARTITIONS
 
 
 @pytest.fixture(scope="module")
@@ -235,47 +288,103 @@ def test_parquet_directory_scan_reads_each_file_once_in_cluster_mode(spark, tmp_
     assert rows == [Row(id=1), Row(id=2)]
 
 
-def test_parquet_utf8_view_across_cluster_shuffle(spark, tmp_path):
+def test_parquet_utf8_view_across_cluster_shuffle(cross_worker_view_spark, tmp_path):
+    spark = cross_worker_view_spark
+
     path = tmp_path / "utf8_view.parquet"
-    pd.DataFrame(
-        {
-            "key": ["alpha", "beta", "alpha"],
-            "label": ["top-level", "other", "top-level"],
-            "raw": [b"bytes", b"other", b"bytes"],
-            "value": [1, 2, 3],
-        }
-    ).to_parquet(path)
+    path.mkdir()
+    rows_per_file = _VIEW_SHUFFLE_ROWS // _VIEW_SHUFFLE_PARTITIONS
+    for file_index in range(_VIEW_SHUFFLE_PARTITIONS):
+        start = file_index * rows_per_file
+        row_values = range(start, start + rows_per_file)
+        pd.DataFrame(
+            {
+                "key": [f"partition-key-{value:03d}-{'k' * 48}" for value in row_values],
+                "label": [None if value % 34 == 0 else _VIEW_LABEL for value in row_values],
+                "raw": [None if value % 51 == 0 else _VIEW_BINARY for value in row_values],
+                "value": list(row_values),
+            }
+        ).to_parquet(path / f"part-{file_index}.parquet")
 
-    df = spark.read.parquet(str(path))
+    input_dfs = [
+        spark.read.parquet(str(path / f"part-{file_index}.parquet")).withColumn("source_file", F.lit(file_index))
+        for file_index in range(_VIEW_SHUFFLE_PARTITIONS)
+    ]
+    df = input_dfs[0]
+    for input_df in input_dfs[1:]:
+        df = df.unionByName(input_df)
+
     assert isinstance(df.schema["key"].dataType, StringType)
-    assert df.select("key").orderBy("key").toPandas()["key"].tolist() == ["alpha", "alpha", "beta"]
-
-    function_rows = (
-        df.repartition(4, "key")
-        .where("label = 'top-level'")
+    selected_values = list(range(0, _VIEW_SHUFFLE_ROWS, 5))
+    selected_rows = (
+        df.where("value % 5 = 0")
+        .select(
+            "*",
+            F.spark_partition_id().alias("source_partition"),
+            F.pmod("value", F.lit(_VIEW_SHUFFLE_PARTITIONS)).alias("shuffle_key"),
+        )
+        .repartition(_VIEW_SHUFFLE_PARTITIONS, "shuffle_key")
         .selectExpr(
-            "regexp_extract(label, '(top)-(level)', 2) AS extracted",
-            "regexp_extract_all(label, '(top)-(level)', 1) AS extracted_all",
+            "*",
+            "spark_partition_id() AS shuffle_partition",
+            "regexp_extract(label, '(selected)-(label)', 2) AS extracted",
+            "regexp_extract_all(label, '(selected)-(label)', 1) AS extracted_all",
             "split(label, '-')[1] AS split_part",
             "hash(label) AS hashed",
             "hash(raw) AS binary_hashed",
         )
-        .distinct()
+        .orderBy("value")
         .collect()
     )
-    assert function_rows == [
-        Row(
-            extracted="level",
-            extracted_all=["top"],
-            split_part="level",
-            hashed=-835272491,
-            binary_hashed=2065139274,
-        )
-    ]
+    _assert_cross_worker_flight_topology(spark)
+    assert [row.value for row in selected_rows] == selected_values
+    source_partition_by_file = {}
+    for row in selected_rows:
+        source_partition = source_partition_by_file.setdefault(row.source_file, row.source_partition)
+        assert row.source_partition == source_partition
+    assert set(source_partition_by_file) == set(range(_VIEW_SHUFFLE_PARTITIONS))
+    assert len(set(source_partition_by_file.values())) == _VIEW_SHUFFLE_PARTITIONS
+    sources_by_shuffle_partition = {}
+    for row in selected_rows:
+        sources_by_shuffle_partition.setdefault(row.shuffle_partition, set()).add(row.source_file)
+    assert sources_by_shuffle_partition
+    assert all(
+        source_files == set(range(_VIEW_SHUFFLE_PARTITIONS)) for source_files in sources_by_shuffle_partition.values()
+    )
+    # The one-slot topology and four-way source/destination task sets require multiple workers.
+    # Every non-empty destination consumes all four sources, so peer Flight fetch is required.
 
-    result = df.repartition(4, "key").groupBy("key").count().orderBy("key").toPandas()
-    expected = pd.DataFrame({"key": ["alpha", "beta"], "count": [2, 1]}).astype({"count": "int64"})
-    assert_frame_equal(result, expected)
+    label_hashes = set()
+    binary_hashes = set()
+    for row in selected_rows:
+        expected_label = None if row.value % 34 == 0 else _VIEW_LABEL
+        expected_raw = None if row.value % 51 == 0 else _VIEW_BINARY
+        assert row.source_file == row.value // rows_per_file
+        assert row.key == f"partition-key-{row.value:03d}-{'k' * 48}"
+        assert row.label == expected_label
+        actual_raw = None if row.raw is None else bytes(row.raw)
+        assert actual_raw == expected_raw
+        assert row.extracted == (None if expected_label is None else "label")
+        assert row.extracted_all == (None if expected_label is None else ["selected"])
+        assert row.split_part == (None if expected_label is None else "label")
+        if expected_label is not None:
+            label_hashes.add(row.hashed)
+        if expected_raw is not None:
+            binary_hashes.add(row.binary_hashed)
+
+    assert len(label_hashes) == 1
+    assert len(binary_hashes) == 1
+
+    counts = {
+        row.label: (row.row_count, row.raw_count)
+        for row in (
+            df.repartition(_VIEW_SHUFFLE_PARTITIONS, "label")
+            .groupBy("label")
+            .agg(F.count("*").alias("row_count"), F.count("raw").alias("raw_count"))
+            .collect()
+        )
+    }
+    assert counts == {None: (4, 2), _VIEW_LABEL: (124, 123)}  # noqa: PLR2004
 
 
 @pytest.mark.parametrize(
@@ -293,10 +402,14 @@ def test_parquet_view_output_honors_arrow_width_config_across_cluster(
     expected_binary_type,
 ):
     path = tmp_path / "view_output_width.parquet"
+    alpha = f"alpha-{'a' * 48}"
+    beta = f"beta-{'b' * 48}"
+    first = f"first-{'f' * 48}".encode()
+    second = f"second-{'s' * 48}".encode()
     pd.DataFrame(
         {
-            "key": ["beta", "alpha"],
-            "raw": [b"second", b"first"],
+            "key": [beta, alpha],
+            "raw": [second, first],
         }
     ).to_parquet(path)
 
@@ -317,12 +430,13 @@ def test_parquet_view_output_honors_arrow_width_config_across_cluster(
             )
             .orderBy("key")
         )
-        table, _ = df._to_table()  # noqa: SLF001
-        empty, _ = df.where("false")._to_table()  # noqa: SLF001
+        table = _to_arrow_table(df)
+        empty = _to_arrow_table(df.where("false"))
     finally:
         spark.conf.set(config_key, previous_value)
 
-    assert table.column("key").to_pylist() == ["alpha", "beta"]
+    assert table.column("key").to_pylist() == [alpha, beta]
+    assert table.column("raw").to_pylist() == [first, second]
     assert empty.num_rows == 0
     for output in (table, empty):
         assert output.schema.field("key").type == expected_string_type

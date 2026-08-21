@@ -208,3 +208,113 @@ impl ManifestWriter {
             .map_err(|e| format!("Avro writer finalize error: {e}"))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::expect_used)]
+
+    use std::collections::HashMap;
+
+    use super::*;
+    use crate::spec::manifest::{DataContentType, DataFileFormat};
+    use crate::spec::partition::PartitionSpec;
+    use crate::spec::transform::Transform;
+    use crate::spec::types::values::{Literal, PrimitiveLiteral};
+    use crate::spec::types::{NestedField, PrimitiveType, Type};
+    use crate::spec::{ManifestContentType, Schema};
+
+    fn data_file(partition_value: Literal) -> DataFile {
+        DataFile {
+            content: DataContentType::Data,
+            file_path: "file:///table/data.parquet".to_string(),
+            file_format: DataFileFormat::Parquet,
+            partition: vec![Some(partition_value)],
+            record_count: 1,
+            file_size_in_bytes: 1,
+            column_sizes: HashMap::new(),
+            value_counts: HashMap::new(),
+            null_value_counts: HashMap::new(),
+            nan_value_counts: HashMap::new(),
+            lower_bounds: HashMap::new(),
+            upper_bounds: HashMap::new(),
+            block_size_in_bytes: None,
+            key_metadata: None,
+            split_offsets: vec![],
+            equality_ids: vec![],
+            sort_order_id: None,
+            first_row_id: None,
+            partition_spec_id: 0,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
+        }
+    }
+
+    fn round_trip_identity_partition(
+        primitive_type: PrimitiveType,
+        partition_value: Literal,
+    ) -> Literal {
+        let schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![Arc::new(NestedField::optional(
+                1,
+                "value",
+                Type::Primitive(primitive_type),
+            ))])
+            .build()
+            .expect("Iceberg schema");
+        let partition_spec = PartitionSpec::builder()
+            .add_field(1, "value", Transform::Identity)
+            .build();
+        let metadata = ManifestMetadata::new(
+            Arc::new(schema),
+            1,
+            partition_spec,
+            FormatVersion::V2,
+            ManifestContentType::Data,
+        );
+        let mut writer = ManifestWriterBuilder::new(None, None, metadata).build();
+        writer.add(data_file(partition_value));
+
+        let bytes = writer.to_avro_bytes_v2().expect("manifest bytes");
+        let manifest = Manifest::parse_avro(&bytes).expect("parsed manifest");
+        manifest.entries()[0].data_file.partition[0]
+            .clone()
+            .expect("partition value")
+    }
+
+    #[test]
+    fn manifest_round_trip_preserves_uuid_identity_partition() {
+        let expected = Literal::Primitive(PrimitiveLiteral::UInt128(u128::from_be_bytes(
+            *b"0123456789abcdef",
+        )));
+        assert_eq!(
+            round_trip_identity_partition(PrimitiveType::Uuid, expected.clone()),
+            expected
+        );
+    }
+
+    #[test]
+    fn manifest_round_trip_preserves_fixed_identity_partition() {
+        let expected = Literal::Primitive(PrimitiveLiteral::Binary(b"fixed".to_vec()));
+        assert_eq!(
+            round_trip_identity_partition(PrimitiveType::Fixed(5), expected.clone()),
+            expected
+        );
+    }
+
+    #[test]
+    fn manifest_round_trip_preserves_decimal_identity_partition() {
+        let decimal_type = PrimitiveType::Decimal {
+            precision: 12,
+            scale: 3,
+        };
+        for value in [123_456_789, -123_456_789] {
+            let expected = Literal::Primitive(PrimitiveLiteral::Int128(value));
+            assert_eq!(
+                round_trip_identity_partition(decimal_type.clone(), expected.clone()),
+                expected
+            );
+        }
+    }
+}

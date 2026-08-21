@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray, MapArray, StructArray,
-    new_null_array,
+    Array, ArrayRef, BinaryViewArray, FixedSizeBinaryBuilder, FixedSizeListArray, LargeListArray,
+    ListArray, MapArray, StructArray, new_null_array,
 };
 use datafusion::arrow::compute::{CastOptions, can_cast_types, cast_with_options};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion::common::{DataFusionError, Result, ScalarValue, exec_err};
 use datafusion::functions::core::getfield::GetFieldFunc;
 use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
@@ -165,7 +165,7 @@ impl PhysicalExprAdapter for SchemaEvolutionPhysicalExprAdapter {
             matching: self.matching,
             timezone_mode: self.timezone_mode,
         };
-        expr.transform(|expr| rewriter.rewrite_expr(Arc::clone(&expr)))
+        expr.transform_down(|expr| rewriter.rewrite_expr(Arc::clone(&expr)))
             .data()
     }
 }
@@ -185,10 +185,18 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
         expr: Arc<dyn PhysicalExpr>,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
         if let Some(transformed) = self.try_rewrite_struct_field_access(&expr)? {
-            return Ok(Transformed::yes(transformed));
+            return Ok(Transformed::new(transformed, true, TreeNodeRecursion::Jump));
         }
         if let Some(column) = expr.downcast_ref::<Column>() {
-            return self.rewrite_column(Arc::clone(&expr), column);
+            let transformed = self.rewrite_column(Arc::clone(&expr), column)?;
+            if transformed.transformed {
+                return Ok(Transformed::new(
+                    transformed.data,
+                    true,
+                    TreeNodeRecursion::Jump,
+                ));
+            }
+            return Ok(transformed);
         }
         Ok(Transformed::no(expr))
     }
@@ -202,6 +210,9 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
                 Some(expr) => expr,
                 None => return Ok(None),
             };
+        if get_field_expr.args().len() != 2 {
+            return Ok(None);
+        }
 
         let source_expr = match get_field_expr.args().first() {
             Some(expr) => expr,
@@ -251,14 +262,52 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
             Some(field) => field,
             None => return Ok(None),
         };
-        if find_matching_struct_field(physical_struct_fields, logical_struct_field, self.matching)
-            .is_some()
-        {
-            return Ok(None);
+        let Some((_, physical_struct_field)) =
+            find_matching_struct_field(physical_struct_fields, logical_struct_field, self.matching)
+        else {
+            let null_value = ScalarValue::Null.cast_to(logical_struct_field.data_type())?;
+            return Ok(Some(Arc::new(Literal::new(null_value))));
+        };
+
+        let physical_column = Arc::new(Column::new_with_schema(
+            physical_field.name(),
+            self.physical_file_schema,
+        )?) as Arc<dyn PhysicalExpr>;
+        let physical_field_name = Arc::new(Literal::new(ScalarValue::Utf8(Some(
+            physical_struct_field.name().to_string(),
+        )))) as Arc<dyn PhysicalExpr>;
+        let physical_field_access = ScalarFunctionExpr::try_new(
+            datafusion::functions::core::get_field(),
+            vec![physical_column, physical_field_name],
+            self.physical_file_schema,
+            Arc::new(get_field_expr.config_options().clone()),
+        )?;
+        let physical_result_field =
+            physical_field_access.return_field(self.physical_file_schema)?;
+        let physical_field_access = Arc::new(physical_field_access) as Arc<dyn PhysicalExpr>;
+        let logical_result_field = logical_struct_field
+            .as_ref()
+            .clone()
+            .with_nullable(logical_field.is_nullable() || logical_struct_field.is_nullable());
+
+        if physical_result_field.data_type() == logical_result_field.data_type() {
+            if physical_result_field.is_nullable() && !logical_result_field.is_nullable() {
+                return exec_err!(
+                    "Cannot cast nested field '{}' from nullable physical data to non-nullable logical data",
+                    logical_struct_field.name()
+                );
+            }
+            return Ok(Some(physical_field_access));
         }
 
-        let null_value = ScalarValue::Null.cast_to(logical_struct_field.data_type())?;
-        Ok(Some(Arc::new(Literal::new(null_value))))
+        Ok(Some(
+            self.apply_type_cast(
+                physical_field_access,
+                &logical_result_field,
+                physical_result_field.as_ref(),
+            )?
+            .data,
+        ))
     }
 
     fn rewrite_column(
@@ -393,10 +442,19 @@ fn can_cast_field_with_schema_evolution(
     target: &Field,
     matching: StructFieldMatching,
 ) -> Result<bool> {
+    can_cast_field_with_schema_evolution_inner(source, target, matching, false)
+}
+
+fn can_cast_field_with_schema_evolution_inner(
+    source: &Field,
+    target: &Field,
+    matching: StructFieldMatching,
+    allow_nullable_to_required: bool,
+) -> Result<bool> {
     if source.data_type() == &DataType::Null {
         return Ok(target.is_nullable());
     }
-    if source.is_nullable() && !target.is_nullable() {
+    if !allow_nullable_to_required && source.is_nullable() && !target.is_nullable() {
         return Ok(false);
     }
     if source.data_type() == target.data_type() {
@@ -411,14 +469,34 @@ fn can_cast_field_with_schema_evolution(
 
     match (source.data_type(), target.data_type()) {
         (DataType::Struct(from_fields), DataType::Struct(to_fields)) => {
-            validate_struct_compatibility_with_variant(from_fields, to_fields, matching)?;
+            validate_struct_compatibility_with_variant(
+                from_fields,
+                to_fields,
+                matching,
+                allow_nullable_to_required,
+            )?;
             Ok(true)
         }
-        (DataType::List(from_elem), DataType::List(to_elem)) => {
-            can_cast_field_with_schema_evolution(from_elem, to_elem, matching)
-        }
+        (
+            DataType::List(from_elem)
+            | DataType::LargeList(from_elem)
+            | DataType::ListView(from_elem)
+            | DataType::LargeListView(from_elem)
+            | DataType::FixedSizeList(from_elem, _),
+            DataType::List(to_elem),
+        ) => can_cast_field_with_schema_evolution_inner(
+            from_elem,
+            to_elem,
+            matching,
+            allow_nullable_to_required,
+        ),
         (DataType::LargeList(from_elem), DataType::LargeList(to_elem)) => {
-            can_cast_field_with_schema_evolution(from_elem, to_elem, matching)
+            can_cast_field_with_schema_evolution_inner(
+                from_elem,
+                to_elem,
+                matching,
+                allow_nullable_to_required,
+            )
         }
         (
             DataType::FixedSizeList(from_elem, from_len),
@@ -427,12 +505,23 @@ fn can_cast_field_with_schema_evolution(
             if from_len != to_len {
                 return Ok(false);
             }
-            can_cast_field_with_schema_evolution(from_elem, to_elem, matching)
+            can_cast_field_with_schema_evolution_inner(
+                from_elem,
+                to_elem,
+                matching,
+                allow_nullable_to_required,
+            )
         }
         (DataType::Map(from_entries, _), DataType::Map(to_entries, _)) => {
-            validate_map_entries_compatibility(from_entries, to_entries, matching)?;
+            validate_map_entries_compatibility(
+                from_entries,
+                to_entries,
+                matching,
+                allow_nullable_to_required,
+            )?;
             Ok(true)
         }
+        (DataType::BinaryView, DataType::FixedSizeBinary(byte_width)) => Ok(*byte_width >= 0),
         _ => Ok(can_cast_types(source.data_type(), target.data_type())),
     }
 }
@@ -487,6 +576,7 @@ fn validate_struct_compatibility_with_variant(
     source_fields: &[Arc<Field>],
     target_fields: &[Arc<Field>],
     matching: StructFieldMatching,
+    allow_nullable_to_required: bool,
 ) -> Result<()> {
     if matching == StructFieldMatching::Name
         && !target_fields
@@ -503,7 +593,12 @@ fn validate_struct_compatibility_with_variant(
     for target_field in target_fields {
         match find_matching_struct_field(source_fields, target_field, matching) {
             Some((_, source_field)) => {
-                if !can_cast_field_with_schema_evolution(source_field, target_field, matching)? {
+                if !can_cast_field_with_schema_evolution_inner(
+                    source_field,
+                    target_field,
+                    matching,
+                    allow_nullable_to_required,
+                )? {
                     return exec_err!(
                         "Cannot cast struct field '{}' from type {} to type {}",
                         target_field.name(),
@@ -530,6 +625,7 @@ fn validate_map_entries_compatibility(
     source_entries: &Field,
     target_entries: &Field,
     matching: StructFieldMatching,
+    allow_nullable_to_required: bool,
 ) -> Result<()> {
     let (DataType::Struct(source_fields), DataType::Struct(target_fields)) =
         (source_entries.data_type(), target_entries.data_type())
@@ -541,7 +637,12 @@ fn validate_map_entries_compatibility(
         // Arrow map key/value fields are positional structural wrappers.
         match source_fields.get(index) {
             Some(source_field)
-                if can_cast_field_with_schema_evolution(source_field, target_field, matching)? => {}
+                if can_cast_field_with_schema_evolution_inner(
+                    source_field,
+                    target_field,
+                    matching,
+                    allow_nullable_to_required,
+                )? => {}
             Some(source_field) => {
                 return exec_err!(
                     "Cannot cast map entry '{}' from type {} to type {}",
@@ -775,7 +876,14 @@ pub fn cast_array_with_schema_evolution(
     cast_options: &CastOptions,
     matching: StructFieldMatching,
 ) -> Result<ArrayRef> {
-    cast_array_with_schema_evolution_inner(source, target_field, cast_options, matching, false)
+    cast_array_with_schema_evolution_inner(
+        source,
+        target_field,
+        cast_options,
+        matching,
+        false,
+        false,
+    )
 }
 
 pub fn cast_array_with_schema_evolution_relaxed_tz(
@@ -784,7 +892,25 @@ pub fn cast_array_with_schema_evolution_relaxed_tz(
     cast_options: &CastOptions,
     matching: StructFieldMatching,
 ) -> Result<ArrayRef> {
-    cast_array_with_schema_evolution_inner(source, target_field, cast_options, matching, true)
+    cast_array_with_schema_evolution_inner(
+        source,
+        target_field,
+        cast_options,
+        matching,
+        true,
+        false,
+    )
+}
+
+/// Casts writer input by schema while allowing nullable source fields to populate required target
+/// fields. Array constructors still reject any unmasked null values in required nested fields.
+pub fn cast_array_for_schema_evolution_write_relaxed_tz(
+    source: &ArrayRef,
+    target_field: &Field,
+    cast_options: &CastOptions,
+    matching: StructFieldMatching,
+) -> Result<ArrayRef> {
+    cast_array_with_schema_evolution_inner(source, target_field, cast_options, matching, true, true)
 }
 
 fn cast_array_with_schema_evolution_inner(
@@ -793,13 +919,25 @@ fn cast_array_with_schema_evolution_inner(
     cast_options: &CastOptions,
     matching: StructFieldMatching,
     relaxed_timezone: bool,
+    allow_nullable_to_required: bool,
 ) -> Result<ArrayRef> {
     if is_variant_arrow_field(target_field) && is_variant_storage_type(source.data_type()) {
-        return cast_variant_array_with_schema_evolution(source, target_field, cast_options);
+        return cast_variant_array_with_schema_evolution(
+            source,
+            target_field,
+            cast_options,
+            allow_nullable_to_required,
+        );
     }
 
     if source.data_type() == target_field.data_type() {
         return Ok(Arc::clone(source));
+    }
+
+    if let (DataType::BinaryView, DataType::FixedSizeBinary(byte_width)) =
+        (source.data_type(), target_field.data_type())
+    {
+        return cast_binary_view_to_fixed_size_binary(source, *byte_width);
     }
 
     if relaxed_timezone
@@ -820,29 +958,16 @@ fn cast_array_with_schema_evolution_inner(
             cast_options,
             matching,
             relaxed_timezone,
+            allow_nullable_to_required,
         ),
-        DataType::List(target_elem) => {
-            let Some(source_list) = source.as_any().downcast_ref::<ListArray>() else {
-                return Ok(cast_with_options(
-                    source,
-                    target_field.data_type(),
-                    cast_options,
-                )?);
-            };
-            let casted_values = cast_array_with_schema_evolution_inner(
-                source_list.values(),
-                target_elem.as_ref(),
-                cast_options,
-                matching,
-                relaxed_timezone,
-            )?;
-            Ok(Arc::new(ListArray::new(
-                Arc::clone(target_elem),
-                source_list.offsets().clone(),
-                casted_values,
-                source_list.nulls().cloned(),
-            )))
-        }
+        DataType::List(target_elem) => cast_list_array_with_schema_evolution(
+            source,
+            target_elem,
+            cast_options,
+            matching,
+            relaxed_timezone,
+            allow_nullable_to_required,
+        ),
         DataType::LargeList(target_elem) => {
             let Some(source_list) = source.as_any().downcast_ref::<LargeListArray>() else {
                 return exec_err!(
@@ -856,13 +981,14 @@ fn cast_array_with_schema_evolution_inner(
                 cast_options,
                 matching,
                 relaxed_timezone,
+                allow_nullable_to_required,
             )?;
-            Ok(Arc::new(LargeListArray::new(
+            Ok(Arc::new(LargeListArray::try_new(
                 Arc::clone(target_elem),
                 source_list.offsets().clone(),
                 casted_values,
                 source_list.nulls().cloned(),
-            )))
+            )?))
         }
         DataType::FixedSizeList(target_elem, target_len) => {
             let Some(source_list) = source.as_any().downcast_ref::<FixedSizeListArray>() else {
@@ -885,13 +1011,14 @@ fn cast_array_with_schema_evolution_inner(
                 cast_options,
                 matching,
                 relaxed_timezone,
+                allow_nullable_to_required,
             )?;
-            Ok(Arc::new(FixedSizeListArray::new(
+            Ok(Arc::new(FixedSizeListArray::try_new(
                 Arc::clone(target_elem),
                 *target_len,
                 casted_values,
                 source_list.nulls().cloned(),
-            )))
+            )?))
         }
         DataType::Map(target_entries, ordered) => {
             let Some(source_map) = source.as_any().downcast_ref::<MapArray>() else {
@@ -922,12 +1049,13 @@ fn cast_array_with_schema_evolution_inner(
                         cast_options,
                         matching,
                         relaxed_timezone,
+                        allow_nullable_to_required,
                     )?),
                     None => kv_arrays.push(new_null_array(target_child.data_type(), num_entries)),
                 }
             }
 
-            let new_entries = StructArray::new(kv_fields.into(), kv_arrays, None);
+            let new_entries = StructArray::try_new(kv_fields.into(), kv_arrays, None)?;
             Ok(Arc::new(MapArray::try_new(
                 Arc::clone(target_entries),
                 source_map.offsets().clone(),
@@ -944,10 +1072,83 @@ fn cast_array_with_schema_evolution_inner(
     }
 }
 
+fn cast_list_array_with_schema_evolution(
+    source: &ArrayRef,
+    target_element: &Arc<Field>,
+    cast_options: &CastOptions,
+    matching: StructFieldMatching,
+    relaxed_timezone: bool,
+    allow_nullable_to_required: bool,
+) -> Result<ArrayRef> {
+    let list = match source.data_type() {
+        DataType::List(_) => Arc::clone(source),
+        DataType::LargeList(source_element)
+        | DataType::ListView(source_element)
+        | DataType::LargeListView(source_element)
+        | DataType::FixedSizeList(source_element, _) => cast_with_options(
+            source,
+            &DataType::List(Arc::clone(source_element)),
+            cast_options,
+        )?,
+        _ => {
+            return Ok(cast_with_options(
+                source,
+                &DataType::List(Arc::clone(target_element)),
+                cast_options,
+            )?);
+        }
+    };
+    let Some(list) = list.as_any().downcast_ref::<ListArray>() else {
+        return exec_err!(
+            "Cannot cast column of type {} to list type",
+            source.data_type()
+        );
+    };
+    let values = cast_array_with_schema_evolution_inner(
+        list.values(),
+        target_element.as_ref(),
+        cast_options,
+        matching,
+        relaxed_timezone,
+        allow_nullable_to_required,
+    )?;
+    Ok(Arc::new(ListArray::try_new(
+        Arc::clone(target_element),
+        list.offsets().clone(),
+        values,
+        list.nulls().cloned(),
+    )?))
+}
+
+fn cast_binary_view_to_fixed_size_binary(source: &ArrayRef, byte_width: i32) -> Result<ArrayRef> {
+    if byte_width < 0 {
+        return exec_err!("FixedSizeBinary byte width must be non-negative, got {byte_width}");
+    }
+    let Some(source) = source.as_any().downcast_ref::<BinaryViewArray>() else {
+        return exec_err!("Expected BinaryView array, got {}", source.data_type());
+    };
+
+    let mut builder = FixedSizeBinaryBuilder::with_capacity(source.len(), byte_width);
+    for (index, value) in source.iter().enumerate() {
+        match value {
+            Some(value) if value.len() == byte_width as usize => builder.append_value(value)?,
+            Some(value) => {
+                return exec_err!(
+                    "Cannot cast BinaryView value at index {index} with length {} to FixedSizeBinary({byte_width})",
+                    value.len()
+                );
+            }
+            None => builder.append_null(),
+        }
+    }
+    Ok(Arc::new(builder.finish()))
+}
+
 fn cast_variant_array_with_schema_evolution(
     source: &ArrayRef,
     target_field: &Field,
     cast_options: &CastOptions,
+    allow_nullable_to_required: bool,
 ) -> Result<ArrayRef> {
     let DataType::Struct(target_fields) = target_field.data_type() else {
         return exec_err!(
@@ -964,6 +1165,7 @@ fn cast_variant_array_with_schema_evolution(
         cast_options,
         StructFieldMatching::Name,
         false,
+        allow_nullable_to_required,
     )
 }
 
@@ -973,6 +1175,7 @@ fn cast_struct_array_with_schema_evolution(
     cast_options: &CastOptions,
     matching: StructFieldMatching,
     relaxed_timezone: bool,
+    allow_nullable_to_required: bool,
 ) -> Result<ArrayRef> {
     if source.data_type() == &DataType::Null
         || (!source.is_empty() && source.null_count() == source.len())
@@ -989,13 +1192,19 @@ fn cast_struct_array_with_schema_evolution(
             source.data_type()
         );
     };
-    validate_struct_compatibility_with_variant(source_struct.fields(), target_fields, matching)?;
+    validate_struct_compatibility_with_variant(
+        source_struct.fields(),
+        target_fields,
+        matching,
+        allow_nullable_to_required,
+    )?;
     cast_struct_array_to_fields(
         source,
         target_fields,
         cast_options,
         matching,
         relaxed_timezone,
+        allow_nullable_to_required,
     )
 }
 
@@ -1005,6 +1214,7 @@ fn cast_struct_array_to_fields(
     cast_options: &CastOptions,
     matching: StructFieldMatching,
     relaxed_timezone: bool,
+    allow_nullable_to_required: bool,
 ) -> Result<ArrayRef> {
     let Some(source_struct) = source.as_any().downcast_ref::<StructArray>() else {
         return exec_err!(
@@ -1026,17 +1236,18 @@ fn cast_struct_array_to_fields(
                     cast_options,
                     matching,
                     relaxed_timezone,
+                    allow_nullable_to_required,
                 )?);
             }
             None => arrays.push(new_null_array(target_child.data_type(), num_rows)),
         }
     }
 
-    Ok(Arc::new(StructArray::new(
+    Ok(Arc::new(StructArray::try_new(
         fields.into(),
         arrays,
         source_struct.nulls().cloned(),
-    )))
+    )?))
 }
 
 #[cfg(test)]
@@ -1045,11 +1256,12 @@ mod tests {
     use std::collections::HashMap;
 
     use datafusion::arrow::array::{
-        BinaryViewArray, Int64Array, StringArray, TimestampMicrosecondArray,
-        TimestampMillisecondArray,
+        FixedSizeBinaryArray, Int64Array, LargeListViewArray, ListViewArray, StringArray,
+        TimestampMicrosecondArray, TimestampMillisecondArray,
     };
     use datafusion::arrow::buffer::OffsetBuffer;
     use datafusion::arrow::datatypes::TimeUnit;
+    use datafusion::common::config::ConfigOptions;
     use parquet_variant_compute::{VariantType, json_to_variant, shred_variant, variant_to_json};
 
     use super::*;
@@ -1120,6 +1332,65 @@ mod tests {
     }
 
     #[test]
+    fn rewrites_nested_parquet_view_predicate_as_leaf_cast() -> Result<()> {
+        let logical_schema = Arc::new(Schema::new(vec![Field::new(
+            "payload",
+            DataType::Struct(
+                vec![
+                    Arc::new(Field::new("label", DataType::Utf8View, true)),
+                    Arc::new(Field::new("code", DataType::Int32, true)),
+                ]
+                .into(),
+            ),
+            true,
+        )]));
+        let physical_schema = Arc::new(Schema::new(vec![Field::new(
+            "payload",
+            DataType::Struct(
+                vec![
+                    Arc::new(Field::new("label", DataType::Utf8, true)),
+                    Arc::new(Field::new("code", DataType::Int32, true)),
+                ]
+                .into(),
+            ),
+            true,
+        )]));
+        let adapter = create_schema_evolution_adapter(
+            Arc::clone(&logical_schema),
+            physical_schema,
+            StructFieldMatching::Name,
+            SchemaEvolutionTimezoneMode::Strict,
+        )?;
+        let predicate = Arc::new(ScalarFunctionExpr::try_new(
+            datafusion::functions::core::get_field(),
+            vec![
+                Arc::new(Column::new("payload", 0)),
+                Arc::new(Literal::new(ScalarValue::Utf8(Some("label".to_string())))),
+            ],
+            logical_schema.as_ref(),
+            Arc::new(ConfigOptions::default()),
+        )?) as Arc<dyn PhysicalExpr>;
+
+        let rewritten = adapter.rewrite(predicate)?;
+        let leaf_cast = rewritten
+            .downcast_ref::<SchemaEvolutionCastColumnExpr>()
+            .expect("leaf cast");
+        assert_eq!(leaf_cast.input_field().data_type(), &DataType::Utf8);
+        assert_eq!(leaf_cast.target_field().data_type(), &DataType::Utf8View);
+
+        let cast_children = leaf_cast.children();
+        let field_access =
+            ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(cast_children[0].as_ref())
+                .expect("get_field below leaf cast");
+        let physical_column = field_access.args()[0]
+            .downcast_ref::<Column>()
+            .expect("direct physical column below get_field");
+        assert_eq!(physical_column.name(), "payload");
+        assert_eq!(physical_column.index(), 0);
+        Ok(())
+    }
+
+    #[test]
     fn cast_struct_fields_by_column_id() -> Result<()> {
         let source_fields = vec![
             field_with_id("col-a", PARQUET_FIELD_ID_META_KEY, 1),
@@ -1176,6 +1447,199 @@ mod tests {
                 .value(0),
             10,
         );
+        Ok(())
+    }
+
+    #[test]
+    fn list_container_casts_preserve_nested_struct_matching() -> Result<()> {
+        let source_fields = vec![
+            field_with_id("col-a", PARQUET_FIELD_ID_META_KEY, 1),
+            field_with_id("col-b", PARQUET_FIELD_ID_META_KEY, 2),
+        ];
+        let source_values = Arc::new(StructArray::new(
+            source_fields.into(),
+            vec![
+                Arc::new(Int64Array::from(vec![Some(10)])),
+                Arc::new(Int64Array::from(vec![Some(20)])),
+            ],
+            None,
+        )) as ArrayRef;
+        let source_element = Arc::new(Field::new(
+            "source_element",
+            source_values.data_type().clone(),
+            true,
+        ));
+        let source_arrays: Vec<(&str, ArrayRef)> = vec![
+            (
+                "large_list",
+                Arc::new(LargeListArray::new(
+                    Arc::clone(&source_element),
+                    OffsetBuffer::new(vec![0_i64, 1].into()),
+                    Arc::clone(&source_values),
+                    None,
+                )),
+            ),
+            (
+                "list_view",
+                Arc::new(ListViewArray::new(
+                    Arc::clone(&source_element),
+                    vec![0_i32].into(),
+                    vec![1_i32].into(),
+                    Arc::clone(&source_values),
+                    None,
+                )),
+            ),
+            (
+                "large_list_view",
+                Arc::new(LargeListViewArray::new(
+                    Arc::clone(&source_element),
+                    vec![0_i64].into(),
+                    vec![1_i64].into(),
+                    Arc::clone(&source_values),
+                    None,
+                )),
+            ),
+            (
+                "fixed_size_list",
+                Arc::new(FixedSizeListArray::new(
+                    source_element,
+                    1,
+                    source_values,
+                    None,
+                )),
+            ),
+        ];
+
+        let matching_cases = [
+            (
+                StructFieldMatching::PhysicalName,
+                vec![
+                    Arc::new(
+                        Field::new("logical_b", DataType::Int64, true).with_metadata(
+                            HashMap::from([(
+                                DELTA_COLUMN_MAPPING_PHYSICAL_NAME_METADATA_KEY.to_string(),
+                                "col-b".to_string(),
+                            )]),
+                        ),
+                    ),
+                    Arc::new(
+                        Field::new("logical_a", DataType::Int64, true).with_metadata(
+                            HashMap::from([(
+                                DELTA_COLUMN_MAPPING_PHYSICAL_NAME_METADATA_KEY.to_string(),
+                                "col-a".to_string(),
+                            )]),
+                        ),
+                    ),
+                ],
+            ),
+            (
+                StructFieldMatching::FieldId,
+                vec![
+                    field_with_id("logical_b", "delta.columnMapping.id", 2),
+                    field_with_id("logical_a", "delta.columnMapping.id", 1),
+                ],
+            ),
+        ];
+        for (matching, target_fields) in matching_cases {
+            let target_field = Field::new(
+                "items",
+                DataType::List(Arc::new(Field::new(
+                    "element",
+                    DataType::Struct(target_fields.into()),
+                    true,
+                ))),
+                true,
+            );
+
+            for (container, source) in &source_arrays {
+                assert!(
+                    can_cast_field_with_schema_evolution(
+                        &Field::new("items", source.data_type().clone(), true),
+                        &target_field,
+                        matching,
+                    )?,
+                    "{container} with {matching:?}",
+                );
+                let casted = cast_array_with_schema_evolution(
+                    source,
+                    &target_field,
+                    &DEFAULT_CAST_OPTIONS,
+                    matching,
+                )?;
+                let list = casted
+                    .as_any()
+                    .downcast_ref::<ListArray>()
+                    .expect("list array");
+                let values = list
+                    .values()
+                    .as_any()
+                    .downcast_ref::<StructArray>()
+                    .expect("struct values");
+                assert_eq!(
+                    values
+                        .column_by_name("logical_b")
+                        .expect("logical_b")
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .expect("int64")
+                        .value(0),
+                    20,
+                    "{container} with {matching:?}",
+                );
+                assert_eq!(
+                    values
+                        .column_by_name("logical_a")
+                        .expect("logical_a")
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .expect("int64")
+                        .value(0),
+                    10,
+                    "{container} with {matching:?}",
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn casts_binary_view_to_fixed_size_binary_strictly() -> Result<()> {
+        let source = Arc::new(BinaryViewArray::from(vec![
+            Some(&b"ab"[..]),
+            None,
+            Some(&b"cd"[..]),
+        ])) as ArrayRef;
+        let target = Field::new("value", DataType::FixedSizeBinary(2), true);
+
+        assert!(can_cast_field_with_schema_evolution(
+            &Field::new("value", DataType::BinaryView, true),
+            &target,
+            StructFieldMatching::Name,
+        )?);
+        let casted = cast_array_with_schema_evolution(
+            &source,
+            &target,
+            &DEFAULT_CAST_OPTIONS,
+            StructFieldMatching::Name,
+        )?;
+        let casted = casted
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .expect("fixed-size binary");
+        assert_eq!(casted.value(0), b"ab");
+        assert!(casted.is_null(1));
+        assert_eq!(casted.value(2), b"cd");
+
+        let invalid = Arc::new(BinaryViewArray::from(vec![Some(&b"x"[..]), None])) as ArrayRef;
+        let error = cast_array_with_schema_evolution(
+            &invalid,
+            &target,
+            &DEFAULT_CAST_OPTIONS,
+            StructFieldMatching::Name,
+        )
+        .expect_err("invalid byte width must fail");
+        assert!(error.to_string().contains("index 0"));
+        assert!(error.to_string().contains("length 1"));
         Ok(())
     }
 

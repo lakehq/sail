@@ -881,11 +881,15 @@
   default: "true"
   description: |
     Whether query output boundaries should coerce view types to non-view types.
+    When enabled, protocols without a dedicated Arrow output adapter, such as Flight, materialize
+    `Utf8View` and `BinaryView` as `LargeUtf8` and `LargeBinary` in the logical output plan,
+    preserving their public Arrow schema contract.
     Spark Connect applies this policy in its Arrow output adapter so view arrays remain available
     to the query engine. If the value is `true`, Spark Connect emits regular `Utf8` and `Binary`
     arrays by default, or `LargeUtf8` and `LargeBinary` when
     `spark.sql.execution.arrow.useLargeVarTypes` is enabled. If the value is `false`, view types
-    pass through to the client while existing offset-based arrays still honor the configured width.
+    remain unchanged; Spark Connect still applies the configured width to existing offset-based
+    arrays.
   experimental: true
 
 - key: spark.session_timeout_secs
