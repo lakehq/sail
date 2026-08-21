@@ -326,10 +326,12 @@ impl IcebergTableProvider {
                 ))
             })?;
             if !identity_fields.contains_key(&field.id) {
-                return Err(datafusion::common::DataFusionError::NotImplemented(format!(
-                    "Iceberg predicate overwrite supports only identity-partition columns; use DELETE ... WHERE followed by INSERT for '{}'",
-                    column.name
-                )));
+                return Err(datafusion::common::DataFusionError::NotImplemented(
+                    format!(
+                        "Iceberg predicate overwrite supports only identity-partition columns; use DELETE ... WHERE followed by INSERT for '{}'",
+                        column.name
+                    ),
+                ));
             }
         }
 

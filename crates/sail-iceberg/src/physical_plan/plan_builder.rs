@@ -69,10 +69,7 @@ impl<'a> IcebergPlanBuilder<'a> {
         }
     }
 
-    pub fn with_expected_snapshot_id(
-        mut self,
-        expected_snapshot_id: Option<Option<i64>>,
-    ) -> Self {
+    pub fn with_expected_snapshot_id(mut self, expected_snapshot_id: Option<Option<i64>>) -> Self {
         self.expected_snapshot_id = expected_snapshot_id;
         self
     }

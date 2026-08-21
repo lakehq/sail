@@ -603,8 +603,13 @@ pub(crate) async fn plan_iceberg_write(
         write_context,
     };
 
-    let mut builder =
-        IcebergPlanBuilder::new(physical_input, table_config, mode.clone(), physical_sort, ctx);
+    let mut builder = IcebergPlanBuilder::new(
+        physical_input,
+        table_config,
+        mode.clone(),
+        physical_sort,
+        ctx,
+    );
     if matches!(mode, PhysicalSinkMode::OverwriteIf { .. }) {
         builder = builder
             .with_expected_snapshot_id(expected_snapshot_id)
@@ -1195,10 +1200,9 @@ mod tests {
 
     #[test]
     fn dynamic_partition_overwrite_missing_table_is_a_plan_error() -> Result<()> {
-        let Err(error) = validate_scoped_overwrite_table(
-            &PhysicalSinkMode::OverwritePartitions,
-            false,
-        ) else {
+        let Err(error) =
+            validate_scoped_overwrite_table(&PhysicalSinkMode::OverwritePartitions, false)
+        else {
             return plan_err!("missing target must fail");
         };
         assert!(matches!(error, DataFusionError::Plan(_)));
