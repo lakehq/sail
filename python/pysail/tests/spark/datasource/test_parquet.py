@@ -234,7 +234,7 @@ def test_arrow_output_width_is_selected_per_action_for_regular_empty_and_command
         spark.conf.set(key, previous)
 
 
-def test_arrow_output_preserves_views_when_output_expansion_is_disabled(tmp_path):
+def test_arrow_output_policies_are_selected_per_action(tmp_path):
     path = tmp_path / "parquet_arrow_output_views_disabled.parquet"
     pq.write_table(
         pa.table(
@@ -249,11 +249,66 @@ def test_arrow_output_preserves_views_when_output_expansion_is_disabled(tmp_path
     envs = {"SAIL_OPTIMIZER__EXPAND_VIEWS_AT_OUTPUT": "false"}
     with spark_connect_server(envs=envs) as server, spark_session_factory(server.remote) as sessions:
         isolated_spark = sessions.create()
-        table, _ = isolated_spark.read.parquet(str(path))._to_table()  # noqa: SLF001
+        view_df = isolated_spark.read.parquet(str(path)).selectExpr(
+            "label",
+            "payload",
+            "named_struct('items', array(label), 'mapping', map(label, payload)) AS nested",
+        )
+        offset_df = isolated_spark.sql(
+            """
+            SELECT
+              'value' AS label,
+              CAST('bytes' AS BINARY) AS payload,
+              named_struct(
+                'items', array('nested'),
+                'mapping', map('key', CAST('value' AS BINARY))
+              ) AS nested
+            """
+        )
+        config_key = "spark.sql.execution.arrow.useLargeVarTypes"
+        previous_value = isolated_spark.conf.get(config_key)
+        try:
+            for use_large_var_types in (False, True):
+                isolated_spark.conf.set(config_key, str(use_large_var_types).lower())
+                expected_string = pa.large_string() if use_large_var_types else pa.string()
+                expected_binary = pa.large_binary() if use_large_var_types else pa.binary()
 
-    assert table.schema.field("label").type == pa.string_view()
-    assert table.schema.field("payload").type == pa.binary_view()
-    assert table.to_pylist() == [{"label": "value", "payload": b"bytes"}]
+                view_table, _ = view_df._to_table()  # noqa: SLF001
+                offset_table, _ = offset_df._to_table()  # noqa: SLF001
+
+                assert view_table.schema.field("label").type == pa.string_view()
+                assert view_table.schema.field("payload").type == pa.binary_view()
+                view_nested = view_table.schema.field("nested").type
+                assert view_nested.field("items").type.value_type == pa.string_view()
+                assert view_nested.field("mapping").type.key_type == pa.string_view()
+                assert view_nested.field("mapping").type.item_type == pa.binary_view()
+                assert view_table.to_pylist() == [
+                    {
+                        "label": "value",
+                        "payload": b"bytes",
+                        "nested": {"items": ["value"], "mapping": [("value", b"bytes")]},
+                    }
+                ]
+
+                assert offset_table.schema.field("label").type == expected_string
+                assert offset_table.schema.field("payload").type == expected_binary
+                offset_nested = offset_table.schema.field("nested").type
+                assert offset_nested.field("items").type.value_type == expected_string
+                assert offset_nested.field("mapping").type.key_type == expected_string
+                assert offset_nested.field("mapping").type.item_type == expected_binary
+
+            isolated_spark.conf.set(config_key, "false")
+            isolated_spark.sql("SET datafusion.optimizer.expand_views_at_output = true").collect()
+            expanded_table, _ = view_df._to_table()  # noqa: SLF001
+            assert expanded_table.schema.field("label").type == pa.string()
+            assert expanded_table.schema.field("payload").type == pa.binary()
+
+            isolated_spark.sql("SET datafusion.optimizer.expand_views_at_output = false").collect()
+            preserved_table, _ = view_df._to_table()  # noqa: SLF001
+            assert preserved_table.schema.field("label").type == pa.string_view()
+            assert preserved_table.schema.field("payload").type == pa.binary_view()
+        finally:
+            isolated_spark.conf.set(config_key, previous_value)
 
 
 @pytest.mark.parametrize("force_view_types", [False, True])

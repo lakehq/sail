@@ -293,13 +293,18 @@ def test_parquet_view_output_honors_arrow_width_config_across_cluster(
     expected_binary_type,
 ):
     path = tmp_path / "view_output_width.parquet"
-    pd.DataFrame({"key": ["alpha"], "raw": [b"bytes"]}).to_parquet(path)
+    pd.DataFrame(
+        {
+            "key": ["beta", "alpha"],
+            "raw": [b"second", b"first"],
+        }
+    ).to_parquet(path)
 
     config_key = "spark.sql.execution.arrow.useLargeVarTypes"
     previous_value = spark.conf.get(config_key)
     spark.conf.set(config_key, str(use_large_var_types).lower())
     try:
-        table, _ = (
+        df = (
             spark.read.parquet(str(path))
             .repartition(2, "key")
             .select(
@@ -310,18 +315,23 @@ def test_parquet_view_output_honors_arrow_width_config_across_cluster(
                     F.create_map("key", "raw").alias("mapping"),
                 ).alias("nested"),
             )
-            ._to_table()  # noqa: SLF001
+            .orderBy("key")
         )
+        table, _ = df._to_table()  # noqa: SLF001
+        empty, _ = df.where("false")._to_table()  # noqa: SLF001
     finally:
         spark.conf.set(config_key, previous_value)
 
-    assert table.schema.field("key").type == expected_string_type
-    assert table.schema.field("raw").type == expected_binary_type
-    nested_type = table.schema.field("nested").type
-    assert nested_type.field("items").type.value_type == expected_string_type
-    mapping_type = nested_type.field("mapping").type
-    assert mapping_type.key_type == expected_string_type
-    assert mapping_type.item_type == expected_binary_type
+    assert table.column("key").to_pylist() == ["alpha", "beta"]
+    assert empty.num_rows == 0
+    for output in (table, empty):
+        assert output.schema.field("key").type == expected_string_type
+        assert output.schema.field("raw").type == expected_binary_type
+        nested_type = output.schema.field("nested").type
+        assert nested_type.field("items").type.value_type == expected_string_type
+        mapping_type = nested_type.field("mapping").type
+        assert mapping_type.key_type == expected_string_type
+        assert mapping_type.item_type == expected_binary_type
 
 
 def test_coalesce_plan_contains_dedicated_exec_in_cluster_mode(spark):

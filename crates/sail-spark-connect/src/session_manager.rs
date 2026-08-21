@@ -12,6 +12,7 @@ use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_plan::catalog::SparkCatalogObjectDisplay;
 use sail_plan::formatter::SparkPlanFormatter;
+use sail_session::optimizer::spark_connect_analyzer_rules;
 use sail_session::session_factory::{
     ServerSessionFactory, ServerSessionInfo, ServerSessionMutator, SessionFactory,
 };
@@ -54,7 +55,7 @@ impl ServerSessionMutator for SparkSessionMutator {
         builder: SessionStateBuilder,
         _info: &ServerSessionInfo,
     ) -> Result<SessionStateBuilder> {
-        Ok(builder)
+        Ok(builder.with_analyzer_rules(spark_connect_analyzer_rules()))
     }
 
     fn mutate_runtime_env(

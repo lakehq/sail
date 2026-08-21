@@ -1,4 +1,4 @@
-//! Materializes Arrow view arrays only when results leave a query.
+//! Materializes Arrow view arrays at the logical output of protocols without an output adapter.
 //!
 //! With `parquet.schema_force_view_types` enabled, Parquet scans use `Utf8View` and `BinaryView`
 //! to avoid eagerly converting decoded values to offset-based arrays before internal operators
@@ -6,7 +6,8 @@
 //! as offset-based `Utf8`/`LargeUtf8` and `Binary`/`LargeBinary`; it does not accept `Utf8View`
 //! or `BinaryView` for those logical types. `optimizer.expand_views_at_output` therefore coerces
 //! only the root output to regular `Utf8` and `Binary`, reusing an existing root projection when
-//! possible. The Spark transport boundary applies the configured regular or large offset width.
+//! possible. Spark Connect omits this analyzer rule and applies its output policy at the Arrow
+//! transport boundary instead.
 //!
 //! DataFusion's built-in output coercion handles top-level view fields only. Spark results can
 //! also contain views nested in lists, structs, maps, dictionaries, unions, and run-end encoded

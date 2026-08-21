@@ -15,43 +15,56 @@ use datafusion::arrow::ipc::reader::StreamReader;
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion_common::{DataFusionError, Result};
 
-fn normalize_spark_arrow_field(field: &FieldRef, use_large_var_types: bool) -> FieldRef {
+fn normalize_spark_arrow_output_field(
+    field: &FieldRef,
+    expand_views: bool,
+    use_large_var_types: bool,
+) -> FieldRef {
     Arc::new(
         field
             .as_ref()
             .clone()
-            .with_data_type(normalize_spark_arrow_data_type(
+            .with_data_type(normalize_spark_arrow_output_data_type(
                 field.data_type(),
+                expand_views,
                 use_large_var_types,
             )),
     )
 }
 
-fn normalize_spark_arrow_list_element(field: &FieldRef, use_large_var_types: bool) -> FieldRef {
+fn normalize_spark_arrow_list_element(
+    field: &FieldRef,
+    expand_views: bool,
+    use_large_var_types: bool,
+) -> FieldRef {
     Arc::new(
-        normalize_spark_arrow_field(field, use_large_var_types)
+        normalize_spark_arrow_output_field(field, expand_views, use_large_var_types)
             .as_ref()
             .clone()
             .with_name("element"),
     )
 }
 
-fn normalize_spark_arrow_map_entries(field: &FieldRef, use_large_var_types: bool) -> FieldRef {
+fn normalize_spark_arrow_map_entries(
+    field: &FieldRef,
+    expand_views: bool,
+    use_large_var_types: bool,
+) -> FieldRef {
     let DataType::Struct(fields) = field.data_type() else {
-        return normalize_spark_arrow_field(field, use_large_var_types);
+        return normalize_spark_arrow_output_field(field, expand_views, use_large_var_types);
     };
     let [key, value] = fields.as_ref() else {
-        return normalize_spark_arrow_field(field, use_large_var_types);
+        return normalize_spark_arrow_output_field(field, expand_views, use_large_var_types);
     };
     let key = Arc::new(
-        normalize_spark_arrow_field(key, use_large_var_types)
+        normalize_spark_arrow_output_field(key, expand_views, use_large_var_types)
             .as_ref()
             .clone()
             .with_name("key")
             .with_nullable(false),
     );
     let value = Arc::new(
-        normalize_spark_arrow_field(value, use_large_var_types)
+        normalize_spark_arrow_output_field(value, expand_views, use_large_var_types)
             .as_ref()
             .clone()
             .with_name("value"),
@@ -66,15 +79,13 @@ fn normalize_spark_arrow_map_entries(field: &FieldRef, use_large_var_types: bool
     )
 }
 
-/// Normalizes Arrow types at a boundary consumed by Spark.
-///
-/// Spark expects offset-based string, binary, and list arrays. The requested string and binary
-/// width is applied recursively while Arrow-only encodings are materialized.
-pub fn normalize_spark_arrow_data_type(
+fn normalize_spark_arrow_output_data_type(
     data_type: &DataType,
+    expand_views: bool,
     use_large_var_types: bool,
 ) -> DataType {
     match data_type {
+        DataType::BinaryView if !expand_views => DataType::BinaryView,
         DataType::Binary
         | DataType::LargeBinary
         | DataType::BinaryView
@@ -87,6 +98,7 @@ pub fn normalize_spark_arrow_data_type(
         | DataType::LargeBinary
         | DataType::BinaryView
         | DataType::FixedSizeBinary(_) => DataType::Binary,
+        DataType::Utf8View if !expand_views => DataType::Utf8View,
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View if use_large_var_types => {
             DataType::LargeUtf8
         }
@@ -97,37 +109,67 @@ pub fn normalize_spark_arrow_data_type(
         | DataType::LargeList(field)
         | DataType::LargeListView(field) => DataType::List(normalize_spark_arrow_list_element(
             field,
+            expand_views,
             use_large_var_types,
         )),
         DataType::Struct(fields) => DataType::Struct(
             fields
                 .iter()
-                .map(|field| normalize_spark_arrow_field(field, use_large_var_types))
+                .map(|field| {
+                    normalize_spark_arrow_output_field(field, expand_views, use_large_var_types)
+                })
                 .collect(),
         ),
         DataType::Dictionary(_, value) => {
-            normalize_spark_arrow_data_type(value, use_large_var_types)
+            normalize_spark_arrow_output_data_type(value, expand_views, use_large_var_types)
         }
         DataType::Map(field, _) => DataType::Map(
-            normalize_spark_arrow_map_entries(field, use_large_var_types),
+            normalize_spark_arrow_map_entries(field, expand_views, use_large_var_types),
             false,
         ),
-        DataType::RunEndEncoded(_, values) => {
-            normalize_spark_arrow_data_type(values.data_type(), use_large_var_types)
-        }
+        DataType::RunEndEncoded(_, values) => normalize_spark_arrow_output_data_type(
+            values.data_type(),
+            expand_views,
+            use_large_var_types,
+        ),
         _ => data_type.clone(),
     }
 }
 
-pub fn normalize_spark_arrow_schema(schema: &Schema, use_large_var_types: bool) -> Schema {
+/// Normalizes Arrow types at a boundary consumed by Spark.
+///
+/// Spark expects offset-based string, binary, and list arrays. The requested string and binary
+/// width is applied recursively while Arrow-only encodings are materialized.
+pub fn normalize_spark_arrow_data_type(
+    data_type: &DataType,
+    use_large_var_types: bool,
+) -> DataType {
+    normalize_spark_arrow_output_data_type(data_type, true, use_large_var_types)
+}
+
+/// Normalizes a Spark Connect Arrow output schema according to an action-scoped policy.
+///
+/// View arrays remain views when `expand_views` is disabled. Existing offset-based string and
+/// binary arrays still use the requested regular or large width, including in nested types.
+pub fn normalize_spark_arrow_output_schema(
+    schema: &Schema,
+    expand_views: bool,
+    use_large_var_types: bool,
+) -> Schema {
     Schema::new_with_metadata(
         schema
             .fields()
             .iter()
-            .map(|field| normalize_spark_arrow_field(field, use_large_var_types))
+            .map(|field| {
+                normalize_spark_arrow_output_field(field, expand_views, use_large_var_types)
+            })
             .collect::<Vec<_>>(),
         schema.metadata().clone(),
     )
+}
+
+pub fn normalize_spark_arrow_schema(schema: &Schema, use_large_var_types: bool) -> Schema {
+    normalize_spark_arrow_output_schema(schema, true, use_large_var_types)
 }
 
 pub fn normalize_spark_arrow_array(
@@ -657,6 +699,102 @@ mod tests {
             assert!(matches!(normalized, DataType::List(_)));
             if let DataType::List(element) = normalized {
                 assert_eq!(element.name(), "element");
+            }
+        }
+    }
+
+    #[test]
+    fn normalize_spark_arrow_output_schema_applies_view_and_width_policies_independently() {
+        let map_entries = Arc::new(Field::new(
+            "source_entries",
+            DataType::Struct(
+                vec![
+                    Arc::new(Field::new("source_key", DataType::Utf8View, false)),
+                    Arc::new(Field::new("source_value", DataType::LargeBinary, true)),
+                ]
+                .into(),
+            ),
+            false,
+        ));
+        let schema = Schema::new(vec![
+            Field::new("view_text", DataType::Utf8View, true),
+            Field::new("view_bytes", DataType::BinaryView, true),
+            Field::new("offset_text", DataType::LargeUtf8, true),
+            Field::new("offset_bytes", DataType::Binary, true),
+            Field::new(
+                "nested",
+                DataType::Struct(
+                    vec![
+                        Arc::new(Field::new(
+                            "items",
+                            DataType::List(Arc::new(Field::new(
+                                "source_item",
+                                DataType::Utf8View,
+                                true,
+                            ))),
+                            true,
+                        )),
+                        Arc::new(Field::new("lookup", DataType::Map(map_entries, true), true)),
+                    ]
+                    .into(),
+                ),
+                true,
+            ),
+        ]);
+
+        for (expand_views, use_large_var_types) in
+            [(false, false), (false, true), (true, false), (true, true)]
+        {
+            let normalized =
+                normalize_spark_arrow_output_schema(&schema, expand_views, use_large_var_types);
+            let offset_text = if use_large_var_types {
+                DataType::LargeUtf8
+            } else {
+                DataType::Utf8
+            };
+            let offset_binary = if use_large_var_types {
+                DataType::LargeBinary
+            } else {
+                DataType::Binary
+            };
+            let view_text = if expand_views {
+                offset_text.clone()
+            } else {
+                DataType::Utf8View
+            };
+            let view_binary = if expand_views {
+                offset_binary.clone()
+            } else {
+                DataType::BinaryView
+            };
+
+            assert_eq!(normalized.field(0).data_type(), &view_text);
+            assert_eq!(normalized.field(1).data_type(), &view_binary);
+            assert_eq!(normalized.field(2).data_type(), &offset_text);
+            assert_eq!(normalized.field(3).data_type(), &offset_binary);
+
+            assert!(matches!(
+                normalized.field(4).data_type(),
+                DataType::Struct(_)
+            ));
+            if let DataType::Struct(nested_fields) = normalized.field(4).data_type() {
+                assert!(matches!(nested_fields[0].data_type(), DataType::List(_)));
+                if let DataType::List(element) = nested_fields[0].data_type() {
+                    assert_eq!(element.name(), "element");
+                    assert_eq!(element.data_type(), &view_text);
+                }
+                assert!(matches!(nested_fields[1].data_type(), DataType::Map(_, _)));
+                if let DataType::Map(entries, sorted) = nested_fields[1].data_type() {
+                    assert!(!sorted);
+                    assert_eq!(entries.name(), "entries");
+                    assert!(matches!(entries.data_type(), DataType::Struct(_)));
+                    if let DataType::Struct(entry_fields) = entries.data_type() {
+                        assert_eq!(entry_fields[0].name(), "key");
+                        assert_eq!(entry_fields[0].data_type(), &view_text);
+                        assert_eq!(entry_fields[1].name(), "value");
+                        assert_eq!(entry_fields[1].data_type(), &offset_binary);
+                    }
+                }
             }
         }
     }

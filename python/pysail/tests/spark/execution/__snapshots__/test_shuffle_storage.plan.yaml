@@ -43,9 +43,6 @@ data:
                     Projection: #3 AS k AS #4, #3 + CAST(Int32(1) AS Int64) AS v2 AS #5
                       Range: start=0, end=64, step=1, num_partitions=4
   
-    logical_plan after expand_view_types_at_output:
-    SAME TEXT AS ABOVE
-  
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
   

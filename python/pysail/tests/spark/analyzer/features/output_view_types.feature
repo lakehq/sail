@@ -1,4 +1,4 @@
-Feature: View types are expanded only at query output
+Feature: View types are materialized at the Spark Arrow output boundary
 
   Background:
     Given variable location for temporary directory explain_parquet_view_types
@@ -39,7 +39,7 @@ Feature: View types are expanded only at query output
       ) AS sketches
       """
 
-  Scenario: EXPLAIN FORMATTED shows view types below the output boundary
+  Scenario: EXPLAIN FORMATTED keeps view types through the physical root
     When query template
       """
       EXPLAIN FORMATTED

@@ -13,7 +13,7 @@ use futures::{StreamExt, stream};
 use log::{debug, warn};
 use sail_common::spec;
 use sail_common_datafusion::array::record_batch::{
-    cast_record_batch_positionally, normalize_spark_arrow_schema,
+    cast_record_batch_positionally, normalize_spark_arrow_output_schema,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::job::JobService;
@@ -116,14 +116,21 @@ impl Stream for ExecutePlanResponseStream {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SparkArrowOutputPolicy {
+    expand_views: bool,
+    use_large_var_types: bool,
+}
+
 fn normalize_arrow_output_stream(
     stream: SendableRecordBatchStream,
-    use_large_var_types: bool,
+    policy: SparkArrowOutputPolicy,
 ) -> SparkResult<SendableRecordBatchStream> {
     let input_schema = stream.schema();
-    let output_schema = Arc::new(normalize_spark_arrow_schema(
+    let output_schema = Arc::new(normalize_spark_arrow_output_schema(
         input_schema.as_ref(),
-        use_large_var_types,
+        policy.expand_views,
+        policy.use_large_var_types,
     ));
     if output_schema == input_schema {
         return Ok(stream);
@@ -152,22 +159,20 @@ async fn handle_execute_plan(
     let service = ctx.extension::<JobService>()?;
     let operation_id = metadata.operation_id.clone();
     let plan_config = spark.plan_config()?;
-    let use_large_var_types = plan_config.arrow_use_large_var_types;
-    let normalize_arrow_output = ctx
-        .state()
-        .config_options()
-        .optimizer
-        .expand_views_at_output;
+    let output_policy = SparkArrowOutputPolicy {
+        expand_views: ctx
+            .state()
+            .config_options()
+            .optimizer
+            .expand_views_at_output,
+        use_large_var_types: plan_config.arrow_use_large_var_types,
+    };
     let (plan, _) = resolve_and_execute_plan(ctx, plan_config, plan).await?;
     let stream = {
         let span = Span::enter_with_parent("JobRunner::execute", &span);
         service.runner().execute(ctx, plan).in_span(span).await?
     };
-    let stream = if normalize_arrow_output {
-        normalize_arrow_output_stream(stream, use_large_var_types)?
-    } else {
-        stream
-    };
+    let stream = normalize_arrow_output_stream(stream, output_policy)?;
     let _guard = span.set_local_parent();
     let executor = Executor::new(
         metadata,
@@ -749,4 +754,66 @@ pub(crate) async fn handle_execute_register_datasource(
         metadata.operation_id,
         Box::pin(stream::iter(output.into_iter().map(Ok))),
     ))
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod tests {
+    use datafusion::arrow::array::{LargeStringArray, StringViewArray};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::arrow::record_batch::RecordBatch;
+    use futures::TryStreamExt;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn arrow_output_normalization_preserves_batch_boundaries_and_order() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Utf8View,
+            false,
+        )]));
+        let first = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(StringViewArray::from(vec!["alpha", "beta"]))],
+        )
+        .unwrap();
+        let second = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(StringViewArray::from(vec!["gamma"]))],
+        )
+        .unwrap();
+        let input: SendableRecordBatchStream = Box::pin(RecordBatchStreamAdapter::new(
+            schema,
+            stream::iter(vec![Ok(first), Ok(second)]),
+        ));
+
+        let output = normalize_arrow_output_stream(
+            input,
+            SparkArrowOutputPolicy {
+                expand_views: true,
+                use_large_var_types: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(output.schema().field(0).data_type(), &DataType::LargeUtf8);
+
+        let batches = output.try_collect::<Vec<_>>().await.unwrap();
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].num_rows(), 2);
+        assert_eq!(batches[1].num_rows(), 1);
+        let values = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<LargeStringArray>()
+                    .unwrap()
+                    .iter()
+                    .map(Option::unwrap)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec!["alpha", "beta", "gamma"]);
+    }
 }

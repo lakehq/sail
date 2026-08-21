@@ -866,10 +866,12 @@
   type: boolean
   default: "true"
   description: |
-    Whether the optimizer should coerce view types to non-view types at query output.
-    If the value is `true`, Spark Connect emits regular `Utf8` and `Binary` arrays by default,
-    or `LargeUtf8` and `LargeBinary` when `spark.sql.execution.arrow.useLargeVarTypes` is enabled.
-    If the value is `false`, view types pass through to the client.
+    Whether query output boundaries should coerce view types to non-view types.
+    Spark Connect applies this policy in its Arrow output adapter so view arrays remain available
+    to the query engine. If the value is `true`, Spark Connect emits regular `Utf8` and `Binary`
+    arrays by default, or `LargeUtf8` and `LargeBinary` when
+    `spark.sql.execution.arrow.useLargeVarTypes` is enabled. If the value is `false`, view types
+    pass through to the client while existing offset-based arrays still honor the configured width.
   experimental: true
 
 - key: spark.session_timeout_secs

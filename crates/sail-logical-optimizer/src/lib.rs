@@ -31,7 +31,7 @@ impl AnalyzerRule for SparkTypeCoercion {
     }
 }
 
-pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
+fn spark_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
     // FIXME: Create analyzer rule for TypeCoercion in Sail
     //  so we don't have to depend on DataFusion's implementation which is incorrect for Spark.
     let Analyzer {
@@ -47,10 +47,19 @@ pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
             rule
         }
     }));
-    // Run this after the built-in analyzer rules so only the final root schema is expanded;
-    // casting scan or intermediate schemas would discard the benefit of keeping view arrays.
+    rules
+}
+
+pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
+    let mut rules = spark_analyzer_rules();
+    // Protocols without a dedicated Arrow output adapter still materialize view arrays in the
+    // logical plan. Spark Connect performs this conversion at its Arrow transport boundary.
     rules.push(Arc::new(ExpandViewTypesAtOutput));
     rules
+}
+
+pub fn spark_connect_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
+    spark_analyzer_rules()
 }
 
 pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
@@ -69,4 +78,29 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
     // arguments, and the lambda variable fields must be refreshed to match.
     custom.push(Arc::new(ResolveLambdaVariables));
     custom
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rule_names(rules: &[Arc<dyn AnalyzerRule + Send + Sync>]) -> Vec<String> {
+        rules.iter().map(|rule| rule.name().to_string()).collect()
+    }
+
+    #[test]
+    fn spark_connect_does_not_expand_views_in_the_analyzer() {
+        let default_rules = rule_names(&default_analyzer_rules());
+        let spark_connect_rules = rule_names(&spark_connect_analyzer_rules());
+
+        assert_eq!(
+            default_rules.last().map(String::as_str),
+            Some("expand_view_types_at_output")
+        );
+        assert_eq!(
+            &default_rules[..default_rules.len() - 1],
+            spark_connect_rules
+        );
+        assert!(!spark_connect_rules.contains(&"expand_view_types_at_output".to_string()));
+    }
 }
