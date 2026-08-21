@@ -806,6 +806,17 @@ impl<'a> SnapshotProducer<'a> {
         if removed_data_file_paths.iter().any(String::is_empty) {
             return Err("Iceberg removed data file path cannot be empty".to_string());
         }
+        // A mixed MERGE can produce inserts without touching any target file at
+        // runtime. That is an append, even though the planned strategy is COW.
+        let update_kind = if update_kind == SnapshotUpdateKind::CopyOnWrite
+            && removed_data_file_paths.is_empty()
+            && !self.added_data_files.is_empty()
+            && self.added_delete_files.is_empty()
+        {
+            SnapshotUpdateKind::FastAppend
+        } else {
+            update_kind
+        };
         if update_kind.is_targeted_rewrite() {
             if !self.added_delete_files.is_empty() {
                 return Err(

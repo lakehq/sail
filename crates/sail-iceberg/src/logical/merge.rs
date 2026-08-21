@@ -18,9 +18,9 @@ use crate::row_level_metadata::{MERGE_PARTITION_COLUMN, MERGE_PARTITION_SPEC_ID_
 
 /// Expand MERGE information into a unified row-level write node for Iceberg.
 ///
-/// Iceberg MERGE is planned as merge-on-read: target rows affected by DELETE or
-/// UPDATE clauses are represented by position deletes, and UPDATE/INSERT output
-/// rows are appended as new data files.
+/// The expanded effects support both copy-on-write and merge-on-read physical
+/// strategies. Iceberg metadata columns remain available for the MOR writer,
+/// while the touched-file effect identifies the files rewritten by COW.
 pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
     // TODO: Add Iceberg MERGE schema evolution support.
     if info.options.with_schema_evolution {
@@ -35,9 +35,9 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
             MERGE_PARTITION_COLUMN,
         ],
     )?;
-    let expected_snapshot_id = Some(merge_target_snapshot_id(info.target.as_ref())?);
+    let expected_snapshot_id = Some(row_level_target_snapshot_id(info.target.as_ref())?);
     let row_index_column = merge_needs_position_deletes(&info).then_some(MERGE_ROW_INDEX_COLUMN);
-    let mut target_plan = ensure_merge_metadata_columns(
+    let mut target_plan = ensure_row_level_metadata_columns(
         info.target.as_ref().clone(),
         MERGE_FILE_COLUMN,
         row_index_column,
@@ -93,16 +93,12 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         row_index_column,
         &[MERGE_PARTITION_SPEC_ID_COLUMN, MERGE_PARTITION_COLUMN],
     )?;
-    // Iceberg consumes delete metadata from the write plan. RowLevelWriteNode still
-    // requires a touched-file input, so use an empty placeholder instead of planning
-    // cloned joins that would duplicate the source and target scans.
-    let placeholder_touched_plan = LogicalPlanBuilder::empty(false).build()?;
     let write_node = RowLevelWriteNode::new_merge(
         raw_target,
         raw_source,
         raw_input_schema,
         Arc::new(expansion.write_plan),
-        Arc::new(placeholder_touched_plan),
+        Arc::new(expansion.touched_files_plan),
         None,
         expansion.options,
         expansion.output_schema,
@@ -114,7 +110,7 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
     }))
 }
 
-fn merge_target_snapshot_id(plan: &LogicalPlan) -> Result<Option<i64>> {
+pub(super) fn row_level_target_snapshot_id(plan: &LogicalPlan) -> Result<Option<i64>> {
     let mut snapshot_id = None;
     plan.apply(|node| {
         if let LogicalPlan::TableScan(scan) = node
@@ -186,7 +182,7 @@ fn try_enable_merge_metadata_columns(
     Ok(None)
 }
 
-fn ensure_merge_metadata_columns(
+pub(super) fn ensure_row_level_metadata_columns(
     plan: LogicalPlan,
     file_col: &str,
     row_index_col: Option<&str>,

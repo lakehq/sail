@@ -1,3 +1,5 @@
+# ruff: noqa: S608
+
 import time
 import uuid
 from pathlib import Path
@@ -360,8 +362,8 @@ def test_iceberg_sql_delete_rejects_partitioned_equality_delete_without_metadata
 
 
 @pytest.mark.parametrize("delete_mode", [None, "copy-on-write"], ids=["default", "explicit-cow"])
-def test_iceberg_sql_delete_rejects_copy_on_write_before_scanning_empty_table(spark, tmp_path, delete_mode):
-    table_name = "iceberg_delete_copy_on_write_reject"
+def test_iceberg_sql_delete_copy_on_write_rewrites_only_touched_files(spark, tmp_path, delete_mode):
+    table_name = "iceberg_delete_copy_on_write"
     table_path = tmp_path / table_name
     mode_property = "" if delete_mode is None else f", 'write.delete.mode' = '{delete_mode}'"
 
@@ -371,22 +373,56 @@ def test_iceberg_sql_delete_rejects_copy_on_write_before_scanning_empty_table(sp
             f"""
             CREATE TABLE {table_name} (
               id BIGINT,
-              name STRING
+              name STRING,
+              selected BOOLEAN
             )
             USING iceberg
             LOCATION '{_uri_sql(table_path)}'
             TBLPROPERTIES ('format-version' = '2'{mode_property})
             """
         )
-        before_metadata_path = _latest_metadata_path(table_path)
-        before_parquet_files = _parquet_file_paths(table_path)
+        spark.sql(f"INSERT INTO {table_name} VALUES (1, 'drop', true), (2, 'keep', false), (3, 'unknown', NULL)")
+        spark.sql(f"INSERT INTO {table_name} VALUES (4, 'untouched', false)")
+        before_noop_metadata = _find_latest_metadata(table_path)
+        before_manifests = _current_manifest_list(before_noop_metadata)["manifests"]
+        before_manifest_paths = {manifest["manifest-path"] for manifest in before_manifests}
+        before_noop_metadata_path = _latest_metadata_path(table_path)
+        before_manifest_files = set((table_path / "metadata").glob("manifest-*.avro"))
 
-        with pytest.raises(Exception, match=r"write\.delete\.mode=copy-on-write|copy-on-write.*not supported"):
-            spark.sql("DELETE FROM iceberg_delete_copy_on_write_reject WHERE id = 1").collect()
+        spark.sql(f"DELETE FROM {table_name} WHERE id = 999").collect()
+        noop_metadata = _find_latest_metadata(table_path)
+        noop_snapshot = _current_snapshot(noop_metadata)
+        assert _latest_metadata_path(table_path) != before_noop_metadata_path
+        assert len(noop_metadata["snapshots"]) == len(before_noop_metadata["snapshots"]) + 1
+        assert noop_snapshot["summary"]["operation"] == "overwrite"
+        assert {
+            manifest["manifest-path"] for manifest in _current_manifest_list(noop_metadata)["manifests"]
+        } == before_manifest_paths
+        assert set((table_path / "metadata").glob("manifest-*.avro")) == before_manifest_files
 
-        assert spark.sql("SELECT * FROM iceberg_delete_copy_on_write_reject").collect() == []
-        assert _latest_metadata_path(table_path) == before_metadata_path
-        assert _parquet_file_paths(table_path) == before_parquet_files
+        spark.sql(f"DELETE FROM {table_name} AS target WHERE target.selected").collect()
+
+        rows = [tuple(row) for row in spark.sql(f"SELECT id, name, selected FROM {table_name} ORDER BY id").collect()]
+        assert rows == [
+            (2, "keep", False),
+            (3, "unknown", None),
+            (4, "untouched", False),
+        ]
+        metadata = _find_latest_metadata(table_path)
+        snapshot = _current_snapshot(metadata)
+        assert snapshot["summary"]["operation"] == "overwrite"
+        assert snapshot["summary"]["deleted-data-files"] == "1"
+        assert snapshot["summary"]["deleted-records"] == "3"
+        assert snapshot["summary"]["added-records"] == "2"
+        manifests = _current_manifest_list(metadata)["manifests"]
+        assert all(manifest.get("content") == "data" for manifest in manifests)
+        assert before_manifest_paths & {manifest["manifest-path"] for manifest in manifests}
+
+        spark.sql(f"DELETE FROM {table_name}").collect()
+        assert spark.sql(f"SELECT * FROM {table_name}").collect() == []
+        final_snapshot = _current_snapshot(_find_latest_metadata(table_path))
+        assert final_snapshot["summary"]["operation"] == "delete"
+        assert final_snapshot["summary"]["total-records"] == "0"
     finally:
         _drop_table(spark, table_name)
 

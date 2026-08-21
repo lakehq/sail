@@ -1,3 +1,5 @@
+# ruff: noqa: S608
+
 from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import url2pathname
@@ -350,8 +352,8 @@ def test_iceberg_merge_rejects_multiple_source_rows_for_one_target_row(spark, tm
 
 
 @pytest.mark.parametrize("merge_mode", [None, "copy-on-write"], ids=["default", "explicit-cow"])
-def test_iceberg_merge_rejects_copy_on_write_before_writing_empty_table(spark, tmp_path, merge_mode):
-    table_name = "iceberg_merge_copy_on_write_reject"
+def test_iceberg_merge_copy_on_write_inserts_into_empty_table(spark, tmp_path, merge_mode):
+    table_name = "iceberg_merge_copy_on_write_insert"
     table_path = tmp_path / table_name
     mode_property = "" if merge_mode is None else f", 'write.merge.mode' = '{merge_mode}'"
 
@@ -374,22 +376,153 @@ def test_iceberg_merge_rejects_copy_on_write_before_writing_empty_table(spark, t
             SELECT * FROM VALUES (1, 'new') AS src(id, value)
             """
         )
-        before_metadata_path = _latest_metadata_path(table_path)
-        before_parquet_files = _parquet_file_paths(table_path)
+        spark.sql(
+            f"""
+            MERGE INTO {table_name} AS t
+            USING iceberg_merge_copy_on_write_source AS s
+            ON t.id = s.id
+            WHEN NOT MATCHED THEN INSERT *
+            """
+        ).collect()
 
-        with pytest.raises(Exception, match=r"write\.merge\.mode=copy-on-write|copy-on-write.*not supported"):
-            spark.sql(
-                f"""
-                MERGE INTO {table_name} AS t
-                USING iceberg_merge_copy_on_write_source AS s
-                ON t.id = s.id
-                WHEN NOT MATCHED THEN INSERT *
-                """
-            ).collect()
+        rows = [tuple(row) for row in spark.sql(f"SELECT id, value FROM {table_name}").collect()]
+        assert rows == [(1, "new")]
+        snapshot = _current_snapshot(_find_latest_metadata(table_path))
+        assert snapshot["summary"]["operation"] == "append"
+    finally:
+        _drop_table(spark, table_name)
 
-        assert spark.sql("SELECT * FROM iceberg_merge_copy_on_write_reject").collect() == []
-        assert _latest_metadata_path(table_path) == before_metadata_path
-        assert _parquet_file_paths(table_path) == before_parquet_files
+
+def test_iceberg_merge_copy_on_write_updates_deletes_inserts_and_copies_touched_rows(spark, tmp_path):
+    table_name = "iceberg_merge_copy_on_write_rows"
+    table_path = tmp_path / table_name
+
+    _drop_table(spark, table_name)
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (id INT, value STRING)
+            USING iceberg
+            LOCATION '{_uri_sql(table_path)}'
+            TBLPROPERTIES ('format-version' = '2', 'write.merge.mode' = 'copy-on-write')
+            """
+        )
+        spark.sql(f"INSERT INTO {table_name} VALUES (1, 'old'), (2, 'delete'), (3, 'copy')")
+        spark.sql(
+            """
+            CREATE OR REPLACE TEMP VIEW iceberg_merge_copy_on_write_rows_source AS
+            SELECT * FROM VALUES
+              (1, 'updated', 'update'),
+              (2, 'ignored', 'delete'),
+              (4, 'inserted', 'insert')
+            AS src(id, value, action)
+            """
+        )
+
+        spark.sql(
+            f"""
+            MERGE INTO {table_name} AS t
+            USING iceberg_merge_copy_on_write_rows_source AS s
+            ON t.id = s.id
+            WHEN MATCHED AND s.action = 'delete' THEN DELETE
+            WHEN MATCHED THEN UPDATE SET value = s.value
+            WHEN NOT MATCHED THEN INSERT (id, value) VALUES (s.id, s.value)
+            """
+        ).collect()
+
+        rows = [tuple(row) for row in spark.sql(f"SELECT id, value FROM {table_name} ORDER BY id").collect()]
+        assert rows == [(1, "updated"), (3, "copy"), (4, "inserted")]
+        metadata = _find_latest_metadata(table_path)
+        snapshot = _current_snapshot(metadata)
+        assert snapshot["summary"]["operation"] == "overwrite"
+        assert snapshot["summary"]["deleted-data-files"] == "1"
+        assert snapshot["summary"]["deleted-records"] == "3"
+        assert snapshot["summary"]["added-records"] == "3"
+        manifests = _current_manifest_list(metadata)["manifests"]
+        assert all(manifest.get("content") == "data" for manifest in manifests)
+    finally:
+        _drop_table(spark, table_name)
+
+
+def test_iceberg_merge_copy_on_write_runtime_insert_only_uses_append_snapshot(spark, tmp_path):
+    table_name = "iceberg_merge_copy_on_write_runtime_insert"
+    table_path = tmp_path / table_name
+
+    _drop_table(spark, table_name)
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (id INT, value STRING)
+            USING iceberg
+            LOCATION '{_uri_sql(table_path)}'
+            TBLPROPERTIES ('format-version' = '2')
+            """
+        )
+        spark.sql(f"INSERT INTO {table_name} VALUES (1, 'old')")
+        spark.sql(
+            """
+            CREATE OR REPLACE TEMP VIEW iceberg_merge_copy_on_write_runtime_source AS
+            SELECT 2 AS id, 'new' AS value
+            """
+        )
+
+        spark.sql(
+            f"""
+            MERGE INTO {table_name} AS t
+            USING iceberg_merge_copy_on_write_runtime_source AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN UPDATE SET value = s.value
+            WHEN NOT MATCHED THEN INSERT *
+            """
+        ).collect()
+
+        rows = [tuple(row) for row in spark.sql(f"SELECT id, value FROM {table_name} ORDER BY id").collect()]
+        assert rows == [(1, "old"), (2, "new")]
+        snapshot = _current_snapshot(_find_latest_metadata(table_path))
+        assert snapshot["summary"]["operation"] == "append"
+    finally:
+        _drop_table(spark, table_name)
+
+
+def test_iceberg_merge_copy_on_write_empty_insert_only_uses_overwrite_snapshot(spark, tmp_path):
+    table_name = "iceberg_merge_copy_on_write_empty_insert"
+    table_path = tmp_path / table_name
+
+    _drop_table(spark, table_name)
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (id INT, value STRING)
+            USING iceberg
+            LOCATION '{_uri_sql(table_path)}'
+            TBLPROPERTIES ('format-version' = '2', 'write.merge.mode' = 'copy-on-write')
+            """
+        )
+        spark.sql(f"INSERT INTO {table_name} VALUES (1, 'keep')")
+        spark.sql(
+            """
+            CREATE OR REPLACE TEMP VIEW iceberg_merge_copy_on_write_empty_source AS
+            SELECT 2 AS id, 'missing' AS value WHERE false
+            """
+        )
+        before_metadata = _find_latest_metadata(table_path)
+        before_manifest_paths = {manifest["manifest-path"] for manifest in _current_manifests(table_path)}
+
+        spark.sql(
+            f"""
+            MERGE INTO {table_name} AS t
+            USING iceberg_merge_copy_on_write_empty_source AS s
+            ON t.id = s.id
+            WHEN NOT MATCHED THEN INSERT *
+            """
+        ).collect()
+
+        after_metadata = _find_latest_metadata(table_path)
+        after_snapshot = _current_snapshot(after_metadata)
+        assert len(after_metadata["snapshots"]) == len(before_metadata["snapshots"]) + 1
+        assert after_snapshot["summary"]["operation"] == "overwrite"
+        assert {manifest["manifest-path"] for manifest in _current_manifests(table_path)} == before_manifest_paths
+        assert [tuple(row) for row in spark.table(table_name).collect()] == [(1, "keep")]
     finally:
         _drop_table(spark, table_name)
 
@@ -588,9 +721,7 @@ def test_iceberg_merge_updates_rows_beyond_the_first_input_batch(spark, tmp_path
 
         rows = [
             tuple(row)
-            for row in spark.sql(
-                f"SELECT id, value FROM iceberg_merge_multi_batch WHERE id = {target_id}"  # noqa: S608
-            ).collect()
+            for row in spark.sql(f"SELECT id, value FROM iceberg_merge_multi_batch WHERE id = {target_id}").collect()
         ]
         assert rows == [(target_id, "updated")]
     finally:
@@ -619,9 +750,7 @@ def test_iceberg_merge_uses_absolute_positions_for_large_multi_row_group_file(sp
             """
         )
         large_file_insert_sql = (
-            f"INSERT INTO {table_name} "  # noqa: S608
-            "SELECT id, sha2(CAST(id AS STRING), 256) AS value "
-            "FROM range(4400000)"
+            f"INSERT INTO {table_name} SELECT id, sha2(CAST(id AS STRING), 256) AS value FROM range(4400000)"
         )
         spark.sql(large_file_insert_sql)
 
@@ -646,7 +775,7 @@ def test_iceberg_merge_uses_absolute_positions_for_large_multi_row_group_file(sp
             """
         ).collect()
 
-        target_row_sql = f"SELECT id, value FROM {table_name} WHERE id = {target_id}"  # noqa: S608
+        target_row_sql = f"SELECT id, value FROM {table_name} WHERE id = {target_id}"
         rows = [tuple(row) for row in spark.sql(target_row_sql).collect()]
         assert rows == [(target_id, "updated")]
 
@@ -829,7 +958,8 @@ def test_iceberg_merge_row_delta_snapshot_operation_tracks_written_files(spark, 
         _drop_table(spark, table_name)
 
 
-def test_iceberg_noop_merge_reuses_parent_manifests_with_overwrite_snapshot(spark, tmp_path):
+@pytest.mark.parametrize("merge_mode", ["merge-on-read", "copy-on-write"], ids=["mor", "cow"])
+def test_iceberg_noop_merge_reuses_parent_manifests_with_overwrite_snapshot(spark, tmp_path, merge_mode):
     table_name = "iceberg_merge_noop_snapshot"
     table_path = tmp_path / table_name
 
@@ -845,7 +975,7 @@ def test_iceberg_noop_merge_reuses_parent_manifests_with_overwrite_snapshot(spar
             LOCATION '{_uri_sql(table_path)}'
             TBLPROPERTIES (
               'format-version' = '2',
-              'write.merge.mode' = 'merge-on-read'
+              'write.merge.mode' = '{merge_mode}'
             )
             """
         )
@@ -912,8 +1042,8 @@ def test_iceberg_merge_partition_delete_granularity_groups_data_files(
             )
             """
         )
-        spark.sql(f"INSERT INTO {table_name} VALUES (1, 'one', 'same')")  # noqa: S608
-        spark.sql(f"INSERT INTO {table_name} VALUES (2, 'two', 'same')")  # noqa: S608
+        spark.sql(f"INSERT INTO {table_name} VALUES (1, 'one', 'same')")
+        spark.sql(f"INSERT INTO {table_name} VALUES (2, 'two', 'same')")
 
         before_data_entries = _current_manifest_entries(table_path, ManifestContent.DATA)
         before_data_paths = {entry.data_file.file_path for entry in before_data_entries}

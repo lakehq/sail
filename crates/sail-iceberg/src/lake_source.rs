@@ -16,11 +16,9 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion::arrow::datatypes::{Field as ArrowField, Schema as ArrowSchema};
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::{
-    DataFusionError, Result, TableReference, ToDFSchema, not_impl_err, plan_err,
-};
+use datafusion::common::{DataFusionError, Result, not_impl_err, plan_err};
 use datafusion::execution::SessionState;
-use datafusion::logical_expr::{LogicalPlan, TableScan, TableSource};
+use datafusion::logical_expr::{LogicalPlan, TableSource};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, Extension, UserDefinedLogicalNodeCore};
@@ -30,20 +28,16 @@ use object_store::ObjectStoreExt;
 use sail_common_datafusion::catalog::iceberg::is_iceberg_table_marker;
 use sail_common_datafusion::catalog::managed::metadata_location_value;
 use sail_common_datafusion::catalog::{
-    CatalogPartitionField, CommitAuthority, LakehouseExecutionContext, LakehouseOperation,
-    ScanAuthority,
+    CatalogPartitionField, CommitAuthority, LakehouseExecutionContext, ScanAuthority,
 };
 use sail_common_datafusion::datasource::{
-    BucketBy, DataSource, DeleteInfo, OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode,
-    SourceInfo, create_sort_order, find_path_in_options,
+    BucketBy, DataSource, OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode, SourceInfo,
+    create_sort_order, find_path_in_options,
 };
 use sail_common_datafusion::lakesource::{
     LakeSource, LakeSourceAlterTableOperation, LakeSourceCreateTableColumn,
     LakeSourceCreateTableInfo, LakeSourceCreateTableResult, LakeSourceMetadata, RowLevelOperation,
 };
-use sail_common_datafusion::logical_expr::ExprWithSource;
-use sail_common_datafusion::rename::expression::expression_before_rename;
-use sail_common_datafusion::rename::schema::rename_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
 use sail_data_source::options::ResolveOptions;
@@ -157,91 +151,14 @@ impl LakeSource for IcebergLakeSource {
 
     async fn plan_row_level_operation(
         &self,
-        ctx: &dyn Session,
+        _ctx: &dyn Session,
         operation: RowLevelOperation,
     ) -> Result<LogicalPlan> {
-        let DeleteInfo {
-            target,
-            condition,
-            input_schema,
-            resolved_target_field_names,
-            ..
-        } = match operation {
-            RowLevelOperation::Delete(info) => *info,
-            RowLevelOperation::Update(_) => {
-                return not_impl_err!("UPDATE is not yet implemented for Iceberg");
-            }
-            RowLevelOperation::Merge(info) => {
-                return crate::logical::merge::expand_merge_node(*info);
-            }
-        };
-        let table_name = target.table_name.clone();
-        let path = target.location.clone();
-        let options = target.options.clone();
-        let lakehouse_table = target.lakehouse_table.clone();
-
-        let read_lakehouse_table = lakehouse_table
-            .as_ref()
-            .map(|context| context.for_operation(LakehouseOperation::Read));
-        let source_info = SourceInfo {
-            paths: vec![path.clone()],
-            lakehouse_table: read_lakehouse_table,
-            schema: None,
-            constraints: Default::default(),
-            partition_by: vec![],
-            bucket_by: None,
-            sort_order: vec![],
-            options: options.clone(),
-            // TODO: Thread resolver session case-sensitivity into row-level planning.
-            read_case_sensitive: true,
-        };
-        let provider = build_iceberg_provider(ctx, source_info).await?;
-        let expected_snapshot_id = Some(
-            provider
-                .current_snapshot()
-                .map(|snapshot| snapshot.snapshot_id()),
-        );
-        let table_source: Arc<dyn TableSource> = Arc::new(IcebergTableSource::new(provider));
-        let raw_input_schema = table_source.schema().to_dfschema_ref()?;
-        let resolved_input_schema =
-            rename_schema(input_schema.as_arrow(), &resolved_target_field_names)?;
-        let input_field_names = input_schema
-            .fields()
-            .iter()
-            .map(|field| field.name().clone())
-            .collect::<Vec<_>>();
-        let condition = condition
-            .map(|condition| -> Result<_> {
-                Ok(ExprWithSource::new(
-                    expression_before_rename(
-                        &condition.expr,
-                        &input_field_names,
-                        &resolved_input_schema,
-                        true,
-                    )?,
-                    condition.source,
-                ))
-            })
-            .transpose()?;
-        let target_scan = LogicalPlan::TableScan(TableScan::try_new(
-            table_reference_from_parts(&table_name),
-            table_source,
-            None,
-            vec![],
-            None,
-        )?);
-
-        let write_node = sail_logical_plan::row_level::RowLevelWriteNode::new_delete(
-            Arc::new(target_scan),
-            raw_input_schema,
-            condition,
-            target,
-        )
-        .with_expected_snapshot_id(expected_snapshot_id);
-
-        Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(write_node),
-        }))
+        match operation {
+            RowLevelOperation::Delete(info) => crate::logical::delete::expand_delete_node(*info),
+            RowLevelOperation::Update(info) => crate::logical::update::expand_update_node(*info),
+            RowLevelOperation::Merge(info) => crate::logical::merge::expand_merge_node(*info),
+        }
     }
 
     async fn create_table_metadata(
@@ -910,26 +827,6 @@ fn partition_columns_from_table_metadata(
     }
 
     Ok(columns)
-}
-
-fn table_reference_from_parts(parts: &[String]) -> TableReference {
-    match parts {
-        [table] => TableReference::Bare {
-            table: table.as_str().into(),
-        },
-        [schema, table] => TableReference::Partial {
-            schema: schema.as_str().into(),
-            table: table.as_str().into(),
-        },
-        [catalog, schema, table] => TableReference::Full {
-            catalog: catalog.as_str().into(),
-            schema: schema.as_str().into(),
-            table: table.as_str().into(),
-        },
-        _ => TableReference::Bare {
-            table: parts.join(".").into(),
-        },
-    }
 }
 
 fn create_table_arrow_schema(columns: Vec<LakeSourceCreateTableColumn>) -> Result<ArrowSchema> {
