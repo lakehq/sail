@@ -11,6 +11,7 @@ use sail_common::actor::ActorContext;
 use sail_common::telemetry::SpanAttribute;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
+use sail_telemetry::system_event::SystemEvent;
 use tokio::time::Instant;
 use tonic::Code;
 
@@ -29,7 +30,7 @@ use crate::worker_manager::WorkerLaunchOptions;
 impl WorkerPool {
     pub async fn close(&mut self, ctx: &mut ActorContext<DriverActor>) -> ExecutionResult<()> {
         let worker_ids = self.workers.keys().cloned().collect::<Vec<_>>();
-        for worker_id in worker_ids.into_iter() {
+        for worker_id in worker_ids {
             self.stop_worker(ctx, worker_id, Some("closing worker pool".to_string()));
         }
         // TODO: support timeout for worker manager stop
@@ -43,14 +44,27 @@ impl WorkerPool {
             ctx.send(DriverMessage::Shutdown { result: None });
             return;
         };
+        let created_at = Utc::now();
         let descriptor = WorkerDescriptor {
             state: WorkerState::Pending,
             messages: vec![],
             peers: HashSet::new(),
-            created_at: Utc::now(),
             stopped_at: None,
         };
         self.workers.insert(worker_id, descriptor);
+        self.event_reporter.report(SystemEvent::WorkerCreated {
+            session_id: self.options.session_id.clone(),
+            worker_id: u64::from(worker_id),
+            created_at,
+        });
+        self.event_reporter.report(SystemEvent::WorkerUpdated {
+            session_id: self.options.session_id.clone(),
+            worker_id: u64::from(worker_id),
+            host: None,
+            port: None,
+            status: WorkerState::Pending.status().to_string(),
+            stopped_at: None,
+        });
         ctx.send_with_delay(
             DriverMessage::ProbePendingWorker { worker_id },
             self.options.worker_launch_timeout,
@@ -99,6 +113,8 @@ impl WorkerPool {
         host: String,
         port: u16,
     ) -> ExecutionResult<()> {
+        let event_reporter = self.event_reporter.clone();
+        let session_id = self.options.session_id.clone();
         let Some(worker) = self.workers.get_mut(&worker_id) else {
             return Err(ExecutionError::InvalidArgument(format!(
                 "worker {worker_id} not found"
@@ -107,7 +123,7 @@ impl WorkerPool {
         match worker.state {
             WorkerState::Pending => {
                 worker.state = WorkerState::Running {
-                    host,
+                    host: host.clone(),
                     port,
                     updated_at: Instant::now(),
                     heartbeat_at: Instant::now(),
@@ -115,6 +131,14 @@ impl WorkerPool {
                 };
                 Self::schedule_lost_worker_probe(ctx, worker_id, worker, &self.options);
                 Self::schedule_idle_worker_probe(ctx, worker_id, worker, &self.options);
+                event_reporter.report(SystemEvent::WorkerUpdated {
+                    session_id,
+                    worker_id: u64::from(worker_id),
+                    host: Some(host),
+                    port: Some(port),
+                    status: worker.state.status().to_string(),
+                    stopped_at: worker.stopped_at,
+                });
                 Ok(())
             }
             WorkerState::Running { .. } => Err(ExecutionError::InternalError(format!(
@@ -135,6 +159,8 @@ impl WorkerPool {
         worker_id: WorkerId,
         reason: Option<String>,
     ) {
+        let event_reporter = self.event_reporter.clone();
+        let session_id = self.options.session_id.clone();
         let Some(worker) = self.workers.get_mut(&worker_id) else {
             warn!("worker {worker_id} not found");
             return;
@@ -145,6 +171,14 @@ impl WorkerPool {
                 worker.state = WorkerState::Completed;
                 worker.stopped_at = Some(Utc::now());
                 worker.messages.extend(reason);
+                event_reporter.report(SystemEvent::WorkerUpdated {
+                    session_id,
+                    worker_id: u64::from(worker_id),
+                    host: None,
+                    port: None,
+                    status: WorkerState::Completed.status().to_string(),
+                    stopped_at: worker.stopped_at,
+                });
             }
             WorkerState::Running { .. } => {
                 info!("stopping worker {worker_id}");
@@ -154,6 +188,14 @@ impl WorkerPool {
                         error!("failed to stop worker {worker_id}: {e}");
                         worker.state = WorkerState::Failed;
                         worker.stopped_at = Some(Utc::now());
+                        event_reporter.report(SystemEvent::WorkerUpdated {
+                            session_id,
+                            worker_id: u64::from(worker_id),
+                            host: None,
+                            port: None,
+                            status: WorkerState::Failed.status().to_string(),
+                            stopped_at: worker.stopped_at,
+                        });
                         return;
                     }
                 };
@@ -165,6 +207,14 @@ impl WorkerPool {
                 worker.state = WorkerState::Completed;
                 worker.stopped_at = Some(Utc::now());
                 worker.messages.extend(reason);
+                event_reporter.report(SystemEvent::WorkerUpdated {
+                    session_id,
+                    worker_id: u64::from(worker_id),
+                    host: None,
+                    port: None,
+                    status: WorkerState::Completed.status().to_string(),
+                    stopped_at: worker.stopped_at,
+                });
             }
             WorkerState::Completed | WorkerState::Failed => {}
         }
@@ -229,6 +279,8 @@ impl WorkerPool {
     }
 
     pub fn fail_worker_if_pending(&mut self, worker_id: WorkerId) -> bool {
+        let event_reporter = self.event_reporter.clone();
+        let session_id = self.options.session_id.clone();
         let Some(worker) = self.workers.get_mut(&worker_id) else {
             warn!("worker {worker_id} not found");
             return false;
@@ -238,6 +290,14 @@ impl WorkerPool {
             let message = "worker registration timeout".to_string();
             worker.state = WorkerState::Failed;
             worker.messages.push(message);
+            event_reporter.report(SystemEvent::WorkerUpdated {
+                session_id,
+                worker_id: u64::from(worker_id),
+                host: None,
+                port: None,
+                status: WorkerState::Failed.status().to_string(),
+                stopped_at: worker.stopped_at,
+            });
             true
         } else {
             false

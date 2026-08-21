@@ -2,8 +2,6 @@ use std::borrow::Cow;
 
 use datafusion::prelude::SessionContext;
 use sail_common::telemetry::{SpanAssociation, SpanAttribute};
-use sail_common_datafusion::session::job::JobRunnerHistory;
-use sail_common_datafusion::system::observable::SessionManagerObserver;
 use sail_execution::DriverId;
 use sail_execution::driver::DriverHandle;
 use sail_execution::error::ExecutionResult;
@@ -27,15 +25,8 @@ pub enum SessionManagerMessage {
         session_id: String,
         result: oneshot::Sender<SessionResult<()>>,
     },
-    SetSessionHistory {
-        session_id: String,
-        history: SessionHistory,
-    },
     SetSessionFailure {
         session_id: String,
-    },
-    ObserveState {
-        observer: SessionManagerObserver,
     },
     GetDriver {
         driver_id: DriverId,
@@ -46,19 +37,13 @@ pub enum SessionManagerMessage {
     },
 }
 
-pub struct SessionHistory {
-    pub job_runner: JobRunnerHistory,
-}
-
 impl SpanAssociation for SessionManagerMessage {
     fn name(&self) -> Cow<'static, str> {
         let name = match self {
             SessionManagerMessage::GetOrCreateSession { .. } => "GetOrCreateSession",
             SessionManagerMessage::ProbeIdleSession { .. } => "ProbeIdleSession",
             SessionManagerMessage::DeleteSession { .. } => "DeleteSession",
-            SessionManagerMessage::SetSessionHistory { .. } => "SetSessionHistory",
             SessionManagerMessage::SetSessionFailure { .. } => "SetSessionFailure",
-            SessionManagerMessage::ObserveState { .. } => "ObserveState",
             SessionManagerMessage::GetDriver { .. } => "GetDriver",
             SessionManagerMessage::Shutdown { .. } => "Shutdown",
         };
@@ -81,10 +66,6 @@ impl SpanAssociation for SessionManagerMessage {
                 session_id,
                 result: _,
             }
-            | SessionManagerMessage::SetSessionHistory {
-                session_id,
-                history: _,
-            }
             | SessionManagerMessage::SetSessionFailure { session_id } => {
                 p.push((SpanAttribute::SESSION_ID, session_id.to_string()));
             }
@@ -94,8 +75,7 @@ impl SpanAssociation for SessionManagerMessage {
             } => {
                 p.push((SpanAttribute::CLUSTER_DRIVER_ID, driver_id.to_string()));
             }
-            SessionManagerMessage::ObserveState { observer: _ }
-            | SessionManagerMessage::Shutdown { .. } => {}
+            SessionManagerMessage::Shutdown { .. } => {}
         }
         p.into_iter().map(|(k, v)| (k.into(), v.into()))
     }

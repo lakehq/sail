@@ -35,14 +35,17 @@ impl Actor for DriverActor {
         let (options, components) = options;
         let DriverComponents {
             worker_manager,
-            history_reporter,
+            event_reporter,
         } = components;
-        let worker_pool = WorkerPool::new(worker_manager, WorkerPoolOptions::from(&options));
-        let job_scheduler = JobScheduler::new(JobSchedulerOptions::from(&options));
+        let worker_pool = WorkerPool::new(
+            worker_manager,
+            WorkerPoolOptions::from(&options),
+            event_reporter.clone(),
+        );
+        let job_scheduler = JobScheduler::new(JobSchedulerOptions::from(&options), event_reporter);
         let task_assigner = TaskAssigner::new(TaskAssignerOptions::from(&options));
         Self {
             options,
-            history_reporter,
             worker_pool,
             job_scheduler,
             task_assigner,
@@ -172,7 +175,6 @@ impl Actor for DriverActor {
             DriverMessage::CelebornGetLifecycleManager { result } => {
                 self.handle_celeborn_get_lifecycle_manager(result)
             }
-            DriverMessage::ObserveState { observer } => self.handle_observe_state(ctx, observer),
             DriverMessage::Shutdown { result } => self.handle_shutdown(ctx, result),
         }
     }
@@ -189,8 +191,6 @@ impl Actor for DriverActor {
             let _ = lifecycle_manager.stop().await;
         }
         ctx.children_mut().join().await;
-        let history = self.build_history();
-        self.history_reporter.report(history).await;
         if let Some(result) = self.shutdown_notifier.take() {
             let _ = result.send(());
         }
