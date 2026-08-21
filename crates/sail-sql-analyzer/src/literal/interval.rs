@@ -469,6 +469,16 @@ pub(crate) fn parse_unqualified_interval_string(
     s: &str,
     negated: bool,
 ) -> SqlResult<IntervalValue> {
+    // The full parser rebuilds its combinator graph on every call — too costly
+    // for per-row use. Common strings take the fast path; everything else falls
+    // through, so accepted syntax and errors are unchanged.
+    if let Some(value) = parse_unqualified_interval_string_fast(s, negated) {
+        return Ok(value);
+    }
+    parse_unqualified_interval_string_full(s, negated)
+}
+
+fn parse_unqualified_interval_string_full(s: &str, negated: bool) -> SqlResult<IntervalValue> {
     let IntervalLiteral {
         interval: _,
         value: interval,
@@ -479,6 +489,417 @@ pub(crate) fn parse_unqualified_interval_string(
         Signed::Positive(interval)
     };
     from_ast_signed_interval(value)
+}
+
+/// A calendar interval with Spark `stringToInterval` bucketing: the unit the
+/// user wrote decides the bucket (year/month → `months`, week/day → `days`,
+/// sub-day units → `microseconds`), and nothing is rebucketed across the day
+/// boundary. This is the semantics `session_window`/`window` gaps need — a
+/// `'1 day'` gap spans a calendar day across a DST transition while a
+/// `'25 hours'` gap spans 25 absolute hours. The typed SQL literal paths keep
+/// the legacy [IntervalValue] shapes from [parse_unqualified_interval_string].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CalendarInterval {
+    pub months: i32,
+    pub days: i32,
+    pub microseconds: i64,
+}
+
+pub fn parse_calendar_interval_string(s: &str) -> SqlResult<CalendarInterval> {
+    if let Some(value) = parse_calendar_interval_string_fast(s) {
+        return Ok(value);
+    }
+    let IntervalLiteral {
+        interval: _,
+        value: interval,
+    } = parse_interval_literal(s)?;
+    match interval {
+        IntervalExpr::MultiUnit { head, tail } => {
+            from_ast_multi_unit_calendar(std::iter::once(head).chain(tail))
+        }
+        // Shapes Spark's `stringToInterval` does not accept (qualified forms
+        // like `'1 2:03:04' day to second`); keep accepting them with the
+        // legacy conversion, whose day-time part is absolute microseconds.
+        other => match from_ast_signed_interval(Signed::Positive(other))? {
+            IntervalValue::YearMonth { months } => Ok(CalendarInterval {
+                months,
+                days: 0,
+                microseconds: 0,
+            }),
+            IntervalValue::Microsecond { microseconds } => Ok(CalendarInterval {
+                months: 0,
+                days: 0,
+                microseconds,
+            }),
+            IntervalValue::MonthDayNanosecond {
+                months,
+                days,
+                nanoseconds,
+            } => Ok(CalendarInterval {
+                months,
+                days,
+                microseconds: nanoseconds / 1_000,
+            }),
+        },
+    }
+}
+
+/// Per-unit bucketing over the same term scanner as the fast interval parser;
+/// declines (`None`) anything the scanner does not recognize.
+fn parse_calendar_interval_string_fast(s: &str) -> Option<CalendarInterval> {
+    let mut words = s.split_ascii_whitespace().peekable();
+    if words
+        .peek()
+        .is_some_and(|w| w.eq_ignore_ascii_case("interval"))
+    {
+        words.next();
+    }
+    let mut months: i32 = 0;
+    let mut days: i32 = 0;
+    let mut delta = TimeDelta::zero();
+    let mut seen = false;
+    while let Some(value_word) = words.next() {
+        let (neg, int_part, fraction) = parse_value_word(value_word)?;
+        let unit = parse_unit_word(words.next()?)?;
+        if fraction.is_some() && unit != Unit::Second {
+            return None;
+        }
+        seen = true;
+        use Unit::*;
+        match unit {
+            Year | Month => {
+                let mut value: i32 = int_part.parse().ok()?;
+                if neg {
+                    value = value.checked_neg()?;
+                }
+                if matches!(unit, Year) {
+                    value = value.checked_mul(12)?;
+                }
+                months = months.checked_add(value)?;
+            }
+            Week | Day => {
+                let mut value: i32 = int_part.parse().ok()?;
+                if neg {
+                    value = value.checked_neg()?;
+                }
+                if matches!(unit, Week) {
+                    value = value.checked_mul(7)?;
+                }
+                days = days.checked_add(value)?;
+            }
+            Hour | Minute | Second | Millisecond | Microsecond => {
+                let mut value: i64 = int_part.parse().ok()?;
+                if neg {
+                    value = value.checked_neg()?;
+                }
+                let part = match unit {
+                    Hour => TimeDelta::try_hours(value)?,
+                    Minute => TimeDelta::try_minutes(value)?,
+                    Second => TimeDelta::try_seconds(value)?.checked_add(
+                        &TimeDelta::microseconds(if neg {
+                            fraction_microseconds(fraction)?.checked_neg()?
+                        } else {
+                            fraction_microseconds(fraction)?
+                        }),
+                    )?,
+                    Millisecond => TimeDelta::try_milliseconds(value)?,
+                    _ => TimeDelta::microseconds(value),
+                };
+                delta = delta.checked_add(&part)?;
+            }
+        }
+    }
+    if !seen {
+        return None;
+    }
+    Some(CalendarInterval {
+        months,
+        days,
+        microseconds: delta.num_microseconds()?,
+    })
+}
+
+/// AST-side counterpart of [parse_calendar_interval_string_fast] for strings
+/// the fast scanner declines.
+fn from_ast_multi_unit_calendar(
+    values: impl Iterator<Item = IntervalValueWithUnit>,
+) -> SqlResult<CalendarInterval> {
+    let error = || SqlError::invalid("multi-unit interval");
+    let mut months = 0i32;
+    let mut days = 0i32;
+    let mut delta = TimeDelta::zero();
+    for value in values {
+        let IntervalValueWithUnit { value, unit } = value;
+        match unit {
+            IntervalUnit::Year(_) | IntervalUnit::Years(_) => {
+                let value: i32 = parse_signed_value(value)?;
+                let m = value.checked_mul(12).ok_or_else(error)?;
+                months = months.checked_add(m).ok_or_else(error)?;
+            }
+            IntervalUnit::Month(_) | IntervalUnit::Months(_) => {
+                let value: i32 = parse_signed_value(value)?;
+                months = months.checked_add(value).ok_or_else(error)?;
+            }
+            IntervalUnit::Week(_) | IntervalUnit::Weeks(_) => {
+                let value: i32 = parse_signed_value(value)?;
+                let d = value.checked_mul(7).ok_or_else(error)?;
+                days = days.checked_add(d).ok_or_else(error)?;
+            }
+            IntervalUnit::Day(_) | IntervalUnit::Days(_) => {
+                let value: i32 = parse_signed_value(value)?;
+                days = days.checked_add(value).ok_or_else(error)?;
+            }
+            IntervalUnit::Hour(_) | IntervalUnit::Hours(_) => {
+                let value: i64 = parse_signed_value(value)?;
+                let hours = TimeDelta::try_hours(value).ok_or_else(error)?;
+                delta = delta.checked_add(&hours).ok_or_else(error)?;
+            }
+            IntervalUnit::Minute(_) | IntervalUnit::Minutes(_) => {
+                let value: i64 = parse_signed_value(value)?;
+                let minutes = TimeDelta::try_minutes(value).ok_or_else(error)?;
+                delta = delta.checked_add(&minutes).ok_or_else(error)?;
+            }
+            IntervalUnit::Second(_) | IntervalUnit::Seconds(_) => {
+                let value: Signed<DecimalSecond> = parse_signed_value(value)?;
+                let negated = value.is_negative();
+                let value = value.into_inner();
+                let seconds = TimeDelta::seconds(value.seconds as i64);
+                let microseconds = TimeDelta::microseconds(value.microseconds as i64);
+                if negated {
+                    delta = delta.checked_sub(&seconds).ok_or_else(error)?;
+                    delta = delta.checked_sub(&microseconds).ok_or_else(error)?;
+                } else {
+                    delta = delta.checked_add(&seconds).ok_or_else(error)?;
+                    delta = delta.checked_add(&microseconds).ok_or_else(error)?;
+                }
+            }
+            IntervalUnit::Millisecond(_) | IntervalUnit::Milliseconds(_) => {
+                let value: i64 = parse_signed_value(value)?;
+                let milliseconds = TimeDelta::try_milliseconds(value).ok_or_else(error)?;
+                delta = delta.checked_add(&milliseconds).ok_or_else(error)?;
+            }
+            IntervalUnit::Microsecond(_) | IntervalUnit::Microseconds(_) => {
+                let value: i64 = parse_signed_value(value)?;
+                let microseconds = TimeDelta::microseconds(value);
+                delta = delta.checked_add(&microseconds).ok_or_else(error)?;
+            }
+        }
+    }
+    Ok(CalendarInterval {
+        months,
+        days,
+        microseconds: delta.num_microseconds().ok_or_else(error)?,
+    })
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Unit {
+    Year,
+    Month,
+    Week,
+    Day,
+    Hour,
+    Minute,
+    Second,
+    Millisecond,
+    Microsecond,
+}
+
+fn parse_unit_word(word: &str) -> Option<Unit> {
+    use Unit::*;
+    for (names, unit) in [
+        (["year", "years"], Year),
+        (["month", "months"], Month),
+        (["week", "weeks"], Week),
+        (["day", "days"], Day),
+        (["hour", "hours"], Hour),
+        (["minute", "minutes"], Minute),
+        (["second", "seconds"], Second),
+        (["millisecond", "milliseconds"], Millisecond),
+        (["microsecond", "microseconds"], Microsecond),
+    ] {
+        if names.iter().any(|n| word.eq_ignore_ascii_case(n)) {
+            return Some(unit);
+        }
+    }
+    None
+}
+
+/// Splits a value word into (negated, integer digits, fraction digits).
+/// Accepts only `-?digits(.digits)?`; anything else (`+`, a detached sign, a
+/// trailing dot) is declined so the full parser decides.
+fn parse_value_word(word: &str) -> Option<(bool, &str, Option<&str>)> {
+    let (negated, rest) = match word.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, word),
+    };
+    let (int_part, fraction) = match rest.split_once('.') {
+        Some((i, f)) => (i, Some(f)),
+        None => (rest, None),
+    };
+    if int_part.is_empty() || !int_part.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    if let Some(f) = fraction
+        && (f.is_empty() || !f.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return None;
+    }
+    Some((negated, int_part, fraction))
+}
+
+/// Converts fraction digits of a second to microseconds the same way
+/// [extract_fraction_match] does: pad with zeros to 6 digits, ignore the rest.
+fn fraction_microseconds(fraction: Option<&str>) -> Option<i64> {
+    match fraction {
+        None => Some(0),
+        Some(f) => f
+            .chars()
+            .chain(std::iter::repeat('0'))
+            .take(6)
+            .collect::<String>()
+            .parse::<i64>()
+            .ok(),
+    }
+}
+
+/// Fast parser for the common `[interval] (value unit)+` strings, e.g.
+/// `5 minutes`, `-2 days`, `1.5 seconds`. Anything else (quoted values, `+`,
+/// qualifiers like `day to second`) returns `None` and the caller falls back
+/// to the full parser. Accepted strings reproduce [from_ast_signed_interval]
+/// exactly, quirks included: a single year/month term is year-month even when
+/// zero, single-term seconds are `i64` but multi-term `u32`, and overflow is
+/// declined so the full parser reports the error.
+fn parse_unqualified_interval_string_fast(s: &str, negated: bool) -> Option<IntervalValue> {
+    let mut words = s.split_ascii_whitespace().peekable();
+    if words
+        .peek()
+        .is_some_and(|w| w.eq_ignore_ascii_case("interval"))
+    {
+        words.next();
+    }
+    let mut terms: Vec<(bool, &str, Option<&str>, Unit)> = Vec::new();
+    while let Some(value_word) = words.next() {
+        let (neg, int_part, fraction) = parse_value_word(value_word)?;
+        let unit = parse_unit_word(words.next()?)?;
+        if fraction.is_some() && unit != Unit::Second {
+            return None;
+        }
+        terms.push((neg, int_part, fraction, unit));
+    }
+
+    // A single term follows the standard-interval path for its units;
+    // everything else accumulates as multi-unit.
+    if let [(neg, int_part, fraction, unit)] = terms[..] {
+        use Unit::*;
+        let negated = neg ^ negated;
+        match unit {
+            Year | Month => {
+                let value: i32 = int_part.parse().ok()?;
+                let mut months = match unit {
+                    Year => value.checked_mul(12)?,
+                    _ => value,
+                };
+                if negated {
+                    months = months.checked_neg()?;
+                }
+                return Some(IntervalValue::YearMonth { months });
+            }
+            Day | Hour | Minute | Second => {
+                let value: i64 = int_part.parse().ok()?;
+                let delta = match unit {
+                    Day => TimeDelta::try_days(value)?,
+                    Hour => TimeDelta::try_hours(value)?,
+                    Minute => TimeDelta::try_minutes(value)?,
+                    _ => TimeDelta::try_seconds(value)?
+                        .checked_add(&TimeDelta::microseconds(fraction_microseconds(fraction)?))?,
+                };
+                let mut microseconds = delta.num_microseconds()?;
+                if negated {
+                    microseconds = microseconds.checked_neg()?;
+                }
+                return Some(IntervalValue::Microsecond { microseconds });
+            }
+            Week | Millisecond | Microsecond => {}
+        }
+    } else if terms.is_empty() {
+        return None;
+    }
+
+    let mut months: i32 = 0;
+    let mut delta = TimeDelta::zero();
+    for (neg, int_part, fraction, unit) in &terms {
+        use Unit::*;
+        match unit {
+            Year | Month => {
+                let mut value: i32 = int_part.parse().ok()?;
+                if *neg {
+                    value = value.checked_neg()?;
+                }
+                if matches!(unit, Year) {
+                    value = value.checked_mul(12)?;
+                }
+                months = months.checked_add(value)?;
+            }
+            Second => {
+                // Multi-unit seconds are `u32` (`DecimalSecond`).
+                let seconds: u32 = int_part.parse().ok()?;
+                let seconds = TimeDelta::seconds(seconds as i64);
+                let microseconds = TimeDelta::microseconds(fraction_microseconds(*fraction)?);
+                if *neg {
+                    delta = delta.checked_sub(&seconds)?.checked_sub(&microseconds)?;
+                } else {
+                    delta = delta.checked_add(&seconds)?.checked_add(&microseconds)?;
+                }
+            }
+            _ => {
+                let mut value: i64 = int_part.parse().ok()?;
+                if *neg {
+                    value = value.checked_neg()?;
+                }
+                let part = match unit {
+                    Week => TimeDelta::try_weeks(value)?,
+                    Day => TimeDelta::try_days(value)?,
+                    Hour => TimeDelta::try_hours(value)?,
+                    Minute => TimeDelta::try_minutes(value)?,
+                    Millisecond => TimeDelta::try_milliseconds(value)?,
+                    _ => TimeDelta::microseconds(value),
+                };
+                delta = delta.checked_add(&part)?;
+            }
+        }
+    }
+    match (months != 0, delta != TimeDelta::zero()) {
+        (true, false) => {
+            if negated {
+                months = months.checked_neg()?;
+            }
+            Some(IntervalValue::YearMonth { months })
+        }
+        (true, true) => {
+            let mut days = delta.num_days();
+            let remainder = delta - chrono::Duration::days(days);
+            let mut microseconds = remainder.num_microseconds()?;
+            if negated {
+                months = months.checked_neg()?;
+                days = days.checked_neg()?;
+                microseconds = microseconds.checked_neg()?;
+            }
+            let days = i32::try_from(days).ok()?;
+            Some(IntervalValue::MonthDayNanosecond {
+                months,
+                days,
+                nanoseconds: microseconds * 1_000,
+            })
+        }
+        (false, _) => {
+            let mut microseconds = delta.num_microseconds()?;
+            if negated {
+                microseconds = microseconds.checked_neg()?;
+            }
+            Some(IntervalValue::Microsecond { microseconds })
+        }
+    }
 }
 
 #[cfg(test)]
@@ -557,6 +978,78 @@ mod tests {
     }
 
     #[test]
+    fn test_fast_path_matches_full_parser() {
+        // Fast-path values must equal the full parser's; declined strings
+        // reach the full parser anyway. The list covers accepted shapes plus
+        // ones that must decline (quotes, `+`, qualifiers, junk, overflow).
+        let cases = [
+            "5 minutes",
+            "2 minutes",
+            "1 second",
+            "1.5 seconds",
+            "-1.5 seconds",
+            "1. seconds",
+            "0.000001 seconds",
+            "1.1234567 seconds",
+            "1 month",
+            "0 month",
+            "-0 month",
+            "0 year",
+            "3 years",
+            "0 day",
+            "0 seconds",
+            "1 week",
+            "-2 weeks",
+            "10 milliseconds",
+            "7 microseconds",
+            "1 month 2 days",
+            "1 hour 2 seconds",
+            "-1 hour -2 seconds",
+            "1 year 2 months 3 days 4 hours 5 minutes 6.789 seconds",
+            "1 day -2 hours",
+            "interval 5 minutes",
+            "INTERVAL 3 HOURS",
+            "  5   MINUTES  ",
+            "007 days",
+            "2147483647 months",
+            "-2147483648 month",
+            "178956970 year 7 month",
+            "178956970 year 8 month",
+            "106751991 day 14454775807 microsecond",
+            "106751991 day 14454775808 microsecond",
+            "5000000000 seconds",
+            "1 day 5000000000 seconds",
+            "'5' minutes",
+            "+5 minutes",
+            "- 5 minutes",
+            "'1 1' day to hour",
+            "'178956970-7' year to month",
+            "5",
+            "minutes",
+            "5 fortnights",
+            "1e3 days",
+            "",
+        ];
+        for s in cases {
+            for negated in [false, true] {
+                let full = parse_unqualified_interval_string_full(s, negated);
+                if let Some(fast) = parse_unqualified_interval_string_fast(s, negated) {
+                    assert!(
+                        full.is_ok(),
+                        "fast path accepts {s:?} (negated={negated}) but the full parser errors: {full:?}"
+                    );
+                    if let Ok(full) = full {
+                        assert_eq!(
+                            fast, full,
+                            "fast path diverges for {s:?} (negated={negated})"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_parse_unqualified_interval_string() -> SqlResult<()> {
         assert!(parse_unqualified_interval_string("1", false).is_err());
         assert!(parse_unqualified_interval_string("1 month", false).is_ok());
@@ -568,6 +1061,46 @@ mod tests {
             parse_unqualified_interval_string("1 hour 2 seconds", false)?,
             parse_unqualified_interval_string("-1 hour -2 seconds", true)?
         );
+        Ok(())
+    }
+
+    /// Spark `stringToInterval` bucketing: the unit written decides the
+    /// bucket; sub-day amounts are never rebucketed into days (and days never
+    /// collapse into microseconds).
+    #[test]
+    fn test_calendar_interval_bucketing() -> SqlResult<()> {
+        const HOUR: i64 = 3_600_000_000;
+        for (s, months, days, micros) in [
+            ("1 day", 0, 1, 0),
+            ("interval 1 day", 0, 1, 0),
+            ("25 hours", 0, 0, 25 * HOUR),
+            ("1 day 2 hours", 0, 1, 2 * HOUR),
+            ("2 weeks", 0, 14, 0),
+            ("-2 days", 0, -2, 0),
+            ("1 month -30 days", 1, -30, 0),
+            ("1 month 25 hours", 1, 0, 25 * HOUR),
+            ("1.5 seconds", 0, 0, 1_500_000),
+            ("-1.5 seconds", 0, 0, -1_500_000),
+            ("1 year 1 microsecond", 12, 0, 1),
+        ] {
+            let v = parse_calendar_interval_string(s)?;
+            assert_eq!(
+                (v.months, v.days, v.microseconds),
+                (months, days, micros),
+                "{s}"
+            );
+        }
+        assert!(parse_calendar_interval_string("garbage").is_err());
+        Ok(())
+    }
+
+    /// The fast scanner and the AST fallback agree; exercise the fallback via
+    /// a quoted value the scanner declines.
+    #[test]
+    fn test_calendar_interval_fallback_matches_fast() -> SqlResult<()> {
+        let fast = parse_calendar_interval_string("1 day 2 hours")?;
+        let full = parse_calendar_interval_string("'1' day '2' hours")?;
+        assert_eq!(fast, full);
         Ok(())
     }
 }

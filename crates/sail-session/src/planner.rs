@@ -25,6 +25,7 @@ use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::{DataSource, DataSourceExec};
 use datafusion_datasource::{PartitionedFile, TableSchema};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
+use datafusion_physical_expr::aggregate::AggregateExprBuilder;
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion_physical_expr::{Partitioning, create_physical_sort_exprs};
 use sail_cache::remote_checkpoint::RemoteCheckpointRegistry;
@@ -50,6 +51,8 @@ use sail_logical_plan::remote_checkpoint::{
 };
 use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitionNode};
 use sail_logical_plan::schema_pivot::SchemaPivotNode;
+use sail_logical_plan::session_aggregate::SessionAggregateNode;
+use sail_logical_plan::session_window::SessionWindowNode;
 use sail_logical_plan::show_string::ShowStringNode;
 use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
 use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
@@ -69,6 +72,8 @@ use sail_physical_plan::remote_checkpoint::{
 };
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
+use sail_physical_plan::session_aggregate::SessionAggregateExec;
+use sail_physical_plan::session_window::SessionWindowExec;
 use sail_physical_plan::show_string::ShowStringExec;
 use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
 use sail_physical_plan::streaming::collector::StreamCollectorExec;
@@ -404,6 +409,82 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
             Arc::new(SparkPartitionIdExec::try_new(
                 input.clone(),
                 node.column_name().to_string(),
+                UserDefinedLogicalNode::schema(node).inner().clone(),
+            )?)
+        } else if let Some(node) = node.as_any().downcast_ref::<SessionWindowNode>() {
+            let [input] = physical_inputs else {
+                return internal_err!("SessionWindowExec requires exactly one physical input");
+            };
+            Arc::new(SessionWindowExec::try_new(
+                input.clone(),
+                node.partition_columns().to_vec(),
+                node.time_column().to_string(),
+                node.end_column().to_string(),
+                node.output_column().to_string(),
+                UserDefinedLogicalNode::schema(node).inner().clone(),
+            )?)
+        } else if let Some(node) = node.as_any().downcast_ref::<SessionAggregateNode>() {
+            let [input] = physical_inputs else {
+                return internal_err!("SessionAggregateExec requires exactly one physical input");
+            };
+            // Convert the logical aggregate expressions to physical ones, naming each
+            // after its output field (the fields after the group columns).
+            let input_dfschema = node.input().schema().as_ref();
+            let input_schema = input.schema();
+            let out_fields = UserDefinedLogicalNode::schema(node)
+                .inner()
+                .fields()
+                .clone();
+            let mut aggregates = Vec::with_capacity(node.aggregate_exprs().len());
+            let mut filters = Vec::with_capacity(node.aggregate_exprs().len());
+            for (expr, out_field) in node
+                .aggregate_exprs()
+                .iter()
+                .zip(out_fields.iter().skip(node.group_columns().len()))
+            {
+                let inner = match expr {
+                    Expr::Alias(alias) => alias.expr.as_ref(),
+                    other => other,
+                };
+                let Expr::AggregateFunction(af) = inner else {
+                    return internal_err!("SessionAggregate expected an aggregate function");
+                };
+                let args = af
+                    .params
+                    .args
+                    .iter()
+                    .map(|a| planner.create_physical_expr(a, input_dfschema, session_state))
+                    .collect::<datafusion_common::Result<Vec<_>>>()?;
+                // `FILTER (WHERE ...)` lives in `params.filter`, not in
+                // `AggregateFunctionExpr`; carry it alongside so the operator can
+                // apply the per-row mask (DataFusion's `AggregateExec` does the
+                // same). The fuse chooser only fuses aggregates without ORDER BY.
+                let filter = af
+                    .params
+                    .filter
+                    .as_ref()
+                    .map(|f| planner.create_physical_expr(f, input_dfschema, session_state))
+                    .transpose()?;
+                let ignore_nulls = af.params.null_treatment
+                    == Some(datafusion_expr::expr::NullTreatment::IgnoreNulls);
+                let agg = AggregateExprBuilder::new(af.func.clone(), args)
+                    .schema(input_schema.clone())
+                    .alias(out_field.name().clone())
+                    .with_ignore_nulls(ignore_nulls)
+                    .with_distinct(af.params.distinct)
+                    .build()?;
+                aggregates.push(Arc::new(agg));
+                filters.push(filter);
+            }
+            Arc::new(SessionAggregateExec::try_new(
+                input.clone(),
+                node.partition_columns().to_vec(),
+                node.time_column().to_string(),
+                node.end_column().to_string(),
+                node.group_columns().to_vec(),
+                node.session_output().to_string(),
+                aggregates,
+                filters,
                 UserDefinedLogicalNode::schema(node).inner().clone(),
             )?)
         } else if let Some(node) = node.as_any().downcast_ref::<SortWithinPartitionsNode>() {
@@ -1085,5 +1166,76 @@ mod tests {
         .unwrap();
 
         assert!(matches!(partitioning, Partitioning::UnknownPartitioning(2)));
+    }
+
+    /// The local planner must map `IGNORE NULLS` onto the physical aggregate,
+    /// mirroring the distributed codec's decode path.
+    #[tokio::test]
+    async fn session_aggregate_preserves_ignore_nulls() -> datafusion_common::Result<()> {
+        use datafusion::arrow::datatypes::{Fields, TimeUnit};
+        use datafusion::functions_aggregate::first_last::first_value_udaf;
+        use datafusion_expr::expr::{AggregateFunction, NullTreatment};
+        use datafusion_expr::{Expr, LogicalPlan};
+
+        let ts = DataType::Timestamp(TimeUnit::Microsecond, None);
+        let input_schema = Arc::new(Schema::new(vec![
+            Field::new("#t", ts.clone(), false),
+            Field::new("#e", ts.clone(), false),
+            Field::new("v", DataType::Int64, true),
+        ]));
+        let input = LogicalPlan::EmptyRelation(datafusion_expr::EmptyRelation {
+            produce_one_row: false,
+            schema: input_schema.to_dfschema_ref()?,
+        });
+        let struct_type = DataType::Struct(Fields::from(vec![
+            Field::new("start", ts.clone(), true),
+            Field::new("end", ts, true),
+        ]));
+        let output_schema = Arc::new(Schema::new(vec![
+            Field::new("session", struct_type, false),
+            Field::new("fv", DataType::Int64, true),
+        ]))
+        .to_dfschema_ref()?;
+        let agg = Expr::AggregateFunction(AggregateFunction::new_udf(
+            first_value_udaf(),
+            vec![col("v")],
+            false,
+            None,
+            vec![],
+            Some(NullTreatment::IgnoreNulls),
+        ))
+        .alias("fv");
+        let node = SessionAggregateNode::new(
+            Arc::new(input),
+            vec![],
+            "#t".to_string(),
+            "#e".to_string(),
+            "session".to_string(),
+            vec!["session".to_string()],
+            vec![agg],
+            output_schema,
+        );
+        let logical = LogicalPlan::Extension(datafusion_expr::Extension {
+            node: Arc::new(node),
+        });
+        let state = SessionStateBuilder::new()
+            .with_default_features()
+            .with_query_planner(new_query_planner())
+            .build();
+        let context = SessionContext::new_with_state(state);
+        let state = context.state();
+        let physical = state
+            .query_planner()
+            .create_physical_plan(&logical, &state)
+            .await?;
+
+        fn find_ignore_nulls(plan: &Arc<dyn ExecutionPlan>) -> Option<bool> {
+            if let Some(exec) = plan.downcast_ref::<SessionAggregateExec>() {
+                return Some(exec.aggregates()[0].ignore_nulls());
+            }
+            plan.children().into_iter().find_map(find_ignore_nulls)
+        }
+        assert_eq!(find_ignore_nulls(&physical), Some(true));
+        Ok(())
     }
 }

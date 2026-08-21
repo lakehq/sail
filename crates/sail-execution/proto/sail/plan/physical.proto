@@ -71,6 +71,8 @@ message ExtendedPhysicalPlanNode {
     IcebergMergeMetadataExecNode iceberg_merge_metadata = 56;
     IcebergEqualityDeleteWriterExecNode iceberg_equality_delete_writer = 57;
     PartitionedTopKExecNode partitioned_top_k = 58;
+    SessionWindowExecNode session_window = 59;
+    SessionAggregateExecNode session_aggregate = 60;
   }
 }
 
@@ -915,6 +917,38 @@ message MonotonicIdExecNode {
   bytes input = 1;
   string column_name = 2;
   bytes schema = 3;
+}
+
+message SessionWindowExecNode {
+  bytes input = 1;
+  repeated string partition_columns = 2;
+  string time_column = 3;
+  string end_column = 4;
+  string output_column = 5;
+  bytes schema = 6;
+}
+
+message SessionAggregateExecNode {
+  bytes input = 1;
+  repeated string partition_columns = 2;
+  string time_column = 3;
+  string end_column = 4;
+  repeated string group_columns = 5;
+  string session_output = 6;
+  repeated SessionAggregateFunctionNode aggregates = 7;
+  bytes schema = 8;
+}
+
+message SessionAggregateFunctionNode {
+  // The aggregate as an encoded datafusion `PhysicalExprNode` (an
+  // `AggregateExpr`), produced by `serialize_physical_aggr_expr`: it carries the
+  // UDAF definition, argument expressions, order-bys, distinct, and ignore-nulls.
+  bytes expr = 1;
+  // The aggregate's output alias (not carried inside the `AggregateExpr`).
+  string output_name = 2;
+  // Optional `FILTER (WHERE ...)` predicate, an encoded datafusion
+  // `PhysicalExprNode`. Empty when the aggregate has no filter.
+  optional bytes filter = 3;
 }
 
 message SparkPartitionIdExecNode {
