@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::stats::Precision;
-use datafusion::common::tree_node::Transformed;
+use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{Column, DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion::functions::core::getfield::GetFieldFunc;
 use datafusion::functions_aggregate::expr_fn::sum;
@@ -331,11 +331,9 @@ fn build_residual_aggregate(
             expression.alias(format!("__sail_delta_residual_aggregate_{index}"))
         })
         .collect::<Vec<_>>();
-    let residual = LogicalPlan::Aggregate(Aggregate::try_new(
-        Arc::clone(&aggregate.input),
-        vec![],
-        residual_expr,
-    )?);
+    let residual_input = project_residual_input(Arc::clone(&aggregate.input), &residual_expr)?;
+    let residual =
+        LogicalPlan::Aggregate(Aggregate::try_new(residual_input, vec![], residual_expr)?);
     let residual_columns = residual.schema().columns();
     let mut residual_index = 0;
     let output_expr = values
@@ -365,6 +363,52 @@ fn build_residual_aggregate(
         Arc::new(residual),
         Arc::clone(&aggregate.schema),
     )?))
+}
+
+fn project_residual_input(
+    input: Arc<LogicalPlan>,
+    residual_expr: &[Expr],
+) -> Result<Arc<LogicalPlan>> {
+    for expression in residual_expr {
+        if expression.exists(|expression| {
+            Ok(matches!(
+                expression,
+                Expr::ScalarSubquery(_)
+                    | Expr::Exists(_)
+                    | Expr::InSubquery(_)
+                    | Expr::SetComparison(_)
+            ))
+        })? {
+            // Subquery outer references are not included in `Expr::column_refs()`.
+            return Ok(input);
+        }
+    }
+
+    let schema = input.schema();
+    let mut required_indices = HashSet::new();
+    for column in residual_expr.iter().flat_map(Expr::column_refs) {
+        let Some(index) = schema.maybe_index_of_column(column) else {
+            return Ok(input);
+        };
+        required_indices.insert(index);
+    }
+    if required_indices.len() == schema.fields().len() {
+        return Ok(input);
+    }
+
+    let projection = schema
+        .columns()
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, column)| {
+            required_indices
+                .contains(&index)
+                .then_some(Expr::Column(column))
+        })
+        .collect::<Vec<_>>();
+    Ok(Arc::new(LogicalPlan::Projection(Projection::try_new(
+        projection, input,
+    )?)))
 }
 
 fn exact_aggregate_value(
