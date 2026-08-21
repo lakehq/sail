@@ -58,7 +58,7 @@ use crate::physical_plan::write_context::{
     input_schema_with_logical_metadata, prepare_iceberg_write_context,
 };
 use crate::schema_evolution::SchemaEvolver;
-use crate::spec::{MetadataLog, PartitionSpec, Schema, Snapshot, TableMetadata};
+use crate::spec::{FormatVersion, MetadataLog, PartitionSpec, Schema, Snapshot, TableMetadata};
 use crate::table::metadata_loader::{
     encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
     metadata_file_version_from_path, metadata_location_to_object_path_string, write_version_hint,
@@ -453,9 +453,10 @@ pub(crate) async fn plan_iceberg_write(
         SinkMode::IgnoreIfExists => PhysicalSinkMode::IgnoreIfExists,
         SinkMode::Append => PhysicalSinkMode::Append,
         SinkMode::Overwrite => PhysicalSinkMode::Overwrite,
-        SinkMode::OverwriteIf { .. } => {
-            return not_impl_err!("predicate overwrite for Iceberg");
-        }
+        SinkMode::OverwriteIf { condition } => PhysicalSinkMode::OverwriteIf {
+            source: condition.source.clone(),
+            condition: Some(condition),
+        },
         SinkMode::OverwritePartitions => PhysicalSinkMode::OverwritePartitions,
     };
     validate_iceberg_lakehouse_storage_access(lakehouse_table.as_ref())?;
@@ -517,6 +518,29 @@ pub(crate) async fn plan_iceberg_write(
     let expected_snapshot_id = table
         .as_ref()
         .map(|table| table.metadata().current_snapshot_id);
+    let removed_data_file_paths = if let PhysicalSinkMode::OverwriteIf {
+        condition: Some(condition),
+        ..
+    } = &mode
+    {
+        let table = table.as_ref().ok_or_else(|| {
+            DataFusionError::Plan(
+                "Iceberg predicate overwrite requires an existing table".to_string(),
+            )
+        })?;
+        if matches!(table.metadata().format_version, FormatVersion::V3) {
+            return not_impl_err!(
+                "Iceberg v3 predicate overwrite is not supported until row lineage is preserved"
+            );
+        }
+        let read_options = IcebergReadOptions::resolve(ctx, vec![])?;
+        table
+            .to_provider(&read_options)?
+            .predicate_overwrite_paths(ctx, &condition.expr)
+            .await?
+    } else {
+        Vec::new()
+    };
 
     if let Some(existing_partitions) = &existing_partition_columns
         && !partition_by.is_empty()
@@ -574,7 +598,11 @@ pub(crate) async fn plan_iceberg_write(
 
     let mut builder =
         IcebergPlanBuilder::new(physical_input, table_config, mode.clone(), physical_sort, ctx);
-    if matches!(mode, PhysicalSinkMode::OverwritePartitions) {
+    if matches!(mode, PhysicalSinkMode::OverwriteIf { .. }) {
+        builder = builder
+            .with_expected_snapshot_id(expected_snapshot_id)
+            .with_removed_data_file_paths(removed_data_file_paths);
+    } else if matches!(mode, PhysicalSinkMode::OverwritePartitions) {
         builder = builder
             .with_expected_snapshot_id(expected_snapshot_id)
             .with_dynamic_partition_overwrite(true);
