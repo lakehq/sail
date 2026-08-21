@@ -47,18 +47,56 @@ enum TransportFrameType {
 /// separately. Keeping that split is important: failures put their error string in the encoded
 /// header, whereas successful RPCs put their payload in the body.
 #[derive(Debug)]
-struct TransportFrame {
+struct TransportFrame<'a> {
     pub frame_type: TransportFrameType,
     pub header: Vec<u8>,
-    pub body: Vec<u8>,
+    pub body: TransportBody<'a>,
 }
 
-impl TransportFrame {
+#[derive(Debug)]
+enum TransportBody<'a> {
+    Owned(Vec<u8>),
+    PrefixAndData { prefix: Vec<u8>, data: &'a [u8] },
+}
+
+impl TransportBody<'_> {
+    fn len(&self) -> usize {
+        match self {
+            Self::Owned(body) => body.len(),
+            Self::PrefixAndData { prefix, data } => prefix.len() + data.len(),
+        }
+    }
+
+    async fn write<W>(&self, writer: &mut W) -> std::io::Result<()>
+    where
+        W: AsyncWriteExt + Unpin,
+    {
+        match self {
+            Self::Owned(body) => writer.write_all(body).await,
+            Self::PrefixAndData { prefix, data } => {
+                writer.write_all(prefix).await?;
+                writer.write_all(data).await
+            }
+        }
+    }
+
+    fn into_owned(self) -> Vec<u8> {
+        match self {
+            Self::Owned(body) => body,
+            Self::PrefixAndData { mut prefix, data } => {
+                prefix.extend_from_slice(data);
+                prefix
+            }
+        }
+    }
+}
+
+impl TransportFrame<'static> {
     pub fn new(frame_type: TransportFrameType, header: Vec<u8>, body: Vec<u8>) -> Self {
         Self {
             frame_type,
             header,
-            body,
+            body: TransportBody::Owned(body),
         }
     }
 
@@ -71,7 +109,27 @@ impl TransportFrame {
         Ok(Self::new(TransportFrameType::RpcRequest, header, body))
     }
 
+    pub async fn read<R>(reader: &mut R) -> CelebornResult<Self>
+    where
+        R: AsyncReadExt + Unpin,
+    {
+        let header_length = usize::try_from(reader.read_i32().await?)
+            .map_err(|_| CelebornError::Protocol("invalid transport header length".to_string()))?;
+        let frame_type = TransportFrameType::try_from(reader.read_u8().await?)
+            .map_err(|error| CelebornError::Protocol(error.to_string()))?;
+        let body_length = usize::try_from(reader.read_i32().await?)
+            .map_err(|_| CelebornError::Protocol("invalid transport body length".to_string()))?;
+        let mut header = vec![0; header_length];
+        let mut body = vec![0; body_length];
+        reader.read_exact(&mut header).await?;
+        reader.read_exact(&mut body).await?;
+        Ok(Self::new(frame_type, header, body))
+    }
+}
+
+impl TransportFrame<'_> {
     pub fn into_rpc_response(self, request_id: i64) -> CelebornResult<Vec<u8>> {
+        let body = self.body.into_owned();
         match self.frame_type {
             TransportFrameType::RpcResponse => {
                 if self.header.len() != 12 {
@@ -93,15 +151,15 @@ impl TransportFrame {
                     i32::from_be_bytes(self.header[8..].try_into().map_err(|_| {
                         CelebornError::Protocol("invalid RPC response body length".to_string())
                     })?);
-                if usize::try_from(declared_body_length).ok() != Some(self.body.len()) {
+                if usize::try_from(declared_body_length).ok() != Some(body.len()) {
                     return Err(CelebornError::Protocol(
                         "invalid RPC response body length".to_string(),
                     ));
                 }
-                Ok(self.body)
+                Ok(body)
             }
             TransportFrameType::RpcFailure => {
-                if !self.body.is_empty() || self.header.len() < 12 {
+                if !body.is_empty() || self.header.len() < 12 {
                     return Err(CelebornError::Protocol(
                         "invalid RPC failure frame".to_string(),
                     ));
@@ -152,26 +210,9 @@ impl TransportFrame {
         writer.write_u8(self.frame_type.into()).await?;
         writer.write_i32(body_length).await?;
         writer.write_all(&self.header).await?;
-        writer.write_all(&self.body).await?;
+        self.body.write(writer).await?;
         writer.flush().await?;
         Ok(())
-    }
-
-    pub async fn read<R>(reader: &mut R) -> CelebornResult<Self>
-    where
-        R: AsyncReadExt + Unpin,
-    {
-        let header_length = usize::try_from(reader.read_i32().await?)
-            .map_err(|_| CelebornError::Protocol("invalid transport header length".to_string()))?;
-        let frame_type = TransportFrameType::try_from(reader.read_u8().await?)
-            .map_err(|error| CelebornError::Protocol(error.to_string()))?;
-        let body_length = usize::try_from(reader.read_i32().await?)
-            .map_err(|_| CelebornError::Protocol("invalid transport body length".to_string()))?;
-        let mut header = vec![0; header_length];
-        let mut body = vec![0; body_length];
-        reader.read_exact(&mut header).await?;
-        reader.read_exact(&mut body).await?;
-        Ok(Self::new(frame_type, header, body))
     }
 }
 
@@ -198,6 +239,11 @@ impl TransportConnection {
             stream: Arc::new(Mutex::new(None)),
             next_request_id: Arc::new(AtomicI64::new(0)),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shares_stream_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.stream, &other.stream)
     }
 
     fn next_request_id(&self) -> i64 {
@@ -228,29 +274,25 @@ impl TransportConnection {
         let header_length = 8 + 1 + 4 + shuffle_key.len() + 4 + partition_unique_id.len();
         let header_length = i32::try_from(header_length)
             .map_err(|_| CelebornError::Protocol("push header is too large".to_string()))?;
-        let body_length = 16usize
-            .checked_add(data.len())
-            .ok_or_else(|| CelebornError::Protocol("push body is too large".to_string()))?;
-        let body_length = i32::try_from(body_length)
-            .map_err(|_| CelebornError::Protocol("push body is too large".to_string()))?;
-
+        let data_length = i32::try_from(data.len())
+            .map_err(|_| CelebornError::Protocol("push data is too large".to_string()))?;
         let mut header = Vec::with_capacity(header_length as usize);
         header.extend_from_slice(&request_id.to_be_bytes());
         header.push(0);
         write_bytes(&mut header, shuffle_key)?;
         write_bytes(&mut header, partition_unique_id)?;
-        let mut body = Vec::with_capacity(body_length as usize);
-        body.extend_from_slice(&map_id.to_be_bytes());
-        body.extend_from_slice(&attempt_id.to_be_bytes());
-        body.extend_from_slice(&batch_id.to_be_bytes());
-        write_bytes(&mut body, data)?;
+        let mut prefix = Vec::with_capacity(16);
+        prefix.extend_from_slice(&map_id.to_be_bytes());
+        prefix.extend_from_slice(&attempt_id.to_be_bytes());
+        prefix.extend_from_slice(&batch_id.to_be_bytes());
+        prefix.extend_from_slice(&data_length.to_be_bytes());
 
         let response = self
-            .request(TransportFrame::new(
-                TransportFrameType::PushData,
+            .request(TransportFrame {
+                frame_type: TransportFrameType::PushData,
                 header,
-                body,
-            ))
+                body: TransportBody::PrefixAndData { prefix, data },
+            })
             .await?
             .into_rpc_response(request_id)?;
         match response.first().copied() {
@@ -327,10 +369,10 @@ impl TransportConnection {
                 "invalid chunk response slice: negative length {response_length}"
             )));
         }
-        Ok(response.body)
+        Ok(response.body.into_owned())
     }
 
-    async fn request(&self, frame: TransportFrame) -> CelebornResult<TransportFrame> {
+    async fn request(&self, frame: TransportFrame<'_>) -> CelebornResult<TransportFrame<'static>> {
         // Keep the lock outside the I/O timeout. A caller queued behind another transaction must
         // not time out and clear the connection that the active transaction is using.
         let mut stream = self.stream.lock().await;
