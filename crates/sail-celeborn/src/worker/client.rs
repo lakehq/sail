@@ -21,6 +21,13 @@ use crate::protocol::transport::{TransportConnection, TransportMessage};
 
 const WORKER_ENDPOINT_NAME: &str = "WorkerEndpoint";
 
+/// Metrics reported by a worker after committing shuffle files.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CommitMetrics {
+    pub total_written: i64,
+    pub file_count: i64,
+}
+
 /// A small async client for a Celeborn worker endpoint.
 #[derive(Clone)]
 pub struct WorkerClient {
@@ -171,7 +178,7 @@ impl WorkerClient {
         primary_locations: Vec<PartitionLocation>,
         replica_locations: Vec<PartitionLocation>,
         map_attempts: Vec<i32>,
-    ) -> CelebornResult<()> {
+    ) -> CelebornResult<CommitMetrics> {
         let request = PbCommitFiles {
             application_id,
             shuffle_id,
@@ -201,7 +208,10 @@ impl WorkerClient {
                 status: response.status,
             });
         }
-        Ok(())
+        Ok(CommitMetrics {
+            total_written: response.total_written,
+            file_count: i64::from(response.file_count),
+        })
     }
 
     /// Open a lazy stream of committed batches for this primary partition.
@@ -497,7 +507,7 @@ fn decompress_block(
             "compressed block checksum mismatch".to_string(),
         ));
     }
-    Ok(Bytes::from(output))
+    Ok(output)
 }
 
 fn take_batch(buffered: &mut BytesMut) -> CelebornResult<Option<Bytes>> {
@@ -533,6 +543,7 @@ fn endpoint(
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use bytes::Bytes;
 

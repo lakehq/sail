@@ -1,3 +1,3 @@
 mod client;
 
-pub use client::{WorkerClient, WorkerClientOptions, WorkerClientPool};
+pub use client::{CommitMetrics, WorkerClient, WorkerClientOptions, WorkerClientPool};

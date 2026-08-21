@@ -3,7 +3,6 @@ use std::sync::Arc;
 use bytes::Bytes;
 use futures::StreamExt;
 use futures::stream::{self, BoxStream};
-use log::warn;
 use sail_common::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
 
@@ -249,13 +248,6 @@ impl ShuffleClientActor {
                     None => (None, Err(error)),
                 },
             };
-            if let Ok(bytes) = result.as_ref()
-                && let Err(error) = lifecycle_manager
-                    .report_metrics(crate::common::ApplicationMetrics::for_written_data(*bytes))
-                    .await
-            {
-                warn!("failed to report Celeborn shuffle metrics: {error}");
-            }
             let _ = handle
                 .send(ShuffleClientMessage::PushDataComplete {
                     shuffle_id,

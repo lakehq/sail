@@ -459,6 +459,7 @@ impl LifecycleManagerActor {
         let handle = ctx.handle().clone();
         ctx.spawn(async move {
             let result = async {
+                let mut metrics = ApplicationMetrics::default();
                 for locations in worker_locations.into_values() {
                     let Some(location) = locations
                         .primary_locations
@@ -467,7 +468,7 @@ impl LifecycleManagerActor {
                     else {
                         continue;
                     };
-                    worker_clients
+                    let commit_metrics = worker_clients
                         .client(
                             WorkerClientOptions::new(location.clone())
                                 .with_endpoint_resolver(endpoint_resolver.clone()),
@@ -480,8 +481,13 @@ impl LifecycleManagerActor {
                             map_attempts.clone(),
                         )
                         .await?;
+                    metrics.total_written = metrics
+                        .total_written
+                        .saturating_add(commit_metrics.total_written);
+                    metrics.file_count =
+                        metrics.file_count.saturating_add(commit_metrics.file_count);
                 }
-                Ok(())
+                Ok(metrics)
             }
             .await;
             let _ = handle
@@ -498,13 +504,18 @@ impl LifecycleManagerActor {
     pub(super) fn handle_mapper_end_complete(
         &mut self,
         shuffle_id: i32,
-        result: CelebornResult<()>,
+        result: CelebornResult<ApplicationMetrics>,
         reply: oneshot::Sender<CelebornResult<()>>,
     ) -> ActorAction {
         self.committing_shuffles.remove(&shuffle_id);
-        if result.is_ok() {
-            self.committed_shuffles.insert(shuffle_id);
-        }
+        let result = match result {
+            Ok(metrics) => {
+                self.committed_shuffles.insert(shuffle_id);
+                self.application_metrics.add_assign(metrics);
+                Ok(())
+            }
+            Err(error) => Err(error),
+        };
         let _ = reply.send(result);
         ActorAction::Continue
     }

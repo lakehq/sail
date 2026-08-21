@@ -115,11 +115,14 @@ fn parse_worker_port(
 }
 
 /// Compression applied to individual push-data batches.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum CompressionCodec {
     None,
+    #[default]
     Lz4,
-    Zstd { level: i8 },
+    Zstd {
+        level: i8,
+    },
 }
 
 /// Metrics sent with an application heartbeat.
@@ -134,13 +137,6 @@ pub struct ApplicationMetrics {
 }
 
 impl ApplicationMetrics {
-    pub fn for_written_data(bytes: usize) -> Self {
-        Self {
-            total_written: i64::try_from(bytes).unwrap_or(i64::MAX),
-            ..Default::default()
-        }
-    }
-
     pub fn add_assign(&mut self, other: Self) {
         self.total_written = self.total_written.saturating_add(other.total_written);
         self.file_count = self.file_count.saturating_add(other.file_count);
@@ -156,12 +152,6 @@ impl ApplicationMetrics {
             let count = self.application_fallback_counts.entry(key).or_default();
             *count = count.saturating_add(value);
         }
-    }
-}
-
-impl Default for CompressionCodec {
-    fn default() -> Self {
-        Self::Lz4
     }
 }
 
@@ -191,11 +181,20 @@ impl FromStr for CompressionCodec {
                     ))
                 })?
                 .parse::<i8>()
-                .map(|level| Self::Zstd { level })
                 .map_err(|_| {
                     CelebornError::InvalidArgument(format!(
                         "invalid Celeborn zstd compression level: {value}"
                     ))
+                })
+                .and_then(|level| {
+                    (-5..=22)
+                        .contains(&level)
+                        .then_some(Self::Zstd { level })
+                        .ok_or_else(|| {
+                            CelebornError::InvalidArgument(format!(
+                                "invalid Celeborn zstd compression level: {value}"
+                            ))
+                        })
                 }),
         }
     }
@@ -306,6 +305,7 @@ impl TryFrom<PbPartitionLocation> for PartitionLocation {
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use super::{CompressionCodec, WorkerIdentity};
 
@@ -318,6 +318,12 @@ mod tests {
             Ok(CompressionCodec::Zstd { level: 1 })
         ));
         assert!("zstd".parse::<CompressionCodec>().is_err());
+        assert!(matches!(
+            "zstd(-5)".parse(),
+            Ok(CompressionCodec::Zstd { level: -5 })
+        ));
+        assert!("zstd(-6)".parse::<CompressionCodec>().is_err());
+        assert!("zstd(127)".parse::<CompressionCodec>().is_err());
     }
 
     #[test]

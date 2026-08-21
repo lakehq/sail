@@ -336,18 +336,15 @@ pub struct CelebornShuffleBackend {
 }
 
 /// Compression applied to Celeborn push-data batches.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub enum CelebornCompressionCodec {
     None,
+    #[default]
     Lz4,
-    Zstd { level: i8 },
-}
-
-impl Default for CelebornCompressionCodec {
-    fn default() -> Self {
-        Self::Lz4
-    }
+    Zstd {
+        level: i8,
+    },
 }
 
 impl Display for CelebornCompressionCodec {
@@ -372,8 +369,13 @@ impl FromStr for CelebornCompressionCodec {
                 .and_then(|value| value.strip_suffix(')'))
                 .ok_or_else(|| format!("invalid Celeborn compression codec: {value}"))?
                 .parse::<i8>()
-                .map(|level| Self::Zstd { level })
-                .map_err(|_| format!("invalid Celeborn zstd compression level: {value}")),
+                .map_err(|_| format!("invalid Celeborn zstd compression level: {value}"))
+                .and_then(|level| {
+                    (-5..=22)
+                        .contains(&level)
+                        .then_some(Self::Zstd { level })
+                        .ok_or_else(|| format!("invalid Celeborn zstd compression level: {value}"))
+                }),
         }
     }
 }
@@ -950,5 +952,11 @@ mod tests {
             Ok(CelebornCompressionCodec::Zstd { level: 1 })
         );
         assert!("zstd".parse::<CelebornCompressionCodec>().is_err());
+        assert_eq!(
+            "zstd(-5)".parse(),
+            Ok(CelebornCompressionCodec::Zstd { level: -5 })
+        );
+        assert!("zstd(-6)".parse::<CelebornCompressionCodec>().is_err());
+        assert!("zstd(127)".parse::<CelebornCompressionCodec>().is_err());
     }
 }

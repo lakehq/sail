@@ -46,7 +46,7 @@ pub enum LifecycleManagerMessage {
     },
     MapperEndComplete {
         shuffle_id: i32,
-        result: CelebornResult<()>,
+        result: CelebornResult<ApplicationMetrics>,
         reply: oneshot::Sender<CelebornResult<()>>,
     },
     UnregisterShuffle {
