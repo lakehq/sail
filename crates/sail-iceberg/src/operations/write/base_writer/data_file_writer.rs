@@ -40,7 +40,8 @@ impl DataFileWriter {
         }
     }
 
-    pub fn finish(self, meta: ParquetFileMeta) -> Result<WriteOutcome, String> {
+    /// Finish a delete-file write without collecting column bounds.
+    pub fn finish_without_bounds(self, meta: ParquetFileMeta) -> Result<WriteOutcome, String> {
         let empty_schema = Schema::builder().with_schema_id(0).build()?;
         self.finish_with_schema(meta, &empty_schema)
     }
@@ -328,6 +329,7 @@ mod tests {
     use datafusion::arrow::array::Int32Array;
     use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
     use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::prelude::{SessionContext, col, lit};
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use parquet::data_type::ByteArray;
     use parquet::file::properties::WriterProperties;
@@ -395,8 +397,44 @@ mod tests {
             outcome.data_file.upper_bounds.get(&1),
             Some(&Datum::new(PrimitiveType::Int, PrimitiveLiteral::Int(3)))
         );
+
+        let session = SessionContext::new();
+        let (kept, mask) = crate::datasource::pruning::prune_files(
+            &session.state(),
+            &[col("id").gt(lit(10i32))],
+            None,
+            arrow_schema,
+            vec![outcome.data_file],
+            &iceberg_schema,
+        )
+        .map_err(|error| error.to_string())?;
+        assert!(kept.is_empty());
+        assert_eq!(mask, Some(vec![false]));
         Ok(())
         })
+    }
+
+    #[test]
+    fn aggregate_statistics_are_absent_when_any_file_metric_is_missing() {
+        let mut bounds = HashMap::new();
+        let mut unknown = HashSet::new();
+        update_bound(
+            &mut bounds,
+            &mut unknown,
+            1,
+            Some(Datum::new(PrimitiveType::Int, PrimitiveLiteral::Int(1))),
+            true,
+        );
+        update_bound(&mut bounds, &mut unknown, 1, None, true);
+        update_bound(
+            &mut bounds,
+            &mut unknown,
+            1,
+            Some(Datum::new(PrimitiveType::Int, PrimitiveLiteral::Int(0))),
+            true,
+        );
+        assert!(!bounds.contains_key(&1));
+        assert!(unknown.contains(&1));
     }
 
     #[test]

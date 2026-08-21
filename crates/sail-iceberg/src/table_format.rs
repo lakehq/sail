@@ -430,6 +430,13 @@ impl UserDefinedLogicalNodeCore for IcebergWriteNode {
     }
 }
 
+fn validate_scoped_overwrite_table(mode: &PhysicalSinkMode, table_exists: bool) -> Result<()> {
+    if matches!(mode, PhysicalSinkMode::OverwritePartitions) && !table_exists {
+        return plan_err!("Iceberg dynamic partition overwrite requires an existing table");
+    }
+    Ok(())
+}
+
 pub(crate) async fn plan_iceberg_write(
     ctx: &SessionState,
     logical_input: &LogicalPlan,
@@ -521,6 +528,7 @@ pub(crate) async fn plan_iceberg_write(
             .current_snapshot()
             .map(Snapshot::snapshot_id)
     });
+    validate_scoped_overwrite_table(&mode, table.is_some())?;
     let removed_data_file_paths = if let PhysicalSinkMode::OverwriteIf {
         condition: Some(condition),
         ..
@@ -1188,6 +1196,18 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn dynamic_partition_overwrite_missing_table_is_a_plan_error() -> Result<()> {
+        let Err(error) = validate_scoped_overwrite_table(
+            &PhysicalSinkMode::OverwritePartitions,
+            false,
+        ) else {
+            return plan_err!("missing target must fail");
+        };
+        assert!(matches!(error, DataFusionError::Plan(_)));
+        Ok(())
+    }
 
     #[test]
     fn split_iceberg_write_options_keeps_catalog_options_out_of_table_properties() -> Result<()> {

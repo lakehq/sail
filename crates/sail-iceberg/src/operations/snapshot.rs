@@ -270,7 +270,6 @@ pub enum SnapshotUpdateKind {
     FastAppend,
     FullOverwrite,
     RowDelta,
-    CopyOnWriteDelete,
     CopyOnWrite,
 }
 
@@ -317,7 +316,6 @@ impl SnapshotUpdateKind {
                 Operation::Delete
             }
             Self::RowDelta => Operation::Overwrite,
-            Self::CopyOnWriteDelete => Operation::Delete,
             Self::CopyOnWrite => Operation::Overwrite,
         }
     }
@@ -327,7 +325,7 @@ impl SnapshotUpdateKind {
     }
 
     fn is_targeted_rewrite(self) -> bool {
-        matches!(self, Self::CopyOnWriteDelete | Self::CopyOnWrite)
+        matches!(self, Self::CopyOnWrite)
     }
 
     fn delete_totals_base<'a>(
@@ -1318,6 +1316,45 @@ mod tests {
         file.record_count = record_count;
         file.referenced_data_file = None;
         file
+    }
+
+    #[test]
+    fn targeted_rewrite_rejects_a_removal_path_missing_from_parent() {
+        futures::executor::block_on(async {
+            let table_url =
+                url::Url::parse("file:///tmp/iceberg-missing-removal/").expect("table URL");
+            let store: Arc<dyn object_store::ObjectStore> =
+                Arc::new(object_store::memory::InMemory::new());
+            let store_ctx = StoreContext::new(store, &table_url).expect("store context");
+            let parent_snapshot = SnapshotBuilder::new()
+                .with_snapshot_id(10)
+                .with_sequence_number(1)
+                .with_manifest_list("metadata/parent-list.avro")
+                .with_summary(crate::spec::snapshots::Summary::new(Operation::Append))
+                .build()
+                .expect("parent snapshot");
+            let transaction = Transaction::new(table_url.to_string(), parent_snapshot, 1);
+            let producer = SnapshotProducer::new(
+                &transaction,
+                vec![],
+                Some(store_ctx.clone()),
+                None,
+            );
+            let mut created_paths = Vec::new();
+            let error = producer
+                .rewrite_parent_manifests(
+                    &store_ctx,
+                    vec![],
+                    &HashSet::from(["data/missing.parquet".to_string()]),
+                    2,
+                    11,
+                    &mut created_paths,
+                )
+                .await
+                .expect_err("missing removal path must fail");
+            assert!(error.contains("data/missing.parquet"));
+            assert!(created_paths.is_empty());
+        });
     }
 
     #[test]

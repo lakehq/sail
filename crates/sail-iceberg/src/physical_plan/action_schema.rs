@@ -636,6 +636,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bounds_roundtrip_preserves_empty_partial_and_full_maps() -> Result<()> {
+        let one = Datum::new(PrimitiveType::Int, PrimitiveLiteral::Int(1));
+        let three = Datum::new(PrimitiveType::Int, PrimitiveLiteral::Int(3));
+        for (lower, upper) in [
+            (HashMap::new(), HashMap::new()),
+            (HashMap::from([(1, one.clone())]), HashMap::new()),
+            (HashMap::from([(1, one)]), HashMap::from([(1, three)])),
+        ] {
+            assert_eq!(decode_bounds(&encode_bounds(&lower)?)?, lower);
+            assert_eq!(decode_bounds(&encode_bounds(&upper)?)?, upper);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn encode_add_and_commit_meta_roundtrip() -> Result<()> {
         let df = DataFile {
             content: DataContentType::Data,

@@ -4171,9 +4171,6 @@ impl RemoteExecutionCodec {
             }
             r#gen::IcebergSnapshotUpdateKind::RowDelta => Ok(SnapshotUpdateKind::RowDelta),
             r#gen::IcebergSnapshotUpdateKind::CopyOnWrite => Ok(SnapshotUpdateKind::CopyOnWrite),
-            r#gen::IcebergSnapshotUpdateKind::CopyOnWriteDelete => {
-                Ok(SnapshotUpdateKind::CopyOnWriteDelete)
-            }
             r#gen::IcebergSnapshotUpdateKind::Unspecified => {
                 plan_err!("Iceberg snapshot update kind is unspecified")
             }
@@ -4186,9 +4183,6 @@ impl RemoteExecutionCodec {
             SnapshotUpdateKind::FullOverwrite => r#gen::IcebergSnapshotUpdateKind::FullOverwrite,
             SnapshotUpdateKind::RowDelta => r#gen::IcebergSnapshotUpdateKind::RowDelta,
             SnapshotUpdateKind::CopyOnWrite => r#gen::IcebergSnapshotUpdateKind::CopyOnWrite,
-            SnapshotUpdateKind::CopyOnWriteDelete => {
-                r#gen::IcebergSnapshotUpdateKind::CopyOnWriteDelete
-            }
         }) as i32
     }
 
@@ -5060,6 +5054,38 @@ mod tests {
                 .field_id_by_name("id")
                 .is_some()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_iceberg_commit_preserves_scoped_overwrite_fields() -> Result<()> {
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        for expected_snapshot_id in [Some(None), Some(Some(42))] {
+            let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
+            let plan: Arc<dyn ExecutionPlan> = Arc::new(
+                IcebergCommitExec::new(
+                    input,
+                    Url::parse("file:///tmp/iceberg-commit-codec/")
+                        .map_err(|error| plan_datafusion_err!("{error}"))?,
+                    None,
+                    SnapshotUpdateKind::CopyOnWrite,
+                )
+                .with_expected_snapshot_id(expected_snapshot_id)
+                .with_dynamic_partition_overwrite(true)
+                .with_removed_data_file_paths(vec!["data/old.parquet".to_string()]),
+            );
+
+            let codec = RemoteExecutionCodec;
+            let bytes = try_encode_physical_plan(&codec, plan)?;
+            let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+            let commit = decoded
+                .downcast_ref::<IcebergCommitExec>()
+                .ok_or_else(|| plan_datafusion_err!("decoded plan is not an IcebergCommitExec"))?;
+            assert_eq!(commit.expected_snapshot_id(), expected_snapshot_id);
+            assert!(commit.dynamic_partition_overwrite());
+            assert_eq!(commit.removed_data_file_paths(), &["data/old.parquet"]);
+        }
         Ok(())
     }
 
