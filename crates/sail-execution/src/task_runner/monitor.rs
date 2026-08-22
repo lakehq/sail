@@ -1,6 +1,8 @@
 use std::any::Any;
 
 use datafusion::execution::SendableRecordBatchStream;
+use fastrace::Span;
+use fastrace::future::FutureExt;
 use futures::StreamExt;
 use sail_common::actor::ActorHandle;
 use sail_common_datafusion::error::CommonErrorCause;
@@ -52,7 +54,8 @@ impl TaskMonitor {
     pub async fn supervise(self) {
         let handle = self.handle.clone();
         let key = self.key.clone();
-        let monitor = AbortOnDropHandle::new(tokio::spawn(self.run()));
+        let span = Span::enter_with_local_parent("TaskMonitor::run");
+        let monitor = AbortOnDropHandle::new(tokio::spawn(self.run().in_span(span)));
         if let Some(message) = Self::monitor_failure(key, monitor).await {
             let _ = handle.send(message).await;
         }
