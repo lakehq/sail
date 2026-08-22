@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, GenericStringArray, Int64Array, ListArray, ListBuilder, OffsetSizeTrait,
-    StringBuilder,
+    Array, ArrayRef, AsArray, Int64Array, ListArray, ListBuilder, StringArrayType, StringBuilder,
 };
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::take_function_args;
@@ -121,63 +120,24 @@ impl ScalarUDFImpl for SparkRegexpExtractAll {
 }
 
 fn regexp_extract_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args[0].data_type() {
-        DataType::LargeUtf8 => regexp_extract_downcast::<i64>(args),
-        _ => regexp_extract_downcast::<i32>(args),
-    }
-}
-
-fn regexp_extract_downcast<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [values_arr, pattern_arr, idx_arr] = take_function_args(SparkRegexpExtract::NAME, args)?;
-    let values = values_arr.as_any().downcast_ref::<GenericStringArray<O>>();
-    let pattern = string_array_like(pattern_arr);
     let idx = opt_downcast_arg!(idx_arr, Int64Array);
+    let Some(idx) = idx.as_ref() else {
+        return Err(generic_internal_err(
+            SparkRegexpExtract::NAME,
+            "Could not downcast arguments to arrow arrays",
+        ));
+    };
 
-    match (values, pattern.as_deref(), idx.as_ref()) {
-        (Some(values), Some(pattern), Some(idx)) => {
-            let pattern_len = pattern.len_();
-            let idx_len = idx.len();
-
-            let pattern_scalar_opt = (pattern_len == 1 && pattern.is_valid_(0))
-                .then(|| parse_regex(SparkRegexpExtract::NAME, pattern.value_(0)))
-                .transpose()?;
-            let idx_scalar_opt = (idx_len == 1 && idx.is_valid(0)).then(|| idx.value(0));
-            let is_pattern_null = pattern_len == 1 && pattern.is_null_(0);
-            let is_idx_null = idx_len == 1 && idx.is_null(0);
-
-            let mut builder = StringBuilder::new();
-            // Compile each distinct column pattern once per batch, not per row.
-            let mut regex_memo = StrMemo::new();
-            for i in 0..args[0].len() {
-                let pattern_is_null = if pattern_len == 1 {
-                    is_pattern_null
-                } else {
-                    pattern.is_null_(i)
-                };
-                let idx_is_null = if idx_len == 1 {
-                    is_idx_null
-                } else {
-                    idx.is_null(i)
-                };
-
-                if pattern_is_null || idx_is_null || values.is_null(i) {
-                    builder.append_null();
-                } else {
-                    let re = regex_memo.resolve(
-                        pattern_scalar_opt.as_ref(),
-                        || pattern.value_(i),
-                        |p| parse_regex(SparkRegexpExtract::NAME, p),
-                    )?;
-                    let group_idx = idx_scalar_opt.unwrap_or_else(|| idx.value(i));
-                    builder.append_value(extract_first_match(
-                        SparkRegexpExtract::NAME,
-                        values.value(i),
-                        re,
-                        group_idx,
-                    )?);
-                }
-            }
-            Ok(Arc::new(builder.finish()))
+    match values_arr.data_type() {
+        DataType::Utf8 => {
+            regexp_extract_with_pattern(values_arr.as_string::<i32>(), pattern_arr, idx)
+        }
+        DataType::LargeUtf8 => {
+            regexp_extract_with_pattern(values_arr.as_string::<i64>(), pattern_arr, idx)
+        }
+        DataType::Utf8View => {
+            regexp_extract_with_pattern(values_arr.as_string_view(), pattern_arr, idx)
         }
         _ => Err(generic_internal_err(
             SparkRegexpExtract::NAME,
@@ -186,72 +146,177 @@ fn regexp_extract_downcast<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Arra
     }
 }
 
-fn regexp_extract_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args[0].data_type() {
-        DataType::LargeUtf8 => regexp_extract_all_downcast::<i64>(args),
-        _ => regexp_extract_all_downcast::<i32>(args),
+fn regexp_extract_with_pattern<'values, V>(
+    values: V,
+    pattern_arr: &ArrayRef,
+    idx: &Int64Array,
+) -> Result<ArrayRef>
+where
+    V: StringArrayType<'values>,
+{
+    match pattern_arr.data_type() {
+        DataType::Utf8 => regexp_extract_arrays(values, pattern_arr.as_string::<i32>(), idx),
+        DataType::LargeUtf8 => regexp_extract_arrays(values, pattern_arr.as_string::<i64>(), idx),
+        DataType::Utf8View => regexp_extract_arrays(values, pattern_arr.as_string_view(), idx),
+        _ => Err(generic_internal_err(
+            SparkRegexpExtract::NAME,
+            "Could not downcast arguments to arrow arrays",
+        )),
     }
 }
 
-fn regexp_extract_all_downcast<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn regexp_extract_arrays<'values, 'pattern, V, P>(
+    values: V,
+    pattern: P,
+    idx: &Int64Array,
+) -> Result<ArrayRef>
+where
+    V: StringArrayType<'values>,
+    P: StringArrayType<'pattern>,
+{
+    let pattern_len = pattern.len();
+    let idx_len = idx.len();
+
+    let pattern_scalar_opt = (pattern_len == 1 && pattern.is_valid(0))
+        .then(|| parse_regex(SparkRegexpExtract::NAME, pattern.value(0)))
+        .transpose()?;
+    let idx_scalar_opt = (idx_len == 1 && idx.is_valid(0)).then(|| idx.value(0));
+    let is_pattern_null = pattern_len == 1 && pattern.is_null(0);
+    let is_idx_null = idx_len == 1 && idx.is_null(0);
+
+    let mut builder = StringBuilder::new();
+    // Compile each distinct column pattern once per batch, not per row.
+    let mut regex_memo = StrMemo::new();
+    for i in 0..values.len() {
+        let pattern_is_null = if pattern_len == 1 {
+            is_pattern_null
+        } else {
+            pattern.is_null(i)
+        };
+        let idx_is_null = if idx_len == 1 {
+            is_idx_null
+        } else {
+            idx.is_null(i)
+        };
+
+        if pattern_is_null || idx_is_null || values.is_null(i) {
+            builder.append_null();
+        } else {
+            let re = regex_memo.resolve(
+                pattern_scalar_opt.as_ref(),
+                || pattern.value(i),
+                |p| parse_regex(SparkRegexpExtract::NAME, p),
+            )?;
+            let group_idx = idx_scalar_opt.unwrap_or_else(|| idx.value(i));
+            builder.append_value(extract_first_match(
+                SparkRegexpExtract::NAME,
+                values.value(i),
+                re,
+                group_idx,
+            )?);
+        }
+    }
+    Ok(Arc::new(builder.finish()))
+}
+
+fn regexp_extract_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [values_arr, pattern_arr, idx_arr] = take_function_args(SparkRegexpExtractAll::NAME, args)?;
-    let values = values_arr.as_any().downcast_ref::<GenericStringArray<O>>();
-    let pattern = string_array_like(pattern_arr);
     let idx = opt_downcast_arg!(idx_arr, Int64Array);
+    let Some(idx) = idx.as_ref() else {
+        return Err(generic_internal_err(
+            SparkRegexpExtractAll::NAME,
+            "Could not downcast arguments to arrow arrays",
+        ));
+    };
 
-    match (values, pattern.as_deref(), idx.as_ref()) {
-        (Some(values), Some(pattern), Some(idx)) => {
-            let pattern_len = pattern.len_();
-            let idx_len = idx.len();
-
-            let pattern_scalar_opt = (pattern_len == 1 && pattern.is_valid_(0))
-                .then(|| parse_regex(SparkRegexpExtractAll::NAME, pattern.value_(0)))
-                .transpose()?;
-            let idx_scalar_opt = (idx_len == 1 && idx.is_valid(0)).then(|| idx.value(0));
-            let is_pattern_null = pattern_len == 1 && pattern.is_null_(0);
-            let is_idx_null = idx_len == 1 && idx.is_null(0);
-
-            let mut builder = ListBuilder::new(StringBuilder::new());
-            // Compile each distinct column pattern once per batch, not per row.
-            let mut regex_memo = StrMemo::new();
-            for i in 0..args[0].len() {
-                let pattern_is_null = if pattern_len == 1 {
-                    is_pattern_null
-                } else {
-                    pattern.is_null_(i)
-                };
-                let idx_is_null = if idx_len == 1 {
-                    is_idx_null
-                } else {
-                    idx.is_null(i)
-                };
-
-                if pattern_is_null || idx_is_null || values.is_null(i) {
-                    builder.append_null();
-                } else {
-                    let re = regex_memo.resolve(
-                        pattern_scalar_opt.as_ref(),
-                        || pattern.value_(i),
-                        |p| parse_regex(SparkRegexpExtractAll::NAME, p),
-                    )?;
-                    let group_idx = idx_scalar_opt.unwrap_or_else(|| idx.value(i));
-                    let matches = extract_all_matches(
-                        SparkRegexpExtractAll::NAME,
-                        values.value(i),
-                        re,
-                        group_idx,
-                    )?;
-                    builder.append_value(matches);
-                }
-            }
-            let array: ListArray = builder.finish();
-            Ok(Arc::new(array))
+    match values_arr.data_type() {
+        DataType::Utf8 => {
+            regexp_extract_all_with_pattern(values_arr.as_string::<i32>(), pattern_arr, idx)
+        }
+        DataType::LargeUtf8 => {
+            regexp_extract_all_with_pattern(values_arr.as_string::<i64>(), pattern_arr, idx)
+        }
+        DataType::Utf8View => {
+            regexp_extract_all_with_pattern(values_arr.as_string_view(), pattern_arr, idx)
         }
         _ => Err(generic_internal_err(
             SparkRegexpExtractAll::NAME,
             "Could not downcast arguments to arrow arrays",
         )),
     }
+}
+
+fn regexp_extract_all_with_pattern<'values, V>(
+    values: V,
+    pattern_arr: &ArrayRef,
+    idx: &Int64Array,
+) -> Result<ArrayRef>
+where
+    V: StringArrayType<'values>,
+{
+    match pattern_arr.data_type() {
+        DataType::Utf8 => regexp_extract_all_arrays(values, pattern_arr.as_string::<i32>(), idx),
+        DataType::LargeUtf8 => {
+            regexp_extract_all_arrays(values, pattern_arr.as_string::<i64>(), idx)
+        }
+        DataType::Utf8View => regexp_extract_all_arrays(values, pattern_arr.as_string_view(), idx),
+        _ => Err(generic_internal_err(
+            SparkRegexpExtractAll::NAME,
+            "Could not downcast arguments to arrow arrays",
+        )),
+    }
+}
+
+fn regexp_extract_all_arrays<'values, 'pattern, V, P>(
+    values: V,
+    pattern: P,
+    idx: &Int64Array,
+) -> Result<ArrayRef>
+where
+    V: StringArrayType<'values>,
+    P: StringArrayType<'pattern>,
+{
+    let pattern_len = pattern.len();
+    let idx_len = idx.len();
+
+    let pattern_scalar_opt = (pattern_len == 1 && pattern.is_valid(0))
+        .then(|| parse_regex(SparkRegexpExtractAll::NAME, pattern.value(0)))
+        .transpose()?;
+    let idx_scalar_opt = (idx_len == 1 && idx.is_valid(0)).then(|| idx.value(0));
+    let is_pattern_null = pattern_len == 1 && pattern.is_null(0);
+    let is_idx_null = idx_len == 1 && idx.is_null(0);
+
+    let mut builder = ListBuilder::new(StringBuilder::new());
+    // Compile each distinct column pattern once per batch, not per row.
+    let mut regex_memo = StrMemo::new();
+    for i in 0..values.len() {
+        let pattern_is_null = if pattern_len == 1 {
+            is_pattern_null
+        } else {
+            pattern.is_null(i)
+        };
+        let idx_is_null = if idx_len == 1 {
+            is_idx_null
+        } else {
+            idx.is_null(i)
+        };
+
+        if pattern_is_null || idx_is_null || values.is_null(i) {
+            builder.append_null();
+        } else {
+            let re = regex_memo.resolve(
+                pattern_scalar_opt.as_ref(),
+                || pattern.value(i),
+                |p| parse_regex(SparkRegexpExtractAll::NAME, p),
+            )?;
+            let group_idx = idx_scalar_opt.unwrap_or_else(|| idx.value(i));
+            let matches =
+                extract_all_matches(SparkRegexpExtractAll::NAME, values.value(i), re, group_idx)?;
+            builder.append_value(matches);
+        }
+    }
+    let array: ListArray = builder.finish();
+    Ok(Arc::new(array))
 }
 
 fn coerce_regexp_extract_types(
@@ -292,54 +357,6 @@ fn coerce_regexp_extract_types(
         });
     }
     res_types.into_iter().collect::<Result<Vec<_>>>()
-}
-
-trait StringArrayLike {
-    fn len_(&self) -> usize;
-    fn is_valid_(&self, i: usize) -> bool;
-    fn is_null_(&self, i: usize) -> bool;
-    fn value_(&self, i: usize) -> &str;
-}
-
-impl<O: OffsetSizeTrait> StringArrayLike for GenericStringArray<O> {
-    fn len_(&self) -> usize {
-        self.len()
-    }
-    fn is_valid_(&self, i: usize) -> bool {
-        self.is_valid(i)
-    }
-    fn is_null_(&self, i: usize) -> bool {
-        self.is_null(i)
-    }
-    fn value_(&self, i: usize) -> &str {
-        self.value(i)
-    }
-}
-
-fn string_array_like(array: &ArrayRef) -> Option<Box<dyn StringArrayLike + '_>> {
-    if let Some(array) = array.as_any().downcast_ref::<GenericStringArray<i32>>() {
-        Some(Box::new(array))
-    } else {
-        array
-            .as_any()
-            .downcast_ref::<GenericStringArray<i64>>()
-            .map(|array| Box::new(array) as Box<dyn StringArrayLike>)
-    }
-}
-
-impl<T: StringArrayLike + ?Sized> StringArrayLike for &T {
-    fn len_(&self) -> usize {
-        (**self).len_()
-    }
-    fn is_valid_(&self, i: usize) -> bool {
-        (**self).is_valid_(i)
-    }
-    fn is_null_(&self, i: usize) -> bool {
-        (**self).is_null_(i)
-    }
-    fn value_(&self, i: usize) -> &str {
-        (**self).value_(i)
-    }
 }
 
 fn parse_regex(function_name: &str, pattern: &str) -> Result<Regex> {

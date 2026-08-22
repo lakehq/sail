@@ -16,9 +16,9 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, BooleanArray, Date32Array, Float32Array, Float64Array, Int32Array, Int64Array,
-    MapArray, StringArray, StructArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, new_empty_array,
+    Array, ArrayRef, AsArray, BooleanArray, Date32Array, FixedSizeBinaryArray, Float32Array,
+    Float64Array, Int32Array, Int64Array, MapArray, StructArray, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, new_empty_array,
 };
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
@@ -274,8 +274,10 @@ pub fn scalar_to_iceberg_literal(
         SV::UInt64(Some(v)) => Ok(Literal::Primitive(PL::Long(*v as i64))),
         SV::Float32(Some(v)) => Ok(Literal::Primitive(PL::Float(OrderedFloat(*v)))),
         SV::Float64(Some(v)) => Ok(Literal::Primitive(PL::Double(OrderedFloat(*v)))),
-        SV::Utf8(Some(s)) | SV::LargeUtf8(Some(s)) => Ok(Literal::Primitive(PL::String(s.clone()))),
-        SV::Binary(Some(b)) | SV::LargeBinary(Some(b)) => {
+        SV::Utf8(Some(s)) | SV::LargeUtf8(Some(s)) | SV::Utf8View(Some(s)) => {
+            Ok(Literal::Primitive(PL::String(s.clone())))
+        }
+        SV::Binary(Some(b)) | SV::LargeBinary(Some(b)) | SV::BinaryView(Some(b)) => {
             Ok(Literal::Primitive(PL::Binary(b.clone())))
         }
         SV::Date32(Some(v)) => Ok(Literal::Primitive(PL::Int(*v))),
@@ -347,9 +349,36 @@ pub fn array_value_to_literal(array: &ArrayRef, row: usize) -> Option<Literal> {
             ))))
         }
         ArrowDataType::Utf8 => {
-            let a = array.as_any().downcast_ref::<StringArray>()?;
+            let a = array.as_string::<i32>();
             Some(Literal::Primitive(PrimitiveLiteral::String(
                 a.value(row).to_string(),
+            )))
+        }
+        ArrowDataType::LargeUtf8 => {
+            let a = array.as_string::<i64>();
+            Some(Literal::Primitive(PrimitiveLiteral::String(
+                a.value(row).to_string(),
+            )))
+        }
+        ArrowDataType::Utf8View => {
+            let a = array.as_string_view();
+            Some(Literal::Primitive(PrimitiveLiteral::String(
+                a.value(row).to_string(),
+            )))
+        }
+        ArrowDataType::Binary => Some(Literal::Primitive(PrimitiveLiteral::Binary(
+            array.as_binary::<i32>().value(row).to_vec(),
+        ))),
+        ArrowDataType::LargeBinary => Some(Literal::Primitive(PrimitiveLiteral::Binary(
+            array.as_binary::<i64>().value(row).to_vec(),
+        ))),
+        ArrowDataType::BinaryView => Some(Literal::Primitive(PrimitiveLiteral::Binary(
+            array.as_binary_view().value(row).to_vec(),
+        ))),
+        ArrowDataType::FixedSizeBinary(_) => {
+            let a = array.as_any().downcast_ref::<FixedSizeBinaryArray>()?;
+            Some(Literal::Primitive(PrimitiveLiteral::Binary(
+                a.value(row).to_vec(),
             )))
         }
         ArrowDataType::Date32 => {
@@ -379,6 +408,70 @@ pub fn array_value_to_literal(array: &ArrayRef, row: usize) -> Option<Literal> {
             value_in_micros.map(|v| Literal::Primitive(PrimitiveLiteral::Long(v)))
         }
         _ => None,
+    }
+}
+
+/// Extract a partition literal using the Iceberg source type to disambiguate Arrow physical
+/// representations that are shared by multiple Iceberg types.
+pub fn array_value_to_typed_literal(
+    array: &ArrayRef,
+    row: usize,
+    iceberg_type: &Type,
+) -> std::result::Result<Option<Literal>, String> {
+    if array.is_null(row) {
+        return Ok(None);
+    }
+
+    if let ArrowDataType::FixedSizeBinary(_) = array.data_type() {
+        let array = array
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .ok_or_else(|| "Failed to downcast FixedSizeBinary partition array".to_string())?;
+        let bytes = array.value(row);
+        return match iceberg_type {
+            Type::Primitive(PrimitiveType::Uuid) => {
+                let bytes: [u8; 16] = bytes.try_into().map_err(|_| {
+                    format!(
+                        "UUID partition value must be exactly 16 bytes, got {}",
+                        bytes.len()
+                    )
+                })?;
+                Ok(Some(Literal::Primitive(PrimitiveLiteral::UInt128(
+                    u128::from_be_bytes(bytes),
+                ))))
+            }
+            Type::Primitive(PrimitiveType::Fixed(expected_width)) => {
+                let actual_width = bytes.len() as u64;
+                if actual_width != *expected_width {
+                    return Err(format!(
+                        "Fixed partition value must be exactly {expected_width} bytes, got {actual_width}"
+                    ));
+                }
+                Ok(Some(Literal::Primitive(PrimitiveLiteral::Binary(
+                    bytes.to_vec(),
+                ))))
+            }
+            _ => Err(format!(
+                "Arrow FixedSizeBinary partition value is incompatible with Iceberg type {iceberg_type}"
+            )),
+        };
+    }
+
+    let literal = array_value_to_literal(array, row).ok_or_else(|| {
+        format!(
+            "Unsupported Arrow partition value type {}",
+            array.data_type()
+        )
+    })?;
+    match (iceberg_type, &literal) {
+        (Type::Primitive(primitive_type), Literal::Primitive(value))
+            if primitive_type.compatible(value) =>
+        {
+            Ok(Some(literal))
+        }
+        _ => Err(format!(
+            "Partition literal {literal:?} is incompatible with Iceberg type {iceberg_type}"
+        )),
     }
 }
 
@@ -498,6 +591,24 @@ mod tests {
         assert_eq!(
             literal,
             Literal::Primitive(PrimitiveLiteral::Long(9_999_999))
+        );
+    }
+
+    #[test]
+    #[expect(clippy::expect_used)]
+    fn test_array_value_to_literal_supports_view_types() {
+        use datafusion::arrow::array::{BinaryViewArray, StringViewArray};
+
+        let strings = Arc::new(StringViewArray::from(vec![Some("partition")])) as ArrayRef;
+        assert_eq!(
+            array_value_to_literal(&strings, 0).expect("string literal"),
+            Literal::Primitive(PrimitiveLiteral::String("partition".to_string()))
+        );
+
+        let binary = Arc::new(BinaryViewArray::from(vec![Some(b"bytes".as_slice())])) as ArrayRef;
+        assert_eq!(
+            array_value_to_literal(&binary, 0).expect("binary literal"),
+            Literal::Primitive(PrimitiveLiteral::Binary(b"bytes".to_vec()))
         );
     }
 }

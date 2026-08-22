@@ -1,0 +1,205 @@
+//! Materializes Arrow view arrays at the logical output of protocols without an output adapter.
+//!
+//! With `parquet.schema_force_view_types` enabled, Parquet scans use `Utf8View` and `BinaryView`
+//! to avoid eagerly converting decoded values to offset-based arrays before internal operators
+//! and shuffles consume them. Spark's Arrow result mapping exposes `StringType` and `BinaryType`
+//! as offset-based `Utf8`/`LargeUtf8` and `Binary`/`LargeBinary`; it does not accept `Utf8View`
+//! or `BinaryView` for those logical types. `optimizer.expand_views_at_output` therefore coerces
+//! only the root output to `LargeUtf8` and `LargeBinary`, preserving the existing public Arrow
+//! contract for protocols without an output adapter and reusing an existing root projection when
+//! possible. Spark Connect omits this analyzer rule and applies its 32-bit or 64-bit output policy
+//! at the Arrow transport boundary instead.
+//!
+//! DataFusion's built-in output coercion handles top-level view fields only. Spark results can
+//! also contain views nested in lists, structs, maps, dictionaries, unions, and run-end encoded
+//! arrays, which is why this rule recursively rebuilds the output schema while preserving field
+//! metadata and qualifiers.
+//!
+//! Keeping views inside the plan also means functions can receive view arrays directly. In
+//! particular, Spark SQL `hash` (`Utf8View` and `BinaryView`), `regexp_extract`,
+//! `regexp_extract_all`, and `split` (`Utf8View`) can consume Parquet view inputs before this
+//! rule runs; `str_to_map` delegates its first parsing stage to `split`. New string or binary
+//! functions that downcast concrete Arrow arrays must likewise accept the corresponding view
+//! representation.
+
+use std::sync::Arc;
+
+use datafusion::arrow::datatypes::{DataType, FieldRef, Fields, Schema};
+use datafusion::optimizer::AnalyzerRule;
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::{DFSchema, DFSchemaRef, Result, TableReference};
+use datafusion_expr::LogicalPlan;
+use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
+
+#[derive(Debug)]
+pub struct ExpandViewTypesAtOutput;
+
+impl AnalyzerRule for ExpandViewTypesAtOutput {
+    fn analyze(&self, plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan> {
+        if !config.optimizer.expand_views_at_output {
+            return Ok(plan);
+        }
+
+        match expanded_output_schema(plan.schema())? {
+            Some(schema) => coerce_plan_expr_for_schema(plan, &schema),
+            None => Ok(plan),
+        }
+    }
+
+    fn name(&self) -> &str {
+        "expand_view_types_at_output"
+    }
+}
+
+fn expanded_output_schema(schema: &DFSchemaRef) -> Result<Option<DFSchema>> {
+    let mut transformed = false;
+    let (qualifiers, fields): (Vec<Option<TableReference>>, Vec<FieldRef>) = schema
+        .iter()
+        .map(|(qualifier, field)| {
+            (
+                qualifier.cloned(),
+                expand_output_field(field, &mut transformed),
+            )
+        })
+        .unzip();
+
+    if !transformed {
+        // Avoid schema coercion when the output contains no string or binary view types.
+        return Ok(None);
+    }
+
+    let schema = Arc::new(Schema::new_with_metadata(
+        fields,
+        schema.as_arrow().metadata().clone(),
+    ));
+    Ok(Some(DFSchema::from_field_specific_qualified_schema(
+        qualifiers, &schema,
+    )?))
+}
+
+fn expand_output_field(field: &FieldRef, transformed: &mut bool) -> FieldRef {
+    let data_type = expand_output_data_type(field.data_type(), transformed);
+    if &data_type == field.data_type() {
+        Arc::clone(field)
+    } else {
+        Arc::new(field.as_ref().clone().with_data_type(data_type))
+    }
+}
+
+fn expand_output_data_type(data_type: &DataType, transformed: &mut bool) -> DataType {
+    match data_type {
+        DataType::Utf8View => {
+            *transformed = true;
+            DataType::LargeUtf8
+        }
+        DataType::BinaryView => {
+            *transformed = true;
+            DataType::LargeBinary
+        }
+        DataType::List(field) => DataType::List(expand_output_field(field, transformed)),
+        DataType::ListView(field) => DataType::ListView(expand_output_field(field, transformed)),
+        DataType::FixedSizeList(field, size) => {
+            DataType::FixedSizeList(expand_output_field(field, transformed), *size)
+        }
+        DataType::LargeList(field) => DataType::LargeList(expand_output_field(field, transformed)),
+        DataType::LargeListView(field) => {
+            DataType::LargeListView(expand_output_field(field, transformed))
+        }
+        DataType::Struct(fields) => DataType::Struct(
+            fields
+                .iter()
+                .map(|field| expand_output_field(field, transformed))
+                .collect::<Fields>(),
+        ),
+        DataType::Union(fields, mode) => DataType::Union(
+            fields
+                .iter()
+                .map(|(type_id, field)| (type_id, expand_output_field(field, transformed)))
+                .collect(),
+            *mode,
+        ),
+        DataType::Dictionary(key, value) => DataType::Dictionary(
+            Box::new(expand_output_data_type(key, transformed)),
+            Box::new(expand_output_data_type(value, transformed)),
+        ),
+        DataType::Map(field, sorted) => {
+            DataType::Map(expand_output_field(field, transformed), *sorted)
+        }
+        DataType::RunEndEncoded(run_ends, values) => DataType::RunEndEncoded(
+            expand_output_field(run_ends, transformed),
+            expand_output_field(values, transformed),
+        ),
+        data_type => data_type.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::datatypes::Field;
+    use datafusion_expr::logical_plan::EmptyRelation;
+
+    use super::*;
+
+    fn view_output_plan() -> Result<LogicalPlan> {
+        let nested = DataType::Struct(Fields::from(vec![
+            Field::new("nested_utf8", DataType::Utf8View, true),
+            Field::new("nested_binary", DataType::BinaryView, true),
+        ]));
+        let schema = Schema::new(vec![
+            Field::new("utf8", DataType::Utf8View, true),
+            Field::new("binary", DataType::BinaryView, true),
+            Field::new("nested", nested, true),
+        ]);
+        Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::try_from(schema)?),
+        }))
+    }
+
+    #[test]
+    fn default_output_boundary_expands_views_to_large_types() -> Result<()> {
+        let mut config = ConfigOptions::default();
+        config.optimizer.expand_views_at_output = true;
+
+        let analyzed = ExpandViewTypesAtOutput.analyze(view_output_plan()?, &config)?;
+        let fields = analyzed.schema().fields();
+
+        assert_eq!(fields[0].data_type(), &DataType::LargeUtf8);
+        assert_eq!(fields[1].data_type(), &DataType::LargeBinary);
+        let DataType::Struct(nested) = fields[2].data_type() else {
+            return datafusion_common::internal_err!("nested output must remain a struct");
+        };
+        assert_eq!(nested[0].data_type(), &DataType::LargeUtf8);
+        assert_eq!(nested[1].data_type(), &DataType::LargeBinary);
+
+        let LogicalPlan::Projection(projection) = analyzed else {
+            return datafusion_common::internal_err!("expected an output projection");
+        };
+        assert_eq!(
+            projection.input.schema().field(0).data_type(),
+            &DataType::Utf8View
+        );
+        assert_eq!(
+            projection.input.schema().field(1).data_type(),
+            &DataType::BinaryView
+        );
+        let DataType::Struct(nested_input) = projection.input.schema().field(2).data_type() else {
+            return datafusion_common::internal_err!("nested input must remain a struct");
+        };
+        assert_eq!(nested_input[0].data_type(), &DataType::Utf8View);
+        assert_eq!(nested_input[1].data_type(), &DataType::BinaryView);
+        Ok(())
+    }
+
+    #[test]
+    fn disabled_output_expansion_preserves_plan() -> Result<()> {
+        let plan = view_output_plan()?;
+        let mut config = ConfigOptions::default();
+        config.optimizer.expand_views_at_output = false;
+
+        let analyzed = ExpandViewTypesAtOutput.analyze(plan.clone(), &config)?;
+
+        assert_eq!(analyzed, plan);
+        Ok(())
+    }
+}

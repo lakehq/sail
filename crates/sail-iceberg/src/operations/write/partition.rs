@@ -20,7 +20,7 @@ use crate::spec::partition::UnboundPartitionSpec as PartitionSpec;
 use crate::spec::schema::Schema as IcebergSchema;
 use crate::spec::types::values::{Literal, PrimitiveLiteral};
 use crate::spec::types::{PrimitiveType, Type};
-use crate::utils::conversions::array_value_to_literal;
+use crate::utils::conversions::{array_value_to_literal, array_value_to_typed_literal};
 use crate::utils::transform::apply_transform;
 
 pub struct PartitionBatchResult {
@@ -71,7 +71,10 @@ pub fn build_partition_dir(
                 PrimitiveLiteral::Double(v) => v.0.to_string(),
                 PrimitiveLiteral::Int128(v) => v.to_string(),
                 PrimitiveLiteral::String(s) => s.clone(),
-                PrimitiveLiteral::UInt128(v) => v.to_string(),
+                PrimitiveLiteral::UInt128(v) => match field_type {
+                    Type::Primitive(PrimitiveType::Uuid) => uuid::Uuid::from_u128(*v).to_string(),
+                    _ => v.to_string(),
+                },
                 PrimitiveLiteral::Binary(b) => {
                     // hex-encode binary values for stability
                     let mut s = String::with_capacity(b.len() * 2 + 2);
@@ -166,11 +169,11 @@ pub fn compute_partition_values(
             .schema()
             .index_of(&col_name)
             .map_err(|e| e.to_string())?;
-        let lit = scalar_to_literal(batch.column(col_index), 0);
         let field_type = iceberg_schema
             .field_by_id(f.source_id)
             .map(|nf| nf.field_type.as_ref())
             .unwrap_or(&Type::Primitive(PrimitiveType::String));
+        let lit = array_value_to_typed_literal(batch.column(col_index), 0, field_type)?;
         values.push(apply_transform(f.transform, field_type, lit));
     }
     let dir = build_partition_dir(spec, iceberg_schema, &values)?;
@@ -207,11 +210,11 @@ pub fn split_record_batch_by_partition(
                 .schema()
                 .index_of(&col_name)
                 .map_err(|e| e.to_string())?;
-            let lit = scalar_to_literal(batch.column(col_index), row);
             let field_type = iceberg_schema
                 .field_by_id(f.source_id)
                 .map(|nf| nf.field_type.as_ref())
                 .unwrap_or(&Type::Primitive(PrimitiveType::String));
+            let lit = array_value_to_typed_literal(batch.column(col_index), row, field_type)?;
             vals.push(apply_transform(f.transform, field_type, lit));
         }
         groups.entry(vals).or_default().push(row as u32);
@@ -231,4 +234,80 @@ pub fn split_record_batch_by_partition(
     }
 
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::expect_used)]
+
+    use std::sync::Arc;
+
+    use datafusion::arrow::array::FixedSizeBinaryArray;
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+
+    use super::*;
+    use crate::spec::partition::UnboundPartitionField;
+    use crate::spec::transform::Transform;
+    use crate::spec::types::NestedField;
+
+    fn identity_partition(primitive_type: PrimitiveType, bytes: &[u8]) -> PartitionBatchResult {
+        let iceberg_schema = IcebergSchema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![Arc::new(NestedField::optional(
+                1,
+                "value",
+                Type::Primitive(primitive_type),
+            ))])
+            .build()
+            .expect("Iceberg schema");
+        let width = i32::try_from(bytes.len()).expect("fixed width");
+        let array =
+            FixedSizeBinaryArray::try_from_iter([bytes].into_iter()).expect("fixed binary array");
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "value",
+                DataType::FixedSizeBinary(width),
+                true,
+            )])),
+            vec![Arc::new(array)],
+        )
+        .expect("record batch");
+        let spec = PartitionSpec {
+            fields: vec![UnboundPartitionField {
+                source_id: 1,
+                name: "value".to_string(),
+                transform: Transform::Identity,
+            }],
+        };
+
+        let mut partitions =
+            split_record_batch_by_partition(&batch, &spec, &iceberg_schema).expect("partition");
+        assert_eq!(partitions.len(), 1);
+        partitions.remove(0)
+    }
+
+    #[test]
+    fn identity_partition_uses_uuid_literal_for_uuid_source() {
+        let partition = identity_partition(PrimitiveType::Uuid, b"0123456789abcdef");
+        assert_eq!(
+            partition.partition_values,
+            vec![Some(Literal::Primitive(PrimitiveLiteral::UInt128(
+                u128::from_be_bytes(*b"0123456789abcdef"),
+            )))]
+        );
+        assert_eq!(
+            partition.partition_dir,
+            "value=30313233-3435-3637-3839-616263646566"
+        );
+    }
+
+    #[test]
+    fn identity_partition_uses_binary_literal_for_fixed_source() {
+        assert_eq!(
+            identity_partition(PrimitiveType::Fixed(5), b"fixed").partition_values,
+            vec![Some(Literal::Primitive(PrimitiveLiteral::Binary(
+                b"fixed".to_vec(),
+            )))]
+        );
+    }
 }

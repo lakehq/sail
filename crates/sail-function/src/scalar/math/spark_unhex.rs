@@ -2,14 +2,13 @@ use std::fmt::Write;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    BinaryBuilder, OffsetSizeTrait, StringArray, as_dictionary_array, as_largestring_array,
-    as_string_array,
+    AsArray, BinaryBuilder, StringArray, StringArrayType, as_dictionary_array,
+    as_largestring_array, as_string_array,
 };
 use datafusion::arrow::datatypes::{DataType, Int32Type};
 use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use datafusion_common::cast::{
-    as_binary_array, as_fixed_size_binary_array, as_generic_string_array, as_int64_array,
-    as_string_view_array,
+    as_binary_array, as_fixed_size_binary_array, as_int64_array, as_string_view_array,
 };
 use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
 use datafusion_expr::ScalarFunctionArgs;
@@ -242,36 +241,41 @@ fn unhex(hex_str: &str, result: &mut Vec<u8>) -> Result<(), DataFusionError> {
     Ok(())
 }
 
-fn spark_unhex_inner<T: OffsetSizeTrait>(
-    array: &ColumnarValue,
+fn spark_unhex_array<'a, S>(
+    string_array: &'a S,
+    fail_on_error: bool,
+) -> Result<ColumnarValue, DataFusionError>
+where
+    &'a S: StringArrayType<'a>,
+{
+    let mut encoded = Vec::new();
+    let mut builder = BinaryBuilder::new();
+
+    for item in string_array.iter() {
+        if let Some(s) = item {
+            if unhex(s, &mut encoded).is_ok() {
+                builder.append_value(encoded.as_slice());
+            } else if fail_on_error {
+                return exec_err!("Input to unhex is not a valid hex string: {s}");
+            } else {
+                builder.append_null();
+            }
+            encoded.clear();
+        } else {
+            builder.append_null();
+        }
+    }
+    Ok(ColumnarValue::Array(Arc::new(builder.finish())))
+}
+
+fn spark_unhex_scalar(
+    scalar: &ScalarValue,
     fail_on_error: bool,
 ) -> Result<ColumnarValue, DataFusionError> {
-    match array {
-        ColumnarValue::Array(array) => {
-            let string_array = as_generic_string_array::<T>(array)?;
-
-            let mut encoded = Vec::new();
-            let mut builder = BinaryBuilder::new();
-
-            for item in string_array.iter() {
-                if let Some(s) = item {
-                    if unhex(s, &mut encoded).is_ok() {
-                        builder.append_value(encoded.as_slice());
-                    } else if fail_on_error {
-                        return exec_err!("Input to unhex is not a valid hex string: {s}");
-                    } else {
-                        builder.append_null();
-                    }
-                    encoded.clear();
-                } else {
-                    builder.append_null();
-                }
-            }
-            Ok(ColumnarValue::Array(Arc::new(builder.finish())))
-        }
-        ColumnarValue::Scalar(ScalarValue::Utf8(Some(string)))
-        | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(string)))
-        | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(string))) => {
+    match scalar {
+        ScalarValue::Utf8(Some(string))
+        | ScalarValue::Utf8View(Some(string))
+        | ScalarValue::LargeUtf8(Some(string)) => {
             let mut encoded = Vec::new();
 
             if unhex(string, &mut encoded).is_ok() {
@@ -282,15 +286,13 @@ fn spark_unhex_inner<T: OffsetSizeTrait>(
                 Ok(ColumnarValue::Scalar(ScalarValue::Binary(None)))
             }
         }
-        ColumnarValue::Scalar(ScalarValue::Utf8(None))
-        | ColumnarValue::Scalar(ScalarValue::Utf8View(None))
-        | ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)) => {
+        ScalarValue::Utf8(None) | ScalarValue::Utf8View(None) | ScalarValue::LargeUtf8(None) => {
             Ok(ColumnarValue::Scalar(ScalarValue::Binary(None)))
         }
         _ => {
             exec_err!(
                 "The first argument must be a string scalar or array, but got: {:?}",
-                array
+                scalar
             )
         }
     }
@@ -317,11 +319,40 @@ pub fn spark_unhex(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionEr
         false
     };
 
-    match val_to_unhex.data_type() {
-        DataType::Utf8 | DataType::Utf8View => {
-            spark_unhex_inner::<i32>(val_to_unhex, fail_on_error)
-        }
-        DataType::LargeUtf8 => spark_unhex_inner::<i64>(val_to_unhex, fail_on_error),
-        other => exec_err!("The first argument must be a Utf8, Utf8View, or LargeUtf8: {other:?}"),
+    match val_to_unhex {
+        ColumnarValue::Array(array) => match array.data_type() {
+            DataType::Utf8 => spark_unhex_array(array.as_string::<i32>(), fail_on_error),
+            DataType::Utf8View => spark_unhex_array(array.as_string_view(), fail_on_error),
+            DataType::LargeUtf8 => spark_unhex_array(array.as_string::<i64>(), fail_on_error),
+            other => {
+                exec_err!("The first argument must be a Utf8, Utf8View, or LargeUtf8: {other:?}")
+            }
+        },
+        ColumnarValue::Scalar(scalar) => spark_unhex_scalar(scalar, fail_on_error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::array::{Array, BinaryArray, StringViewArray};
+
+    use super::*;
+
+    #[test]
+    fn unhex_accepts_string_view_arrays_without_scalarizing() -> Result<()> {
+        let input = Arc::new(StringViewArray::from(vec![Some("10"), Some("11")])) as _;
+        let result = spark_unhex(&[ColumnarValue::Array(input)])?;
+        let ColumnarValue::Array(result) = result else {
+            return exec_err!("expected array result");
+        };
+        let result = result
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .ok_or_else(|| DataFusionError::Internal("expected BinaryArray".to_string()))?;
+
+        assert_eq!(result.value(0), &[0x10]);
+        assert_eq!(result.value(1), &[0x11]);
+        assert_eq!(result.null_count(), 0);
+        Ok(())
     }
 }

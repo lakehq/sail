@@ -335,3 +335,32 @@ def test_partitioned_append_infers_spec_from_metadata(spark, tmp_path):
         assert not root_files, "Partitioned Iceberg tables should not place files directly under data/"
     finally:
         catalog.drop_table(table_name)
+
+
+@pytest.mark.skipif(platform.system() == "Windows", reason="may not work on Windows")
+def test_partitioned_iceberg_write_accepts_parquet_view_partition_column(spark, tmp_path):
+    catalog = create_sql_catalog(tmp_path)
+    schema = Schema(
+        NestedField(1, "id", IntegerType(), required=True),
+        NestedField(2, "category", StringType(), required=False),
+    )
+    spec = PartitionSpec(PartitionField(2, 2009, IdentityTransform(), "category"))
+    table_name = "default.partitioned_parquet_view_append"
+    table = catalog.create_table(identifier=table_name, schema=schema, partition_spec=spec)
+    source_path = tmp_path / "partitioned_parquet_view_source"
+    try:
+        spark.createDataFrame(
+            [(1, "A"), (2, "B")],
+            schema="id INT, category STRING",
+        ).write.parquet(str(source_path))
+
+        spark.read.parquet(str(source_path)).write.format("iceberg").mode("append").save(table.location())
+
+        rows = spark.read.format("iceberg").load(table.location()).orderBy("id").collect()
+        assert [(row.id, row.category) for row in rows] == [(1, "A"), (2, "B")]
+
+        table_path = Path(table.location().removeprefix("file://"))
+        partition_dirs = {path.name for path in (table_path / "data").iterdir() if path.is_dir()}
+        assert partition_dirs == {"category=A", "category=B"}
+    finally:
+        catalog.drop_table(table_name)

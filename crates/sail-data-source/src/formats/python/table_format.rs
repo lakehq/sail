@@ -10,14 +10,19 @@ use datafusion::catalog::Session;
 use datafusion::datasource::provider_as_source;
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::{Extension, LogicalPlan, TableSource, UserDefinedLogicalNode};
+use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
-use datafusion_common::{DFSchema, DFSchemaRef, Result, internal_err};
+use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result, internal_err};
 use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
 use educe::Educe;
+use sail_common_datafusion::array::record_batch::normalize_spark_arrow_schema;
 use sail_common_datafusion::datasource::{
     OptionLayer, SinkInfo, SinkMode, SourceInfo, TableFormat, TableFormatRegistry,
 };
+use sail_common_datafusion::schema_evolution::SchemaEvolutionCastColumnExpr;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use super::datasource::PythonDataSource;
@@ -213,6 +218,7 @@ impl TableFormat for PythonTableFormat {
     async fn create_writer(&self, _ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
         let SinkInfo {
             input,
+            arrow_use_large_var_types,
             mode,
             partition_by,
             options,
@@ -236,6 +242,7 @@ impl TableFormat for PythonTableFormat {
                 Arc::new(input),
                 self.name.clone(),
                 self.pickled_class.clone(),
+                arrow_use_large_var_types,
                 mode,
                 options,
             )),
@@ -249,6 +256,7 @@ pub struct PythonWriteNode {
     input: Arc<LogicalPlan>,
     name: String,
     pickled_class: Option<Vec<u8>>,
+    arrow_use_large_var_types: bool,
     mode: SinkMode,
     options: Vec<OptionLayer>,
     #[educe(PartialOrd(ignore))]
@@ -260,6 +268,7 @@ impl PythonWriteNode {
         input: Arc<LogicalPlan>,
         name: String,
         pickled_class: Option<Vec<u8>>,
+        arrow_use_large_var_types: bool,
         mode: SinkMode,
         options: Vec<OptionLayer>,
     ) -> Self {
@@ -267,6 +276,7 @@ impl PythonWriteNode {
             input,
             name,
             pickled_class,
+            arrow_use_large_var_types,
             mode,
             options,
             schema: Arc::new(DFSchema::empty()),
@@ -301,6 +311,7 @@ impl UserDefinedLogicalNodeCore for PythonWriteNode {
             input: Arc::new(inputs.one()?),
             name: self.name.clone(),
             pickled_class: self.pickled_class.clone(),
+            arrow_use_large_var_types: self.arrow_use_large_var_types,
             mode: self.mode.clone(),
             options: self.options.clone(),
             schema: self.schema.clone(),
@@ -344,8 +355,9 @@ impl ExtensionPlanner for PythonPhysicalPlanner {
         let datasource = table_format.create_datasource(&opaque_options)?;
         let executor: Arc<dyn super::executor::PythonExecutor> =
             Arc::new(InProcessExecutor::from_app_config());
-        let schema = input.schema();
         let expected_partitions = input.properties().partitioning.partition_count();
+        let input = normalize_python_writer_input(input.clone(), node.arrow_use_large_var_types)?;
+        let schema = input.schema();
         let writer_plan = executor
             .get_writer(datasource.command(), &schema, overwrite)
             .await?;
@@ -367,13 +379,220 @@ impl ExtensionPlanner for PythonPhysicalPlanner {
     }
 }
 
+fn normalize_python_writer_input(
+    input: Arc<dyn ExecutionPlan>,
+    use_large_var_types: bool,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let input_schema = input.schema();
+    let output_schema = Arc::new(normalize_spark_arrow_schema(
+        input_schema.as_ref(),
+        use_large_var_types,
+    ));
+    if input_schema == output_schema {
+        return Ok(input);
+    }
+
+    let expressions = input_schema
+        .fields()
+        .iter()
+        .zip(output_schema.fields())
+        .enumerate()
+        .map(|(index, (input_field, output_field))| {
+            let column = Arc::new(Column::new(input_field.name(), index)) as Arc<dyn PhysicalExpr>;
+            let expression: Arc<dyn PhysicalExpr> = if input_field == output_field {
+                column
+            } else {
+                // Generic Arrow casts reject map sorted-flag changes; Sail rebuilds nested maps
+                // while matching key and value arrays positionally.
+                Arc::new(SchemaEvolutionCastColumnExpr::new(
+                    column,
+                    Arc::clone(input_field),
+                    Arc::clone(output_field),
+                    None,
+                ))
+            };
+            (expression, output_field.name().clone())
+        })
+        .collect::<Vec<_>>();
+    let projection =
+        Arc::new(ProjectionExec::try_new(expressions, input)?) as Arc<dyn ExecutionPlan>;
+    if projection.schema() != output_schema {
+        return Err(DataFusionError::Plan(format!(
+            "Python writer projection produced schema {} instead of {}",
+            projection.schema(),
+            output_schema
+        )));
+    }
+    Ok(projection)
+}
+
 #[cfg(test)]
+#[expect(clippy::unwrap_used)]
 mod tests {
+    use datafusion::arrow::array::{
+        Array, Int32Array, MapArray, MapBuilder, MapFieldNames, StringArray, StringBuilder,
+        StructArray,
+    };
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::datasource::memory::MemorySourceConfig;
+    use datafusion::execution::TaskContext;
+    use datafusion::physical_expr::expressions::CastExpr;
+    use datafusion::physical_plan::collect;
+
     use super::*;
 
     #[test]
     fn test_python_table_format_name() {
         let format = PythonTableFormat::new("test_datasource".to_string());
         assert_eq!(format.name(), "test_datasource");
+    }
+
+    #[tokio::test]
+    async fn normalize_writer_input_rebuilds_nested_sorted_map() {
+        let mut builder = MapBuilder::new(
+            Some(MapFieldNames {
+                entry: "entries".to_string(),
+                key: "key".to_string(),
+                value: "value".to_string(),
+            }),
+            StringBuilder::new(),
+            Int32Array::builder(3),
+        );
+        builder.keys().append_value("alpha");
+        builder.values().append_value(10);
+        builder.keys().append_value("beta");
+        builder.values().append_value(20);
+        builder.append(true).unwrap();
+        builder.append(false).unwrap();
+        builder.keys().append_value("gamma");
+        builder.values().append_value(30);
+        builder.append(true).unwrap();
+        let map = builder.finish();
+        let DataType::Map(entries_field, _) = map.data_type() else {
+            unreachable!();
+        };
+        let sorted_map = MapArray::try_new(
+            Arc::clone(entries_field),
+            map.offsets().clone(),
+            map.entries().clone(),
+            map.nulls().cloned(),
+            true,
+        )
+        .unwrap();
+        let input_offsets = sorted_map.value_offsets().to_vec();
+        let input_nulls = sorted_map.nulls().cloned();
+        let input_keys = sorted_map
+            .keys()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .iter()
+            .map(|value| value.map(str::to_owned))
+            .collect::<Vec<_>>();
+        let input_values = sorted_map
+            .values()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap()
+            .iter()
+            .collect::<Vec<_>>();
+
+        let payload = StructArray::new(
+            vec![Arc::new(Field::new(
+                "lookup",
+                sorted_map.data_type().clone(),
+                true,
+            ))]
+            .into(),
+            vec![Arc::new(sorted_map)],
+            None,
+        );
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "payload",
+                payload.data_type().clone(),
+                true,
+            )])),
+            vec![Arc::new(payload)],
+        )
+        .unwrap();
+
+        let normalized_schema =
+            Arc::new(normalize_spark_arrow_schema(batch.schema().as_ref(), false));
+        let input_schema = batch.schema();
+        let DataType::Struct(input_fields) = input_schema.field(0).data_type() else {
+            unreachable!();
+        };
+        let DataType::Map(input_entries, input_sorted) = input_fields[0].data_type() else {
+            unreachable!();
+        };
+        assert!(*input_sorted);
+        let DataType::Struct(output_fields) = normalized_schema.field(0).data_type() else {
+            unreachable!();
+        };
+        let DataType::Map(output_entries, output_sorted) = output_fields[0].data_type() else {
+            unreachable!();
+        };
+        assert_eq!(input_entries, output_entries);
+        assert!(!output_sorted);
+
+        let datafusion_cast = CastExpr::new_with_target_field(
+            Arc::new(Column::new("payload", 0)),
+            Arc::clone(&normalized_schema.fields()[0]),
+            None,
+        );
+        assert!(datafusion_cast.evaluate(&batch).is_err());
+
+        let input =
+            MemorySourceConfig::try_new_exec(&[vec![batch.clone()]], batch.schema(), None).unwrap();
+        let input = normalize_python_writer_input(input, false).unwrap();
+        let batches = collect(input, Arc::new(TaskContext::default()))
+            .await
+            .unwrap();
+        let payload = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let output_map = payload
+            .column(0)
+            .as_any()
+            .downcast_ref::<MapArray>()
+            .unwrap();
+
+        let DataType::Map(entries, sorted) = output_map.data_type() else {
+            unreachable!();
+        };
+        assert!(!sorted);
+        assert_eq!(entries.name(), "entries");
+        let DataType::Struct(entry_fields) = entries.data_type() else {
+            unreachable!();
+        };
+        assert_eq!(entry_fields[0].name(), "key");
+        assert_eq!(entry_fields[1].name(), "value");
+        assert_eq!(output_map.value_offsets(), input_offsets.as_slice());
+        assert_eq!(output_map.nulls(), input_nulls.as_ref());
+        assert_eq!(
+            output_map
+                .keys()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .iter()
+                .map(|value| value.map(str::to_owned))
+                .collect::<Vec<_>>(),
+            input_keys
+        );
+        assert_eq!(
+            output_map
+                .values()
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
+            input_values
+        );
     }
 }

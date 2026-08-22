@@ -4,7 +4,8 @@
 /// `sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/higherOrderFunctions.scala`.
 /// The merge lambda is a left fold over each array, the accumulator is always
 /// typed nullable, a `NULL` array returns `NULL`, and the merge result must
-/// structurally match the zero value type ignoring nested nullability.
+/// logically match the zero value type ignoring nested nullability and Arrow
+/// string/binary encoding differences.
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -12,7 +13,7 @@ use datafusion::arrow::array::{
     new_empty_array, new_null_array,
 };
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
-use datafusion::arrow::compute::take_arrays;
+use datafusion::arrow::compute::{cast, take_arrays};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::{adjust_offsets_for_slice, list_values, take_function_args};
 use datafusion_common::{Result, exec_err, plan_err};
@@ -20,6 +21,8 @@ use datafusion_expr::{
     ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
     HigherOrderUDFImpl, LambdaArgument, LambdaParametersProgress, ValueOrLambda, Volatility,
 };
+
+use crate::scalar::spark_type_coercion::spark_view_equivalent_type;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkArrayAggregate {
@@ -121,7 +124,9 @@ impl HigherOrderUDFImpl for SparkArrayAggregate {
         let (list, zero, merge, finish) = aggregate_args(self.name(), args.arg_fields)?;
         list_element_field(self.name(), list.data_type())?;
 
-        if !equals_structurally_ignore_nullability(zero.data_type(), merge.data_type()) {
+        if !equals_structurally_ignore_nullability(zero.data_type(), merge.data_type())
+            && spark_view_equivalent_type(zero.data_type(), merge.data_type()).is_none()
+        {
             return plan_err!(
                 "{} merge lambda result type must match zero value type, got {} and {}",
                 self.name(),
@@ -380,6 +385,8 @@ fn scatter_updates(
             .into_builder()
             .data_type(base.data_type().clone())
             .build()?
+    } else if spark_view_equivalent_type(base.data_type(), updates.data_type()).is_some() {
+        cast(updates.as_ref(), base.data_type())?.to_data()
     } else {
         return exec_err!(
             "{name} internal error: cannot scatter updates of type {} into accumulator type {}",
@@ -408,4 +415,56 @@ fn scatter_updates(
 
 fn is_row_null(nulls: Option<&NullBuffer>, row: usize) -> bool {
     nulls.map(|n| n.is_null(row)).unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::array::{ArrayRef, AsArray, StringArray, StringViewArray};
+    use datafusion::arrow::datatypes::{DataType, Field};
+    use datafusion_common::Result;
+    use datafusion_expr::{HigherOrderReturnFieldArgs, HigherOrderUDFImpl, ValueOrLambda};
+
+    use super::{SparkArrayAggregate, scatter_updates};
+
+    #[test]
+    fn accepts_view_compatible_zero_and_merge_types() -> Result<()> {
+        let list = Arc::new(Field::new(
+            "list",
+            DataType::new_list(DataType::Utf8View, true),
+            false,
+        ));
+        let zero = Arc::new(Field::new("zero", DataType::Utf8, false));
+        let merge = Arc::new(Field::new("merge", DataType::Utf8View, true));
+        let finish = Arc::new(Field::new("finish", DataType::Utf8, true));
+        let arg_fields = vec![
+            ValueOrLambda::Value(list),
+            ValueOrLambda::Value(zero),
+            ValueOrLambda::Lambda(merge),
+            ValueOrLambda::Lambda(finish),
+        ];
+        let scalar_arguments = [None, None, None, None];
+
+        let output =
+            SparkArrayAggregate::new().return_field_from_args(HigherOrderReturnFieldArgs {
+                arg_fields: &arg_fields,
+                scalar_arguments: &scalar_arguments,
+            })?;
+        assert_eq!(output.data_type(), &DataType::Utf8);
+        Ok(())
+    }
+
+    #[test]
+    fn scatter_updates_casts_view_values_to_the_accumulator_type() -> Result<()> {
+        let base: ArrayRef = Arc::new(StringArray::from(vec!["zero", "keep"]));
+        let updates: ArrayRef = Arc::new(StringViewArray::from(vec!["view"]));
+
+        let output = scatter_updates("aggregate", &base, &updates, &[0])?;
+        assert_eq!(output.data_type(), &DataType::Utf8);
+        let output = output.as_string::<i32>();
+        assert_eq!(output.value(0), "view");
+        assert_eq!(output.value(1), "keep");
+        Ok(())
+    }
 }

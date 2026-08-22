@@ -6,6 +6,10 @@ pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
     sail_logical_optimizer::default_analyzer_rules()
 }
 
+pub fn spark_connect_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
+    sail_logical_optimizer::spark_connect_analyzer_rules()
+}
+
 pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
     let rules = sail_logical_optimizer::default_optimizer_rules();
     rules
@@ -25,6 +29,20 @@ mod tests {
             !rules
                 .iter()
                 .any(|rule| rule.name() == "push_down_leaf_projections")
+        );
+    }
+
+    #[test]
+    fn spark_connect_rules_skip_output_view_expansion() {
+        assert!(
+            default_analyzer_rules()
+                .iter()
+                .any(|rule| rule.name() == "expand_view_types_at_output")
+        );
+        assert!(
+            !spark_connect_analyzer_rules()
+                .iter()
+                .any(|rule| rule.name() == "expand_view_types_at_output")
         );
     }
 }

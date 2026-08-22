@@ -821,15 +821,12 @@ impl Literal {
     }
 }
 
-/// A lightweight, schema-agnostic representation of a struct literal that
-/// serializes into an Avro record matching a provided `StructType`.
-///
-/// This is used for encoding the `partition` tuple in `DataFile` manifest
-/// entries. It intentionally avoids carrying type information and focuses on
-/// field-name to optional `Literal` mapping; type validation is deferred to
-/// the caller that provides the `StructType`.
+/// A typed representation of a partition struct literal used at the manifest Avro boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RawLiteral(pub Vec<(String, Option<Literal>)>);
+pub struct RawLiteral {
+    values: Vec<(String, Option<Literal>)>,
+    field_types: Option<Vec<crate::spec::types::PrimitiveType>>,
+}
 
 impl RawLiteral {
     /// Build from a positional vector of values and a struct type; positions
@@ -847,22 +844,212 @@ impl RawLiteral {
             ));
         }
         let mut out = Vec::with_capacity(values.len());
+        let mut field_types = Vec::with_capacity(values.len());
         for (i, f) in fields.iter().enumerate() {
+            let crate::spec::types::Type::Primitive(primitive_type) = f.field_type.as_ref() else {
+                return Err(format!(
+                    "Manifest partition field '{}' must have a primitive type",
+                    f.name
+                ));
+            };
+            if let Some(value) = values[i].as_ref() {
+                let Literal::Primitive(value) = value else {
+                    return Err(format!(
+                        "Manifest partition field '{}' must have a primitive literal",
+                        f.name
+                    ));
+                };
+                if !primitive_type.compatible(value) {
+                    return Err(format!(
+                        "Partition literal {value:?} is incompatible with Iceberg type {primitive_type}"
+                    ));
+                }
+                if let (
+                    crate::spec::types::PrimitiveType::Fixed(expected_width),
+                    PrimitiveLiteral::Binary(bytes),
+                ) = (primitive_type, value)
+                    && bytes.len() as u64 != *expected_width
+                {
+                    return Err(format!(
+                        "Fixed partition value must be exactly {expected_width} bytes, got {}",
+                        bytes.len()
+                    ));
+                }
+            }
             out.push((f.name.clone(), values[i].clone()));
+            field_types.push(primitive_type.clone());
         }
-        Ok(RawLiteral(out))
+        Ok(RawLiteral {
+            values: out,
+            field_types: Some(field_types),
+        })
     }
 
     /// Convert back to positional vector based on the struct type's field order.
-    pub fn into_struct_values(self, ty: &crate::spec::types::StructType) -> Vec<Option<Literal>> {
-        let mut by_name = std::collections::HashMap::with_capacity(self.0.len());
-        for (k, v) in self.0.into_iter() {
+    pub fn into_struct_values(
+        self,
+        ty: &crate::spec::types::StructType,
+    ) -> Result<Vec<Option<Literal>>, String> {
+        let mut by_name = std::collections::HashMap::with_capacity(self.values.len());
+        for (k, v) in self.values {
             by_name.insert(k, v);
         }
         ty.fields()
             .iter()
-            .map(|f| by_name.remove(&f.name).unwrap_or(None))
+            .map(|f| {
+                by_name
+                    .remove(&f.name)
+                    .unwrap_or(None)
+                    .map(|value| normalize_manifest_partition_literal(value, &f.field_type))
+                    .transpose()
+            })
             .collect()
+    }
+}
+
+fn normalize_manifest_partition_literal(
+    literal: Literal,
+    iceberg_type: &crate::spec::types::Type,
+) -> Result<Literal, String> {
+    let crate::spec::types::Type::Primitive(primitive_type) = iceberg_type else {
+        return Err(format!(
+            "Manifest partition field must have a primitive type, got {iceberg_type}"
+        ));
+    };
+    let Literal::Primitive(value) = literal else {
+        return Err("Manifest partition value must be a primitive literal".to_string());
+    };
+
+    let value = match (primitive_type, value) {
+        (crate::spec::types::PrimitiveType::Uuid, PrimitiveLiteral::UInt128(value)) => {
+            PrimitiveLiteral::UInt128(value)
+        }
+        (crate::spec::types::PrimitiveType::Uuid, PrimitiveLiteral::String(value)) => {
+            PrimitiveLiteral::UInt128(parse_uuid_to_u128(&value)?)
+        }
+        (crate::spec::types::PrimitiveType::Uuid, PrimitiveLiteral::Binary(value)) => {
+            let value: [u8; 16] = value.try_into().map_err(|value: Vec<u8>| {
+                format!(
+                    "UUID partition value must be exactly 16 bytes, got {}",
+                    value.len()
+                )
+            })?;
+            PrimitiveLiteral::UInt128(u128::from_be_bytes(value))
+        }
+        (
+            crate::spec::types::PrimitiveType::Fixed(expected_width),
+            PrimitiveLiteral::Binary(value),
+        ) => {
+            if value.len() as u64 != *expected_width {
+                return Err(format!(
+                    "Fixed partition value must be exactly {expected_width} bytes, got {}",
+                    value.len()
+                ));
+            }
+            PrimitiveLiteral::Binary(value)
+        }
+        (crate::spec::types::PrimitiveType::Decimal { .. }, PrimitiveLiteral::Binary(value)) => {
+            PrimitiveLiteral::Int128(i128_from_signed_big_endian(&value)?)
+        }
+        (primitive_type, value) if primitive_type.compatible(&value) => value,
+        (primitive_type, value) => {
+            return Err(format!(
+                "Partition literal {value:?} is incompatible with Iceberg type {primitive_type}"
+            ));
+        }
+    };
+    Ok(Literal::Primitive(value))
+}
+
+fn i128_from_signed_big_endian(bytes: &[u8]) -> Result<i128, String> {
+    if bytes.len() > std::mem::size_of::<i128>() {
+        return Err(format!(
+            "Decimal partition value cannot exceed 16 bytes, got {}",
+            bytes.len()
+        ));
+    }
+    let sign = bytes
+        .first()
+        .map_or(0, |byte| if byte & 0x80 == 0 { 0 } else { 0xff });
+    let mut value = [sign; std::mem::size_of::<i128>()];
+    let offset = value.len() - bytes.len();
+    value[offset..].copy_from_slice(bytes);
+    Ok(i128::from_be_bytes(value))
+}
+
+fn i128_to_fixed_big_endian(value: i128, width: usize) -> Result<Vec<u8>, String> {
+    if width == 0 || width > std::mem::size_of::<i128>() {
+        return Err(format!("Invalid decimal partition width: {width}"));
+    }
+    let bytes = value.to_be_bytes();
+    let encoded = bytes[bytes.len() - width..].to_vec();
+    if i128_from_signed_big_endian(&encoded)? != value {
+        return Err(format!(
+            "Decimal partition value {value} does not fit in {width} bytes"
+        ));
+    }
+    Ok(encoded)
+}
+
+struct ManifestPartitionLiteral<'a> {
+    value: Option<&'a Literal>,
+    field_type: &'a crate::spec::types::PrimitiveType,
+}
+
+impl Serialize for ManifestPartitionLiteral<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let Some(value) = self.value else {
+            return serializer.serialize_none();
+        };
+        struct TypedLiteral<'a> {
+            value: &'a Literal,
+            field_type: &'a crate::spec::types::PrimitiveType,
+        }
+        impl Serialize for TypedLiteral<'_> {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                match (self.field_type, self.value) {
+                    (
+                        crate::spec::types::PrimitiveType::Uuid,
+                        Literal::Primitive(PrimitiveLiteral::UInt128(value)),
+                    ) => serializer.serialize_str(&uuid::Uuid::from_u128(*value).to_string()),
+                    (
+                        crate::spec::types::PrimitiveType::Fixed(expected_width),
+                        Literal::Primitive(PrimitiveLiteral::Binary(value)),
+                    ) => {
+                        if value.len() as u64 != *expected_width {
+                            return Err(serde::ser::Error::custom(format!(
+                                "Fixed partition value must be exactly {expected_width} bytes, got {}",
+                                value.len()
+                            )));
+                        }
+                        serializer.serialize_bytes(value)
+                    }
+                    (
+                        crate::spec::types::PrimitiveType::Decimal { precision, .. },
+                        Literal::Primitive(PrimitiveLiteral::Int128(value)),
+                    ) => {
+                        let width = crate::spec::types::Type::decimal_required_bytes(*precision)
+                            .map_err(serde::ser::Error::custom)?
+                            as usize;
+                        let bytes = i128_to_fixed_big_endian(*value, width)
+                            .map_err(serde::ser::Error::custom)?;
+                        serializer.serialize_bytes(&bytes)
+                    }
+                    _ => self.value.serialize(serializer),
+                }
+            }
+        }
+
+        serializer.serialize_some(&TypedLiteral {
+            value,
+            field_type: self.field_type,
+        })
     }
 }
 
@@ -872,12 +1059,142 @@ impl Serialize for RawLiteral {
         S: serde::Serializer,
     {
         use serde::ser::SerializeStruct;
-        let mut ss = serializer.serialize_struct("", self.0.len())?;
-        for (k, v) in &self.0 {
+        let field_types = self.field_types.as_ref().ok_or_else(|| {
+            serde::ser::Error::custom("Cannot serialize a manifest partition without field types")
+        })?;
+        if field_types.len() != self.values.len() {
+            return Err(serde::ser::Error::custom(
+                "Manifest partition field type count does not match value count",
+            ));
+        }
+        let mut ss = serializer.serialize_struct("", self.values.len())?;
+        for ((k, v), field_type) in self.values.iter().zip(field_types) {
             // Avro's serde requires &'static str for field names
-            ss.serialize_field(Box::leak(k.clone().into_boxed_str()), v)?;
+            ss.serialize_field(
+                Box::leak(k.clone().into_boxed_str()),
+                &ManifestPartitionLiteral {
+                    value: v.as_ref(),
+                    field_type,
+                },
+            )?;
         }
         ss.end()
+    }
+}
+
+struct DeserializedManifestLiteral(Literal);
+
+impl<'de> Deserialize<'de> for DeserializedManifestLiteral {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::{SeqAccess, Visitor};
+
+        struct LiteralVisitor;
+        impl<'de> Visitor<'de> for LiteralVisitor {
+            type Value = DeserializedManifestLiteral;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("an Iceberg primitive manifest literal")
+            }
+
+            fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(DeserializedManifestLiteral(Literal::Primitive(
+                    PrimitiveLiteral::Boolean(value),
+                )))
+            }
+
+            fn visit_i32<E>(self, value: i32) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(DeserializedManifestLiteral(Literal::Primitive(
+                    PrimitiveLiteral::Int(value),
+                )))
+            }
+
+            fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(DeserializedManifestLiteral(Literal::Primitive(
+                    PrimitiveLiteral::Long(value),
+                )))
+            }
+
+            fn visit_f32<E>(self, value: f32) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(DeserializedManifestLiteral(Literal::Primitive(
+                    PrimitiveLiteral::Float(OrderedFloat(value)),
+                )))
+            }
+
+            fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(DeserializedManifestLiteral(Literal::Primitive(
+                    PrimitiveLiteral::Double(OrderedFloat(value)),
+                )))
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(DeserializedManifestLiteral(Literal::Primitive(
+                    PrimitiveLiteral::String(value.to_string()),
+                )))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(DeserializedManifestLiteral(Literal::Primitive(
+                    PrimitiveLiteral::String(value),
+                )))
+            }
+
+            fn visit_bytes<E>(self, value: &[u8]) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(DeserializedManifestLiteral(Literal::Primitive(
+                    PrimitiveLiteral::Binary(value.to_vec()),
+                )))
+            }
+
+            fn visit_byte_buf<E>(self, value: Vec<u8>) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(DeserializedManifestLiteral(Literal::Primitive(
+                    PrimitiveLiteral::Binary(value),
+                )))
+            }
+
+            fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let mut value = Vec::new();
+                while let Some(byte) = sequence.next_element::<u8>()? {
+                    value.push(byte);
+                }
+                Ok(DeserializedManifestLiteral(Literal::Primitive(
+                    PrimitiveLiteral::Binary(value),
+                )))
+            }
+        }
+
+        deserializer.deserialize_any(LiteralVisitor)
     }
 }
 
@@ -898,10 +1215,15 @@ impl<'de> Deserialize<'de> for RawLiteral {
                 M: MapAccess<'de>,
             {
                 let mut out: Vec<(String, Option<Literal>)> = Vec::new();
-                while let Some((k, v)) = map.next_entry::<String, Option<Literal>>()? {
-                    out.push((k, v));
+                while let Some((k, v)) =
+                    map.next_entry::<String, Option<DeserializedManifestLiteral>>()?
+                {
+                    out.push((k, v.map(|value| value.0)));
                 }
-                Ok(RawLiteral(out))
+                Ok(RawLiteral {
+                    values: out,
+                    field_types: None,
+                })
             }
         }
         deserializer.deserialize_map(RLVisitor)

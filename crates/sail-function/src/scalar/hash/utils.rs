@@ -320,11 +320,19 @@ macro_rules! create_hashes_internal {
                 DataType::LargeUtf8 => {
                     hash_array!(LargeStringArray, col, $hashes_buffer, $hash_method);
                 }
+                // Parquet arrays remain as views inside the query. Spark SQL `hash` must hash
+                // their logical bytes directly instead of relying on an early output cast.
+                DataType::Utf8View => {
+                    hash_array!(StringViewArray, col, $hashes_buffer, $hash_method);
+                }
                 DataType::Binary => {
                     hash_array!(BinaryArray, col, $hashes_buffer, $hash_method);
                 }
                 DataType::LargeBinary => {
                     hash_array!(LargeBinaryArray, col, $hashes_buffer, $hash_method);
+                }
+                DataType::BinaryView => {
+                    hash_array!(BinaryViewArray, col, $hashes_buffer, $hash_method);
                 }
                 DataType::FixedSizeBinary(_) => {
                     hash_array!(FixedSizeBinaryArray, col, $hashes_buffer, $hash_method);

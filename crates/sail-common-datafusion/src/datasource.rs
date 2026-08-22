@@ -266,6 +266,8 @@ pub struct TableFormatCreateTableResult {
 #[derive(Debug, Clone)]
 pub struct SinkInfo {
     pub input: LogicalPlan,
+    /// Whether Spark-facing Arrow writers should use 64-bit string and binary offsets.
+    pub arrow_use_large_var_types: bool,
     pub mode: SinkMode,
     pub partition_by: Vec<CatalogPartitionField>,
     pub bucket_by: Option<BucketBy>,

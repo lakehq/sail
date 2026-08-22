@@ -15,12 +15,15 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, new_null_array};
 use datafusion::arrow::datatypes::{FieldRef, Schema, SchemaRef};
-use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::{DataFusionError, Result};
 use object_store::ObjectStoreExt;
 use object_store::path::Path as ObjectPath;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
-use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
+use sail_common_datafusion::schema_evolution::{
+    StructFieldMatching, cast_array_for_schema_evolution_write_relaxed_tz,
+};
 use url::Url;
 
 use crate::operations::write::arrow_parquet::ArrowParquetWriter;
@@ -93,41 +96,31 @@ impl IcebergTableWriter {
 
         let spec = &self.config.partition_spec;
         let iceberg_schema = &self.config.iceberg_schema;
+        let padded = Self::align_batch_with_table_schema(
+            batch,
+            &self.config.table_schema,
+            self.config.iceberg_schema.as_ref(),
+        )
+        .map_err(|e| e.to_string())?;
+        let normalized = unshred_shredded_variants_for_write(&padded, &self.config.table_schema)?;
+        let aligned = Self::cast_batch_for_table_write(&normalized, &self.config.table_schema)
+            .map_err(|e| e.to_string())?;
+        Self::validate_required_columns(aligned.columns(), &self.config.table_schema)?;
 
         if spec.fields.is_empty() {
             // Unpartitioned: write as-is once
             let partition_dir = String::new();
             let partition_values = Vec::new();
-            let padded = Self::align_batch_with_table_schema(
-                batch,
-                &self.config.table_schema,
-                self.config.iceberg_schema.as_ref(),
-            )
-            .map_err(|e| e.to_string())?;
-            let normalized =
-                unshred_shredded_variants_for_write(&padded, &self.config.table_schema)?;
-            let aligned = cast_record_batch_relaxed_tz(&normalized, &self.config.table_schema)
-                .map_err(|e| e.to_string())?;
             self.write_aligned_batch(partition_values, partition_dir, aligned)
                 .await?;
             return Ok(());
         }
 
-        let parts = split_record_batch_by_partition(batch, spec, iceberg_schema)?;
+        let parts = split_record_batch_by_partition(&aligned, spec, iceberg_schema)?;
         for p in parts.into_iter() {
             let partition_dir = p.partition_dir;
             let partition_values = p.partition_values;
-            let padded = Self::align_batch_with_table_schema(
-                &p.record_batch,
-                &self.config.table_schema,
-                self.config.iceberg_schema.as_ref(),
-            )
-            .map_err(|e| e.to_string())?;
-            let normalized =
-                unshred_shredded_variants_for_write(&padded, &self.config.table_schema)?;
-            let aligned = cast_record_batch_relaxed_tz(&normalized, &self.config.table_schema)
-                .map_err(|e| e.to_string())?;
-            self.write_aligned_batch(partition_values, partition_dir, aligned)
+            self.write_aligned_batch(partition_values, partition_dir, p.record_batch)
                 .await?;
         }
 
@@ -381,5 +374,240 @@ impl IcebergTableWriter {
             return Ok(Some(array));
         }
         Ok(None)
+    }
+
+    fn cast_batch_for_table_write(
+        batch: &RecordBatch,
+        table_schema: &SchemaRef,
+    ) -> Result<RecordBatch> {
+        let mut columns = Vec::with_capacity(table_schema.fields().len());
+        for field in table_schema.fields() {
+            let source = match batch.schema().index_of(field.name()) {
+                Ok(index) => batch.column(index),
+                Err(_) if field.is_nullable() => {
+                    columns.push(new_null_array(field.data_type(), batch.num_rows()));
+                    continue;
+                }
+                Err(_) => {
+                    return Err(DataFusionError::Plan(format!(
+                        "Missing required column '{}' in input batch",
+                        field.name()
+                    )));
+                }
+            };
+            columns.push(cast_array_for_schema_evolution_write_relaxed_tz(
+                source,
+                field,
+                &DEFAULT_CAST_OPTIONS,
+                StructFieldMatching::Name,
+            )?);
+        }
+
+        Self::validate_required_columns(&columns, table_schema)
+            .map_err(DataFusionError::Execution)?;
+
+        if columns.is_empty() {
+            Ok(RecordBatch::try_new_with_options(
+                Arc::clone(table_schema),
+                columns,
+                &RecordBatchOptions::default().with_row_count(Some(batch.num_rows())),
+            )?)
+        } else {
+            Ok(RecordBatch::try_new(Arc::clone(table_schema), columns)?)
+        }
+    }
+
+    fn validate_required_columns(
+        columns: &[ArrayRef],
+        table_schema: &SchemaRef,
+    ) -> Result<(), String> {
+        for (field, column) in table_schema.fields().iter().zip(columns) {
+            if !field.is_nullable() && column.null_count() > 0 {
+                return Err(format!(
+                    "Column '{}' is required but contains {} null value(s)",
+                    field.name(),
+                    column.null_count()
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::expect_used)]
+
+    use std::collections::HashMap;
+
+    use datafusion::arrow::array::{Array, BinaryViewArray, Int32Array, StructArray};
+    use datafusion::arrow::datatypes::{DataType, Field};
+    use object_store::memory::InMemory;
+    use parquet::file::properties::WriterProperties;
+
+    use super::*;
+    use crate::datasource::type_converter::iceberg_schema_to_arrow;
+    use crate::spec::partition::UnboundPartitionSpec;
+    use crate::spec::types::{PrimitiveType, Type};
+
+    fn fixed_size_writer(required: bool) -> IcebergTableWriter {
+        let iceberg_schema = IcebergSchema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![Arc::new(NestedField::new(
+                1,
+                "value",
+                Type::Primitive(PrimitiveType::Fixed(4)),
+                required,
+            ))])
+            .build()
+            .expect("Iceberg schema");
+        let table_schema = Arc::new(
+            iceberg_schema_to_arrow(&iceberg_schema).expect("Iceberg writer Arrow schema"),
+        );
+        let config = WriterConfig {
+            table_schema,
+            partition_columns: vec![],
+            writer_properties: WriterProperties::default(),
+            target_file_size: 1024,
+            write_batch_size: 1024,
+            num_indexed_cols: 1,
+            stats_columns: None,
+            iceberg_schema: Arc::new(iceberg_schema),
+            partition_spec: UnboundPartitionSpec { fields: vec![] },
+            variant_shredding: Default::default(),
+        };
+        IcebergTableWriter::new(
+            Arc::new(InMemory::new()),
+            ObjectPath::from("table/data"),
+            config,
+            0,
+            Url::parse("file:///table/data/").expect("data URL"),
+        )
+    }
+
+    fn binary_view_batch(values: Vec<Option<&'static [u8]>>) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::BinaryView,
+            true,
+        )]));
+        RecordBatch::try_new(schema, vec![Arc::new(BinaryViewArray::from(values))])
+            .expect("binary view batch")
+    }
+
+    #[test]
+    fn writer_casts_binary_view_to_fixed_size_binary() {
+        futures::executor::block_on(async {
+            let mut writer = fixed_size_writer(true);
+            writer
+                .write(&binary_view_batch(vec![Some(b"1234")]))
+                .await
+                .expect("matching fixed-width value should write");
+
+            let files = writer.close().await.expect("written data file");
+            assert_eq!(files.len(), 1);
+            assert_eq!(files[0].record_count, 1);
+        });
+    }
+
+    #[test]
+    fn writer_rejects_wrong_length_binary_view_for_optional_fixed_size_field() {
+        futures::executor::block_on(async {
+            let mut writer = fixed_size_writer(false);
+            let result = writer.write(&binary_view_batch(vec![Some(b"bad")])).await;
+
+            let error = result.expect_err("wrong fixed width must fail");
+            assert!(error.contains("length 3"), "unexpected error: {error}");
+            assert!(writer.writers.is_empty());
+        });
+    }
+
+    #[test]
+    fn writer_rejects_null_for_required_fixed_size_field() {
+        futures::executor::block_on(async {
+            let mut writer = fixed_size_writer(true);
+            let result = writer.write(&binary_view_batch(vec![None])).await;
+
+            let error = result.expect_err("required null must fail");
+            assert!(error.contains("required"), "unexpected error: {error}");
+            assert!(writer.writers.is_empty());
+        });
+    }
+
+    #[test]
+    fn writer_allows_null_for_optional_fixed_size_field() {
+        futures::executor::block_on(async {
+            let mut writer = fixed_size_writer(false);
+            writer
+                .write(&binary_view_batch(vec![None]))
+                .await
+                .expect("optional null should write");
+
+            let files = writer.close().await.expect("written data file");
+            assert_eq!(files.len(), 1);
+            assert_eq!(files[0].record_count, 1);
+        });
+    }
+
+    #[test]
+    fn writer_cast_preserves_nested_name_matching_metadata_and_nullability() {
+        let field_with_id = |name: &str, id: i32, nullable: bool| {
+            Arc::new(
+                Field::new(name, DataType::Int32, nullable).with_metadata(HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    id.to_string(),
+                )])),
+            )
+        };
+        let source_fields = vec![
+            field_with_id("legacy", 1, true),
+            field_with_id("kept", 2, true),
+        ];
+        let source_payload = StructArray::new(
+            source_fields.clone().into(),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(10)])),
+                Arc::new(Int32Array::from(vec![Some(20)])),
+            ],
+            None,
+        );
+        let source_schema = Arc::new(Schema::new(vec![Field::new(
+            "payload",
+            DataType::Struct(source_fields.into()),
+            true,
+        )]));
+        let source = RecordBatch::try_new(source_schema, vec![Arc::new(source_payload)])
+            .expect("source batch");
+
+        let target_fields = vec![
+            field_with_id("kept", 2, false),
+            // The field ID matches `legacy`, but writer evolution has always matched nested
+            // fields by name, so a rename remains a missing nullable field.
+            field_with_id("renamed", 1, true),
+        ];
+        let target_schema = Arc::new(Schema::new(vec![
+            Field::new("payload", DataType::Struct(target_fields.into()), true).with_metadata(
+                HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "100".to_string())]),
+            ),
+        ]));
+
+        let casted = IcebergTableWriter::cast_batch_for_table_write(&source, &target_schema)
+            .expect("writer cast");
+        assert_eq!(casted.schema(), target_schema);
+        let payload = casted
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("struct payload");
+        assert_eq!(
+            payload
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .expect("kept values")
+                .value(0),
+            20
+        );
+        assert!(payload.column(1).is_null(0));
     }
 }
