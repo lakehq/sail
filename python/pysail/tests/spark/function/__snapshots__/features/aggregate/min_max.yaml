@@ -1,0 +1,11 @@
+# serializer version: 1
+---
+name: "test_explain_distinct_extrema_use_ordinary_aggregates"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as minimum, #3@1 as maximum]
+      ProjectionExec: expr=[min(t.#1)@0 as #2, max(t.#1)@1 as #3]
+        AggregateExec: mode=Single, gby=[], aggr=[min(t.#1), max(t.#1)]
+          ProjectionExec: expr=[column1@0 as #1]
+            DataSourceExec: partitions=1, partition_sizes=[1]
