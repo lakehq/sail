@@ -1,9 +1,24 @@
 import importlib
 import os
 import sys
+from pathlib import Path
+
+import pytest
+
+INTEGRATION_TEST_PATHS = [
+    Path(__file__).parent / "celeborn",
+    Path(__file__).parent / "catalog" / "glue",
+    Path(__file__).parent / "catalog" / "hms",
+    Path(__file__).parent / "catalog" / "iceberg_rest",
+    Path(__file__).parent / "catalog" / "unity",
+    Path(__file__).parent / "spark" / "catalog" / "glue",
+    Path(__file__).parent / "spark" / "catalog" / "hms",
+    Path(__file__).parent / "spark" / "catalog" / "iceberg_rest",
+    Path(__file__).parent / "spark" / "catalog" / "unity",
+]
 
 
-def pytest_configure(config):
+def pytest_configure(config: pytest.Config) -> None:
     """Configure pytest.
 
     We include the tests in the installed package so that the user can test the installation
@@ -11,6 +26,12 @@ def pytest_configure(config):
     We must customize the configuration here instead of using `pytest.ini` or `pyproject.toml`
     since these files are not part of the installed package.
     """
+
+    config.pluginmanager.import_plugin("pysail.testing.containers.celeborn")
+    config.pluginmanager.import_plugin("pysail.testing.containers.glue")
+    config.pluginmanager.import_plugin("pysail.testing.containers.hms")
+    config.pluginmanager.import_plugin("pysail.testing.containers.iceberg_rest")
+    config.pluginmanager.import_plugin("pysail.testing.containers.unity")
 
     # Note: configuration set via `config.inicfg` may not have an effect due to the cache used
     # in `config.getini()`. In such a case, we may have to clear the INI cache in `config`.
@@ -34,8 +55,36 @@ def pytest_configure(config):
         "markers",
         "yamlsnapshot: add metadata to customize the YAML snapshot",
     )
+    config.addinivalue_line(
+        "markers",
+        "integration: mark test as requiring external services and deselected by default",
+    )
 
     configure_sail_environment()
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    # Add BDD feature file paths as an extra keyword to support test selection based on feature files.
+    package_root = Path(__file__).resolve().parents[1]
+    for item in items:
+        scenario = getattr(getattr(item, "function", None), "__scenario__", None)
+        feature = getattr(scenario, "feature", None)
+        filename = getattr(feature, "filename", None)
+        if filename:
+            path = Path(filename).resolve().relative_to(package_root)
+            item.extra_keyword_matches.add(path.as_posix())
+
+    for item in items:
+        item_path = item.path.resolve()
+        if any(item_path.is_relative_to(path.resolve()) for path in INTEGRATION_TEST_PATHS):
+            item.add_marker(pytest.mark.integration)
+
+    if not config.getoption("markexpr"):
+        deselected = [item for item in items if item.get_closest_marker("integration")]
+        if deselected:
+            remaining = [item for item in items if item not in deselected]
+            config.hook.pytest_deselected(items=deselected)
+            items[:] = remaining
 
 
 def configure_sail_environment():

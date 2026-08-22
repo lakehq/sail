@@ -12,27 +12,25 @@
 
 use std::sync::Arc;
 
-use datafusion::arrow::compute::SortOptions;
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion::common::{
     Column as LogicalColumn, DataFusionError, Result, ScalarValue, ToDFSchema,
 };
 use datafusion::logical_expr::Expr;
 use datafusion::logical_expr::expr::{Case, Cast, ScalarFunction};
 use datafusion::physical_expr::expressions::Column;
-use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr};
+use datafusion::physical_expr::{LexRequirement, PhysicalExpr};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::projection::ProjectionExec;
-use datafusion::physical_plan::repartition::RepartitionExec;
-use datafusion::physical_plan::sorts::sort::SortExec;
+use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_functions_nested::extract::array_element_udf;
 use datafusion_functions_nested::map_extract::map_extract_udf;
-use datafusion_physical_expr::expressions::Column as PhysicalColumn;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
+use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use url::Url;
 
 use super::context::PlannerContext;
@@ -46,7 +44,9 @@ use crate::physical_plan::{
     COL_LOG_IS_REMOVE, COL_LOG_VERSION, COL_REPLAY_PATH, DeltaCommitExec, DeltaLogReplayExec,
     DeltaWriterExec, DeltaWriterExecOptions, create_projection, create_repartition, create_sort,
 };
+use crate::schema::PhysicalPartitionColumn;
 use crate::spec::fields::{
+    DV_FIELD_OFFSET, DV_FIELD_PATH_OR_INLINE_DV, DV_FIELD_STORAGE_TYPE, FIELD_NAME_DELETION_VECTOR,
     FIELD_NAME_MODIFICATION_TIME, FIELD_NAME_PATH, FIELD_NAME_SIZE, FIELD_NAME_STATS,
 };
 use crate::table::DeltaSnapshot;
@@ -75,6 +75,153 @@ pub struct LogReplayFilter {
     pub table_schema: SchemaRef,
 }
 
+fn utf8_literal(value: &str) -> Expr {
+    Expr::Literal(ScalarValue::Utf8(Some(value.to_string())), None)
+}
+
+fn struct_field_expr(struct_expr: Expr, field_name: &str) -> Expr {
+    Expr::ScalarFunction(ScalarFunction::new_udf(
+        datafusion::functions::core::get_field(),
+        vec![struct_expr, utf8_literal(field_name)],
+    ))
+}
+
+fn concat_utf8(args: Vec<Expr>) -> Expr {
+    Expr::ScalarFunction(ScalarFunction::new_udf(
+        datafusion::functions::string::concat(),
+        args,
+    ))
+}
+
+fn first_matching_field<'a>(fields: &Fields, names: &'a [&str]) -> Option<&'a str> {
+    names
+        .iter()
+        .copied()
+        .find(|name| fields.iter().any(|field| field.name() == *name))
+}
+
+fn action_replay_key_expr(
+    action_expr: Expr,
+    action_is_not_null: Expr,
+    action_fields: &Fields,
+) -> Result<Expr> {
+    let path = Expr::Cast(Cast::new(
+        Box::new(struct_field_expr(action_expr.clone(), FIELD_NAME_PATH)),
+        DataType::Utf8,
+    ));
+    let path_bytes = Expr::ScalarFunction(ScalarFunction::new_udf(
+        datafusion::functions::string::octet_length(),
+        vec![path.clone()],
+    ));
+    let path_bytes = Expr::Cast(Cast::new(Box::new(path_bytes), DataType::Utf8));
+
+    let dv_identity = if let Some(dv_field_name) = first_matching_field(
+        action_fields,
+        &[FIELD_NAME_DELETION_VECTOR, "deletion_vector"],
+    ) {
+        let dv_field = action_fields
+            .iter()
+            .find(|field| field.name() == dv_field_name)
+            .ok_or_else(|| {
+                DataFusionError::Internal(format!(
+                    "deletion vector field '{dv_field_name}' disappeared from action schema"
+                ))
+            })?;
+        let DataType::Struct(dv_fields) = dv_field.data_type() else {
+            return Err(DataFusionError::Plan(format!(
+                "log replay expects '{dv_field_name}' to be Struct, got {}",
+                dv_field.data_type()
+            )));
+        };
+        let storage_type_field =
+            first_matching_field(dv_fields, &[DV_FIELD_STORAGE_TYPE, "storage_type"]).ok_or_else(
+                || DataFusionError::Plan("deletion vector is missing storageType".to_string()),
+            )?;
+        let path_or_inline_field = first_matching_field(
+            dv_fields,
+            &[DV_FIELD_PATH_OR_INLINE_DV, "path_or_inline_dv"],
+        )
+        .ok_or_else(|| {
+            DataFusionError::Plan("deletion vector is missing pathOrInlineDv".to_string())
+        })?;
+
+        let dv_expr = struct_field_expr(action_expr.clone(), dv_field_name);
+        let storage_type = Expr::Cast(Cast::new(
+            Box::new(struct_field_expr(dv_expr.clone(), storage_type_field)),
+            DataType::Utf8,
+        ));
+        let path_or_inline = Expr::Cast(Cast::new(
+            Box::new(struct_field_expr(dv_expr.clone(), path_or_inline_field)),
+            DataType::Utf8,
+        ));
+        let offset_suffix =
+            if let Some(offset_field) = first_matching_field(dv_fields, &[DV_FIELD_OFFSET]) {
+                let offset = struct_field_expr(dv_expr.clone(), offset_field);
+                Expr::Case(Case::new(
+                    None,
+                    vec![(
+                        Box::new(offset.clone().is_not_null()),
+                        Box::new(concat_utf8(vec![
+                            utf8_literal("@"),
+                            Expr::Cast(Cast::new(Box::new(offset), DataType::Utf8)),
+                        ])),
+                    )],
+                    Some(Box::new(utf8_literal(""))),
+                ))
+            } else {
+                utf8_literal("")
+            };
+        let unique_id = concat_utf8(vec![storage_type, path_or_inline, offset_suffix]);
+        Expr::Case(Case::new(
+            None,
+            vec![(
+                Box::new(action_is_not_null.clone().and(dv_expr.is_not_null())),
+                Box::new(concat_utf8(vec![utf8_literal("1:"), unique_id])),
+            )],
+            Some(Box::new(utf8_literal("0"))),
+        ))
+    } else {
+        utf8_literal("0")
+    };
+
+    // Length-prefix the path so the composite string remains injective even when a path contains
+    // delimiter-like text. The resulting Utf8 value is opaque to Sort/Hash replay operators.
+    let key = concat_utf8(vec![
+        path_bytes,
+        utf8_literal(":"),
+        path,
+        utf8_literal(":"),
+        dv_identity,
+    ]);
+    Ok(Expr::Case(Case::new(
+        None,
+        vec![(Box::new(action_is_not_null), Box::new(key))],
+        None,
+    )))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplayPipelineMode {
+    Sort,
+    Hash,
+    HashCommits,
+}
+
+fn select_replay_pipeline_mode(
+    strategy: DeltaLogReplayStrategy,
+    has_checkpoint: bool,
+) -> ReplayPipelineMode {
+    match strategy {
+        DeltaLogReplayStrategy::Sort => ReplayPipelineMode::Sort,
+        DeltaLogReplayStrategy::Hash if has_checkpoint => ReplayPipelineMode::Hash,
+        DeltaLogReplayStrategy::Hash => ReplayPipelineMode::HashCommits,
+        // Commit file count does not bound the number of actions or hash-table memory. Keep the
+        // default path spill-friendly; hash replay remains available through the explicit Hash
+        // strategy.
+        DeltaLogReplayStrategy::Auto => ReplayPipelineMode::Sort,
+    }
+}
+
 impl Default for LogReplayOptions {
     fn default() -> Self {
         Self {
@@ -89,7 +236,7 @@ impl Default for LogReplayOptions {
 }
 
 fn replay_output_schema(
-    partition_columns: &[(String, String)],
+    partition_columns: &[PhysicalPartitionColumn],
     include_stats_json: bool,
     include_extended_add_metadata: bool,
 ) -> SchemaRef {
@@ -100,8 +247,12 @@ fn replay_output_schema(
         Field::new(COMMIT_VERSION_COLUMN, DataType::Int64, true),
         Field::new(COMMIT_TIMESTAMP_COLUMN, DataType::Int64, true),
     ];
-    for (logical, _) in partition_columns {
-        fields.push(Field::new(logical, DataType::Utf8, true));
+    for column in partition_columns {
+        fields.push(Field::new(
+            column.logical_name.clone(),
+            DataType::Utf8,
+            true,
+        ));
     }
     if include_stats_json {
         fields.push(Field::new("stats_json", DataType::Utf8, true));
@@ -262,7 +413,7 @@ async fn build_log_replay_pipeline_with_files(
     ctx: &PlannerContext<'_>,
     table_url: Url,
     version: i64,
-    partition_columns: Vec<(String, String)>,
+    partition_columns: Vec<PhysicalPartitionColumn>,
     checkpoint_files: Vec<String>,
     commit_files: Vec<String>,
     sidecar_files: Vec<String>,
@@ -284,8 +435,8 @@ async fn build_log_replay_pipeline_with_files(
 
     // Projection#1: build a compact log scan schema for streaming replay.
     //
-    // - replay_path = coalesce(get_field(add, 'path'), get_field(remove, 'path'))
-    // - is_remove  = remove_struct IS NOT NULL
+    // - replay_path is the Delta logical-file identity (path plus optional deletion-vector ID)
+    // - is_remove  = remove_struct IS NOT NULL AND add_struct IS NULL
     // - __sail_delta_log_version is passed through from the scan as a partition column
     // - payload columns are extracted up-front so the sort/replay does not carry wide structs
     let input_schema = checkpoint_scan_opt
@@ -358,33 +509,6 @@ async fn build_log_replay_pipeline_with_files(
         .map(|e| e.clone().is_not_null())
         .unwrap_or_else(|| lit_bool(false));
 
-    // NOTE: `get_field(struct, 'child')` does not apply the parent struct's
-    // null buffer to the returned child array. We must guard child extraction with the
-    // struct's validity to avoid spurious values.
-    let add_path = guard_with(
-        add_is_not_null.clone(),
-        get_field_expr(add_col_expr.clone(), FIELD_NAME_PATH),
-    );
-    let remove_path = remove_col_expr
-        .as_ref()
-        .map(|e| {
-            guard_with(
-                remove_is_not_null.clone(),
-                get_field_expr(e.clone(), FIELD_NAME_PATH),
-            )
-        })
-        .unwrap_or_else(lit_utf8_null);
-
-    let replay_path = simplify(Expr::ScalarFunction(ScalarFunction::new_udf(
-        datafusion::functions::core::coalesce(),
-        vec![add_path, remove_path.clone()],
-    )))?;
-
-    // Mark tombstones using the struct's own validity.
-    let is_remove = simplify(remove_is_not_null.clone())?;
-
-    // Extract a stable "metadata table" schema from `add` up-front so replay can stream
-    // over narrow payload columns.
     let add_field = input_schema.field_with_name("add")?;
     let add_struct_fields = match add_field.data_type() {
         DataType::Struct(fields) => fields,
@@ -394,6 +518,46 @@ async fn build_log_replay_pipeline_with_files(
             )));
         }
     };
+    let remove_struct_fields = if has_remove_column {
+        let remove_field = input_schema.field_with_name("remove")?;
+        match remove_field.data_type() {
+            DataType::Struct(fields) => Some(fields),
+            other => {
+                return Err(DataFusionError::Plan(format!(
+                    "log replay expects 'remove' to be Struct, got {other}"
+                )));
+            }
+        }
+    } else {
+        None
+    };
+
+    let add_key = action_replay_key_expr(
+        add_col_expr.clone(),
+        add_is_not_null.clone(),
+        add_struct_fields,
+    )?;
+    let remove_key = match (remove_col_expr.as_ref(), remove_struct_fields) {
+        (Some(remove), Some(fields)) => {
+            action_replay_key_expr(remove.clone(), remove_is_not_null.clone(), fields)?
+        }
+        _ => lit_utf8_null(),
+    };
+
+    let replay_path = simplify(Expr::ScalarFunction(ScalarFunction::new_udf(
+        datafusion::functions::core::coalesce(),
+        vec![add_key, remove_key],
+    )))?;
+
+    // Mark tombstones using the struct's own validity.
+    let is_remove = simplify(
+        remove_is_not_null
+            .clone()
+            .and(Expr::Not(Box::new(add_is_not_null.clone()))),
+    )?;
+
+    // Extract a stable "metadata table" schema from `add` up-front so replay can stream
+    // over narrow payload columns.
     let has_add_field = |name: &str| add_struct_fields.iter().any(|f| f.name() == name);
     let mod_time_field = if has_add_field(FIELD_NAME_MODIFICATION_TIME) {
         FIELD_NAME_MODIFICATION_TIME
@@ -450,7 +614,7 @@ async fn build_log_replay_pipeline_with_files(
     };
 
     let part_values = guard_add(get_add_field(part_values_field));
-    let part_expr_for = |logical: &str, physical: &str| -> Result<Arc<dyn PhysicalExpr>> {
+    let part_expr_for = |physical: &str| -> Result<Arc<dyn PhysicalExpr>> {
         let extract_elem = |key: &str| {
             let extracted = Expr::ScalarFunction(ScalarFunction::new_udf(
                 map_extract_udf(),
@@ -461,17 +625,10 @@ async fn build_log_replay_pipeline_with_files(
                 vec![extracted, lit_i64(1)],
             ))
         };
-        let physical_elem = extract_elem(physical);
-        let elem = if physical == logical {
-            physical_elem
-        } else {
-            let logical_elem = extract_elem(logical);
-            Expr::ScalarFunction(ScalarFunction::new_udf(
-                datafusion::functions::core::coalesce(),
-                vec![physical_elem, logical_elem],
-            ))
-        };
-        simplify(Expr::Cast(Cast::new(Box::new(elem), DataType::Utf8)))
+        simplify(Expr::Cast(Cast::new(
+            Box::new(extract_elem(physical)),
+            DataType::Utf8,
+        )))
     };
 
     let mut final_proj: Vec<(Arc<dyn PhysicalExpr>, String)> =
@@ -481,16 +638,17 @@ async fn build_log_replay_pipeline_with_files(
     final_proj.push((path_expr, PATH_COLUMN.to_string()));
     final_proj.push((size_expr, "size_bytes".to_string()));
     final_proj.push((Arc::clone(&mod_time_expr), "modification_time".to_string()));
+    let unknown_commit_metadata = simplify(Expr::Literal(ScalarValue::Int64(None), None))?;
     final_proj.push((
-        Arc::new(Column::new(COL_LOG_VERSION, log_version_idx)) as Arc<dyn PhysicalExpr>,
+        Arc::clone(&unknown_commit_metadata),
         COMMIT_VERSION_COLUMN.to_string(),
     ));
-    final_proj.push((
-        Arc::clone(&mod_time_expr),
-        COMMIT_TIMESTAMP_COLUMN.to_string(),
-    ));
-    for (logical, physical) in &partition_columns {
-        final_proj.push((part_expr_for(logical, physical)?, logical.clone()));
+    final_proj.push((unknown_commit_metadata, COMMIT_TIMESTAMP_COLUMN.to_string()));
+    for column in &partition_columns {
+        final_proj.push((
+            part_expr_for(&column.physical_name)?,
+            column.logical_name.clone(),
+        ));
     }
     if let Some(stats_expr) = stats_expr {
         final_proj.push((stats_expr, "stats_json".to_string()));
@@ -548,7 +706,7 @@ async fn build_log_replay_pipeline_with_files(
     }
 
     // Replay key columns (consumed by replay; stripped from replay output schema).
-    final_proj.push((replay_path, COL_REPLAY_PATH.to_string()));
+    final_proj.push((Arc::clone(&replay_path), COL_REPLAY_PATH.to_string()));
     final_proj.push((is_remove, COL_LOG_IS_REMOVE.to_string()));
     final_proj.push((
         Arc::new(Column::new(COL_LOG_VERSION, log_version_idx)) as Arc<dyn PhysicalExpr>,
@@ -557,121 +715,78 @@ async fn build_log_replay_pipeline_with_files(
 
     let log_partitions = ctx.session().config().target_partitions().max(1);
 
-    let replay_partition_cols = partition_columns
-        .iter()
-        .map(|(logical, _)| logical.clone())
-        .collect::<Vec<_>>();
-
     let empty_scan = |schema: SchemaRef| -> Arc<dyn ExecutionPlan> {
         Arc::new(datafusion::physical_plan::empty::EmptyExec::new(schema))
     };
 
-    let build_branch = |scan: Arc<dyn ExecutionPlan>,
-                        sort: bool|
-     -> Result<Arc<dyn ExecutionPlan>> {
-        // Preserve existing behavior: fan out to target partitions early for stable EXPLAIN and
-        // better parallelism. (This is a shuffle, but not a pipeline breaker like SortExec.)
-        let plan: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+    let build_branch = |scan: Arc<dyn ExecutionPlan>| -> Result<Arc<dyn ExecutionPlan>> {
+        // Keep the raw-row hash repartition through distribution enforcement. The explicit node
+        // is rewritten to an executable repartition after ProjectionExec maps its expression to
+        // COL_REPLAY_PATH.
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(ExplicitRepartitionExec::new(
             scan,
-            Partitioning::RoundRobinBatch(log_partitions),
-        )?);
-
+            Partitioning::Hash(vec![Arc::clone(&replay_path)], log_partitions),
+        ));
         let plan: Arc<dyn ExecutionPlan> =
             Arc::new(ProjectionExec::try_new(final_proj.clone(), plan)?);
-
-        // Hash partition by replay_path so all actions for the same path are co-located.
-        let replay_path_idx = plan.schema().index_of(COL_REPLAY_PATH)?;
-        let replay_expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> =
-            Arc::new(PhysicalColumn::new(COL_REPLAY_PATH, replay_path_idx));
-        let plan: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
-            plan,
-            Partitioning::Hash(vec![replay_expr], log_partitions),
-        )?);
-
-        if !sort {
-            return Ok(plan);
-        }
-
-        // Ensure per-partition ordering on (replay_path, log_version desc, is_remove asc)
-        // for sort-based replay mode.
-        let replay_path_idx = plan.schema().index_of(COL_REPLAY_PATH)?;
-        let log_version_idx = plan.schema().index_of(COL_LOG_VERSION)?;
-        let is_remove_idx = plan.schema().index_of(COL_LOG_IS_REMOVE)?;
-        let ordering = LexOrdering::new(vec![
-            PhysicalSortExpr {
-                expr: Arc::new(Column::new(COL_REPLAY_PATH, replay_path_idx)),
-                options: SortOptions {
-                    descending: false,
-                    nulls_first: false,
-                },
-            },
-            PhysicalSortExpr {
-                expr: Arc::new(Column::new(COL_LOG_VERSION, log_version_idx)),
-                options: SortOptions {
-                    descending: true,
-                    nulls_first: false,
-                },
-            },
-            // Add beats Remove within the same path/version (DV update pattern).
-            PhysicalSortExpr {
-                expr: Arc::new(Column::new(COL_LOG_IS_REMOVE, is_remove_idx)),
-                options: SortOptions {
-                    descending: false,
-                    nulls_first: false,
-                },
-            },
-        ])
-        .ok_or_else(|| {
-            DataFusionError::Internal("failed to create replay ordering requirement".to_string())
-        })?;
-        Ok(Arc::new(
-            SortExec::new(ordering, plan).with_preserve_partitioning(true),
-        ))
+        Ok(plan)
     };
 
     let replay_strategy = ctx.options().delta_log_replay_strategy;
-    let replay_hash_threshold = ctx.options().delta_log_replay_hash_threshold.get();
     let has_checkpoint = !checkpoint_files.is_empty();
-    let use_hash = match replay_strategy {
-        DeltaLogReplayStrategy::Sort => false,
-        DeltaLogReplayStrategy::Hash => has_checkpoint,
-        DeltaLogReplayStrategy::Auto => {
-            has_checkpoint && commit_files.len() <= replay_hash_threshold
+    let replay_mode = select_replay_pipeline_mode(replay_strategy, has_checkpoint);
+
+    let replay: Arc<dyn ExecutionPlan> = match replay_mode {
+        ReplayPipelineMode::Sort => {
+            let mut scans = Vec::with_capacity(2);
+            if let Some(checkpoint_scan) = checkpoint_scan_opt {
+                scans.push(checkpoint_scan);
+            }
+            if let Some(commit_scan) = commit_scan_opt {
+                scans.push(commit_scan);
+            }
+            let scan = match scans.len() {
+                0 => empty_scan(Arc::clone(&input_schema)),
+                1 => scans.remove(0),
+                _ => UnionExec::try_new(scans)?,
+            };
+            let input = build_branch(scan)?;
+            Arc::new(DeltaLogReplayExec::new(
+                input,
+                table_url,
+                version,
+                checkpoint_files,
+                commit_files,
+            ))
         }
-    };
-
-    let replay: Arc<dyn ExecutionPlan> = if has_checkpoint {
-        // Hash replay: stream checkpoint, build small commit-side map, then emit commit-only adds.
-        let checkpoint_scan =
-            checkpoint_scan_opt.unwrap_or_else(|| empty_scan(Arc::clone(&input_schema)));
-        let commit_scan = commit_scan_opt.unwrap_or_else(|| empty_scan(Arc::clone(&input_schema)));
-
-        let checkpoint_branch = build_branch(checkpoint_scan, false)?;
-        let commit_branch = build_branch(commit_scan, !use_hash)?;
-
-        Arc::new(DeltaLogReplayExec::new_hash(
-            checkpoint_branch,
-            commit_branch,
-            table_url,
-            version,
-            replay_partition_cols,
-            checkpoint_files,
-            commit_files,
-        ))
-    } else {
-        // Sort replay (spill-friendly): for commit-only scenarios, avoid building a potentially
-        // large in-memory map.
-        let commit_scan = commit_scan_opt.unwrap_or_else(|| empty_scan(Arc::clone(&input_schema)));
-        let commit_branch = build_branch(commit_scan, true)?;
-
-        Arc::new(DeltaLogReplayExec::new(
-            commit_branch,
-            table_url,
-            version,
-            replay_partition_cols,
-            checkpoint_files,
-            commit_files,
-        ))
+        ReplayPipelineMode::Hash => {
+            let checkpoint_scan =
+                checkpoint_scan_opt.unwrap_or_else(|| empty_scan(Arc::clone(&input_schema)));
+            let commit_scan =
+                commit_scan_opt.unwrap_or_else(|| empty_scan(Arc::clone(&input_schema)));
+            let checkpoint = build_branch(checkpoint_scan)?;
+            let commits = build_branch(commit_scan)?;
+            Arc::new(DeltaLogReplayExec::try_new_hash(
+                checkpoint,
+                commits,
+                table_url,
+                version,
+                checkpoint_files,
+                commit_files,
+            )?)
+        }
+        ReplayPipelineMode::HashCommits => {
+            let commit_scan =
+                commit_scan_opt.unwrap_or_else(|| empty_scan(Arc::clone(&input_schema)));
+            let commits = build_branch(commit_scan)?;
+            Arc::new(DeltaLogReplayExec::new_hash_commits(
+                commits,
+                table_url,
+                version,
+                checkpoint_files,
+                commit_files,
+            ))
+        }
     };
 
     let replay: Arc<dyn ExecutionPlan> = if let Some(filter) = options.log_filter {
@@ -689,4 +804,40 @@ async fn build_log_replay_pipeline_with_files(
 
     // Replay now outputs the extracted payload columns directly (replay keys are stripped).
     Ok(replay)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selects_replay_pipeline_mode_for_strategy_and_checkpoint_presence() {
+        let cases = [
+            (
+                DeltaLogReplayStrategy::Sort,
+                false,
+                ReplayPipelineMode::Sort,
+            ),
+            (DeltaLogReplayStrategy::Sort, true, ReplayPipelineMode::Sort),
+            (
+                DeltaLogReplayStrategy::Hash,
+                false,
+                ReplayPipelineMode::HashCommits,
+            ),
+            (DeltaLogReplayStrategy::Hash, true, ReplayPipelineMode::Hash),
+            (
+                DeltaLogReplayStrategy::Auto,
+                false,
+                ReplayPipelineMode::Sort,
+            ),
+            (DeltaLogReplayStrategy::Auto, true, ReplayPipelineMode::Sort),
+        ];
+
+        for (strategy, has_checkpoint, expected) in cases {
+            assert_eq!(
+                select_replay_pipeline_mode(strategy, has_checkpoint),
+                expected
+            );
+        }
+    }
 }

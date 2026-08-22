@@ -1,4 +1,9 @@
-@product
+# Spark exposes `product` only through the DataFrame API (`pyspark.sql.functions.product`);
+# `SELECT product(...)` raises `UNRESOLVED_ROUTINE` on JVM Spark. Sail additionally registers
+# it as a SQL aggregate and window function, so the SQL form below is Sail-only.
+# The DataFrame form runs against both engines in `function/test_product.py`.
+# When Spark registers the SQL routine, drop `@sail-only` and delete `test_product.py`.
+@sail-only
 Feature: product returns the multiplicative product of all non-null input values
 
   Rule: product multiplies non-null values

@@ -5,17 +5,24 @@ use datafusion::common::{DataFusionError, Result, internal_datafusion_err, inter
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::{ExecutionPlan, execute_stream};
 use datafusion::prelude::SessionContext;
-use sail_common_datafusion::session::job::{JobRunner, JobRunnerHistory};
-use sail_common_datafusion::system::observable::{JobRunnerObserver, Observer, StateObservable};
-use sail_server::actor::ActorSystem;
+use sail_common::actor::ActorSystem;
+use sail_common_datafusion::session::job::JobRunner;
 use sail_telemetry::telemetry::global_metrics;
 use sail_telemetry::{TracingExecOptions, trace_execution_plan};
-use tokio::sync::mpsc::error::SendError;
 use tokio::sync::oneshot;
 
-use crate::driver::{DriverActor, DriverEvent, DriverHandle, DriverOptions};
+use crate::driver::{DriverActor, DriverComponents, DriverHandle, DriverMessage, DriverOptions};
 use crate::job_graph::{JobGraph, JobGraphOptions};
 use crate::shuffle::ShuffleBackendKind;
+
+fn explain_job_graph(
+    plan: Arc<dyn ExecutionPlan>,
+    shuffle_backend: ShuffleBackendKind,
+) -> Result<String> {
+    JobGraph::try_new(plan, JobGraphOptions { shuffle_backend })
+        .map(|graph| graph.to_string())
+        .map_err(|e| DataFusionError::External(Box::new(e)))
+}
 
 pub struct LocalJobRunner {
     next_job_id: AtomicU64,
@@ -38,14 +45,11 @@ impl Default for LocalJobRunner {
 }
 
 #[tonic::async_trait]
-impl StateObservable<JobRunnerObserver> for LocalJobRunner {
-    async fn observe(&self, observer: JobRunnerObserver) {
-        observer.nothing()
-    }
-}
-
-#[tonic::async_trait]
 impl JobRunner for LocalJobRunner {
+    fn explain(&self, plan: Arc<dyn ExecutionPlan>) -> Result<String> {
+        explain_job_graph(plan, ShuffleBackendKind::Flight)
+    }
+
     async fn execute(
         &self,
         ctx: &SessionContext,
@@ -66,14 +70,8 @@ impl JobRunner for LocalJobRunner {
         Ok(execute_stream(plan, ctx.task_ctx())?)
     }
 
-    async fn stop(&self, history: oneshot::Sender<JobRunnerHistory>) {
+    async fn stop(&self) {
         self.stopped.store(true, Ordering::Relaxed);
-        let _ = history.send(JobRunnerHistory {
-            jobs: vec![],
-            stages: vec![],
-            tasks: vec![],
-            workers: vec![],
-        });
     }
 }
 
@@ -83,9 +81,13 @@ pub struct ClusterJobRunner {
 }
 
 impl ClusterJobRunner {
-    pub fn new(system: &mut ActorSystem, options: DriverOptions) -> Self {
+    pub fn new(
+        system: &mut ActorSystem,
+        options: DriverOptions,
+        components: DriverComponents,
+    ) -> Self {
         let shuffle_backend = options.shuffle_backend.clone();
-        let driver = DriverHandle::new(system.spawn::<DriverActor>(options));
+        let driver = DriverHandle::new(system.spawn::<DriverActor>((options, components)));
         Self {
             driver,
             shuffle_backend,
@@ -98,34 +100,9 @@ impl ClusterJobRunner {
 }
 
 #[tonic::async_trait]
-impl StateObservable<JobRunnerObserver> for ClusterJobRunner {
-    async fn observe(&self, observer: JobRunnerObserver) {
-        let result = self
-            .driver
-            .send(DriverEvent::ObserveState { observer })
-            .await;
-        if let Err(SendError(DriverEvent::ObserveState { observer })) = result {
-            observer.fail(internal_datafusion_err!(
-                "failed to observe state for cluster job runner"
-            ));
-        }
-    }
-}
-
-#[tonic::async_trait]
 impl JobRunner for ClusterJobRunner {
-    fn explain(&self, plan: Arc<dyn ExecutionPlan>) -> Result<Option<String>> {
-        JobGraph::try_new(
-            plan,
-            JobGraphOptions {
-                use_blocking_shuffle: matches!(
-                    &self.shuffle_backend,
-                    ShuffleBackendKind::Storage { .. }
-                ),
-            },
-        )
-        .map(|graph| Some(graph.to_string()))
-        .map_err(|e| DataFusionError::External(Box::new(e)))
+    fn explain(&self, plan: Arc<dyn ExecutionPlan>) -> Result<String> {
+        explain_job_graph(plan, self.shuffle_backend.clone())
     }
 
     /// Executes a plan on the cluster. This is where the cool stuff happens.
@@ -136,7 +113,7 @@ impl JobRunner for ClusterJobRunner {
     ) -> Result<SendableRecordBatchStream> {
         let (tx, rx) = oneshot::channel();
         self.driver
-            .send(DriverEvent::ExecuteJob {
+            .send(DriverMessage::ExecuteJob {
                 plan,
                 context: ctx.task_ctx(),
                 result: tx,
@@ -148,12 +125,7 @@ impl JobRunner for ClusterJobRunner {
             .map_err(|e| internal_datafusion_err!("{e}"))
     }
 
-    async fn stop(&self, history: oneshot::Sender<JobRunnerHistory>) {
-        let _ = self
-            .driver
-            .send(DriverEvent::Shutdown {
-                history: Some(history),
-            })
-            .await;
+    async fn stop(&self) {
+        let _ = self.driver.shutdown_and_wait().await;
     }
 }

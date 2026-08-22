@@ -43,6 +43,8 @@ data:
     - columnMapping
     writerFeatures:
     - columnMapping
+    - appendOnly
+    - invariants
 ---
 name: "test_create_table_with_column_mapping_id_mode_ddl_and_first_write_materializes_mapping"
 data:
@@ -86,6 +88,8 @@ data:
     - columnMapping
     writerFeatures:
     - columnMapping
+    - appendOnly
+    - invariants
 ---
 name: "test_create_table_with_column_mapping_name_mode_ddl_and_first_write_materializes_mapping"
 data:
@@ -129,6 +133,8 @@ data:
     - columnMapping
     writerFeatures:
     - columnMapping
+    - appendOnly
+    - invariants
 ---
 name: "test_create_table_with_nested_struct_in_column_mapping_name_mode_ddl"
 data:
@@ -189,3 +195,112 @@ data:
     - columnMapping
     writerFeatures:
     - columnMapping
+    - appendOnly
+    - invariants
+---
+name: "test_mergeschema_allocates_a_new_id_after_array_of_array_of_struct"
+data:
+  metaData:
+    configuration:
+      delta.columnMapping.maxColumnId: '3'
+      delta.columnMapping.mode: name
+    createdTime: <created_time>
+    description: null
+    format:
+      options: {}
+      provider: parquet
+    id: <table_id>
+    name: null
+    partitionColumns: []
+    schemaString:
+      fields:
+      - metadata:
+          delta.columnMapping.id: 1
+          delta.columnMapping.physicalName: <physical_name_0>
+        name: matrix
+        nullable: true
+        type:
+          containsNull: true
+          elementType:
+            containsNull: true
+            elementType:
+              fields:
+              - metadata:
+                  delta.columnMapping.id: 2
+                  delta.columnMapping.physicalName: <physical_name_0.0>
+                name: value
+                nullable: true
+                type: long
+              type: struct
+            type: array
+          type: array
+      - metadata:
+          delta.columnMapping.id: 3
+          delta.columnMapping.physicalName: <physical_name_1>
+        name: label
+        nullable: false
+        type: string
+      type: struct
+  protocol:
+    minReaderVersion: 3
+    minWriterVersion: 7
+    readerFeatures:
+    - columnMapping
+    writerFeatures:
+    - columnMapping
+    - appendOnly
+    - invariants
+---
+name: "test_writing_a_scalar_idmapped_table_strips_physical_read_metadata"
+data:
+  metaData:
+    configuration: {}
+    createdTime: <created_time>
+    description: null
+    format:
+      options: {}
+      provider: parquet
+    id: <table_id>
+    name: null
+    partitionColumns: []
+    schemaString:
+      fields:
+      - metadata: {}
+        name: id
+        nullable: true
+        type: long
+      - metadata: {}
+        name: label
+        nullable: true
+        type: string
+      type: struct
+  protocol:
+    minReaderVersion: 1
+    minWriterVersion: 2
+---
+name: "test_writing_a_scalar_namemapped_table_strips_physical_read_metadata"
+data:
+  metaData:
+    configuration: {}
+    createdTime: <created_time>
+    description: null
+    format:
+      options: {}
+      provider: parquet
+    id: <table_id>
+    name: null
+    partitionColumns: []
+    schemaString:
+      fields:
+      - metadata: {}
+        name: id
+        nullable: true
+        type: long
+      - metadata: {}
+        name: label
+        nullable: true
+        type: string
+      type: struct
+  protocol:
+    minReaderVersion: 1
+    minWriterVersion: 2

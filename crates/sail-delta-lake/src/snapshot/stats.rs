@@ -26,7 +26,6 @@ use arrow_schema::DataType as ArrowDataType;
 use datafusion::arrow::array::{
     Array, ArrayRef, BooleanArray, Int64Array, RecordBatch, StringArray, StructArray, UInt64Array,
 };
-use datafusion::arrow::compute::sum;
 use datafusion::common::scalar::ScalarValue;
 use datafusion::common::{Column, DataFusionError};
 use datafusion::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
@@ -35,11 +34,14 @@ use datafusion::physical_plan::Accumulator;
 use log::warn;
 
 use super::DeltaSnapshot;
+use crate::datasource::pruning::{
+    arrow_type_contains_timestamp, widen_timestamp_max_scalar, widen_timestamp_max_stat,
+};
 use crate::schema::arrow_field_physical_name;
 use crate::spec::fields::{
-    FIELD_NAME_PARTITION_VALUES_PARSED, FIELD_NAME_SIZE, FIELD_NAME_STATS_PARSED,
-    STATS_FIELD_MAX_VALUES, STATS_FIELD_MIN_VALUES, STATS_FIELD_NULL_COUNT,
-    STATS_FIELD_NUM_RECORDS,
+    DV_FIELD_CARDINALITY, FIELD_NAME_DELETION_VECTOR, FIELD_NAME_PARTITION_VALUES_PARSED,
+    FIELD_NAME_SIZE, FIELD_NAME_STATS_PARSED, STATS_FIELD_MAX_VALUES, STATS_FIELD_MIN_VALUES,
+    STATS_FIELD_NULL_COUNT, STATS_FIELD_NUM_RECORDS, STATS_FIELD_TIGHT_BOUNDS,
 };
 use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
 
@@ -47,6 +49,13 @@ use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
 enum AccumulatorType {
     Min,
     Max,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FileRowCounts {
+    physical: usize,
+    logical: usize,
+    wide_bounds: bool,
 }
 
 // TODO validate this works with "wide and narrow" builds / stats
@@ -70,17 +79,20 @@ pub struct SnapshotPruningStats<'a> {
     snapshot: &'a DeltaSnapshot,
     sizes: &'a Int64Array,
     stats: &'a StructArray,
+    file_row_counts: Option<Arc<[FileRowCounts]>>,
 }
 
 impl<'a> SnapshotPruningStats<'a> {
     pub(crate) fn try_new(data: &'a RecordBatch, snapshot: &'a DeltaSnapshot) -> DeltaResult<Self> {
         let sizes = batch_column::<Int64Array>(data, FIELD_NAME_SIZE)?;
         let stats = batch_column::<StructArray>(data, FIELD_NAME_STATS_PARSED)?;
+        let file_row_counts = Self::build_file_row_counts(data, stats);
         Ok(Self {
             data,
             snapshot,
             sizes,
             stats,
+            file_row_counts,
         })
     }
 
@@ -89,28 +101,110 @@ impl<'a> SnapshotPruningStats<'a> {
         self.data.num_rows()
     }
 
-    fn collect_count(&self, name: &str) -> Precision<usize> {
-        let num_records = nested_struct_column_exact_or_path(self.stats, name)
-            .and_then(|col| col.as_any().downcast_ref::<Int64Array>());
-        if let Some(num_records) = num_records {
-            if num_records.is_empty() {
-                Precision::Exact(0)
-            } else if let Some(null_count_mulls) = num_records.nulls() {
-                if null_count_mulls.null_count() > 0 {
-                    Precision::Absent
-                } else {
-                    sum(num_records)
-                        .map(|s| Precision::Exact(s as usize))
-                        .unwrap_or(Precision::Absent)
-                }
-            } else {
-                sum(num_records)
-                    .map(|s| Precision::Exact(s as usize))
-                    .unwrap_or(Precision::Absent)
-            }
-        } else {
-            Precision::Absent
+    fn build_file_row_counts(
+        data: &RecordBatch,
+        stats: &StructArray,
+    ) -> Option<Arc<[FileRowCounts]>> {
+        // Delta numRecords remains the physical Parquet row count when a DV is present. Logical
+        // output rows subtract the DV cardinality, while wide column stats still describe the
+        // physical rows, so retain both counts.
+        let physical_rows = nested_struct_column_exact_or_path(stats, STATS_FIELD_NUM_RECORDS)?
+            .as_any()
+            .downcast_ref::<Int64Array>()?;
+        if physical_rows.len() != data.num_rows() {
+            return None;
         }
+
+        let deletion_vectors = data
+            .column_by_name(FIELD_NAME_DELETION_VECTOR)
+            .and_then(|column| column.as_any().downcast_ref::<StructArray>());
+        let cardinalities = deletion_vectors.and_then(|vectors| {
+            vectors
+                .column_by_name(DV_FIELD_CARDINALITY)
+                .and_then(|column| column.as_any().downcast_ref::<Int64Array>())
+        });
+        let tight_bounds = nested_struct_column_exact_or_path(stats, STATS_FIELD_TIGHT_BOUNDS)
+            .and_then(|column| column.as_any().downcast_ref::<BooleanArray>());
+
+        (0..physical_rows.len())
+            .map(|row| {
+                if physical_rows.is_null(row) {
+                    return None;
+                }
+                let physical = usize::try_from(physical_rows.value(row)).ok()?;
+                let has_deletion_vector = deletion_vectors
+                    .is_some_and(|vectors| row < vectors.len() && !vectors.is_null(row));
+                let deleted = if has_deletion_vector {
+                    let cardinalities = cardinalities?;
+                    if row >= cardinalities.len() || cardinalities.is_null(row) {
+                        return None;
+                    }
+                    usize::try_from(cardinalities.value(row)).ok()?
+                } else {
+                    0
+                };
+                let logical = physical.checked_sub(deleted)?;
+                let tight = tight_bounds
+                    .filter(|bounds| row < bounds.len() && !bounds.is_null(row))
+                    .is_none_or(|bounds| bounds.value(row));
+                Some(FileRowCounts {
+                    physical,
+                    logical,
+                    wide_bounds: !tight,
+                })
+            })
+            .collect::<Option<Vec<_>>>()
+            .map(Arc::from)
+    }
+
+    fn file_row_counts(&self) -> Option<&[FileRowCounts]> {
+        self.file_row_counts.as_deref()
+    }
+
+    fn column_null_count(&self, name: &str) -> Precision<usize> {
+        let Some(null_counts) = nested_struct_column_exact_or_path(self.stats, name)
+            .and_then(|column| column.as_any().downcast_ref::<Int64Array>())
+        else {
+            return Precision::Absent;
+        };
+        let Some(file_rows) = self.file_row_counts() else {
+            return Precision::Absent;
+        };
+        if null_counts.len() != file_rows.len() {
+            return Precision::Absent;
+        }
+
+        let mut total = 0usize;
+        for (row, counts) in file_rows.iter().copied().enumerate() {
+            if null_counts.is_null(row) {
+                return Precision::Absent;
+            }
+            let Ok(physical_nulls) = usize::try_from(null_counts.value(row)) else {
+                return Precision::Absent;
+            };
+            let maximum_nulls = if counts.wide_bounds {
+                counts.physical
+            } else {
+                counts.logical
+            };
+            if physical_nulls > maximum_nulls {
+                return Precision::Absent;
+            }
+            let logical_nulls = if !counts.wide_bounds {
+                physical_nulls
+            } else if physical_nulls == 0 {
+                0
+            } else if physical_nulls == counts.physical {
+                counts.logical
+            } else {
+                return Precision::Absent;
+            };
+            let Some(next) = total.checked_add(logical_nulls) else {
+                return Precision::Absent;
+            };
+            total = next;
+        }
+        Precision::Exact(total)
     }
 
     fn column_bounds(
@@ -126,6 +220,46 @@ impl<'a> SnapshotPruningStats<'a> {
         let array_ref = array.as_ref();
 
         if array_ref.data_type().is_primitive() {
+            let Some(file_rows) = self.file_row_counts() else {
+                return Precision::Absent;
+            };
+            if array_ref.len() != file_rows.len() {
+                return Precision::Absent;
+            }
+            let null_counts = nested_column(self.stats, STATS_FIELD_NULL_COUNT, name)
+                .ok()
+                .and_then(|column| column.as_any().downcast_ref::<Int64Array>());
+            for (row, counts) in file_rows.iter().copied().enumerate() {
+                if counts.logical == 0 || !array_ref.is_null(row) {
+                    continue;
+                }
+                let Some(null_counts) = null_counts else {
+                    return Precision::Absent;
+                };
+                if row >= null_counts.len() || null_counts.is_null(row) {
+                    return Precision::Absent;
+                }
+                let Ok(physical_nulls) = usize::try_from(null_counts.value(row)) else {
+                    return Precision::Absent;
+                };
+                let maximum_nulls = if counts.wide_bounds {
+                    counts.physical
+                } else {
+                    counts.logical
+                };
+                if physical_nulls > maximum_nulls {
+                    return Precision::Absent;
+                }
+                let all_logical_rows_are_null = if counts.wide_bounds {
+                    physical_nulls == counts.physical
+                } else {
+                    physical_nulls == counts.logical
+                };
+                if !all_logical_rows_are_null {
+                    return Precision::Absent;
+                }
+            }
+
             let accumulator: Option<Box<dyn Accumulator>> = match fun_type {
                 AccumulatorType::Min => MinAccumulator::try_new(array_ref.data_type())
                     .map_or(None, |a| Some(Box::new(a))),
@@ -174,25 +308,42 @@ impl<'a> SnapshotPruningStats<'a> {
     }
 
     fn num_records(&self) -> Precision<usize> {
-        self.collect_count(STATS_FIELD_NUM_RECORDS)
+        let Some(file_rows) = self.file_row_counts() else {
+            return Precision::Absent;
+        };
+        file_rows
+            .iter()
+            .try_fold(0usize, |total, counts| total.checked_add(counts.logical))
+            .map(Precision::Exact)
+            .unwrap_or(Precision::Absent)
     }
 
     fn total_size_files(&self) -> Precision<usize> {
-        let size = self
-            .sizes
+        self.sizes
             .iter()
-            .flat_map(|s| s.map(|s| s as usize))
-            .sum::<usize>();
-        Precision::Inexact(size)
+            .try_fold(0usize, |total, size| {
+                total.checked_add(usize::try_from(size?).ok()?)
+            })
+            .map(Precision::Inexact)
+            .unwrap_or(Precision::Absent)
     }
 
     fn build_column_stats(&self, name: impl AsRef<str>) -> DeltaResult<ColumnStatistics> {
-        let null_count_col = format!("{STATS_FIELD_NULL_COUNT}.{}", name.as_ref());
-        let null_count = self.collect_count(&null_count_col);
+        let name = name.as_ref();
+        let stats_name = self
+            .snapshot
+            .schema()
+            .field_with_name(name)
+            .map(|field| {
+                arrow_field_physical_name(field, self.snapshot.effective_column_mapping_mode())
+            })
+            .unwrap_or(name);
+        let null_count_col = format!("{STATS_FIELD_NULL_COUNT}.{stats_name}");
+        let null_count = self.column_null_count(&null_count_col);
 
         let min_value =
-            self.column_bounds(STATS_FIELD_MIN_VALUES, name.as_ref(), AccumulatorType::Min);
-        let min_value = match &min_value {
+            self.column_bounds(STATS_FIELD_MIN_VALUES, stats_name, AccumulatorType::Min);
+        let mut min_value = match &min_value {
             Precision::Exact(value) if value.is_null() => Precision::Absent,
             // TODO this is a hack, we should not be casting here but rather when we read the checkpoint data.
             // it seems sometimes the min/max values are stored as nanoseconds and sometimes as microseconds?
@@ -203,14 +354,37 @@ impl<'a> SnapshotPruningStats<'a> {
         };
 
         let max_value =
-            self.column_bounds(STATS_FIELD_MAX_VALUES, name.as_ref(), AccumulatorType::Max);
-        let max_value = match &max_value {
+            self.column_bounds(STATS_FIELD_MAX_VALUES, stats_name, AccumulatorType::Max);
+        let mut max_value = match &max_value {
             Precision::Exact(value) if value.is_null() => Precision::Absent,
             Precision::Exact(ScalarValue::TimestampNanosecond(a, b)) => Precision::Exact(
                 ScalarValue::TimestampMicrosecond(a.map(|v| v / 1000), b.clone()),
             ),
             _ => max_value,
         };
+
+        let is_partition = self
+            .snapshot
+            .metadata()
+            .partition_columns()
+            .iter()
+            .any(|partition| partition == name);
+        let has_wide_bounds = self
+            .file_row_counts()
+            .is_none_or(|rows| rows.iter().any(|counts| counts.wide_bounds));
+        if !is_partition && has_wide_bounds {
+            min_value = min_value.to_inexact();
+            max_value = max_value.to_inexact();
+        }
+        let contains_timestamp = self
+            .snapshot
+            .schema()
+            .field_with_name(name)
+            .is_ok_and(|field| arrow_type_contains_timestamp(field.data_type()));
+        if !is_partition && contains_timestamp {
+            min_value = min_value.to_inexact();
+            max_value = max_value.map(widen_timestamp_max_scalar).to_inexact();
+        }
 
         Ok(ColumnStatistics {
             null_count,
@@ -334,7 +508,17 @@ impl PruningStatistics for SnapshotPruningStats<'_> {
     /// return the maximum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows.
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        self.pick_stats(column, STATS_FIELD_MAX_VALUES)
+        let values = self.pick_stats(column, STATS_FIELD_MAX_VALUES)?;
+        if self
+            .snapshot
+            .metadata()
+            .partition_columns()
+            .contains(&column.name)
+        {
+            Some(values)
+        } else {
+            Some(widen_timestamp_max_stat(values))
+        }
     }
 
     /// return the number of containers (e.g. row groups) being

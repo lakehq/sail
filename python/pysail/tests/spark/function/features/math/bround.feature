@@ -1,4 +1,3 @@
-@bround
 Feature: bround comprehensive tests
   # bround = banker's rounding (round-half-to-even). The scenarios below use
   # explicit CAST to DOUBLE/FLOAT/INT/BIGINT so they exercise the vectorized
@@ -40,39 +39,6 @@ Feature: bround comprehensive tests
         | case                       | v    | result |
         | bround DOUBLE 1.25 scale 1 | 1.25 | 1.2    |
         | bround DOUBLE 1.35 scale 1 | 1.35 | 1.4    |
-
-  # FIXME: The type mismatch assertion is only active in debug builds,
-  #   so the following tests would fail with XPASS in release builds.
-  #
-  #   Rule: Float32 path
-  #     # Pre-existing bug (NOT caused by the binary-kernel perf refactor, which
-  #     # preserves the Float32Array output). `return_type` maps a FLOAT/Float32
-  #     # input to Float64, but the Float32 execution branch yields a Float32Array,
-  #     # so execution fails with a planning-vs-runtime type mismatch
-  #     # ("type 'Float32' ... expected: 'Float64'"). Spark returns FLOAT here.
-  #     # Fix path (separate PR): make return_type return Float32 for Float32 input
-  #     # (or coerce the arg/result to Float64). Kept perf-only in this PR.
-  #
-  #     @sail-bug
-  #     Scenario: bround FLOAT 2.5 rounds to even
-  #       When query
-  #         """
-  #         SELECT bround(CAST(2.5 AS FLOAT), 0) AS result
-  #         """
-  #       Then query result
-  #         | result |
-  #         | 2.0    |
-  #
-  #     @sail-bug
-  #     Scenario: bround FLOAT 3.5 rounds to even
-  #       When query
-  #         """
-  #         SELECT bround(CAST(3.5 AS FLOAT), 0) AS result
-  #         """
-  #       Then query result
-  #         | result |
-  #         | 4.0    |
-  #
 
   Rule: Integer paths with negative scale preserve input type
 
@@ -200,10 +166,16 @@ Feature: bround comprehensive tests
         | -2.0      |
 
     @sail-bug
-    # Same pre-existing Float32 return_type mismatch as the "Float32 path" rule
-    # above (Float32 branch yields Float32Array while return_type promises
-    # Float64). The special-value semantics themselves match Spark. Fix in the
-    # separate return_type PR; kept perf-only here.
+    # Pre-existing Float32 mismatch: `return_field_from_args` promises Float64
+    # (spark_bround.rs:69-72) while the Float32 branch yields a Float32Array
+    # (spark_bround.rs:141-148). The special-value semantics themselves match Spark;
+    # the declared type is what diverges, asserted directly by "a FLOAT input keeps
+    # FLOAT" under `Rule: Output schema`.
+    # This scenario asserts VALUES, so unlike that one it executes: what makes it
+    # fail is the type check in datafusion-expr/src/udf.rs:277, which is
+    # `#[cfg(debug_assertions)]`. In a release build it may instead fail on Arrow's
+    # RecordBatch column-type validation, or not at all — and `@sail-bug` is
+    # xfail(strict=True), so an XPASS turns CI red. Not measured against release.
     Scenario: bround FLOAT column with NULL NaN and Infinity mix
       When query
         """
@@ -249,7 +221,7 @@ Feature: bround comprehensive tests
 
   Rule: bround — the argument must be foldable
 
-    @column_args
+    @function(columnargs)
     Scenario: bround with the argument as a literal
       When query
         """
@@ -261,7 +233,7 @@ Feature: bround comprehensive tests
 
     # Spark requires a foldable argument here; Sail accepts a column and returns
     # a value per row instead of raising.
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario Outline: Bround: <case>
       When query
         """
@@ -274,7 +246,7 @@ Feature: bround comprehensive tests
         | bround takes argument 2 from a column holding two different values | 0  |
         | bround takes argument 2 from a column                              | -1 |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug
@@ -309,4 +281,73 @@ Feature: bround comprehensive tests
         """
         root
          |-- result: double (nullable = true)
+        """
+
+    # `RoundBase.dataType = child.dataType`, with a precision/scale adjustment for decimals
+    # (mathExpressions.scala:1567-1584, `case t => t` at :1583). Spark inserts no cast for any
+    # of these: `inputTypes = Seq(NumericType, IntegerType)` (:1586) and `NumericType` accepts
+    # FLOAT, DECIMAL, TINYINT and SMALLINT directly.
+    #
+    # These assert the output data TYPE, not nullability, so they inherit
+    # `@function(nullability)` from this Rule without being about it — filed here deliberately
+    # rather than in a Rule of their own, because `Rule: Output schema` is where the declared
+    # field lives. Asserted on the schema rather than on a value because the declared type comes
+    # from `return_field_from_args` at plan time, so it is identical in debug and release; the
+    # runtime type check is debug-only (datafusion-expr/src/udf.rs:277).
+    #
+    # Two DIFFERENT Sail bugs are recorded below, despite the shared Rule:
+    #   - FLOAT and DECIMAL: the type is declared wrong (`Float64`, spark_bround.rs:69-72).
+    #   - TINYINT and SMALLINT: the input is REJECTED outright — `Int8`/`Int16` have no arm in
+    #     `return_field_from_args` and fall through to `unsupported_data_type_exec_err`. The
+    #     `coerce_types` that would widen them (spark_bround.rs:191) is dead code, because the
+    #     signature is `variadic_any` and DataFusion only consults `coerce_types` for
+    #     `TypeSignature::UserDefined`. So fixing type propagation alone will NOT turn these two
+    #     green, and `strict=True` will not flag the tags as outdated either.
+
+    @sail-bug
+    Scenario: a FLOAT input keeps FLOAT
+      When query
+        """
+        SELECT bround(v, 0) AS result FROM VALUES (CAST(2.5 AS FLOAT)) AS t(v)
+        """
+      Then query schema
+        """
+        root
+         |-- result: float (nullable = true)
+        """
+
+    @sail-bug
+    Scenario: a DECIMAL input keeps an adjusted DECIMAL
+      When query
+        """
+        SELECT bround(v, 2) AS result FROM VALUES (CAST(1.005 AS DECIMAL(10,3))) AS t(v)
+        """
+      Then query schema
+        """
+        root
+         |-- result: decimal(10,2) (nullable = true)
+        """
+
+    @sail-bug
+    Scenario: a TINYINT input keeps TINYINT
+      When query
+        """
+        SELECT bround(v, 0) AS result FROM VALUES (CAST(1 AS TINYINT)) AS t(v)
+        """
+      Then query schema
+        """
+        root
+         |-- result: byte (nullable = true)
+        """
+
+    @sail-bug
+    Scenario: a SMALLINT input keeps SMALLINT
+      When query
+        """
+        SELECT bround(v, 0) AS result FROM VALUES (CAST(1 AS SMALLINT)) AS t(v)
+        """
+      Then query schema
+        """
+        root
+         |-- result: short (nullable = true)
         """

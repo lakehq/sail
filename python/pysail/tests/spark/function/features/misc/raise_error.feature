@@ -1,7 +1,6 @@
-@raise_error
 Feature: raise_error output schema
 
-  @spark_null @spark-4
+  @function(nullability) @spark-4
   Rule: Output schema
 
     Scenario: a non-null literal input to raise_error yields the schema Spark declares

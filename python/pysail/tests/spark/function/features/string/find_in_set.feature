@@ -1,7 +1,6 @@
-@find_in_set
 Feature: find_in_set output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

@@ -1,7 +1,6 @@
-@width_bucket
 Feature: width_bucket output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to width_bucket yields the schema Spark declares

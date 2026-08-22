@@ -25,17 +25,19 @@ use std::sync::Arc;
 use chrono::{DateTime, TimeZone, Utc};
 use datafusion::arrow::array::{
     Array, ArrayRef, BooleanArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
-    Int64Array, LargeStringArray, RecordBatch, StringArray, UInt8Array, UInt16Array, UInt32Array,
-    UInt64Array,
+    Int64Array, LargeStringArray, RecordBatch, StringArray, StructArray, UInt8Array, UInt16Array,
+    UInt32Array, UInt64Array,
 };
 use datafusion::arrow::compute::{CastOptions, cast, cast_with_options};
-use datafusion::arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
+use datafusion::arrow::datatypes::DataType as ArrowDataType;
 use datafusion::common::Result as DataFusionResult;
 use datafusion::common::scalar::ScalarValue;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use serde_json::Value;
 
-use crate::spec::{DeltaError as DeltaTableError, DeltaResult as DeltaResultLocal, StatValue};
+use crate::spec::{
+    ColumnValueStat, DeltaError as DeltaTableError, DeltaResult as DeltaResultLocal, StatValue,
+};
 
 pub const NULL_PARTITION_VALUE_DATA_PATH: &str = "__HIVE_DEFAULT_PARTITION__";
 
@@ -154,6 +156,41 @@ impl ScalarConverter {
             StatValue::Boolean(value) => Self::bool_to_arrow_scalar_value(*value, field_dt),
             StatValue::Number(value) => Self::number_to_arrow_scalar_value(value, field_dt),
             StatValue::String(value) => Self::string_json_to_arrow_scalar_value(value, field_dt),
+        }
+    }
+
+    pub(crate) fn column_value_stat_to_arrow_scalar_value(
+        column_stat: &ColumnValueStat,
+        field_dt: &ArrowDataType,
+    ) -> DataFusionResult<Option<ScalarValue>> {
+        match (column_stat, field_dt) {
+            (ColumnValueStat::Value(value), _) => {
+                Self::stat_value_to_arrow_scalar_value(value, field_dt)
+            }
+            (ColumnValueStat::Column(values), ArrowDataType::Struct(fields)) => {
+                let arrays = fields
+                    .iter()
+                    .map(|field| {
+                        let scalar = match values.get(field.name()) {
+                            Some(value) => match Self::column_value_stat_to_arrow_scalar_value(
+                                value,
+                                field.data_type(),
+                            )? {
+                                Some(scalar) => scalar,
+                                None => ScalarValue::try_new_null(field.data_type())?,
+                            },
+                            None => ScalarValue::try_new_null(field.data_type())?,
+                        };
+                        scalar.to_array_of_size(1)
+                    })
+                    .collect::<DataFusionResult<Vec<_>>>()?;
+                Ok(Some(ScalarValue::Struct(Arc::new(StructArray::new(
+                    fields.clone(),
+                    arrays,
+                    None,
+                )))))
+            }
+            _ => Ok(None),
         }
     }
 
@@ -309,19 +346,7 @@ impl ScalarConverter {
         timestamp_str: &str,
         field_dt: &ArrowDataType,
     ) -> DataFusionResult<ScalarValue> {
-        let time_micro = ScalarValue::try_from_string(
-            timestamp_str.to_string(),
-            &ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
-        )?;
-        let cast_arr = cast_with_options(
-            &time_micro.to_array()?,
-            field_dt,
-            &CastOptions {
-                safe: false,
-                ..Default::default()
-            },
-        )?;
-        ScalarValue::try_from_array(&cast_arr, 0)
+        ScalarValue::try_from_string(timestamp_str.to_string(), field_dt)
     }
 }
 

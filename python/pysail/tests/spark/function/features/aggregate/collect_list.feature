@@ -1,4 +1,3 @@
-@collect_list @collect_set
 Feature: collect_list / collect_set
 
   collect_list gathers all values of a group into an array (order and duplicates preserved);
@@ -134,10 +133,11 @@ Feature: collect_list / collect_set
 
   Rule: collect_set float equality diverges from Spark
 
-    # Spark's collect_set never treats two NaNs as equal, so duplicate NaNs are all kept.
-    # Sail (DataFusion's distinct array_agg) deduplicates NaN, dropping the repeat -> divergence.
-    @sail-bug
-    Scenario: collect_set keeps duplicate NaN values
+    # Spark 4.2 deduplicates NaN against NaN and keeps a single one, matching Sail and its own
+    # documented contract ("eliminating duplicates"). Measured: 4.0.1 and 4.1.1 both return
+    # `[1.0, NaN, NaN]`, so this is gated on 4.2 rather than asserted for every matrix version.
+    @spark-4.2
+    Scenario: collect_set deduplicates NaN values
       When query
         """
         SELECT sort_array(collect_set(v)) AS r FROM VALUES
@@ -145,8 +145,8 @@ Feature: collect_list / collect_set
         AS t(v)
         """
       Then query result
-        | r               |
-        | [1.0, NaN, NaN] |
+        | r          |
+        | [1.0, NaN] |
 
     # Spark's collect_set treats -0.0 and 0.0 as equal and keeps a single 0.0. Sail keeps both
     # -> divergence.

@@ -29,6 +29,45 @@ Feature: Delta Lake read path (driver vs metadata-as-data)
         """
       Then query plan matches snapshot
 
+  Rule: EXPLAIN shows timestamp schema adaptation inside the driver file scan
+    Background:
+      Given variable location for temporary directory delta_read_driver_timestamp
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_read_driver_timestamp_path
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_read_driver_timestamp_path (
+          id INT,
+          event_time TIMESTAMP
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_read_driver_timestamp_path
+        VALUES (1, TIMESTAMP '2024-05-01 12:00:00')
+        """
+
+    Scenario: EXPLAIN SELECT with timestamp uses the standard driver file scan
+      When query
+        """
+        EXPLAIN SELECT * FROM delta_read_driver_timestamp_path
+        """
+      Then query plan matches snapshot
+
+    Scenario: SELECT with timestamp preserves the session-local value
+      When query
+        """
+        SELECT id, CAST(event_time AS STRING) AS event_time
+        FROM delta_read_driver_timestamp_path
+        """
+      Then query result ordered
+        | id | event_time          |
+        | 1  | 2024-05-01 12:00:00 |
+
   Rule: EXPLAIN shows metadata-as-data path when table has metadataAsDataRead option
     Background:
       Given variable location for temporary directory delta_read_metadata
@@ -38,24 +77,43 @@ Feature: Delta Lake read path (driver vs metadata-as-data)
         """
       Given statement template
         """
-        CREATE TABLE delta_read_metadata_path (
-          id INT,
-          name STRING,
-          value INT
-        )
+        CREATE TABLE delta_read_metadata_path
         USING DELTA LOCATION {{ location.sql }}
         OPTIONS (metadataAsDataRead 'true')
-        """
-      Given statement
-        """
-        INSERT INTO delta_read_metadata_path
-        SELECT * FROM VALUES (1, 'a', 10), (2, 'b', 20)
+        AS SELECT * FROM VALUES
+          (1, 'a', 10),
+          (2, 'b', 20)
+        AS t(id, name, value)
         """
 
     Scenario: EXPLAIN SELECT with metadataAsDataRead true uses discovery and log replay
       When query
         """
         EXPLAIN SELECT * FROM delta_read_metadata_path
+        """
+      Then query plan matches snapshot
+
+    Scenario: Metadata pruning does not assume arbitrary casts preserve bounds
+      Given statement
+        """
+        INSERT INTO delta_read_metadata_path VALUES (3, 'c', 2), (4, 'd', 10)
+        """
+      When query
+        """
+        SELECT id
+        FROM delta_read_metadata_path
+        WHERE CAST(value AS STRING) < '2'
+        ORDER BY id
+        """
+      Then query result ordered
+        | id |
+        | 1  |
+        | 4  |
+
+    Scenario: EXPLAIN CODEGEN shows the distributed metadata replay stages
+      When query
+        """
+        EXPLAIN CODEGEN SELECT * FROM delta_read_metadata_path
         """
       Then query plan matches snapshot
 
@@ -170,3 +228,48 @@ Feature: Delta Lake read path (driver vs metadata-as-data)
         | 2  | b    | 20    |
         | 3  | c    | 30    |
         | 4  | d    | 40    |
+
+  Rule: COUNT(1) uses exact Delta row-count metadata but scans CSV data
+    Background:
+      Given variable delta_count_location for temporary directory delta_count_metadata_only
+      Given variable csv_count_location for temporary directory csv_count_scan
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_count_metadata_only
+        """
+      Given final statement
+        """
+        DROP TABLE IF EXISTS csv_count_scan
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_count_metadata_only (id INT)
+        USING DELTA LOCATION {{ delta_count_location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_count_metadata_only VALUES (1), (2), (3)
+        """
+      Given statement template
+        """
+        CREATE TABLE csv_count_scan (id INT)
+        USING CSV LOCATION {{ csv_count_location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO csv_count_scan VALUES (1), (2), (3)
+        """
+
+    Scenario: EXPLAIN COUNT(1) on Delta replaces the data scan with metadata
+      When query
+        """
+        EXPLAIN SELECT COUNT(1) AS cnt FROM delta_count_metadata_only
+        """
+      Then query plan matches snapshot
+
+    Scenario: EXPLAIN COUNT(1) on CSV retains the file scan
+      When query
+        """
+        EXPLAIN SELECT COUNT(1) AS cnt FROM csv_count_scan
+        """
+      Then query plan matches snapshot

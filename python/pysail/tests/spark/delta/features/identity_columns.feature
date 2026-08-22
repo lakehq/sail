@@ -40,7 +40,7 @@ Feature: Delta Lake Identity Columns
       Then delta log first commit protocol and metadata contains
         | path                                                                  | value               |
         | protocol.minWriterVersion                                             | 7                   |
-        | protocol.writerFeatures                                               | ["identityColumns"] |
+        | protocol.writerFeatures                                               | ["identityColumns", "appendOnly", "invariants"] |
         | metaData.schemaString.fields[0].metadata["delta.identity.start"]      | 1                   |
         | metaData.schemaString.fields[0].metadata["delta.identity.step"]       | 1                   |
         | metaData.schemaString.fields[0].metadata["delta.identity.allowExplicitInsert"] | false       |

@@ -1,22 +1,27 @@
 use std::mem;
+use std::sync::Arc;
 
 use fastrace::Span;
 use fastrace::future::FutureExt;
 use log::info;
-use sail_server::actor::{Actor, ActorAction, ActorContext};
+use sail_celeborn::shuffle::{ShuffleClient, ShuffleClientActor, ShuffleClientOptions};
+use sail_common::actor::{Actor, ActorAction, ActorContext};
 
 use crate::driver::DriverClientSet;
 use crate::rpc::{ClientOptions, ServerMonitor};
-use crate::stream_manager::{StreamManager, StreamManagerOptions};
-use crate::task_runner::TaskRunner;
-use crate::worker::WorkerActor;
-use crate::worker::event::WorkerEvent;
-use crate::worker::options::WorkerOptions;
+use crate::shuffle::{ShuffleBackendKind, celeborn_application_id};
+use crate::stream::celeborn::{CelebornStreamManager, RemoteLifecycleManager};
+use crate::stream::local::LocalStreamManager;
+use crate::stream::storage::StorageStreamManager;
+use crate::task_runner::{
+    TaskRunnerActor, TaskRunnerComponents, TaskRunnerExtensions, TaskRunnerPlacement,
+};
 use crate::worker::peer_tracker::{PeerTracker, PeerTrackerOptions};
+use crate::worker::{WorkerActor, WorkerMessage, WorkerOptions};
 
 #[tonic::async_trait]
 impl Actor for WorkerActor {
-    type Message = WorkerEvent;
+    type Message = WorkerMessage;
     type Options = WorkerOptions;
 
     fn name() -> &'static str {
@@ -32,90 +37,96 @@ impl Actor for WorkerActor {
                 port: options.driver_port,
             },
         );
-        let peer_tracker = PeerTracker::new(PeerTrackerOptions::from(&options));
-        let stream_manager = StreamManager::new(StreamManagerOptions::from(&options));
         Self {
             options,
             server: ServerMonitor::new(),
             driver_client_set,
-            peer_tracker,
-            task_runner: TaskRunner::new(),
-            stream_manager,
-            sequence: 42,
+            task_runner: None,
         }
     }
 
     async fn start(&mut self, ctx: &mut ActorContext<Self>) {
+        let worker = ctx.handle().clone();
+        let local_streams = LocalStreamManager::new((&self.options).into());
+        let storage_streams = match &self.options.shuffle_backend {
+            ShuffleBackendKind::Storage {
+                path,
+                max_file_size,
+                compression,
+            } => Some(StorageStreamManager::new(
+                path.clone(),
+                self.options.session_id.clone(),
+                *max_file_size,
+                *compression,
+            )),
+            ShuffleBackendKind::Flight | ShuffleBackendKind::Celeborn { .. } => None,
+        };
+        let celeborn_streams = match &self.options.shuffle_backend {
+            ShuffleBackendKind::Celeborn { compression, .. } => {
+                let application_id = celeborn_application_id(&self.options.session_id);
+                let lifecycle_manager = Arc::new(RemoteLifecycleManager::new(
+                    self.driver_client_set.celeborn.clone(),
+                ));
+                let client = ShuffleClient::new(ctx.children_mut().spawn::<ShuffleClientActor>(
+                    ShuffleClientOptions::new(
+                        application_id,
+                        lifecycle_manager,
+                        self.options.shuffle_backend.celeborn_endpoint_resolver(),
+                        *compression,
+                    ),
+                ));
+                Some(CelebornStreamManager::new(client))
+            }
+            ShuffleBackendKind::Flight | ShuffleBackendKind::Storage { .. } => None,
+        };
+        let task_runner = ctx
+            .children_mut()
+            .spawn::<TaskRunnerActor>(TaskRunnerComponents {
+                extensions: TaskRunnerExtensions {
+                    local_streams,
+                    storage_streams,
+                    celeborn_streams,
+                },
+                placement: TaskRunnerPlacement::Worker {
+                    worker_id: self.options.worker_id,
+                    sequence: 42,
+                    driver: self.driver_client_set.clone(),
+                    worker,
+                    peers: PeerTracker::new(PeerTrackerOptions::from(&self.options)),
+                    retry_strategy: self.options.rpc_retry_strategy.clone(),
+                },
+            });
+        self.task_runner = Some(task_runner.clone());
         let addr = (
             self.options.worker_listen_host.clone(),
             self.options.worker_listen_port,
         );
         let server = mem::take(&mut self.server);
         let span = Span::enter_with_local_parent("WorkerActor::serve");
+        let task_context = self.options.session.task_ctx();
         self.server = server
-            .start(Self::serve(ctx.handle().clone(), addr).in_span(span))
+            .start(Self::serve(ctx.handle().clone(), task_runner, task_context, addr).in_span(span))
             .await;
     }
 
     fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
         match message {
-            WorkerEvent::ServerReady { port, signal } => {
+            WorkerMessage::ServerReady { port, signal } => {
                 self.handle_server_ready(ctx, port, signal)
             }
-            WorkerEvent::StartHeartbeat => self.handle_start_heartbeat(ctx),
-            WorkerEvent::ReportKnownPeers { peer_worker_ids } => {
-                self.handle_report_known_peers(ctx, peer_worker_ids)
-            }
-            WorkerEvent::RunTask {
-                key,
-                definition,
-                peers,
-            } => self.handle_run_task(ctx, key, definition, peers),
-            WorkerEvent::StopTask { key } => self.handle_stop_task(ctx, key),
-            WorkerEvent::ReportTaskStatus {
-                key,
-                status,
-                message,
-                cause,
-            } => self.handle_report_task_status(ctx, key, status, message, cause),
-            WorkerEvent::ProbePendingLocalStream { key } => {
-                self.handle_probe_pending_local_stream(ctx, key)
-            }
-            WorkerEvent::CreateLocalStream {
-                key,
-                storage,
-                schema,
-                result,
-            } => self.handle_create_local_stream(ctx, key, storage, schema, result),
-            WorkerEvent::CreateRemoteStream {
-                key,
-                schema,
-                context,
-                result,
-            } => self.handle_create_remote_stream(ctx, key, schema, context, result),
-            WorkerEvent::FetchDriverStream {
-                key,
-                schema,
-                result,
-            } => self.handle_fetch_driver_stream(ctx, key, schema, result),
-            WorkerEvent::FetchWorkerStream { owner, key, result } => {
-                self.handle_fetch_worker_stream(ctx, owner, key, result)
-            }
-            WorkerEvent::FetchRemoteStream {
-                key,
-                schema,
-                context,
-                result,
-            } => self.handle_fetch_remote_stream(ctx, key, schema, context, result),
-            WorkerEvent::CleanUpJob { job_id, stage } => {
-                self.handle_clean_up_job(ctx, job_id, stage)
-            }
-            WorkerEvent::Shutdown => ActorAction::Stop,
+            WorkerMessage::StartHeartbeat => self.handle_start_heartbeat(ctx),
+            WorkerMessage::Shutdown => ActorAction::Stop,
         }
     }
 
-    async fn stop(self, _ctx: &mut ActorContext<Self>) {
+    async fn stop(mut self, ctx: &mut ActorContext<Self>) {
+        if let Some(task_runner) = self.task_runner.take() {
+            let _ = task_runner
+                .send(crate::task_runner::TaskRunnerMessage::Shutdown)
+                .await;
+        }
         self.server.stop().await;
+        ctx.children_mut().join().await;
         info!("worker {} server has stopped", self.options.worker_id);
     }
 }

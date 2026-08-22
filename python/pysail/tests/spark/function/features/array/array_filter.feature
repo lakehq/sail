@@ -1,4 +1,4 @@
-@lambda_hof
+@function(lambda)
 Feature: array filter with lambda
 
   Rule: Filter array elements using lambda predicates
@@ -575,13 +575,6 @@ Feature: array filter with lambda
 
   Rule: Filter inside a join condition
 
-    # @sail-bug: a lambda that captures a column from the OTHER join side hits
-    # DataFusion's `join_proj_push_down` rule, which cannot rewrite through
-    # `LambdaExpr` ("unable to unwrap lambda from filter"). Fails in all modes;
-    # Spark returns the row. Likely an upstream DataFusion fix, not a Sail one.
-    # If the lambda does not capture the other side, the HOF is pushed below the
-    # join and works.
-    @sail-bug
     Scenario: Lambda capturing a column from the other join side
       When query
         """

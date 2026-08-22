@@ -1,4 +1,3 @@
-@regexp_extract
 Feature: regexp_extract() extracts regex capture groups from strings
 
   Rule: Basic extraction
@@ -55,7 +54,21 @@ Feature: regexp_extract() extracts regex capture groups from strings
         | regexp_extract with anchored pattern at beginning | '123abc' | '^(\\d+)' | 123    |
         | regexp_extract with anchored pattern at end       | 'abc123' | '(\\d+)$' | 123    |
 
-  @spark_null
+  Rule: Pattern from a column
+
+    Scenario: regexp_extract with the pattern supplied by a column
+      When query
+        """
+        SELECT regexp_extract(s, p, 1) AS result FROM VALUES ('a11b', '([0-9]+)'), ('a22b', '([0-9]+)'), ('a33b', '([a-z]+)'), ('a44b', CAST(NULL AS STRING)) AS t(s, p)
+        """
+      Then query result
+        | result |
+        | 11     |
+        | 22     |
+        | a      |
+        | NULL   |
+
+  @function(nullability)
   Rule: Output schema
 
     @sail-bug

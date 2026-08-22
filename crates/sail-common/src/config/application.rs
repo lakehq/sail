@@ -1,3 +1,6 @@
+use std::fmt::{Display, Formatter};
+use std::str::FromStr;
+
 use figment::providers::Env;
 use figment::value::{Dict, Empty, Map, Tag, Value};
 use figment::{Error, Figment, Metadata, Profile, Provider};
@@ -186,6 +189,8 @@ pub struct TemporaryFilesConfig {
 #[serde(deny_unknown_fields)]
 pub struct ClusterConfig {
     pub enable_tls: bool,
+    #[serde(skip_serializing)]
+    pub session_id: String,
     pub driver_listen_host: String,
     pub driver_listen_port: u16,
     pub driver_external_host: String,
@@ -301,16 +306,118 @@ mod retry_strategy {
     from = "shuffle_backend::ShuffleBackend"
 )]
 pub enum ShuffleBackend {
-    Streaming,
+    Flight,
     Storage(StorageShuffleBackend),
+    Celeborn(CelebornShuffleBackend),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StorageShuffleBackend {
-    pub path: String,
+    #[serde(
+        serialize_with = "serialize_non_empty_string",
+        deserialize_with = "deserialize_non_empty_string"
+    )]
+    pub path: Option<String>,
     pub max_file_size: usize,
     pub compression: ShuffleCompression,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CelebornShuffleBackend {
+    pub master_host: String,
+    pub master_port: u16,
+    pub compression: CelebornCompressionCodec,
+    pub heartbeat_interval_secs: u64,
+    pub endpoint_overrides: Vec<CelebornEndpointOverride>,
+    pub partition_split_threshold: i64,
+    pub partition_split_mode: CelebornPartitionSplitMode,
+}
+
+/// Compression applied to Celeborn push-data batches.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub enum CelebornCompressionCodec {
+    None,
+    #[default]
+    Lz4,
+    Zstd {
+        level: i8,
+    },
+}
+
+impl Display for CelebornCompressionCodec {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::None => f.write_str("none"),
+            Self::Lz4 => f.write_str("lz4"),
+            Self::Zstd { level } => write!(f, "zstd({level})"),
+        }
+    }
+}
+
+impl FromStr for CelebornCompressionCodec {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "none" => Ok(Self::None),
+            "lz4" => Ok(Self::Lz4),
+            value => value
+                .strip_prefix("zstd(")
+                .and_then(|value| value.strip_suffix(')'))
+                .ok_or_else(|| format!("invalid Celeborn compression codec: {value}"))?
+                .parse::<i8>()
+                .map_err(|_| format!("invalid Celeborn zstd compression level: {value}"))
+                .and_then(|level| {
+                    (-5..=22)
+                        .contains(&level)
+                        .then_some(Self::Zstd { level })
+                        .ok_or_else(|| format!("invalid Celeborn zstd compression level: {value}"))
+                }),
+        }
+    }
+}
+
+impl TryFrom<String> for CelebornCompressionCodec {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        value.parse()
+    }
+}
+
+impl From<CelebornCompressionCodec> for String {
+    fn from(value: CelebornCompressionCodec) -> Self {
+        value.to_string()
+    }
+}
+
+/// The behavior a Celeborn worker uses when a partition exceeds its split threshold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CelebornPartitionSplitMode {
+    Soft,
+    Hard,
+}
+
+impl std::fmt::Display for CelebornPartitionSplitMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Soft => f.write_str("soft"),
+            Self::Hard => f.write_str("hard"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CelebornEndpointOverride {
+    pub internal_host: String,
+    pub internal_port: u16,
+    pub external_host: String,
+    pub external_port: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -327,8 +434,9 @@ mod shuffle_backend {
     #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(rename_all = "snake_case")]
     pub enum Type {
-        Streaming,
+        Flight,
         Storage,
+        Celeborn,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -336,13 +444,15 @@ mod shuffle_backend {
     pub struct ShuffleBackend {
         pub r#type: Type,
         pub storage: super::StorageShuffleBackend,
+        pub celeborn: super::CelebornShuffleBackend,
     }
 
     impl From<ShuffleBackend> for super::ShuffleBackend {
         fn from(value: ShuffleBackend) -> Self {
             match value.r#type {
-                Type::Streaming => super::ShuffleBackend::Streaming,
+                Type::Flight => super::ShuffleBackend::Flight,
                 Type::Storage => super::ShuffleBackend::Storage(value.storage),
+                Type::Celeborn => super::ShuffleBackend::Celeborn(value.celeborn),
             }
         }
     }
@@ -350,17 +460,44 @@ mod shuffle_backend {
     impl From<super::ShuffleBackend> for ShuffleBackend {
         fn from(value: super::ShuffleBackend) -> Self {
             match value {
-                super::ShuffleBackend::Streaming => ShuffleBackend {
-                    r#type: Type::Streaming,
+                super::ShuffleBackend::Flight => ShuffleBackend {
+                    r#type: Type::Flight,
                     storage: super::StorageShuffleBackend {
-                        path: String::new(),
+                        path: None,
                         max_file_size: 0,
                         compression: super::ShuffleCompression::None,
+                    },
+                    celeborn: super::CelebornShuffleBackend {
+                        master_host: String::new(),
+                        master_port: 0,
+                        compression: super::CelebornCompressionCodec::default(),
+                        heartbeat_interval_secs: 10,
+                        endpoint_overrides: vec![],
+                        partition_split_threshold: 1_i64 << 30,
+                        partition_split_mode: super::CelebornPartitionSplitMode::Soft,
                     },
                 },
                 super::ShuffleBackend::Storage(storage) => ShuffleBackend {
                     r#type: Type::Storage,
                     storage,
+                    celeborn: super::CelebornShuffleBackend {
+                        master_host: String::new(),
+                        master_port: 0,
+                        compression: super::CelebornCompressionCodec::default(),
+                        heartbeat_interval_secs: 10,
+                        endpoint_overrides: vec![],
+                        partition_split_threshold: 1_i64 << 30,
+                        partition_split_mode: super::CelebornPartitionSplitMode::Soft,
+                    },
+                },
+                super::ShuffleBackend::Celeborn(celeborn) => ShuffleBackend {
+                    r#type: Type::Celeborn,
+                    storage: super::StorageShuffleBackend {
+                        path: None,
+                        max_file_size: 0,
+                        compression: super::ShuffleCompression::None,
+                    },
+                    celeborn,
                 },
             }
         }
@@ -592,6 +729,8 @@ pub struct CatalogConfig {
 #[serde(deny_unknown_fields)]
 pub struct OptimizerConfig {
     pub enable_join_reorder: bool,
+    pub enable_join_swap: bool,
+    pub prefer_hash_join: bool,
     pub expand_views_at_output: bool,
 }
 
@@ -635,6 +774,14 @@ pub enum CatalogType {
             serialize_with = "serialize_optional_secret"
         )]
         bearer_access_token: Option<SecretString>,
+        /// Path to a file holding the bearer token. When set, the token is
+        /// re-read from this file for every request, so a rotated token (for
+        /// example a kubelet-projected service account token) is picked up
+        /// without restarting the server. Takes precedence over
+        /// `bearer_access_token`. The path is not a secret, so it is kept as a
+        /// plain string.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        bearer_access_token_file: Option<String>,
         #[serde(flatten)]
         cache: CatalogCacheConfig,
     },
@@ -718,15 +865,31 @@ pub struct TelemetryConfig {
     pub export_traces: bool,
     pub export_metrics: bool,
     pub export_logs: bool,
-    pub otlp_endpoint: String,
-    pub otlp_protocol: OtlpProtocol,
-    pub otlp_timeout_secs: u64,
+    pub exporter: TelemetryExporterConfig,
     pub traces_export_interval_secs: u64,
     pub metrics_export_interval_secs: u64,
     pub metrics_collection_interval_secs: u64,
     pub logs_export_interval_secs: u64,
     pub logs_export_max_queue_size: u64,
     pub logs_export_batch_size: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetryExporterConfig {
+    pub otlp: OtlpConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OtlpConfig {
+    #[serde(
+        serialize_with = "serialize_non_empty_string",
+        deserialize_with = "deserialize_non_empty_string"
+    )]
+    pub endpoint: Option<String>,
+    pub protocol: OtlpProtocol,
+    pub timeout_secs: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -751,6 +914,7 @@ macro_rules! define_cluster_config_env {
 impl ClusterConfigEnv {
     define_cluster_config_env! {
         ENABLE_TLS,
+        SESSION_ID,
         DRIVER_EXTERNAL_HOST,
         DRIVER_EXTERNAL_PORT,
         DRIVER_ID,
@@ -765,5 +929,34 @@ impl ClusterConfigEnv {
         SHUFFLE_BACKEND__STORAGE__PATH,
         SHUFFLE_BACKEND__STORAGE__MAX_FILE_SIZE,
         SHUFFLE_BACKEND__STORAGE__COMPRESSION,
+        SHUFFLE_BACKEND__CELEBORN__MASTER_HOST,
+        SHUFFLE_BACKEND__CELEBORN__MASTER_PORT,
+        SHUFFLE_BACKEND__CELEBORN__COMPRESSION,
+        SHUFFLE_BACKEND__CELEBORN__HEARTBEAT_INTERVAL_SECS,
+        SHUFFLE_BACKEND__CELEBORN__ENDPOINT_OVERRIDES,
+        SHUFFLE_BACKEND__CELEBORN__PARTITION_SPLIT_THRESHOLD,
+        SHUFFLE_BACKEND__CELEBORN__PARTITION_SPLIT_MODE,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CelebornCompressionCodec;
+
+    #[test]
+    fn parses_celeborn_compression() {
+        assert_eq!("none".parse(), Ok(CelebornCompressionCodec::None));
+        assert_eq!("lz4".parse(), Ok(CelebornCompressionCodec::Lz4));
+        assert_eq!(
+            "zstd(1)".parse(),
+            Ok(CelebornCompressionCodec::Zstd { level: 1 })
+        );
+        assert!("zstd".parse::<CelebornCompressionCodec>().is_err());
+        assert_eq!(
+            "zstd(-5)".parse(),
+            Ok(CelebornCompressionCodec::Zstd { level: -5 })
+        );
+        assert!("zstd(-6)".parse::<CelebornCompressionCodec>().is_err());
+        assert!("zstd(127)".parse::<CelebornCompressionCodec>().is_err());
     }
 }

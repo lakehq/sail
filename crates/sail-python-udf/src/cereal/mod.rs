@@ -4,8 +4,8 @@ use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyList, PyModule};
 use pyo3::{PyResult, Python, intern};
 use sail_common::spec;
-use sail_pyarrow::ToPyArrow;
 
+use crate::conversion::TryToPy;
 use crate::error::{PyUdfError, PyUdfResult};
 
 pub mod pyspark_udf;
@@ -150,7 +150,7 @@ fn should_write_config(eval_type: spec::PySparkUdfType) -> bool {
 /// Builds a JSON string representing a PySpark StructType schema from Arrow input types.
 /// This is used by PySpark 4.x's `read_udfs` to deserialize input type information
 /// for `SQL_ARROW_BATCHED_UDF`.
-fn build_input_types_json(input_types: &[DataType]) -> PyUdfResult<String> {
+fn build_input_types_json(input_types: &[DataType], large_var_types: bool) -> PyUdfResult<String> {
     Python::attach(|py| -> PyResult<String> {
         let types_module = PyModule::import(py, intern!(py, "pyspark.sql.types"))?;
         let struct_type_cls = types_module.getattr(intern!(py, "StructType"))?;
@@ -162,7 +162,7 @@ fn build_input_types_json(input_types: &[DataType]) -> PyUdfResult<String> {
             .iter()
             .enumerate()
             .map(|(i, dt)| -> PyResult<_> {
-                let arrow_type = dt.to_pyarrow(py)?;
+                let arrow_type = dt.try_to_py(py, large_var_types)?;
                 let spark_type = from_arrow_type.call1((arrow_type,))?;
                 struct_field_cls.call1((format!("_{i}"), spark_type, true))
             })

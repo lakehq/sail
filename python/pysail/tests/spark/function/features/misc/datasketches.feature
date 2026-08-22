@@ -1,4 +1,4 @@
-@datasketches
+@function(sketch)
 Feature: DataSketches functions
 
   Rule: HLL sketch functions estimate distinct values

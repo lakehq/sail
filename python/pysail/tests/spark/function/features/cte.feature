@@ -1,4 +1,3 @@
-@cte
 Feature: CTE (Common Table Expressions) support
 
   Rule: Basic CTE
@@ -70,8 +69,14 @@ Feature: CTE (Common Table Expressions) support
         | val   |
         | inner |
 
+  # Spark's parser rejects repeated CTE names outright with
+  # `[DUPLICATED_CTE_NAMES] CTE definition can't have duplicate names: \`x\`. SQLSTATE: 42602`
+  # (`AstBuilder.withCTE`). Sail deliberately allows them and lets the last definition win --
+  # see "fix: allow duplicate CTE names with shadowing behavior" (#1331) -- so this whole rule
+  # describes a Sail extension rather than Spark behavior.
   Rule: CTE shadowing
 
+    @sail-only
     Scenario: duplicate CTE name keeps the last definition
       When query
         """
@@ -84,6 +89,7 @@ Feature: CTE (Common Table Expressions) support
         | value |
         | 2     |
 
+    @sail-only
     Scenario: duplicate CTE name with intermediate CTEs
       When query
         """
@@ -97,6 +103,7 @@ Feature: CTE (Common Table Expressions) support
         | label |
         | last  |
 
+    @sail-only
     Scenario: multiple shadowed CTEs preserve non-duplicate order
       When query
         """

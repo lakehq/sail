@@ -1,4 +1,3 @@
-@xpath_typed
 Feature: xpath_boolean/double/float/int/long/number/short/string extract typed values from XML
 
   Rule: xpath_boolean evaluates XPath to a boolean
@@ -159,12 +158,15 @@ Feature: xpath_boolean/double/float/int/long/number/short/string extract typed v
 
   Rule: Invalid XML or XPath fails
 
+    # Spark wraps the parse failure as "(java.lang.RuntimeException) Error loading expression
+    # 'a/b'"; Sail reports its own "Invalid XML" wording.
+    @sail-bug
     Scenario: typed xpath fails on invalid XML
       When query
         """
         SELECT xpath_int('<a><b>1</b>', 'a/b') AS result
         """
-      Then query error (?s).*Invalid XML.*
+      Then query error (?s).*Error loading expression
 
     Scenario: typed xpath fails on invalid XPath
       When query

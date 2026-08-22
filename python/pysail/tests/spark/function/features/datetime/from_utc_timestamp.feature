@@ -1,4 +1,3 @@
-@from_utc_timestamp
 Feature: from_utc_timestamp
 
   Rule: Type coercion
@@ -25,6 +24,35 @@ Feature: from_utc_timestamp
         | '2024-06-15 13:30:00+07:00'           | 2024-06-15 07:30:00 |
         | DATE '2024-06-15'                     | 2024-06-14 17:00:00 |
 
+  Rule: Invalid time zone validation
+
+    Scenario: `from_utc_timestamp` validates a constant zone for a runtime-null timestamp
+      When query
+        """
+        SELECT from_utc_timestamp(
+          CASE
+            WHEN id = 0 THEN CAST(NULL AS TIMESTAMP)
+            ELSE TIMESTAMP '2024-01-01 00:00:00'
+          END,
+          'Not/AZone'
+        ) AS result
+        FROM range(0, 1, 1, 1)
+        """
+      Then query error INVALID_TIMEZONE
+
+    @sail-bug
+    Scenario: `from_utc_timestamp` skips a dynamic zone for a null timestamp
+      When query
+        """
+        SELECT from_utc_timestamp(source_ts, target_tz) AS result
+        FROM VALUES
+          (CAST(NULL AS TIMESTAMP), 'Not/AZone')
+          AS t(source_ts, target_tz)
+        """
+      Then query result
+        | result |
+        | NULL   |
+
   Rule: Daylight saving time handling
 
   Background:
@@ -44,7 +72,7 @@ Feature: from_utc_timestamp
         | '2025-03-09 17:30:00' | 2025-03-09 09:30:00 |
         | '2025-03-09 18:30:00' | 2025-03-09 11:30:00 |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to from_utc_timestamp yields the schema Spark declares

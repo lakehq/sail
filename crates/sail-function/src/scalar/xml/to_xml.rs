@@ -5,8 +5,10 @@ use chrono::prelude::*;
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::*;
-use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, plan_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, internal_err, plan_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+};
 use datafusion_expr_common::signature::Volatility;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 
@@ -81,26 +83,26 @@ impl SparkToXmlOptions {
 
         let timestamp_ltz_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
             .as_deref()
-            .map(DateTimeFormat::parse)
+            .map(DateTimeFormat::for_formatting)
             .transpose()?;
 
         let timestamp_ntz_format = find_key_value(map, Self::TIMESTAMP_NTZ_FORMAT_OPTION)
             .as_deref()
-            .map(DateTimeFormat::parse)
+            .map(DateTimeFormat::for_formatting)
             .transpose()?
             .unwrap_or_else(|| {
                 #[expect(clippy::expect_used)]
-                DateTimeFormat::parse(Self::TIMESTAMP_NTZ_FORMAT_DEFAULT)
+                DateTimeFormat::for_formatting(Self::TIMESTAMP_NTZ_FORMAT_DEFAULT)
                     .expect("default timestamp NTZ format should be valid")
             });
 
         let date_format = find_key_value(map, Self::DATE_FORMAT_OPTION)
             .as_deref()
-            .map(DateTimeFormat::parse)
+            .map(DateTimeFormat::for_formatting)
             .transpose()?
             .unwrap_or_else(|| {
                 #[expect(clippy::expect_used)]
-                DateTimeFormat::parse(Self::DATE_FORMAT_DEFAULT)
+                DateTimeFormat::for_formatting(Self::DATE_FORMAT_DEFAULT)
                     .expect("default date format should be valid")
             });
 
@@ -140,9 +142,11 @@ impl Default for SparkToXmlOptions {
             value_tag: Self::VALUE_TAG_DEFAULT.to_string(),
             null_value: None,
             timestamp_ltz_format: None,
-            timestamp_ntz_format: DateTimeFormat::parse(Self::TIMESTAMP_NTZ_FORMAT_DEFAULT)
-                .expect("default timestamp NTZ format should be valid"),
-            date_format: DateTimeFormat::parse(Self::DATE_FORMAT_DEFAULT)
+            timestamp_ntz_format: DateTimeFormat::for_formatting(
+                Self::TIMESTAMP_NTZ_FORMAT_DEFAULT,
+            )
+            .expect("default timestamp NTZ format should be valid"),
+            date_format: DateTimeFormat::for_formatting(Self::DATE_FORMAT_DEFAULT)
                 .expect("default date format should be valid"),
             session_timezone: "UTC".to_string(),
         }
@@ -187,7 +191,15 @@ impl ScalarUDFImpl for SparkToXml {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Utf8)
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `StructsToXml.nullable = true`, unconditional.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/xmlExpressions.scala#L236>
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, true)))
     }
 
     fn schema_name(&self, args: &[datafusion_expr::Expr]) -> Result<String> {
@@ -945,7 +957,7 @@ fn format_timestamp_field(
             // Use default format
             #[expect(clippy::expect_used)]
             let default_fmt =
-                DateTimeFormat::parse(SparkToXmlOptions::TIMESTAMP_LTZ_FORMAT_DEFAULT)
+                DateTimeFormat::for_formatting(SparkToXmlOptions::TIMESTAMP_LTZ_FORMAT_DEFAULT)
                     .expect("default timestamp LTZ format should be valid");
             Ok(default_fmt.format(input).map_err(|e| {
                 DataFusionError::Execution(format!("Failed to format timestamp: {e}"))

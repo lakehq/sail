@@ -26,10 +26,9 @@ sail-physical-plan = { path = "../sail-physical-plan" }
 sail-physical-optimizer = { path = "../sail-physical-optimizer" }
 sail-plan = { path = "../sail-plan" }
 sail-execution = { path = "../sail-execution" }
-sail-object-store = { path = "../sail-object-store" }
-sail-server = { path = "../sail-server" }
-sail-cache = { path = "../sail-cache" }
 sail-telemetry = { path = "../sail-telemetry" }
+sail-object-store = { path = "../sail-object-store" }
+sail-cache = { path = "../sail-cache" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 
 async-trait = { workspace = true }
@@ -50,3 +49,6 @@ chrono = { workspace = true }
 indexmap = { workspace = true }
 futures = { workspace = true }
 uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -1,5 +1,11 @@
-@time_functions
 Feature: TIME functions (make_time, time_diff, time_trunc)
+
+  # `spark.sql.timeType.enabled` is an internal Spark configuration whose default is
+  # `Utils.isTesting`, so it is on only inside Spark's own test suite and off in every real
+  # session. Without it, `TimeExpression.checkInputDataTypes()` rejects these functions with
+  # `UNSUPPORTED_TIME_TYPE` and the scenarios below cannot be validated against JVM Spark.
+  Background:
+      Given config spark.sql.timeType.enabled = true
 
   Rule: make_time
 
@@ -62,7 +68,7 @@ Feature: TIME functions (make_time, time_diff, time_trunc)
         """
         SELECT time_diff('MS', TIME '10:00:00', TIME '11:00:00')
         """
-      Then query error unsupported unit
+      Then query error expects one of the units
 
     Scenario: time_diff with unit from column
       When query
@@ -101,7 +107,7 @@ Feature: TIME functions (make_time, time_diff, time_trunc)
         """
         SELECT CAST(time_trunc('MS', TIME '09:32:05.123456') AS STRING)
         """
-      Then query error unsupported unit
+      Then query error expects one of the units
 
     Scenario: time_trunc with unit from column
       When query

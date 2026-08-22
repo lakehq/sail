@@ -3,6 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::logical_expr::expr::NullTreatment;
 use datafusion::prelude::SessionContext;
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams, WindowFunctionParams};
 use datafusion_expr::{
@@ -10,7 +11,14 @@ use datafusion_expr::{
     WindowFunctionDefinition, WindowUDF, cast, expr, lit,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 use sail_function::sketch::{DEFAULT_HLL_LG_CONFIG_K, DEFAULT_THETA_LG_NOM_ENTRIES};
+use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
+use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
+use sail_python_udf::udf::pyspark_group_map_udf::PySparkGroupMapUDF;
+use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
+use sail_python_udf::udf::pyspark_udf::PySparkUDF;
+use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::config::PlanConfig;
 use crate::error::{IntoPlanResult, PlanError, PlanResult};
@@ -262,14 +270,9 @@ impl AggFunctionBuilder {
         Arc::new(f)
     }
 
-    #[expect(dead_code)]
     pub fn unknown(name: &str) -> AggFunction {
         let name = name.to_string();
-        Arc::new(move |_| {
-            Err(PlanError::todo(format!(
-                "unknown aggregate function: {name}"
-            )))
-        })
+        Arc::new(move |_| Err(PlanError::todo(format!("function: {name}"))))
     }
 }
 
@@ -480,4 +483,41 @@ pub(crate) fn theta_args_with_default_lg(
             "{function_name} requires 1 or 2 arguments, got {count}"
         ))),
     }
+}
+
+pub fn expr_contains_python_udf(body: &expr::Expr) -> PlanResult<bool> {
+    Ok(body.exists(|expression| {
+        Ok(match expression {
+            expr::Expr::ScalarFunction(function) => {
+                let f = function.func.inner();
+                f.is::<PySparkUDF>()
+                    || f.is::<PySparkUnresolvedUDF>()
+                    || f.is::<PySparkCoGroupMapUDF>()
+            }
+            expr::Expr::AggregateFunction(function) => {
+                let f = function.func.inner();
+                f.is::<PySparkGroupAggregateUDF>()
+                    || f.is::<PySparkGroupMapUDF>()
+                    || f.is::<PySparkBatchCollectorUDF>()
+            }
+            expr::Expr::WindowFunction(window) => matches!(
+                &window.fun,
+                WindowFunctionDefinition::AggregateUDF(udf)
+                    if udf.inner().is::<PySparkGroupAggregateUDF>()
+            ),
+            _ => false,
+        })
+    })?)
+}
+
+// TODO: Match Catalyst constant folding and NullPropagation before extracting opaque
+//  Python or Variant scalar calls, so a foldable NULL can eliminate them.
+pub fn expr_contains_spark_cast_to_variant(body: &expr::Expr) -> PlanResult<bool> {
+    Ok(body.exists(|expression| {
+        Ok(matches!(
+            expression,
+            expr::Expr::ScalarFunction(function)
+                if function.func.inner().is::<SparkCastToVariant>()
+        ))
+    })?)
 }

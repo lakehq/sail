@@ -11,18 +11,18 @@ use datafusion_expr::registry::FunctionRegistry;
 use sail_cache::remote_checkpoint::RemoteCheckpointRegistry;
 use sail_catalog::provider::CatalogCacheManager;
 use sail_catalog_system::service::SystemTableService;
-use sail_common::config::AppConfig;
+use sail_common::actor::ActorHandle;
+use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::session::activity::ActivityTracker;
 use sail_common_datafusion::session::job::{JobRunner, JobService};
 use sail_common_datafusion::session::repartition::RepartitionBufferConfig;
 use sail_delta_lake::session_extension::DeltaTableCache;
 use sail_physical_optimizer::{PhysicalOptimizerOptions, get_physical_optimizers};
-use sail_server::actor::ActorHandle;
+use sail_telemetry::telemetry::global_system_event_reader;
 
 use crate::catalog::create_catalog_manager;
 use crate::formats::create_table_format_registry;
-use crate::observable::SessionManagerHandle;
 use crate::optimizer::{default_analyzer_rules, default_optimizer_rules};
 use crate::planner::new_query_planner;
 use crate::runtime::RuntimeEnvFactory;
@@ -119,6 +119,7 @@ impl ServerSessionFactory {
             .with_extension(Arc::new(JobService::new(job_runner)))
             .with_extension(Arc::new(RemoteCheckpointRegistry::new(
                 self.config.execution.checkpoint.path.clone(),
+                info.session_id.clone(),
             )))
             .with_extension(Arc::new(RepartitionBufferConfig::new(
                 self.config.cluster.task_stream_buffer,
@@ -153,10 +154,13 @@ impl ServerSessionFactory {
         Ok(builder.build())
     }
 
-    fn create_system_table_service(&self, info: &ServerSessionInfo) -> Result<SystemTableService> {
-        Ok(SystemTableService::new(Box::new(
-            SessionManagerHandle::new(info.session_manager.clone()),
-        )))
+    fn create_system_table_service(&self, _info: &ServerSessionInfo) -> Result<SystemTableService> {
+        let reader = global_system_event_reader().ok_or_else(|| {
+            datafusion::common::DataFusionError::Internal(
+                "system event telemetry is not initialized".to_string(),
+            )
+        })?;
+        Ok(SystemTableService::new(reader))
     }
 
     fn apply_execution_config(&mut self, config: &mut SessionConfig) {
@@ -176,7 +180,15 @@ impl ServerSessionFactory {
 
     fn apply_optimizer_config(&mut self, config: &mut SessionConfig) {
         let optimizer = &mut config.options_mut().optimizer;
+        optimizer.join_reordering = self.config.optimizer.enable_join_swap;
+        optimizer.prefer_hash_join = self.config.optimizer.prefer_hash_join;
         optimizer.expand_views_at_output = self.config.optimizer.expand_views_at_output;
+        match &self.config.mode {
+            ExecutionMode::Local => {}
+            ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster => {
+                optimizer.enable_dynamic_filter_pushdown = false;
+            }
+        }
     }
 
     fn apply_execution_parquet_config(&mut self, config: &mut SessionConfig) {

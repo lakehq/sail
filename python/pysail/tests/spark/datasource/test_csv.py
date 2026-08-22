@@ -54,6 +54,32 @@ def test_csv_path_glob_filter(spark, tmp_path):
 
 
 @pytest.mark.parametrize("infer_schema", [True, False])
+@pytest.mark.parametrize("compression", [None, "gzip"])
+def test_csv_read_replaces_invalid_utf8(spark, tmp_path, infer_schema, compression):
+    path = tmp_path / f"csv_invalid_utf8_{infer_schema}_{compression}"
+    path.mkdir()
+    content = b"id,label\n1,ok\n2,caf\xe9_bad_\xff\n"
+
+    if compression == "gzip":
+        with gzip.open(path / "data.csv.gz", "wb") as file:
+            file.write(content)
+    else:
+        (path / "data.csv").write_bytes(content)
+
+    reader = spark.read.option("header", True).option("inferSchema", infer_schema)
+    if compression is not None:
+        reader = reader.option("compression", compression)
+    rows = reader.csv(str(path)).collect()
+
+    first_id = 1 if infer_schema else "1"
+    second_id = 2 if infer_schema else "2"
+    assert rows == [
+        Row(id=first_id, label="ok"),
+        Row(id=second_id, label="caf\ufffd_bad_\ufffd"),
+    ]
+
+
+@pytest.mark.parametrize("infer_schema", [True, False])
 def test_csv_read_write_compressed(spark, sample_df, sample_pandas_df, tmp_path, infer_schema):
     # Round-tripped values are typed under `inferSchema=True` and STRING-only
     # under the Spark default `inferSchema=False`. Both behaviors are pinned.

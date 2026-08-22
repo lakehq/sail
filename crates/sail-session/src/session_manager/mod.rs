@@ -1,30 +1,29 @@
 mod actor;
-mod event;
-mod options;
 mod session;
 
 use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use datafusion::prelude::SessionContext;
+use sail_common::actor::{ActorHandle, ActorSystem};
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_execution::driver::{DriverGateway, DriverGatewayOptions};
-use sail_server::actor::{ActorHandle, ActorSystem};
+use sail_telemetry::telemetry::global_system_event_reporter;
 use tokio::sync::oneshot;
 
 use crate::error::{SessionError, SessionResult};
 use crate::session_factory::{
     ServerSessionInfo, ServerSessionJobRunnerFactory, SessionFactory, SessionJobRunnerFactory,
 };
-pub(crate) use crate::session_manager::actor::SessionManagerActor;
-pub(crate) use crate::session_manager::event::SessionManagerEvent;
-pub use crate::session_manager::options::SessionManagerOptions;
+pub(crate) use crate::session_manager::actor::{SessionManagerActor, SessionManagerMessage};
+pub use crate::session_manager::actor::{SessionManagerComponents, SessionManagerOptions};
 
 pub type ServerSessionFactoryFn =
     fn(Arc<AppConfig>, RuntimeHandle) -> Box<dyn SessionFactory<ServerSessionInfo>>;
 
+#[derive(Clone)]
 pub struct SessionManager {
     handle: ActorHandle<SessionManagerActor>,
 }
@@ -36,9 +35,12 @@ impl fmt::Debug for SessionManager {
 }
 
 impl SessionManager {
-    pub fn try_new(options: SessionManagerOptions) -> SessionResult<Self> {
-        let system = options.system.clone();
-        let handle = system.lock()?.spawn::<SessionManagerActor>(options);
+    pub fn try_new(
+        options: SessionManagerOptions,
+        components: SessionManagerComponents,
+        system: &mut ActorSystem,
+    ) -> SessionResult<Self> {
+        let handle = system.spawn::<SessionManagerActor>((options, components));
         Ok(Self { handle })
     }
 
@@ -48,25 +50,37 @@ impl SessionManager {
         user_id: String,
     ) -> SessionResult<SessionContext> {
         let (tx, rx) = oneshot::channel();
-        let event = SessionManagerEvent::GetOrCreateSession {
+        let message = SessionManagerMessage::GetOrCreateSession {
             session_id,
             user_id,
             result: tx,
         };
-        self.handle.send(event).await?;
+        self.handle.send(message).await?;
         rx.await
             .map_err(|e| SessionError::internal(format!("failed to get session: {e}")))?
     }
 
     pub async fn delete_session(&self, session_id: String) -> SessionResult<()> {
         let (tx, rx) = oneshot::channel();
-        let event = SessionManagerEvent::DeleteSession {
+        let message = SessionManagerMessage::DeleteSession {
             session_id,
             result: tx,
         };
-        self.handle.send(event).await?;
+        self.handle.send(message).await?;
         rx.await
             .map_err(|e| SessionError::internal(format!("failed to delete session: {e}")))?
+    }
+
+    /// Shut down the session manager and all resources it owns.
+    pub async fn shutdown(&self) -> SessionResult<()> {
+        let (tx, rx) = oneshot::channel();
+        self.handle
+            .send(SessionManagerMessage::Shutdown { result: tx })
+            .await?;
+        rx.await.map_err(|e| {
+            SessionError::internal(format!("failed to shut down session manager: {e}"))
+        })?;
+        Ok(())
     }
 }
 
@@ -75,26 +89,14 @@ pub async fn create_session_manager(
     runtime: RuntimeHandle,
     session_factory_fn: ServerSessionFactoryFn,
     session_timeout: Duration,
+    system: &mut ActorSystem,
 ) -> SessionResult<SessionManager> {
-    let system = Arc::new(Mutex::new(ActorSystem::new()));
-    let session_factory = {
-        let config = config.clone();
-        let runtime = runtime.clone();
-        Box::new(move || session_factory_fn(config.clone(), runtime.clone()))
-    };
-    let job_runner_factory = {
-        let config = config.clone();
-        let runtime = runtime.clone();
-        let system = system.clone();
-        Box::new(move || {
-            Box::new(ServerSessionJobRunnerFactory::new(
-                config.clone(),
-                runtime.clone(),
-                system.clone(),
-            )) as Box<dyn SessionJobRunnerFactory>
-        })
-    };
-    let gateway = if matches!(&config.mode, ExecutionMode::Local) {
+    let session_factory = session_factory_fn(config.clone(), runtime.clone());
+    let job_runner_factory = Box::new(ServerSessionJobRunnerFactory::new(
+        config.clone(),
+        runtime.clone(),
+    )) as Box<dyn SessionJobRunnerFactory>;
+    let driver_gateway = if matches!(&config.mode, ExecutionMode::Local) {
         None
     } else {
         Some(
@@ -105,16 +107,19 @@ pub async fn create_session_manager(
                 })?,
         )
     };
-    let mut options =
-        SessionManagerOptions::new(runtime, system, session_factory, job_runner_factory)
-            .with_session_timeout(session_timeout)
-            .with_options(
-                config
-                    .raw()
-                    .map_err(|e| SessionError::internal(e.to_string()))?,
-            );
-    if let Some(gateway) = gateway {
-        options = options.with_driver_gateway(gateway);
-    }
-    SessionManager::try_new(options)
+    let options = SessionManagerOptions::new(runtime)
+        .with_session_timeout(session_timeout)
+        .with_options(
+            config
+                .raw()
+                .map_err(|e| SessionError::internal(e.to_string()))?,
+        );
+    let components = SessionManagerComponents {
+        session_factory,
+        job_runner_factory,
+        driver_gateway,
+        event_reporter: global_system_event_reporter()
+            .ok_or_else(|| SessionError::internal("system event telemetry is not initialized"))?,
+    };
+    SessionManager::try_new(options, components, system)
 }

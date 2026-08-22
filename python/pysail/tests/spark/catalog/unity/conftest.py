@@ -6,7 +6,6 @@ Uses the Unity Catalog OSS Docker image with its embedded H2 backend.
 from __future__ import annotations
 
 import json
-import os
 import time
 import uuid
 from pathlib import Path
@@ -16,9 +15,8 @@ from urllib.parse import quote, urlparse
 import pytest
 import requests
 from pytest_bdd import given, parsers, then
-from testcontainers.core.container import DockerContainer
-from testcontainers.core.waiting_utils import wait_for_logs
 
+from pysail.testing.containers.unity_defaults import DEFAULT_CATALOG
 from pysail.testing.spark.session import spark_connect_server
 from pysail.testing.spark.steps.sql import PathWrapper
 
@@ -27,91 +25,15 @@ if TYPE_CHECKING:
 
     from pyspark.sql import SparkSession
 
-DEFAULT_CATALOG = "sail_test_catalog"
-# GitHub has a v0.4.1 release, but Docker Hub currently publishes versioned
-# server images only up to v0.4.0. Keep this on an existing tag so the black-box
-# integration suite is runnable; override PYSAIL_UNITY_CATALOG_IMAGE when a
-# newer server image is published.
-UNITY_CATALOG_IMAGE = os.environ.get(
-    "PYSAIL_UNITY_CATALOG_IMAGE",
-    "unitycatalog/unitycatalog:v0.4.0",
-)
-
-
-@pytest.fixture(scope="module")
-def unity_storage_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """Host path mounted into Unity Catalog for managed table storage."""
-    return tmp_path_factory.mktemp("unity_storage_root")
-
-
-@pytest.fixture(scope="module")
-def unity_container(
-    tmp_path_factory: pytest.TempPathFactory,
-    unity_storage_root: Path,
-) -> Generator[DockerContainer, None, None]:
-    """Start a Unity Catalog container with its embedded H2 backend."""
-    tmp_dir = tmp_path_factory.mktemp("unity")
-    server_config = "server.env=dev\nserver.authorization=disable\nserver.managed-table.enabled=true\n"
-    server_path = tmp_dir / "server.properties"
-    server_path.write_text(server_config)
-
-    container = (
-        DockerContainer(UNITY_CATALOG_IMAGE)
-        .with_exposed_ports(8080)
-        .with_volume_mapping(str(server_path), "/home/unitycatalog/etc/conf/server.properties", "ro")
-        .with_volume_mapping(str(unity_storage_root), str(unity_storage_root), "rw")
-    )
-    container.start()
-    wait_for_logs(
-        container,
-        "###################################################################",
-        timeout=120,
-    )
-    yield container
-    container.stop()
-
-
-@pytest.fixture(scope="module")
-def unity_rest_url(unity_container: DockerContainer) -> str:
-    """Host-accessible Unity Catalog REST API URL."""
-    host = unity_container.get_container_host_ip()
-    port = unity_container.get_exposed_port(8080)
-    return f"http://{host}:{port}/api/2.1/unity-catalog"
-
-
-@pytest.fixture(scope="module")
-def _create_unity_catalog(unity_rest_url: str, unity_storage_root: Path) -> None:
-    """Create the test catalog in Unity Catalog via REST API."""
-    url = f"{unity_rest_url}/catalogs"
-    payload = {
-        "name": DEFAULT_CATALOG,
-        "comment": "Main catalog for testing",
-        "storage_root": str(unity_storage_root),
-    }
-    max_retries = 10
-    for attempt in range(max_retries):
-        try:
-            resp = requests.post(url, json=payload, timeout=10)
-            if resp.status_code in (200, 201, 409):
-                # 409 = already exists, that's fine
-                return
-            resp.raise_for_status()
-        except Exception:
-            if attempt == max_retries - 1:
-                raise
-            time.sleep(2)
-        else:
-            return
-
 
 @pytest.fixture(scope="module")
 def remote(
     unity_rest_url: str,
-    _create_unity_catalog: None,
+    unity_catalog_initialized: None,
 ) -> Generator[str, None, None]:
     """Start Sail server with Unity catalog."""
     catalog_config = f'[{{name="sail", type="unity", uri="{unity_rest_url}", default_catalog="{DEFAULT_CATALOG}"}}]'
-    del _create_unity_catalog
+    del unity_catalog_initialized
     with spark_connect_server(
         envs={
             "SAIL_CATALOG__LIST": catalog_config,
@@ -194,8 +116,8 @@ def _write_seed_delta_log(location: Path, table_id: str) -> None:
             "protocol": {
                 "minReaderVersion": 3,
                 "minWriterVersion": 7,
-                "readerFeatures": ["catalogManaged"],
-                "writerFeatures": ["catalogManaged", "inCommitTimestamp"],
+                "readerFeatures": ["catalogManaged", "vacuumProtocolCheck"],
+                "writerFeatures": ["catalogManaged", "inCommitTimestamp", "vacuumProtocolCheck"],
             }
         },
         {

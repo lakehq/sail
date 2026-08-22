@@ -1,7 +1,6 @@
-@log2
 Feature: log2 output schema
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to log2 yields the schema Spark declares

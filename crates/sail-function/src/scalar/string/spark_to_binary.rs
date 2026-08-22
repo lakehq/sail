@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::functions::encoding::expr_fn::decode;
 use datafusion::functions::encoding::inner::DecodeFunc;
-use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
-use datafusion_expr::{Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, expr};
+use datafusion_expr::{Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, expr};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, TypeSignature, Volatility};
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -204,7 +204,16 @@ impl ScalarUDFImpl for SparkTryToBinary {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Binary)
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `TryToBinary` is `RuntimeReplaceable` over `TryEval`, whose
+    /// `nullable = true` is unconditional.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/TryEval.scala#L50>
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Binary, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

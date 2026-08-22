@@ -29,9 +29,9 @@ use fastrace::Span;
 use fastrace_futures::StreamExt;
 use futures::Stream;
 use pin_project_lite::pin_project;
+use sail_common::telemetry::{KeyValue, SpanAttribute};
 use sail_common_datafusion::utils::items::ItemTaker;
 
-use crate::common::{KeyValue, SpanAttribute};
 use crate::execution::metrics::MetricEmitter;
 use crate::metrics::{MetricAttribute, MetricManager, MetricRegistry};
 

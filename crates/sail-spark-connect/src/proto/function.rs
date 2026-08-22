@@ -7,17 +7,19 @@ mod tests {
     use datafusion::arrow::array::RecordBatch;
     use datafusion::arrow::error::ArrowError;
     use datafusion::arrow::util::display::{ArrayFormatter, FormatOptions};
+    use futures::stream::TryStreamExt;
     use pyo3::Python;
+    use sail_common::actor::ActorSystem;
     use sail_common::config::AppConfig;
     use sail_common::runtime::RuntimeManager;
     use sail_common::tests::test_gold_set;
     use sail_common_datafusion::extension::SessionExtensionAccessor;
     use sail_common_datafusion::session::job::JobService;
     use sail_plan::resolve_and_execute_plan;
+    use sail_telemetry::telemetry::{ResourceOptions, init_telemetry};
     use serde::{Deserialize, Serialize};
 
     use crate::error::{SparkError, SparkResult};
-    use crate::executor::read_stream;
     use crate::proto::data_type_json::JsonDataType;
     use crate::session::SparkSession;
     use crate::session_manager::create_spark_session_manager;
@@ -61,11 +63,17 @@ mod tests {
         let config = Arc::new(AppConfig::load()?);
         let runtime = RuntimeManager::try_new(&config.runtime)?;
         let handle = runtime.handle();
+        handle.primary().block_on(async {
+            init_telemetry(&config.telemetry, ResourceOptions { kind: "server" })
+        })?;
+        let mut system = ActorSystem::new();
         // The driver gateway is initialized before the session manager in cluster mode, so the
         // manager must be created inside an async context.
-        let manager = handle
-            .primary()
-            .block_on(create_spark_session_manager(config, handle.clone()))?;
+        let manager = handle.primary().block_on(create_spark_session_manager(
+            config,
+            handle.clone(),
+            &mut system,
+        ))?;
         let context = handle
             .primary()
             .block_on(manager.get_or_create_session_context("test".to_string(), "".to_string()))?;
@@ -91,7 +99,7 @@ mod tests {
                         let (plan, _) =
                             resolve_and_execute_plan(&context, spark.plan_config()?, plan).await?;
                         let stream = service.runner().execute(&context, plan).await?;
-                        read_stream(stream).await
+                        stream.err_into().try_collect::<Vec<_>>().await
                     });
                     // TODO: validate the result against the expected output
                     // TODO: handle non-deterministic results and error messages

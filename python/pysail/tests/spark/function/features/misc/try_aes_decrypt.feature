@@ -1,4 +1,3 @@
-@try_aes_decrypt
 Feature: try_aes_decrypt with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -6,7 +5,7 @@ Feature: try_aes_decrypt with an argument coming from a column
 
   Rule: try_aes_decrypt — the argument is resolved per row, not taken from the first row
 
-    @column_args
+    @function(columnargs)
     Scenario: try_aes_decrypt with the argument as a literal
       When query
         """
@@ -17,7 +16,7 @@ Feature: try_aes_decrypt with an argument coming from a column
         | 537061726B2053514C |
 
     # Sail returns the wrong value on the column path: Sail returns NULL for every row.
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario Outline: Try_aes_decrypt: <case>
       When query
         """
@@ -35,7 +34,7 @@ Feature: try_aes_decrypt with an argument coming from a column
         | try_aes_decrypt takes argument 3 from a column containing NULL | '0000111122223333', c | 'GCM'              | NULL               | NULL               |
         | try_aes_decrypt takes argument 3 from a column                 | '0000111122223333', c | 'GCM'              | 'GCM'              | 537061726B2053514C |
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null literal input to try_aes_decrypt yields the schema Spark declares

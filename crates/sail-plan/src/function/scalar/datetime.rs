@@ -1,18 +1,22 @@
 use std::sync::Arc;
 
+use datafusion::arrow::compute::can_cast_types;
 use datafusion::arrow::datatypes::{
     DataType, IntervalDayTimeType, IntervalUnit, IntervalYearMonthType, TimeUnit,
 };
 use datafusion::functions::expr_fn;
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::{self, Expr};
-use datafusion_expr::{BinaryExpr, ExprSchemable, Operator, ScalarUDF, cast, lit, try_cast, when};
+use datafusion_expr::{
+    BinaryExpr, ExprSchemable, HigherOrderUDF, Operator, ScalarUDF, cast, lit, try_cast, when,
+};
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
 use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
-use sail_common::datetime::time_unit_to_multiplier;
+use sail_common::utils::datetime::time_unit_to_multiplier;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::datetime::convert_tz::ConvertTz;
+use sail_common_datafusion::variant::is_variant_storage_field;
+use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzLazy};
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_format::SparkDateFormat;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
@@ -26,7 +30,6 @@ use sail_function::scalar::datetime::spark_time::SparkTime;
 use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
-use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
 use sail_function::scalar::datetime::spark_year::SparkYear;
@@ -35,13 +38,14 @@ use sail_function::scalar::explode::{Explode, ExplodeKind};
 use sail_sql_analyzer::literal::interval::IntervalValue;
 use sail_sql_analyzer::parser::parse_interval;
 
+use super::lambda::lambda_with_fresh_parameter;
 use crate::config::DefaultTimestampType;
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+use crate::function::common::{
+    ScalarFunction, ScalarFunctionInput, expr_contains_python_udf,
+    expr_contains_spark_cast_to_variant,
+};
 
-fn to_chrono_fmt(format: Expr) -> Expr {
-    ScalarUDF::from(SparkToChronoFmt::new()).call(vec![format])
-}
 fn integer_part(expr: Expr, part: &str) -> Expr {
     cast(
         expr_fn::date_part(lit(part.to_uppercase()), expr),
@@ -160,7 +164,7 @@ fn format_interval(interval: Expr, unit: &str) -> Expr {
     })
 }
 
-fn timestampadd_interval(unit: &str, quantity: Expr) -> PlanResult<Expr> {
+fn timestampadd_interval(function_name: &str, unit: &str, quantity: Expr) -> PlanResult<Expr> {
     let zero_i32 = || lit(0_i32);
     let zero_f64 = || lit(0_f64);
     let quantity_i32 = || cast(quantity.clone(), DataType::Int32);
@@ -219,24 +223,24 @@ fn timestampadd_interval(unit: &str, quantity: Expr) -> PlanResult<Expr> {
             quantity_f64() / lit(1_000_000_f64),
         ])),
         _ => Err(PlanError::invalid(format!(
-            "timestampadd does not support interval unit type '{unit}'"
+            "{function_name} does not support interval unit type '{unit}'"
         ))),
     }
 }
 
-fn timestampadd(input: ScalarFunctionInput) -> PlanResult<Expr> {
+fn timestampadd_with_name(input: ScalarFunctionInput, function_name: &str) -> PlanResult<Expr> {
     let (unit, quantity, timestamp) = input.arguments.three()?;
     let unit = match &unit {
         Expr::Literal(ScalarValue::Utf8(Some(s)), _)
         | Expr::Literal(ScalarValue::LargeUtf8(Some(s)), _) => s.clone(),
         Expr::Column(col) => col.name().to_string(),
         _ => {
-            return Err(PlanError::invalid(
-                "timestampadd unit must be a string literal or keyword",
-            ));
+            return Err(PlanError::invalid(format!(
+                "{function_name} unit must be a string literal or keyword"
+            )));
         }
     };
-    let interval = timestampadd_interval(&unit, quantity)?;
+    let interval = timestampadd_interval(function_name, &unit, quantity)?;
     Ok(cast(
         timestamp,
         DataType::Timestamp(
@@ -244,6 +248,20 @@ fn timestampadd(input: ScalarFunctionInput) -> PlanResult<Expr> {
             Some(input.function_context.plan_config.session_timezone.clone()),
         ),
     ) + interval)
+}
+
+fn timestampadd(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    timestampadd_with_name(input, "timestampadd")
+}
+
+fn dateadd(input: ScalarFunctionInput, function_name: &str) -> PlanResult<Expr> {
+    match input.arguments.len() {
+        2 => interval_arithmetic(input, "days", Operator::Plus),
+        3 => timestampadd_with_name(input, function_name),
+        _ => Err(PlanError::invalid(format!(
+            "{function_name} requires 2 or 3 arguments"
+        ))),
+    }
 }
 
 fn make_date(year: Expr, month: Expr, day: Expr) -> Expr {
@@ -400,39 +418,112 @@ fn current_timezone(input: ScalarFunctionInput) -> PlanResult<Expr> {
     Ok(session_tz)
 }
 
+fn coerce_datetime_format(
+    function_name: &str,
+    format: Expr,
+    schema: &DFSchemaRef,
+) -> PlanResult<Expr> {
+    let data_type = format.get_type(schema)?;
+    if data_type.is_nested() {
+        Err(PlanError::invalid(format!(
+            "{function_name} format argument must be a string, got {data_type}"
+        )))
+    } else if data_type.is_string() {
+        Ok(format)
+    } else {
+        Ok(cast(format, DataType::Utf8))
+    }
+}
+
+fn declare_nullable_result(expr: Expr, nullable: bool, schema: &DFSchemaRef) -> PlanResult<Expr> {
+    if nullable && !expr.nullable(schema)? {
+        let null = lit(ScalarValue::try_from(&expr.get_type(schema)?)?);
+        Ok(when(lit(true), expr).otherwise(null)?)
+    } else {
+        Ok(expr)
+    }
+}
+
 fn to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let null_on_error = !input.function_context.plan_config.ansi_mode;
     if input.arguments.len() == 1 {
         // If format is not supplied, the function is a synonym for cast(expr AS DATE).
-        crate::function::scalar::conversion::cast_to_date(input)
+        let expr = input.arguments[0].clone();
+        let data_type = expr.get_type(input.function_context.schema)?;
+        if data_type.is_string() {
+            Ok(ScalarUDF::from(SparkDate::new(null_on_error)).call(vec![expr]))
+        } else {
+            Ok(cast(expr, DataType::Date32))
+        }
     } else if input.arguments.len() == 2 {
         let expr = input.arguments[0].clone();
+        let format = coerce_datetime_format(
+            "to_date",
+            input.arguments[1].clone(),
+            input.function_context.schema,
+        )?;
         let expr_type = expr.get_type(input.function_context.schema);
-        if let Ok(DataType::Timestamp(_, _)) = expr_type {
-            let expr = expr_fn::to_local_time(vec![expr]);
-            return Ok(cast(expr, DataType::Date32)); // In case of data type timestamp, ignore format
+        let date = match &expr_type {
+            Ok(DataType::Timestamp(_, _)) => Some(expr_fn::to_local_time(vec![expr.clone()])),
+            Ok(DataType::Date32 | DataType::Date64) => Some(expr.clone()),
+            _ => None,
+        };
+        if let Some(date) = date {
+            let nullable = !input.function_context.plan_config.ansi_mode
+                || expr.nullable(input.function_context.schema)?
+                || format.nullable(input.function_context.schema)?;
+            return declare_nullable_result(
+                cast(date, DataType::Date32),
+                nullable,
+                input.function_context.schema,
+            );
         }
         let expr = match expr_type {
             Ok(_other) => expr,
             Err(_) => cast(expr, DataType::Utf8), // In case of error, cast to string
         };
-        let mut arguments = input.arguments;
-        arguments[0] = expr;
-        Ok(ScalarUDF::from(SparkDate::new(false)).call(arguments))
+        Ok(ScalarUDF::from(SparkDate::new(null_on_error)).call(vec![expr, format]))
     } else {
         Err(PlanError::invalid("to_date requires 1 or 2 arguments"))
     }
 }
 
+fn validate_unix_timestamp_format(format: &Expr, schema: &DFSchemaRef) -> PlanResult<()> {
+    match format.get_type(schema)? {
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Null => Ok(()),
+        data_type => Err(PlanError::invalid(format!(
+            "unix_timestamp format argument must be a string, got {data_type}"
+        ))),
+    }
+}
+
 fn unix_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let timezone = input.function_context.plan_config.session_timezone.clone();
+    let ansi_mode = input.function_context.plan_config.ansi_mode;
     if input.arguments.is_empty() {
         let expr = ScalarUDF::from(TimestampNow::new(timezone, TimeUnit::Second)).call(vec![]);
         Ok(cast(expr, DataType::Int64))
     } else if input.arguments.len() == 1 {
-        Ok(ScalarUDF::from(SparkUnixTimestamp::new(timezone)).call(input.arguments))
+        Ok(ScalarUDF::from(SparkUnixTimestamp::new(timezone, ansi_mode)).call(input.arguments))
     } else if input.arguments.len() == 2 {
         let (expr, format) = input.arguments.two()?;
-        Ok(ScalarUDF::from(SparkUnixTimestamp::new(timezone)).call(vec![expr, format]))
+        if matches!(
+            expr.get_type(input.function_context.schema)?,
+            DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) | DataType::Null
+        ) {
+            validate_unix_timestamp_format(&format, input.function_context.schema)?;
+            let nullable = !ansi_mode
+                || expr.nullable(input.function_context.schema)?
+                || format.nullable(input.function_context.schema)?;
+            let result =
+                ScalarUDF::from(SparkUnixTimestamp::new(timezone, ansi_mode)).call(vec![expr]);
+            declare_nullable_result(result, nullable, input.function_context.schema)
+        } else {
+            Ok(
+                ScalarUDF::from(SparkUnixTimestamp::new(timezone, ansi_mode))
+                    .call(vec![expr, format]),
+            )
+        }
     } else {
         Err(PlanError::invalid(
             "unix_timestamp requires 0, 1, or 2 arguments",
@@ -504,7 +595,8 @@ fn try_to_time(input: ScalarFunctionInput) -> PlanResult<Expr> {
 }
 
 /// Shared `to_time` / `try_to_time` planner. Routes through `SparkTime`, which
-/// parses strings (with an optional chrono format) or casts time/timestamp args.
+/// parses strings (with an optional Spark Java datetime pattern) or casts
+/// time/timestamp args.
 /// `to_time` errors on failure (Spark's `ToTime` is ANSI-invariant); `try_to_time`
 /// (`is_try`) returns NULL.
 fn time_with_try(input: ScalarFunctionInput, is_try: bool) -> PlanResult<Expr> {
@@ -518,7 +610,6 @@ fn time_with_try(input: ScalarFunctionInput, is_try: bool) -> PlanResult<Expr> {
         // cast to Utf8 here would route non-string inputs through string parsing,
         // bypassing the coercion checks and diverging from the 1-arg behavior.
         let (expr, format) = input.arguments.two()?;
-        let format = to_chrono_fmt(format);
         Ok(udf.call(vec![expr, format]))
     } else {
         let name = if is_try { "try_to_time" } else { "to_time" };
@@ -655,8 +746,43 @@ fn current_localtimestamp_microseconds(input: ScalarFunctionInput) -> PlanResult
     Ok(expr_fn::to_local_time(vec![expr]))
 }
 
-fn convert_tz(from_tz: Expr, to_tz: Expr, ts: Expr, classic: bool) -> Expr {
-    ScalarUDF::from(ConvertTz::new(classic)).call(vec![from_tz, to_tz, ts])
+fn convert_tz(
+    from_tz: Expr,
+    to_tz: Expr,
+    ts: Expr,
+    classic: bool,
+    with_null_short_circuit: bool,
+) -> PlanResult<Expr> {
+    let func = ConvertTz::new(classic);
+    if with_null_short_circuit {
+        let arguments = [from_tz, to_tz, ts]
+            .into_iter()
+            .map(|argument| lambda_with_fresh_parameter(argument, "_convert_tz"))
+            .collect::<PlanResult<Vec<_>>>()?;
+        Ok(Expr::HigherOrderFunction(expr::HigherOrderFunction::new(
+            Arc::new(HigherOrderUDF::new_from_impl(ConvertTzLazy::new(
+                func.with_null_short_circuit(),
+            ))),
+            arguments,
+        )))
+    } else {
+        Ok(ScalarUDF::from(func).call(vec![from_tz, to_tz, ts]))
+    }
+}
+
+// TODO: Reject every non-atomic time-zone type during analysis, even when Arrow can cast
+//  it to Utf8 (for example, ARRAY). Spark's VariantType remains a supported atomic type.
+fn validate_convert_timezone_zone(expr: &Expr, schema: &DFSchemaRef) -> PlanResult<()> {
+    let field = expr.to_field(schema)?.1;
+    if !can_cast_types(field.data_type(), &DataType::Utf8)
+        && !is_variant_storage_field(field.as_ref())
+    {
+        return Err(PlanError::invalid(format!(
+            "convert_timezone time zone arguments must be castable to string, got {}",
+            field.data_type()
+        )));
+    }
+    Ok(())
 }
 
 /// A helper function for processing the input NTZ timestamp.
@@ -668,6 +794,10 @@ fn ntz_timestamp_and_unit(
     match ts.get_type(schema)? {
         DataType::Timestamp(unit, Some(_)) => Ok((expr_fn::to_local_time(vec![ts]), unit)),
         DataType::Timestamp(unit, None) => Ok((ts, unit)),
+        DataType::Null => {
+            let unit = TimeUnit::Microsecond;
+            Ok((cast(ts, DataType::Timestamp(unit, None)), unit))
+        }
         DataType::Date32 | DataType::Date64 => {
             let unit = TimeUnit::Microsecond;
             Ok((cast(ts, DataType::Timestamp(unit, None)), unit))
@@ -697,12 +827,33 @@ fn convert_timezone(input: ScalarFunctionInput) -> PlanResult<Expr> {
             "convert_timezone takes 2 or 3 arguments, got {args:?}"
         ))),
     }?;
+    validate_convert_timezone_zone(&from_tz, input.function_context.schema)?;
+    validate_convert_timezone_zone(&to_tz, input.function_context.schema)?;
     let (ts, _unit) = ntz_timestamp_and_unit(
         ts,
         input.function_context.schema,
         input.function_context.plan_config.ansi_mode,
     )?;
-    Ok(convert_tz(from_tz, to_tz, ts, true))
+    let requires_scalar_evaluation =
+        [&from_tz, &to_tz, &ts]
+            .into_iter()
+            .try_fold(false, |found, argument| {
+                if found {
+                    PlanResult::Ok(true)
+                } else {
+                    Ok(expr_contains_python_udf(argument)?
+                        || expr_contains_spark_cast_to_variant(argument)?)
+                }
+            })?;
+
+    if requires_scalar_evaluation {
+        Ok(
+            ScalarUDF::from(ConvertTz::new(true).with_null_short_circuit())
+                .call(vec![from_tz, to_tz, ts]),
+        )
+    } else {
+        convert_tz(from_tz, to_tz, ts, true, true)
+    }
 }
 
 /// A helper function for processing the input timestamp for
@@ -713,6 +864,7 @@ fn utc_ntz_timestamp_and_unit(
     ts: Expr,
     schema: &DFSchemaRef,
     session_tz: &Arc<str>,
+    ansi_mode: bool,
 ) -> PlanResult<(Expr, TimeUnit)> {
     let (ts, unit) = match ts.get_type(schema)? {
         DataType::Timestamp(unit, Some(_)) => (ts, unit),
@@ -720,13 +872,19 @@ fn utc_ntz_timestamp_and_unit(
             let ts = cast(ts, DataType::Timestamp(unit, Some(session_tz.clone())));
             (ts, unit)
         }
-        DataType::Date32
-        | DataType::Date64
-        | DataType::Utf8
-        | DataType::LargeUtf8
-        | DataType::Utf8View => {
+        DataType::Date32 | DataType::Date64 => {
             let unit = TimeUnit::Microsecond;
             let ts = cast(ts, DataType::Timestamp(unit, Some(session_tz.clone())));
+            (ts, unit)
+        }
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+            let unit = TimeUnit::Microsecond;
+            let ts = ScalarUDF::from(SparkTimestamp::try_new(
+                Some(session_tz.clone()),
+                ansi_mode,
+                false,
+            )?)
+            .call(vec![ts]);
             (ts, unit)
         }
         x => {
@@ -739,11 +897,19 @@ fn utc_ntz_timestamp_and_unit(
     Ok((ts, unit))
 }
 
+// TODO: Match Spark's foldability-aware zone eval for `from_utc_timestamp` and `to_utc_timestamp`:
+//  a foldable NULL skips the timestamp, a non-NULL foldable zone is validated eagerly,
+//  and a dynamic zone is skipped for a NULL timestamp.
 fn from_utc_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let session_tz = input.function_context.plan_config.session_timezone.clone();
     let (ts, to_tz) = input.arguments.two()?;
-    let (ts, unit) = utc_ntz_timestamp_and_unit(ts, input.function_context.schema, &session_tz)?;
-    let ts = convert_tz(lit("UTC"), to_tz, ts, false);
+    let (ts, unit) = utc_ntz_timestamp_and_unit(
+        ts,
+        input.function_context.schema,
+        &session_tz,
+        input.function_context.plan_config.ansi_mode,
+    )?;
+    let ts = convert_tz(lit("UTC"), to_tz, ts, false, false)?;
     let ts = cast(ts, DataType::Timestamp(unit, Some(Arc::from("UTC"))));
     Ok(cast(ts, DataType::Timestamp(unit, Some(session_tz))))
 }
@@ -751,8 +917,13 @@ fn from_utc_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
 fn to_utc_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let session_tz = input.function_context.plan_config.session_timezone.clone();
     let (ts, from_tz) = input.arguments.two()?;
-    let (ts, unit) = utc_ntz_timestamp_and_unit(ts, input.function_context.schema, &session_tz)?;
-    let ts = convert_tz(from_tz, lit("UTC"), ts, false);
+    let (ts, unit) = utc_ntz_timestamp_and_unit(
+        ts,
+        input.function_context.schema,
+        &session_tz,
+        input.function_context.plan_config.ansi_mode,
+    )?;
+    let ts = convert_tz(from_tz, lit("UTC"), ts, false, false)?;
     let ts = cast(ts, DataType::Timestamp(unit, Some(Arc::from("UTC"))));
     Ok(cast(ts, DataType::Timestamp(unit, Some(session_tz))))
 }
@@ -766,7 +937,7 @@ fn make_timestamp_ltz(args: Vec<Expr>, session_tz: &Arc<str>, is_try: bool) -> P
             unreachable!()
         };
         let ntz_ts = ScalarUDF::from(SparkMakeTimestampNtz::new(is_try)).call(args);
-        convert_tz(from_tz, lit(session_tz.to_string()), ntz_ts, true)
+        convert_tz(from_tz, lit(session_tz.to_string()), ntz_ts, true, false)?
     } else {
         return Err(PlanError::invalid(format!(
             "{}make_timestamp_ltz requires 2, 3, 6 or 7 arguments, got {:?}",
@@ -1098,10 +1269,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             F::custom(current_timestamp_microseconds),
         ),
         ("current_timezone", F::custom(current_timezone)),
-        (
-            "date_add",
-            F::custom(|input| interval_arithmetic(input, "days", Operator::Plus)),
-        ),
+        ("date_add", F::custom(|input| dateadd(input, "date_add"))),
         ("date_diff", F::custom(datediff)),
         (
             "date_format",
@@ -1120,10 +1288,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             F::custom(|input| interval_arithmetic(input, "days", Operator::Minus)),
         ),
         ("date_trunc", F::custom(date_trunc)),
-        (
-            "dateadd",
-            F::custom(|input| interval_arithmetic(input, "days", Operator::Plus)),
-        ),
+        ("dateadd", F::custom(|input| dateadd(input, "dateadd"))),
         ("datediff", F::custom(datediff)),
         ("datepart", F::binary(date_part)),
         ("day", F::unary(|arg| integer_part(arg, "DAY"))),
@@ -1178,6 +1343,13 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("quarter", F::unary(|arg| integer_part(arg, "QUARTER"))),
         ("second", F::unary(|arg| integer_part(arg, "SECOND"))),
         ("session_window", F::unknown("session_window")),
+        ("time_bucket", F::unknown("time_bucket")),
+        ("time_from_micros", F::unknown("time_from_micros")),
+        ("time_from_millis", F::unknown("time_from_millis")),
+        ("time_from_seconds", F::unknown("time_from_seconds")),
+        ("time_to_micros", F::unknown("time_to_micros")),
+        ("time_to_millis", F::unknown("time_to_millis")),
+        ("time_to_seconds", F::unknown("time_to_seconds")),
         (
             "timestamp_micros",
             F::cast(DataType::Timestamp(

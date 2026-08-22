@@ -48,6 +48,7 @@ serde_json = { workspace = true }
 indexmap = { workspace = true }
 log = { workspace = true }
 regex = { workspace = true }
+regex-syntax = { workspace = true }
 parquet-variant-compute = { workspace = true }
 
 [build-dependencies]

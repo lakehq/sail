@@ -1,5 +1,4 @@
 @spark-4
-@schema_of_variant_agg
 Feature: schema_of_variant_agg
 
   Rule: Uniform types

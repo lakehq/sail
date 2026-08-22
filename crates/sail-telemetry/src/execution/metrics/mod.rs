@@ -15,8 +15,8 @@ use datafusion::physical_plan::joins::{
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::{ExecutionPlan, Metric};
 use paste::paste;
+use sail_common::telemetry::KeyValue;
 
-use crate::common::KeyValue;
 use crate::metrics::MetricRegistry;
 
 /// A flag indicating whether the metric was handled by a metric emitter.

@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 use std::env;
+use std::sync::Arc;
 
 use fastrace::collector::SpanContext;
+use futures::future::BoxFuture;
 use k8s_openapi::api::core::v1::{
     Container, EnvVar, EnvVarSource, ObjectFieldSelector, Pod, PodSpec, PodTemplateSpec,
 };
@@ -11,9 +13,10 @@ use kube::Api;
 use kube::api::{DeleteParams, ListParams};
 use rand::RngExt;
 use rand::distr::Uniform;
+use sail_common::actor::ActorSystem;
 use sail_common::config::ClusterConfigEnv;
-use sail_server::RetryStrategy;
-use sail_telemetry::common::ContextPropagationEnv;
+use sail_common::telemetry::ContextPropagationEnv;
+use sail_common::utils::retry::RetryStrategy;
 use tokio::sync::OnceCell;
 
 use crate::error::{ExecutionError, ExecutionResult};
@@ -32,15 +35,27 @@ pub struct KubernetesWorkerManagerOptions {
     pub worker_pod_template: String,
 }
 
-pub struct KubernetesWorkerManager {
+pub struct KubernetesWorkerService {
     /// An opaque name that can be used to create names to uniquely identify Kubernetes resources.
     name: String,
     options: KubernetesWorkerManagerOptions,
     pods: OnceCell<Api<Pod>>,
 }
 
+pub struct KubernetesWorkerManager {
+    service: Arc<KubernetesWorkerService>,
+}
+
 impl KubernetesWorkerManager {
     pub fn new(options: KubernetesWorkerManagerOptions) -> Self {
+        Self {
+            service: Arc::new(KubernetesWorkerService::new(options)),
+        }
+    }
+}
+
+impl KubernetesWorkerService {
+    fn new(options: KubernetesWorkerManagerOptions) -> Self {
         Self {
             name: Self::generate_name(),
             options,
@@ -48,7 +63,7 @@ impl KubernetesWorkerManager {
         }
     }
 
-    pub fn generate_name() -> String {
+    fn generate_name() -> String {
         #[expect(clippy::unwrap_used)]
         rand::rng()
             .sample_iter(Uniform::new(0, 36).unwrap())
@@ -102,7 +117,7 @@ impl KubernetesWorkerManager {
             ),
             (
                 "app.kubernetes.io/instance".to_string(),
-                format!("{}-{}", self.name, id),
+                format!("{}-{id}", self.name),
             ),
             (
                 "sail.lakesail.com/worker-manager".to_string(),
@@ -115,6 +130,7 @@ impl KubernetesWorkerManager {
         let WorkerLaunchOptions {
             enable_tls,
             driver_id,
+            session_id,
             driver_external_host,
             driver_external_port,
             worker_heartbeat_interval,
@@ -178,6 +194,11 @@ impl KubernetesWorkerManager {
                 value_from: None,
             },
             EnvVar {
+                name: ClusterConfigEnv::SESSION_ID.to_string(),
+                value: Some(session_id),
+                value_from: None,
+            },
+            EnvVar {
                 name: ClusterConfigEnv::WORKER_ID.to_string(),
                 value: Some(u64::from(id).to_string()),
                 value_from: None,
@@ -222,8 +243,9 @@ impl KubernetesWorkerManager {
                 name: ClusterConfigEnv::SHUFFLE_BACKEND__TYPE.to_string(),
                 value: Some(
                     match &shuffle_backend {
-                        ShuffleBackendKind::Streaming => "streaming",
+                        ShuffleBackendKind::Flight => "flight",
                         ShuffleBackendKind::Storage { .. } => "storage",
+                        ShuffleBackendKind::Celeborn { .. } => "celeborn",
                     }
                     .to_string(),
                 ),
@@ -234,14 +256,16 @@ impl KubernetesWorkerManager {
             path,
             max_file_size,
             compression,
-        } = shuffle_backend
+        } = &shuffle_backend
         {
-            env.extend([
-                EnvVar {
+            if let Some(path) = path {
+                env.push(EnvVar {
                     name: ClusterConfigEnv::SHUFFLE_BACKEND__STORAGE__PATH.to_string(),
-                    value: Some(path),
+                    value: Some(path.clone()),
                     value_from: None,
-                },
+                });
+            }
+            env.extend([
                 EnvVar {
                     name: ClusterConfigEnv::SHUFFLE_BACKEND__STORAGE__MAX_FILE_SIZE.to_string(),
                     value: Some(max_file_size.to_string()),
@@ -261,6 +285,58 @@ impl KubernetesWorkerManager {
                 },
             ]);
         }
+        if let ShuffleBackendKind::Celeborn {
+            master_host,
+            master_port,
+            compression,
+            heartbeat_interval_secs,
+            partition_split_threshold,
+            partition_split_mode,
+            ..
+        } = &shuffle_backend
+        {
+            env.extend([
+                EnvVar {
+                    name: ClusterConfigEnv::SHUFFLE_BACKEND__CELEBORN__MASTER_HOST.to_string(),
+                    value: Some(master_host.clone()),
+                    value_from: None,
+                },
+                EnvVar {
+                    name: ClusterConfigEnv::SHUFFLE_BACKEND__CELEBORN__MASTER_PORT.to_string(),
+                    value: Some(master_port.to_string()),
+                    value_from: None,
+                },
+                EnvVar {
+                    name: ClusterConfigEnv::SHUFFLE_BACKEND__CELEBORN__COMPRESSION.to_string(),
+                    value: Some(compression.to_string()),
+                    value_from: None,
+                },
+                EnvVar {
+                    name: ClusterConfigEnv::SHUFFLE_BACKEND__CELEBORN__HEARTBEAT_INTERVAL_SECS
+                        .to_string(),
+                    value: Some(heartbeat_interval_secs.to_string()),
+                    value_from: None,
+                },
+                EnvVar {
+                    name: ClusterConfigEnv::SHUFFLE_BACKEND__CELEBORN__ENDPOINT_OVERRIDES
+                        .to_string(),
+                    value: Some(shuffle_backend.celeborn_endpoint_overrides_string()),
+                    value_from: None,
+                },
+                EnvVar {
+                    name: ClusterConfigEnv::SHUFFLE_BACKEND__CELEBORN__PARTITION_SPLIT_THRESHOLD
+                        .to_string(),
+                    value: Some(partition_split_threshold.to_string()),
+                    value_from: None,
+                },
+                EnvVar {
+                    name: ClusterConfigEnv::SHUFFLE_BACKEND__CELEBORN__PARTITION_SPLIT_MODE
+                        .to_string(),
+                    value: Some(partition_split_mode.to_string()),
+                    value_from: None,
+                },
+            ]);
+        }
         if let Some(traceparent) = w3c_traceparent {
             env.push(EnvVar {
                 name: ContextPropagationEnv::TRACEPARENT.to_string(),
@@ -274,6 +350,22 @@ impl KubernetesWorkerManager {
 
 #[tonic::async_trait]
 impl WorkerManager for KubernetesWorkerManager {
+    fn launch_worker(
+        &self,
+        _system: &mut ActorSystem,
+        id: WorkerId,
+        options: WorkerLaunchOptions,
+    ) -> BoxFuture<'static, ExecutionResult<()>> {
+        let service = self.service.clone();
+        Box::pin(async move { service.launch_worker(id, options).await })
+    }
+
+    async fn stop(&self) -> ExecutionResult<()> {
+        self.service.stop().await
+    }
+}
+
+impl KubernetesWorkerService {
     async fn launch_worker(
         &self,
         id: WorkerId,

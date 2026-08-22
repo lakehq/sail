@@ -1,5 +1,4 @@
 # Moved from features/datetime_literal.feature by the datetime/ layout reorganisation.
-@datetime_literal
 Feature: Datetime literal syntax from Spark SQL documentation
 
   This feature tests datetime literal syntax as documented in Spark 4.1.2:
@@ -17,10 +16,11 @@ Feature: Datetime literal syntax from Spark SQL documentation
         | <col> |
 
       Examples:
-        | case                             | lit        | col        |
-        | DATE literal with year only      | 1997       | 1997-01-01 |
-        | DATE literal with year and month | 1997-01    | 1997-01-01 |
-        | DATE literal with full date      | 2011-11-11 | 2011-11-11 |
+        | case                                         | lit         | col        |
+        | DATE literal with year only                  | 1997        | 1997-01-01 |
+        | DATE literal with year and month             | 1997-01     | 1997-01-01 |
+        | DATE literal with full date                  | 2011-11-11  | 2011-11-11 |
+        | DATE literal with leading positive year sign | +1997-01-31 | 1997-01-31 |
 
   Rule: TIME literal syntax
 
@@ -52,10 +52,11 @@ Feature: Datetime literal syntax from Spark SQL documentation
         | <col> |
 
       Examples:
-        | case                                       | lit                                   | col                        |
-        | TIMESTAMP literal with milliseconds        | 1997-01-31 09:26:56.123               | 1997-01-31 09:26:56.123    |
-        | TIMESTAMP literal with year and month only | 1997-01                               | 1997-01-01 00:00:00        |
-        | TIMESTAMP literal with timezone conversion | 1997-01-31 09:26:56.66666666UTC+08:00 | 1997-01-31 01:26:56.666666 |
+        | case                                              | lit                                   | col                        |
+        | TIMESTAMP literal with milliseconds               | 1997-01-31 09:26:56.123               | 1997-01-31 09:26:56.123    |
+        | TIMESTAMP literal with year and month only        | 1997-01                               | 1997-01-01 00:00:00        |
+        | TIMESTAMP literal with timezone conversion        | 1997-01-31 09:26:56.66666666UTC+08:00 | 1997-01-31 01:26:56.666666 |
+        | TIMESTAMP literal with leading positive year sign | +1997-01-31 09:26:56                  | 1997-01-31 09:26:56        |
 
   Rule: Nanosecond precision handling
 

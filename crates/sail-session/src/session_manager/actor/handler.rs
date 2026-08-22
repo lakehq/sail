@@ -1,28 +1,24 @@
-use std::sync::Arc;
-
 use chrono::Utc;
 use datafusion::prelude::SessionContext;
 use fastrace::Span;
 use fastrace::collector::SpanContext;
 use log::{info, warn};
 use sail_cache::remote_checkpoint::RemoteCheckpointRegistry;
+use sail_common::actor::{ActorAction, ActorContext};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::activity::ActivityTracker;
 use sail_common_datafusion::session::job::JobService;
-use sail_common_datafusion::system::catalog::{OptionRow, SessionRow};
-use sail_common_datafusion::system::observable::{JobRunnerObserver, SessionManagerObserver};
-use sail_common_datafusion::system::predicate::PredicateExt;
 use sail_execution::DriverId;
 use sail_execution::driver::DriverHandle;
 use sail_execution::error::ExecutionResult;
-use sail_server::actor::{ActorAction, ActorContext};
+use sail_telemetry::system_event::SystemEvent;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use crate::error::{SessionError, SessionResult};
 use crate::session_factory::{ServerSessionInfo, SessionJobRunnerInfo};
+use crate::session_manager::SessionManagerMessage;
 use crate::session_manager::actor::SessionManagerActor;
-use crate::session_manager::event::{SessionHistory, SessionManagerEvent};
 use crate::session_manager::session::{ServerSession, ServerSessionState};
 
 impl SessionManagerActor {
@@ -43,7 +39,7 @@ impl SessionManagerActor {
         result: oneshot::Sender<SessionResult<SessionContext>>,
     ) -> ActorAction {
         let context = if let Some(session) = self.sessions.get(&session_id) {
-            if let ServerSessionState::Running { context } = &session.state {
+            if let ServerSessionState::Running { context, .. } = &session.state {
                 Ok(context.clone())
             } else {
                 Err(SessionError::invalid(format!(
@@ -51,6 +47,10 @@ impl SessionManagerActor {
                 )))
             }
         } else {
+            // TODO: The session ID is used in various storage paths, so it is assumed to be unique
+            //   across all session managers, and it should contain only valid characters for a
+            //   path segment. Right now the session ID is generated as a UUID by the Spark client,
+            //   so this is true in practice, but we may still want some validation here.
             let session_id = session_id.clone();
             info!("creating session {session_id}");
             let span = Span::root(
@@ -66,10 +66,15 @@ impl SessionManagerActor {
                     return ActorAction::Continue;
                 }
             };
-            let runner = self.job_runner_factory.create(SessionJobRunnerInfo {
-                driver_id,
-                driver_server_port: self.gateway.as_ref().map(|x| x.port()),
-            });
+            let runner = self.job_runner_factory.create(
+                ctx.children_mut(),
+                SessionJobRunnerInfo {
+                    session_id: session_id.clone(),
+                    driver_id,
+                    driver_server_port: self.driver_gateway.as_ref().map(|x| x.port()),
+                    event_reporter: self.event_reporter.clone(),
+                },
+            );
             match runner {
                 Ok(runner) => {
                     let (runner, driver) = runner.into_parts();
@@ -77,6 +82,17 @@ impl SessionManagerActor {
                     if let Some(driver) = &driver
                         && let Err(e) = self.drivers.insert(driver_id, driver.clone())
                     {
+                        let session = ServerSession {
+                            state: ServerSessionState::Failed,
+                        };
+                        let status = session.state.status().to_string();
+                        self.sessions.insert(session_id.clone(), session);
+                        self.event_reporter.report(SystemEvent::SessionCreated {
+                            session_id: session_id.clone(),
+                            user_id,
+                            status,
+                            created_at: Utc::now(),
+                        });
                         let driver = driver.clone();
                         ctx.spawn(async move {
                             if let Err(e) = driver.shutdown().await {
@@ -103,15 +119,19 @@ impl SessionManagerActor {
                                 });
                             }
                             let session = ServerSession {
-                                user_id,
-                                created_at: Utc::now(),
-                                deleted_at: None,
                                 state: ServerSessionState::Running {
                                     context: context.clone(),
+                                    driver_id: registered_driver_id,
                                 },
-                                driver_id: registered_driver_id,
                             };
-                            self.sessions.insert(session_id, session);
+                            let status = session.state.status().to_string();
+                            self.sessions.insert(session_id.clone(), session);
+                            self.event_reporter.report(SystemEvent::SessionCreated {
+                                session_id: session_id.clone(),
+                                user_id,
+                                status,
+                                created_at: Utc::now(),
+                            });
                             Ok(context)
                         }
                         Err(e) => {
@@ -124,6 +144,17 @@ impl SessionManagerActor {
                                     }
                                 });
                             }
+                            let session = ServerSession {
+                                state: ServerSessionState::Failed,
+                            };
+                            let status = session.state.status().to_string();
+                            self.sessions.insert(session_id.clone(), session);
+                            self.event_reporter.report(SystemEvent::SessionCreated {
+                                session_id: session_id.clone(),
+                                user_id,
+                                status,
+                                created_at: Utc::now(),
+                            });
                             Err(e.into())
                         }
                     }
@@ -137,8 +168,8 @@ impl SessionManagerActor {
                 .and_then(|tracker| tracker.track_activity())
         {
             ctx.send_with_delay(
-                SessionManagerEvent::ProbeIdleSession {
-                    session_id,
+                SessionManagerMessage::ProbeIdleSession {
+                    session_id: session_id.clone(),
                     instant: active_at,
                 },
                 self.options.session_timeout,
@@ -156,14 +187,22 @@ impl SessionManagerActor {
     ) -> ActorAction {
         let session = self.sessions.get_mut(&session_id);
         if let Some(session) = session
-            && let ServerSessionState::Running { context } = &mut session.state
+            && let ServerSessionState::Running { context, driver_id } = &mut session.state
             && let Ok(tracker) = context.extension::<ActivityTracker>()
             && tracker.active_at().is_ok_and(|x| x <= instant)
         {
             info!("removing idle session {session_id}");
-            Self::delete_session(ctx, session_id, context);
-            session.deleted_at = Some(Utc::now());
-            session.state = ServerSessionState::Deleting;
+            Self::delete_session(ctx, session_id.clone(), context);
+            if let Some(driver_id) = *driver_id {
+                self.drivers.remove(driver_id);
+            }
+            session.state = ServerSessionState::Deleted;
+            let status = session.state.status().to_string();
+            self.event_reporter.report(SystemEvent::SessionUpdated {
+                session_id: session_id.clone(),
+                status,
+                updated_at: Utc::now(),
+            });
         }
         ActorAction::Continue
     }
@@ -176,11 +215,19 @@ impl SessionManagerActor {
     ) -> ActorAction {
         let session = self.sessions.get_mut(&session_id);
         let output = if let Some(session) = session {
-            if let ServerSessionState::Running { context } = &mut session.state {
+            if let ServerSessionState::Running { context, driver_id } = &mut session.state {
                 info!("removing session {session_id}");
-                Self::delete_session(ctx, session_id, context);
-                session.deleted_at = Some(Utc::now());
-                session.state = ServerSessionState::Deleting;
+                Self::delete_session(ctx, session_id.clone(), context);
+                if let Some(driver_id) = *driver_id {
+                    self.drivers.remove(driver_id);
+                }
+                session.state = ServerSessionState::Deleted;
+                let status = session.state.status().to_string();
+                self.event_reporter.report(SystemEvent::SessionUpdated {
+                    session_id: session_id.clone(),
+                    status,
+                    updated_at: Utc::now(),
+                });
                 Ok(())
             } else {
                 Err(SessionError::invalid(format!(
@@ -196,29 +243,6 @@ impl SessionManagerActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_set_session_history(
-        &mut self,
-        _ctx: &mut ActorContext<Self>,
-        session_id: String,
-        history: SessionHistory,
-    ) -> ActorAction {
-        let Some(session) = self.sessions.get_mut(&session_id) else {
-            warn!("session not found: {session_id}");
-            return ActorAction::Continue;
-        };
-        if let Some(driver_id) = session.driver_id.take() {
-            self.drivers.remove(driver_id);
-        }
-        if matches!(session.state, ServerSessionState::Deleting) {
-            session.state = ServerSessionState::Deleted {
-                history: Arc::new(history),
-            };
-        } else {
-            warn!("session is not being deleted: {session_id}");
-        }
-        ActorAction::Continue
-    }
-
     pub(super) fn handle_set_session_failure(
         &mut self,
         ctx: &mut ActorContext<Self>,
@@ -228,7 +252,11 @@ impl SessionManagerActor {
             warn!("session not found: {session_id}");
             return ActorAction::Continue;
         };
-        if let Some(driver_id) = session.driver_id.take()
+        let driver_id = match &session.state {
+            ServerSessionState::Running { driver_id, .. } => *driver_id,
+            ServerSessionState::Deleted | ServerSessionState::Failed => None,
+        };
+        if let Some(driver_id) = driver_id
             && let Some(driver) = self.drivers.remove(driver_id)
         {
             ctx.spawn(async move {
@@ -238,160 +266,12 @@ impl SessionManagerActor {
             });
         }
         session.state = ServerSessionState::Failed;
-        ActorAction::Continue
-    }
-
-    pub(super) fn handle_observe_state(
-        &mut self,
-        ctx: &mut ActorContext<Self>,
-        observer: SessionManagerObserver,
-    ) -> ActorAction {
-        match observer {
-            SessionManagerObserver::Jobs {
-                session_id,
-                job_id,
-                fetch,
-                result,
-            } => {
-                let task = self
-                    .sessions
-                    .iter()
-                    .predicate_filter_async_flat_map(
-                        session_id,
-                        |&(k, _)| k,
-                        |(k, v)| {
-                            v.observe_job_runner(|tx| JobRunnerObserver::Jobs {
-                                session_id: k.clone(),
-                                job_id: job_id.clone(),
-                                fetch,
-                                result: tx,
-                            })
-                        },
-                    )
-                    .into_task();
-                ctx.spawn(async move {
-                    let _ = result.send(task.fetch(fetch).collect().await);
-                });
-            }
-            SessionManagerObserver::Stages {
-                session_id,
-                job_id,
-                fetch,
-                result,
-            } => {
-                let task = self
-                    .sessions
-                    .iter()
-                    .predicate_filter_async_flat_map(
-                        session_id,
-                        |&(k, _)| k,
-                        |(k, v)| {
-                            v.observe_job_runner(|tx| JobRunnerObserver::Stages {
-                                session_id: k.clone(),
-                                job_id: job_id.clone(),
-                                fetch,
-                                result: tx,
-                            })
-                        },
-                    )
-                    .into_task();
-                ctx.spawn(async move {
-                    let _ = result.send(task.fetch(fetch).collect().await);
-                });
-            }
-            SessionManagerObserver::Tasks {
-                session_id,
-                job_id,
-                fetch,
-                result,
-            } => {
-                let task = self
-                    .sessions
-                    .iter()
-                    .predicate_filter_async_flat_map(
-                        session_id,
-                        |&(k, _)| k,
-                        |(k, v)| {
-                            v.observe_job_runner(|tx| JobRunnerObserver::Tasks {
-                                session_id: k.clone(),
-                                job_id: job_id.clone(),
-                                fetch,
-                                result: tx,
-                            })
-                        },
-                    )
-                    .into_task();
-                ctx.spawn(async move {
-                    let _ = result.send(task.fetch(fetch).collect().await);
-                });
-            }
-            SessionManagerObserver::Sessions {
-                session_id,
-                fetch,
-                result,
-            } => {
-                let output = self
-                    .sessions
-                    .iter()
-                    .predicate_filter_map(
-                        session_id,
-                        |&(k, _)| k,
-                        |(k, v)| SessionRow {
-                            session_id: k.clone(),
-                            user_id: v.user_id.clone(),
-                            status: v.state.status().to_string(),
-                            created_at: v.created_at,
-                            deleted_at: v.deleted_at,
-                        },
-                    )
-                    .fetch(fetch)
-                    .collect::<Result<Vec<_>, _>>();
-                let _ = result.send(output);
-            }
-            SessionManagerObserver::Workers {
-                session_id,
-                worker_id,
-                fetch,
-                result,
-            } => {
-                let task = self
-                    .sessions
-                    .iter()
-                    .predicate_filter_async_flat_map(
-                        session_id,
-                        |&(k, _)| k,
-                        |(k, v)| {
-                            v.observe_job_runner(|tx| JobRunnerObserver::Workers {
-                                session_id: k.clone(),
-                                worker_id: worker_id.clone(),
-                                fetch,
-                                result: tx,
-                            })
-                        },
-                    )
-                    .into_task();
-                ctx.spawn(async move {
-                    let _ = result.send(task.fetch(fetch).collect().await);
-                });
-            }
-            SessionManagerObserver::Options { key, fetch, result } => {
-                let rows = self
-                    .options
-                    .options
-                    .iter()
-                    .predicate_filter_map(
-                        key,
-                        |(key, _)| key,
-                        |(key, value)| OptionRow {
-                            key: key.clone(),
-                            value: value.clone(),
-                        },
-                    )
-                    .fetch(fetch)
-                    .collect::<Result<Vec<_>, _>>();
-                let _ = result.send(rows);
-            }
-        }
+        let status = session.state.status().to_string();
+        self.event_reporter.report(SystemEvent::SessionUpdated {
+            session_id,
+            status,
+            updated_at: Utc::now(),
+        });
         ActorAction::Continue
     }
 
@@ -402,12 +282,9 @@ impl SessionManagerActor {
         };
         let checkpoint_registry = context.extension::<RemoteCheckpointRegistry>().ok();
         let runtime_env = context.runtime_env();
-        let handle = ctx.handle().clone();
-        let (tx, rx) = oneshot::channel();
         ctx.spawn(async move {
             // Stop tasks before deleting the namespace so late attempts cannot recreate objects.
-            service.runner().stop(tx).await;
-            let history = rx.await;
+            service.runner().stop().await;
             if let Some(checkpoint_registry) = checkpoint_registry
                 && let Err(error) = checkpoint_registry
                     .cleanup_session(runtime_env.as_ref())
@@ -415,14 +292,6 @@ impl SessionManagerActor {
             {
                 warn!("failed to clean checkpoints for session {session_id}: {error}");
             }
-            let message = match history {
-                Ok(x) => SessionManagerEvent::SetSessionHistory {
-                    session_id,
-                    history: SessionHistory { job_runner: x },
-                },
-                Err(_) => SessionManagerEvent::SetSessionFailure { session_id },
-            };
-            let _ = handle.send(message).await;
         });
     }
 }

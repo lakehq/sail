@@ -1,4 +1,3 @@
-@xpath_string
 Feature: xpath_string with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -6,7 +5,7 @@ Feature: xpath_string with an argument coming from a column
 
   Rule: xpath_string — the argument must be foldable
 
-    @column_args
+    @function(columnargs)
     Scenario: xpath_string with the argument as a literal
       When query
         """
@@ -17,7 +16,7 @@ Feature: xpath_string with an argument coming from a column
         | cc     |
 
     # Spark requires a foldable argument here; Sail accepts a column: Sail returns ['cc', 'NULL'].
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: xpath_string takes argument 2 from a column containing NULL
       When query
         """
@@ -26,7 +25,7 @@ Feature: xpath_string with an argument coming from a column
       Then query error NON_FOLDABLE_INPUT
 
     # Spark requires a foldable argument here; Sail accepts a column: Sail returns ['cc', 'cc'].
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: xpath_string takes argument 2 from a column
       When query
         """
@@ -34,7 +33,7 @@ Feature: xpath_string with an argument coming from a column
         """
       Then query error NON_FOLDABLE_INPUT
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null xml literal yields a string

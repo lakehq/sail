@@ -27,7 +27,7 @@ use sail_catalog::provider::{
     TableFormatCreateMetadataMode,
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
-use sail_common::http::SAIL_USER_AGENT;
+use sail_common::utils::http::SAIL_USER_AGENT;
 use sail_common_datafusion::catalog::delta::{
     DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY, unity_table_id_value,
 };

@@ -1,6 +1,6 @@
 """Output-schema nullability via the DataFrame API.
 
-Complements the SQL `@spark_null` feature suite with the DataFrame path: build a
+Complements the SQL `@function(nullability)` feature suite with the DataFrame path: build a
 DataFrame from an explicit `StructType` (so the input nullability is exactly what
 we declare — a non-nullable and a nullable column), apply functions through the
 `F.*` API, and assert the resulting schema's `nullable` flags.

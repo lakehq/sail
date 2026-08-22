@@ -1,5 +1,15 @@
-@make_timestamp_ltz
 Feature: make_timestamp_ltz
+
+  Rule: Invalid time zone validation
+
+    Scenario: `try_make_timestamp_ltz` validates the time zone before invalid fields
+      When query
+        """
+        SELECT try_make_timestamp_ltz(
+          2024, 13, 1, 0, 0, 0, 'Not/AZone'
+        ) AS result
+        """
+      Then query error INVALID_TIMEZONE
 
   Rule: Daylight saving time handling
 

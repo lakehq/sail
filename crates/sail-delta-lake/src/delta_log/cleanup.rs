@@ -8,11 +8,14 @@ use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use uuid::Uuid;
 
 use super::{
-    parse_checkpoint_version_from_location, parse_checksum_version_from_location,
-    parse_commit_version_from_location, parse_compacted_json_versions_from_location,
-    resolve_version_timestamp,
+    list_delta_log_entries_from, parse_checkpoint_version_from_location,
+    parse_checksum_version_from_location, parse_commit_version_from_location,
+    parse_compacted_json_versions_from_location, read_last_checkpoint_hint_from_store,
+    resolve_version_timestamp, v2_checkpoint_path_from_hint,
 };
-use crate::checkpoint::read_checkpoint_main_rows_from_checkpoint_file;
+use crate::checkpoint::{
+    inspect_checkpoint_main_file, write_classic_checkpoint_from_v2_checkpoint,
+};
 use crate::delta_log::LogStore;
 use crate::snapshot::DeltaSnapshot;
 use crate::spec::{
@@ -135,12 +138,18 @@ pub(crate) async fn cleanup_expired_delta_log_files(
     // boundary version when the table uses V2 (UUID-named) checkpoints.
     ensure_v2_compat_classic_checkpoint(object_store.clone(), retention_checkpoint_version).await?;
 
+    // Validate every checkpoint that will remain after cleanup and collect its sidecar references
+    // before deleting any log file. A damaged retained checkpoint must fail closed while the
+    // older JSON history is still available.
+    let referenced_sidecars =
+        collect_referenced_sidecars(object_store.clone(), retention_checkpoint_version).await?;
+
     let deleted_logs =
         delete_logs_before_checkpoint_version(object_store.clone(), retention_checkpoint_version)
             .await?;
 
     // Clean up orphaned sidecar files (V2 checkpoint GC per protocol spec).
-    let deleted_sidecars = cleanup_orphaned_sidecars(object_store).await?;
+    let deleted_sidecars = delete_orphaned_sidecars(object_store, &referenced_sidecars).await?;
 
     Ok(deleted_logs + deleted_sidecars)
 }
@@ -148,8 +157,8 @@ pub(crate) async fn cleanup_expired_delta_log_files(
 /// Ensures a classic single-file checkpoint (`{version:020}.checkpoint.parquet`) exists at
 /// `version` when the checkpoint at that version is a UUID-named V2 checkpoint.
 ///
-/// The compat file is a byte-copy of a UUID-named V2 parquet main checkpoint to the classic
-/// filename. JSON manifests are never copied to a parquet checkpoint path.
+/// The compat file contains the complete checkpoint state, including file actions loaded from
+/// V2 sidecars. It is always encoded as Parquet regardless of the top-level V2 manifest format.
 async fn ensure_v2_compat_classic_checkpoint(
     object_store: Arc<dyn ObjectStore>,
     version: i64,
@@ -160,22 +169,27 @@ async fn ensure_v2_compat_classic_checkpoint(
         return Ok(());
     }
 
+    if let Some(hint) = read_last_checkpoint_hint_from_store(object_store.clone()).await
+        && hint.version == version
+        && let Some(hinted_path) = v2_checkpoint_path_from_hint(&hint)?
+    {
+        let checkpoint_meta = object_store.head(&hinted_path).await.map_err(|error| {
+            crate::spec::DeltaError::generic(format!(
+                "V2 checkpoint named by _last_checkpoint is not readable at {hinted_path}: {error}"
+            ))
+        })?;
+        write_classic_checkpoint_from_v2_checkpoint(object_store, version, checkpoint_meta).await?;
+        debug!("Wrote V2 compat classic checkpoint at {}", classic_path);
+        return Ok(());
+    }
+
     // Find the UUID-named checkpoint at `version` (if any).
-    let log_path = delta_log_root_path();
     let mut uuid_checkpoint_meta: Option<object_store::ObjectMeta> = None;
-    let mut log_entries = object_store.list(Some(&log_path));
-    while let Some(meta) = log_entries.next().await {
-        let Ok(meta) = meta else {
-            continue;
-        };
-        let filename = meta
-            .location
-            .as_ref()
-            .rsplit('/')
-            .next()
-            .unwrap_or_default();
+    for meta in
+        list_delta_log_entries_from(object_store.clone(), version.saturating_sub(1).max(0)).await?
+    {
+        let filename = meta.location.filename().unwrap_or_default();
         if is_uuid_checkpoint_filename(filename)
-            && filename.ends_with(".parquet")
             && let Some(v) = parse_checkpoint_version_from_location(&meta.location)
             && v == version
         {
@@ -189,18 +203,8 @@ async fn ensure_v2_compat_classic_checkpoint(
         return Ok(());
     };
 
-    // Copy the UUID-named V2 main checkpoint to the classic path.
-    // `ObjectStore::copy` performs a server-side copy where the backend supports it and
-    // falls back to get+put otherwise.
-    match object_store.copy(&uuid_meta.location, &classic_path).await {
-        Ok(()) => {
-            debug!("Wrote V2 compat classic checkpoint at {}", classic_path);
-        }
-        Err(object_store::Error::AlreadyExists { .. }) => {
-            // A concurrent writer beat us to it — that's fine, the content is identical.
-        }
-        Err(err) => return Err(err.into()),
-    }
+    write_classic_checkpoint_from_v2_checkpoint(object_store, version, uuid_meta).await?;
+    debug!("Wrote V2 compat classic checkpoint at {}", classic_path);
 
     Ok(())
 }
@@ -285,62 +289,47 @@ fn expired_log_location(
 /// 2. List all files in `_sidecars/`.
 /// 3. Delete sidecar files that are NOT referenced by any remaining checkpoint
 ///    AND are older than 24 hours (to avoid racing with concurrent checkpoint writers).
+#[cfg(test)]
 async fn cleanup_orphaned_sidecars(object_store: Arc<dyn ObjectStore>) -> DeltaResult<usize> {
-    // Step 1: Collect all sidecar paths referenced by remaining checkpoints.
-    let log_path = delta_log_root_path();
-    let mut uuid_checkpoint_metas: Vec<ObjectMeta> = Vec::new();
-    let mut log_entries = object_store.list(Some(&log_path));
-    while let Some(meta) = log_entries.next().await {
-        let Ok(meta) = meta else {
-            continue;
-        };
-        // Only UUID-named checkpoints (V2) can reference sidecar files.
-        let filename = meta
-            .location
-            .as_ref()
-            .rsplit('/')
-            .next()
-            .unwrap_or_default();
-        if is_uuid_checkpoint_filename(filename) {
-            uuid_checkpoint_metas.push(meta);
-        }
-    }
+    let referenced_sidecars = collect_referenced_sidecars(object_store.clone(), 0).await?;
+    delete_orphaned_sidecars(object_store, &referenced_sidecars).await
+}
 
+async fn collect_referenced_sidecars(
+    object_store: Arc<dyn ObjectStore>,
+    min_checkpoint_version: i64,
+) -> DeltaResult<HashSet<String>> {
+    let checkpoint_metas = list_delta_log_entries_from(
+        object_store.clone(),
+        min_checkpoint_version.saturating_sub(1).max(0),
+    )
+    .await?;
     let mut referenced_sidecars: HashSet<String> = HashSet::new();
-    for cp_meta in uuid_checkpoint_metas {
-        match read_checkpoint_main_rows_from_checkpoint_file(object_store.clone(), cp_meta.clone())
-            .await
-        {
-            Ok(rows) => {
-                for row in rows {
-                    if let Some(sidecar) = row.sidecar {
-                        referenced_sidecars.insert(sidecar_file_name(&sidecar.path));
-                    }
-                }
-            }
-            Err(err) => {
-                debug!(
-                    "Failed to read checkpoint at {} for sidecar GC: {err}",
-                    cp_meta.location
-                );
-                continue;
-            }
+    for checkpoint_meta in checkpoint_metas.into_iter().filter(|meta| {
+        parse_checkpoint_version_from_location(&meta.location)
+            .is_some_and(|version| version >= min_checkpoint_version)
+    }) {
+        let sidecars = inspect_checkpoint_main_file(object_store.clone(), checkpoint_meta).await?;
+        for sidecar in sidecars {
+            referenced_sidecars.insert(sidecar_file_name(&sidecar.path));
         }
     }
+    Ok(referenced_sidecars)
+}
 
-    // Step 2: List all files in _sidecars/ and delete orphans older than 24 hours.
+async fn delete_orphaned_sidecars(
+    object_store: Arc<dyn ObjectStore>,
+    referenced_sidecars: &HashSet<String>,
+) -> DeltaResult<usize> {
     let sidecars_path = sidecars_dir_path();
     let one_day_ago = Utc::now().timestamp_millis() - 86_400_000;
     let mut deleted_count = 0;
-    let mut sidecar_entries = object_store.list(Some(&sidecars_path));
-    while let Some(meta) = sidecar_entries.next().await {
-        let Ok(meta) = meta else {
-            continue;
-        };
-        let filename = match meta.location.as_ref().rsplit('/').next() {
-            Some(f) => f.to_string(),
-            None => continue,
-        };
+    let sidecar_metas: Vec<ObjectMeta> = object_store
+        .list(Some(&sidecars_path))
+        .try_collect()
+        .await?;
+    for meta in sidecar_metas {
+        let filename = sidecar_file_name(meta.location.as_ref());
         // Keep sidecars that are referenced by any checkpoint.
         if referenced_sidecars.contains(&filename) {
             continue;
@@ -378,11 +367,13 @@ mod tests {
     use url::Url;
 
     use super::*;
+    use crate::checkpoint::{ReconciledCheckpointState, write_classic_checkpoint_file};
     use crate::delta_log::{LogStoreRef, StorageConfig, default_logstore};
     use crate::snapshot::DeltaSnapshot;
     use crate::spec::{
-        Action, CommitInfo, DataType, Metadata, Protocol, StructField, StructType, TableFeature,
-        VersionChecksum, checkpoint_path, checksum_path, commit_path,
+        Action, CheckpointMetadata, CommitInfo, DataType, Metadata, Protocol, Sidecar, StructField,
+        StructType, TableFeature, VersionChecksum, checkpoint_path, checksum_path, commit_path,
+        sidecar_file_path,
     };
 
     fn test_log_store(store: Arc<dyn ObjectStore>) -> LogStoreRef {
@@ -396,6 +387,22 @@ mod tests {
 
     async fn put_log_file(store: &Arc<dyn ObjectStore>, path: Path) {
         store.put(&path, b"{}".to_vec().into()).await.unwrap();
+    }
+
+    async fn put_valid_checkpoint(
+        store: &Arc<dyn ObjectStore>,
+        version: i64,
+        protocol: Protocol,
+        metadata: Metadata,
+    ) {
+        let state = ReconciledCheckpointState {
+            protocol: Some(protocol),
+            metadata: Some(metadata),
+            ..Default::default()
+        };
+        write_classic_checkpoint_file(version, state, store.clone())
+            .await
+            .unwrap();
     }
 
     fn test_metadata(
@@ -502,7 +509,7 @@ mod tests {
 
         put_checksum(&store, 1, &protocol, &metadata, None).await;
         put_log_file(&store, checkpoint_path(1)).await;
-        put_log_file(&store, checkpoint_path(2)).await;
+        put_valid_checkpoint(&store, 2, protocol.clone(), metadata.clone()).await;
 
         let deleted =
             cleanup_expired_delta_log_files(snapshot.as_ref(), log_store.as_ref(), i64::MAX, None)
@@ -561,6 +568,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cleanup_ignores_version_prefixed_sidecar_as_retention_checkpoint() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let protocol = Protocol::new(1, 2, None, None);
+        let metadata = test_metadata([]);
+        put_commit(
+            &store,
+            0,
+            &[
+                Action::CommitInfo(CommitInfo::default()),
+                Action::Protocol(protocol),
+                Action::Metadata(metadata),
+            ],
+        )
+        .await;
+        put_commit(&store, 1, &[Action::CommitInfo(CommitInfo::default())]).await;
+        put_commit(&store, 2, &[Action::CommitInfo(CommitInfo::default())]).await;
+
+        let log_store = test_log_store(store.clone());
+        let snapshot = load_snapshot(&log_store, 2).await;
+        let sidecar_path =
+            sidecar_file_path("00000000000000000002.checkpoint.0000000001.0000000001.uuid.parquet");
+        put_log_file(&store, sidecar_path.clone()).await;
+
+        let deleted =
+            cleanup_expired_delta_log_files(snapshot.as_ref(), log_store.as_ref(), i64::MAX, None)
+                .await
+                .unwrap();
+
+        assert_eq!(deleted, 0);
+        for version in 0..=2 {
+            store.head(&commit_path(version)).await.unwrap();
+        }
+        store.head(&sidecar_path).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn cleanup_expired_delta_log_files_uses_ict_cutoff_instead_of_object_mtime() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let protocol = Protocol::new(1, 7, None, Some(vec![TableFeature::InCommitTimestamp]));
@@ -611,7 +654,7 @@ mod tests {
 
         put_checksum(&store, 1, &protocol, &metadata, Some(200)).await;
         put_log_file(&store, checkpoint_path(1)).await;
-        put_log_file(&store, checkpoint_path(2)).await;
+        put_valid_checkpoint(&store, 2, protocol.clone(), metadata.clone()).await;
 
         let deleted =
             cleanup_expired_delta_log_files(snapshot.as_ref(), log_store.as_ref(), 350, None)
@@ -627,5 +670,102 @@ mod tests {
                 "_delta_log/00000000000000000003.json".to_string(),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn orphaned_sidecar_cleanup_fails_closed_on_unreadable_checkpoint() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        put_log_file(&store, checkpoint_path(2)).await;
+
+        let sidecar_path = sidecar_file_path("old-orphan.parquet");
+        store
+            .put(&sidecar_path, b"orphan".to_vec().into())
+            .await
+            .unwrap();
+
+        assert!(cleanup_orphaned_sidecars(store.clone()).await.is_err());
+        store.head(&sidecar_path).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn log_cleanup_validates_retained_checkpoint_before_deleting_history() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let protocol = Protocol::new(1, 2, None, None);
+        let metadata = test_metadata([]);
+        put_commit(
+            &store,
+            0,
+            &[
+                Action::CommitInfo(CommitInfo::default()),
+                Action::Protocol(protocol),
+                Action::Metadata(metadata),
+            ],
+        )
+        .await;
+        for version in 1..=3 {
+            put_commit(
+                &store,
+                version,
+                &[Action::CommitInfo(CommitInfo::default())],
+            )
+            .await;
+        }
+
+        let log_store = test_log_store(store.clone());
+        let snapshot = load_snapshot(&log_store, 3).await;
+        put_log_file(&store, checkpoint_path(2)).await;
+
+        assert!(
+            cleanup_expired_delta_log_files(snapshot.as_ref(), log_store.as_ref(), i64::MAX, None,)
+                .await
+                .is_err()
+        );
+        for version in 0..=3 {
+            store.head(&commit_path(version)).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn orphaned_sidecar_cleanup_preserves_referenced_nested_path() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let sidecar_path = sidecar_file_path("nested/kept.parquet");
+        store
+            .put(&sidecar_path, b"kept".to_vec().into())
+            .await
+            .unwrap();
+
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::V2Checkpoint]),
+            Some(vec![TableFeature::V2Checkpoint]),
+        );
+        let metadata = test_metadata([("delta.checkpointPolicy", "v2")]);
+        let actions = [
+            Action::CheckpointMetadata(CheckpointMetadata {
+                version: 2,
+                tags: None,
+            }),
+            Action::Sidecar(Sidecar {
+                path: "nested/kept.parquet".to_string(),
+                size_in_bytes: 4,
+                modification_time: 0,
+                tags: None,
+            }),
+            Action::Protocol(protocol),
+            Action::Metadata(metadata),
+        ];
+        let mut bytes = Vec::new();
+        for action in actions {
+            serde_json::to_writer(&mut bytes, &action).unwrap();
+            bytes.push(b'\n');
+        }
+        let checkpoint = Path::from(
+            "_delta_log/00000000000000000002.checkpoint.00000000-0000-0000-0000-000000000002.json",
+        );
+        store.put(&checkpoint, bytes.into()).await.unwrap();
+
+        assert_eq!(cleanup_orphaned_sidecars(store.clone()).await.unwrap(), 0);
+        store.head(&sidecar_path).await.unwrap();
     }
 }

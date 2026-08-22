@@ -1,7 +1,6 @@
-@assert_true
 Feature: assert_true output schema
 
-  @spark_null @spark-4
+  @function(nullability) @spark-4
   Rule: Output schema
 
     Scenario: a non-null literal input to assert_true yields the schema Spark declares

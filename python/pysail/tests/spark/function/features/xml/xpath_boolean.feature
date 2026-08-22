@@ -1,4 +1,3 @@
-@xpath_boolean
 Feature: xpath_boolean with an argument coming from a column
   # A behaviour-governing argument given as a literal is constant-folded, so the literal
   # scenarios never exercise the columnar kernel. These scenarios pass the same argument
@@ -6,7 +5,7 @@ Feature: xpath_boolean with an argument coming from a column
 
   Rule: xpath_boolean — the argument must be foldable
 
-    @column_args
+    @function(columnargs)
     Scenario: xpath_boolean with the argument as a literal
       When query
         """
@@ -17,7 +16,7 @@ Feature: xpath_boolean with an argument coming from a column
         | true   |
 
     # Spark requires a foldable argument here; Sail accepts a column: Sail returns ['True', 'NULL'].
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: xpath_boolean takes argument 2 from a column containing NULL
       When query
         """
@@ -26,7 +25,7 @@ Feature: xpath_boolean with an argument coming from a column
       Then query error NON_FOLDABLE_INPUT
 
     # Spark requires a foldable argument here; Sail accepts a column: Sail returns ['True', 'True'].
-    @column_args @sail-bug
+    @function(columnargs) @sail-bug
     Scenario: xpath_boolean takes argument 2 from a column
       When query
         """
@@ -34,7 +33,7 @@ Feature: xpath_boolean with an argument coming from a column
         """
       Then query error NON_FOLDABLE_INPUT
 
-  @spark_null
+  @function(nullability)
   Rule: Output schema
 
     Scenario: a non-null xml literal yields a boolean
