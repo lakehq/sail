@@ -51,7 +51,8 @@ impl ScalarUDFImpl for SparkConcat {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         internal_err!(
-            "spark_concat: `return_type` should not be called; `return_field_from_args` is used instead"
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
         )
     }
 
