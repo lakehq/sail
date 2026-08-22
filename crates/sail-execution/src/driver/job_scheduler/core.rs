@@ -601,14 +601,14 @@ impl JobScheduler {
                 }
             }
         }
-        for (stage_id, stage) in job.stages.iter_mut().enumerate() {
+        for (s, stage) in job.stages.iter_mut().enumerate() {
             match stage.state {
                 StageState::Active => {
                     stage.state = StageState::Inactive;
                     event_reporter.report(SystemEvent::StageUpdated {
                         session_id: session_id.clone(),
                         job_id: u64::from(job_id),
-                        stage: stage_id as u64,
+                        stage: s as u64,
                         status: stage.state.status().to_string(),
                         updated_at: Utc::now(),
                     });
@@ -691,27 +691,27 @@ impl JobScheduler {
                     updated_at: Utc::now(),
                 });
             }
-            for (stage_id, stage) in job.stages.iter_mut().enumerate() {
+            for (s, stage) in job.stages.iter_mut().enumerate() {
                 if matches!(stage.state, StageState::Active) {
                     stage.state = StageState::Inactive;
                     event_reporter.report(SystemEvent::StageUpdated {
                         session_id: session_id.to_string(),
                         job_id,
-                        stage: stage_id as u64,
+                        stage: s as u64,
                         status: stage.state.status().to_string(),
                         updated_at: Utc::now(),
                     });
                 }
                 for (partition, task) in stage.tasks.iter_mut().enumerate() {
-                    for (attempt_id, attempt) in task.attempts.iter_mut().enumerate() {
+                    for (a, attempt) in task.attempts.iter_mut().enumerate() {
                         if !attempt.state.is_terminal() {
                             attempt.state = TaskState::Canceled;
                             event_reporter.report(SystemEvent::TaskUpdated {
                                 session_id: session_id.to_string(),
                                 job_id,
-                                stage: stage_id as u64,
+                                stage: s as u64,
                                 partition: partition as u64,
-                                attempt: attempt_id as u64,
+                                attempt: a as u64,
                                 status: attempt.state.status().to_string(),
                                 updated_at: Utc::now(),
                             });

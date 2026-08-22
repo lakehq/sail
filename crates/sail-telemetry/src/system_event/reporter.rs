@@ -1,4 +1,4 @@
-use opentelemetry::logs::{AnyValue, LogRecord as _, Logger as _};
+use opentelemetry::logs::{AnyValue, LogRecord, Logger};
 use opentelemetry_sdk::logs::SdkLogger;
 
 use crate::system_event::{SYSTEM_EVENT_NAME, SystemEvent};
