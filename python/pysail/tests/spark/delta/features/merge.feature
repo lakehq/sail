@@ -1306,6 +1306,92 @@ Feature: Delta Lake Merge
         | 5  | 2024 | 100   |
 
 
+  Rule: MERGE target partition pruning applies to Merge-on-Read deletes
+    Background:
+      Given variable location for temporary directory merge_dv_partition_pruning
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_dv_partition_pruning
+        """
+      Given final statement
+        """
+        DROP VIEW IF EXISTS src_merge_dv_partition_pruning
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_dv_partition_pruning (
+          id INT,
+          year INT,
+          value INT
+        )
+        USING DELTA
+        PARTITIONED BY (year)
+        LOCATION {{ location.sql }}
+        TBLPROPERTIES ('delta.enableDeletionVectors' = 'true')
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_dv_partition_pruning
+        SELECT * FROM VALUES
+          (1, 2023, 100),
+          (2, 2024, 200),
+          (3, 2024, 700),
+          (5, 2024, 100)
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW src_merge_dv_partition_pruning AS
+        SELECT * FROM VALUES
+          (2, 2024, 250)
+        AS src(id, year, value)
+        """
+
+    Scenario: EXPLAIN prunes partitioned Merge-on-Read target files
+      When query
+        """
+        EXPLAIN
+        MERGE INTO delta_merge_dv_partition_pruning AS t
+        USING src_merge_dv_partition_pruning AS s
+        ON t.id = s.id AND t.year = 2024
+        WHEN MATCHED THEN DELETE
+        """
+      Then query plan matches snapshot
+
+    Scenario: Partition-pruned Merge-on-Read DELETE preserves untouched rows
+      Given statement
+        """
+        MERGE INTO delta_merge_dv_partition_pruning AS t
+        USING src_merge_dv_partition_pruning AS s
+        ON t.id = s.id AND t.year = 2024
+        WHEN MATCHED THEN DELETE
+        """
+      Then delta log latest commit info contains
+        | path                                               | value    |
+        | operation                                          | "MERGE"  |
+        | operationMetrics.numTargetDeletionVectorsAdded     | 1        |
+        | operationMetrics.numTargetRowsDeleted              | 1        |
+        | operationParameters.matchedPredicates[0].actionType | "delete" |
+      Then data files in location count is 2
+      Then file tree in location matches
+        """
+        📂 <hex-prefix>
+          📄 deletion_vector_<uuid>.bin
+        📂 year=2023
+          📄 part-<id>.<codec>.parquet
+        📂 year=2024
+          📄 part-<id>.<codec>.parquet
+        """
+      When query
+        """
+        SELECT id, year, value FROM delta_merge_dv_partition_pruning ORDER BY id
+        """
+      Then query result ordered
+        | id | year | value |
+        | 1  | 2023 | 100   |
+        | 3  | 2024 | 700   |
+        | 5  | 2024 | 100   |
+
+
   Rule: MERGE INTO with path-based target (delta.`/path/to/table` syntax)
     Background:
       Given variable location for temporary directory merge_path_target
