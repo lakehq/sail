@@ -486,9 +486,8 @@
   type: boolean
   default: "true"
   description: |
-    (Reading) Whether to force view types for binary and string columns when reading Parquet files.
-    If the value is `true`, the Parquet reader will read columns of the `Utf8` or `Utf8Large` types as the `Utf8View` type,
-    and the `Binary` or `BinaryLarge` types as the `BinaryView` type.
+    (Reading) Whether to use view types for top-level binary and string columns when reading
+    Parquet files. Nested fields retain their offset-based types.
   experimental: true
 
 - key: parquet.binary_as_string
@@ -878,10 +877,11 @@
   type: boolean
   default: "true"
   description: |
-    Whether the optimizer should coerce view types to non-view types at query output.
-    If the value is `true`, `Utf8View` is coerced to `LargeUtf8` and `BinaryView` is coerced
-    to `LargeBinary` before results leave the query boundary. If the value is `false`, view
-    types pass through to the client.
+    Whether client-facing output should coerce view types to non-view types. Spark Connect materializes
+    `Utf8View` and `BinaryView` fields recursively in a physical output adapter before worker
+    results are returned, using the configured Arrow variable-width types. Other protocols apply
+    their output policy during optimization. If disabled, view types can pass through to the
+    client.
   experimental: true
 
 - key: spark.session_timeout_secs

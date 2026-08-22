@@ -18,6 +18,8 @@ use datafusion_expr::{
 use datafusion_functions_nested::concat::ArrayConcat;
 use sail_common_datafusion::utils::items::ItemTaker;
 
+use crate::scalar::spark_type_coercion::spark_view_compatible_type;
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkConcat {
     signature: Signature,
@@ -410,7 +412,7 @@ fn concat_return_type(arg_types: &[DataType]) -> Result<DataType> {
                             Ordering::Greater => expr_type.unwrap_or_else(|| arg_type.clone()),
                             Ordering::Equal => {
                                 if let Some(expr_type) = expr_type {
-                                    merge_list_types(&expr_type, arg_type).ok_or_else(|| {
+                                    spark_view_compatible_type(&expr_type, arg_type).ok_or_else(|| {
                                         datafusion_common::plan_datafusion_err!(
                                             "It is not possible to concatenate arrays of different types. Expected: {expr_type}, got: {arg_type}"
                                         )
@@ -437,13 +439,15 @@ fn concat_return_type(arg_types: &[DataType]) -> Result<DataType> {
         Ok(expr_type.unwrap_or_else(|| arg_types[0].clone()))
     } else if arg_types
         .iter()
-        .all(|arg_type| matches!(arg_type, DataType::Binary))
+        .all(|arg_type| matches!(arg_type, DataType::Binary | DataType::BinaryView))
     {
         Ok(DataType::Binary)
-    } else if arg_types
-        .iter()
-        .all(|arg_type| matches!(arg_type, DataType::Binary | DataType::LargeBinary))
-    {
+    } else if arg_types.iter().all(|arg_type| {
+        matches!(
+            arg_type,
+            DataType::Binary | DataType::LargeBinary | DataType::BinaryView
+        )
+    }) {
         Ok(DataType::LargeBinary)
     } else {
         Ok(arg_types
@@ -459,24 +463,29 @@ fn concat_return_type(arg_types: &[DataType]) -> Result<DataType> {
     }
 }
 
-fn merge_list_types(left: &DataType, right: &DataType) -> Option<DataType> {
-    match (left, right) {
-        (DataType::List(left), DataType::List(right)) => {
-            let data_type =
-                merge_list_types(left.data_type(), right.data_type()).or_else(|| {
-                    // Leaf list item types may only differ by field/nullability metadata.
-                    left.data_type()
-                        .equals_datatype(right.data_type())
-                        .then(|| left.data_type().clone())
-                })?;
-            Some(DataType::List(Arc::new(
-                left.as_ref()
-                    .clone()
-                    .with_data_type(data_type)
-                    .with_nullable(left.is_nullable() || right.is_nullable()),
-            )))
-        }
-        _ if left.equals_datatype(right) => Some(left.clone()),
-        _ => None,
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn binary_views_are_materialized_at_the_concat_boundary() -> Result<()> {
+        assert_eq!(
+            concat_return_type(&[DataType::BinaryView, DataType::BinaryView])?,
+            DataType::Binary
+        );
+        assert_eq!(
+            concat_return_type(&[DataType::BinaryView, DataType::LargeBinary])?,
+            DataType::LargeBinary
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn concat_merges_view_and_offset_array_elements() -> Result<()> {
+        let view = DataType::List(Arc::new(Field::new("element", DataType::Utf8View, true)));
+        let offset = DataType::List(Arc::new(Field::new("element", DataType::Utf8, true)));
+
+        assert_eq!(concat_return_type(&[view, offset.clone()])?, offset);
+        Ok(())
     }
 }

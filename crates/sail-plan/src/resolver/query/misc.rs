@@ -1,13 +1,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use datafusion::arrow::array::RecordBatch;
 use datafusion::catalog::MemTable;
 use datafusion_common::{DFSchema, DFSchemaRef, ParamValues, ScalarValue};
 use datafusion_expr::{EmptyRelation, Expr, Extension, LogicalPlan, UNNAMED_TABLE};
 use log::warn;
 use sail_common::spec;
 use sail_common_datafusion::array::record_batch::{
-    cast_record_batch_positionally, read_record_batches,
+    cast_record_batch_positionally, materialize_spark_view_schema, read_record_batches,
 };
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_logical_plan::range::RangeNode;
@@ -16,6 +17,22 @@ use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitio
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
+
+fn normalize_spark_connect_input_batch(
+    batch: RecordBatch,
+    use_large_var_types: bool,
+) -> PlanResult<RecordBatch> {
+    let input_schema = batch.schema();
+    let schema = Arc::new(materialize_spark_view_schema(
+        input_schema.as_ref(),
+        use_large_var_types,
+    ));
+    if schema.as_ref() == input_schema.as_ref() {
+        Ok(batch)
+    } else {
+        Ok(cast_record_batch_positionally(batch, schema)?)
+    }
+}
 
 impl PlanResolver<'_> {
     /// Resolves a query plan that produces an empty relation.
@@ -115,6 +132,14 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let batches = if let Some(data) = data {
             read_record_batches(&data)?
+                .into_iter()
+                .map(|batch| {
+                    normalize_spark_connect_input_batch(
+                        batch,
+                        self.config.arrow_use_large_var_types,
+                    )
+                })
+                .collect::<PlanResult<Vec<_>>>()?
         } else {
             vec![]
         };
@@ -254,5 +279,97 @@ fn literal_partition_count(hint_name: &str, expr: &Expr) -> PlanResult<usize> {
         _ => Err(PlanError::invalid(format!(
             "{hint_name} hint partition count must be an integer"
         ))),
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::expect_used)]
+mod tests {
+    use datafusion::arrow::array::{
+        Array, ArrayRef, BinaryArray, BinaryViewArray, LargeBinaryArray, LargeStringArray,
+        StringArray, StringViewArray, StructArray,
+    };
+    use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema};
+
+    use super::*;
+
+    fn view_batch() -> RecordBatch {
+        let nested_fields = Fields::from(vec![Field::new("value", DataType::Utf8View, true)]);
+        let nested = StructArray::new(
+            nested_fields.clone(),
+            vec![Arc::new(StringViewArray::from(vec![Some("nested"), None]))],
+            None,
+        );
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("text", DataType::Utf8View, true),
+            Field::new("bytes", DataType::BinaryView, true),
+            Field::new("nested", DataType::Struct(nested_fields), true),
+        ]));
+        let bytes = vec![Some(b"one".as_slice()), None];
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(StringViewArray::from(vec![Some("one"), None])) as ArrayRef,
+                Arc::new(BinaryViewArray::from(bytes)) as ArrayRef,
+                Arc::new(nested) as ArrayRef,
+            ],
+        )
+        .expect("view batch")
+    }
+
+    #[test]
+    fn spark_connect_input_views_are_normalized_recursively() -> PlanResult<()> {
+        for use_large_var_types in [false, true] {
+            let output = normalize_spark_connect_input_batch(view_batch(), use_large_var_types)?;
+            let output_schema = output.schema();
+            let expected_text = if use_large_var_types {
+                DataType::LargeUtf8
+            } else {
+                DataType::Utf8
+            };
+            let expected_bytes = if use_large_var_types {
+                DataType::LargeBinary
+            } else {
+                DataType::Binary
+            };
+            assert_eq!(output_schema.field(0).data_type(), &expected_text);
+            assert_eq!(output_schema.field(1).data_type(), &expected_bytes);
+
+            let DataType::Struct(nested) = output_schema.field(2).data_type() else {
+                return Err(PlanError::internal("nested field must remain a struct"));
+            };
+            assert_eq!(nested[0].data_type(), &expected_text);
+
+            if use_large_var_types {
+                let text = output
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<LargeStringArray>()
+                    .expect("large string array");
+                let bytes = output
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<LargeBinaryArray>()
+                    .expect("large binary array");
+                assert_eq!(text.value(0), "one");
+                assert_eq!(bytes.value(0), b"one");
+            } else {
+                let text = output
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .expect("string array");
+                let bytes = output
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<BinaryArray>()
+                    .expect("binary array");
+                assert_eq!(text.value(0), "one");
+                assert_eq!(bytes.value(0), b"one");
+            }
+            assert!(output.column(0).is_null(1));
+            assert!(output.column(1).is_null(1));
+        }
+        Ok(())
     }
 }

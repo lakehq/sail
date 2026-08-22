@@ -21,6 +21,7 @@ use datafusion_expr::{
 };
 
 use crate::functions_nested_utils::make_scalar_function;
+use crate::scalar::spark_type_coercion::spark_view_compatible_type;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayIntersect {
@@ -63,35 +64,17 @@ impl ScalarUDFImpl for ArrayIntersect {
             (DataType::Null, DataType::Null) => Ok(DataType::new_list(DataType::Null, true)),
             (DataType::Null, dt) | (dt, DataType::Null) => Ok(dt.clone()),
 
-            (DataType::List(field1), DataType::List(field2)) => {
-                let field = if field1.data_type().is_null() {
-                    field2
-                } else {
-                    field1
-                };
-                Ok(DataType::List(field.clone()))
+            (DataType::List(left), DataType::List(right)) => {
+                Ok(DataType::List(intersection_element_field(left, right)?))
             }
-
-            (DataType::LargeList(field1), DataType::LargeList(field2)) => {
-                let field = if field1.data_type().is_null() {
-                    field2
-                } else {
-                    field1
-                };
-                Ok(DataType::LargeList(field.clone()))
-            }
-
-            (DataType::List(field1), DataType::LargeList(field2))
-            | (DataType::LargeList(field1), DataType::List(field2)) => {
-                let field = if field1.data_type().is_null() {
-                    field2
-                } else {
-                    field1
-                };
-                Ok(DataType::LargeList(field.clone()))
-            }
-
-            (dt, _) => Ok(dt.clone()),
+            (DataType::LargeList(left), DataType::LargeList(right)) => Ok(DataType::LargeList(
+                intersection_element_field(left, right)?,
+            )),
+            (DataType::List(left), DataType::LargeList(right))
+            | (DataType::LargeList(left), DataType::List(right)) => Ok(DataType::LargeList(
+                intersection_element_field(left, right)?,
+            )),
+            (data_type, _) => Ok(data_type.clone()),
         }
     }
 
@@ -140,18 +123,80 @@ impl ScalarUDFImpl for ArrayIntersect {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        match arg_types.as_slice() {
-            [DataType::List(field), DataType::LargeList(_)] => Ok(vec![
-                DataType::LargeList(field.clone()),
-                arg_types[1].clone(),
-            ]),
-            [DataType::LargeList(_), DataType::List(field)] => Ok(vec![
-                arg_types[0].clone(),
-                DataType::LargeList(field.clone()),
-            ]),
-            _ => Ok(arg_types),
+        let left = &arg_types[0];
+        let right = &arg_types[1];
+        match (left, right) {
+            (DataType::Null, DataType::Null) => Ok(arg_types),
+            (DataType::Null, other) | (other, DataType::Null) => {
+                Ok(vec![other.clone(), other.clone()])
+            }
+            _ => {
+                let common = spark_view_compatible_type(left, right).ok_or_else(|| {
+                    DataFusionError::Plan(format!(
+                        "Spark `array_intersect` cannot find a common element type for '{left}' and '{right}'"
+                    ))
+                })?;
+                Ok(vec![
+                    coerce_list_to_common_element_type(left, &common)?,
+                    coerce_list_to_common_element_type(right, &common)?,
+                ])
+            }
         }
     }
+}
+
+fn intersection_element_field(left: &FieldRef, right: &FieldRef) -> Result<FieldRef> {
+    let data_type =
+        spark_view_compatible_type(left.data_type(), right.data_type()).ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "Spark `array_intersect` cannot find a common element type for '{}' and '{}'",
+                left.data_type(),
+                right.data_type()
+            ))
+        })?;
+    let field = if left.data_type().is_null() {
+        right
+    } else {
+        left
+    };
+    Ok(Arc::new(
+        field
+            .as_ref()
+            .clone()
+            .with_data_type(data_type)
+            .with_nullable(left.is_nullable() && right.is_nullable()),
+    ))
+}
+
+fn coerce_list_to_common_element_type(source: &DataType, common: &DataType) -> Result<DataType> {
+    let source_field = match source {
+        DataType::List(field) | DataType::LargeList(field) => field,
+        other => {
+            return internal_err!(
+                "array_intersect expected a normalized list type for coercion, got '{other}'"
+            );
+        }
+    };
+    let (common_field, is_large) = match common {
+        DataType::List(field) => (field, false),
+        DataType::LargeList(field) => (field, true),
+        other => {
+            return internal_err!(
+                "array_intersect expected a common list type for coercion, got '{other}'"
+            );
+        }
+    };
+    let field = Arc::new(
+        source_field
+            .as_ref()
+            .clone()
+            .with_data_type(common_field.data_type().clone()),
+    );
+    Ok(if is_large {
+        DataType::LargeList(field)
+    } else {
+        DataType::List(field)
+    })
 }
 
 fn array_intersect_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -171,21 +216,13 @@ fn general_set_op(array1: &ArrayRef, array2: &ArrayRef) -> Result<ArrayRef> {
         | (dt @ DataType::List(_), DataType::Null)
         | (dt @ DataType::LargeList(_), DataType::Null) => Ok(new_null_array(dt, len)),
         (DataType::List(field1), DataType::List(field2)) => {
-            let field = if field1.data_type().is_null() {
-                Arc::clone(field2)
-            } else {
-                Arc::clone(field1)
-            };
+            let field = intersection_element_field(field1, field2)?;
             let array1 = as_list_array(array1)?;
             let array2 = as_list_array(array2)?;
             generic_set_lists::<i32>(array1, array2, field)
         }
         (DataType::LargeList(field1), DataType::LargeList(field2)) => {
-            let field = if field1.data_type().is_null() {
-                Arc::clone(field2)
-            } else {
-                Arc::clone(field1)
-            };
+            let field = intersection_element_field(field1, field2)?;
             let array1 = as_large_list_array(array1)?;
             let array2 = as_large_list_array(array2)?;
             generic_set_lists::<i64>(array1, array2, field)
@@ -442,36 +479,84 @@ mod tests {
     fn test_array_intersect_inner_nullability_result_type_match_return_type() -> Result<()> {
         let udf = ArrayIntersect::new();
 
-        for inner_nullable in [true, false] {
-            let inner_field = Field::new_list_field(DataType::Int32, inner_nullable);
-            let input_field = Field::new_list("input", Arc::new(inner_field.clone()), true);
+        for left_nullable in [true, false] {
+            for right_nullable in [true, false] {
+                let left_element = Field::new_list_field(DataType::Int32, left_nullable);
+                let right_element = Field::new_list_field(DataType::Int32, right_nullable);
+                let left_input = Field::new_list("left", Arc::new(left_element.clone()), true);
+                let right_input = Field::new_list("right", Arc::new(right_element.clone()), true);
+                let left_array = ListArray::new(
+                    left_element.into(),
+                    OffsetBuffer::new(vec![0, 3].into()),
+                    Arc::new(Int32Array::new(vec![1, 1, 2].into(), None)),
+                    None,
+                );
+                let right_array = ListArray::new(
+                    right_element.into(),
+                    OffsetBuffer::new(vec![0, 3].into()),
+                    Arc::new(Int32Array::new(vec![1, 1, 2].into(), None)),
+                    None,
+                );
+                let input_types = [
+                    left_input.data_type().clone(),
+                    right_input.data_type().clone(),
+                ];
+                let return_type = udf.return_type(&input_types)?;
 
-            let input_array = ListArray::new(
-                inner_field.into(),
-                OffsetBuffer::new(vec![0, 3].into()),
-                Arc::new(Int32Array::new(vec![1, 1, 2].into(), None)),
-                None,
-            );
+                let result = udf.invoke_with_args(ScalarFunctionArgs {
+                    args: vec![
+                        ColumnarValue::Array(Arc::new(left_array)),
+                        ColumnarValue::Array(Arc::new(right_array)),
+                    ],
+                    arg_fields: vec![left_input.into(), right_input.into()],
+                    number_rows: 1,
+                    return_field: Arc::new(Field::new(
+                        "array_intersect",
+                        return_type.clone(),
+                        true,
+                    )),
+                    config_options: Arc::new(ConfigOptions::default()),
+                })?;
 
-            let result = udf.invoke_with_args(ScalarFunctionArgs {
-                args: vec![
-                    ColumnarValue::Array(Arc::new(input_array.clone())),
-                    ColumnarValue::Array(Arc::new(input_array)),
-                ],
-                arg_fields: vec![input_field.clone().into(), input_field.clone().into()],
-                number_rows: 1,
-                return_field: input_field.clone().into(),
-                config_options: Arc::new(ConfigOptions::default()),
-            })?;
-
-            assert_eq!(
-                result.data_type(),
-                udf.return_type(&[
-                    input_field.data_type().clone(),
-                    input_field.data_type().clone()
-                ])?
-            );
+                assert_eq!(result.data_type(), return_type);
+                let DataType::List(element) = result.data_type() else {
+                    return exec_err!("expected List output, got {}", result.data_type());
+                };
+                assert_eq!(element.is_nullable(), left_nullable && right_nullable);
+            }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_intersect_coerces_view_and_offset_elements() -> Result<()> {
+        let udf = ArrayIntersect::new();
+        let view = DataType::List(Arc::new(Field::new("element", DataType::Utf8View, true)));
+        let offset = DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)));
+
+        let expected_view = DataType::List(Arc::new(Field::new("element", DataType::Utf8, true)));
+        let expected_offset = DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)));
+        assert_eq!(
+            udf.coerce_types(&[view, offset])?,
+            vec![expected_view, expected_offset]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_intersect_preserves_input_nullability_and_uses_output_and() -> Result<()> {
+        let udf = ArrayIntersect::new();
+        let non_nullable = DataType::List(Arc::new(Field::new("element", DataType::Int32, false)));
+        let nullable = DataType::List(Arc::new(Field::new("element", DataType::Int32, true)));
+
+        let coerced = udf.coerce_types(&[non_nullable.clone(), nullable.clone()])?;
+        assert_eq!(coerced, vec![non_nullable, nullable]);
+
+        let output = udf.return_type(&coerced)?;
+        let DataType::List(element) = output else {
+            return exec_err!("expected List output, got {output}");
+        };
+        assert!(!element.is_nullable());
         Ok(())
     }
 }

@@ -195,18 +195,15 @@ impl ScalarUDFImpl for SparkFromCSV {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         match arg_types {
-            [DataType::Utf8, DataType::Utf8] | [DataType::LargeUtf8, DataType::Utf8] => {
-                Ok(vec![arg_types[0].clone(), arg_types[1].clone()])
-            }
+            [
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+            ] => Ok(vec![DataType::Utf8, DataType::Utf8]),
             [
                 DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
                 DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
                 DataType::Map(_, _),
-            ] => Ok(vec![
-                arg_types[0].clone(),
-                arg_types[1].clone(),
-                arg_types[2].clone(),
-            ]),
+            ] => Ok(vec![DataType::Utf8, DataType::Utf8, arg_types[2].clone()]),
             _ => plan_err!(
                 "`{}` function requires 2 or 3 arguments, got {}",
                 Self::FROM_CSV_NAME,
@@ -711,6 +708,16 @@ mod tests {
     use datafusion_common::internal_err;
 
     use super::*;
+
+    #[test]
+    fn view_arguments_are_cast_at_the_function_boundary() -> Result<()> {
+        let function = SparkFromCSV::new(Arc::from(DEFAULT_SESSION_TIMEZONE));
+        assert_eq!(
+            function.coerce_types(&[DataType::Utf8View, DataType::Utf8View])?,
+            vec![DataType::Utf8, DataType::Utf8]
+        );
+        Ok(())
+    }
 
     /// Unit test for `spark_from_csv_inner` that verifies CSV parsing into a `StructArray`.
     /// This test simulates a column of CSV lines and checks:
