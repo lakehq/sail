@@ -15,7 +15,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion::arrow::array::{Array, BooleanArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::catalog::Session;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::common::scalar::ScalarValue;
@@ -88,7 +90,6 @@ pub struct IcebergTableProvider {
     /// All partition specs referenced by the table
     partition_specs: Vec<PartitionSpec>,
     /// Default partition spec id (for schema ordering / partition metadata)
-    #[expect(unused)]
     default_spec_id: i32,
     /// Arrow schema for DataFusion
     arrow_schema: Arc<ArrowSchema>,
@@ -289,6 +290,119 @@ impl IcebergTableProvider {
     /// Get the current snapshot
     pub fn current_snapshot(&self) -> Option<&Snapshot> {
         self.snapshot.as_ref()
+    }
+
+    pub(crate) async fn predicate_overwrite_paths(
+        &self,
+        session: &dyn Session,
+        condition: &Expr,
+    ) -> Result<Vec<String>> {
+        if self.snapshot.is_none() {
+            return Ok(Vec::new());
+        }
+        let default_spec = self
+            .partition_specs
+            .iter()
+            .find(|spec| spec.spec_id() == self.default_spec_id)
+            .ok_or_else(|| {
+                datafusion::common::DataFusionError::Plan(
+                    "Iceberg table metadata has no default partition spec".to_string(),
+                )
+            })?;
+        let identity_fields = default_spec
+            .fields()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, field)| {
+                matches!(field.transform, Transform::Identity).then_some((field.source_id, index))
+            })
+            .collect::<HashMap<_, _>>();
+        for column in condition.column_refs() {
+            let field = self.schema.field_by_name(&column.name).ok_or_else(|| {
+                datafusion::common::DataFusionError::Plan(format!(
+                    "predicate overwrite column '{}' is not present in the Iceberg schema",
+                    column.name
+                ))
+            })?;
+            if !identity_fields.contains_key(&field.id) {
+                return Err(datafusion::common::DataFusionError::NotImplemented(
+                    format!(
+                        "Iceberg predicate overwrite supports only identity-partition columns; use DELETE ... WHERE followed by INSERT for '{}'",
+                        column.name
+                    ),
+                ));
+            }
+        }
+
+        let table_url = Url::parse(&self.table_uri)
+            .map_err(|error| datafusion::common::DataFusionError::External(Box::new(error)))?;
+        let object_store = get_object_store_from_session(session, &table_url)?;
+        let store_ctx = StoreContext::new(object_store, &table_url)?;
+        let manifest_list = self.load_manifest_list(&store_ctx).await?;
+        if !self
+            .build_delete_file_index(&store_ctx, &manifest_list)
+            .await?
+            .is_empty()
+        {
+            return plan_err!(
+                "copy-on-write predicate overwrite is not supported for Iceberg tables with active delete files"
+            );
+        }
+        let files = self
+            .load_data_files_with_seq(session, &[], &store_ctx, &manifest_list)
+            .await?
+            .into_iter()
+            .map(|(file, _)| file)
+            .collect::<Vec<_>>();
+        let df_schema = self.arrow_schema.clone().to_dfschema()?;
+        let predicate = session.create_physical_expr(condition.clone(), &df_schema)?;
+        let mut paths = Vec::new();
+        for file in files {
+            if file.partition_spec_id != default_spec.spec_id()
+                || file.partition.len() != default_spec.fields().len()
+            {
+                return Err(datafusion::common::DataFusionError::NotImplemented(
+                    "predicate overwrite is not supported for Iceberg tables with incomparable live partition specs"
+                        .to_string(),
+                ));
+            }
+            let columns = self
+                .arrow_schema
+                .fields()
+                .iter()
+                .map(|arrow_field| {
+                    let scalar = self
+                        .schema
+                        .field_by_name(arrow_field.name())
+                        .and_then(|field| identity_fields.get(&field.id).copied())
+                        .and_then(|index| file.partition.get(index))
+                        .and_then(Option::as_ref)
+                        .and_then(|literal| match literal {
+                            Literal::Primitive(value) => Some(primitive_to_scalar_default(value)),
+                            _ => None,
+                        })
+                        .map(Ok)
+                        .unwrap_or_else(|| ScalarValue::try_from(arrow_field.data_type()));
+                    scalar?.to_array_of_size(1)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let batch = RecordBatch::try_new(self.arrow_schema.clone(), columns)?;
+            let result = predicate.evaluate(&batch)?.into_array(1)?;
+            let result = result
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .ok_or_else(|| {
+                    datafusion::common::DataFusionError::Plan(
+                        "Iceberg overwrite predicate did not evaluate to boolean".to_string(),
+                    )
+                })?;
+            if !result.is_null(0) && result.value(0) {
+                paths.push(file.file_path);
+            }
+        }
+        paths.sort();
+        paths.dedup();
+        Ok(paths)
     }
 
     fn projected_arrow_schema(&self, projection: Option<&Vec<usize>>) -> Result<Arc<ArrowSchema>> {
