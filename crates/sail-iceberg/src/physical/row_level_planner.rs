@@ -8,7 +8,7 @@ use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_planner::PhysicalPlanner;
 use sail_common_datafusion::datasource::{PhysicalSinkMode, RowLevelCommand};
 use sail_data_source::options::ResolveOptions;
-use sail_logical_plan::merge::RowLevelWriteNode;
+use sail_logical_plan::row_level::RowLevelWriteNode;
 
 use crate::lake_source::{
     IcebergLakeSource, catalog_managed_iceberg_from_options, metadata_location_from_options,
