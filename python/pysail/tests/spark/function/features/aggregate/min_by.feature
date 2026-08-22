@@ -103,6 +103,7 @@ Feature: min_by function
         """
       Then query error (?s)min_by.*does not support ordering on type
 
+    @spark-4
     Scenario: min_by rejects a VARIANT ordering column
       When query
         """
@@ -131,6 +132,20 @@ Feature: min_by function
       Examples:
         | case            | ordering              |
         | STRUCT<MAP>     | struct(map('k', y))   |
+
+    # parse_json is Spark 4.0+, so the VARIANT rows are split out of the outline above to keep
+    # the MAP coverage available when the suite runs against the 3.5 oracle.
+    @spark-4
+    Scenario Outline: min_by rejects a nested Spark 4 <case> ordering column
+      When query
+        """
+        SELECT min_by(x, <ordering>) AS result
+        FROM VALUES ('{"v":1}', 1), ('{"v":2}', 2) AS t(x, y)
+        """
+      Then query error (?s)min_by.*does not support ordering on type
+
+      Examples:
+        | case            | ordering              |
         | STRUCT<VARIANT> | struct(parse_json(x)) |
 
     # Spark's CalendarIntervalType is not an AtomicType, so it is not orderable.
@@ -162,6 +177,7 @@ Feature: min_by function
         | case                   | ordering                                                       |
         | STRUCT<INT>            | struct(y)                                                      |
         | STRUCT<STRUCT>         | struct(struct(y))                                              |
+        | unmarked VARIANT shape | named_struct('metadata', CAST(CAST(y AS STRING) AS BINARY), 'value', CAST(CAST(y AS STRING) AS BINARY)) |
         | ARRAY<INT>             | array(y)                                                       |
         | ARRAY<STRUCT>          | array(struct(y))                                               |
         | STRUCT<ARRAY<INT>>     | struct(array(y))                                               |
@@ -253,6 +269,22 @@ Feature: min_by function
         | foldable sum    | 1 + 1            |
         | foldable concat | concat('a', 'b') |
 
+    # A unique window ORDER BY makes tie replacement deterministic inside every running frame:
+    # Spark's predicate is strict, so each row's tie with the buffered key takes the newer row.
+    Scenario: min_by takes the newer row on ties in a running window
+      When query
+        """
+        SELECT i,
+               min_by(x, 1) OVER (ORDER BY i ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS result
+        FROM VALUES (1, 'a'), (2, 'b'), (3, 'c') AS t(i, x)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result |
+        | 1 | a      |
+        | 2 | b      |
+        | 3 | c      |
+
     # NullType is orderable in Spark, which returns NULL here.
     Scenario: min_by accepts an untyped NULL ordering argument
       When query
@@ -283,6 +315,16 @@ Feature: min_by function
       Examples:
         | case        | value                                      | result  |
         | MAP         | min_by(map('a', y), y)['a']                | 1       |
-        | VARIANT     | to_json(min_by(parse_json(j), y))          | {"v":1} |
         | ARRAY<MAP>  | min_by(array(map('k', y)), y)[0]['k']      | 1       |
         | STRUCT<MAP> | min_by(struct(map('k', y) AS m), y).m['k'] | 1       |
+
+    @spark-4
+    Scenario: min_by accepts a VARIANT value argument
+      When query
+        """
+        SELECT to_json(min_by(parse_json(j), y)) AS result
+        FROM VALUES ('{"v":3}', 3), ('{"v":1}', 1), ('{"v":2}', 2) AS t(j, y)
+        """
+      Then query result
+        | result  |
+        | {"v":1} |

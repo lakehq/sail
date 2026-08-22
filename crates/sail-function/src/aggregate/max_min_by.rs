@@ -55,7 +55,11 @@ impl Accumulator for MaxMinByAccumulator {
                 match ordering_val.partial_cmp(&self.ordering) {
                     Some(Ordering::Greater) => self.is_max,
                     Some(Ordering::Less) => !self.is_max,
-                    _ => false,
+                    // Spark's predicate is strict (`If(old > new, old, new)`), so a tie takes
+                    // the newer row. Only the window path runs this accumulator; the aggregate
+                    // path is rewritten to `last_value`, which already behaves this way.
+                    Some(Ordering::Equal) => true,
+                    None => false,
                 }
             };
             if should_update {

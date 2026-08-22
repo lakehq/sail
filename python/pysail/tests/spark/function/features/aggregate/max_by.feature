@@ -77,6 +77,7 @@ Feature: max_by function
         """
       Then query error (?s)max_by.*does not support ordering on type
 
+    @spark-4
     Scenario: max_by rejects a VARIANT ordering column
       When query
         """
@@ -107,8 +108,22 @@ Feature: max_by function
         | STRUCT<MAP>        | struct(map('k', y))        |
         | ARRAY<ARRAY<MAP>>  | array(array(map('k', y)))  |
         | STRUCT<ARRAY<MAP>> | struct(array(map('k', y))) |
-        | ARRAY<VARIANT>     | array(parse_json(x))       |
-        | STRUCT<VARIANT>    | struct(parse_json(x))      |
+
+    # parse_json is Spark 4.0+, so the VARIANT rows are split out of the outline above to keep
+    # the MAP coverage available when the suite runs against the 3.5 oracle.
+    @spark-4
+    Scenario Outline: max_by rejects a nested Spark 4 <case> ordering column
+      When query
+        """
+        SELECT max_by(x, <ordering>) AS result
+        FROM VALUES ('{"v":1}', 1), ('{"v":2}', 2) AS t(x, y)
+        """
+      Then query error (?s)max_by.*does not support ordering on type
+
+      Examples:
+        | case            | ordering              |
+        | ARRAY<VARIANT>  | array(parse_json(x))  |
+        | STRUCT<VARIANT> | struct(parse_json(x)) |
 
     # Spark's CalendarIntervalType is not an AtomicType, so it is not orderable,
     # unlike the ANSI day-time and year-month interval types below.
@@ -140,6 +155,7 @@ Feature: max_by function
         | case                   | ordering                                                       |
         | STRUCT<INT>            | struct(y)                                                      |
         | STRUCT<STRUCT>         | struct(struct(y))                                              |
+        | unmarked VARIANT shape | named_struct('metadata', CAST(CAST(y AS STRING) AS BINARY), 'value', CAST(CAST(y AS STRING) AS BINARY)) |
         | ARRAY<INT>             | array(y)                                                       |
         | ARRAY<STRUCT>          | array(struct(y))                                               |
         | STRUCT<ARRAY<INT>>     | struct(array(y))                                               |
@@ -217,7 +233,7 @@ Feature: max_by function
     # applyIgnoreNulls has a whitelist (NthValue, Lead, Lag, First, Last, AnyValue,
     # CollectList, CollectSet); max_by is not in it. Sail answers 'b' where the plain call
     # answers NULL.
-    @sail-bug
+    @sail-bug @spark-4
     Scenario: max_by rejects the clause IGNORE NULLS
       When query
         """
@@ -228,7 +244,7 @@ Feature: max_by function
 
     # WITHIN GROUP requires SupportsOrderingWithinGroup, which max_by is not. Sail keeps the
     # user's ORDER BY and appends its own key after it, answering 'c' instead of 'b'.
-    @sail-bug
+    @sail-bug @spark-4
     Scenario: max_by rejects the clause WITHIN GROUP
       When query
         """
@@ -248,7 +264,7 @@ Feature: max_by function
 
     # The mirror image: Spark allows FILTER on a window aggregate, while Sail's window match
     # arm requires `filter: None` and rejects it.
-    @sail-bug
+    @sail-bug @spark-4.2
     Scenario: max_by supports the clause FILTER combined with OVER
       When query
         """
@@ -314,6 +330,22 @@ Feature: max_by function
         | foldable sum    | 1 + 1            |
         | foldable concat | concat('a', 'b') |
 
+    # A unique window ORDER BY makes tie replacement deterministic inside every running frame:
+    # Spark's predicate is strict, so each row's tie with the buffered key takes the newer row.
+    Scenario: max_by takes the newer row on ties in a running window
+      When query
+        """
+        SELECT i,
+               max_by(x, 1) OVER (ORDER BY i ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS result
+        FROM VALUES (1, 'a'), (2, 'b'), (3, 'c') AS t(i, x)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result |
+        | 1 | a      |
+        | 2 | b      |
+        | 3 | c      |
+
     # NullType is orderable in Spark, which returns NULL here.
     Scenario: max_by accepts an untyped NULL ordering argument
       When query
@@ -342,6 +374,16 @@ Feature: max_by function
       Examples:
         | case        | value                                      | result  |
         | MAP         | max_by(map('a', y), y)['a']                | 3       |
-        | VARIANT     | to_json(max_by(parse_json(j), y))          | {"v":3} |
         | ARRAY<MAP>  | max_by(array(map('k', y)), y)[0]['k']      | 3       |
         | STRUCT<MAP> | max_by(struct(map('k', y) AS m), y).m['k'] | 3       |
+
+    @spark-4
+    Scenario: max_by accepts a VARIANT value argument
+      When query
+        """
+        SELECT to_json(max_by(parse_json(j), y)) AS result
+        FROM VALUES ('{"v":1}', 1), ('{"v":3}', 3), ('{"v":2}', 2) AS t(j, y)
+        """
+      Then query result
+        | result  |
+        | {"v":3} |
