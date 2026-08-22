@@ -45,6 +45,7 @@ pub enum SystemEventActorMessage {
         fetch: usize,
         result: oneshot::Sender<Result<RecordBatch>>,
     },
+    Shutdown,
 }
 
 impl SpanAssociation for SystemEventActorMessage {
@@ -57,6 +58,7 @@ impl SpanAssociation for SystemEventActorMessage {
             Self::ReadOptions { .. } => "ReadOptions",
             Self::ReadSessions { .. } => "ReadSessions",
             Self::ReadWorkers { .. } => "ReadWorkers",
+            Self::Shutdown => "Shutdown",
         }
         .into()
     }

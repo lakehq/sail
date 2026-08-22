@@ -70,13 +70,8 @@ impl JobScheduler {
             event_reporter.report(SystemEvent::JobCreated {
                 session_id: session_id.clone(),
                 job_id: u64::from(job_id),
-                created_at: Utc::now(),
-            });
-            event_reporter.report(SystemEvent::JobUpdated {
-                session_id: session_id.clone(),
-                job_id: u64::from(job_id),
                 status: job.state.status().to_string(),
-                updated_at: Utc::now(),
+                created_at: Utc::now(),
             });
             for (stage_index, (stage, descriptor)) in
                 job.graph.stages().iter().zip(&job.stages).enumerate()
@@ -98,14 +93,8 @@ impl JobScheduler {
                     mode: stage.mode.to_string(),
                     distribution: stage.distribution.to_string(),
                     placement: stage.placement.to_string(),
-                    created_at: Utc::now(),
-                });
-                event_reporter.report(SystemEvent::StageUpdated {
-                    session_id: session_id.clone(),
-                    job_id: u64::from(job_id),
-                    stage: stage_index as u64,
                     status: descriptor.state.status().to_string(),
-                    updated_at: Utc::now(),
+                    created_at: Utc::now(),
                 });
             }
         }
@@ -417,7 +406,6 @@ impl JobScheduler {
             }
 
             for t in &region.tasks {
-                let created_at = Utc::now();
                 let attempts = &mut job.stages[t.stage].tasks[t.partition].attempts;
                 attempts.push(TaskAttemptDescriptor {
                     state: TaskState::Created,
@@ -431,7 +419,8 @@ impl JobScheduler {
                     stage: t.stage as u64,
                     partition: t.partition as u64,
                     attempt: (attempts.len() - 1) as u64,
-                    created_at,
+                    status: TaskState::Created.status().to_string(),
+                    created_at: Utc::now(),
                 });
             }
 
@@ -613,16 +602,18 @@ impl JobScheduler {
             }
         }
         for (stage_id, stage) in job.stages.iter_mut().enumerate() {
-            let was_active = matches!(stage.state, StageState::Active);
-            stage.state = StageState::Inactive;
-            if was_active {
-                event_reporter.report(SystemEvent::StageUpdated {
-                    session_id: session_id.clone(),
-                    job_id: u64::from(job_id),
-                    stage: stage_id as u64,
-                    status: stage.state.status().to_string(),
-                    updated_at: Utc::now(),
-                });
+            match stage.state {
+                StageState::Active => {
+                    stage.state = StageState::Inactive;
+                    event_reporter.report(SystemEvent::StageUpdated {
+                        session_id: session_id.clone(),
+                        job_id: u64::from(job_id),
+                        stage: stage_id as u64,
+                        status: stage.state.status().to_string(),
+                        updated_at: Utc::now(),
+                    });
+                }
+                StageState::Inactive => {}
             }
         }
         actions.push(JobAction::CleanUpJob {

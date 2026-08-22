@@ -60,6 +60,7 @@ impl Actor for SystemEventActor {
             } => {
                 let _ = result.send(self.read_workers(session_id, worker_id, fetch));
             }
+            SystemEventActorMessage::Shutdown => return ActorAction::Stop,
         }
         ActorAction::Continue
     }

@@ -90,12 +90,8 @@ impl SessionManagerActor {
                         self.event_reporter.report(SystemEvent::SessionCreated {
                             session_id: session_id.clone(),
                             user_id,
-                            created_at: Utc::now(),
-                        });
-                        self.event_reporter.report(SystemEvent::SessionUpdated {
-                            session_id: session_id.clone(),
                             status,
-                            updated_at: Utc::now(),
+                            created_at: Utc::now(),
                         });
                         let driver = driver.clone();
                         ctx.spawn(async move {
@@ -133,12 +129,8 @@ impl SessionManagerActor {
                             self.event_reporter.report(SystemEvent::SessionCreated {
                                 session_id: session_id.clone(),
                                 user_id,
-                                created_at: Utc::now(),
-                            });
-                            self.event_reporter.report(SystemEvent::SessionUpdated {
-                                session_id: session_id.clone(),
                                 status,
-                                updated_at: Utc::now(),
+                                created_at: Utc::now(),
                             });
                             Ok(context)
                         }
@@ -160,12 +152,8 @@ impl SessionManagerActor {
                             self.event_reporter.report(SystemEvent::SessionCreated {
                                 session_id: session_id.clone(),
                                 user_id,
-                                created_at: Utc::now(),
-                            });
-                            self.event_reporter.report(SystemEvent::SessionUpdated {
-                                session_id: session_id.clone(),
                                 status,
-                                updated_at: Utc::now(),
+                                created_at: Utc::now(),
                             });
                             Err(e.into())
                         }

@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use opentelemetry::InstrumentationScope;
 use opentelemetry::logs::AnyValue;
 use opentelemetry_sdk::error::OTelSdkResult;
@@ -7,7 +9,9 @@ use tokio::runtime::Handle;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 
-use crate::system_event::{SystemEvent, SystemEventActor, SystemEventActorMessage};
+use crate::system_event::{
+    SYSTEM_EVENT_NAME, SystemEvent, SystemEventActor, SystemEventActorMessage,
+};
 
 /// Materializes system-event log records into [`SystemEventActor`] rows.
 #[derive(Debug)]
@@ -52,8 +56,8 @@ impl Drop for SystemEventLogProcessor {
 }
 
 impl LogProcessor for SystemEventLogProcessor {
-    fn emit(&self, record: &mut SdkLogRecord, instrumentation: &InstrumentationScope) {
-        if instrumentation.name() != "sail.system_event" {
+    fn emit(&self, record: &mut SdkLogRecord, _: &InstrumentationScope) {
+        if record.event_name() != Some(SYSTEM_EVENT_NAME) {
             return;
         }
         let Some(AnyValue::String(body)) = record.body() else {
@@ -62,10 +66,19 @@ impl LogProcessor for SystemEventLogProcessor {
         let Ok(event) = serde_json::from_str::<SystemEvent>(body.as_ref()) else {
             return;
         };
+        // Log processors run synchronously. An unbounded channel lets event reporting remain
+        // non-blocking while the forwarder waits for the actor's bounded mailbox.
         let _ = self.sender.send(SystemEventActorMessage::Apply(event));
     }
 
     fn force_flush(&self) -> OTelSdkResult {
+        Ok(())
+    }
+
+    fn shutdown_with_timeout(&self, _: Duration) -> OTelSdkResult {
+        // The shutdown message follows all buffered events, so the actor processes the
+        // complete event stream before it stops.
+        let _ = self.sender.send(SystemEventActorMessage::Shutdown);
         Ok(())
     }
 }

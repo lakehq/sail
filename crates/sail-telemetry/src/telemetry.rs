@@ -39,9 +39,10 @@ struct TelemetryState {
     meter: Option<Meter>,
     metrics: Option<MetricManager>,
     logger_provider: Option<SdkLoggerProvider>,
+    runtime: Option<tokio::runtime::Handle>,
+    actor_system: Option<ActorSystem>,
     system_event_reader: Option<SystemEventReader>,
-    system_event_system: Option<ActorSystem>,
-    event_reporter: Option<SystemEventReporter>,
+    system_event_reporter: Option<SystemEventReporter>,
 }
 
 static TELEMETRY_STATUS: Mutex<TelemetryStatus> = Mutex::new(TelemetryStatus::Uninitialized);
@@ -173,13 +174,16 @@ fn init_logs(
     let max_level = primary.filter();
 
     let mut secondary: Vec<Box<dyn Log>> = vec![];
-    let mut system_event_system = ActorSystem::new();
-    let system_event_actor = system_event_system.spawn(());
+    let mut actor_system = ActorSystem::new();
+    let system_event_actor = actor_system.spawn(());
     let system_event_reader = SystemEventReader::new(system_event_actor.clone());
     let runtime = tokio::runtime::Handle::try_current()
         .map_err(|e| TelemetryError::internal(format!("failed to get runtime handle: {e}")))?;
     let mut provider = SdkLoggerProvider::builder()
-        .with_log_processor(SystemEventLogProcessor::new(system_event_actor, runtime))
+        .with_log_processor(SystemEventLogProcessor::new(
+            system_event_actor,
+            runtime.clone(),
+        ))
         .with_resource(get_resource(resource));
 
     if config.export_logs
@@ -208,12 +212,15 @@ fn init_logs(
         provider = provider.with_log_processor(processor);
     }
     let provider = provider.build();
-    secondary.push(Box::new(OpenTelemetryLogBridge::new(&provider)));
-    state.event_reporter = Some(SystemEventReporter::new(
-        provider.logger("sail.system_event"),
+    if config.export_logs && config.exporter.otlp.endpoint.is_some() {
+        secondary.push(Box::new(OpenTelemetryLogBridge::new(&provider)));
+    }
+    state.system_event_reporter = Some(SystemEventReporter::new(
+        provider.logger_with_scope(get_instrumentation_scope()),
     ));
+    state.runtime = Some(runtime);
+    state.actor_system = Some(actor_system);
     state.system_event_reader = Some(system_event_reader);
-    state.system_event_system = Some(system_event_system);
     state.logger_provider = Some(provider);
     if config.export_traces && config.exporter.otlp.endpoint.is_some() {
         secondary.push(Box::new(SpanEventLogger));
@@ -234,16 +241,26 @@ fn init_datafusion_telemetry() -> TelemetryResult<()> {
 pub fn shutdown_telemetry() {
     debug!("Shutting down OpenTelemetry...");
     fastrace::flush();
-    if let Ok(mut status) = TELEMETRY_STATUS.lock()
-        && let TelemetryStatus::Initialized(ref state) = *status
-    {
-        if let Some(provider) = &state.meter_provider {
+    let state = TELEMETRY_STATUS.lock().ok().and_then(|mut status| {
+        let previous = std::mem::replace(&mut *status, TelemetryStatus::Finalized);
+        match previous {
+            TelemetryStatus::Initialized(state) => Some(state),
+            previous => {
+                *status = previous;
+                None
+            }
+        }
+    });
+    if let Some(state) = state {
+        if let Some(provider) = state.meter_provider {
             let _ = provider.shutdown();
         }
-        if let Some(provider) = &state.logger_provider {
+        if let Some(provider) = state.logger_provider {
             let _ = provider.shutdown();
         }
-        *status = TelemetryStatus::Finalized;
+        if let (Some(runtime), Some(mut actor_system)) = (state.runtime, state.actor_system) {
+            runtime.block_on(actor_system.join());
+        }
     }
 }
 
@@ -272,7 +289,7 @@ pub fn global_system_event_reporter() -> Option<SystemEventReporter> {
         .lock()
         .ok()
         .and_then(|status| match &*status {
-            TelemetryStatus::Initialized(state) => state.event_reporter.clone(),
+            TelemetryStatus::Initialized(state) => state.system_event_reporter.clone(),
             _ => None,
         })
 }

@@ -44,25 +44,20 @@ impl WorkerPool {
             ctx.send(DriverMessage::Shutdown { result: None });
             return;
         };
-        let created_at = Utc::now();
         let descriptor = WorkerDescriptor {
             state: WorkerState::Pending,
             messages: vec![],
             peers: HashSet::new(),
         };
+        let status = descriptor.state.status().to_string();
         self.workers.insert(worker_id, descriptor);
         self.event_reporter.report(SystemEvent::WorkerCreated {
             session_id: self.options.session_id.clone(),
             worker_id: u64::from(worker_id),
-            created_at,
-        });
-        self.event_reporter.report(SystemEvent::WorkerUpdated {
-            session_id: self.options.session_id.clone(),
-            worker_id: u64::from(worker_id),
             host: None,
             port: None,
-            status: WorkerState::Pending.status().to_string(),
-            updated_at: Utc::now(),
+            status,
+            created_at: Utc::now(),
         });
         ctx.send_with_delay(
             DriverMessage::ProbePendingWorker { worker_id },
@@ -174,7 +169,7 @@ impl WorkerPool {
                     worker_id: u64::from(worker_id),
                     host: None,
                     port: None,
-                    status: WorkerState::Completed.status().to_string(),
+                    status: worker.state.status().to_string(),
                     updated_at: Utc::now(),
                 });
             }
@@ -190,7 +185,7 @@ impl WorkerPool {
                             worker_id: u64::from(worker_id),
                             host: None,
                             port: None,
-                            status: WorkerState::Failed.status().to_string(),
+                            status: worker.state.status().to_string(),
                             updated_at: Utc::now(),
                         });
                         return;
@@ -208,7 +203,7 @@ impl WorkerPool {
                     worker_id: u64::from(worker_id),
                     host: None,
                     port: None,
-                    status: WorkerState::Completed.status().to_string(),
+                    status: worker.state.status().to_string(),
                     updated_at: Utc::now(),
                 });
             }
@@ -291,7 +286,7 @@ impl WorkerPool {
                 worker_id: u64::from(worker_id),
                 host: None,
                 port: None,
-                status: WorkerState::Failed.status().to_string(),
+                status: worker.state.status().to_string(),
                 updated_at: Utc::now(),
             });
             true

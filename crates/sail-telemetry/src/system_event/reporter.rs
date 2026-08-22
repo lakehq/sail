@@ -1,7 +1,7 @@
 use opentelemetry::logs::{AnyValue, LogRecord as _, Logger as _};
 use opentelemetry_sdk::logs::SdkLogger;
 
-use crate::system_event::SystemEvent;
+use crate::system_event::{SYSTEM_EVENT_NAME, SystemEvent};
 
 /// Emits serialized [`SystemEvent`] values through an OpenTelemetry SDK logger.
 #[derive(Debug, Clone)]
@@ -19,7 +19,7 @@ impl SystemEventReporter {
             return;
         };
         let mut record = self.logger.create_log_record();
-        record.set_event_name("sail.system_event");
+        record.set_event_name(SYSTEM_EVENT_NAME);
         record.set_body(AnyValue::String(body.into()));
         self.logger.emit(record);
     }
