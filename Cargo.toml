@@ -25,6 +25,7 @@ todo = "deny"
 [workspace.dependencies]
 thiserror = { version = "2.0.18" }
 tokio = { version = "1.52.3", features = ["full"] }
+tokio-util = { version = "0.7.19", features = ["rt"] }
 tokio-stream = { version = "0.1.18", features = ["time", "io-util"] }
 pbjson = "0.9.0"
 pbjson-types = "0.9.0"
