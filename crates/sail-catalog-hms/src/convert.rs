@@ -40,7 +40,7 @@ pub(crate) const VIRTUAL_VIEW_TYPE: &str = "VIRTUAL_VIEW";
 /// Used as a literal owner name when no authenticated principal is available.
 pub(crate) const DEFAULT_OWNER: &str = "user.name";
 
-pub(crate) struct GenericTableFormat<'a> {
+pub(crate) struct GenericDataSourceFormat<'a> {
     pub logical_format: &'a str,
     pub storage: &'a HiveStorageFormat,
 }
@@ -99,7 +99,7 @@ pub(crate) fn table_to_status(
     let format = if is_iceberg_table_parameters(table.parameters.as_ref()) {
         ICEBERG_TABLE_TYPE_VALUE.to_string()
     } else {
-        resolve_table_format(table.parameters.as_ref(), storage)
+        resolve_data_source_format(table.parameters.as_ref(), storage)
     };
     let partition_by = table
         .partition_keys
@@ -192,7 +192,7 @@ pub(crate) fn build_generic_table(
     columns: Vec<CreateTableColumnOptions>,
     partition_columns: Vec<String>,
     location: Option<String>,
-    format: GenericTableFormat<'_>,
+    format: GenericDataSourceFormat<'_>,
     comment: Option<String>,
     properties: Vec<(String, String)>,
 ) -> CatalogResult<Table> {
@@ -708,7 +708,7 @@ fn reorder_spark_columns(
 /// 2. Only tables without a datasource marker are classified from their Hive
 ///    SerDe/InputFormat/OutputFormat metadata.
 /// 3. If neither is present or detectable, the format is `unknown`.
-fn resolve_table_format(
+fn resolve_data_source_format(
     parameters: Option<&AHashMap<FastStr, FastStr>>,
     storage: Option<&StorageDescriptor>,
 ) -> String {
@@ -888,10 +888,10 @@ mod tests {
     use sail_common_hms::hms::{FieldSchema, SerDeInfo, StorageDescriptor, Table};
 
     use super::{
-        COMMENT_KEY, GenericTableFormat, SPARK_DATASOURCE_PATH_KEY, SPARK_DATASOURCE_PROVIDER_KEY,
-        SPARK_SCHEMA_KEY, VIRTUAL_VIEW_TYPE, build_generic_table, build_view,
-        columns_from_spark_properties, database_to_status, inject_spark_metadata, is_view_table,
-        map_to_vec, validate_namespace,
+        COMMENT_KEY, GenericDataSourceFormat, SPARK_DATASOURCE_PATH_KEY,
+        SPARK_DATASOURCE_PROVIDER_KEY, SPARK_SCHEMA_KEY, VIRTUAL_VIEW_TYPE, build_generic_table,
+        build_view, columns_from_spark_properties, database_to_status, inject_spark_metadata,
+        is_view_table, map_to_vec, validate_namespace,
     };
 
     #[test]
@@ -932,7 +932,7 @@ mod tests {
             }],
             vec![],
             Some("s3://warehouse/items".to_string()),
-            GenericTableFormat {
+            GenericDataSourceFormat {
                 logical_format: "parquet",
                 storage: &HiveStorageFormat::parquet(),
             },
@@ -982,7 +982,7 @@ mod tests {
                 }],
                 vec![],
                 Some(format!("s3://warehouse/{logical_format}_items")),
-                GenericTableFormat {
+                GenericDataSourceFormat {
                     logical_format,
                     storage: &storage,
                 },
@@ -1032,7 +1032,7 @@ mod tests {
             }],
             vec![],
             Some("s3://warehouse/items".to_string()),
-            GenericTableFormat {
+            GenericDataSourceFormat {
                 logical_format: "textfile",
                 storage: &HiveStorageFormat::textfile(),
             },
@@ -1091,7 +1091,7 @@ mod tests {
             }],
             vec!["missing_partition".to_string()],
             Some("s3://warehouse/items".to_string()),
-            GenericTableFormat {
+            GenericDataSourceFormat {
                 logical_format: "parquet",
                 storage: &HiveStorageFormat::parquet(),
             },
@@ -1124,7 +1124,7 @@ mod tests {
             }],
             vec![],
             Some("s3://warehouse/items".to_string()),
-            GenericTableFormat {
+            GenericDataSourceFormat {
                 logical_format: "textfile",
                 storage: &HiveStorageFormat::textfile(),
             },
@@ -1159,7 +1159,7 @@ mod tests {
             }],
             vec![],
             Some("s3://warehouse/items".to_string()),
-            GenericTableFormat {
+            GenericDataSourceFormat {
                 logical_format: "parquet",
                 storage: &HiveStorageFormat::parquet(),
             },
@@ -1205,7 +1205,7 @@ mod tests {
             ],
             vec!["day".to_string()],
             Some("s3://warehouse/items".to_string()),
-            GenericTableFormat {
+            GenericDataSourceFormat {
                 logical_format: "parquet",
                 storage: &HiveStorageFormat::parquet(),
             },
@@ -1256,7 +1256,7 @@ mod tests {
             ],
             vec!["day".to_string()],
             Some("s3://warehouse/items".to_string()),
-            GenericTableFormat {
+            GenericDataSourceFormat {
                 logical_format: "parquet",
                 storage: &HiveStorageFormat::parquet(),
             },
@@ -1324,7 +1324,7 @@ mod tests {
             }],
             vec![],
             Some("s3://warehouse/items".to_string()),
-            GenericTableFormat {
+            GenericDataSourceFormat {
                 logical_format: "textfile",
                 storage: &HiveStorageFormat::textfile(),
             },
@@ -1399,7 +1399,7 @@ mod tests {
             columns.clone(),
             vec![],
             Some("s3://warehouse/items".to_string()),
-            GenericTableFormat {
+            GenericDataSourceFormat {
                 logical_format: "parquet",
                 storage: &HiveStorageFormat::parquet(),
             },
@@ -1480,7 +1480,7 @@ mod tests {
             columns.clone(),
             vec![],
             Some("s3://warehouse/items".to_string()),
-            GenericTableFormat {
+            GenericDataSourceFormat {
                 logical_format: "parquet",
                 storage: &HiveStorageFormat::parquet(),
             },
@@ -1583,7 +1583,7 @@ mod tests {
             ],
             vec!["day".to_string()],
             Some("s3://warehouse/items".to_string()),
-            GenericTableFormat {
+            GenericDataSourceFormat {
                 logical_format: "parquet",
                 storage: &HiveStorageFormat::parquet(),
             },
@@ -2080,7 +2080,7 @@ mod tests {
             vec![],
             vec![],
             Some("s3://warehouse/empty_cols".to_string()),
-            GenericTableFormat {
+            GenericDataSourceFormat {
                 logical_format: "parquet",
                 storage: &HiveStorageFormat::parquet(),
             },
@@ -2192,7 +2192,7 @@ mod tests {
             ],
             vec!["category".to_string(), "event_date".to_string()],
             Some("s3://warehouse/mixed_events".to_string()),
-            GenericTableFormat {
+            GenericDataSourceFormat {
                 logical_format: "parquet",
                 storage: &HiveStorageFormat::parquet(),
             },
@@ -2560,7 +2560,7 @@ mod tests {
             }],
             vec![],
             Some("s3://warehouse/items".to_string()),
-            GenericTableFormat {
+            GenericDataSourceFormat {
                 logical_format: "parquet",
                 storage: &HiveStorageFormat::parquet(),
             },
@@ -2591,7 +2591,7 @@ mod tests {
             }],
             vec![],
             Some("s3://warehouse/items".to_string()),
-            GenericTableFormat {
+            GenericDataSourceFormat {
                 logical_format: "parquet",
                 storage: &HiveStorageFormat::parquet(),
             },
