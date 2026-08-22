@@ -24,6 +24,7 @@ sail-celeborn = { path = "../sail-celeborn" }
 
 thiserror = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 tonic = { workspace = true }
 tonic-types = { workspace = true }
 tonic-prost = { workspace = true }

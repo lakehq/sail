@@ -48,6 +48,27 @@ Feature: TABLESAMPLE clause
         | cnt |
         | 5   |
 
+    Scenario Outline: TABLESAMPLE PERCENT accepts Spark's rounding tolerance
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW ts_data AS
+        SELECT * FROM range(0, 10, 1, 1)
+        """
+      When query
+        """
+        SELECT COUNT(*) AS cnt
+        FROM ts_data TABLESAMPLE (<percent> PERCENT) REPEATABLE (1)
+        """
+      Then query result
+        | cnt   |
+        | <cnt> |
+
+      Examples:
+        | percent             | cnt |
+        | -0.00005            | 0   |
+        | -0.0001             | 0   |
+        | 100.00005           | 10  |
+
   Rule: TABLESAMPLE with BUCKET
 
     Scenario: TABLESAMPLE BUCKET 1 OUT OF 1 returns all rows
@@ -67,6 +88,26 @@ Feature: TABLESAMPLE clause
         | 3  |
         | 4  |
         | 5  |
+
+    Scenario Outline: TABLESAMPLE BUCKET uses numerator as the sample fraction
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW ts_data AS
+        SELECT * FROM range(0, 10, 1, 1)
+        """
+      When query
+        """
+        SELECT COUNT(*) AS cnt
+        FROM ts_data TABLESAMPLE (BUCKET <numerator> OUT OF 4) REPEATABLE (1)
+        """
+      Then query result
+        | cnt   |
+        | <cnt> |
+
+      Examples:
+        | numerator | cnt |
+        | 0         | 0   |
+        | 4         | 10  |
 
   Rule: TABLESAMPLE error cases
 
@@ -93,6 +134,23 @@ Feature: TABLESAMPLE clause
         SELECT * FROM ts_data TABLESAMPLE (-10 PERCENT)
         """
       Then query error Sampling fraction
+
+    Scenario Outline: TABLESAMPLE PERCENT rejects values beyond Spark's rounding tolerance
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW ts_data AS
+        SELECT * FROM range(0, 10, 1, 1)
+        """
+      When query
+        """
+        SELECT * FROM ts_data TABLESAMPLE (<percent> PERCENT)
+        """
+      Then query error Sampling fraction
+
+      Examples:
+        | percent              |
+        | -0.00010000000000001 |
+        | 100.0001             |
 
   Rule: TABLESAMPLE on subqueries
 
