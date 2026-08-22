@@ -9,6 +9,7 @@ use datafusion::logical_expr::{Accumulator, Signature, Volatility};
 use datafusion_expr::AggregateUDFImpl;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use pyo3::{Py, PyAny, Python};
+use sail_common_python::thread_state::pin_thread_state;
 
 use crate::accumulator::{BatchAggregateAccumulator, BatchAggregator};
 use crate::cereal::pyspark_udf::PySparkUdfPayload;
@@ -143,7 +144,10 @@ impl AggregateUDFImpl for PySparkGroupAggregateUDF {
     }
 
     fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let udf = Python::attach(|py| self.udf(py))?;
+        let udf = Python::attach(|py| {
+            pin_thread_state(py);
+            self.udf(py)
+        })?;
         let aggregator = Box::new(PySparkGroupAggregator {
             udf,
             output_type: self.output_type.clone(),
@@ -171,6 +175,7 @@ struct PySparkGroupAggregator {
 impl BatchAggregator for PySparkGroupAggregator {
     fn call(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
         let data = Python::attach(|py| -> PyUdfResult<_> {
+            pin_thread_state(py);
             let output = self
                 .udf
                 .call1(py, (args.try_to_py(py, self.large_var_types)?,))?;

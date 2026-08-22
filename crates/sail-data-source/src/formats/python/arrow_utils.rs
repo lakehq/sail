@@ -28,6 +28,7 @@ use arrow_schema::SchemaRef;
 use datafusion_common::{DataFusionError, Result};
 use pyo3::prelude::*;
 use pyo3::types::PyAnyMethods;
+use sail_common_python::thread_state::pin_thread_state;
 
 /// Convert a Python PyArrow RecordBatch to a Rust Arrow RecordBatch.
 ///
@@ -478,6 +479,7 @@ pub fn convert_rows_to_batch(schema: &SchemaRef, pickled_rows: &[Vec<u8>]) -> Re
     }
 
     Python::attach(|py| {
+        pin_thread_state(py);
         let cloudpickle = import_cloudpickle(py)?;
 
         // Unpickle all rows
@@ -702,6 +704,7 @@ mod tests {
     fn test_rust_record_batch_to_py() {
         init_python();
         Python::attach(|py| {
+            pin_thread_state(py);
             // Create a simple RecordBatch
             let schema = Arc::new(Schema::new(vec![
                 Field::new("id", DataType::Int32, false),
@@ -737,6 +740,7 @@ mod tests {
     fn test_record_batch_to_py_rows() {
         init_python();
         Python::attach(|py| {
+            pin_thread_state(py);
             // Create a simple RecordBatch
             let schema = Arc::new(Schema::new(vec![
                 Field::new("id", DataType::Int32, false),
@@ -785,6 +789,7 @@ mod tests {
     fn test_record_batch_to_py_rows_with_nulls() {
         init_python();
         Python::attach(|py| {
+            pin_thread_state(py);
             // Create a RecordBatch with nulls
             let schema = Arc::new(Schema::new(vec![
                 Field::new("id", DataType::Int32, false),

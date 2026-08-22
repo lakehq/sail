@@ -19,6 +19,7 @@ use sail_common_datafusion::datasource::{
     OptionLayer, SinkInfo, SinkMode, SourceInfo, TableFormat, TableFormatRegistry,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_common_python::thread_state::pin_thread_state;
 
 use super::datasource::PythonDataSource;
 use super::discovery::DATA_SOURCE_REGISTRY;
@@ -80,6 +81,7 @@ impl PythonTableFormat {
         use pyo3::prelude::*;
 
         Python::attach(|py| {
+            pin_thread_state(py);
             let sys = py.import("sys").map_err(py_err)?;
             let version_info = sys.getattr("version_info").map_err(py_err)?;
             let major: u32 = version_info
@@ -137,6 +139,7 @@ impl PythonTableFormat {
         let python_ver = Self::get_python_version()?;
 
         Python::attach(|py| {
+            pin_thread_state(py);
             // Use pyspark.cloudpickle (PySpark is a hard requirement)
             let cloudpickle = import_cloudpickle(py)?;
 
