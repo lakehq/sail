@@ -46,6 +46,7 @@ impl Actor for SessionManagerActor {
             session_factory,
             job_runner_factory,
             driver_gateway,
+            event_reporter,
         } = components;
         Self {
             options,
@@ -56,10 +57,18 @@ impl Actor for SessionManagerActor {
             driver_gateway,
             driver_id_generator: IdGenerator::new(),
             shutdown_notifier: None,
+            event_reporter,
         }
     }
 
     async fn start(&mut self, ctx: &mut ActorContext<Self>) {
+        for (key, value) in &self.options.options {
+            self.event_reporter
+                .report(sail_telemetry::system_event::SystemEvent::OptionCreated {
+                    key: key.clone(),
+                    value: value.clone(),
+                });
+        }
         let Some(driver_gateway) = &mut self.driver_gateway else {
             return;
         };
@@ -83,15 +92,8 @@ impl Actor for SessionManagerActor {
             SessionManagerMessage::DeleteSession { session_id, result } => {
                 self.handle_delete_session(ctx, session_id, result)
             }
-            SessionManagerMessage::SetSessionHistory {
-                session_id,
-                history,
-            } => self.handle_set_session_history(ctx, session_id, history),
             SessionManagerMessage::SetSessionFailure { session_id } => {
                 self.handle_set_session_failure(ctx, session_id)
-            }
-            SessionManagerMessage::ObserveState { observer } => {
-                self.handle_observe_state(ctx, observer)
             }
             SessionManagerMessage::GetDriver { driver_id, result } => {
                 self.handle_get_driver(driver_id, result)

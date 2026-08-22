@@ -5,7 +5,6 @@ from urllib.request import url2pathname
 import pyarrow.parquet as pq
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
-from pyiceberg.io.pyarrow import PyArrowFileIO
 from pyiceberg.manifest import DataFileContent, ManifestContent, read_manifest_list
 from pyiceberg.typedef import Record
 from pyspark.sql.dataframe import DataFrame as SparkDataFrame
@@ -19,6 +18,7 @@ from pysail.testing.spark.steps.iceberg import (
     _pyarrow_input_file,
 )
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
+from pysail.tests.spark.iceberg.utils import WindowsLocalPyArrowFileIO
 
 UNPARTITIONED_LAST_PARTITION_ID = 999
 
@@ -66,7 +66,7 @@ def _manifest_count(manifests: list[dict], *, content: str, key: str) -> int:
 def _current_manifest_entries(table_path: Path, content: ManifestContent):
     metadata = _find_latest_metadata(table_path)
     snapshot = _current_snapshot(metadata)
-    io = PyArrowFileIO()
+    io = WindowsLocalPyArrowFileIO()
     entries = []
     for manifest in read_manifest_list(_pyarrow_input_file(io, snapshot["manifest-list"])):
         if manifest.content == content:

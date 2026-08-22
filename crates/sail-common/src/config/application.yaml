@@ -302,6 +302,20 @@
   description: The port of the Celeborn master.
   experimental: true
 
+- key: cluster.shuffle_backend.celeborn.compression
+  type: string
+  default: "lz4"
+  description: |
+    Compression for Celeborn push-data batches. Valid values are `none`, `lz4`, and
+    `zstd(level)`, for example `zstd(1)`.
+  experimental: true
+
+- key: cluster.shuffle_backend.celeborn.heartbeat_interval_secs
+  type: number
+  default: "10"
+  description: The interval in seconds between Celeborn application heartbeats.
+  experimental: true
+
 - key: cluster.shuffle_backend.celeborn.endpoint_overrides
   type: array
   default: "[]"

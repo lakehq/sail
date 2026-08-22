@@ -31,6 +31,7 @@ use crate::physical_plan::{
     COL_ACTION, ExecCommitMeta, current_timestamp_millis, decode_adds_from_batch,
     delta_action_schema, encode_actions, meta_adds,
 };
+use crate::schema::PhysicalPartitionColumn;
 use crate::spec::{Action, Add, Remove, RemoveOptions, Stats};
 use crate::transaction::OperationMetrics;
 
@@ -38,7 +39,7 @@ use crate::transaction::OperationMetrics;
 #[derive(Debug)]
 pub struct DeltaRemoveActionsExec {
     input: Arc<dyn ExecutionPlan>,
-    partition_value_columns: Option<Vec<(String, String)>>,
+    partition_value_columns: Option<Vec<PhysicalPartitionColumn>>,
     metrics: ExecutionPlanMetricsSet,
     cache: Arc<PlanProperties>,
 }
@@ -48,13 +49,13 @@ impl DeltaRemoveActionsExec {
         Self::try_new(input, None)
     }
 
-    pub fn partition_value_columns(&self) -> Option<&[(String, String)]> {
+    pub fn partition_value_columns(&self) -> Option<&[PhysicalPartitionColumn]> {
         self.partition_value_columns.as_deref()
     }
 
     pub fn try_new(
         input: Arc<dyn ExecutionPlan>,
-        partition_value_columns: Option<Vec<(String, String)>>,
+        partition_value_columns: Option<Vec<PhysicalPartitionColumn>>,
     ) -> Result<Self> {
         // Output schema must match DeltaWriterExec output schema (row-per-action).
         let schema = delta_action_schema()?;

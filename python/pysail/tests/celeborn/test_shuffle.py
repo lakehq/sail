@@ -387,19 +387,21 @@ def test_shuffle_client_does_not_reuse_a_worker_that_failed_in_an_earlier_epoch(
         assert client.push_data(3, 0, 0, 0, b"epoch zero") == len(b"epoch zero") + 16
         assert sum(proxy.close_active_connections(reason="test") for proxy in celeborn_push_proxies.values()) == 1
         assert client.push_data(3, 0, 0, 0, b"epoch one") == len(b"epoch one") + 16
-        _add_drop_next_connection(celeborn_push_proxies)
+        # The worker client is reused across partition epochs. Close its connection before
+        # the next push so the failed transport is observed by the reused client.
+        assert sum(proxy.close_active_connections(reason="test") for proxy in celeborn_push_proxies.values()) == 1
         with pytest.raises(RuntimeError, match="master error: status 27"):
             client.push_data(3, 0, 0, 0, b"epoch two")
 
+        # Each direct close forces a revive after one of the first two epoch pushes.
         assert (
             _event_count(
                 celeborn_push_proxies,
                 ConnectionClosed,
                 reason="test",
             )
-            == 1
+            == 2  # noqa: PLR2004
         )
-        assert _event_count(celeborn_push_proxies, RuleApplied) == 1
         assert _event_count(celeborn_push_proxies, ConnectionOpened) == 2  # noqa: PLR2004
         assert len(_event_workers(celeborn_push_proxies, ConnectionOpened)) == 2  # noqa: PLR2004
 

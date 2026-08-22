@@ -4,7 +4,7 @@ mod actor;
 pub use access::LocalLifecycleManager;
 pub use actor::{LifecycleManagerActor, LifecycleManagerMessage, LifecycleManagerOptions};
 
-use crate::common::{PartitionLocation, SlotReservation};
+use crate::common::{ApplicationMetrics, PartitionLocation, SlotReservation};
 use crate::error::CelebornResult;
 
 /// A failed push that needs a newer partition location.
@@ -47,6 +47,9 @@ pub trait LifecycleManager: Send + Sync + 'static {
     ) -> CelebornResult<()>;
 
     async fn unregister_shuffle(&self, shuffle_id: i32) -> CelebornResult<()>;
+
+    /// Add metrics that will be reported in the next application heartbeat.
+    async fn report_metrics(&self, metrics: ApplicationMetrics) -> CelebornResult<()>;
 
     async fn stop(&self) -> CelebornResult<()>;
 }

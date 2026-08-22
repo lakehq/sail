@@ -9,9 +9,6 @@ use log::{debug, info, warn};
 use sail_celeborn::lifecycle::{LifecycleManagerActor, LocalLifecycleManager};
 use sail_common::actor::{ActorAction, ActorContext, ActorHandle};
 use sail_common_datafusion::error::CommonErrorCause;
-use sail_common_datafusion::session::job::JobRunnerHistory;
-use sail_common_datafusion::system::observable::JobRunnerObserver;
-use sail_common_datafusion::system::predicate::Predicates;
 use sail_python_udf::error::PyErrExtractor;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
@@ -329,60 +326,6 @@ impl DriverActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_observe_state(
-        &mut self,
-        _ctx: &mut ActorContext<Self>,
-        observer: JobRunnerObserver,
-    ) -> ActorAction {
-        match observer {
-            JobRunnerObserver::Jobs {
-                session_id,
-                job_id,
-                fetch,
-                result,
-            } => {
-                let job_id = Predicates::transform(job_id, |x: &JobId| u64::from(*x));
-                let output = self.job_scheduler.observe_jobs(&session_id, job_id, fetch);
-                let _ = result.send(output);
-            }
-            JobRunnerObserver::Stages {
-                session_id,
-                job_id,
-                fetch,
-                result,
-            } => {
-                let job_id = Predicates::transform(job_id, |x: &JobId| u64::from(*x));
-                let output = self
-                    .job_scheduler
-                    .observe_stages(&session_id, job_id, fetch);
-                let _ = result.send(output);
-            }
-            JobRunnerObserver::Tasks {
-                session_id,
-                job_id,
-                fetch,
-                result,
-            } => {
-                let job_id = Predicates::transform(job_id, |x: &JobId| u64::from(*x));
-                let output = self.job_scheduler.observe_tasks(&session_id, job_id, fetch);
-                let _ = result.send(output);
-            }
-            JobRunnerObserver::Workers {
-                session_id,
-                worker_id,
-                fetch,
-                result,
-            } => {
-                let worker_id = Predicates::transform(worker_id, |x: &WorkerId| u64::from(*x));
-                let output = self
-                    .worker_pool
-                    .observe_workers(&session_id, worker_id, fetch);
-                let _ = result.send(output);
-            }
-        }
-        ActorAction::Continue
-    }
-
     pub(super) fn handle_shutdown(
         &mut self,
         _ctx: &mut ActorContext<Self>,
@@ -621,15 +564,6 @@ impl DriverActor {
     fn scale_up_workers(&mut self, ctx: &mut ActorContext<Self>) {
         for _ in 0..self.task_assigner.request_workers() {
             self.worker_pool.start_worker(ctx);
-        }
-    }
-
-    pub(super) fn build_history(&self) -> JobRunnerHistory {
-        JobRunnerHistory {
-            jobs: self.job_scheduler.observe_job_snapshots(),
-            stages: self.job_scheduler.observe_stage_snapshots(),
-            tasks: self.job_scheduler.observe_task_snapshots(),
-            workers: self.worker_pool.observe_worker_snapshots(),
         }
     }
 }

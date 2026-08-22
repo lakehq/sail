@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 
+use bytes::Bytes;
 use futures::stream::BoxStream;
 use sail_common::telemetry::SpanAssociation;
 use tokio::sync::oneshot;
@@ -45,7 +46,7 @@ pub enum ShuffleClientMessage {
         partition_id: i32,
         map_id: i32,
         attempt_id: i32,
-        data: Vec<u8>,
+        data: Bytes,
         result: oneshot::Sender<CelebornResult<usize>>,
     },
     PushDataComplete {
@@ -79,13 +80,13 @@ pub enum ShuffleClientMessage {
     ReadPartitionStream {
         shuffle_id: i32,
         partition_id: i32,
-        result: oneshot::Sender<BoxStream<'static, CelebornResult<Vec<u8>>>>,
+        result: oneshot::Sender<BoxStream<'static, CelebornResult<Bytes>>>,
     },
     ReadPartitionStreamComplete {
         shuffle_id: i32,
         partition_id: i32,
         result: CelebornResult<SlotReservation>,
-        reply: oneshot::Sender<BoxStream<'static, CelebornResult<Vec<u8>>>>,
+        reply: oneshot::Sender<BoxStream<'static, CelebornResult<Bytes>>>,
     },
     Stop {
         result: oneshot::Sender<()>,

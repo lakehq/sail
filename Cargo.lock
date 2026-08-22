@@ -7538,6 +7538,7 @@ dependencies = [
  "futures",
  "sail-catalog",
  "sail-common-datafusion",
+ "sail-telemetry",
  "serde",
  "tokio",
 ]
@@ -7569,8 +7570,11 @@ dependencies = [
 name = "sail-celeborn"
 version = "0.7.0"
 dependencies = [
+ "bytes",
+ "crc32fast",
  "futures",
  "log",
+ "lz4_flex",
  "num_enum",
  "prost",
  "readonly",
@@ -7579,7 +7583,9 @@ dependencies = [
  "tokio",
  "tonic",
  "tonic-prost-build",
+ "twox-hash",
  "uuid",
+ "zstd",
 ]
 
 [[package]]
@@ -7767,6 +7773,7 @@ name = "sail-execution"
 version = "0.7.0"
 dependencies = [
  "arrow-flight",
+ "bytes",
  "chrono",
  "datafusion",
  "datafusion-proto",
@@ -8092,6 +8099,7 @@ name = "sail-python"
 version = "0.7.0"
 dependencies = [
  "arrow-schema",
+ "bytes",
  "fastrace",
  "futures",
  "log",
@@ -8169,6 +8177,7 @@ dependencies = [
  "sail-physical-plan",
  "sail-plan",
  "sail-sql-analyzer",
+ "sail-telemetry",
  "secrecy",
  "tempfile",
  "thiserror 2.0.20",
@@ -8210,6 +8219,7 @@ dependencies = [
  "sail-python-udf",
  "sail-session",
  "sail-sql-analyzer",
+ "sail-telemetry",
  "serde",
  "serde_json",
  "syn 2.0.119",
@@ -8266,6 +8276,7 @@ dependencies = [
 name = "sail-telemetry"
 version = "0.7.0"
 dependencies = [
+ "chrono",
  "datafusion",
  "env_logger",
  "fastrace",
@@ -8288,10 +8299,12 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "serde",
+ "serde_json",
  "serde_yaml",
  "syn 2.0.119",
  "thiserror 2.0.20",
  "tokio",
+ "tonic",
 ]
 
 [[package]]

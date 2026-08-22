@@ -10,7 +10,6 @@ use sail_celeborn::lifecycle::LifecycleManagerActor;
 use sail_common::actor::ActorHandle;
 use sail_common::telemetry::{SpanAssociation, SpanAttribute};
 use sail_common_datafusion::error::CommonErrorCause;
-use sail_common_datafusion::system::observable::JobRunnerObserver;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
@@ -78,9 +77,6 @@ pub enum DriverMessage {
     CelebornGetLifecycleManager {
         result: oneshot::Sender<Option<ActorHandle<LifecycleManagerActor>>>,
     },
-    ObserveState {
-        observer: JobRunnerObserver,
-    },
     Shutdown {
         result: Option<oneshot::Sender<()>>,
     },
@@ -145,7 +141,6 @@ impl SpanAssociation for DriverMessage {
             DriverMessage::FetchDriverStream { .. } => "FetchDriverStream",
             DriverMessage::FetchWorkerStream { .. } => "FetchWorkerStream",
             DriverMessage::CelebornGetLifecycleManager { .. } => "CelebornGetLifecycleManager",
-            DriverMessage::ObserveState { .. } => "ObserveState",
             DriverMessage::Shutdown { .. } => "Shutdown",
         };
         name.into()
@@ -269,7 +264,6 @@ impl SpanAssociation for DriverMessage {
                 p.push((SpanAttribute::EXECUTION_CHANNEL, channel.to_string()));
             }
             DriverMessage::CelebornGetLifecycleManager { result: _ } => {}
-            DriverMessage::ObserveState { observer: _ } => {}
             DriverMessage::Shutdown { .. } => {}
         }
         p.into_iter().map(|(k, v)| (k.into(), v.into()))

@@ -25,26 +25,26 @@ use object_store::ObjectMeta;
 
 /// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
 use crate::conversion::parse_optional_partition_value;
+use crate::schema::PhysicalPartitionColumn;
 use crate::spec::{Add, DeltaError as DeltaTableError, DeltaResult, Remove};
 
 /// Convert an Add action to a PartitionedFile for DataFusion scanning
 pub fn partitioned_file_from_action(
     action: &Add,
-    partition_columns: &[(String, String)],
+    partition_columns: &[PhysicalPartitionColumn],
     schema: &ArrowSchema,
 ) -> DeltaResult<PartitionedFile> {
     let partition_values = partition_columns
         .iter()
-        .map(|(logical_name, physical_name)| {
-            let field = match schema.field_with_name(logical_name) {
+        .map(|column| {
+            let field = match schema.field_with_name(&column.logical_name) {
                 Ok(field) => field,
                 Err(_) => return ScalarValue::Null,
             };
 
             action
                 .partition_values
-                .get(physical_name)
-                .or_else(|| action.partition_values.get(logical_name))
+                .get(&column.physical_name)
                 .and_then(|value| value.as_ref())
                 .map(|value| parse_optional_partition_value(Some(value), field.data_type()))
                 .unwrap_or_else(|| parse_optional_partition_value(None, field.data_type()))
@@ -85,4 +85,51 @@ pub fn adds_to_remove_actions(adds: Vec<Add>) -> Vec<Remove> {
     adds.into_iter()
         .map(|add| add.into_remove(deletion_timestamp))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::common::ScalarValue;
+
+    use super::partitioned_file_from_action;
+    use crate::schema::PhysicalPartitionColumn;
+    use crate::spec::Add;
+
+    fn mapped_field(logical_name: &str, physical_name: &str) -> Field {
+        Field::new(logical_name, DataType::Int32, true).with_metadata(HashMap::from([(
+            "delta.columnMapping.physicalName".to_string(),
+            physical_name.to_string(),
+        )]))
+    }
+
+    #[test]
+    fn mapped_partition_values_do_not_fallback_to_a_colliding_logical_name() {
+        let schema = Schema::new(vec![
+            mapped_field("source", "col-source"),
+            mapped_field("col-source", "col-target"),
+        ]);
+        let partition_columns = vec![
+            PhysicalPartitionColumn::new("source", "col-source"),
+            PhysicalPartitionColumn::new("col-source", "col-target"),
+        ];
+        let action = Add {
+            path: "part-00000.parquet".to_string(),
+            partition_values: HashMap::from([("col-source".to_string(), Some("10".to_string()))]),
+            size: 1,
+            data_change: true,
+            ..Default::default()
+        };
+
+        #[expect(clippy::expect_used)]
+        let file = partitioned_file_from_action(&action, &partition_columns, &schema)
+            .expect("partition values should parse");
+
+        assert_eq!(
+            file.partition_values,
+            vec![ScalarValue::Int32(Some(10)), ScalarValue::Int32(None)]
+        );
+    }
 }

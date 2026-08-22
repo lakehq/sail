@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use bytes::Bytes;
 use futures::StreamExt;
 use futures::stream::{self, BoxStream};
 use sail_common::actor::{ActorAction, ActorContext};
@@ -11,7 +12,7 @@ use crate::lifecycle::ReviveRequest;
 use crate::protocol::StatusCode;
 use crate::shuffle::ShuffleClientMessage;
 use crate::shuffle::actor::ShuffleClientActor;
-use crate::worker::{WorkerClient, WorkerClientOptions};
+use crate::worker::WorkerClientOptions;
 
 impl ShuffleClientActor {
     pub(super) fn handle_get_shuffle_id(
@@ -159,7 +160,7 @@ impl ShuffleClientActor {
         partition_id: i32,
         map_id: i32,
         attempt_id: i32,
-        data: Vec<u8>,
+        data: Bytes,
         reply: oneshot::Sender<CelebornResult<usize>>,
     ) -> ActorAction {
         let Some(location) = self.locations.get(&(shuffle_id, partition_id)).cloned() else {
@@ -168,16 +169,10 @@ impl ShuffleClientActor {
             ))));
             return ActorAction::Continue;
         };
-        let Some(client) = self
-            .worker_clients
-            .get(&(shuffle_id, partition_id))
-            .cloned()
-        else {
-            let _ = reply.send(Err(CelebornError::Application(format!(
-                "shuffle {shuffle_id} partition {partition_id} is not registered"
-            ))));
-            return ActorAction::Continue;
-        };
+        let client = self.worker_clients.client(
+            WorkerClientOptions::new(location.clone())
+                .with_endpoint_resolver(self.options.endpoint_resolver.clone()),
+        );
         let batch_id = self
             .batch_ids
             .entry((shuffle_id, map_id, attempt_id))
@@ -187,10 +182,19 @@ impl ShuffleClientActor {
         let shuffle_key = self.shuffle_key(shuffle_id);
         let lifecycle_manager = Arc::clone(&self.options.lifecycle_manager);
         let endpoint_resolver = self.options.endpoint_resolver.clone();
+        let worker_clients = self.worker_clients.clone();
+        let compression = self.options.compression;
         let handle = ctx.handle().clone();
         ctx.spawn(async move {
             let push_result = client
-                .push_data(&shuffle_key, map_id, attempt_id, current_batch_id, &data)
+                .push_data(
+                    &shuffle_key,
+                    map_id,
+                    attempt_id,
+                    current_batch_id,
+                    data.clone(),
+                    compression,
+                )
                 .await;
             let (location, result) = match push_result {
                 Ok(result) => (None, Ok(result)),
@@ -223,12 +227,20 @@ impl ShuffleClientActor {
                         .await
                     {
                         Ok(location) => {
-                            let retry = WorkerClient::new(
-                                WorkerClientOptions::new(location.clone())
-                                    .with_endpoint_resolver(endpoint_resolver),
-                            )
-                            .push_data(&shuffle_key, map_id, attempt_id, current_batch_id, &data)
-                            .await;
+                            let retry = worker_clients
+                                .client(
+                                    WorkerClientOptions::new(location.clone())
+                                        .with_endpoint_resolver(endpoint_resolver),
+                                )
+                                .push_data(
+                                    &shuffle_key,
+                                    map_id,
+                                    attempt_id,
+                                    current_batch_id,
+                                    data.clone(),
+                                    compression,
+                                )
+                                .await;
                             (Some(location), retry)
                         }
                         Err(error) => (None, Err(error)),
@@ -316,7 +328,6 @@ impl ShuffleClientActor {
             self.shuffle_ids.retain(|_, id| *id != shuffle_id);
             self.locations.retain(|(id, _), _| *id != shuffle_id);
             self.location_history.retain(|(id, _), _| *id != shuffle_id);
-            self.worker_clients.retain(|(id, _), _| *id != shuffle_id);
             self.batch_ids.retain(|(id, _, _), _| *id != shuffle_id);
         }
         let _ = reply.send(result);
@@ -330,7 +341,6 @@ impl ShuffleClientActor {
     ) -> ActorAction {
         self.locations.retain(|(id, _), _| *id != shuffle_id);
         self.location_history.retain(|(id, _), _| *id != shuffle_id);
-        self.worker_clients.retain(|(id, _), _| *id != shuffle_id);
         self.batch_ids.retain(|(id, _, _), _| *id != shuffle_id);
         self.shuffle_ids.retain(|_, id| *id != shuffle_id);
         let _ = reply.send(Ok(()));
@@ -342,7 +352,7 @@ impl ShuffleClientActor {
         ctx: &mut ActorContext<Self>,
         shuffle_id: i32,
         partition_id: i32,
-        reply: oneshot::Sender<BoxStream<'static, CelebornResult<Vec<u8>>>>,
+        reply: oneshot::Sender<BoxStream<'static, CelebornResult<Bytes>>>,
     ) -> ActorAction {
         if !self
             .location_history
@@ -379,7 +389,7 @@ impl ShuffleClientActor {
         shuffle_id: i32,
         partition_id: i32,
         result: CelebornResult<SlotReservation>,
-        reply: oneshot::Sender<BoxStream<'static, CelebornResult<Vec<u8>>>>,
+        reply: oneshot::Sender<BoxStream<'static, CelebornResult<Bytes>>>,
     ) -> ActorAction {
         let reservation = match result {
             Ok(reservation) => reservation,
@@ -411,19 +421,24 @@ impl ShuffleClientActor {
             return ActorAction::Continue;
         };
         let shuffle_key = self.shuffle_key(shuffle_id);
-        let endpoint_resolver = self.options.endpoint_resolver.clone();
+        let compression = self.options.compression;
+        let clients = locations
+            .into_iter()
+            .map(|location| {
+                self.worker_clients.client(
+                    WorkerClientOptions::new(location)
+                        .with_endpoint_resolver(self.options.endpoint_resolver.clone()),
+                )
+            })
+            .collect::<Vec<_>>();
         ctx.spawn(async move {
-            let stream = stream::iter(locations)
-                .then(move |location| {
+            let stream = stream::iter(clients)
+                .then(move |client| {
                     let shuffle_key = shuffle_key.clone();
-                    let endpoint_resolver = endpoint_resolver.clone();
                     async move {
-                        WorkerClient::new(
-                            WorkerClientOptions::new(location)
-                                .with_endpoint_resolver(endpoint_resolver),
-                        )
-                        .read_partition_stream(&shuffle_key)
-                        .await
+                        client
+                            .read_partition_stream(&shuffle_key, compression)
+                            .await
                     }
                 })
                 .flatten();
@@ -457,13 +472,6 @@ impl ShuffleClientActor {
             .is_none_or(|current| current.epoch <= location.epoch);
         if update_latest {
             self.locations.insert(key, location.clone());
-            self.worker_clients.insert(
-                key,
-                WorkerClient::new(
-                    WorkerClientOptions::new(location)
-                        .with_endpoint_resolver(self.options.endpoint_resolver.clone()),
-                ),
-            );
         }
     }
 }

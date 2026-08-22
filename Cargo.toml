@@ -98,6 +98,9 @@ cbc = { version = "0.1.2", features = ["std"] }
 base64 = "0.22.1"
 md-5 = "0.11.0"
 crc32fast = "1.5.0"
+lz4_flex = "0.13.1"
+twox-hash = "2.1.3"
+zstd = "0.13.3"
 roaring = "0.11.3"
 datasketches = { version = "0.3.0", features = ["hll", "theta"] }
 sha1 = "0.10.6"

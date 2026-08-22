@@ -24,6 +24,22 @@ Feature: to_utc_timestamp
         | '2024-06-15 13:30:00+07:00'           | 2024-06-15 21:30:00 |
         | DATE '2024-06-15'                     | 2024-06-15 07:00:00 |
 
+  Rule: Invalid time zone validation
+
+    Scenario: `to_utc_timestamp` validates a constant zone for a runtime-null timestamp
+      When query
+        """
+        SELECT to_utc_timestamp(
+          CASE
+            WHEN id = 0 THEN CAST(NULL AS TIMESTAMP)
+            ELSE TIMESTAMP '2024-01-01 00:00:00'
+          END,
+          'Not/AZone'
+        ) AS result
+        FROM range(0, 1, 1, 1)
+        """
+      Then query error INVALID_TIMEZONE
+
   Rule: Daylight saving time handling
 
   Background:

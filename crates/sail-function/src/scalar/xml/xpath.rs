@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, ListBuilder, StringArray, StringBuilder};
-use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{DataFusionError, Result, plan_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::{DataFusionError, Result, internal_err, plan_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use xee_xpath::{Documents, Item, Queries, Query};
 
 use crate::functions_utils::make_scalar_function;
@@ -38,10 +40,20 @@ impl ScalarUDFImpl for Xpath {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::List(Arc::new(Field::new_list_field(
-            DataType::Utf8,
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `XPathExtract.nullable = true`, unconditional; `XPathList` inherits it and
+    /// declares no `nullable` of its own.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/xml/xpath.scala#L40>
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
             true,
-        ))))
+        )))
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {

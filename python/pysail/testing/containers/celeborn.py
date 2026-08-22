@@ -262,6 +262,25 @@ def celeborn_frame_codec() -> CelebornCodec:
     return CelebornCodec()
 
 
+@pytest.fixture
+def celeborn_master_proxy(
+    celeborn_master: MasterService,
+    celeborn_frame_codec: CelebornCodec,
+) -> Generator[EndpointProxy, None, None]:
+    """Forward master traffic through a proxy so application heartbeats can be observed."""
+    proxy = EndpointProxy(
+        name="celeborn-master",
+        target_host=celeborn_master.host,
+        target_port=celeborn_master.port,
+        codec=celeborn_frame_codec,
+    )
+    proxy.start()
+    try:
+        yield proxy
+    finally:
+        proxy.close()
+
+
 @pytest.fixture(scope="session")
 def celeborn_endpoint_resolver(celeborn_workers: dict[str, WorkerService]) -> object:
     """Map Docker-network worker endpoints to the host-published ports."""

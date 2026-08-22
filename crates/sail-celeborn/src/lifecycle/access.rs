@@ -1,7 +1,7 @@
 use sail_common::actor::ActorHandle;
 use tokio::sync::oneshot;
 
-use crate::common::{PartitionLocation, SlotReservation};
+use crate::common::{ApplicationMetrics, PartitionLocation, SlotReservation};
 use crate::error::{CelebornError, CelebornResult};
 use crate::lifecycle::{
     LifecycleManager, LifecycleManagerActor, LifecycleManagerMessage, ReviveRequest,
@@ -81,6 +81,15 @@ impl LifecycleManager for LocalLifecycleManager {
         let (result, receiver) = oneshot::channel();
         self.handle
             .send(LifecycleManagerMessage::UnregisterShuffle { shuffle_id, result })
+            .await
+            .map_err(|_| CelebornError::ActorStopped)?;
+        receiver.await.map_err(|_| CelebornError::ActorStopped)?
+    }
+
+    async fn report_metrics(&self, metrics: ApplicationMetrics) -> CelebornResult<()> {
+        let (result, receiver) = oneshot::channel();
+        self.handle
+            .send(LifecycleManagerMessage::ReportMetrics { metrics, result })
             .await
             .map_err(|_| CelebornError::ActorStopped)?;
         receiver.await.map_err(|_| CelebornError::ActorStopped)?

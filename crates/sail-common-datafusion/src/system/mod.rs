@@ -1,4 +1,3 @@
-pub mod observable;
 pub mod predicate;
 pub mod types;
 

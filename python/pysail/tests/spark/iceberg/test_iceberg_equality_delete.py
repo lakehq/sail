@@ -7,7 +7,6 @@ from urllib.request import url2pathname
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from pyiceberg.io.pyarrow import PyArrowFileIO
 from pyiceberg.manifest import (
     DataFile,
     DataFileContent,
@@ -35,7 +34,7 @@ from pysail.testing.spark.steps.iceberg import (
     _write_metadata_file,
 )
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
-from pysail.tests.spark.iceberg.utils import create_sql_catalog
+from pysail.tests.spark.iceberg.utils import WindowsLocalPyArrowFileIO, create_sql_catalog
 
 UNPARTITIONED_LAST_PARTITION_ID = 999
 
@@ -99,7 +98,7 @@ def _append_equality_delete_snapshot(
     snapshot_id = _new_snapshot_id()
     sequence_number = metadata.get("last-sequence-number", 0) + 1
 
-    io = PyArrowFileIO()
+    io = WindowsLocalPyArrowFileIO()
     delete_data_file = DataFile.from_args(
         content=DataFileContent.EQUALITY_DELETES,
         file_path=delete_file_path.as_uri(),
@@ -178,7 +177,7 @@ def _append_equality_delete_snapshot(
 def _current_delete_entries(table_path: Path) -> list[ManifestEntry]:
     metadata = _find_latest_metadata(table_path)
     snapshot = _current_snapshot(metadata)
-    io = PyArrowFileIO()
+    io = WindowsLocalPyArrowFileIO()
     entries = []
     for manifest in read_manifest_list(_pyarrow_input_file(io, snapshot["manifest-list"])):
         if manifest.content == ManifestContent.DELETES:

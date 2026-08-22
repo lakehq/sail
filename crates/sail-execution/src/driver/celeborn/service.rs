@@ -1,7 +1,7 @@
 use std::fmt::Display;
 use std::sync::Arc;
 
-use sail_celeborn::common::PartitionLocation;
+use sail_celeborn::common::{ApplicationMetrics, PartitionLocation};
 use sail_celeborn::lifecycle::{LifecycleManagerActor, LifecycleManagerMessage, ReviveRequest};
 use sail_common::actor::ActorHandle;
 use tokio::sync::oneshot;
@@ -12,9 +12,9 @@ use crate::driver::r#gen::celeborn_lifecycle_manager_service_server::CelebornLif
 use crate::driver::r#gen::{
     CelebornGetJobShuffleIdsRequest, CelebornGetJobShuffleIdsResponse, CelebornGetShuffleIdRequest,
     CelebornGetShuffleIdResponse, CelebornMapperEndRequest, CelebornMapperEndResponse,
-    CelebornRegisterShuffleRequest, CelebornRegisterShuffleResponse, CelebornReviveRequest,
-    CelebornReviveResponse, CelebornShuffleId, CelebornUnregisterShuffleRequest,
-    CelebornUnregisterShuffleResponse,
+    CelebornRegisterShuffleRequest, CelebornRegisterShuffleResponse, CelebornReportMetricsRequest,
+    CelebornReportMetricsResponse, CelebornReviveRequest, CelebornReviveResponse,
+    CelebornShuffleId, CelebornUnregisterShuffleRequest, CelebornUnregisterShuffleResponse,
 };
 use crate::error::ExecutionError;
 use crate::id::DriverId;
@@ -206,5 +206,29 @@ impl CelebornLifecycleManagerService for CelebornLifecycleManagerServer {
             .map_err(ExecutionError::from)?;
         receiver.await.map_err(status)?.map_err(status)?;
         Ok(Response::new(CelebornUnregisterShuffleResponse {}))
+    }
+
+    async fn report_metrics(
+        &self,
+        request: Request<CelebornReportMetricsRequest>,
+    ) -> Result<Response<CelebornReportMetricsResponse>, Status> {
+        let request = request.into_inner();
+        let manager = self
+            .celeborn_lifecycle_manager(DriverId::from(request.driver_id))
+            .await?;
+        let (result, receiver) = oneshot::channel();
+        manager
+            .send(LifecycleManagerMessage::ReportMetrics {
+                metrics: ApplicationMetrics {
+                    total_written: request.total_written,
+                    file_count: request.file_count,
+                    ..Default::default()
+                },
+                result,
+            })
+            .await
+            .map_err(ExecutionError::from)?;
+        receiver.await.map_err(status)?.map_err(status)?;
+        Ok(Response::new(CelebornReportMetricsResponse {}))
     }
 }

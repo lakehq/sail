@@ -1,6 +1,10 @@
-use datafusion::arrow::datatypes::DataType;
-use datafusion_common::Result;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
+use std::sync::Arc;
+
+use datafusion::arrow::datatypes::{DataType, FieldRef};
+use datafusion_common::{Result, internal_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+};
 use datafusion_spark::function::math::modulus::{SparkPmod as DataFusionPmod, spark_pmod};
 
 /// Spark `pmod(a, b)` (positive modulo) that honors `spark.sql.ansi.enabled`.
@@ -45,8 +49,17 @@ impl ScalarUDFImpl for SparkPmod {
         self.inner.signature()
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        self.inner.return_type(arg_types)
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `Pmod.nullable = true`, unconditional (not narrowed by ANSI mode).
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L1061>
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let field = self.inner.return_field_from_args(args)?;
+        Ok(Arc::new(field.as_ref().clone().with_nullable(true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

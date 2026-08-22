@@ -1,6 +1,7 @@
 use std::io::Cursor;
 use std::sync::Arc;
 
+use bytes::Bytes;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::ipc::reader::StreamReader;
@@ -177,7 +178,9 @@ struct CelebornStreamSink {
 #[tonic::async_trait]
 impl TaskStreamChannelSink for CelebornStreamSink {
     async fn write(&mut self, batch: RecordBatch) -> Result<TaskStreamWriteState> {
-        let mut writer = StreamWriter::try_new(Vec::new(), self.schema.as_ref())
+        // Reserve the frame length prefix before serializing Arrow IPC so the payload can be
+        // passed to Celeborn without copying it into a second framing buffer.
+        let mut writer = StreamWriter::try_new(vec![0; size_of::<u32>()], self.schema.as_ref())
             .map_err(|error| DataFusionError::External(Box::new(error)))?;
         writer
             .write(&batch)
@@ -185,20 +188,22 @@ impl TaskStreamChannelSink for CelebornStreamSink {
         writer
             .finish()
             .map_err(|error| DataFusionError::External(Box::new(error)))?;
-        let payload = writer
+        let mut data = writer
             .into_inner()
             .map_err(|error| DataFusionError::External(Box::new(error)))?;
-        let length = u32::try_from(payload.len())
-            .map_err(|error| DataFusionError::External(Box::new(error)))?;
-        let mut data = length.to_be_bytes().to_vec();
-        data.extend_from_slice(&payload);
+        let length = data.len().checked_sub(size_of::<u32>()).ok_or_else(|| {
+            DataFusionError::Execution("invalid Celeborn frame length".to_string())
+        })?;
+        let length =
+            u32::try_from(length).map_err(|error| DataFusionError::External(Box::new(error)))?;
+        data[..size_of::<u32>()].copy_from_slice(&length.to_be_bytes());
         self.client
             .push_data(
                 self.shuffle_id,
                 self.partition_id,
                 self.map_id,
                 self.attempt_id,
-                data,
+                Bytes::from(data),
             )
             .await
             .map_err(|error| DataFusionError::External(Box::new(error)))?;
@@ -259,7 +264,7 @@ impl TaskStreamSink for CelebornTaskStreamSink {
     }
 }
 
-fn decode_batches(data: Vec<u8>, _schema: &SchemaRef) -> Result<Vec<RecordBatch>> {
+fn decode_batches(data: Bytes, _schema: &SchemaRef) -> Result<Vec<RecordBatch>> {
     let mut offset = 0;
     let mut batches = vec![];
     while offset < data.len() {
