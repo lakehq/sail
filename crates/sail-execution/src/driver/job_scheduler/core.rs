@@ -73,9 +73,7 @@ impl JobScheduler {
                 status: job.state.status().to_string(),
                 created_at: Utc::now(),
             });
-            for (s, (stage, descriptor)) in
-                job.graph.stages().iter().zip(&job.stages).enumerate()
-            {
+            for (s, (stage, descriptor)) in job.graph.stages().iter().zip(&job.stages).enumerate() {
                 event_reporter.report(SystemEvent::StageCreated {
                     session_id: session_id.clone(),
                     job_id: u64::from(job_id),
