@@ -56,14 +56,12 @@ impl<T: ArrowNumericType + Send> PercentileDiscGroupsAccumulator<T> {
             .nulls()
             .expect("null buffer must exist when null_count > 0");
 
-        let group_indices_chunks = group_indices.chunks_exact(64);
-        let data_chunks = data.chunks_exact(64);
+        let (group_indices_chunks, group_indices_remainder) = group_indices.as_chunks::<64>();
+        let (data_chunks, data_remainder) = data.as_chunks::<64>();
         let bit_chunks = nulls.inner().bit_chunks();
 
-        let group_indices_remainder = group_indices_chunks.remainder();
-        let data_remainder = data_chunks.remainder();
-
         group_indices_chunks
+            .iter()
             .zip(data_chunks)
             .zip(bit_chunks.iter())
             .for_each(|((group_index_chunk, data_chunk), mask)| {

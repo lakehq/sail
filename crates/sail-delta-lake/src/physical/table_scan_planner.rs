@@ -10,7 +10,7 @@ use sail_logical_plan::merge::{MergeCardinalityCheckNode, RowLevelWriteNode};
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 
 use crate::logical::table_source::DeltaTableSource;
-use crate::physical::scan_planner::plan_delta_scan;
+use crate::physical::scan_planner::{DeltaFileSource, plan_delta_scan};
 use crate::physical_plan::planner::create_row_level_write_physical_plan;
 use crate::table_format::{DeltaWriteNode, plan_delta_write};
 
@@ -86,21 +86,17 @@ impl ExtensionPlanner for DeltaPhysicalPlanner {
         let config = source.config();
         let filters = unnormalize_cols(scan.filters.clone());
         let projection = scan.projection.clone();
-        let files = if !snapshot.load_config().require_files || snapshot.adds().is_empty() {
-            None
-        } else if snapshot.adds().iter().any(|a| a.deletion_vector.is_some()) {
-            // When deletion vectors are present, fall through to the
-            // DeltaScanByAddsExec path which applies per-file DV filtering.
-            None
+        let file_source = if snapshot.load_config().require_files {
+            DeltaFileSource::Eager(snapshot.shared_adds())
         } else {
-            Some(Arc::new(snapshot.adds().to_vec()))
+            DeltaFileSource::Replay
         };
         let plan = plan_delta_scan(
             session_state,
             snapshot,
             log_store,
             config,
-            files,
+            file_source,
             projection.as_ref(),
             &filters,
             scan.fetch,

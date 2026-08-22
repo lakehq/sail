@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 
+use sail_celeborn::common::{
+    ApplicationMetrics, PartitionLocation, SlotReservation, WorkerIdentity, WorkerSlotLocations,
+};
 use sail_celeborn::error::{CelebornError, CelebornResult};
 use sail_celeborn::lifecycle::{LifecycleManager, ReviveRequest};
-use sail_celeborn::master::{PartitionLocation, SlotReservation};
 
 use crate::driver::CelebornLifecycleManagerClient;
 use crate::driver::r#gen::CelebornPartitionLocation;
@@ -54,14 +56,13 @@ impl LifecycleManager for RemoteLifecycleManager {
                 Ok((location.id, location))
             })
             .collect::<CelebornResult<HashMap<_, _>>>()?;
-        let mut worker_locations =
-            HashMap::<String, sail_celeborn::master::WorkerSlotLocations>::new();
+        let mut worker_locations = HashMap::<WorkerIdentity, WorkerSlotLocations>::new();
         for location in response.all_primary_locations {
             let location = PartitionLocation::try_from(location)?;
-            let worker_id = location.worker_id();
+            let worker_identity = location.worker_identity();
             worker_locations
-                .entry(worker_id)
-                .or_insert_with(|| sail_celeborn::master::WorkerSlotLocations {
+                .entry(worker_identity)
+                .or_insert_with(|| WorkerSlotLocations {
                     primary_locations: Vec::new(),
                     replica_locations: Vec::new(),
                 })
@@ -109,6 +110,13 @@ impl LifecycleManager for RemoteLifecycleManager {
     async fn unregister_shuffle(&self, shuffle_id: i32) -> CelebornResult<()> {
         self.client
             .unregister_shuffle(shuffle_id)
+            .await
+            .map_err(|error| CelebornError::Application(error.to_string()))
+    }
+
+    async fn report_metrics(&self, metrics: ApplicationMetrics) -> CelebornResult<()> {
+        self.client
+            .report_metrics(metrics.total_written, metrics.file_count)
             .await
             .map_err(|error| CelebornError::Application(error.to_string()))
     }

@@ -175,10 +175,7 @@ pub(crate) fn parse_partition_values_array(
                 ));
             }
             let physical_name = field.physical_name(column_mapping_mode);
-            let value = raw_values
-                .get(physical_name)
-                .or_else(|| raw_values.get(field.name()))
-                .and_then(Clone::clone);
+            let value = raw_values.get(physical_name).and_then(Clone::clone);
             raw_collected
                 .get_mut(physical_name)
                 .ok_or_else(|| DeltaTableError::schema("partition field missing".to_string()))?
@@ -291,4 +288,57 @@ fn collect_partition_row(value: &StructArray) -> DeltaResult<HashMap<String, Opt
         }
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use datafusion::arrow::array::{Array, Int32Array};
+    use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
+
+    use super::{encode_snapshot_add_rows, parse_partition_values_array};
+    use crate::spec::{Add, ColumnMappingMode, DeltaError, DeltaResult, StructType};
+
+    fn mapped_field(logical_name: &str, physical_name: &str) -> Field {
+        Field::new(logical_name, ArrowDataType::Int32, true).with_metadata(HashMap::from([(
+            "delta.columnMapping.physicalName".to_string(),
+            physical_name.to_string(),
+        )]))
+    }
+
+    #[test]
+    fn mapped_partition_array_does_not_fallback_to_a_colliding_logical_name() -> DeltaResult<()> {
+        let partition_schema = StructType::try_from(&Schema::new(vec![
+            mapped_field("source", "col-source"),
+            mapped_field("col-source", "col-target"),
+        ]))?;
+        let action = Add {
+            path: "part-00000.parquet".to_string(),
+            partition_values: HashMap::from([("col-source".to_string(), Some("10".to_string()))]),
+            size: 1,
+            data_change: true,
+            ..Default::default()
+        };
+        let batch = encode_snapshot_add_rows(&[action])?;
+
+        let parsed = parse_partition_values_array(
+            &batch,
+            &partition_schema,
+            "partitionValues",
+            ColumnMappingMode::Name,
+        )?;
+        let source = parsed
+            .column_by_name("col-source")
+            .and_then(|array| array.as_any().downcast_ref::<Int32Array>())
+            .ok_or_else(|| DeltaError::schema("source partition field missing"))?;
+        let target = parsed
+            .column_by_name("col-target")
+            .and_then(|array| array.as_any().downcast_ref::<Int32Array>())
+            .ok_or_else(|| DeltaError::schema("target partition field missing"))?;
+
+        assert_eq!(source.value(0), 10);
+        assert!(target.is_null(0));
+        Ok(())
+    }
 }

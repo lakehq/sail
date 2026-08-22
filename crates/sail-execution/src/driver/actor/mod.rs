@@ -9,7 +9,6 @@ pub(crate) use message::{DriverMessage, TaskStatus};
 pub use options::{DriverComponents, DriverOptions};
 use sail_celeborn::lifecycle::LocalLifecycleManager;
 use sail_common::actor::ActorHandle;
-use sail_common_datafusion::session::job::JobRunnerHistoryReporter;
 use tokio::sync::oneshot;
 
 use crate::driver::job_scheduler::JobScheduler;
@@ -25,7 +24,6 @@ pub struct DriverExtensions {
 
 pub struct DriverActor {
     options: DriverOptions,
-    history_reporter: Box<dyn JobRunnerHistoryReporter>,
     worker_pool: WorkerPool,
     job_scheduler: JobScheduler,
     task_assigner: TaskAssigner,

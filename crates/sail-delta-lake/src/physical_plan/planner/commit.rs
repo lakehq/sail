@@ -39,6 +39,7 @@ use crate::physical_plan::{
     DeltaCommitExec, DeltaDiscoveryExec, DeltaRemoveActionsExec, DeltaWriteContext,
     DeltaWriterExec, DeltaWriterExecOptions,
 };
+use crate::schema::PhysicalPartitionColumn;
 use crate::table::DeltaSnapshot;
 
 /// Assemble the common tail of a row-level operation physical plan.
@@ -56,7 +57,7 @@ use crate::table::DeltaSnapshot;
 pub fn assemble_commit_plan(
     writer_input: Arc<dyn ExecutionPlan>,
     remove_source: Option<Arc<dyn ExecutionPlan>>,
-    remove_partition_value_columns: Option<Vec<(String, String)>>,
+    remove_partition_value_columns: Option<Vec<PhysicalPartitionColumn>>,
     table_url: Url,
     options: DeltaWriterExecOptions,
     metadata_configuration: HashMap<String, String>,

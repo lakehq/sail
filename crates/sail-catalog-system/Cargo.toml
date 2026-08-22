@@ -9,6 +9,7 @@ workspace = true
 [dependencies]
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-catalog = { path = "../sail-catalog" }
+sail-telemetry = { path = "../sail-telemetry" }
 
 serde = { workspace = true }
 datafusion = { workspace = true }

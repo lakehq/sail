@@ -29,7 +29,7 @@ use datafusion::arrow::array::{
     UInt32Array, UInt64Array,
 };
 use datafusion::arrow::compute::{CastOptions, cast, cast_with_options};
-use datafusion::arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
+use datafusion::arrow::datatypes::DataType as ArrowDataType;
 use datafusion::common::Result as DataFusionResult;
 use datafusion::common::scalar::ScalarValue;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
@@ -346,19 +346,7 @@ impl ScalarConverter {
         timestamp_str: &str,
         field_dt: &ArrowDataType,
     ) -> DataFusionResult<ScalarValue> {
-        let time_micro = ScalarValue::try_from_string(
-            timestamp_str.to_string(),
-            &ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
-        )?;
-        let cast_arr = cast_with_options(
-            &time_micro.to_array()?,
-            field_dt,
-            &CastOptions {
-                safe: false,
-                ..Default::default()
-            },
-        )?;
-        ScalarValue::try_from_array(&cast_arr, 0)
+        ScalarValue::try_from_string(timestamp_str.to_string(), field_dt)
     }
 }
 

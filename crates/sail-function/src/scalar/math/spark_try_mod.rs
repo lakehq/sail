@@ -1,8 +1,14 @@
+use std::sync::Arc;
+
 use datafusion::arrow::array::builder::PrimitiveBuilder;
 use datafusion::arrow::array::{Array, AsArray, PrimitiveArray};
-use datafusion::arrow::datatypes::{DataType, Decimal128Type, DecimalType, Int32Type, Int64Type};
-use datafusion_common::Result;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion::arrow::datatypes::{
+    DataType, Decimal128Type, DecimalType, Field, FieldRef, Int32Type, Int64Type,
+};
+use datafusion_common::{Result, internal_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_types_exec_err};
 use crate::scalar::math::utils::try_op::{binary_op_scalar_or_array, try_binary_op_primitive};
@@ -50,16 +56,32 @@ impl ScalarUDFImpl for SparkTryMod {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if let [DataType::Decimal128(pl, sl), DataType::Decimal128(pr, sr)] = arg_types {
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `TryMod` is `RuntimeReplaceable`; both replacement branches declare `true`.
+    /// numeric  <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L236>
+    /// fallback <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/TryEval.scala#L50>
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|f| f.data_type().clone())
+            .collect::<Vec<_>>();
+        let data_type = if let [DataType::Decimal128(pl, sl), DataType::Decimal128(pr, sr)] =
+            arg_types.as_slice()
+        {
             let (result_scale, result_precision) = Self::get_scale_and_precision(pl, sl, pr, sr);
-            return Ok(DataType::Decimal128(result_precision, result_scale));
-        }
-        if arg_types.contains(&DataType::Int64) {
-            Ok(DataType::Int64)
+            DataType::Decimal128(result_precision, result_scale)
+        } else if arg_types.contains(&DataType::Int64) {
+            DataType::Int64
         } else {
-            Ok(DataType::Int32)
-        }
+            DataType::Int32
+        };
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -127,7 +149,7 @@ impl ScalarUDFImpl for SparkTryMod {
 
             (l, r) => Err(unsupported_data_types_exec_err(
                 "spark_try_mod",
-                "Int32, Int64 o Decimal128",
+                "Int32, Int64 or Decimal128",
                 &[l.clone(), r.clone()],
             )),
         }
@@ -175,7 +197,7 @@ impl ScalarUDFImpl for SparkTryMod {
             }
             _ => Err(unsupported_data_types_exec_err(
                 "spark_try_mod",
-                "Int32, Int64 o Decimal128",
+                "Int32, Int64 or Decimal128",
                 types,
             )),
         }

@@ -129,6 +129,12 @@ def normalize_plan_text(plan_text: str) -> str:
         r"<id>_\1.\2.parquet",
         text,
     )
+    # Normalize Sail default CSV filenames: <16-char random>_<partition>.csv.
+    text = re.sub(
+        r"[A-Za-z0-9]{16}_(\d+)\.csv",
+        r"<id>_\1.csv",
+        text,
+    )
 
     # Normalize file_groups ordering: group ordering is not guaranteed (e.g. parallel listing / async head).
     # TODO: consider sorting the file groups during planner.

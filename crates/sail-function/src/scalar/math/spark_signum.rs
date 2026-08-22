@@ -3,13 +3,15 @@ use std::sync::Arc;
 use datafusion::arrow::array::{ArrayRef, AsArray, Float64Array};
 use datafusion::arrow::datatypes::{
     DataType, Decimal128Type, DurationMicrosecondType, DurationMillisecondType,
-    DurationNanosecondType, DurationSecondType, Float16Type, Float32Type, Float64Type, Int8Type,
-    Int16Type, Int32Type, Int64Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
-    IntervalYearMonthType, TimeUnit, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+    DurationNanosecondType, DurationSecondType, Field, FieldRef, Float16Type, Float32Type,
+    Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, IntervalDayTimeType,
+    IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, TimeUnit, UInt8Type, UInt16Type,
+    UInt32Type, UInt64Type,
 };
-use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    Volatility,
 };
 use half::f16;
 
@@ -54,7 +56,16 @@ impl ScalarUDFImpl for SparkSignum {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Float64)
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `UnaryMathExpression.nullable = true`, unconditional; `Signum` inherits it and
+    /// declares no `nullable` of its own.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala#L73>
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Float64, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

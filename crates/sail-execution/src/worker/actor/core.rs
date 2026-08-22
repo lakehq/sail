@@ -62,7 +62,7 @@ impl Actor for WorkerActor {
             ShuffleBackendKind::Flight | ShuffleBackendKind::Celeborn { .. } => None,
         };
         let celeborn_streams = match &self.options.shuffle_backend {
-            ShuffleBackendKind::Celeborn { .. } => {
+            ShuffleBackendKind::Celeborn { compression, .. } => {
                 let application_id = celeborn_application_id(&self.options.session_id);
                 let lifecycle_manager = Arc::new(RemoteLifecycleManager::new(
                     self.driver_client_set.celeborn.clone(),
@@ -72,6 +72,7 @@ impl Actor for WorkerActor {
                         application_id,
                         lifecycle_manager,
                         self.options.shuffle_backend.celeborn_endpoint_resolver(),
+                        *compression,
                     ),
                 ));
                 Some(CelebornStreamManager::new(client))

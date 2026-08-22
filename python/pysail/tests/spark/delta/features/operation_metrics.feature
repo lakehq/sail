@@ -1,5 +1,25 @@
 Feature: Delta Lake operationMetrics in commitInfo
 
+  Rule: Delta DDL result collection
+
+    Background:
+      Given variable location for temporary directory op_metrics_collect
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_op_metrics_collect
+        """
+
+    Scenario: CREATE TABLE AS SELECT result can be collected
+      When query template
+        """
+        CREATE TABLE delta_op_metrics_collect
+        USING DELTA LOCATION {{ location.sql }}
+        AS SELECT * FROM VALUES (1, 'a'), (2, 'b') AS t(id, value)
+        """
+      Then query result collected
+        | count |
+        | 2     |
+
   Rule: WRITE operationMetrics
 
     Background:

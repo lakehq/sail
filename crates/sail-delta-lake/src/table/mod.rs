@@ -798,7 +798,6 @@ async fn load_delta_read_state(
         commit_version_column_name: None,
         commit_timestamp_column_name: None,
         delta_log_replay_strategy: options.delta_log_replay_strategy,
-        delta_log_replay_hash_threshold: options.delta_log_replay_hash_threshold.get(),
     };
 
     Ok((snapshot, log_store, scan_config))

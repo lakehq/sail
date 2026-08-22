@@ -1,7 +1,15 @@
 //! Python wrappers for catalog status types.
 
 use pyo3::prelude::*;
-use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
+use sail_common_datafusion::catalog::{
+    CatalogPartitionField, CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
+    DatabaseStatus, PartitionTransform, TableColumnStatus, TableKind, TableStatus,
+};
+
+type PyTableConstraintStatus = (String, Option<String>, Vec<String>);
+type PyPartitionFieldStatus = (String, Option<String>);
+type PyTableSortStatus = (String, bool);
+type PyTableBucketStatus = (Vec<String>, usize);
 
 #[derive(Clone)]
 #[pyclass(name = "ColumnStatus", frozen, get_all, skip_from_py_object)]
@@ -64,79 +72,120 @@ pub(super) struct PyTableStatus {
     columns: Vec<PyColumnStatus>,
     view_definition: Option<String>,
     comment: Option<String>,
+    constraints: Vec<PyTableConstraintStatus>,
     location: Option<String>,
+    partition_by: Vec<PyPartitionFieldStatus>,
+    sort_by: Vec<PyTableSortStatus>,
+    bucket_by: Option<PyTableBucketStatus>,
     properties: Vec<(String, String)>,
     is_external: Option<bool>,
 }
 
 impl From<TableStatus> for PyTableStatus {
     fn from(status: TableStatus) -> Self {
-        let (kind, format, columns, view_definition, comment, location, properties, is_external) =
-            match status.kind {
-                TableKind::Table {
-                    columns,
-                    comment,
-                    location,
-                    format,
-                    properties,
-                    is_external,
-                    ..
-                } => (
-                    "table".to_string(),
-                    Some(format),
-                    columns,
-                    None,
-                    comment,
-                    location,
-                    properties,
-                    Some(is_external),
-                ),
-                TableKind::View {
-                    definition,
-                    columns,
-                    comment,
-                    properties,
-                } => (
-                    "view".to_string(),
-                    None,
-                    columns,
-                    Some(definition),
-                    comment,
-                    None,
-                    properties,
-                    None,
-                ),
-                TableKind::TemporaryView {
-                    columns,
-                    comment,
-                    properties,
-                    ..
-                } => (
-                    "temporary_view".to_string(),
-                    None,
-                    columns,
-                    None,
-                    comment,
-                    None,
-                    properties,
-                    None,
-                ),
-                TableKind::GlobalTemporaryView {
-                    columns,
-                    comment,
-                    properties,
-                    ..
-                } => (
-                    "global_temporary_view".to_string(),
-                    None,
-                    columns,
-                    None,
-                    comment,
-                    None,
-                    properties,
-                    None,
-                ),
-            };
+        let (
+            kind,
+            format,
+            columns,
+            view_definition,
+            comment,
+            constraints,
+            location,
+            partition_by,
+            sort_by,
+            bucket_by,
+            properties,
+            is_external,
+        ) = match status.kind {
+            TableKind::Table {
+                columns,
+                comment,
+                constraints,
+                location,
+                format,
+                partition_by,
+                sort_by,
+                bucket_by,
+                properties,
+                is_external,
+            } => (
+                "table".to_string(),
+                Some(format),
+                columns,
+                None,
+                comment,
+                constraints
+                    .into_iter()
+                    .map(table_constraint_status)
+                    .collect(),
+                location,
+                partition_by
+                    .into_iter()
+                    .map(partition_field_status)
+                    .collect(),
+                sort_by.into_iter().map(table_sort_status).collect(),
+                bucket_by.map(table_bucket_status),
+                properties,
+                Some(is_external),
+            ),
+            TableKind::View {
+                definition,
+                columns,
+                comment,
+                properties,
+            } => (
+                "view".to_string(),
+                None,
+                columns,
+                Some(definition),
+                comment,
+                vec![],
+                None,
+                vec![],
+                vec![],
+                None,
+                properties,
+                None,
+            ),
+            TableKind::TemporaryView {
+                columns,
+                comment,
+                properties,
+                ..
+            } => (
+                "temporary_view".to_string(),
+                None,
+                columns,
+                None,
+                comment,
+                vec![],
+                None,
+                vec![],
+                vec![],
+                None,
+                properties,
+                None,
+            ),
+            TableKind::GlobalTemporaryView {
+                columns,
+                comment,
+                properties,
+                ..
+            } => (
+                "global_temporary_view".to_string(),
+                None,
+                columns,
+                None,
+                comment,
+                vec![],
+                None,
+                vec![],
+                vec![],
+                None,
+                properties,
+                None,
+            ),
+        };
 
         Self {
             catalog: status.catalog,
@@ -147,9 +196,45 @@ impl From<TableStatus> for PyTableStatus {
             columns: columns.into_iter().map(Into::into).collect(),
             view_definition,
             comment,
+            constraints,
             location,
+            partition_by,
+            sort_by,
+            bucket_by,
             properties,
             is_external,
         }
     }
+}
+
+fn table_constraint_status(constraint: CatalogTableConstraint) -> PyTableConstraintStatus {
+    match constraint {
+        CatalogTableConstraint::Unique { name, columns } => ("unique".to_string(), name, columns),
+        CatalogTableConstraint::PrimaryKey { name, columns } => {
+            ("primary_key".to_string(), name, columns)
+        }
+    }
+}
+
+fn partition_field_status(field: CatalogPartitionField) -> PyPartitionFieldStatus {
+    (
+        field.column,
+        field.transform.map(|transform| match transform {
+            PartitionTransform::Identity => "identity".to_string(),
+            PartitionTransform::Year => "year".to_string(),
+            PartitionTransform::Month => "month".to_string(),
+            PartitionTransform::Day => "day".to_string(),
+            PartitionTransform::Hour => "hour".to_string(),
+            PartitionTransform::Bucket(count) => format!("bucket({count})"),
+            PartitionTransform::Truncate(width) => format!("truncate({width})"),
+        }),
+    )
+}
+
+fn table_sort_status(sort: CatalogTableSort) -> PyTableSortStatus {
+    (sort.column, sort.ascending)
+}
+
+fn table_bucket_status(bucket: CatalogTableBucketBy) -> PyTableBucketStatus {
+    (bucket.columns, bucket.num_buckets)
 }

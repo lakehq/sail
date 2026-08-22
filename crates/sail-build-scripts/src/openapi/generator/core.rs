@@ -75,9 +75,9 @@ impl<'a> OpenApiGenerator<'a> {
                 #[error("request error: {0}")]
                 Request(#[from] reqwest::Error),
                 #[error("response error: status code {}", .0.status)]
-                Response(Response<E>),
+                Response(Box<Response<E>>),
                 #[error("unknown error: status code {}", .0.status)]
-                Unknown(Response<()>),
+                Unknown(Box<Response<()>>),
             }
 
             impl<E> ApiError<E> {

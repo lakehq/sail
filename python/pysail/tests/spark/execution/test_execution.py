@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import pandas as pd
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
@@ -35,6 +37,65 @@ def test_basic_query_execution(spark):
     """Test basic query execution in local-cluster mode."""
     result = spark.sql("SELECT 1 + 1 AS result").collect()
     assert result[0]["result"] == 2  # noqa: PLR2004
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.parametrize(
+    ("with_replacement", "expected"),
+    [
+        (False, [2, 3]),
+        pytest.param(
+            True,
+            [0, 2, 3, 4],
+            marks=pytest.mark.xfail(
+                reason="Replacement sampling RNG differs from Spark",
+                strict=True,
+            ),
+        ),
+    ],
+)
+def test_seeded_sample_in_cluster_mode(spark, with_replacement, expected):
+    sampled = spark.range(5, numPartitions=1).sample(with_replacement, 0.5, 1)
+    assert [row.id for row in sampled.collect()] == expected
+
+
+@pytest.mark.timeout(30)
+def test_sequence_with_column_bound_in_cluster_mode(spark):
+    assert spark.sql("SELECT sequence(1, 3) AS s").collect()[0]["s"] == [1, 2, 3]
+
+    df = spark.createDataFrame([(1,), (3,), (12,)], ["n"])
+    rows = df.withColumn("s", F.expr("sequence(1, n)")).collect()
+    assert {row.n: row.s for row in rows} == {
+        1: [1],
+        3: [1, 2, 3],
+        12: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+    }
+
+
+@pytest.mark.timeout(30)
+def test_temporal_sequence_in_cluster_mode(spark):
+    start = datetime(2018, 1, 1)  # noqa: DTZ001
+    noon = datetime(2018, 1, 1, 12)  # noqa: DTZ001
+    stop = datetime(2018, 1, 2)  # noqa: DTZ001
+    df = spark.createDataFrame(
+        [(start, stop)],
+        "start TIMESTAMP_NTZ, stop TIMESTAMP_NTZ",
+    )
+
+    row = df.select(
+        F.expr("sequence(start, stop)").alias("default_step"),
+        F.expr("sequence(start, stop, INTERVAL 12 HOURS)").alias("explicit_step"),
+    ).collect()[0]
+
+    assert row.default_step == [
+        start,
+        stop,
+    ]
+    assert row.explicit_step == [
+        start,
+        noon,
+        stop,
+    ]
 
 
 def test_dataframe_operations(spark):

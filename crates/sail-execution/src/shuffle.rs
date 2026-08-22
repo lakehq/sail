@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use sail_celeborn::common::{CompressionCodec, PartitionSplitMode};
 use sail_celeborn::endpoint::{EndpointResolver, StaticEndpointResolver};
+use sail_common::config::{CelebornCompressionCodec, CelebornPartitionSplitMode};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShuffleBackendKind {
@@ -14,7 +16,11 @@ pub enum ShuffleBackendKind {
     Celeborn {
         master_host: String,
         master_port: u16,
+        compression: CompressionCodec,
+        heartbeat_interval_secs: u64,
         endpoint_overrides: Vec<ShuffleEndpointOverride>,
+        partition_split_threshold: i64,
+        partition_split_mode: PartitionSplitMode,
     },
 }
 
@@ -38,6 +44,12 @@ impl From<&sail_common::config::ShuffleBackend> for ShuffleBackendKind {
             sail_common::config::ShuffleBackend::Celeborn(celeborn) => Self::Celeborn {
                 master_host: celeborn.master_host.clone(),
                 master_port: celeborn.master_port,
+                compression: match celeborn.compression {
+                    CelebornCompressionCodec::None => CompressionCodec::None,
+                    CelebornCompressionCodec::Lz4 => CompressionCodec::Lz4,
+                    CelebornCompressionCodec::Zstd { level } => CompressionCodec::Zstd { level },
+                },
+                heartbeat_interval_secs: celeborn.heartbeat_interval_secs,
                 endpoint_overrides: celeborn
                     .endpoint_overrides
                     .iter()
@@ -48,6 +60,11 @@ impl From<&sail_common::config::ShuffleBackend> for ShuffleBackendKind {
                         external_port: r#override.external_port,
                     })
                     .collect(),
+                partition_split_threshold: celeborn.partition_split_threshold,
+                partition_split_mode: match celeborn.partition_split_mode {
+                    CelebornPartitionSplitMode::Soft => PartitionSplitMode::Soft,
+                    CelebornPartitionSplitMode::Hard => PartitionSplitMode::Hard,
+                },
             },
         }
     }
@@ -116,19 +133,25 @@ impl From<sail_common::config::ShuffleCompression> for ShuffleCompression {
 
 #[cfg(test)]
 mod tests {
-    use super::{ShuffleBackendKind, ShuffleEndpointOverride};
+    use super::{
+        CompressionCodec, PartitionSplitMode, ShuffleBackendKind, ShuffleEndpointOverride,
+    };
 
     #[test]
     fn test_celeborn_endpoint_overrides_string() {
         let backend = ShuffleBackendKind::Celeborn {
             master_host: "master".to_string(),
             master_port: 12097,
+            compression: CompressionCodec::Lz4,
+            heartbeat_interval_secs: 10,
             endpoint_overrides: vec![ShuffleEndpointOverride {
                 internal_host: "celeborn-worker".to_string(),
                 internal_port: 12000,
                 external_host: "127.0.0.1".to_string(),
                 external_port: 32000,
             }],
+            partition_split_threshold: 1_i64 << 30,
+            partition_split_mode: PartitionSplitMode::Soft,
         };
 
         assert_eq!(

@@ -16,6 +16,8 @@ use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
 use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
+use sail_function::scalar::array::spark_sequence::SparkSequenceLazy;
+use sail_function::scalar::datetime::convert_tz::ConvertTzLazy;
 use sail_physical_plan::data_source::RemoteDataSourceExec;
 
 use crate::plan::r#gen;
@@ -118,6 +120,16 @@ pub(super) fn try_encode_higher_order_udf(
     } else if let Some(sort) = udf_inner.downcast_ref::<SparkArraySort>() {
         HigherOrderUdfKind::Sort(r#gen::SparkArraySortUdf {
             swapped: sort.is_swapped(),
+        })
+    } else if let Some(sequence) = udf_inner.downcast_ref::<SparkSequenceLazy>() {
+        HigherOrderUdfKind::SparkSequenceLazy(r#gen::SparkSequenceUdf {
+            session_timezone: sequence.session_timezone().to_owned(),
+            ansi_mode: sequence.ansi_mode(),
+        })
+    } else if let Some(convert_tz) = udf_inner.downcast_ref::<ConvertTzLazy>() {
+        HigherOrderUdfKind::ConvertTzLazy(r#gen::ConvertTzUdf {
+            classic: convert_tz.classic(),
+            null_short_circuit: convert_tz.null_short_circuit(),
         })
     } else {
         return plan_err!("unsupported higher-order function: {}", hof.name());

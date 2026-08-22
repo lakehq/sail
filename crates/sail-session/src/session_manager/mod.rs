@@ -10,15 +10,14 @@ use sail_common::actor::{ActorHandle, ActorSystem};
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_execution::driver::{DriverGateway, DriverGatewayOptions};
+use sail_telemetry::telemetry::global_system_event_reporter;
 use tokio::sync::oneshot;
 
 use crate::error::{SessionError, SessionResult};
 use crate::session_factory::{
     ServerSessionInfo, ServerSessionJobRunnerFactory, SessionFactory, SessionJobRunnerFactory,
 };
-pub(crate) use crate::session_manager::actor::{
-    SessionHistory, SessionManagerActor, SessionManagerMessage,
-};
+pub(crate) use crate::session_manager::actor::{SessionManagerActor, SessionManagerMessage};
 pub use crate::session_manager::actor::{SessionManagerComponents, SessionManagerOptions};
 
 pub type ServerSessionFactoryFn =
@@ -119,6 +118,8 @@ pub async fn create_session_manager(
         session_factory,
         job_runner_factory,
         driver_gateway,
+        event_reporter: global_system_event_reporter()
+            .ok_or_else(|| SessionError::internal("system event telemetry is not initialized"))?,
     };
     SessionManager::try_new(options, components, system)
 }

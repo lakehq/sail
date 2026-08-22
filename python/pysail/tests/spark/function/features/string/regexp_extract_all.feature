@@ -73,6 +73,20 @@ Feature: regexp_extract_all() extracts all regex capture group matches from stri
         | regexp_extract_all returns NULL when input is NULL   | NULL, r'(\d+)' |
         | regexp_extract_all returns NULL when pattern is NULL | 'abc', NULL    |
 
+  Rule: Pattern from a column
+
+    Scenario: regexp_extract_all with the pattern supplied by a column
+      When query
+        """
+        SELECT regexp_extract_all(s, p, 1) AS result FROM VALUES ('1a2b', '([0-9])'), ('3c4d', '([0-9])'), ('3c4d', '([a-z])'), ('5e6f', CAST(NULL AS STRING)) AS t(s, p)
+        """
+      Then query result
+        | result |
+        | [1, 2] |
+        | [3, 4] |
+        | [c, d] |
+        | NULL   |
+
   @function(nullability)
   Rule: Output schema
 

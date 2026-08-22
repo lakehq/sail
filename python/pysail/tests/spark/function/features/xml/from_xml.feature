@@ -393,3 +393,66 @@ Feature: from_xml parses an XML string into a struct value
          |-- result: struct (nullable = true)
          |    |-- a: integer (nullable = true)
         """
+
+    # `XmlToStructs` forces the user-supplied schema nullable before using it
+    # (`schema.asNullable`, xmlExpressions.scala:75), so a NOT NULL field in the DDL is ignored.
+    # `asNullable` recurses into structs, arrays and maps.
+
+    @sail-bug
+    Scenario: a NOT NULL field in the XML schema is forced nullable
+      When query
+        """
+        SELECT from_xml('<r><a></a></r>', 'a INT NOT NULL') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: struct (nullable = true)
+         |    |-- a: integer (nullable = true)
+        """
+
+    @sail-bug
+    Scenario: a NOT NULL field nested in an XML struct is forced nullable
+      When query
+        """
+        SELECT from_xml('<r><s><b></b></s></r>', 's STRUCT<b: INT NOT NULL>') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: struct (nullable = true)
+         |    |-- s: struct (nullable = true)
+         |    |    |-- b: integer (nullable = true)
+        """
+
+    # The schema scenarios above only analyse; these execute, which is where the corruption
+    # `asNullable` exists to prevent would actually surface (xmlExpressions.scala:72-75).
+
+    Scenario: a null value under a plain XML field is returned
+      When query
+        """
+        SELECT from_xml('<r><a></a></r>', 'a INT') AS result
+        """
+      Then query result
+        | result |
+        | {NULL} |
+
+    @sail-bug
+    Scenario: a null value under a NOT NULL XML field is returned
+      When query
+        """
+        SELECT from_xml('<r><a></a></r>', 'a INT NOT NULL') AS result
+        """
+      Then query result
+        | result |
+        | {NULL} |
+
+    @sail-bug
+    Scenario: a null value nested under a NOT NULL XML field is returned
+      When query
+        """
+        SELECT from_xml('<r><s><b></b></s></r>', 's STRUCT<b: INT NOT NULL>') AS result
+        """
+      Then query result
+        | result   |
+        | {{NULL}} |

@@ -82,6 +82,14 @@ message CelebornUnregisterShuffleRequest {
 
 message CelebornUnregisterShuffleResponse {}
 
+message CelebornReportMetricsRequest {
+  uint64 driver_id = 1;
+  int64 total_written = 2;
+  int64 file_count = 3;
+}
+
+message CelebornReportMetricsResponse {}
+
 service CelebornLifecycleManagerService {
   rpc GetShuffleId(CelebornGetShuffleIdRequest) returns (CelebornGetShuffleIdResponse) {}
   rpc GetJobShuffleIds(CelebornGetJobShuffleIdsRequest) returns (CelebornGetJobShuffleIdsResponse) {}
@@ -89,4 +97,5 @@ service CelebornLifecycleManagerService {
   rpc Revive(CelebornReviveRequest) returns (CelebornReviveResponse) {}
   rpc MapperEnd(CelebornMapperEndRequest) returns (CelebornMapperEndResponse) {}
   rpc UnregisterShuffle(CelebornUnregisterShuffleRequest) returns (CelebornUnregisterShuffleResponse) {}
+  rpc ReportMetrics(CelebornReportMetricsRequest) returns (CelebornReportMetricsResponse) {}
 }

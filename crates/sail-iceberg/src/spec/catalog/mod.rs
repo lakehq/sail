@@ -245,7 +245,7 @@ pub enum TableUpdate {
 }
 
 pub(super) mod _serde {
-    use serde::{Deserialize as _, Deserializer};
+    use serde::Deserializer;
 
     use super::*;
     pub(super) fn deserialize_snapshot<'de, D>(

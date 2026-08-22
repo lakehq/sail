@@ -29,7 +29,7 @@ pub use sail_common_datafusion::datasource::MERGE_FILE_COLUMN as PATH_COLUMN;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::options::{DeltaLogReplayStrategy, default_delta_log_replay_hash_threshold};
+use crate::options::DeltaLogReplayStrategy;
 use crate::snapshot::SnapshotPruningStats;
 use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
 use crate::table::DeltaSnapshot;
@@ -100,8 +100,6 @@ pub struct DeltaScanConfigBuilder {
     commit_timestamp_column_name: Option<String>,
     /// Strategy for log replay planning.
     delta_log_replay_strategy: DeltaLogReplayStrategy,
-    /// Threshold for auto replay strategy.
-    delta_log_replay_hash_threshold: usize,
 }
 
 impl Default for DeltaScanConfigBuilder {
@@ -116,7 +114,6 @@ impl Default for DeltaScanConfigBuilder {
             commit_version_column_name: None,
             commit_timestamp_column_name: None,
             delta_log_replay_strategy: DeltaLogReplayStrategy::Auto,
-            delta_log_replay_hash_threshold: 100,
         }
     }
 }
@@ -150,12 +147,6 @@ impl DeltaScanConfigBuilder {
     /// Configure replay strategy for log replay planning.
     pub fn with_delta_log_replay_strategy(mut self, strategy: DeltaLogReplayStrategy) -> Self {
         self.delta_log_replay_strategy = strategy;
-        self
-    }
-
-    /// Configure threshold for `Auto` replay strategy.
-    pub fn with_delta_log_replay_hash_threshold(mut self, threshold: usize) -> Self {
-        self.delta_log_replay_hash_threshold = threshold;
         self
     }
 
@@ -248,7 +239,6 @@ impl DeltaScanConfigBuilder {
             commit_version_column_name,
             commit_timestamp_column_name,
             delta_log_replay_strategy: self.delta_log_replay_strategy,
-            delta_log_replay_hash_threshold: self.delta_log_replay_hash_threshold,
         })
     }
 }
@@ -273,11 +263,4 @@ pub struct DeltaScanConfig {
     /// Strategy for log replay planning.
     #[serde(default)]
     pub delta_log_replay_strategy: DeltaLogReplayStrategy,
-    /// Threshold for `Auto` replay strategy.
-    #[serde(default = "default_delta_log_replay_hash_threshold_usize")]
-    pub delta_log_replay_hash_threshold: usize,
-}
-
-fn default_delta_log_replay_hash_threshold_usize() -> usize {
-    default_delta_log_replay_hash_threshold().get()
 }
