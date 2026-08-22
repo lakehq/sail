@@ -62,7 +62,9 @@ impl ScalarUDFImpl for FormatNumber {
                 ScalarValue::Int64(Some(d)) => {
                     format_with_scalar_spec(&args[0], |v| format_number_fixed(v, *d as i32))
                 }
-                ScalarValue::Utf8(Some(pattern)) => {
+                ScalarValue::Utf8(Some(pattern))
+                | ScalarValue::Utf8View(Some(pattern))
+                | ScalarValue::LargeUtf8(Some(pattern)) => {
                     let parsed = parse_pattern(pattern)?;
                     format_with_scalar_spec(&args[0], |v| {
                         Some(format_with_parsed_pattern(v, &parsed))
@@ -72,7 +74,11 @@ impl ScalarUDFImpl for FormatNumber {
                 | ScalarValue::Int16(None)
                 | ScalarValue::Int32(None)
                 | ScalarValue::Int64(None)
-                | ScalarValue::Utf8(None) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
+                | ScalarValue::Utf8(None)
+                | ScalarValue::Utf8View(None)
+                | ScalarValue::LargeUtf8(None) => {
+                    Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
+                }
                 other => exec_err!(
                     "`format_number` second argument must be INT or STRING, got {}",
                     other.data_type()
@@ -258,4 +264,35 @@ fn cast_arrow_array_to_f64(arr: &ArrayRef) -> Result<Float64Array> {
     let casted = datafusion::arrow::compute::cast(arr, &DataType::Float64)?;
     let f64_arr = as_float64_array(&casted)?;
     Ok(f64_arr.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::datatypes::Field;
+    use datafusion_common::config::ConfigOptions;
+
+    use super::*;
+
+    #[test]
+    fn scalarized_view_pattern_is_accepted() -> Result<()> {
+        let result = FormatNumber::new().invoke_with_args(ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(1234.5))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some("#,###.##".to_string()))),
+            ],
+            arg_fields: vec![
+                Arc::new(Field::new("number", DataType::Float64, true)),
+                Arc::new(Field::new("pattern", DataType::Utf8View, true)),
+            ],
+            number_rows: 1,
+            return_field: Arc::new(Field::new("formatted", DataType::Utf8, true)),
+            config_options: Arc::new(ConfigOptions::default()),
+        })?;
+
+        let ColumnarValue::Scalar(result) = result else {
+            return exec_err!("expected scalar result");
+        };
+        assert_eq!(result, ScalarValue::Utf8(Some("1,234.5".to_string())));
+        Ok(())
+    }
 }

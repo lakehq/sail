@@ -877,11 +877,11 @@
   type: boolean
   default: "true"
   description: |
-    Whether query output should coerce view types to non-view types. Spark Connect materializes
-    top-level `Utf8View` and `BinaryView` fields in a physical output adapter before worker results
-    are returned, using the configured Arrow variable-width types. Other protocols apply their
-    output policy during optimization. If disabled, view types can pass through to the client.
-    Nested view fields are not covered by this option.
+    Whether client-facing output should coerce view types to non-view types. Spark Connect materializes
+    `Utf8View` and `BinaryView` fields recursively in a physical output adapter before worker
+    results are returned, using the configured Arrow variable-width types. Other protocols apply
+    their output policy during optimization. If disabled, view types can pass through to the
+    client.
   experimental: true
 
 - key: spark.session_timeout_secs

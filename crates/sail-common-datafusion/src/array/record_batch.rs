@@ -15,6 +15,90 @@ use datafusion::arrow::ipc::reader::StreamReader;
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion_common::{DataFusionError, Result};
 
+fn materialize_spark_view_field(field: &FieldRef, use_large_var_types: bool) -> FieldRef {
+    let data_type = materialize_spark_view_data_type(field.data_type(), use_large_var_types);
+    if &data_type == field.data_type() {
+        Arc::clone(field)
+    } else {
+        Arc::new(field.as_ref().clone().with_data_type(data_type))
+    }
+}
+
+/// Materializes Arrow string and binary view types for a Spark-facing boundary.
+///
+/// Spark models view and offset arrays as the same logical string or binary type, but its Arrow
+/// conversion does not accept view arrays. Container types and field metadata are preserved while
+/// view leaves are converted recursively to the configured offset width.
+pub fn materialize_spark_view_data_type(
+    data_type: &DataType,
+    use_large_var_types: bool,
+) -> DataType {
+    match data_type {
+        DataType::Utf8View if use_large_var_types => DataType::LargeUtf8,
+        DataType::Utf8View => DataType::Utf8,
+        DataType::BinaryView if use_large_var_types => DataType::LargeBinary,
+        DataType::BinaryView => DataType::Binary,
+        DataType::List(field) => {
+            DataType::List(materialize_spark_view_field(field, use_large_var_types))
+        }
+        DataType::ListView(field) => {
+            DataType::ListView(materialize_spark_view_field(field, use_large_var_types))
+        }
+        DataType::FixedSizeList(field, size) => DataType::FixedSizeList(
+            materialize_spark_view_field(field, use_large_var_types),
+            *size,
+        ),
+        DataType::LargeList(field) => {
+            DataType::LargeList(materialize_spark_view_field(field, use_large_var_types))
+        }
+        DataType::LargeListView(field) => {
+            DataType::LargeListView(materialize_spark_view_field(field, use_large_var_types))
+        }
+        DataType::Struct(fields) => DataType::Struct(
+            fields
+                .iter()
+                .map(|field| materialize_spark_view_field(field, use_large_var_types))
+                .collect::<Fields>(),
+        ),
+        DataType::Union(fields, mode) => DataType::Union(
+            fields
+                .iter()
+                .map(|(type_id, field)| {
+                    (
+                        type_id,
+                        materialize_spark_view_field(field, use_large_var_types),
+                    )
+                })
+                .collect(),
+            *mode,
+        ),
+        DataType::Dictionary(key, value) => DataType::Dictionary(
+            Box::new(materialize_spark_view_data_type(key, use_large_var_types)),
+            Box::new(materialize_spark_view_data_type(value, use_large_var_types)),
+        ),
+        DataType::Map(field, sorted) => DataType::Map(
+            materialize_spark_view_field(field, use_large_var_types),
+            *sorted,
+        ),
+        DataType::RunEndEncoded(run_ends, values) => DataType::RunEndEncoded(
+            materialize_spark_view_field(run_ends, use_large_var_types),
+            materialize_spark_view_field(values, use_large_var_types),
+        ),
+        data_type => data_type.clone(),
+    }
+}
+
+pub fn materialize_spark_view_schema(schema: &Schema, use_large_var_types: bool) -> Schema {
+    Schema::new_with_metadata(
+        schema
+            .fields()
+            .iter()
+            .map(|field| materialize_spark_view_field(field, use_large_var_types))
+            .collect::<Fields>(),
+        schema.metadata().clone(),
+    )
+}
+
 pub fn cast_record_batch_positionally(
     batch: RecordBatch,
     schema: SchemaRef,
@@ -383,8 +467,11 @@ pub fn record_batch_with_schema(batch: RecordBatch, schema: &SchemaRef) -> Resul
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
+    use std::collections::HashMap;
+
     use datafusion::arrow::array::{ArrayRef, Int32Array, StructArray};
-    use datafusion::arrow::datatypes::{Field, Fields};
+    use datafusion::arrow::datatypes::{Field, Fields, UnionMode};
+    use datafusion_common::internal_err;
 
     use super::*;
 
@@ -392,6 +479,99 @@ mod tests {
         let field_refs_vec: Vec<FieldRef> = fields.into_iter().map(Arc::new).collect();
         let field_refs: Fields = field_refs_vec.into();
         StructArray::new(field_refs, columns, None)
+    }
+
+    #[test]
+    fn materializes_spark_view_types_recursively() -> Result<()> {
+        let nested = DataType::Struct(
+            vec![
+                Field::new(
+                    "list",
+                    DataType::List(Arc::new(Field::new("element", DataType::Utf8View, true))),
+                    true,
+                ),
+                Field::new(
+                    "fixed",
+                    DataType::FixedSizeList(
+                        Arc::new(Field::new("item", DataType::BinaryView, true)),
+                        2,
+                    ),
+                    true,
+                ),
+                Field::new(
+                    "dictionary",
+                    DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8View)),
+                    true,
+                ),
+                Field::new(
+                    "union",
+                    DataType::Union(
+                        [(0, Arc::new(Field::new("value", DataType::BinaryView, true)))]
+                            .into_iter()
+                            .collect(),
+                        UnionMode::Sparse,
+                    ),
+                    true,
+                ),
+                Field::new(
+                    "runs",
+                    DataType::RunEndEncoded(
+                        Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                        Arc::new(Field::new("values", DataType::Utf8View, true)),
+                    ),
+                    true,
+                ),
+            ]
+            .into(),
+        );
+        let schema = Schema::new_with_metadata(
+            vec![
+                Field::new("text", DataType::Utf8View, true).with_metadata(HashMap::from([(
+                    "logical".to_string(),
+                    "string".to_string(),
+                )])),
+                Field::new("nested", nested, true),
+            ],
+            HashMap::from([("owner".to_string(), "spark".to_string())]),
+        );
+
+        for (use_large_var_types, string_type, binary_type) in [
+            (false, DataType::Utf8, DataType::Binary),
+            (true, DataType::LargeUtf8, DataType::LargeBinary),
+        ] {
+            let output = materialize_spark_view_schema(&schema, use_large_var_types);
+            assert_eq!(output.metadata(), schema.metadata());
+            assert_eq!(output.field(0).metadata(), schema.field(0).metadata());
+            assert_eq!(output.field(0).data_type(), &string_type);
+
+            let DataType::Struct(fields) = output.field(1).data_type() else {
+                return internal_err!("nested field must remain a struct");
+            };
+            let DataType::List(element) = fields[0].data_type() else {
+                return internal_err!("list field must remain a list");
+            };
+            assert_eq!(element.data_type(), &string_type);
+            let DataType::FixedSizeList(element, 2) = fields[1].data_type() else {
+                return internal_err!("fixed field must remain a fixed-size list");
+            };
+            assert_eq!(element.data_type(), &binary_type);
+            let DataType::Dictionary(_, value) = fields[2].data_type() else {
+                return internal_err!("dictionary field must remain a dictionary");
+            };
+            assert_eq!(value.as_ref(), &string_type);
+            let DataType::Union(union_fields, UnionMode::Sparse) = fields[3].data_type() else {
+                return internal_err!("union field must remain a sparse union");
+            };
+            let Some((_, union_value)) = union_fields.iter().next() else {
+                return internal_err!("union field must retain its value field");
+            };
+            assert_eq!(union_value.data_type(), &binary_type);
+            let DataType::RunEndEncoded(_, values) = fields[4].data_type() else {
+                return internal_err!("runs field must remain run-end encoded");
+            };
+            assert_eq!(values.data_type(), &string_type);
+        }
+        Ok(())
     }
 
     #[test]

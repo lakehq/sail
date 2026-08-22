@@ -64,7 +64,11 @@ def test_local_relation_normalizes_arrow_view_inputs(spark):
         }
     )
 
-    df = ConnectDataFrame(LocalRelation(table), spark)
+    relation = LocalRelation(table)
+    if hasattr(ConnectDataFrame, "withPlan"):
+        df = ConnectDataFrame.withPlan(relation, spark)
+    else:
+        df = ConnectDataFrame(relation, spark)
     assert df.orderBy("id").collect() == [
         Row(id=1, text="alpha", raw=b"one", nested=Row(value="nested")),
         Row(id=2, text=None, raw=None, nested=None),
@@ -283,29 +287,75 @@ def test_parquet_top_level_views_across_cluster_shuffle(spark, tmp_path):
         path,
     )
 
-    result = (
-        spark.read.parquet(str(path))
-        .repartition(4, "key")
-        .select(
-            "id",
-            "key",
-            "raw",
-            F.concat("raw", "raw").alias("raw_concat"),
-            F.regexp_extract("label", r"([0-9]+)", 1).alias("first_match"),
-            F.regexp_extract_all("label", F.lit(r"([0-9]+)"), 1).alias("all_matches"),
-            F.split("label", r"[0-9]+").alias("parts"),
-            F.hash("key").alias("key_hash"),
-            F.hash("raw").alias("raw_hash"),
-            F.conv("hex", 16, 10).alias("decimal"),
-            F.unhex("hex").alias("decoded"),
-            F.from_csv("csv", "name STRING, age INT").alias("parsed"),
-        )
+    source = spark.read.parquet(str(path))
+    result = source.repartition(4, "key").select(
+        "id",
+        "key",
+        "raw",
+        F.concat("raw", "raw").alias("raw_concat"),
+        F.regexp_extract("label", r"([0-9]+)", 1).alias("first_match"),
+        F.regexp_extract_all("label", F.lit(r"([0-9]+)"), 1).alias("all_matches"),
+        F.split("label", r"[0-9]+").alias("parts"),
+        F.hash("key").alias("key_hash"),
+        F.hash("raw").alias("raw_hash"),
+        F.conv("hex", 16, 10).alias("decimal"),
+        F.unhex("hex").alias("decoded"),
+        F.from_csv("csv", "name STRING, age INT").alias("parsed"),
     )
     if hasattr(result, "toArrow"):
         arrow = result.select("key", "raw").toArrow()
         use_large = spark.conf.get("spark.sql.execution.arrow.useLargeVarTypes").lower() == "true"
         assert arrow.schema.field("key").type == (pa.large_string() if use_large else pa.string())
         assert arrow.schema.field("raw").type == (pa.large_binary() if use_large else pa.binary())
+
+    nested = source.select(
+        "id",
+        F.array("key").alias("keys"),
+        F.struct("key", "raw").alias("payload"),
+        F.create_map("key", "raw").alias("lookup"),
+    )
+    nested_rows = nested.orderBy("id").collect()
+    assert nested_rows[0] == Row(
+        id=1,
+        keys=["alpha"],
+        payload=Row(key="alpha", raw=b"one"),
+        lookup={"alpha": b"one"},
+    )
+    assert nested_rows[2].payload == Row(key="alpha", raw=None)
+
+    collected = source.agg(
+        F.collect_list("key").alias("keys"),
+        F.collect_list("raw").alias("raw_values"),
+    )
+    collected_row = collected.collect()[0]
+    assert sorted(collected_row.keys) == ["alpha", "alpha", "beta"]
+    assert sorted(collected_row.raw_values) == [b"one", b"two"]
+
+    array_functions = source.select(
+        "id",
+        F.array_intersect(F.array("key"), F.array(F.lit("alpha"))).alias("common_keys"),
+        F.concat(F.array("key"), F.array(F.lit("tail"))).alias("concatenated"),
+        F.aggregate(F.array("key"), F.lit(""), lambda _acc, value: value).alias("aggregate_value"),
+    )
+    assert [
+        (row.common_keys, row.concatenated, row.aggregate_value) for row in array_functions.orderBy("id").collect()
+    ] == [
+        (["alpha"], ["alpha", "tail"], "alpha"),
+        ([], ["beta", "tail"], "beta"),
+        (["alpha"], ["alpha", "tail"], "alpha"),
+    ]
+
+    if hasattr(nested, "toArrow"):
+        use_large = spark.conf.get("spark.sql.execution.arrow.useLargeVarTypes").lower() == "true"
+        string_type = pa.large_string() if use_large else pa.string()
+        binary_type = pa.large_binary() if use_large else pa.binary()
+        nested_arrow = nested.toArrow()
+        assert nested_arrow.schema.field("keys").type.value_type == string_type
+        assert nested_arrow.schema.field("payload").type.field("key").type == string_type
+        assert nested_arrow.schema.field("payload").type.field("raw").type == binary_type
+        collected_arrow = collected.toArrow()
+        assert collected_arrow.schema.field("keys").type.value_type == string_type
+        assert collected_arrow.schema.field("raw_values").type.value_type == binary_type
 
     rows = result.orderBy("id").collect()
 
@@ -321,7 +371,7 @@ def test_parquet_top_level_views_across_cluster_shuffle(spark, tmp_path):
     assert rows[0].key_hash == rows[2].key_hash
     assert rows[0].key_hash != rows[1].key_hash
     assert rows[0].raw_hash != rows[1].raw_hash
-    assert rows[2].raw_hash == 42  # Spark keeps the initial hash seed for null inputs.
+    assert rows[2].raw_hash == 42  # noqa: PLR2004  # Spark's initial hash seed for null inputs.
     assert [row.decimal for row in rows] == ["16", "17", None]
     assert [row.decoded for row in rows] == [b"\x10", b"\x11", None]
     assert [row.parsed for row in rows] == [

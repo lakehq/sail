@@ -2,14 +2,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::datatypes::{DataType, FieldRef, Fields, Schema};
 use datafusion::catalog::MemTable;
 use datafusion_common::{DFSchema, DFSchemaRef, ParamValues, ScalarValue};
 use datafusion_expr::{EmptyRelation, Expr, Extension, LogicalPlan, UNNAMED_TABLE};
 use log::warn;
 use sail_common::spec;
 use sail_common_datafusion::array::record_batch::{
-    cast_record_batch_positionally, read_record_batches,
+    cast_record_batch_positionally, materialize_spark_view_schema, read_record_batches,
 };
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_logical_plan::range::RangeNode;
@@ -19,56 +18,14 @@ use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
-fn normalize_spark_connect_input_field(field: &FieldRef, use_large_var_types: bool) -> FieldRef {
-    let data_type = normalize_spark_connect_input_type(field.data_type(), use_large_var_types);
-    if &data_type == field.data_type() {
-        Arc::clone(field)
-    } else {
-        Arc::new(field.as_ref().clone().with_data_type(data_type))
-    }
-}
-
-// Materialize view arrays at the LocalRelation boundary, including Spark container types.
-fn normalize_spark_connect_input_type(data_type: &DataType, use_large_var_types: bool) -> DataType {
-    match data_type {
-        DataType::Utf8View if use_large_var_types => DataType::LargeUtf8,
-        DataType::Utf8View => DataType::Utf8,
-        DataType::BinaryView if use_large_var_types => DataType::LargeBinary,
-        DataType::BinaryView => DataType::Binary,
-        DataType::List(field) => DataType::List(normalize_spark_connect_input_field(
-            field,
-            use_large_var_types,
-        )),
-        DataType::LargeList(field) => DataType::LargeList(normalize_spark_connect_input_field(
-            field,
-            use_large_var_types,
-        )),
-        DataType::Struct(fields) => DataType::Struct(
-            fields
-                .iter()
-                .map(|field| normalize_spark_connect_input_field(field, use_large_var_types))
-                .collect::<Fields>(),
-        ),
-        DataType::Map(field, sorted) => DataType::Map(
-            normalize_spark_connect_input_field(field, use_large_var_types),
-            *sorted,
-        ),
-        data_type => data_type.clone(),
-    }
-}
-
 fn normalize_spark_connect_input_batch(
     batch: RecordBatch,
     use_large_var_types: bool,
 ) -> PlanResult<RecordBatch> {
     let input_schema = batch.schema();
-    let schema = Arc::new(Schema::new_with_metadata(
-        input_schema
-            .fields()
-            .iter()
-            .map(|field| normalize_spark_connect_input_field(field, use_large_var_types))
-            .collect::<Fields>(),
-        input_schema.metadata().clone(),
+    let schema = Arc::new(materialize_spark_view_schema(
+        input_schema.as_ref(),
+        use_large_var_types,
     ));
     if schema.as_ref() == input_schema.as_ref() {
         Ok(batch)
@@ -332,7 +289,7 @@ mod tests {
         Array, ArrayRef, BinaryArray, BinaryViewArray, LargeBinaryArray, LargeStringArray,
         StringArray, StringViewArray, StructArray,
     };
-    use datafusion::arrow::datatypes::Field;
+    use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema};
 
     use super::*;
 
