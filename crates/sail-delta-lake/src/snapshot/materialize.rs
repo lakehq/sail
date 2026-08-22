@@ -10,7 +10,6 @@ use datafusion::common::scalar::ScalarValue;
 
 use super::DeltaSnapshot;
 use crate::conversion::parse_optional_partition_value;
-use crate::schema::make_physical_arrow_schema;
 use crate::spec::fields::{
     FIELD_NAME_PARTITION_VALUES_PARSED, FIELD_NAME_STATS, FIELD_NAME_STATS_PARSED,
 };
@@ -20,7 +19,7 @@ use crate::spec::{
 };
 
 impl DeltaSnapshot {
-    pub(super) fn build_files_batch_from_adds(&self, adds: &[Add]) -> DeltaResult<RecordBatch> {
+    pub(crate) fn build_files_batch_from_adds(&self, adds: &[Add]) -> DeltaResult<RecordBatch> {
         let raw = encode_snapshot_add_rows(adds)?;
         parse_scan_row_columns(raw, self)
     }
@@ -74,7 +73,6 @@ fn build_partition_schema(
 
 fn build_stats_source_schema(snapshot: &DeltaSnapshot) -> DeltaResult<ArrowSchema> {
     let partition_columns = snapshot.metadata().partition_columns();
-    let mode = snapshot.effective_column_mapping_mode();
     let non_partition_fields: Vec<Field> = snapshot
         .schema()
         .fields()
@@ -82,8 +80,7 @@ fn build_stats_source_schema(snapshot: &DeltaSnapshot) -> DeltaResult<ArrowSchem
         .filter(|field| !partition_columns.contains(field.name()))
         .map(|field| field.as_ref().clone())
         .collect();
-    let logical_non_partition = ArrowSchema::new(non_partition_fields);
-    Ok(make_physical_arrow_schema(&logical_non_partition, mode))
+    Ok(ArrowSchema::new(non_partition_fields))
 }
 
 fn parse_scan_row_columns(raw: RecordBatch, snapshot: &DeltaSnapshot) -> DeltaResult<RecordBatch> {
@@ -94,10 +91,9 @@ fn parse_scan_row_columns(raw: RecordBatch, snapshot: &DeltaSnapshot) -> DeltaRe
     if let Some((stats_idx, _)) = raw.schema_ref().column_with_name(FIELD_NAME_STATS) {
         let stats_source_arrow = build_stats_source_schema(snapshot)?;
         let stats_source_kernel = StructType::try_from(&stats_source_arrow)?;
-        let stats_schema = Arc::new(stats_schema(
-            &stats_source_kernel,
-            snapshot.table_properties(),
-        )?);
+        let stats_schema =
+            stats_schema(&stats_source_kernel, snapshot.table_properties())?.make_physical(mode);
+        let stats_schema = Arc::new(stats_schema);
         let arrow_stats_schema = Arc::new(ArrowSchema::try_from(stats_schema.as_ref())?);
         let stats_batch = raw.project(&[stats_idx])?;
         let stats_json = stats_batch
