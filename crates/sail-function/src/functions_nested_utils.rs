@@ -1,7 +1,12 @@
+use std::sync::Arc;
+
+use arrow::array::{NullArray, UInt64Array};
 /// [Credit]: <https://github.com/apache/datafusion/blob/94d178ebe9674669b32ecd7896b5597f49e90791/datafusion/functions-nested/src/utils.rs>
 use datafusion::arrow::array::{Array, ArrayRef};
-use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::ColumnarValue;
+use datafusion::arrow::compute::take_arrays;
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err};
+use datafusion_expr::{ColumnarValue, LambdaArgument};
+
 macro_rules! downcast_arg {
     ($ARG:expr_2021, $ARRAY_TYPE:ident) => {{
         $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {
@@ -41,7 +46,7 @@ where
 
         let args = ColumnarValue::values_to_arrays(args)?;
 
-        let result = (inner)(&args);
+        let result = inner(&args);
 
         if is_scalar {
             // If all inputs are scalar, keeps output as scalar
@@ -51,4 +56,76 @@ where
             result.map(ColumnarValue::Array)
         }
     }
+}
+
+pub(crate) fn evaluate_lambda_rows(lambda: &LambdaArgument, rows: &[u64]) -> Result<ArrayRef> {
+    let indices = UInt64Array::from(rows.to_vec());
+    let dummy = || Ok(Arc::new(NullArray::new(rows.len())) as ArrayRef);
+
+    lambda
+        .evaluate(&[&dummy], |arrays| Ok(take_arrays(arrays, &indices, None)?))?
+        .into_array(rows.len())
+}
+
+pub(crate) fn evaluate_lambdas_until_null(
+    lambdas: &[&LambdaArgument],
+    number_rows: usize,
+) -> Result<(Vec<ArrayRef>, Vec<u64>)> {
+    let row_count = u64::try_from(number_rows)
+        .map_err(|_| exec_datafusion_err!("sequence row count does not fit in u64"))?;
+    let mut active_rows = (0..row_count).collect::<Vec<_>>();
+    let mut values = Vec::with_capacity(lambdas.len());
+
+    for lambda in lambdas {
+        if active_rows.is_empty() {
+            break;
+        }
+        let value = evaluate_lambda_rows(lambda, &active_rows)?;
+        let nulls = value.logical_nulls();
+        let mut retained_positions = Vec::with_capacity(value.len());
+        let mut retained_rows = Vec::with_capacity(value.len());
+        for (position, row) in active_rows.iter().copied().enumerate() {
+            if nulls.as_ref().is_none_or(|nulls| nulls.is_valid(position)) {
+                retained_positions.push(
+                    u64::try_from(position).map_err(|_| {
+                        exec_datafusion_err!("sequence row index does not fit in u64")
+                    })?,
+                );
+                retained_rows.push(row);
+            }
+        }
+
+        values.push(value);
+        if retained_rows.len() != active_rows.len() {
+            let indices = UInt64Array::from(retained_positions);
+            values = take_arrays(&values, &indices, None)?;
+            active_rows = retained_rows;
+        }
+    }
+    Ok((values, active_rows))
+}
+
+pub(crate) fn scatter_active_rows(
+    value: ArrayRef,
+    active_rows: &[u64],
+    number_rows: usize,
+) -> Result<ArrayRef> {
+    if active_rows.len() == number_rows {
+        return Ok(value);
+    }
+
+    let mut indices = vec![None::<u64>; number_rows];
+    for (compact_index, row) in active_rows.iter().copied().enumerate() {
+        let row = usize::try_from(row)
+            .map_err(|_| exec_datafusion_err!("sequence row index does not fit in usize"))?;
+        let compact_index = u64::try_from(compact_index)
+            .map_err(|_| exec_datafusion_err!("sequence row index does not fit in u64"))?;
+        let index = indices
+            .get_mut(row)
+            .ok_or_else(|| exec_datafusion_err!("sequence row index is out of bounds"))?;
+        *index = Some(compact_index);
+    }
+    take_arrays(&[value], &UInt64Array::from(indices), None)?
+        .pop()
+        .ok_or_else(|| exec_datafusion_err!("sequence take returned no arrays"))
 }
