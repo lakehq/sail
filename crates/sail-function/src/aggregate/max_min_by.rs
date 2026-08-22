@@ -14,7 +14,7 @@ use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::logical_expr::utils::format_state_name;
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility, function};
 use datafusion::prelude::Expr;
-use sail_common_datafusion::ordering::is_orderable;
+use sail_common_datafusion::ordering::{is_orderable, is_orderable_field};
 
 use crate::error::{generic_exec_err, invalid_arg_count_exec_err};
 
@@ -170,6 +170,28 @@ fn get_min_max_by_result_type(
     Ok(coerced)
 }
 
+/// The orderability check that `coerce_types` cannot make.
+///
+/// `coerce_types` only sees `DataType`s, so it misses the Spark types Sail carries in field
+/// metadata — GEOMETRY/GEOGRAPHY, and a VARIANT whose child fields are unmarked. `return_field`
+/// receives the real argument fields, so the check is repeated here to catch them.
+fn check_ordering_field(
+    function_name: &str,
+    arg_fields: &[FieldRef],
+) -> Result<(), DataFusionError> {
+    let (_, ordering_field) = max_min_by_args(function_name, arg_fields)?;
+    if !is_orderable_field(ordering_field) {
+        return Err(generic_exec_err(
+            function_name,
+            &format!(
+                "does not support ordering on type {}",
+                ordering_field.data_type()
+            ),
+        ));
+    }
+    Ok(())
+}
+
 impl AggregateUDFImpl for MaxByFunction {
     fn name(&self) -> &str {
         "max_by"
@@ -182,6 +204,11 @@ impl AggregateUDFImpl for MaxByFunction {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType, DataFusionError> {
         let (value_type, _) = max_min_by_args(self.name(), arg_types)?;
         Ok(value_type.to_owned())
+    }
+
+    fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef, DataFusionError> {
+        check_ordering_field(self.name(), arg_fields)?;
+        datafusion::logical_expr::udaf_default_return_field(self, arg_fields)
     }
 
     fn accumulator(
@@ -296,6 +323,11 @@ impl AggregateUDFImpl for MinByFunction {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType, DataFusionError> {
         let (value_type, _) = max_min_by_args(self.name(), arg_types)?;
         Ok(value_type.to_owned())
+    }
+
+    fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef, DataFusionError> {
+        check_ordering_field(self.name(), arg_fields)?;
+        datafusion::logical_expr::udaf_default_return_field(self, arg_fields)
     }
 
     fn accumulator(

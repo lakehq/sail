@@ -1,6 +1,7 @@
-use datafusion::arrow::datatypes::{DataType, IntervalUnit};
+use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit};
+use sail_common::geoarrow::extension::GeoArrowWkbType;
 
-use crate::variant::is_marked_variant_storage_type;
+use crate::variant::{is_marked_variant_storage_type, is_variant_storage_field};
 
 /// Spark's `RowOrdering.isOrderable`, which delegates to `OrderUtils.isOrderable`.
 ///
@@ -8,8 +9,8 @@ use crate::variant::is_marked_variant_storage_type;
 /// not. Spark fails closed on the types it does not name (`case _ => false`); this port has no
 /// wildcard arm at all, so a new *Arrow* variant fails the build and has to be classified
 /// deliberately. That guarantee does not extend to a new *Spark* type carried inside an existing
-/// Arrow variant — such a type is silently treated as orderable, which is exactly the GEOMETRY
-/// case described below.
+/// Arrow variant: such a type looks ordinary here and is caught only by [`is_orderable_field`],
+/// which sees the field metadata this function never receives.
 ///
 /// Beyond Spark's own arms this also recurses through `Dictionary` and `RunEndEncoded`, which
 /// have no Spark counterpart. Spark's `UserDefinedType` arm has none here because a Sail UDT
@@ -24,8 +25,8 @@ use crate::variant::is_marked_variant_storage_type;
 /// arm exists so that a day-time interval arriving from outside the resolver is not rejected.
 ///
 /// `GEOMETRY` and `GEOGRAPHY` are unorderable in Spark too, but in Sail they are lowered to plain
-/// `Binary` and their identity lives in the field metadata, which `coerce_types` never receives.
-/// Catching them would mean moving the check to a hook that takes `FieldRef`s.
+/// `Binary` with their identity in the field metadata, so they pass this check; use
+/// [`is_orderable_field`] wherever a `Field` is available.
 pub fn is_orderable(data_type: &DataType) -> bool {
     match data_type {
         DataType::Null => true,
@@ -65,13 +66,13 @@ pub fn is_orderable(data_type: &DataType) -> bool {
         | DataType::Duration(_)
         | DataType::Interval(IntervalUnit::DayTime)
         | DataType::Interval(IntervalUnit::YearMonth) => true,
-        DataType::Struct(fields) => fields.iter().all(|field| is_orderable(field.data_type())),
+        DataType::Struct(fields) => fields.iter().all(|field| is_orderable_field(field)),
         DataType::List(field)
         | DataType::LargeList(field)
         | DataType::FixedSizeList(field, _)
         | DataType::ListView(field)
         | DataType::LargeListView(field)
-        | DataType::RunEndEncoded(_, field) => is_orderable(field.data_type()),
+        | DataType::RunEndEncoded(_, field) => is_orderable_field(field),
         DataType::Dictionary(_, value_type) => is_orderable(value_type),
         // `MapType` and `CalendarIntervalType` are not `AtomicType`s in Spark, so they reach its
         // final `case _ => false`, as does everything else with no Spark counterpart.
@@ -79,4 +80,20 @@ pub fn is_orderable(data_type: &DataType) -> bool {
         | DataType::Interval(IntervalUnit::MonthDayNano)
         | DataType::Union(_, _) => false,
     }
+}
+
+/// Spark orderability for an Arrow *field*, which is the only view that can see the logical
+/// types Sail carries in metadata rather than in the [`DataType`].
+///
+/// `GEOMETRY`/`GEOGRAPHY` are lowered to `Binary` tagged `geoarrow.wkb`, and a VARIANT read
+/// through a path that does not mark its child fields is recognizable only by its
+/// `arrow.parquet.variant` extension. Both are unorderable in Spark and both look ordinary to
+/// [`is_orderable`], so prefer this function wherever a `Field` is available — in a UDF that
+/// means `return_field`, not `coerce_types`.
+pub fn is_orderable_field(field: &Field) -> bool {
+    if field.extension_type_name() == Some(GeoArrowWkbType::NAME) || is_variant_storage_field(field)
+    {
+        return false;
+    }
+    is_orderable(field.data_type())
 }

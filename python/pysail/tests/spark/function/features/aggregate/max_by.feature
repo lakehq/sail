@@ -180,10 +180,10 @@ Feature: max_by function
         | NULL   |
 
     # OrderUtils.isOrderable rejects GEOMETRY and GEOGRAPHY explicitly, before the AtomicType
-    # case, because they are opaque WKB bytes with no meaningful ordering. Sail cannot see this
-    # from `coerce_types`: it lowers both to plain BINARY and keeps the geo identity in the
-    # field metadata, which the hook never receives.
-    @sail-bug @spark-4.2
+    # case, because they are opaque WKB bytes with no meaningful ordering. Sail lowers both to
+    # plain BINARY and keeps the geo identity in the field metadata, so `coerce_types` cannot
+    # see it; the check is repeated in `return_field`, which does receive the fields.
+    @spark-4.2
     Scenario: max_by rejects a GEOMETRY ordering column
       When query
         """
@@ -311,18 +311,21 @@ Feature: max_by function
 
   Rule: Constant and untyped ordering keys
 
-    # A constant ordering key makes every row tie. Spark keeps the newer row on a tie
-    # (MaxByAndMinBy.scala: `If(old > new, old, new)` is false when they are equal), so the
-    # answer is the last one. Foldable arguments are constant-folded to the same literal.
+    # A constant ordering key makes every row tie, and Spark documents the winner among tied
+    # rows as unspecified (`MaxByAndMinBy.scala`: "the output can be different for those
+    # associated the same values"), because partial-state merge order is not guaranteed. So
+    # assert only that the call is accepted and returns one of the tied values; the running
+    # window scenarios above pin the directional tie rule where it IS deterministic.
+    # Foldable arguments are constant-folded to the same literal.
     Scenario Outline: max_by accepts the constant ordering key <case>
       When query
         """
-        SELECT max_by(x, <ordering>) AS result
+        SELECT max_by(x, <ordering>) IN ('a', 'b', 'c') AS result
         FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y)
         """
       Then query result
         | result |
-        | c      |
+        | true   |
 
       Examples:
         | case            | ordering         |
