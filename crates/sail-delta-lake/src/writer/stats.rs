@@ -21,7 +21,6 @@
 use std::cmp::min;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ops::AddAssign;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -635,7 +634,10 @@ pub fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
     result
 }
 
-fn decimal_stats_number(unscaled: i128, scale: i32) -> Result<serde_json::Number, DeltaTableError> {
+fn decimal_stats_number(
+    unscaled: i128,
+    scale: i32,
+) -> Result<Box<serde_json::value::RawValue>, DeltaTableError> {
     let scale = usize::try_from(scale).map_err(|_| {
         DeltaTableError::generic(format!("Decimal statistic has a negative scale: {scale}"))
     })?;
@@ -657,7 +659,7 @@ fn decimal_stats_number(unscaled: i128, scale: i32) -> Result<serde_json::Number
         }
         _ => value.push_str(&digits),
     }
-    serde_json::Number::from_str(&value).map_err(|error| {
+    serde_json::value::RawValue::from_string(value.clone()).map_err(|error| {
         DeltaTableError::generic(format!(
             "Failed to encode decimal statistic {value}: {error}"
         ))
@@ -686,7 +688,7 @@ impl TryFrom<StatsScalar> for StatValue {
                 Self::String(v.format("%Y-%m-%dT%H:%M:%S%.3f").to_string())
             }
             StatsScalar::Decimal { unscaled, scale } => {
-                Self::Number(decimal_stats_number(unscaled, scale)?)
+                Self::ExactNumber(decimal_stats_number(unscaled, scale)?)
             }
             StatsScalar::String(v) => Self::String(v),
             StatsScalar::Bytes(v) => {
@@ -700,14 +702,6 @@ impl TryFrom<StatsScalar> for StatValue {
             }
             StatsScalar::Uuid(v) => Self::String(v.hyphenated().to_string()),
         })
-    }
-}
-
-impl TryFrom<StatsScalar> for serde_json::Value {
-    type Error = DeltaTableError;
-
-    fn try_from(scalar: StatsScalar) -> Result<Self, Self::Error> {
-        Ok(StatValue::try_from(scalar)?.into())
     }
 }
 
@@ -931,34 +925,37 @@ mod tests {
             panic!("Expected timestamp ntz scalar");
         }
 
-        let timestamp_json = serde_json::Value::try_from(scalar_timestamp).unwrap();
-        let timestamp_ntz_json = serde_json::Value::try_from(scalar_timestamp_ntz).unwrap();
+        let timestamp_json = StatValue::try_from(scalar_timestamp).unwrap();
+        let timestamp_ntz_json = StatValue::try_from(scalar_timestamp_ntz).unwrap();
 
         assert_eq!(
             timestamp_json,
-            serde_json::Value::String(expected.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
+            StatValue::String(expected.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
         );
         assert_eq!(
             timestamp_ntz_json,
-            serde_json::Value::String(expected.format("%Y-%m-%dT%H:%M:%S%.3f").to_string())
+            StatValue::String(expected.format("%Y-%m-%dT%H:%M:%S%.3f").to_string())
         );
     }
 
     #[test]
     fn decimal_stats_preserve_exact_values() {
-        let integer = serde_json::Value::try_from(StatsScalar::Decimal {
+        let integer = StatValue::try_from(StatsScalar::Decimal {
             unscaled: 9_007_199_254_740_993,
             scale: 0,
         })
         .unwrap();
-        let fractional = serde_json::Value::try_from(StatsScalar::Decimal {
-            unscaled: -12_345,
-            scale: 2,
+        let fractional = StatValue::try_from(StatsScalar::Decimal {
+            unscaled: -12_345_678_901_234_567_890_123_456_789_012_345_678,
+            scale: 18,
         })
         .unwrap();
 
-        assert_eq!(integer.to_string(), "9007199254740993");
-        assert_eq!(fractional.to_string(), "-123.45");
+        assert_eq!(serde_json::to_string(&integer).unwrap(), "9007199254740993");
+        assert_eq!(
+            serde_json::to_string(&fractional).unwrap(),
+            "-12345678901234567890.123456789012345678"
+        );
     }
 
     #[test]

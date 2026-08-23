@@ -38,25 +38,32 @@ use crate::spec::{
 };
 
 /// Column statistics stored in `Stats`.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum StatValue {
     Null,
     Boolean(bool),
     Number(serde_json::Number),
+    /// A JSON number produced from exact typed statistics.
+    #[serde(skip_deserializing)]
+    ExactNumber(Box<serde_json::value::RawValue>),
     String(String),
 }
 
-impl From<StatValue> for serde_json::Value {
-    fn from(value: StatValue) -> Self {
-        match value {
-            StatValue::Null => serde_json::Value::Null,
-            StatValue::Boolean(value) => serde_json::Value::Bool(value),
-            StatValue::Number(value) => serde_json::Value::Number(value),
-            StatValue::String(value) => serde_json::Value::String(value),
+impl PartialEq for StatValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Null, Self::Null) => true,
+            (Self::Boolean(left), Self::Boolean(right)) => left == right,
+            (Self::Number(left), Self::Number(right)) => left == right,
+            (Self::ExactNumber(left), Self::ExactNumber(right)) => left.get() == right.get(),
+            (Self::String(left), Self::String(right)) => left == right,
+            _ => false,
         }
     }
 }
+
+impl Eq for StatValue {}
 
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/protocol/mod.rs#L23-L124>
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
