@@ -325,6 +325,14 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             output.tvf_allow_multiple_table_arguments = value;
         }
 
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_LEGACY_ALLOW_PARAMETERLESS_COUNT)
+            .map(|x| x.to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.legacy_allow_parameterless_count = value;
+        }
+
         output.pyspark_udf_config = Arc::new(PySparkUdfConfig::try_from(config)?);
 
         Ok(output)

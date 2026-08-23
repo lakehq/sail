@@ -1,0 +1,24 @@
+# serializer version: 1
+---
+name: "test_explain_count_normalization_uses_canonical_aggregates"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as row_count, #3@1 as null_count, #4@2 as nullable_count, #5@3 as distinct_count, #6@4 as filtered_count]
+      ProjectionExec: expr=[count(Int64(1))@0 as #2, count(NULL)@1 as #3, count(t.#1)@2 as #4, CASE WHEN count(Int64(1))@0 > 0 THEN 1 ELSE 0 END as #5, count(NULL)@1 as #6]
+        AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1)), count(NULL), count(t.#1)]
+          ProjectionExec: expr=[column1@0 as #1]
+            DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_window_count_literals_use_the_canonical_row_count"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#6@0 as id, #7@1 as partition_count, #8@2 as total_count]
+      ProjectionExec: expr=[#2@0 as #6, count(Int64(1)) PARTITION BY [t.#3] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as #7, count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as #8]
+        WindowAggExec: wdw=[count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+          ProjectionExec: expr=[#2@0 as #2, count(Int64(1)) PARTITION BY [t.#3] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as count(Int64(1)) PARTITION BY [t.#3] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]
+            WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [t.#3] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [t.#3] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+              SortExec: expr=[#3@1 ASC NULLS LAST], preserve_partitioning=[false]
+                ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
+                  DataSourceExec: partitions=1, partition_sizes=[1]
