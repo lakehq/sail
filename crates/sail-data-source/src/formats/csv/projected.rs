@@ -497,7 +497,6 @@ impl<R: BufRead, D: Decoder> Iterator for DecoderBatchReader<R, D> {
     }
 }
 
-#[expect(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use datafusion::arrow::csv::ReaderBuilder as ArrowReaderBuilder;
@@ -838,7 +837,10 @@ mod tests {
             ),
             (
                 true,
-                vec![vec![Some("a"), None], vec![Some("b;c"), Some("d")]],
+                vec![
+                    vec![Some("a"), None],
+                    vec![Some("b;c"), Some("d")],
+                ],
             ),
         ] {
             for chunk in [1, 2, 3, 64] {
