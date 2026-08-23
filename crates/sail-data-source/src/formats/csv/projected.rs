@@ -1,27 +1,19 @@
-//! Projected CSV decoding for all-string file schemas.
+//! Projected CSV decoding for all-`Utf8` file schemas.
 //!
-//! arrow-csv's `RecordDecoder` copies every field of every column through `csv_core`
-//! and stores one end offset per field before the projection is applied
-//! (arrow-csv `reader/records.rs`, `reader/mod.rs::parse`). For wide files read with
-//! `inferSchema=false` (every column is `Utf8`), this decoder finds the end of records
-//! that do not contain the quote byte with `memchr`, locates their delimiters with a
-//! SWAR byte-equality scan (one 64-bit mask per 64-byte block) walking only the
-//! delimiters up to the largest projected column, and delegates records that contain
-//! the quote byte to `csv_core` (the parser arrow-csv uses) from the start of the
-//! record. Field-count validation, header skipping, truncated-row padding and null
-//! handling (empty field) follow arrow-csv.
+//! Before projection, arrow-csv's `RecordDecoder` copies every field through `csv_core` and stores
+//! every field-end offset. For wide `inferSchema=false` files, this decoder instead uses `memchr`
+//! to find record ends without a quote byte, then a SWAR (SIMD Within A Register) byte-equality
+//! scan (one 64-bit mask per 64-byte block) to visit delimiters through the largest projected col.
+//! Records containing quotes are delegated from their start to `csv_core`, arrow-csv's parser.
+//! Field-count validation, header skipping, truncated-row padding, and null handling follow arrow.
 //!
-//! Differences from arrow-csv (both are `csv_core` DFA quirks; the Spark behaviour of
-//! ignoring comment lines is kept, see `CSVExprUtils.filterCommentAndEmpty`):
-//! - a comment line ends at the record terminator, also when `lineSep` is not `\n`
-//!   (csv_core never leaves a comment when the terminator is another byte);
-//! - a comment line without a trailing newline at the end of the file does not produce
-//!   an empty record (csv_core `transition_final_dfa`, reader.rs:748-758).
+//! It preserves Spark's comment handling in two departures from arrow-csv caused by `csv_core` DFA quirks:
+//! - Comments end at the record terminator even when `lineSep` is not `\n`.
+//!   `csv_core` otherwise never exits comments for another terminator.
+//! - An unterminated EOF comment produces no empty record
 //!
-//! The input must be valid UTF-8; both Sail read paths pass the bytes through the lossy
-//! UTF-8 decoder first. The projected values are validated again when the string arrays
-//! are built (`StringArray::try_from_binary`), which only costs a pass over the
-//! projected bytes.
+//! Input must be valid UTF-8. Both Sail read paths first apply lossy UTF-8 decoding, and
+//! `StringArray::try_from_binary` revalidates projected values (one pass over the projected bytes).
 
 use std::io::BufRead;
 use std::sync::Arc;
@@ -35,6 +27,8 @@ use datafusion::arrow::error::ArrowError;
 use datafusion_datasource::decoder::Decoder;
 
 const UTF8_BOM: &[u8] = b"\xef\xbb\xbf";
+
+const LOW_7_BITS: u64 = 0x7f7f_7f7f_7f7f_7f7f;
 
 #[derive(Clone)]
 pub struct ProjectedCsvOptions {
@@ -53,7 +47,7 @@ pub struct ProjectedCsvOptions {
 #[derive(Debug)]
 pub struct ProjectedCsvDecoder {
     schema: SchemaRef,
-    /// the delimiter splatted into every byte, for `eq_mask`
+    // The delimiter splatted into every byte, for `eq_mask`
     delimiter_pattern: u64,
     quote: u8,
     comment: Option<u8>,
@@ -61,24 +55,21 @@ pub struct ProjectedCsvDecoder {
     num_columns: usize,
     truncated_rows: bool,
     batch_size: usize,
-    /// `(file column, output column)` sorted by file column
+    // `(file column, output column)` sorted by file column
     wanted: Vec<(usize, usize)>,
     builders: Vec<BinaryBuilder>,
     rows: usize,
     to_skip: usize,
-    /// arrow `RecordDecoder::line_number`: one plus the number of records decoded,
-    /// header included
+    // Arrow `RecordDecoder::line_number`: one plus the number of records decoded, header included
     line_number: usize,
     has_read: bool,
     in_comment: bool,
-    /// bytes of an unterminated quote-free record carried across `decode` calls
+    // Bytes of an unterminated quote-free record carried across `decode` calls.
     pending: Vec<u8>,
-    /// end offsets of the delimiters of the current fast-path record up to the largest
-    /// projected column
+    // End offsets of the delimiters of current fast-path record up to the largest projected col
     ends: Vec<usize>,
-    /// `csv_core` parser for records containing the quote byte; `slow` is set while it
-    /// owns the current record. It is never cloned: `csv_core::Reader::clone` drops part
-    /// of the DFA (csv-core reader.rs:1307-1313).
+    // `slow` is set while it owns the current record.
+    // It's never cloned: `csv_core::Reader::clone` drops part of the DFA (reader.rs:1307-1313).
     slow: bool,
     slow_reader: Reader,
     slow_out: Vec<u8>,
@@ -170,8 +161,8 @@ impl ProjectedCsvDecoder {
         }
     }
 
-    /// Feeds bytes to the `csv_core` parser and returns the number of bytes consumed.
-    /// Leaves the slow path once the record is complete.
+    // Feeds bytes to the `csv_core` parser and returns the number of bytes consumed.
+    // Leaves the slow path once the record is complete.
     fn slow_feed(&mut self, input: &[u8]) -> Result<usize, ArrowError> {
         let mut consumed = 0;
         loop {
@@ -215,7 +206,7 @@ impl ProjectedCsvDecoder {
         }
     }
 
-    /// Fast path: `line` contains neither a terminator nor the quote byte.
+    // Fast path: `line` contains neither a terminator nor the quote byte.
     #[inline]
     fn process_line(&mut self, line: &[u8]) -> Result<(), ArrowError> {
         let pattern = self.delimiter_pattern;
@@ -249,9 +240,8 @@ impl ProjectedCsvDecoder {
         result
     }
 
-    /// Validates the field count like arrow `RecordDecoder` (records.rs:136-149) and
-    /// appends the projected fields; `field(w, column)` returns the bytes of file
-    /// column `column` (the `w`-th projected column in file order).
+    // Validates the field count like arrow `RecordDecoder` and appends the projected fields.
+    // `field(w, column)` returns the bytes of file `column` (`w`-th projected col in file order).
     #[inline]
     fn emit_record<'a, F>(&mut self, num_fields: usize, field: F) -> Result<(), ArrowError>
     where
@@ -287,13 +277,11 @@ impl ProjectedCsvDecoder {
     }
 }
 
-const LOW_7_BITS: u64 = 0x7f7f_7f7f_7f7f_7f7f;
-
-/// Bit `i` of the result is set iff byte `i` (little-endian) of `word` equals the byte
-/// splatted in `pattern`. SWAR zero-byte test on `word ^ pattern`: adding `0x7f` to the
-/// low 7 bits of a byte sets bit 7 iff they are not all zero (no carry between bytes),
-/// so bit 7 of `z` is set exactly where the byte is zero. The multiply by the "magic"
-/// constant gathers the flags at bits 0, 8, ..., 56 into the top byte (bit `i` = byte `i`).
+// Bit `i` of the result is set iff byte `i` (little-endian) of `word` equals the byte splatted
+// in `pattern`. SWAR zero-byte test on `word ^ pattern`: adding `0x7f` to the low 7 bits of a
+// byte sets bit 7 iff they are not all zero (no carry between bytes), so bit 7 of `z` is set
+// exactly where the byte is zero. The multiply by the "magic" constant gathers the flags at
+// bits 0, 8, ..., 56 into the top byte (bit `i` = byte `i`).
 #[inline]
 fn eq_mask(word: u64, pattern: u64) -> u8 {
     let x = word ^ pattern;
@@ -302,8 +290,8 @@ fn eq_mask(word: u64, pattern: u64) -> u8 {
     ((z >> 7).wrapping_mul(0x0102_0408_1020_4080) >> 56) as u8
 }
 
-/// Bit `i` of the result is set iff `bytes[i]` is the delimiter splatted in `pattern`;
-/// `bytes` holds at most 64 bytes.
+// Bit `i` of the result is set iff `bytes[i]` is the delimiter splatted in `pattern`.
+// `bytes` holds at most 64 bytes.
 #[inline]
 fn delimiter_mask(bytes: &[u8], pattern: u64) -> u64 {
     let (words, rest) = bytes.as_chunks::<8>();
@@ -324,11 +312,6 @@ fn delimiter_mask(bytes: &[u8], pattern: u64) -> u64 {
 }
 
 impl Decoder for ProjectedCsvDecoder {
-    /// Decodes records from `buf` and returns the number of bytes consumed.
-    ///
-    /// Same contract as `arrow::csv::reader::Decoder::decode`: an empty `buf` signals
-    /// the end of the input, and no more bytes are consumed once `batch_size` records
-    /// are buffered.
     fn decode(&mut self, buf: &[u8]) -> Result<usize, ArrowError> {
         let mut pos = 0;
         if !self.has_read {
@@ -446,8 +429,6 @@ impl Decoder for ProjectedCsvDecoder {
     }
 }
 
-/// Drives a [`Decoder`] from a [`BufRead`] the way `arrow::csv::BufReader` does
-/// (reader/mod.rs:526-544), yielding one batch per `batch_size` records.
 pub struct DecoderBatchReader<R, D> {
     reader: R,
     decoder: D,
@@ -546,9 +527,8 @@ mod tests {
         Ok(batches)
     }
 
-    /// arrow reports a record with too many fields as "got more than N" or "got N"
-    /// depending on where the input chunks end (csv_core `OutputEndsFull` vs
-    /// `InputEmpty`); the projected decoder always reports the exact count.
+    // Arrow reports a record with too many fields as "got more than N" or "got N" depending on
+    // where the input chunks end. The projected decoder always reports the exact count.
     fn normalize(result: Result<Vec<RecordBatch>, String>) -> Result<Vec<RecordBatch>, String> {
         result.map_err(|e| e.split(" got ").next().unwrap_or_default().to_string())
     }
@@ -570,8 +550,6 @@ mod tests {
         }
     }
 
-    /// A header line and `num_rows` data rows of `num_columns` fields, joined by
-    /// `delimiter` and `\n`; field `i` of data row `r` is `field(r, i)`.
     fn rows(
         num_columns: usize,
         num_rows: usize,
