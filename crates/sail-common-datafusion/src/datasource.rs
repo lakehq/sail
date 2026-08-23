@@ -184,6 +184,26 @@ pub struct BucketBy {
     pub num_buckets: usize,
 }
 
+/// Spark-compatible controls for packing files into scan partitions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd)]
+pub struct FileScanPartitioningOptions {
+    pub max_partition_bytes: u64,
+    pub open_cost_bytes: u64,
+    pub min_partitions: Option<usize>,
+    pub max_partitions: Option<usize>,
+}
+
+impl Default for FileScanPartitioningOptions {
+    fn default() -> Self {
+        Self {
+            max_partition_bytes: 128 * 1024 * 1024,
+            open_cost_bytes: 4 * 1024 * 1024,
+            min_partitions: None,
+            max_partitions: None,
+        }
+    }
+}
+
 /// Information required to create a data source.
 #[derive(Debug, Clone)]
 pub struct SourceInfo {
@@ -196,6 +216,7 @@ pub struct SourceInfo {
     pub partition_by: Vec<String>,
     pub bucket_by: Option<BucketBy>,
     pub sort_order: Vec<Sort>,
+    pub file_scan_partitioning: FileScanPartitioningOptions,
     /// The layers of options for the data source.
     /// A later layer can override earlier ones.
     pub options: Vec<OptionLayer>,

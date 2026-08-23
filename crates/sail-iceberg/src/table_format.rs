@@ -169,6 +169,7 @@ impl TableFormat for IcebergTableFormat {
             partition_by: vec![],
             bucket_by: None,
             sort_order: vec![],
+            file_scan_partitioning: Default::default(),
             options: options.clone(),
             // TODO: Thread resolver session case-sensitivity into TableFormat::create_deleter.
             read_case_sensitive: true,
@@ -731,6 +732,7 @@ async fn build_iceberg_provider(
         partition_by: _,
         bucket_by: _,
         sort_order: _,
+        file_scan_partitioning: _,
         options,
         read_case_sensitive: _,
     } = info;

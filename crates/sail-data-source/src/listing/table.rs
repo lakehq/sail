@@ -9,6 +9,7 @@ use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableSource, T
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{Constraints, Result};
 use datafusion_datasource::{ListingTableUrl, TableSchema};
+use sail_common_datafusion::datasource::FileScanPartitioningOptions;
 
 use crate::listing::source::ReadFormat;
 use crate::listing::utils::can_be_evaluated_for_partition_pruning;
@@ -22,6 +23,7 @@ pub struct ListingTableSourceConfig {
     pub file_sort_order: Vec<Vec<Sort>>,
     pub collect_stat: bool,
     pub target_partitions: usize,
+    pub file_scan_partitioning: FileScanPartitioningOptions,
     pub read_format: Arc<dyn ReadFormat>,
     pub path_glob_filter: Option<PathGlobFilter>,
     pub compression: CompressionTypeVariant,

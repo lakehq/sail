@@ -408,13 +408,21 @@ async fn list_files_for_scan<'a>(
         } else {
             let all_files: Vec<_> = grouped.into_iter().flat_map(|g| g.into_inner()).collect();
             (
-                FileGroup::new(all_files).split_files(source.config().target_partitions),
+                pack_file_groups(
+                    FileGroup::new(all_files),
+                    source.config().target_partitions,
+                    source.config().file_scan_partitioning,
+                ),
                 false,
             )
         }
     } else {
         (
-            file_group.split_files(source.config().target_partitions),
+            pack_file_groups(
+                file_group,
+                source.config().target_partitions,
+                source.config().file_scan_partitioning,
+            ),
             false,
         )
     };
@@ -431,6 +439,71 @@ async fn list_files_for_scan<'a>(
         statistics: stats,
         grouped_by_partition,
     })
+}
+
+/// Packs files using Spark's next-fit-decreasing file partition algorithm.
+fn pack_file_groups(
+    file_group: FileGroup,
+    target_partitions: usize,
+    options: sail_common_datafusion::datasource::FileScanPartitioningOptions,
+) -> Vec<FileGroup> {
+    let files = file_group.into_inner();
+    if files.is_empty() {
+        return vec![];
+    }
+
+    let total_bytes = total_scan_bytes(&files, options.open_cost_bytes);
+    let min_partitions = options.min_partitions.unwrap_or(target_partitions).max(1);
+    let bytes_per_partition = total_bytes / min_partitions as u64;
+    let max_split_bytes = options
+        .max_partition_bytes
+        .min(options.open_cost_bytes.max(bytes_per_partition));
+    let groups = pack_files(files, max_split_bytes, options.open_cost_bytes);
+
+    let Some(max_partitions) = options
+        .max_partitions
+        .filter(|max_partitions| *max_partitions > 0 && groups.len() > *max_partitions)
+    else {
+        return groups;
+    };
+    let files = groups.into_iter().flat_map(FileGroup::into_inner).collect();
+    let desired_split_bytes = total_bytes.div_ceil(max_partitions as u64);
+    pack_files(files, desired_split_bytes, options.open_cost_bytes)
+}
+
+fn total_scan_bytes(files: &[datafusion_datasource::PartitionedFile], open_cost_bytes: u64) -> u64 {
+    files.iter().fold(0_u64, |total, file| {
+        total
+            .saturating_add(file.effective_size())
+            .saturating_add(open_cost_bytes)
+    })
+}
+
+fn pack_files(
+    mut files: Vec<datafusion_datasource::PartitionedFile>,
+    max_split_bytes: u64,
+    open_cost_bytes: u64,
+) -> Vec<FileGroup> {
+    files.sort_by_key(|file| std::cmp::Reverse(file.effective_size()));
+
+    let mut groups = vec![];
+    let mut current_files = vec![];
+    let mut current_size = 0_u64;
+    for file in files {
+        let file_size = file.effective_size();
+        if !current_files.is_empty() && current_size.saturating_add(file_size) > max_split_bytes {
+            groups.push(FileGroup::new(std::mem::take(&mut current_files)));
+            current_size = 0;
+        }
+        current_size = current_size
+            .saturating_add(file_size)
+            .saturating_add(open_cost_bytes);
+        current_files.push(file);
+    }
+    if !current_files.is_empty() {
+        groups.push(FileGroup::new(current_files));
+    }
+    groups
 }
 
 async fn do_collect_statistics_and_ordering(
@@ -553,4 +626,126 @@ async fn get_files_with_limit(
 
     let inexact_stats = all_files.next().await.is_some();
     Ok((file_group, inexact_stats))
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion_datasource::PartitionedFile;
+    use sail_common_datafusion::datasource::FileScanPartitioningOptions;
+
+    use super::*;
+
+    fn paths(groups: &[FileGroup]) -> Vec<Vec<&str>> {
+        groups
+            .iter()
+            .map(|group| group.iter().map(|file| file.path().as_ref()).collect())
+            .collect()
+    }
+
+    fn options(max_partition_bytes: u64, open_cost_bytes: u64) -> FileScanPartitioningOptions {
+        FileScanPartitioningOptions {
+            max_partition_bytes,
+            open_cost_bytes,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn packs_files_by_size_with_next_fit_decreasing() {
+        let files = FileGroup::new(vec![
+            PartitionedFile::new("d", 1),
+            PartitionedFile::new("b", 8),
+            PartitionedFile::new("c", 1),
+            PartitionedFile::new("a", 8),
+        ]);
+
+        let groups = pack_file_groups(files, 2, options(10, 0));
+
+        assert_eq!(paths(&groups), vec![vec!["b"], vec!["a", "d"], vec!["c"]]);
+    }
+
+    #[test]
+    fn includes_object_open_cost_when_packing_small_files() {
+        let files = FileGroup::new(vec![
+            PartitionedFile::new("a", 4),
+            PartitionedFile::new("b", 4),
+            PartitionedFile::new("c", 4),
+        ]);
+
+        let without_open_cost = pack_file_groups(files.clone(), 1, options(12, 0));
+        let with_open_cost = pack_file_groups(files, 1, options(12, 5));
+
+        assert_eq!(paths(&without_open_cost), vec![vec!["a", "b", "c"]]);
+        assert_eq!(
+            paths(&with_open_cost),
+            vec![vec!["a"], vec!["b"], vec!["c"]]
+        );
+    }
+
+    #[test]
+    fn honors_session_file_partition_size_overrides() {
+        let files = FileGroup::new(vec![
+            PartitionedFile::new("a", 8),
+            PartitionedFile::new("b", 8),
+        ]);
+
+        assert_eq!(
+            paths(&pack_file_groups(files.clone(), 1, options(10, 0))),
+            vec![vec!["a"], vec!["b"]]
+        );
+        assert_eq!(
+            paths(&pack_file_groups(files, 1, options(20, 0))),
+            vec![vec!["a", "b"]]
+        );
+    }
+
+    #[test]
+    fn packing_threshold_excludes_next_file_open_cost() {
+        let files = FileGroup::new(vec![
+            PartitionedFile::new("a", 5),
+            PartitionedFile::new("b", 2),
+        ]);
+
+        let groups = pack_file_groups(files, 1, options(10, 3));
+
+        assert_eq!(paths(&groups), vec![vec!["a", "b"]]);
+    }
+
+    #[test]
+    fn honors_minimum_partition_count_when_sizing_splits() {
+        let files = FileGroup::new(vec![
+            PartitionedFile::new("a", 5),
+            PartitionedFile::new("b", 5),
+        ]);
+        let options = FileScanPartitioningOptions {
+            max_partition_bytes: 20,
+            open_cost_bytes: 0,
+            min_partitions: Some(2),
+            max_partitions: None,
+        };
+
+        let groups = pack_file_groups(files, 1, options);
+
+        assert_eq!(paths(&groups), vec![vec!["a"], vec!["b"]]);
+    }
+
+    #[test]
+    fn rescales_when_initial_partition_count_exceeds_maximum() {
+        let files = FileGroup::new(vec![
+            PartitionedFile::new("a", 5),
+            PartitionedFile::new("b", 5),
+            PartitionedFile::new("c", 5),
+            PartitionedFile::new("d", 5),
+        ]);
+        let options = FileScanPartitioningOptions {
+            max_partition_bytes: 6,
+            open_cost_bytes: 1,
+            max_partitions: Some(2),
+            ..Default::default()
+        };
+
+        let groups = pack_file_groups(files, 4, options);
+
+        assert_eq!(paths(&groups), vec![vec!["a", "b"], vec!["c", "d"]]);
+    }
 }

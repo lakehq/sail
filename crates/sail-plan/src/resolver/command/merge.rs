@@ -917,6 +917,7 @@ impl PlanResolver<'_> {
                             partition_by: vec![],
                             bucket_by: None,
                             sort_order: vec![],
+                            file_scan_partitioning: self.config.file_scan_partitioning,
                             options: vec![],
                             read_case_sensitive: self.config.case_sensitive,
                         },
