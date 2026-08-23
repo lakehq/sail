@@ -327,10 +327,6 @@ mod tests {
 
     type Records = Arc<Mutex<Vec<(usize, Bytes, Id)>>>;
 
-    /// A fake upload that records, for each part, the index assigned when the part
-    /// was requested, the payload, and the runtime on which the part was uploaded.
-    /// The index is assigned synchronously in `put_part`, as all `object_store`
-    /// implementations do, so it reflects the order in which parts were requested.
     #[derive(Debug)]
     struct RecordingMultipartUpload {
         next_idx: Arc<AtomicUsize>,
