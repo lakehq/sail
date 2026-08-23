@@ -108,11 +108,10 @@ impl CsvSource {
     /// `inferSchema=false`); typed columns keep the arrow decoder.
     fn projected_decoder(&self) -> Result<Option<ProjectedCsvDecoder>> {
         let schema = self.table_schema.file_schema();
-        let all_strings = self
-            .projection
-            .file_indices
+        let all_strings = schema
+            .fields()
             .iter()
-            .all(|i| schema.field(*i).data_type() == &DataType::Utf8);
+            .all(|field| field.data_type() == &DataType::Utf8);
         if !all_strings {
             return Ok(None);
         }
