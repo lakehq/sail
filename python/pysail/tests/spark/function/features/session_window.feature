@@ -243,6 +243,29 @@ Feature: session_window() gap-based sessionization
         | session_window                             | cnt |
         | {2021-01-01 00:00:00, 2021-01-01 00:09:30} | 2   |
 
+    # Both tables deliberately share the column names `k` and `ts`, and the
+    # join is on a third column so the duplicated ones hold DIFFERENT values:
+    # `b.k` is one constant (a mis-bound key qualifier would merge the groups)
+    # and `b.ts` is decades away (a mis-bound time qualifier would move the
+    # sessions to 2030).
+    Scenario: qualified keys after a join with duplicate column names
+      When query
+        """
+        SELECT a.k AS k, session_window.start, session_window.end, count(*) AS cnt
+        FROM VALUES ('X', TIMESTAMP '2021-01-01 00:00:00'),
+                    ('X', TIMESTAMP '2021-01-01 00:04:00'),
+                    ('Y', TIMESTAMP '2021-01-01 00:02:00') AS a(k, ts)
+        JOIN VALUES ('SAME', TIMESTAMP '2030-01-01 00:00:00', 'X'),
+                    ('SAME', TIMESTAMP '2030-06-01 00:00:00', 'Y') AS b(k, ts, jk)
+          ON a.k = b.jk
+        GROUP BY a.k, session_window(a.ts, '5 minutes')
+        ORDER BY k, start
+        """
+      Then query result
+        | k | start               | end                 | cnt |
+        | X | 2021-01-01 00:00:00 | 2021-01-01 00:09:00 | 2   |
+        | Y | 2021-01-01 00:02:00 | 2021-01-01 00:07:00 | 1   |
+
     Scenario: session_window grouped by its SELECT-list alias
       When query
         """
