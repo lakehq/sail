@@ -171,6 +171,7 @@ use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp_ntz::SparkMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use sail_function::scalar::datetime::spark_next_day::SparkNextDay;
+use sail_function::scalar::datetime::spark_session_window::SparkSessionWindow;
 use sail_function::scalar::datetime::spark_time::SparkTime;
 use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
@@ -3119,6 +3120,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_try_calendar_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryCalendarInterval::new())))
             }
+            "session_window" => Ok(Arc::new(ScalarUDF::from(SparkSessionWindow::new()))),
             "spark_date_format" | "date_format" => {
                 // Use UTC as default timezone when creating from name only
                 Ok(Arc::new(ScalarUDF::from(SparkDateFormat::new(Arc::from(
@@ -3208,6 +3210,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkBRound>()
             || node_inner.is::<SparkCalendarInterval>()
             || node_inner.is::<SparkTryCalendarInterval>()
+            || node_inner.is::<SparkSessionWindow>()
             || node_inner.is::<SparkConcat>()
             || node_inner.is::<SparkConv>()
             || node_inner.is::<SparkCrc32>()

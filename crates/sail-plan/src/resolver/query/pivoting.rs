@@ -195,6 +195,17 @@ impl PlanResolver<'_> {
             }
         }
 
+        // Pivot builds its aggregate directly, bypassing the grouping
+        // expanders; reject the session_window marker cleanly instead of
+        // letting it reach execution with a misleading error.
+        if grouping
+            .iter()
+            .any(|g| Self::contains_session_window(&g.expr))
+        {
+            return Err(PlanError::AnalysisError(
+                "session_window is not supported in pivot grouping".to_string(),
+            ));
+        }
         self.rewrite_aggregate(input, projections, grouping, None, false, &[], state)
     }
 

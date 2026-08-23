@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use datafusion_common::{DFSchemaRef, Result};
+use datafusion_common::{DFSchemaRef, Result, internal_err};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use educe::Educe;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -121,6 +121,13 @@ impl UserDefinedLogicalNodeCore for SessionAggregateNode {
     }
 
     fn with_exprs_and_inputs(&self, exprs: Vec<Expr>, inputs: Vec<LogicalPlan>) -> Result<Self> {
+        if exprs.len() != self.aggregate_exprs.len() {
+            return internal_err!(
+                "SessionAggregateNode expects {} expressions, got {}",
+                self.aggregate_exprs.len(),
+                exprs.len()
+            );
+        }
         let input = Arc::new(inputs.one()?);
         Ok(Self {
             input,
