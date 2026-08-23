@@ -19,6 +19,7 @@ hdfs-native-object-store = { workspace = true, optional = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 tonic = { workspace = true }
 tokio-stream = { workspace = true }
 async-stream = { workspace = true }
@@ -35,6 +36,9 @@ dashmap = { workspace = true }
 hf-hub = { workspace = true }
 fastrace = { workspace = true }
 fastrace-futures = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 
 [features]
 hdfs = ["dep:hdfs-native-object-store"]
