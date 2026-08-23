@@ -287,3 +287,127 @@ impl<T> Stream for RuntimeAwareStream<T> {
         self.inner.poll_next_unpin(cx)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+    use std::time::Duration;
+
+    use futures::future::{try_join, try_join_all};
+    use tokio::runtime::{Id, Runtime};
+    use tokio::sync::Barrier;
+    use tokio::time::timeout;
+
+    use super::*;
+
+    /// A fake upload that records, for each part, the index assigned when the part
+    /// was requested, the payload, and the runtime on which the part was uploaded.
+    /// The index is assigned synchronously in `put_part`, as all `object_store`
+    /// implementations do, so it reflects the order in which parts were requested.
+    #[derive(Debug)]
+    struct RecordingMultipartUpload {
+        next_idx: usize,
+        barrier: Arc<Barrier>,
+        records: Arc<Mutex<Vec<(usize, Bytes, Id)>>>,
+    }
+
+    impl RecordingMultipartUpload {
+        fn new(parts: usize) -> (Self, Arc<Mutex<Vec<(usize, Bytes, Id)>>>) {
+            let records = Arc::new(Mutex::new(Vec::new()));
+            let upload = Self {
+                next_idx: 0,
+                barrier: Arc::new(Barrier::new(parts)),
+                records: records.clone(),
+            };
+            (upload, records)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MultipartUpload for RecordingMultipartUpload {
+        fn put_part(&mut self, data: PutPayload) -> UploadPart {
+            let idx = self.next_idx;
+            self.next_idx += 1;
+            let barrier = self.barrier.clone();
+            let records = self.records.clone();
+            Box::pin(async move {
+                // All parts must be in flight at the same time to pass the barrier.
+                barrier.wait().await;
+                records
+                    .lock()
+                    .await
+                    .push((idx, Bytes::from(data), Handle::current().id()));
+                Ok(())
+            })
+        }
+
+        async fn complete(&mut self) -> Result<PutResult> {
+            Ok(PutResult {
+                e_tag: None,
+                version: None,
+            })
+        }
+
+        async fn abort(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn multipart_parts_upload_concurrently() -> Result<(), Box<dyn Error>> {
+        let (inner, _) = RecordingMultipartUpload::new(2);
+        let mut upload = RuntimeAwareMultipartUpload::new(Box::new(inner), Handle::current());
+
+        let first = upload.put_part(vec![1].into());
+        let second = upload.put_part(vec![2].into());
+
+        // The barrier is only released when both parts are in flight at the same
+        // time, so this times out if the wrapper serializes the uploads.
+        timeout(Duration::from_secs(5), try_join(first, second)).await??;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn multipart_parts_preserve_order() -> Result<(), Box<dyn Error>> {
+        const PARTS: usize = 64;
+        let (inner, records) = RecordingMultipartUpload::new(PARTS);
+        let mut upload = RuntimeAwareMultipartUpload::new(Box::new(inner), Handle::current());
+
+        let parts: Vec<_> = (0..PARTS)
+            .map(|i| upload.put_part(vec![i as u8].into()))
+            .collect();
+        timeout(Duration::from_secs(5), try_join_all(parts)).await??;
+
+        let mut records = records.lock().await.clone();
+        records.sort_by_key(|(idx, _, _)| *idx);
+        let actual: Vec<(usize, Bytes)> = records
+            .into_iter()
+            .map(|(idx, data, _)| (idx, data))
+            .collect();
+        let expected: Vec<(usize, Bytes)> = (0..PARTS)
+            .map(|i| (i, Bytes::from(vec![i as u8])))
+            .collect();
+        assert_eq!(actual, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn multipart_parts_upload_on_object_store_runtime() -> Result<(), Box<dyn Error>> {
+        let primary = Runtime::new()?;
+        let io = Runtime::new()?;
+        let (inner, records) = RecordingMultipartUpload::new(1);
+        let mut upload =
+            RuntimeAwareMultipartUpload::new(Box::new(inner), io.handle().clone());
+
+        primary.block_on(timeout(
+            Duration::from_secs(5),
+            upload.put_part(vec![1].into()),
+        ))??;
+
+        let records = records.blocking_lock();
+        let runtime_ids: Vec<Id> = records.iter().map(|(_, _, id)| *id).collect();
+        assert_eq!(runtime_ids, vec![io.handle().id()]);
+        assert_ne!(runtime_ids, vec![primary.handle().id()]);
+        Ok(())
+    }
+}
