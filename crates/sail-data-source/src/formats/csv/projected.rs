@@ -816,8 +816,8 @@ mod tests {
             }
             let mut block = [0; 64];
             for _ in 0..64 {
-                for chunk in block.chunks_exact_mut(8) {
-                    chunk.copy_from_slice(&random().to_le_bytes());
+                for chunk in block.as_chunks_mut::<8>().0 {
+                    *chunk = random().to_le_bytes();
                 }
                 let expected = block
                     .iter()
