@@ -15,6 +15,7 @@ use object_store::{
 use tokio::runtime::Handle;
 use tokio::sync::{Mutex, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
+use tokio_util::task::AbortOnDropHandle;
 use tonic::codegen::Bytes;
 
 #[derive(Debug)]
@@ -204,13 +205,28 @@ impl RuntimeAwareMultipartUpload {
 #[async_trait::async_trait]
 impl MultipartUpload for RuntimeAwareMultipartUpload {
     fn put_part(&mut self, data: PutPayload) -> UploadPart {
-        let inner = self.inner.clone();
-        #[expect(clippy::async_yields_async)]
-        let task = self.handle.spawn(async move {
-            let mut inner = inner.lock().await;
-            inner.put_part(data)
-        });
-        Box::pin(async move { task.await?.await })
+        // The inner `put_part` assigns the part index synchronously, so it must be called here,
+        // in the order the parts are requested, rather than from a spawned task whose scheduling
+        // order is not guaranteed.
+        let part = match self.inner.try_lock() {
+            Ok(mut inner) => {
+                let _guard = self.handle.enter();
+                inner.put_part(data)
+            }
+            Err(e) => {
+                return Box::pin(async move {
+                    Err(object_store::Error::Generic {
+                        store: "RuntimeAwareMultipartUpload",
+                        source: Box::new(e),
+                    })
+                });
+            }
+        };
+        // The lock is released before the part is uploaded, so parts upload concurrently, and the
+        // upload runs on the object store runtime. Dropping the returned future (e.g. when the
+        // caller aborts the upload) cancels the in-flight upload instead of leaving it detached.
+        let task = AbortOnDropHandle::new(self.handle.spawn(part));
+        Box::pin(async move { task.await? })
     }
 
     async fn complete(&mut self) -> Result<PutResult> {
