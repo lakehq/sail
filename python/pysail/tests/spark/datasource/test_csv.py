@@ -623,6 +623,20 @@ def test_csv_read_ignores_comment_at_end_of_file(spark, tmp_path):
     assert rows == [Row(a="1", b="2", c="3")]
 
 
+def test_csv_read_ignores_comments_with_cr_line_endings(spark, tmp_path):
+    path = tmp_path / "csv_comment_cr"
+    _write_csv(path, "data", b"#c\ra,b,c\r#x\r1,2,3\r#tail")
+    rows = (
+        spark.read.schema("a STRING, b STRING, c STRING")
+        .option("header", True)
+        .option("comment", "#")
+        .csv(str(path))
+        .select("c", "a")
+        .collect()
+    )
+    assert rows == [Row(c="3", a="1")]
+
+
 def test_csv_read_field_count_mismatch(spark, tmp_path):
     # Existing Sail behavior (Spark PERMISSIVE would return the row with the extra
     # field dropped): the error text is unchanged by the projected decoder.

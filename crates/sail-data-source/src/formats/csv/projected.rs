@@ -358,7 +358,11 @@ impl Decoder for ProjectedCsvDecoder {
                 continue;
             }
             if self.in_comment {
-                match memchr::memchr(self.terminator.unwrap_or(b'\n'), &buf[pos..]) {
+                let end = match self.terminator {
+                    Some(t) => memchr::memchr(t, &buf[pos..]),
+                    None => memchr::memchr2(b'\n', b'\r', &buf[pos..]),
+                };
+                match end {
                     Some(i) => {
                         pos += i + 1;
                         self.in_comment = false;
@@ -859,6 +863,7 @@ mod tests {
         // trailing newline, and never ends a comment when the terminator is not '\n'
         for (input, terminator) in [
             (&b"#c\na,b,c\n#x\n1,2,3\n#tail"[..], None),
+            (&b"#c\ra,b,c\r#x\r1,2,3\r#tail"[..], None),
             (&b"#x;a,b,c;1,2,3;"[..], Some(b';')),
         ] {
             let decoder = ProjectedCsvDecoder::try_new(ProjectedCsvOptions {
