@@ -187,8 +187,8 @@ pub struct BucketBy {
 /// Spark-compatible controls for packing files into scan partitions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd)]
 pub struct FileScanPartitioningOptions {
-    pub max_partition_bytes: u64,
-    pub open_cost_bytes: u64,
+    pub max_partition_bytes: i64,
+    pub open_cost_bytes: i64,
     pub min_partitions: Option<usize>,
     pub max_partitions: Option<usize>,
 }

@@ -20,17 +20,18 @@ use datafusion::physical_expr_common::sort_expr::LexOrdering;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
+use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
-use datafusion_common::{Statistics, internal_err, plan_err, project_schema};
-use datafusion_datasource::ListingTableUrl;
+use datafusion_common::{DataFusionError, Statistics, internal_err, plan_err, project_schema};
 use datafusion_datasource::file_groups::FileGroup;
-use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::source::DataSourceExec;
+use datafusion_datasource::{ListingTableUrl, PartitionedFile};
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use object_store::ObjectStore;
 use sail_common_datafusion::datasource::create_sort_order;
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_physical_plan::barrier::BarrierExec;
+use sail_physical_plan::file_scan_partitioning::FileScanPartitioningFenceExec;
 
 use crate::listing::delete::FileDeleteExec;
 use crate::listing::source::{ListingScanInput, ListingSinkInput};
@@ -108,7 +109,7 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
         let statistic_file_limit = if filters.is_empty() { limit } else { None };
 
         let ListFilesResult {
-            mut file_groups,
+            file_groups,
             statistics,
             grouped_by_partition: partitioned_by_file_group,
         } = list_files_for_scan(
@@ -127,35 +128,6 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
 
         let output_ordering =
             try_create_output_ordering(source, session_state.execution_props(), &file_groups)?;
-
-        match session_state
-            .config_options()
-            .execution
-            .split_file_groups_by_statistics
-            .then(|| {
-                output_ordering.first().map(|output_ordering| {
-                    FileScanConfig::split_groups_by_statistics_with_target_partitions(
-                        table_schema,
-                        &file_groups,
-                        output_ordering,
-                        source.config().target_partitions,
-                    )
-                })
-            })
-            .flatten()
-        {
-            Some(Err(e)) => log::debug!("failed to split file groups by statistics: {e}"),
-            Some(Ok(new_groups)) => {
-                if new_groups.len() <= source.config().target_partitions {
-                    file_groups = new_groups;
-                } else {
-                    log::debug!(
-                        "attempted to split file groups by statistics, but there were more file groups than target_partitions; falling back to unordered"
-                    )
-                }
-            }
-            None => {} // no ordering required
-        };
 
         // If user specified ordering, that's already handled in `try_create_output_ordering`.
         // When no ordering is specified and we derived ordering from files, keep it.
@@ -181,7 +153,7 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
                     constraints: source.config().constraints.clone(),
                     projection,
                     limit,
-                    preserve_order: false,
+                    preserve_order: true,
                     output_ordering,
                     statistics,
                     partitioned_by_file_group,
@@ -191,7 +163,9 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
             )
             .await?;
 
-        Ok(Some(DataSourceExec::from_data_source(config)))
+        Ok(Some(Arc::new(FileScanPartitioningFenceExec::new(
+            DataSourceExec::from_data_source(config),
+        ))))
     }
 }
 
@@ -399,45 +373,50 @@ async fn list_files_for_scan<'a>(
     let (file_group, inexact_stats) =
         get_files_with_limit(files, limit, source.config().collect_stat).await?;
 
-    let threshold = ctx.config_options().optimizer.preserve_file_partitions;
-
-    let (file_groups, grouped_by_partition) = if threshold > 0 && !partition_cols.is_empty() {
-        let grouped = file_group.group_by_partition_values(source.config().target_partitions);
-        if grouped.len() >= threshold {
-            (grouped, true)
-        } else {
-            let all_files: Vec<_> = grouped.into_iter().flat_map(|g| g.into_inner()).collect();
-            (
-                pack_file_groups(
-                    FileGroup::new(all_files),
-                    source.config().target_partitions,
-                    source.config().file_scan_partitioning,
-                ),
-                false,
-            )
-        }
+    let split_files = source.config().read_format.is_splittable()
+        && source.config().compression == CompressionTypeVariant::UNCOMPRESSED;
+    let file_groups = if split_files {
+        // Keep listing order until after files become ranges. Spark sorts the
+        // ranges, not the original files, so ties must retain listing order.
+        vec![file_group]
     } else {
-        (
-            pack_file_groups(
-                file_group,
-                source.config().target_partitions,
-                source.config().file_scan_partitioning,
-            ),
+        pack_file_groups(
+            file_group,
+            source.config().target_partitions,
+            source.config().file_scan_partitioning,
             false,
-        )
+        )?
+        .0
     };
 
-    let (file_groups, stats) = datafusion_datasource::compute_all_files_statistics(
+    // Compute table statistics from whole files. Repeating full-file statistics
+    // on every generated byte range would multiply row counts and byte sizes.
+    let (mut file_groups, stats) = datafusion_datasource::compute_all_files_statistics(
         file_groups,
         source.config().schema.table_schema().clone(),
         source.config().collect_stat,
         inexact_stats,
     )?;
 
+    if split_files {
+        let files = file_groups
+            .iter()
+            .flat_map(FileGroup::iter)
+            .cloned()
+            .collect();
+        file_groups = pack_file_groups(
+            FileGroup::new(files),
+            source.config().target_partitions,
+            source.config().file_scan_partitioning,
+            true,
+        )?
+        .0;
+    }
+
     Ok(ListFilesResult {
         file_groups,
         statistics: stats,
-        grouped_by_partition,
+        grouped_by_partition: false,
     })
 }
 
@@ -446,64 +425,136 @@ fn pack_file_groups(
     file_group: FileGroup,
     target_partitions: usize,
     options: sail_common_datafusion::datasource::FileScanPartitioningOptions,
-) -> Vec<FileGroup> {
+    split_files: bool,
+) -> datafusion_common::Result<(Vec<FileGroup>, bool)> {
     let files = file_group.into_inner();
     if files.is_empty() {
-        return vec![];
+        return Ok((vec![], false));
     }
 
-    let total_bytes = total_scan_bytes(&files, options.open_cost_bytes);
+    let total_bytes = total_scan_bytes(&files, options.open_cost_bytes)?;
     let min_partitions = options.min_partitions.unwrap_or(target_partitions).max(1);
-    let bytes_per_partition = total_bytes / min_partitions as u64;
+    let min_partitions = i64::try_from(min_partitions).map_err(|_| {
+        DataFusionError::Plan("file scan minimum partition count exceeds i64".to_string())
+    })?;
+    let bytes_per_partition = total_bytes / min_partitions;
     let max_split_bytes = options
         .max_partition_bytes
         .min(options.open_cost_bytes.max(bytes_per_partition));
-    let groups = pack_files(files, max_split_bytes, options.open_cost_bytes);
+
+    let (files, changed) = if split_files {
+        split_file_ranges(files, max_split_bytes)?
+    } else {
+        (files, false)
+    };
+
+    // Spark's maxPartitionNum rescale charges openCostInBytes once for each
+    // generated PartitionedFile range, not once for each original object.
+    let total_bytes = total_scan_bytes(&files, options.open_cost_bytes)?;
+    let groups = pack_files(files, max_split_bytes, options.open_cost_bytes)?;
 
     let Some(max_partitions) = options
         .max_partitions
         .filter(|max_partitions| *max_partitions > 0 && groups.len() > *max_partitions)
     else {
-        return groups;
+        return Ok((groups, changed));
     };
     let files = groups.into_iter().flat_map(FileGroup::into_inner).collect();
-    let desired_split_bytes = total_bytes.div_ceil(max_partitions as u64);
-    pack_files(files, desired_split_bytes, options.open_cost_bytes)
+    let max_partitions = i64::try_from(max_partitions).map_err(|_| {
+        DataFusionError::Plan("file scan maximum partition count exceeds i64".to_string())
+    })?;
+    let desired_split_bytes = divide_rounding_away_from_zero(total_bytes, max_partitions);
+    Ok((
+        pack_files(files, desired_split_bytes, options.open_cost_bytes)?,
+        changed,
+    ))
 }
 
-fn total_scan_bytes(files: &[datafusion_datasource::PartitionedFile], open_cost_bytes: u64) -> u64 {
-    files.iter().fold(0_u64, |total, file| {
-        total
-            .saturating_add(file.effective_size())
-            .saturating_add(open_cost_bytes)
+fn split_file_ranges(
+    files: Vec<PartitionedFile>,
+    max_split_bytes: i64,
+) -> datafusion_common::Result<(Vec<PartitionedFile>, bool)> {
+    if max_split_bytes == 0 {
+        return plan_err!("file scan split size must be non-zero");
+    }
+    if max_split_bytes < 0 {
+        return Ok((vec![], !files.is_empty()));
+    }
+
+    let max_split_bytes = max_split_bytes as u64;
+    let mut output = vec![];
+    let mut changed = false;
+    for file in files {
+        let (mut offset, file_end) = file.range();
+        let output_start = output.len();
+        while offset < file_end {
+            let range_end = offset.saturating_add(max_split_bytes).min(file_end);
+            let range_start = i64::try_from(offset).map_err(|_| {
+                DataFusionError::Plan(
+                    "file range start exceeds Spark's signed 64-bit byte domain".to_string(),
+                )
+            })?;
+            let range_end = i64::try_from(range_end).map_err(|_| {
+                DataFusionError::Plan(
+                    "file range end exceeds Spark's signed 64-bit byte domain".to_string(),
+                )
+            })?;
+            output.push(file.clone().with_range(range_start, range_end));
+            offset = range_end as u64;
+        }
+        changed |= output.len() - output_start != 1;
+    }
+    Ok((output, changed))
+}
+
+fn total_scan_bytes(
+    files: &[PartitionedFile],
+    open_cost_bytes: i64,
+) -> datafusion_common::Result<i64> {
+    files.iter().try_fold(0_i64, |total, file| {
+        let file_size = i64::try_from(file.effective_size()).map_err(|_| {
+            DataFusionError::Plan("file size exceeds Spark's signed 64-bit byte domain".to_string())
+        })?;
+        Ok(total.wrapping_add(file_size).wrapping_add(open_cost_bytes))
     })
 }
 
 fn pack_files(
-    mut files: Vec<datafusion_datasource::PartitionedFile>,
-    max_split_bytes: u64,
-    open_cost_bytes: u64,
-) -> Vec<FileGroup> {
+    mut files: Vec<PartitionedFile>,
+    max_split_bytes: i64,
+    open_cost_bytes: i64,
+) -> datafusion_common::Result<Vec<FileGroup>> {
     files.sort_by_key(|file| std::cmp::Reverse(file.effective_size()));
 
     let mut groups = vec![];
     let mut current_files = vec![];
-    let mut current_size = 0_u64;
+    let mut current_size = 0_i64;
     for file in files {
-        let file_size = file.effective_size();
-        if !current_files.is_empty() && current_size.saturating_add(file_size) > max_split_bytes {
+        let file_size = i64::try_from(file.effective_size()).map_err(|_| {
+            DataFusionError::Plan("file size exceeds Spark's signed 64-bit byte domain".to_string())
+        })?;
+        if !current_files.is_empty() && current_size.wrapping_add(file_size) > max_split_bytes {
             groups.push(FileGroup::new(std::mem::take(&mut current_files)));
             current_size = 0;
         }
         current_size = current_size
-            .saturating_add(file_size)
-            .saturating_add(open_cost_bytes);
+            .wrapping_add(file_size)
+            .wrapping_add(open_cost_bytes);
         current_files.push(file);
     }
     if !current_files.is_empty() {
         groups.push(FileGroup::new(current_files));
     }
-    groups
+    Ok(groups)
+}
+
+fn divide_rounding_away_from_zero(dividend: i64, divisor: i64) -> i64 {
+    let quotient = dividend / divisor;
+    match dividend % divisor {
+        0 => quotient,
+        _ if dividend > 0 => quotient + 1,
+        _ => quotient - 1,
+    }
 }
 
 async fn do_collect_statistics_and_ordering(
@@ -642,7 +693,19 @@ mod tests {
             .collect()
     }
 
-    fn options(max_partition_bytes: u64, open_cost_bytes: u64) -> FileScanPartitioningOptions {
+    fn ranges(groups: &[FileGroup]) -> Vec<Vec<Option<(i64, i64)>>> {
+        groups
+            .iter()
+            .map(|group| {
+                group
+                    .iter()
+                    .map(|file| file.range.as_ref().map(|range| (range.start, range.end)))
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn options(max_partition_bytes: i64, open_cost_bytes: i64) -> FileScanPartitioningOptions {
         FileScanPartitioningOptions {
             max_partition_bytes,
             open_cost_bytes,
@@ -659,7 +722,7 @@ mod tests {
             PartitionedFile::new("a", 8),
         ]);
 
-        let groups = pack_file_groups(files, 2, options(10, 0));
+        let groups = pack_file_groups(files, 2, options(10, 0), false).unwrap().0;
 
         assert_eq!(paths(&groups), vec![vec!["b"], vec!["a", "d"], vec!["c"]]);
     }
@@ -672,8 +735,10 @@ mod tests {
             PartitionedFile::new("c", 4),
         ]);
 
-        let without_open_cost = pack_file_groups(files.clone(), 1, options(12, 0));
-        let with_open_cost = pack_file_groups(files, 1, options(12, 5));
+        let without_open_cost = pack_file_groups(files.clone(), 1, options(12, 0), false)
+            .unwrap()
+            .0;
+        let with_open_cost = pack_file_groups(files, 1, options(12, 5), false).unwrap().0;
 
         assert_eq!(paths(&without_open_cost), vec![vec!["a", "b", "c"]]);
         assert_eq!(
@@ -690,11 +755,15 @@ mod tests {
         ]);
 
         assert_eq!(
-            paths(&pack_file_groups(files.clone(), 1, options(10, 0))),
+            paths(
+                &pack_file_groups(files.clone(), 1, options(10, 0), false)
+                    .unwrap()
+                    .0
+            ),
             vec![vec!["a"], vec!["b"]]
         );
         assert_eq!(
-            paths(&pack_file_groups(files, 1, options(20, 0))),
+            paths(&pack_file_groups(files, 1, options(20, 0), false).unwrap().0),
             vec![vec!["a", "b"]]
         );
     }
@@ -706,7 +775,7 @@ mod tests {
             PartitionedFile::new("b", 2),
         ]);
 
-        let groups = pack_file_groups(files, 1, options(10, 3));
+        let groups = pack_file_groups(files, 1, options(10, 3), false).unwrap().0;
 
         assert_eq!(paths(&groups), vec![vec!["a", "b"]]);
     }
@@ -724,7 +793,7 @@ mod tests {
             max_partitions: None,
         };
 
-        let groups = pack_file_groups(files, 1, options);
+        let groups = pack_file_groups(files, 1, options, false).unwrap().0;
 
         assert_eq!(paths(&groups), vec![vec!["a"], vec!["b"]]);
     }
@@ -744,8 +813,120 @@ mod tests {
             ..Default::default()
         };
 
-        let groups = pack_file_groups(files, 4, options);
+        let groups = pack_file_groups(files, 4, options, false).unwrap().0;
 
         assert_eq!(paths(&groups), vec![vec!["a", "b"], vec!["c", "d"]]);
+    }
+
+    #[test]
+    fn splits_large_splittable_files_before_packing() {
+        let files = FileGroup::new(vec![PartitionedFile::new("a", 25)]);
+
+        let (groups, changed) = pack_file_groups(files, 1, options(10, 0), true).unwrap();
+
+        assert!(changed);
+        assert_eq!(paths(&groups), vec![vec!["a"], vec!["a"], vec!["a"]]);
+        assert_eq!(
+            ranges(&groups),
+            vec![
+                vec![Some((0, 10))],
+                vec![Some((10, 20))],
+                vec![Some((20, 25))],
+            ]
+        );
+    }
+
+    #[test]
+    fn equal_sized_ranges_keep_original_file_order() {
+        let files = FileGroup::new(vec![
+            PartitionedFile::new("small", 25),
+            PartitionedFile::new("large", 30),
+        ]);
+
+        let groups = pack_file_groups(files, 1, options(10, 0), true)
+            .unwrap()
+            .0;
+
+        assert_eq!(
+            paths(&groups),
+            vec![
+                vec!["small"],
+                vec!["small"],
+                vec!["large"],
+                vec!["large"],
+                vec!["large"],
+                vec!["small"],
+            ]
+        );
+    }
+
+    #[test]
+    fn does_not_split_unsplittable_files() {
+        let files = FileGroup::new(vec![PartitionedFile::new("a", 25)]);
+
+        let (groups, changed) = pack_file_groups(files, 1, options(10, 0), false).unwrap();
+
+        assert!(!changed);
+        assert_eq!(paths(&groups), vec![vec!["a"]]);
+        assert_eq!(ranges(&groups), vec![vec![None]]);
+    }
+
+    #[test]
+    fn max_partition_rescale_charges_open_cost_per_split_range() {
+        let files = FileGroup::new(vec![PartitionedFile::new("a", 25)]);
+        let options = FileScanPartitioningOptions {
+            max_partition_bytes: 10,
+            open_cost_bytes: 4,
+            max_partitions: Some(2),
+            ..Default::default()
+        };
+
+        let (groups, changed) = pack_file_groups(files, 1, options, true).unwrap();
+
+        assert!(changed);
+        assert_eq!(
+            ranges(&groups),
+            vec![vec![Some((0, 10))], vec![Some((10, 20)), Some((20, 25))],]
+        );
+    }
+
+    #[test]
+    fn max_partition_rescale_rounds_away_from_zero() {
+        let files = FileGroup::new(vec![
+            PartitionedFile::new("a", 4),
+            PartitionedFile::new("b", 3),
+            PartitionedFile::new("c", 2),
+        ]);
+        let options = FileScanPartitioningOptions {
+            max_partition_bytes: 4,
+            open_cost_bytes: 0,
+            max_partitions: Some(2),
+            ..Default::default()
+        };
+
+        let groups = pack_file_groups(files, 1, options, false).unwrap().0;
+
+        assert_eq!(paths(&groups), vec![vec!["a"], vec!["b", "c"]]);
+        assert_eq!(divide_rounding_away_from_zero(9, 2), 5);
+        assert_eq!(divide_rounding_away_from_zero(-9, 2), -5);
+    }
+
+    #[test]
+    fn preserves_spark_signed_split_size_behavior() {
+        let files = FileGroup::new(vec![PartitionedFile::new("a", 25)]);
+
+        let (groups, changed) = pack_file_groups(files, 1, options(-1, 0), true).unwrap();
+
+        assert!(changed);
+        assert!(groups.is_empty());
+    }
+
+    #[test]
+    fn rejects_zero_split_size_for_splittable_files() {
+        let files = FileGroup::new(vec![PartitionedFile::new("a", 25)]);
+
+        let error = pack_file_groups(files, 1, options(0, 0), true).unwrap_err();
+
+        assert!(error.to_string().contains("split size must be non-zero"));
     }
 }

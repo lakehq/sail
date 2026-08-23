@@ -142,6 +142,10 @@ impl ReadFormat for CsvReadFormat {
         Ok(config)
     }
 
+    fn is_splittable(&self) -> bool {
+        !self.options.multi_line
+    }
+
     fn path_glob_filter(&self) -> Option<&str> {
         self.options.path_glob_filter.as_deref()
     }

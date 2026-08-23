@@ -34,6 +34,44 @@ def test_text_path_glob_filter(spark, tmp_path):
     assert df.collect() == [Row(value="keep")]
 
 
+def test_text_scan_keeps_spark_file_partition_groups(spark, tmp_path):
+    path = tmp_path / "text_file_partition_groups"
+    path.mkdir()
+    (path / "a.txt").write_text("aaaaaaa\n")
+    (path / "b.txt").write_text("bbbbbb\n")
+    (path / "c.txt").write_text("cc\n")
+    (path / "d.txt").write_text("d\n")
+
+    settings = {
+        "spark.sql.files.maxPartitionBytes": "10",
+        "spark.sql.files.openCostInBytes": "0",
+        "spark.sql.files.minPartitionNum": "2",
+        "spark.sql.files.maxPartitionNum": "100",
+    }
+    previous = {key: spark.conf.get(key, None) for key in settings}
+    try:
+        for key, value in settings.items():
+            spark.conf.set(key, value)
+        rows = (
+            spark.read.text(str(path))
+            .selectExpr("value", "spark_partition_id() AS pid")
+            .collect()
+        )
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                spark.conf.unset(key)
+            else:
+                spark.conf.set(key, value)
+
+    assert {row.value: row.pid for row in rows} == {
+        "aaaaaaa": 0,
+        "bbbbbb": 1,
+        "cc": 1,
+        "d": 2,
+    }
+
+
 def test_text_read_write_compressed(spark, sample_df, tmp_path):
     path = str(tmp_path / "text_compressed_gzip")
     sample_df = sample_df.select("col1")

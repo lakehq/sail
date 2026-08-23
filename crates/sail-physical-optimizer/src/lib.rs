@@ -23,6 +23,7 @@ use datafusion::physical_optimizer::window_topn::WindowTopN;
 use crate::barrier::EnforceBarrierPartitioning;
 use crate::collect_left::RewriteCollectLeftHashJoin;
 use crate::explicit_repartition::RewriteExplicitRepartition;
+use crate::file_scan_partitioning::RemoveFileScanPartitioningFence;
 use crate::join_reorder::JoinReorder;
 pub use crate::join_reorder::JoinReorderOptions;
 use crate::projection_pushdown::LambdaSafeProjectionPushdown;
@@ -30,6 +31,7 @@ use crate::projection_pushdown::LambdaSafeProjectionPushdown;
 mod barrier;
 mod collect_left;
 mod explicit_repartition;
+mod file_scan_partitioning;
 mod join_reorder;
 mod projection_pushdown;
 
@@ -53,6 +55,7 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(LimitedDistinctAggregation::new()));
     rules.push(Arc::new(FilterPushdown::new()));
     rules.push(Arc::new(EnforceDistribution::new()));
+    rules.push(Arc::new(RemoveFileScanPartitioningFence::new()));
     rules.push(Arc::new(CombinePartialFinalAggregate::new()));
     rules.push(Arc::new(EnforceSorting::new()));
     rules.push(Arc::new(OptimizeAggregateOrder::new()));
@@ -101,6 +104,10 @@ mod tests {
             datafusion_optimizer_names, actual_datafusion_optimizer_names,
             "the custom physical optimizer rules should include all the default DataFusion optimizer rules in the same order"
         );
+        assert!(optimizers.windows(2).any(|rules| {
+            rules[0].name() == "EnforceDistribution"
+                && rules[1].name() == "RemoveFileScanPartitioningFence"
+        }));
 
         Ok(())
     }

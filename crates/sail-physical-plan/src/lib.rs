@@ -2,6 +2,7 @@ pub mod barrier;
 pub mod catalog_command;
 pub mod coalesce;
 pub mod data_source;
+pub mod file_scan_partitioning;
 pub mod map_partitions;
 pub mod merge_cardinality_check;
 pub mod monotonic_id;

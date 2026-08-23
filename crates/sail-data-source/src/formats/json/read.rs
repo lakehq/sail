@@ -117,6 +117,10 @@ impl ReadFormat for JsonReadFormat {
         Ok(config)
     }
 
+    fn is_splittable(&self) -> bool {
+        true
+    }
+
     fn path_glob_filter(&self) -> Option<&str> {
         self.options.path_glob_filter.as_deref()
     }

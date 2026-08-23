@@ -84,6 +84,14 @@ pub trait ReadFormat: Debug + Send + Sync + 'static {
     /// Build a scan configuration for listing reads.
     async fn scan(&self, ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig>;
 
+    /// Whether this read mode supports splitting files into byte ranges.
+    ///
+    /// Compression is checked separately because DataFusion cannot safely
+    /// range-scan externally compressed files.
+    fn is_splittable(&self) -> bool {
+        false
+    }
+
     /// Whether validating an explicit schema requires the physical file schema.
     fn requires_explicit_schema_validation(&self) -> bool {
         false
