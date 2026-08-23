@@ -614,6 +614,46 @@ def test_csv_read_projected_columns(spark, tmp_path, compression, columns):
     assert spark.read.option("header", True).csv(str(path)).count() == len(expected)
 
 
+@pytest.mark.parametrize(
+    ("multi_line", "expected"),
+    [
+        (
+            False,
+            [
+                Row(a="a", b=None),
+                Row(a="b", b=None),
+                Row(a='c"', b=None),
+                Row(a="d", b=None),
+            ],
+        ),
+        (
+            True,
+            [
+                Row(a="a", b=None),
+                Row(a="b;c", b="d"),
+            ],
+        ),
+    ],
+)
+def test_csv_read_projected_columns_respects_multi_line(spark, tmp_path, multi_line, expected):
+    path = tmp_path / f"csv_projected_multi_line_{multi_line}"
+    _write_csv(path, "data", b'a;"b;c";d;')
+
+    rows = (
+        spark.read.schema("a STRING, b STRING, c STRING")
+        .option("header", False)
+        .option("delimiter", ";")
+        .option("lineSep", ";")
+        .option("multiLine", multi_line)
+        .option("allowTruncatedRows", True)
+        .csv(str(path))
+        .select("a", "b")
+        .collect()
+    )
+
+    assert rows == expected
+
+
 def test_csv_read_ignores_comment_at_end_of_file(spark, tmp_path):
     # Spark drops comment lines wherever they are (CSVExprUtils.filterCommentAndEmpty),
     # including a comment at the end of the file without a trailing newline.

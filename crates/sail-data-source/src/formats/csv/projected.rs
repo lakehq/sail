@@ -39,6 +39,7 @@ pub struct ProjectedCsvOptions {
     pub escape: Option<u8>,
     pub comment: Option<u8>,
     pub terminator: Option<u8>,
+    pub multi_line: bool,
     pub has_header: bool,
     pub truncated_rows: bool,
     pub batch_size: usize,
@@ -52,6 +53,7 @@ pub struct ProjectedCsvDecoder {
     quote: u8,
     comment: Option<u8>,
     terminator: Option<u8>,
+    multi_line: bool,
     num_columns: usize,
     truncated_rows: bool,
     batch_size: usize,
@@ -64,7 +66,7 @@ pub struct ProjectedCsvDecoder {
     line_number: usize,
     has_read: bool,
     in_comment: bool,
-    // Bytes of an unterminated quote-free record carried across `decode` calls.
+    // Bytes of an unterminated record carried across `decode` calls.
     pending: Vec<u8>,
     // End offsets of the delimiters of current fast-path record up to the largest projected col
     ends: Vec<usize>,
@@ -88,6 +90,7 @@ impl ProjectedCsvDecoder {
             escape,
             comment,
             terminator,
+            multi_line,
             has_header,
             truncated_rows,
             batch_size,
@@ -121,6 +124,7 @@ impl ProjectedCsvDecoder {
             quote,
             comment,
             terminator,
+            multi_line,
             num_columns: schema.fields().len(),
             truncated_rows,
             batch_size,
@@ -150,6 +154,14 @@ impl ProjectedCsvDecoder {
         match self.terminator {
             Some(t) => byte == t,
             None => byte == b'\n' || byte == b'\r',
+        }
+    }
+
+    #[inline]
+    fn find_terminator(&self, haystack: &[u8]) -> Option<usize> {
+        match self.terminator {
+            Some(t) => memchr::memchr(t, haystack),
+            None => memchr::memchr2(b'\n', b'\r', haystack),
         }
     }
 
@@ -204,6 +216,26 @@ impl ProjectedCsvDecoder {
                 }
             }
         }
+    }
+
+    // Spark parses one already-framed physical line at a time unless `multiLine=true`.
+    fn process_framed_line(&mut self, line: &[u8]) -> Result<(), ArrowError> {
+        if memchr::memchr(self.quote, line).is_none() {
+            return self.process_line(line);
+        }
+
+        self.slow_reader.reset();
+        // The outer decoder handles the file-leading BOM; preserve BOM bytes in later records.
+        let _ = self.slow_reader.read_record(&[], &mut [], &mut []);
+        self.slow = true;
+        self.slow_out_len = 0;
+        self.slow_ends_len = 0;
+        let consumed = self.slow_feed(line)?;
+        debug_assert_eq!(consumed, line.len());
+        if self.slow {
+            self.slow_feed(&[])?;
+        }
+        Ok(())
     }
 
     // Fast path: `line` contains neither a terminator nor the quote byte.
@@ -327,7 +359,7 @@ impl Decoder for ProjectedCsvDecoder {
                 self.slow_feed(&[])?;
             } else if !self.pending.is_empty() {
                 let line = std::mem::take(&mut self.pending);
-                self.process_line(&line)?;
+                self.process_framed_line(&line)?;
             }
             self.in_comment = false;
             return Ok(0);
@@ -369,12 +401,17 @@ impl Decoder for ProjectedCsvDecoder {
                     continue;
                 }
             }
-            match self.find_terminator_or_quote(&buf[pos..]) {
+            let next = if self.multi_line {
+                self.find_terminator_or_quote(&buf[pos..])
+            } else {
+                self.find_terminator(&buf[pos..])
+            };
+            match next {
                 None => {
                     self.pending.extend_from_slice(&buf[pos..]);
                     pos = buf.len();
                 }
-                Some(i) if buf[pos + i] == self.quote => {
+                Some(i) if self.multi_line && buf[pos + i] == self.quote => {
                     // the record contains the quote byte: csv_core parses it from the
                     // record start, continuing with `buf[pos..]` on the next iteration
                     self.slow = true;
@@ -387,11 +424,11 @@ impl Decoder for ProjectedCsvDecoder {
                 }
                 Some(i) => {
                     if self.pending.is_empty() {
-                        self.process_line(&buf[pos..pos + i])?;
+                        self.process_framed_line(&buf[pos..pos + i])?;
                     } else {
                         self.pending.extend_from_slice(&buf[pos..pos + i]);
                         let line = std::mem::take(&mut self.pending);
-                        self.process_line(&line)?;
+                        self.process_framed_line(&line)?;
                         self.pending = line;
                         self.pending.clear();
                     }
@@ -479,6 +516,7 @@ mod tests {
             escape: None,
             comment: None,
             terminator: None,
+            multi_line: true,
             has_header: true,
             truncated_rows: false,
             batch_size: 8192,
@@ -780,6 +818,62 @@ mod tests {
         input.extend_from_slice(&long);
         input.extend_from_slice(b",\n");
         assert_matches_arrow(&input, options(3, &p));
+    }
+
+    #[test]
+    fn test_projected_decoder_respects_multi_line() -> Result<(), ArrowError> {
+        use datafusion::arrow::array::Array;
+
+        let input = b"a;\"b;c\";d;";
+        for (multi_line, expected) in [
+            (
+                false,
+                vec![
+                    vec![Some("a"), None],
+                    vec![Some("b"), None],
+                    vec![Some("c\""), None],
+                    vec![Some("d"), None],
+                ],
+            ),
+            (
+                true,
+                vec![
+                    vec![Some("a"), None],
+                    vec![Some("b;c"), Some("d")],
+                ],
+            ),
+        ] {
+            for chunk in [1, 2, 3, 64] {
+                let decoder = ProjectedCsvDecoder::try_new(ProjectedCsvOptions {
+                    delimiter: b';',
+                    escape: Some(b'\\'),
+                    terminator: Some(b';'),
+                    multi_line,
+                    has_header: false,
+                    truncated_rows: true,
+                    ..options(3, &[0, 1])
+                })?;
+                let batches = run(decoder, input, chunk).map_err(ArrowError::CsvError)?;
+                let actual = batches
+                    .iter()
+                    .flat_map(|batch| {
+                        let columns = batch.columns();
+                        (0..batch.num_rows()).map(move |row| {
+                            columns
+                                .iter()
+                                .map(|column| {
+                                    let array =
+                                        column.as_any().downcast_ref::<StringArray>().unwrap();
+                                    (!array.is_null(row)).then(|| array.value(row))
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(actual, expected, "multiLine={multi_line}, chunk={chunk}");
+            }
+        }
+        Ok(())
     }
 
     #[test]
