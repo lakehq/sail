@@ -624,6 +624,10 @@ def test_csv_read_ignores_comment_at_end_of_file(spark, tmp_path):
 
 
 def test_csv_read_ignores_comments_with_cr_line_endings(spark, tmp_path):
+    # Spark's line reader accepts `\r`, `\r\n` and `\n` when `lineSep` is not set, and
+    # comment lines are dropped afterwards. The schema is given explicitly because Sail's
+    # schema inference still splits the sampled file on `\n` only, so it cannot see the
+    # header of a file that uses bare `\r` line endings (Spark infers `a`, `b`, `c` here).
     path = tmp_path / "csv_comment_cr"
     _write_csv(path, "data", b"#c\ra,b,c\r#x\r1,2,3\r#tail")
     rows = (

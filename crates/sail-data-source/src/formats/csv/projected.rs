@@ -8,8 +8,8 @@
 //! Field-count validation, header skipping, truncated-row padding, and null handling follow arrow.
 //!
 //! It preserves Spark's comment handling in two departures from arrow-csv caused by `csv_core` DFA quirks:
-//! - Comments end at the record terminator even when `lineSep` is not `\n`.
-//!   `csv_core` otherwise never exits comments for another terminator.
+//! - Comments end at the record terminator: at a bare `\r` in the default mode, and at the
+//!   `lineSep` byte when one is set. `csv_core` only ever exits a comment at `\n`.
 //! - An unterminated EOF comment produces no empty record
 //!
 //! Input must be valid UTF-8. Both Sail read paths first apply lossy UTF-8 decoding, and
@@ -842,6 +842,7 @@ mod tests {
         for (input, terminator) in [
             (&b"#c\na,b,c\n#x\n1,2,3\n#tail"[..], None),
             (&b"#c\ra,b,c\r#x\r1,2,3\r#tail"[..], None),
+            (&b"#c\r\na,b,c\r\n#x\r\n1,2,3\r\n#tail"[..], None),
             (&b"#x;a,b,c;1,2,3;"[..], Some(b';')),
         ] {
             let decoder = ProjectedCsvDecoder::try_new(ProjectedCsvOptions {
