@@ -13,6 +13,7 @@ use crate::options::r#gen::{CsvReadOptions, CsvWriteOptions};
 
 mod decoder;
 mod options;
+mod projected;
 mod read;
 mod source;
 mod write;
