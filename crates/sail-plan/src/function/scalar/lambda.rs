@@ -4,7 +4,9 @@ use datafusion_common::ScalarValue;
 use datafusion_common::arrow::datatypes::FieldRef;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_expr::expr::{HigherOrderFunction, Lambda, LambdaVariable};
-use datafusion_expr::{HigherOrderUDF, LambdaParametersProgress, ValueOrLambda, expr, lit};
+use datafusion_expr::{
+    HigherOrderTypeSignature, HigherOrderUDF, LambdaParametersProgress, ValueOrLambda, expr, lit,
+};
 use datafusion_functions_nested::expr_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::spark_array_aggregate::SparkArrayAggregate;
@@ -57,11 +59,75 @@ static SPARK_ARRAY_SORT_UDF: LazyLock<Arc<HigherOrderUDF>> =
 static SPARK_ARRAY_SORT_SWAPPED_UDF: LazyLock<Arc<HigherOrderUDF>> =
     LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new_swapped())));
 
+/// The name-to-UDF lookup for built-in higher-order functions. The resolver runs
+/// before the catalog lookup, so the parsed name is the only key available.
+fn higher_order_udf(name: &str) -> Option<&'static LazyLock<Arc<HigherOrderUDF>>> {
+    Some(match name.trim().to_lowercase().as_str() {
+        "aggregate" | "reduce" => &SPARK_ARRAY_AGGREGATE_UDF,
+        "filter" => &SPARK_ARRAY_FILTER_UDF,
+        "transform" => &SPARK_ARRAY_TRANSFORM_UDF,
+        "exists" => &SPARK_ARRAY_EXISTS_UDF,
+        "forall" => &SPARK_ARRAY_FORALL_UDF,
+        "array_sort" => &SPARK_ARRAY_SORT_UDF,
+        _ => return None,
+    })
+}
+
 pub(crate) fn is_higher_order_function(name: &str) -> bool {
-    matches!(
-        name.trim().to_lowercase().as_str(),
-        "aggregate" | "reduce" | "filter" | "transform" | "exists" | "forall" | "array_sort"
-    )
+    higher_order_udf(name).is_some()
+}
+
+/// The argument positions expecting a lambda. Positions at or beyond `arity` are
+/// dropped so a shorter overload (`array_sort(a)`) resolves as an ordinary call.
+pub(crate) fn lambda_argument_positions(function_name: &str, arity: usize) -> Vec<usize> {
+    let Some(udf) = higher_order_udf(function_name) else {
+        return vec![];
+    };
+    let HigherOrderTypeSignature::Exact(slots) = &udf.signature().type_signature else {
+        return vec![];
+    };
+    slots
+        .iter()
+        .enumerate()
+        .filter(|(index, slot)| *index < arity && matches!(slot, ValueOrLambda::Lambda(())))
+        .map(|(index, _)| index)
+        .collect()
+}
+
+/// Whether `function_name` called with `arity` arguments forms a valid
+/// higher-order function in Spark — i.e. Spark would build a `HigherOrderFunction`
+/// node rather than fail on argument count first.
+///
+/// The trailing lambda is optional for `array_sort` (natural-order form) and
+/// `aggregate`/`reduce` (identity finish), so those accept one fewer argument than
+/// their full signature.
+pub(crate) fn is_higher_order_arity(function_name: &str, arity: usize) -> bool {
+    let Some(udf) = higher_order_udf(function_name) else {
+        return false;
+    };
+    let HigherOrderTypeSignature::Exact(slots) = &udf.signature().type_signature else {
+        return false;
+    };
+    let max = slots.len();
+    let min = match function_name.trim().to_lowercase().as_str() {
+        "array_sort" | "aggregate" | "reduce" => max.saturating_sub(1),
+        _ => max,
+    };
+    (min..=max).contains(&arity)
+}
+
+/// Returns how many parameters to declare when wrapping a bare (non-lambda)
+/// expression in a lambda for `function_name`, given the `available` parameters
+/// the function's lambda supports.
+///
+/// `transform`/`filter` expose an optional trailing index parameter, but Spark
+/// wraps a bare expression with the element parameter only; declaring the extra
+/// would materialize an unused per-element column.
+pub(crate) fn wrapped_lambda_param_count(function_name: &str, available: usize) -> usize {
+    match function_name.trim().to_lowercase().as_str() {
+        "transform" | "filter" => 1,
+        _ => available,
+    }
 }
 
 /// Returns the lambda parameter fields of a built-in higher-order function, one
@@ -72,19 +138,9 @@ pub(crate) fn get_lambda_parameters(
     function_name: &str,
     fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
 ) -> PlanResult<Vec<Vec<FieldRef>>> {
-    let udf = match function_name.trim().to_lowercase().as_str() {
-        "aggregate" | "reduce" => &SPARK_ARRAY_AGGREGATE_UDF,
-        "filter" => &SPARK_ARRAY_FILTER_UDF,
-        "transform" => &SPARK_ARRAY_TRANSFORM_UDF,
-        "exists" => &SPARK_ARRAY_EXISTS_UDF,
-        "forall" => &SPARK_ARRAY_FORALL_UDF,
-        "array_sort" => &SPARK_ARRAY_SORT_UDF,
-        other => {
-            return Err(PlanError::internal(format!(
-                "not a higher-order function: {other}"
-            )));
-        }
-    };
+    let udf = higher_order_udf(function_name).ok_or_else(|| {
+        PlanError::internal(format!("not a higher-order function: {function_name}"))
+    })?;
     match udf.lambda_parameters(0, fields)? {
         LambdaParametersProgress::Complete(params) => Ok(params),
         LambdaParametersProgress::Partial(_) => Err(PlanError::internal(format!(

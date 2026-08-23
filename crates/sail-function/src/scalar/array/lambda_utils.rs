@@ -22,7 +22,21 @@ use datafusion_common::utils::{
 use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, LambdaArgument, ValueOrLambda};
 
-use crate::error::generic_exec_err;
+use crate::error::{generic_exec_err, spark_sql_type_name};
+
+/// Validates, at planning time, that a predicate lambda returns `BOOLEAN`, as
+/// Spark's `functionType = BooleanType` does during analysis. An untyped `NULL`
+/// body carries the `Null` type and is coerced, so it is allowed.
+pub(crate) fn require_boolean_predicate(name: &str, return_type: &DataType) -> Result<()> {
+    match return_type {
+        DataType::Boolean | DataType::Null => Ok(()),
+        other => plan_err!(
+            "cannot resolve `{name}`: The second parameter requires the \"BOOLEAN\" type, \
+             however the lambda body has the type \"{}\"",
+            spark_sql_type_name(other)
+        ),
+    }
+}
 
 /// Extracts a `(value, lambda)` pair from a [`ValueOrLambda`] slice.
 pub(crate) fn value_lambda_pair<'a, V: std::fmt::Debug, L: std::fmt::Debug>(
@@ -100,6 +114,16 @@ pub(crate) fn extract_list_values(
     }
 
     Ok(ListValuesResult::Values(values))
+}
+
+/// Reinterprets a `Null`-typed lambda result as a boolean that is NULL everywhere,
+/// mirroring the coercion Spark applies; without it the downcast rejects it.
+pub(crate) fn coerce_null_lambda_result(result: ArrayRef) -> ArrayRef {
+    if result.data_type() == &DataType::Null {
+        Arc::new(BooleanArray::new_null(result.len()))
+    } else {
+        result
+    }
 }
 
 /// Evaluates a boolean lambda element by element, stopping each row at the first
@@ -184,7 +208,9 @@ fn single_boolean(name: &str, output: &ColumnarValue) -> Result<Option<bool>> {
     if let ColumnarValue::Scalar(ScalarValue::Boolean(value)) = output {
         return Ok(*value);
     }
-    let array = output.clone().into_array(1)?;
+    // Same coercion as the vectorized path; otherwise this recovery path masks the
+    // real error with a spurious type error.
+    let array = coerce_null_lambda_result(output.clone().into_array(1)?);
     let Some(array) = array.as_any().downcast_ref::<BooleanArray>() else {
         return exec_err!(
             "{name} lambda must return boolean, got {}",
