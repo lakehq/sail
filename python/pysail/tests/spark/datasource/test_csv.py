@@ -578,3 +578,62 @@ def test_csv_read_dataframe_reader_round_trip(spark, tmp_path):
     spark.createDataFrame([{"name": "Alice"}, {"name": "Bob"}]).write.mode("overwrite").format("csv").save(path)
     actual = sorted(spark.read.csv(path).toPandas().to_dict(orient="records"), key=lambda r: r["_c0"])
     assert actual == [{"_c0": "Alice"}, {"_c0": "Bob"}]
+
+
+def _write_csv(path, name, content, compression=None):
+    path.mkdir(exist_ok=True)
+    if compression == "gzip":
+        with gzip.open(path / f"{name}.csv.gz", "wb") as file:
+            file.write(content)
+    else:
+        (path / f"{name}.csv").write_bytes(content)
+
+
+# Expected values verified against JVM Spark 4.1.1 (`spark.read.option("header", True).csv(dir)`;
+# `mode` defaults to PERMISSIVE, `inferSchema` defaults to false so all values are strings).
+@pytest.mark.parametrize("compression", [None, "gzip"])
+@pytest.mark.parametrize("columns", [["a", "c"], ["c"], ["a", "b", "c"]])
+def test_csv_read_projected_columns(spark, tmp_path, compression, columns):
+    # A BOM, records with and without quotes, CRLF and blank lines, empty fields (null),
+    # and a last record without a trailing newline, so that both the memchr fast path
+    # and the csv_core fallback of the projected decoder are exercised.
+    content = b'\xef\xbb\xbfa,b,c\r\n"x,y","he said hi",3\r\n\r\n4,,6\n,,\nab"c,8,"9"\n10,11,12'
+    path = tmp_path / f"csv_projected_{compression}"
+    _write_csv(path, "data", content, compression)
+    expected = [
+        {"a": "x,y", "b": "he said hi", "c": "3"},
+        {"a": "4", "b": None, "c": "6"},
+        {"a": None, "b": None, "c": None},
+        {"a": 'ab"c', "b": "8", "c": "9"},
+        {"a": "10", "b": "11", "c": "12"},
+    ]
+
+    df = spark.read.option("header", True).csv(str(path)).select(*columns)
+
+    assert [row.asDict() for row in df.collect()] == [{k: r[k] for k in columns} for r in expected]
+    assert spark.read.option("header", True).csv(str(path)).count() == len(expected)
+
+
+def test_csv_read_ignores_comment_at_end_of_file(spark, tmp_path):
+    # Spark drops comment lines wherever they are (CSVExprUtils.filterCommentAndEmpty),
+    # including a comment at the end of the file without a trailing newline.
+    path = tmp_path / "csv_comment_eof"
+    _write_csv(path, "data", b"#c\na,b,c\n#x\n1,2,3\n#tail")
+    rows = spark.read.option("header", True).option("comment", "#").csv(str(path)).collect()
+    assert rows == [Row(a="1", b="2", c="3")]
+
+
+def test_csv_read_field_count_mismatch(spark, tmp_path):
+    # Existing Sail behavior (Spark PERMISSIVE would return the row with the extra
+    # field dropped): the error text is unchanged by the projected decoder.
+    path = tmp_path / "csv_too_many_fields"
+    _write_csv(path, "data", b"a,b,c\n1,2,3,4\n")
+    with pytest.raises(SparkConnectGrpcException, match="incorrect number of fields for line 2, expected 3 got 4"):
+        spark.read.option("header", True).csv(str(path)).select("a").collect()
+
+    # Spark PERMISSIVE pads the missing fields with null (verified against JVM Spark 4.1.1);
+    # Sail needs `allowTruncatedRows` for the same rows.
+    path = tmp_path / "csv_truncated_rows"
+    _write_csv(path, "data", b"a,b,c\n1\n1,2\n")
+    df = spark.read.option("header", True).option("allowTruncatedRows", True).csv(str(path))
+    assert df.select("c", "a").collect() == [Row(c=None, a="1"), Row(c=None, a="1")]
