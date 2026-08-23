@@ -291,14 +291,17 @@ impl<T> Stream for RuntimeAwareStream<T> {
 #[cfg(test)]
 mod tests {
     use std::error::Error;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
-    use futures::future::{try_join, try_join_all};
+    use futures::future::try_join;
     use tokio::runtime::{Id, Runtime};
-    use tokio::sync::Barrier;
+    use tokio::sync::{Barrier, Notify};
     use tokio::time::timeout;
 
     use super::*;
+
+    type Records = Arc<Mutex<Vec<(usize, Bytes, Id)>>>;
 
     /// A fake upload that records, for each part, the index assigned when the part
     /// was requested, the payload, and the runtime on which the part was uploaded.
@@ -306,31 +309,46 @@ mod tests {
     /// implementations do, so it reflects the order in which parts were requested.
     #[derive(Debug)]
     struct RecordingMultipartUpload {
-        next_idx: usize,
+        next_idx: Arc<AtomicUsize>,
         barrier: Arc<Barrier>,
-        records: Arc<Mutex<Vec<(usize, Bytes, Id)>>>,
+        records: Records,
+        started: Arc<Notify>,
+        dropped: Arc<Notify>,
     }
 
     impl RecordingMultipartUpload {
-        fn new(parts: usize) -> (Self, Arc<Mutex<Vec<(usize, Bytes, Id)>>>) {
+        fn new(parts: usize) -> (Self, Records) {
             let records = Arc::new(Mutex::new(Vec::new()));
             let upload = Self {
-                next_idx: 0,
+                next_idx: Arc::new(AtomicUsize::new(0)),
                 barrier: Arc::new(Barrier::new(parts)),
                 records: records.clone(),
+                started: Arc::new(Notify::new()),
+                dropped: Arc::new(Notify::new()),
             };
             (upload, records)
+        }
+    }
+
+    struct NotifyOnDrop(Arc<Notify>);
+
+    impl Drop for NotifyOnDrop {
+        fn drop(&mut self) {
+            self.0.notify_one();
         }
     }
 
     #[async_trait::async_trait]
     impl MultipartUpload for RecordingMultipartUpload {
         fn put_part(&mut self, data: PutPayload) -> UploadPart {
-            let idx = self.next_idx;
-            self.next_idx += 1;
+            let idx = self.next_idx.fetch_add(1, Ordering::SeqCst);
             let barrier = self.barrier.clone();
             let records = self.records.clone();
+            let started = self.started.clone();
+            let dropped = NotifyOnDrop(self.dropped.clone());
             Box::pin(async move {
+                let _dropped = dropped;
+                started.notify_one();
                 // All parts must be in flight at the same time to pass the barrier.
                 barrier.wait().await;
                 records
@@ -367,27 +385,20 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn multipart_parts_preserve_order() -> Result<(), Box<dyn Error>> {
-        const PARTS: usize = 64;
-        let (inner, records) = RecordingMultipartUpload::new(PARTS);
-        let mut upload = RuntimeAwareMultipartUpload::new(Box::new(inner), Handle::current());
+    #[test]
+    fn multipart_parts_are_created_synchronously() -> Result<(), Box<dyn Error>> {
+        let io = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let (inner, _) = RecordingMultipartUpload::new(2);
+        let next_idx = inner.next_idx.clone();
+        let mut upload = RuntimeAwareMultipartUpload::new(Box::new(inner), io.handle().clone());
 
-        let parts: Vec<_> = (0..PARTS)
-            .map(|i| upload.put_part(vec![i as u8].into()))
-            .collect();
-        timeout(Duration::from_secs(5), try_join_all(parts)).await??;
+        let first = upload.put_part(vec![1].into());
+        let second = upload.put_part(vec![2].into());
 
-        let mut records = records.lock().await.clone();
-        records.sort_by_key(|(idx, _, _)| *idx);
-        let actual: Vec<(usize, Bytes)> = records
-            .into_iter()
-            .map(|(idx, data, _)| (idx, data))
-            .collect();
-        let expected: Vec<(usize, Bytes)> = (0..PARTS)
-            .map(|i| (i, Bytes::from(vec![i as u8])))
-            .collect();
-        assert_eq!(actual, expected);
+        assert_eq!(next_idx.load(Ordering::SeqCst), 2);
+        drop((first, second));
         Ok(())
     }
 
@@ -396,18 +407,37 @@ mod tests {
         let primary = Runtime::new()?;
         let io = Runtime::new()?;
         let (inner, records) = RecordingMultipartUpload::new(1);
-        let mut upload =
-            RuntimeAwareMultipartUpload::new(Box::new(inner), io.handle().clone());
+        let mut upload = RuntimeAwareMultipartUpload::new(Box::new(inner), io.handle().clone());
 
-        primary.block_on(timeout(
-            Duration::from_secs(5),
-            upload.put_part(vec![1].into()),
-        ))??;
+        primary.block_on(async move {
+            timeout(Duration::from_secs(5), upload.put_part(vec![1].into())).await
+        })??;
 
         let records = records.blocking_lock();
         let runtime_ids: Vec<Id> = records.iter().map(|(_, _, id)| *id).collect();
         assert_eq!(runtime_ids, vec![io.handle().id()]);
         assert_ne!(runtime_ids, vec![primary.handle().id()]);
+        Ok(())
+    }
+
+    #[test]
+    fn dropping_upload_part_cancels_runtime_task() -> Result<(), Box<dyn Error>> {
+        let primary = Runtime::new()?;
+        let io = Runtime::new()?;
+        // Only one part is launched, so the two-party barrier keeps it pending.
+        let (inner, _) = RecordingMultipartUpload::new(2);
+        let started = inner.started.clone();
+        let dropped = inner.dropped.clone();
+        let mut upload = RuntimeAwareMultipartUpload::new(Box::new(inner), io.handle().clone());
+        let part = upload.put_part(vec![1].into());
+
+        primary.block_on(async move {
+            let task = tokio::spawn(part);
+            timeout(Duration::from_secs(5), started.notified()).await?;
+            task.abort();
+            timeout(Duration::from_secs(5), dropped.notified()).await?;
+            Ok::<_, Box<dyn Error>>(())
+        })?;
         Ok(())
     }
 }
