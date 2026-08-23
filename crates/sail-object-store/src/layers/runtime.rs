@@ -15,7 +15,7 @@ use object_store::{
 use tokio::runtime::Handle;
 use tokio::sync::{Mutex, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
-use tokio_util::task::AbortOnDropHandle;
+use tokio_util::task::{AbortOnDropHandle, TaskTracker};
 use tonic::codegen::Bytes;
 
 #[derive(Debug)]
@@ -193,12 +193,17 @@ impl ObjectStore for RuntimeAwareObjectStore {
 struct RuntimeAwareMultipartUpload {
     inner: Arc<Mutex<Box<dyn MultipartUpload>>>,
     handle: Handle,
+    parts: TaskTracker,
 }
 
 impl RuntimeAwareMultipartUpload {
     pub fn new(inner: Box<dyn MultipartUpload>, handle: Handle) -> Self {
         let inner = Arc::new(Mutex::new(inner));
-        Self { inner, handle }
+        Self {
+            inner,
+            handle,
+            parts: TaskTracker::new(),
+        }
     }
 }
 
@@ -225,7 +230,7 @@ impl MultipartUpload for RuntimeAwareMultipartUpload {
         // The lock is released before the part is uploaded, so parts upload concurrently, and the
         // upload runs on the object store runtime. Dropping the returned future (e.g. when the
         // caller aborts the upload) cancels the in-flight upload instead of leaving it detached.
-        let task = AbortOnDropHandle::new(self.handle.spawn(part));
+        let task = AbortOnDropHandle::new(self.parts.spawn_on(part, &self.handle));
         Box::pin(async move { task.await? })
     }
 
@@ -240,6 +245,10 @@ impl MultipartUpload for RuntimeAwareMultipartUpload {
     }
 
     async fn abort(&mut self) -> Result<()> {
+        // Wait for every local part task to finish or process cancellation before aborting the
+        // multipart upload.
+        self.parts.close();
+        self.parts.wait().await;
         let inner = self.inner.clone();
         self.handle
             .spawn(async move {
@@ -292,6 +301,7 @@ impl<T> Stream for RuntimeAwareStream<T> {
 mod tests {
     use std::error::Error;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::mpsc;
     use std::time::Duration;
 
     use futures::future::try_join;
@@ -439,5 +449,82 @@ mod tests {
             Ok::<_, Box<dyn Error>>(())
         })?;
         Ok(())
+    }
+
+    #[derive(Debug)]
+    struct BlockingDropMultipartUpload {
+        drop_started: Arc<Notify>,
+        release_drop: Option<mpsc::Receiver<()>>,
+    }
+
+    struct BlockOnDrop(Arc<Notify>, mpsc::Receiver<()>);
+
+    impl Drop for BlockOnDrop {
+        fn drop(&mut self) {
+            self.0.notify_one();
+            let _ = self.1.recv();
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MultipartUpload for BlockingDropMultipartUpload {
+        fn put_part(&mut self, _data: PutPayload) -> UploadPart {
+            let Some(release_drop) = self.release_drop.take() else {
+                return Box::pin(async {
+                    Err(object_store::Error::Generic {
+                        store: "BlockingDropMultipartUpload",
+                        source: "only one part can be uploaded".into(),
+                    })
+                });
+            };
+            let guard = BlockOnDrop(self.drop_started.clone(), release_drop);
+            Box::pin(async move {
+                let _guard = guard;
+                std::future::pending::<Result<()>>().await
+            })
+        }
+
+        async fn complete(&mut self) -> Result<PutResult> {
+            Ok(PutResult {
+                e_tag: None,
+                version: None,
+            })
+        }
+
+        async fn abort(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn multipart_abort_waits_for_cancelled_parts() -> Result<(), Box<dyn Error>> {
+        let primary = Runtime::new()?;
+        let io = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()?;
+        let drop_started = Arc::new(Notify::new());
+        let (release_drop, wait_for_release) = mpsc::channel();
+        let inner = BlockingDropMultipartUpload {
+            drop_started: drop_started.clone(),
+            release_drop: Some(wait_for_release),
+        };
+        let upload = RuntimeAwareMultipartUpload::new(Box::new(inner), io.handle().clone());
+
+        primary.block_on(async move {
+            let mut write = object_store::WriteMultipart::new_with_chunk_size(Box::new(upload), 1);
+            write.write(&[1]);
+            let mut abort = tokio::spawn(write.abort());
+            timeout(Duration::from_secs(5), drop_started.notified()).await?;
+
+            let early_abort = timeout(Duration::from_secs(1), &mut abort).await;
+            release_drop.send(())?;
+            assert!(
+                early_abort.is_err(),
+                "multipart upload aborted while a part task was still being dropped"
+            );
+            timeout(Duration::from_secs(5), abort).await???;
+            Ok(())
+        })
     }
 }
