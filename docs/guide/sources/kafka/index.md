@@ -79,28 +79,28 @@ the [PySpark Kafka documentation](https://spark.apache.org/docs/latest/structure
 
 Option names are case-insensitive, as in Spark.
 
-| Name                                 | Required   | Default    | Description                                                                                                                   |
-| ------------------------------------ | ---------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `kafka.bootstrap.servers`            | Yes        |            | Comma-separated broker list.                                                                                                  |
-| `assign`                             | One of the |            | JSON of `{"topic": [partition, ...]}`.                                                                                        |
-| `subscribe`                          | three      |            | Comma-separated topic names.                                                                                                  |
-| `subscribePattern`                   |            |            | Regular expression matched against whole topic names.                                                                         |
-| `startingOffsets`                    | No         | `earliest` | `earliest`, or per-partition JSON (see below).                                                                                |
-| `endingOffsets`                      | No         | `latest`   | `latest`, or per-partition JSON (see below).                                                                                  |
-| `startingTimestamp`                  | No         |            | Global start time as milliseconds since epoch. Applied to every partition.                                                    |
-| `endingTimestamp`                    | No         |            | Global end time as milliseconds since epoch. Applied to every partition.                                                      |
-| `startingOffsetsByTimestamp`         | No         |            | Per-partition JSON of start timestamps in ms since epoch.                                                                     |
-| `endingOffsetsByTimestamp`           | No         |            | Per-partition JSON of end timestamps in ms since epoch.                                                                       |
-| `startingOffsetsByTimestampStrategy` | No         | `error`    | `error` or `latest`: what to do when no offset matches a starting timestamp.                                                  |
-| `failOnDataLoss`                     | No         | `true`     | Whether to fail when records that were planned for reading are no longer in the log.                                          |
-| `includeHeaders`                     | No         | `false`    | Whether to project the `headers` column.                                                                                      |
-| `minPartitions`                      | No         |            | Lower bound on the number of input partitions; offset ranges are split to reach it.                                           |
-| `maxRecordsPerPartition`             | No         |            | Upper bound on records per input partition; larger ranges are split.                                                          |
-| `kafkaConsumer.pollTimeoutMs`        | No         | `120000`   | Per-call `consumer.poll()` timeout in milliseconds. Also accepted as `pollTimeoutMs`; the Spark-standard name wins if both are given. |
-| `maxBatchRows`                       | No         | `10000`    | Maximum rows per Arrow `RecordBatch` returned to the executor. Sail-specific.                                                 |
-| `stallTimeoutMs`                     | No         | `300000`   | Wall-clock time a read may go without receiving a record before failing (guards against an unreachable broker or dead partition leader). Sail-specific. |
+| Name                                 | Required   | Default    | Description                                                                                                                                                             |
+| ------------------------------------ | ---------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `kafka.bootstrap.servers`            | Yes        |            | Comma-separated broker list.                                                                                                                                            |
+| `assign`                             | One of the |            | JSON of `{"topic": [partition, ...]}`.                                                                                                                                  |
+| `subscribe`                          | three      |            | Comma-separated topic names.                                                                                                                                            |
+| `subscribePattern`                   |            |            | Regular expression matched against whole topic names.                                                                                                                   |
+| `startingOffsets`                    | No         | `earliest` | `earliest`, or per-partition JSON (see below).                                                                                                                          |
+| `endingOffsets`                      | No         | `latest`   | `latest`, or per-partition JSON (see below).                                                                                                                            |
+| `startingTimestamp`                  | No         |            | Global start time as milliseconds since epoch. Applied to every partition.                                                                                              |
+| `endingTimestamp`                    | No         |            | Global end time as milliseconds since epoch. Applied to every partition.                                                                                                |
+| `startingOffsetsByTimestamp`         | No         |            | Per-partition JSON of start timestamps in ms since epoch.                                                                                                               |
+| `endingOffsetsByTimestamp`           | No         |            | Per-partition JSON of end timestamps in ms since epoch.                                                                                                                 |
+| `startingOffsetsByTimestampStrategy` | No         | `error`    | `error` or `latest`: what to do when no offset matches a starting timestamp.                                                                                            |
+| `failOnDataLoss`                     | No         | `true`     | Whether to fail when records that were planned for reading are no longer in the log.                                                                                    |
+| `includeHeaders`                     | No         | `false`    | Whether to project the `headers` column.                                                                                                                                |
+| `minPartitions`                      | No         |            | Lower bound on the number of input partitions; offset ranges are split to reach it.                                                                                     |
+| `maxRecordsPerPartition`             | No         |            | Upper bound on records per input partition; larger ranges are split.                                                                                                    |
+| `kafkaConsumer.pollTimeoutMs`        | No         | `120000`   | Per-call `consumer.poll()` timeout in milliseconds. Also accepted as `pollTimeoutMs`; the Spark-standard name wins if both are given.                                   |
+| `maxBatchRows`                       | No         | `10000`    | Maximum rows per Arrow `RecordBatch` returned to the executor. Sail-specific.                                                                                           |
+| `stallTimeoutMs`                     | No         | `300000`   | Wall-clock time a read may go without receiving a record before failing (guards against an unreachable broker or dead partition leader). Sail-specific.                 |
 | `adminTimeoutMs`                     | No         | `10000`    | Timeout in milliseconds for the broker metadata, `describe_topics`, and `list_offsets` calls made while planning. Bump this for slow or remote clusters. Sail-specific. |
-| `kafka.*`                            | No         |            | Any additional `librdkafka` client property, passed through with the `kafka.` prefix stripped.                                |
+| `kafka.*`                            | No         |            | Any additional `librdkafka` client property, passed through with the `kafka.` prefix stripped.                                                                          |
 
 ::: info
 Exactly one of `assign`, `subscribe`, and `subscribePattern` must be specified.
@@ -284,7 +284,7 @@ compacted-away records are skipped, as Spark skips them.
 
 ### Transactional Topics
 
-`isolation.level` defaults to `read_uncommitted`, matching Spark. Note that this is *not* the
+`isolation.level` defaults to `read_uncommitted`, matching Spark. Note that this is _not_ the
 `librdkafka` default (`read_committed`), so it is set explicitly — otherwise a topic written by a
 transactional producer would return a different row set here than under Spark, dropping aborted records
 and anything past the last stable offset. Pass `kafka.isolation.level=read_committed` to opt in to
