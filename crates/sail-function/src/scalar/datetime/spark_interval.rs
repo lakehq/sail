@@ -331,13 +331,12 @@ fn string_to_calendar_interval(value: &str) -> Result<IntervalMonthDayNano> {
     // amounts stay absolute microseconds and are never rebucketed into days.
     let interval =
         parse_calendar_interval_string(value).map_err(|e| exec_datafusion_err!("{e}"))?;
-    let nanoseconds = interval
-        .microseconds
-        .checked_mul(1_000)
+    let (days, nanoseconds) = interval
+        .days_and_nanoseconds()
         .ok_or_else(|| exec_datafusion_err!("interval out of range: {value:?}"))?;
     Ok(IntervalMonthDayNano {
         months: interval.months,
-        days: interval.days,
+        days,
         nanoseconds,
     })
 }
@@ -383,12 +382,21 @@ mod tests {
         Ok(())
     }
 
-    /// A gap that fits i64 microseconds can still overflow the nanosecond
-    /// representation; the strict converter must error rather than wrap.
+    /// A sub-day amount too large for i64 nanoseconds splits whole days out
+    /// (Spark's microsecond-based CalendarInterval still represents it);
+    /// below that bound the absolute bucket is preserved exactly.
     #[test]
-    fn calendar_interval_nanosecond_overflow_errors() {
-        assert!(string_to_calendar_interval("100000000000 hours").is_err());
-        assert!(string_to_calendar_interval("2000000 hours").is_ok());
+    fn calendar_interval_nanosecond_overflow_splits_days() -> Result<()> {
+        // 3000000 hours = 125000 days; fits i64 µs but not ns.
+        let v = string_to_calendar_interval("3000000 hours")?;
+        assert_eq!((v.months, v.days, v.nanoseconds), (0, 125_000, 0));
+        // 2000000 hours fits ns: stays absolute, no day splitting.
+        let v = string_to_calendar_interval("2000000 hours")?;
+        assert_eq!(
+            (v.months, v.days, v.nanoseconds),
+            (0, 0, 2_000_000i64 * 3_600 * 1_000_000_000)
+        );
+        Ok(())
     }
 
     #[test]

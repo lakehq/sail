@@ -34,7 +34,9 @@ use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
 use sail_function::scalar::datetime::spark_year::SparkYear;
 use sail_function::scalar::datetime::timestamp_now::TimestampNow;
 use sail_function::scalar::explode::{Explode, ExplodeKind};
-use sail_sql_analyzer::literal::interval::{IntervalValue, parse_calendar_interval_string};
+use sail_sql_analyzer::literal::interval::{
+    CalendarInterval, IntervalValue, parse_calendar_interval_string,
+};
 use sail_sql_analyzer::parser::parse_interval;
 
 use crate::config::DefaultTimestampType;
@@ -1172,15 +1174,24 @@ fn session_window_gap(gap: Expr, schema: &DFSchemaRef) -> PlanResult<Expr> {
             // Spark bucketing: the unit the user wrote decides the bucket, so
             // a `'1 day'` gap is a calendar day (25h across a DST fall-back)
             // while `'25 hours'` is 25 absolute hours.
-            let interval = parse_calendar_interval_string(s).map_err(|e| {
-                PlanError::invalid(format!("invalid session_window gap {s:?}: {e}"))
-            })?;
-            let nanos = interval.microseconds.checked_mul(1_000).ok_or_else(|| {
-                PlanError::invalid(format!("session_window gap out of range: {s:?}"))
-            })?;
-            return Ok(lit(ScalarValue::IntervalMonthDayNano(Some(
-                IntervalMonthDayNano::new(interval.months, interval.days, nanos),
-            ))));
+            // Spark casts the gap with `safeStringToInterval`: an invalid or
+            // out-of-range literal becomes NULL, every row is dropped by the
+            // `end > time` filter, and the query returns an empty result.
+            let value = parse_calendar_interval_string(s).ok().and_then(|interval| {
+                interval
+                    .days_and_nanoseconds()
+                    .map(|(days, nanos)| IntervalMonthDayNano::new(interval.months, days, nanos))
+            });
+            return Ok(lit(ScalarValue::IntervalMonthDayNano(value)));
+        }
+        // Spark rejects integer gaps for session_window (unlike `window`,
+        // which Sail keeps interpreting as microseconds for parity with its
+        // own `window` implementation).
+        if let ScalarValue::Int32(_) | ScalarValue::Int64(_) = value {
+            return Err(PlanError::invalid(
+                "gap duration expression used in session window must be an interval string, \
+                 a calendar interval, or a day-time interval, but got an integer",
+            ));
         }
         if let ScalarValue::IntervalYearMonth(_) = value {
             return Err(PlanError::invalid(
@@ -1192,13 +1203,18 @@ fn session_window_gap(gap: Expr, schema: &DFSchemaRef) -> PlanResult<Expr> {
             return Ok(lit(ScalarValue::IntervalMonthDayNano(Some(*v))));
         }
         let micros = window_interval_micros(&gap)?;
-        let nanos = micros.checked_mul(1_000).ok_or_else(|| {
+        let interval = CalendarInterval {
+            months: 0,
+            days: 0,
+            microseconds: micros,
+        };
+        let (days, nanos) = interval.days_and_nanoseconds().ok_or_else(|| {
             PlanError::invalid(format!(
                 "session_window gap out of range: {micros} microseconds"
             ))
         })?;
         return Ok(lit(ScalarValue::IntervalMonthDayNano(Some(
-            IntervalMonthDayNano::new(0, 0, nanos),
+            IntervalMonthDayNano::new(0, days, nanos),
         ))));
     }
     // Otherwise the gap is a per-row (dynamic) expression. Year-month *typed*

@@ -505,6 +505,25 @@ pub struct CalendarInterval {
     pub microseconds: i64,
 }
 
+impl CalendarInterval {
+    /// Splits the microsecond bucket for nanosecond-based consumers: whole
+    /// days move into the day bucket ONLY when the microseconds do not fit
+    /// i64 nanoseconds — an interval beyond ~106751 days of sub-day units,
+    /// which Spark's microsecond-based `CalendarInterval` still represents.
+    /// Below that bound the calendar/absolute distinction is preserved
+    /// exactly; above it the sub-day remainder stays absolute.
+    pub fn days_and_nanoseconds(&self) -> Option<(i32, i64)> {
+        if let Some(nanoseconds) = self.microseconds.checked_mul(1_000) {
+            return Some((self.days, nanoseconds));
+        }
+        const MICROSECONDS_PER_DAY: i64 = 24 * 60 * 60 * 1_000_000;
+        let extra_days = i32::try_from(self.microseconds / MICROSECONDS_PER_DAY).ok()?;
+        let days = self.days.checked_add(extra_days)?;
+        let nanoseconds = (self.microseconds % MICROSECONDS_PER_DAY).checked_mul(1_000)?;
+        Some((days, nanoseconds))
+    }
+}
+
 pub fn parse_calendar_interval_string(s: &str) -> SqlResult<CalendarInterval> {
     if let Some(value) = parse_calendar_interval_string_fast(s) {
         return Ok(value);

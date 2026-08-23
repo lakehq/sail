@@ -111,7 +111,8 @@ impl PlanResolver<'_> {
         // unresolved ordinal literal would otherwise be materialized as a
         // constant grouping key by the session_window expander, and a marker
         // referenced only by ordinal would never desugar.
-        let grouping = self.resolve_grouping_positions_early(grouping, &resolved_projections)?;
+        let (grouping, resolved_positions) =
+            self.resolve_grouping_positions_early(grouping, &resolved_projections)?;
 
         // Expand any special grouping expressions into materialized grouping
         // columns; a no-op for ordinary aggregates.
@@ -131,34 +132,6 @@ impl PlanResolver<'_> {
                 state,
             )
             .await?;
-
-        // Spark evaluates `session_window` inside an aggregate function
-        // argument with per-row (pre-merge) semantics; Sail does not implement
-        // that path, so reject it instead of silently aggregating the merged
-        // struct.
-        let session_columns: Vec<&Expr> = generator_replacements
-            .iter()
-            .filter(|(from, _)| Self::contains_session_window(from))
-            .map(|(_, to)| to)
-            .collect();
-        if !session_columns.is_empty() {
-            let all_exprs = projections
-                .iter()
-                .map(|p| p.expr.clone())
-                .collect::<Vec<_>>();
-            for agg in find_aggregate_exprs(&all_exprs) {
-                let references_session = agg
-                    .exists(|e| Ok(session_columns.contains(&e)))
-                    .unwrap_or(false);
-                if references_session {
-                    return Err(PlanError::AnalysisError(
-                        "session_window inside an aggregate function has per-row semantics \
-                         and is not supported"
-                            .to_string(),
-                    ));
-                }
-            }
-        }
 
         // Spark CheckAnalysis: reject non-deterministic expressions in aggregate context
         for proj in &projections {
@@ -188,12 +161,42 @@ impl PlanResolver<'_> {
             }
         };
 
+        // Spark evaluates `session_window` inside an aggregate function
+        // argument with per-row (pre-merge) semantics; Sail does not implement
+        // that path, so reject it (in SELECT and HAVING alike) instead of
+        // silently aggregating the merged struct.
+        let session_columns: Vec<&Expr> = generator_replacements
+            .iter()
+            .filter(|(from, _)| Self::contains_session_window(from))
+            .map(|(_, to)| to)
+            .collect();
+        if !session_columns.is_empty() {
+            let all_exprs = projections
+                .iter()
+                .map(|p| p.expr.clone())
+                .chain(having.iter().cloned())
+                .collect::<Vec<_>>();
+            for agg in find_aggregate_exprs(&all_exprs) {
+                let references_session = agg
+                    .exists(|e| Ok(session_columns.contains(&e)))
+                    .unwrap_or(false);
+                if references_session {
+                    return Err(PlanError::AnalysisError(
+                        "session_window inside an aggregate function has per-row semantics \
+                         and is not supported"
+                            .to_string(),
+                    ));
+                }
+            }
+        }
+
         self.rewrite_aggregate(
             input,
             projections,
             grouping,
             having,
             with_grouping_expressions,
+            &resolved_positions,
             state,
         )
     }
@@ -201,15 +204,20 @@ impl PlanResolver<'_> {
     /// Resolves `GROUP BY <ordinal>` against the select list before grouping
     /// expansion. A deferred (not yet resolved) select item leaves the ordinal
     /// in place for [`Self::resolve_grouping_positions`] to finish later.
+    /// Returns the rewritten grouping plus a mask of positions it substituted,
+    /// so [`Self::resolve_grouping_positions`] does not re-read a substituted
+    /// integer literal (e.g. `SELECT 5 ... GROUP BY 1`) as another ordinal.
     fn resolve_grouping_positions_early(
         &self,
         exprs: Vec<NamedExpr>,
         projections: &[Option<NamedExpr>],
-    ) -> PlanResult<Vec<NamedExpr>> {
+    ) -> PlanResult<(Vec<NamedExpr>, Vec<bool>)> {
         let num_projections = projections.len() as i64;
-        exprs
+        let mut substituted = vec![false; exprs.len()];
+        let exprs = exprs
             .into_iter()
-            .map(|named_expr| {
+            .enumerate()
+            .map(|(i, named_expr)| {
                 let NamedExpr { expr, .. } = &named_expr;
                 let Expr::Literal(scalar_value, _) = expr else {
                     return Ok(named_expr);
@@ -221,7 +229,10 @@ impl PlanResolver<'_> {
                 };
                 if position > 0_i64 && position <= num_projections {
                     match &projections[(position - 1) as usize] {
-                        Some(resolved) => Ok(resolved.clone()),
+                        Some(resolved) => {
+                            substituted[i] = true;
+                            Ok(resolved.clone())
+                        }
                         None => Ok(named_expr),
                     }
                 } else {
@@ -230,18 +241,24 @@ impl PlanResolver<'_> {
                     )))
                 }
             })
-            .collect()
+            .collect::<PlanResult<Vec<_>>>()?;
+        Ok((exprs, substituted))
     }
 
     fn resolve_grouping_positions(
         &self,
         exprs: Vec<NamedExpr>,
         projections: &[NamedExpr],
+        resolved_positions: &[bool],
     ) -> PlanResult<Vec<NamedExpr>> {
         let num_projections = projections.len() as i64;
         exprs
             .into_iter()
-            .map(|named_expr| {
+            .enumerate()
+            .map(|(i, named_expr)| {
+                if resolved_positions.get(i).copied().unwrap_or(false) {
+                    return Ok(named_expr);
+                }
                 let NamedExpr { expr, .. } = &named_expr;
                 match expr {
                     Expr::Literal(scalar_value, _metadata) => {
@@ -271,9 +288,11 @@ impl PlanResolver<'_> {
         grouping: Vec<NamedExpr>,
         having: Option<Expr>,
         with_grouping_expressions: bool,
+        resolved_positions: &[bool],
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let grouping = self.resolve_grouping_positions(grouping, &projections)?;
+        let grouping =
+            self.resolve_grouping_positions(grouping, &projections, resolved_positions)?;
         let group_exprs = grouping.iter().map(|x| x.expr.clone()).collect::<Vec<_>>();
         let has_grouping_set = Self::has_grouping_set(&group_exprs);
         let grouping_exprs = Self::distinct_grouping_expressions_from_exprs(&group_exprs);
@@ -1182,7 +1201,7 @@ impl PlanResolver<'_> {
     }
 
     /// Whether an expression contains a `session_window` marker anywhere.
-    fn contains_session_window(expr: &Expr) -> bool {
+    pub(super) fn contains_session_window(expr: &Expr) -> bool {
         expr.exists(|e| Ok(Self::is_session_window_marker(e)))
             .unwrap_or(false)
     }
@@ -1224,10 +1243,10 @@ impl PlanResolver<'_> {
 
         // Only one time-window expression per grouping; `session_window` cannot
         // be combined with `window` (its generator fills `replacements`).
-        let extra_window = grouping
-            .iter()
-            .enumerate()
-            .any(|(i, g)| i != marker_idx && Self::contains_session_window(&g.expr));
+        let marker_expr = grouping[marker_idx].expr.clone();
+        let extra_window = grouping.iter().enumerate().any(|(i, g)| {
+            i != marker_idx && g.expr != marker_expr && Self::contains_session_window(&g.expr)
+        });
         if extra_window || !replacements.is_empty() {
             return Err(PlanError::AnalysisError(
                 "only one session_window or window expression is allowed in a grouping".to_string(),
@@ -1240,8 +1259,16 @@ impl PlanResolver<'_> {
         // the downstream aggregate reuses the hash distribution (no reshuffle).
         let mut partition_columns = Vec::new();
         let mut key_projections: Vec<Expr> = Vec::new();
+        let mut duplicate_markers: Vec<usize> = Vec::new();
         for (i, g) in grouping.iter_mut().enumerate() {
             if i == marker_idx {
+                continue;
+            }
+            // Spark collapses duplicate identical session_window keys; point
+            // them at the same struct column instead of materializing (and
+            // executing) the marker as an expression key.
+            if g.expr == marker_expr {
+                duplicate_markers.push(i);
                 continue;
             }
             match &g.expr {
@@ -1343,6 +1370,18 @@ impl PlanResolver<'_> {
         }
         replacements.push((original_marker, w_col.clone()));
         grouping[marker_idx].expr = w_col;
+        // Drop the duplicate keys entirely (their SELECT/HAVING re-uses go
+        // through `replacements` like the primary's).
+        if !duplicate_markers.is_empty() {
+            let duplicates: std::collections::HashSet<usize> =
+                duplicate_markers.into_iter().collect();
+            grouping = grouping
+                .into_iter()
+                .enumerate()
+                .filter(|(i, _)| !duplicates.contains(i))
+                .map(|(_, g)| g)
+                .collect();
+        }
 
         Ok((plan, grouping, replacements))
     }

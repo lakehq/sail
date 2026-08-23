@@ -266,6 +266,38 @@ Feature: session_window() gap-based sessionization
         | X | 2021-01-01 00:00:00 | 2021-01-01 00:09:00 | 2   |
         | Y | 2021-01-01 00:02:00 | 2021-01-01 00:07:00 | 1   |
 
+    # Guards the two-pass ordinal resolution: the substituted literal must not
+    # be re-read as another ordinal position.
+    Scenario: an integer literal selected and grouped by ordinal
+      When query
+        """
+        SELECT 5, count(*) AS cnt FROM VALUES (1), (2) AS t(x) GROUP BY 1
+        """
+      Then query result
+        | 5 | cnt |
+        | 5 | 2   |
+
+    Scenario: duplicate identical session_window keys collapse
+      When query
+        """
+        SELECT session_window.start, count(*) AS cnt
+        FROM VALUES (TIMESTAMP '2021-01-01 00:00:00'),
+                    (TIMESTAMP '2021-01-01 00:04:30') AS t(b)
+        GROUP BY session_window(b, '5 minutes'), session_window(b, '5 minutes')
+        """
+      Then query result
+        | start               | cnt |
+        | 2021-01-01 00:00:00 | 2   |
+
+    Scenario: an aggregate over the session struct in HAVING is rejected
+      When query
+        """
+        SELECT count(*) FROM VALUES (TIMESTAMP '2021-01-01 00:00:00') AS t(b)
+        GROUP BY session_window(b, '5 minutes')
+        HAVING max(session_window(b, '5 minutes').start) > TIMESTAMP '2020-01-01 00:00:00'
+        """
+      Then query error .*(session_window inside an aggregate function|MISSING_ATTRIBUTES).*
+
     Scenario: session_window grouped by its SELECT-list alias
       When query
         """
@@ -340,6 +372,37 @@ Feature: session_window() gap-based sessionization
         | 2021-01-01 00:00:00 | 2021-01-01 00:00:00 | 2   |
         | 2021-01-02 00:00:00 | 2021-01-01 00:00:00 | 1   |
 
+  Rule: Gap literal edge cases
+
+    Scenario: an invalid literal gap yields an empty result, not an error
+      When query
+        """
+        SELECT session_window.start, count(*) AS cnt
+        FROM VALUES (TIMESTAMP '2021-01-01 00:00:00') AS t(b)
+        GROUP BY session_window(b, 'garbage')
+        """
+      Then query result
+        | start | cnt |
+
+    Scenario: an integer gap is rejected
+      When query
+        """
+        SELECT count(*) FROM VALUES (TIMESTAMP '2021-01-01 00:00:00') AS t(b)
+        GROUP BY session_window(b, 300)
+        """
+      Then query error .*ap duration expression used in session window must be.*
+
+    Scenario: a gap too large for nanoseconds still works via whole days
+      When query
+        """
+        SELECT session_window.start, session_window.end, count(*) AS cnt
+        FROM VALUES (TIMESTAMP '2021-01-01 00:00:00') AS t(b)
+        GROUP BY session_window(b, '3000000 hours')
+        """
+      Then query result
+        | start               | end                 | cnt |
+        | 2021-01-01 00:00:00 | 2363-03-30 00:00:00 | 1   |
+
   Rule: Invalid dynamic gap values
 
     Scenario: an invalid gap string in a column drops the row, not the query
@@ -373,6 +436,23 @@ Feature: session_window() gap-based sessionization
         ORDER BY m
         """
       Then query error .*session_window inside an aggregate function.*
+
+    # The fused node is an extension, not LogicalPlan::Aggregate; ORDER BY on
+    # a bare aggregate must still rebase onto its output.
+    Scenario: ORDER BY a bare aggregate over the fused path
+      When query
+        """
+        SELECT session_window.start, count(*) AS cnt
+        FROM VALUES (TIMESTAMP '2021-01-01 00:00:00'),
+                    (TIMESTAMP '2021-01-01 00:04:30'),
+                    (TIMESTAMP '2021-01-01 00:20:00') AS t(b)
+        GROUP BY session_window(b, '5 minutes')
+        ORDER BY count(*) DESC
+        """
+      Then query result
+        | start               | cnt |
+        | 2021-01-01 00:00:00 | 2   |
+        | 2021-01-01 00:20:00 | 1   |
 
     Scenario: multiple aggregates are computed per session (fused path)
       When query

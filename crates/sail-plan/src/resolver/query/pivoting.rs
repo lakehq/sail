@@ -195,7 +195,7 @@ impl PlanResolver<'_> {
             }
         }
 
-        self.rewrite_aggregate(input, projections, grouping, None, false, state)
+        self.rewrite_aggregate(input, projections, grouping, None, false, &[], state)
     }
 
     /// Infer pivot values by collecting the distinct values of the pivot column
