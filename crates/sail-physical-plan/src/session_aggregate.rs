@@ -829,6 +829,103 @@ mod tests {
         Ok(())
     }
 
+    /// Pins the fused merge rules: inclusive boundary, a key change at a
+    /// batch boundary within the carried gap, and multi-row segments at
+    /// nonzero offsets.
+    #[tokio::test]
+    async fn fused_merge_boundaries_and_segment_offsets() -> Result<()> {
+        let ts = DataType::Timestamp(TimeUnit::Microsecond, None);
+        let input_schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int32, true),
+            Field::new("#t", ts.clone(), true),
+            Field::new("#e0", ts.clone(), true),
+            Field::new("v", DataType::Int64, true),
+        ]));
+        let struct_type = DataType::Struct(Fields::from(vec![
+            Field::new("start", ts.clone(), true),
+            Field::new("end", ts, true),
+        ]));
+        let output_schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int32, true),
+            Field::new("#w", struct_type, false),
+            Field::new("cnt", DataType::Int64, true),
+        ]));
+        let cnt = AggregateExprBuilder::new(
+            count_udaf(),
+            vec![Arc::new(Column::new("v", 3)) as Arc<dyn PhysicalExpr>],
+        )
+        .schema(input_schema.clone())
+        .alias("cnt")
+        .build()?;
+        let batches = vec![
+            batch(
+                &input_schema,
+                &[
+                    (1, 0, 1),
+                    (1, 10, 1),
+                    (1, 25, 1),
+                    (1, 30, 1),
+                    (1, 50, 1),
+                    (2, 100, 1),
+                ],
+            ),
+            batch(&input_schema, &[(3, 104, 1), (3, 120, 1)]),
+        ];
+        let input = MemorySourceConfig::try_new_exec(&[batches], input_schema.clone(), None)?;
+        let exec = SessionAggregateExec::try_new(
+            input,
+            vec!["k".to_string()],
+            "#t".to_string(),
+            "#e0".to_string(),
+            vec!["k".to_string(), "#w".to_string()],
+            "#w".to_string(),
+            vec![Arc::new(cnt)],
+            vec![None],
+            output_schema.clone(),
+        )?;
+        let ctx = SessionContext::new().task_ctx();
+        let mut stream = exec.execute(0, ctx)?;
+        let mut batches = vec![];
+        while let Some(batch) = stream.next().await {
+            batches.push(batch?);
+        }
+        let output = concat_batches(&output_schema, &batches)?;
+        assert_eq!(output.num_rows(), 6);
+        let keys = output
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("key column");
+        let sessions = output
+            .column(1)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("session struct column");
+        let starts = as_micros(sessions.column(0))?;
+        let ends = as_micros(sessions.column(1))?;
+        let cnts = output
+            .column(2)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("count column");
+        let expected = [
+            (1, 0, 20, 2),
+            (1, 25, 40, 2),
+            (1, 50, 60, 1),
+            (2, 100, 110, 1),
+            (3, 104, 114, 1),
+            (3, 120, 130, 1),
+        ];
+        for (i, (key, start, end, count)) in expected.iter().enumerate() {
+            assert_eq!(
+                (keys.value(i), starts.value(i), ends.value(i), cnts.value(i)),
+                (*key, *start, *end, *count),
+                "session {i}"
+            );
+        }
+        Ok(())
+    }
+
     /// The advertised output partitioning must be rebound to the output
     /// schema: group columns move (the session struct is first here), so the
     /// input's hash exprs carry stale indices.
@@ -885,6 +982,15 @@ mod tests {
             .downcast_ref::<Column>()
             .ok_or_else(|| datafusion_common::DataFusionError::Internal("not a column".into()))?;
         assert_eq!((column.name(), column.index()), ("k", 1));
+        let ordering = exec
+            .properties()
+            .output_ordering()
+            .ok_or_else(|| datafusion_common::DataFusionError::Internal("no ordering".into()))?;
+        let first = ordering[0]
+            .expr
+            .downcast_ref::<Column>()
+            .ok_or_else(|| datafusion_common::DataFusionError::Internal("not a column".into()))?;
+        assert_eq!((first.name(), first.index()), ("k", 1));
         Ok(())
     }
 

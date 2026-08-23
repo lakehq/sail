@@ -607,6 +607,137 @@ mod tests {
         Ok(())
     }
 
+    /// Pins the merge rules a refactor could silently flip: the inclusive
+    /// boundary (a row at exactly the session end merges), a key change at a
+    /// batch boundary (must close the carried session even though its time is
+    /// within the gap), and multi-row segments at nonzero offsets (slice
+    /// arithmetic).
+    #[tokio::test]
+    async fn merge_boundaries_and_segment_offsets() -> Result<()> {
+        let ts = DataType::Timestamp(TimeUnit::Microsecond, None);
+        let input_schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int32, true),
+            Field::new("#t", ts.clone(), true),
+            Field::new("#e0", ts.clone(), true),
+        ]));
+        let struct_type = DataType::Struct(Fields::from(vec![
+            Field::new("start", ts.clone(), true),
+            Field::new("end", ts, true),
+        ]));
+        let output_schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int32, true),
+            Field::new("#t", input_schema.field(1).data_type().clone(), true),
+            Field::new("#e0", input_schema.field(2).data_type().clone(), true),
+            Field::new("#w", struct_type, false),
+        ]));
+        // Gap is 10 (the helper adds time + 10 as the end candidate).
+        // Batch 1: key 1 merges t=10 exactly on the session end (inclusive
+        // boundary), t=25 opens a second session extended by t=30; key 2
+        // changes mid-batch. Batch 2 starts with a key change at the batch
+        // boundary whose time (104) is within key 2's still-open gap.
+        let batches = vec![
+            batch(
+                &input_schema,
+                &[(1, 0), (1, 10), (1, 25), (1, 30), (1, 50), (2, 100)],
+            ),
+            batch(&input_schema, &[(3, 104), (3, 120)]),
+        ];
+        let input = MemorySourceConfig::try_new_exec(&[batches], input_schema.clone(), None)?;
+        let exec = SessionWindowExec::try_new(
+            input,
+            vec!["k".to_string()],
+            "#t".to_string(),
+            "#e0".to_string(),
+            "#w".to_string(),
+            output_schema.clone(),
+        )?;
+        let ctx = SessionContext::new().task_ctx();
+        let mut stream = exec.execute(0, ctx)?;
+        let mut batches = vec![];
+        while let Some(batch) = stream.next().await {
+            batches.push(batch?);
+        }
+        let output = concat_batches(&output_schema, &batches)?;
+        assert_eq!(output.num_rows(), 8);
+        let sessions = output
+            .column(3)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("session struct column");
+        let starts = as_micros(sessions.column(0))?;
+        let ends = as_micros(sessions.column(1))?;
+        let expected = [
+            (0, 20),
+            (0, 20),
+            (25, 40),
+            (25, 40),
+            (50, 60),
+            (100, 110),
+            (104, 114),
+            (120, 130),
+        ];
+        for (i, (start, end)) in expected.iter().enumerate() {
+            assert_eq!((starts.value(i), ends.value(i)), (*start, *end), "row {i}");
+        }
+        let metrics = exec.metrics().expect("metrics");
+        assert_eq!(
+            metrics.sum_by_name("num_sessions").map(|m| m.as_usize()),
+            Some(6)
+        );
+        Ok(())
+    }
+
+    /// The memory reservation must be released when sessions close: many
+    /// carried-then-closed sessions stay within a modest pool (an accounting
+    /// leak would accumulate and trip it).
+    #[tokio::test]
+    async fn reservation_is_released_when_sessions_close() -> Result<()> {
+        let ts = DataType::Timestamp(TimeUnit::Microsecond, None);
+        let input_schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int32, true),
+            Field::new("#t", ts.clone(), true),
+            Field::new("#e0", ts.clone(), true),
+        ]));
+        let struct_type = DataType::Struct(Fields::from(vec![
+            Field::new("start", ts.clone(), true),
+            Field::new("end", ts, true),
+        ]));
+        let output_schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int32, true),
+            Field::new("#t", input_schema.field(1).data_type().clone(), true),
+            Field::new("#e0", input_schema.field(2).data_type().clone(), true),
+            Field::new("#w", struct_type, false),
+        ]));
+        // Every session spans one batch boundary (one carried slice) and then
+        // closes; 300 sequential sessions never hold more than one carry, so
+        // the run must fit a modest pool unless accounting leaks.
+        let mut batches = Vec::new();
+        for i in 0..300i64 {
+            batches.push(batch(&input_schema, &[(1, i * 1000)]));
+            batches.push(batch(&input_schema, &[(1, i * 1000 + 5)]));
+        }
+        let input = MemorySourceConfig::try_new_exec(&[batches], input_schema.clone(), None)?;
+        let exec = SessionWindowExec::try_new(
+            input,
+            vec!["k".to_string()],
+            "#t".to_string(),
+            "#e0".to_string(),
+            "#w".to_string(),
+            output_schema,
+        )?;
+        let runtime = datafusion::execution::runtime_env::RuntimeEnvBuilder::new()
+            .with_memory_limit(32 * 1024, 1.0)
+            .build_arc()?;
+        let ctx = SessionContext::new_with_config_rt(Default::default(), runtime).task_ctx();
+        let mut stream = exec.execute(0, ctx)?;
+        let mut rows = 0;
+        while let Some(item) = stream.next().await {
+            rows += item?.num_rows();
+        }
+        assert_eq!(rows, 600);
+        Ok(())
+    }
+
     /// A partition or time column missing from the input schema must fail at
     /// construction, not silently drop the sort requirement later.
     #[test]
