@@ -326,8 +326,7 @@ pub struct StorageShuffleBackend {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CelebornShuffleBackend {
-    pub master_host: String,
-    pub master_port: u16,
+    pub master_endpoints: Vec<String>,
     pub compression: CelebornCompressionCodec,
     pub heartbeat_interval_secs: u64,
     pub endpoint_overrides: Vec<CelebornEndpointOverride>,
@@ -414,10 +413,8 @@ impl std::fmt::Display for CelebornPartitionSplitMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CelebornEndpointOverride {
-    pub internal_host: String,
-    pub internal_port: u16,
-    pub external_host: String,
-    pub external_port: u16,
+    pub internal: String,
+    pub external: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -468,8 +465,7 @@ mod shuffle_backend {
                         compression: super::ShuffleCompression::None,
                     },
                     celeborn: super::CelebornShuffleBackend {
-                        master_host: String::new(),
-                        master_port: 0,
+                        master_endpoints: vec![],
                         compression: super::CelebornCompressionCodec::default(),
                         heartbeat_interval_secs: 10,
                         endpoint_overrides: vec![],
@@ -481,8 +477,7 @@ mod shuffle_backend {
                     r#type: Type::Storage,
                     storage,
                     celeborn: super::CelebornShuffleBackend {
-                        master_host: String::new(),
-                        master_port: 0,
+                        master_endpoints: vec![],
                         compression: super::CelebornCompressionCodec::default(),
                         heartbeat_interval_secs: 10,
                         endpoint_overrides: vec![],
@@ -929,8 +924,7 @@ impl ClusterConfigEnv {
         SHUFFLE_BACKEND__STORAGE__PATH,
         SHUFFLE_BACKEND__STORAGE__MAX_FILE_SIZE,
         SHUFFLE_BACKEND__STORAGE__COMPRESSION,
-        SHUFFLE_BACKEND__CELEBORN__MASTER_HOST,
-        SHUFFLE_BACKEND__CELEBORN__MASTER_PORT,
+        SHUFFLE_BACKEND__CELEBORN__MASTER_ENDPOINTS,
         SHUFFLE_BACKEND__CELEBORN__COMPRESSION,
         SHUFFLE_BACKEND__CELEBORN__HEARTBEAT_INTERVAL_SECS,
         SHUFFLE_BACKEND__CELEBORN__ENDPOINT_OVERRIDES,

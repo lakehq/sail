@@ -74,8 +74,7 @@ impl Actor for DriverActor {
         };
         let celeborn_streams = match &self.options.shuffle_backend {
             ShuffleBackendKind::Celeborn {
-                master_host,
-                master_port,
+                master_endpoints,
                 compression,
                 heartbeat_interval_secs,
                 partition_split_threshold,
@@ -85,7 +84,7 @@ impl Actor for DriverActor {
                 let application_id = celeborn_application_id(&self.options.session_id);
                 let options = LifecycleManagerOptions::new(
                     application_id.clone(),
-                    MasterClientOptions::new(master_host.clone(), *master_port),
+                    MasterClientOptions::new(master_endpoints.clone()),
                 );
                 let options = match self.options.shuffle_backend.celeborn_endpoint_resolver() {
                     Some(endpoint_resolver) => options.with_endpoint_resolver(endpoint_resolver),
