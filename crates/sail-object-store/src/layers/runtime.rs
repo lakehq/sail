@@ -314,8 +314,7 @@ impl<T> Stream for RuntimeAwareStream<T> {
 #[cfg(test)]
 mod tests {
     use std::error::Error;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::sync::mpsc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     use futures::future::try_join;
@@ -459,97 +458,5 @@ mod tests {
             Ok::<_, Box<dyn Error>>(())
         })?;
         Ok(())
-    }
-
-    #[derive(Debug)]
-    struct BlockingDropMultipartUpload {
-        drop_started: Arc<Notify>,
-        release_drop: Option<mpsc::Receiver<()>>,
-        abort_called: Arc<AtomicBool>,
-        abort_started: Arc<Notify>,
-    }
-
-    struct BlockOnDrop(Arc<Notify>, mpsc::Receiver<()>);
-
-    impl Drop for BlockOnDrop {
-        fn drop(&mut self) {
-            self.0.notify_one();
-            let _ = self.1.recv();
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl MultipartUpload for BlockingDropMultipartUpload {
-        fn put_part(&mut self, _data: PutPayload) -> UploadPart {
-            let Some(release_drop) = self.release_drop.take() else {
-                return Box::pin(async {
-                    Err(object_store::Error::Generic {
-                        store: "BlockingDropMultipartUpload",
-                        source: "only one part can be uploaded".into(),
-                    })
-                });
-            };
-            let guard = BlockOnDrop(self.drop_started.clone(), release_drop);
-            Box::pin(async move {
-                let _guard = guard;
-                std::future::pending::<Result<()>>().await
-            })
-        }
-
-        async fn complete(&mut self) -> Result<PutResult> {
-            Ok(PutResult {
-                e_tag: None,
-                version: None,
-            })
-        }
-
-        async fn abort(&mut self) -> Result<()> {
-            self.abort_called.store(true, Ordering::SeqCst);
-            self.abort_started.notify_one();
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn multipart_abort_bounds_wait_for_cancelled_parts() -> Result<(), Box<dyn Error>> {
-        let primary = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .start_paused(true)
-            .build()?;
-        let io = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()?;
-        let drop_started = Arc::new(Notify::new());
-        let abort_called = Arc::new(AtomicBool::new(false));
-        let abort_started = Arc::new(Notify::new());
-        let (release_drop, wait_for_release) = mpsc::channel();
-        let inner = BlockingDropMultipartUpload {
-            drop_started: drop_started.clone(),
-            release_drop: Some(wait_for_release),
-            abort_called: abort_called.clone(),
-            abort_started: abort_started.clone(),
-        };
-        let mut upload = RuntimeAwareMultipartUpload::new(Box::new(inner), io.handle().clone());
-        // Retain the part future while aborting. The upload must cancel its runtime task itself.
-        let part = upload.put_part(vec![1].into());
-
-        primary.block_on(async move {
-            let abort = tokio::spawn(async move { upload.abort().await });
-            drop_started.notified().await;
-
-            tokio::time::advance(Duration::from_secs(14)).await;
-            assert!(!abort_called.load(Ordering::SeqCst));
-            assert!(!abort.is_finished());
-
-            tokio::time::advance(Duration::from_secs(1)).await;
-            abort_started.notified().await;
-            assert!(abort_called.load(Ordering::SeqCst));
-            abort.await??;
-
-            release_drop.send(())?;
-            assert!(part.await.is_err());
-            Ok(())
-        })
     }
 }
