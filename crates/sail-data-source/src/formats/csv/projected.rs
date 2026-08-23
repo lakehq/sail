@@ -3,12 +3,13 @@
 //! arrow-csv's `RecordDecoder` copies every field of every column through `csv_core`
 //! and stores one end offset per field before the projection is applied
 //! (arrow-csv `reader/records.rs`, `reader/mod.rs::parse`). For wide files read with
-//! `inferSchema=false` (every column is `Utf8`), this decoder tokenizes records that do
-//! not contain the quote byte with `memchr`, touching only the delimiters up to the
-//! largest projected column, and delegates records that contain the quote byte to
-//! `csv_core` (the parser arrow-csv uses) from the start of the record. Field-count
-//! validation, header skipping, truncated-row padding and null handling (empty field)
-//! follow arrow-csv.
+//! `inferSchema=false` (every column is `Utf8`), this decoder finds the end of records
+//! that do not contain the quote byte with `memchr`, locates their delimiters with a
+//! SWAR byte-equality scan (one 64-bit mask per 64-byte block) walking only the
+//! delimiters up to the largest projected column, and delegates records that contain
+//! the quote byte to `csv_core` (the parser arrow-csv uses) from the start of the
+//! record. Field-count validation, header skipping, truncated-row padding and null
+//! handling (empty field) follow arrow-csv.
 //!
 //! Differences from arrow-csv (both are `csv_core` DFA quirks; the Spark behaviour of
 //! ignoring comment lines is kept, see `CSVExprUtils.filterCommentAndEmpty`):
@@ -52,7 +53,8 @@ pub struct ProjectedCsvOptions {
 #[derive(Debug)]
 pub struct ProjectedCsvDecoder {
     schema: SchemaRef,
-    delimiter: u8,
+    /// the delimiter splatted into every byte, for `eq_mask`
+    delimiter_pattern: u64,
     quote: u8,
     comment: Option<u8>,
     terminator: Option<u8>,
@@ -71,8 +73,9 @@ pub struct ProjectedCsvDecoder {
     in_comment: bool,
     /// bytes of an unterminated quote-free record carried across `decode` calls
     pending: Vec<u8>,
-    /// byte bounds of the projected fields of the current fast-path record
-    bounds: Vec<(usize, usize)>,
+    /// end offsets of the delimiters of the current fast-path record up to the largest
+    /// projected column
+    ends: Vec<usize>,
     /// `csv_core` parser for records containing the quote byte; `slow` is set while it
     /// owns the current record. It is never cloned: `csv_core::Reader::clone` drops part
     /// of the DFA (csv-core reader.rs:1307-1313).
@@ -123,7 +126,7 @@ impl ProjectedCsvDecoder {
 
         Ok(Self {
             schema: projected,
-            delimiter,
+            delimiter_pattern: u64::from(delimiter) * 0x0101_0101_0101_0101,
             quote,
             comment,
             terminator,
@@ -134,7 +137,7 @@ impl ProjectedCsvDecoder {
                 .iter()
                 .map(|_| BinaryBuilder::with_capacity(batch_size, batch_size * 16))
                 .collect(),
-            bounds: Vec::with_capacity(wanted.len()),
+            ends: Vec::with_capacity(wanted.last().map_or(0, |&(column, _)| column + 1)),
             wanted,
             rows: 0,
             to_skip: usize::from(has_header),
@@ -215,36 +218,34 @@ impl ProjectedCsvDecoder {
     /// Fast path: `line` contains neither a terminator nor the quote byte.
     #[inline]
     fn process_line(&mut self, line: &[u8]) -> Result<(), ArrowError> {
-        let delimiter = self.delimiter;
-        // the filter/count loop is vectorized by LLVM
-        let num_fields = line.iter().filter(|&&b| b == delimiter).count() + 1;
-        // one pass over the delimiters up to the largest projected column
-        let mut bounds = std::mem::take(&mut self.bounds);
-        bounds.clear();
-        let mut delimiters = memchr::memchr_iter(delimiter, line);
-        let mut field = 0;
-        let mut start = 0;
-        let mut end = delimiters.next();
-        for &(column, _) in &self.wanted {
-            while field < column {
-                match end {
-                    Some(e) => {
-                        start = e + 1;
-                        end = delimiters.next();
-                        field += 1;
-                    }
-                    None => break,
-                }
-            }
-            if field == column {
-                bounds.push((start, end.unwrap_or(line.len())));
-            } else {
-                // missing (truncated) field: arrow pads it as an empty string
-                bounds.push((line.len(), line.len()));
+        let pattern = self.delimiter_pattern;
+        // the delimiters closing the fields up to the largest projected column are needed
+        let needed = self.wanted.last().map_or(0, |&(column, _)| column + 1);
+        let mut ends = std::mem::take(&mut self.ends);
+        ends.clear();
+        let mut num_fields = 1;
+        // one pass over the line: a 64-bit delimiter mask per 64-byte block counts all
+        // delimiters, and its set bits are walked only until `needed` ends are known
+        let (blocks, tail) = line.as_chunks::<64>();
+        let tail_mask = (!tail.is_empty()).then(|| delimiter_mask(tail, pattern));
+        let masks = blocks
+            .iter()
+            .map(|block| delimiter_mask(block, pattern))
+            .chain(tail_mask);
+        for (i, mut mask) in masks.enumerate() {
+            let count = mask.count_ones() as usize;
+            num_fields += count;
+            for _ in 0..count.min(needed - ends.len()) {
+                ends.push(i * 64 + mask.trailing_zeros() as usize);
+                mask &= mask - 1;
             }
         }
-        let result = self.emit_record(num_fields, |w, _| &line[bounds[w].0..bounds[w].1]);
-        self.bounds = bounds;
+        // a missing (truncated) field is not requested: `emit_record` pads it
+        let result = self.emit_record(num_fields, |_, column| {
+            let start = if column == 0 { 0 } else { ends[column - 1] + 1 };
+            &line[start..ends.get(column).copied().unwrap_or(line.len())]
+        });
+        self.ends = ends;
         result
     }
 
@@ -284,6 +285,42 @@ impl ProjectedCsvDecoder {
         self.rows += 1;
         Ok(())
     }
+}
+
+const LOW_7_BITS: u64 = 0x7f7f_7f7f_7f7f_7f7f;
+
+/// Bit `i` of the result is set iff byte `i` (little-endian) of `word` equals the byte
+/// splatted in `pattern`. SWAR zero-byte test on `word ^ pattern`: adding `0x7f` to the
+/// low 7 bits of a byte sets bit 7 iff they are not all zero (no carry between bytes),
+/// so bit 7 of `z` is set exactly where the byte is zero. The multiply by the "magic"
+/// constant gathers the flags at bits 0, 8, ..., 56 into the top byte (bit `i` = byte `i`).
+#[inline]
+fn eq_mask(word: u64, pattern: u64) -> u8 {
+    let x = word ^ pattern;
+    let y = (x & LOW_7_BITS).wrapping_add(LOW_7_BITS);
+    let z = !(y | x | LOW_7_BITS);
+    ((z >> 7).wrapping_mul(0x0102_0408_1020_4080) >> 56) as u8
+}
+
+/// Bit `i` of the result is set iff `bytes[i]` is the delimiter splatted in `pattern`;
+/// `bytes` holds at most 64 bytes.
+#[inline]
+fn delimiter_mask(bytes: &[u8], pattern: u64) -> u64 {
+    let (words, rest) = bytes.as_chunks::<8>();
+    let mut mask = words.iter().enumerate().fold(0, |mask, (i, word)| {
+        mask | (u64::from(eq_mask(u64::from_le_bytes(*word), pattern)) << (8 * i))
+    });
+    if !rest.is_empty() {
+        // the last partial word is zero-padded; its pad bytes are masked off below since
+        // the delimiter may be any byte, including 0x00
+        let word = rest
+            .iter()
+            .enumerate()
+            .fold(0, |word, (i, &b)| word | (u64::from(b) << (8 * i)));
+        mask |= u64::from(eq_mask(word, pattern)) << (8 * words.len());
+        mask &= (1 << bytes.len()) - 1;
+    }
+    mask
 }
 
 impl Decoder for ProjectedCsvDecoder {
@@ -529,6 +566,31 @@ mod tests {
         }
     }
 
+    /// A header line and `num_rows` data rows of `num_columns` fields, joined by
+    /// `delimiter` and `\n`; field `i` of data row `r` is `field(r, i)`.
+    fn rows(
+        num_columns: usize,
+        num_rows: usize,
+        delimiter: u8,
+        field: impl Fn(usize, usize) -> Vec<u8>,
+    ) -> Vec<u8> {
+        let mut out = Vec::new();
+        for r in 0..=num_rows {
+            for i in 0..num_columns {
+                if i != 0 {
+                    out.push(delimiter);
+                }
+                if r == 0 {
+                    out.extend_from_slice(format!("c{i}").as_bytes());
+                } else {
+                    out.extend_from_slice(&field(r - 1, i));
+                }
+            }
+            out.push(b'\n');
+        }
+        out
+    }
+
     fn assert_matches_arrow(input: &[u8], options: ProjectedCsvOptions) {
         for chunk in [1, 2, 3, 5, 7, 64] {
             for batch_size in [1, 2, 8192] {
@@ -621,6 +683,174 @@ mod tests {
                 ..options(3, &p)
             },
         );
+        // lines of exactly 63/64/65/127/128/129 bytes with delimiters at block positions
+        // 0, 63 and 64 and at the end of the line, two rows so that batch boundaries fall
+        // inside a block, also truncated (the last column missing on the first row)
+        for len in [63, 64, 65, 127, 128, 129] {
+            for positions in [
+                vec![0],
+                vec![63],
+                vec![64],
+                vec![0, 63, 64],
+                vec![len - 1],
+                vec![len - 2, len - 1],
+                vec![0, len - 1],
+            ] {
+                let positions = positions
+                    .into_iter()
+                    .filter(|&p| p < len)
+                    .collect::<Vec<_>>();
+                let num_columns = positions.len() + 1;
+                let mut line = vec![b'x'; len];
+                for &p in &positions {
+                    line[p] = b',';
+                }
+                let mut input = rows(num_columns, 0, b',', |_, _| vec![]);
+                input.extend_from_slice(&line);
+                input.push(b'\n');
+                input.extend_from_slice(&line);
+                input.push(b'\n');
+                let all = (0..num_columns).collect::<Vec<_>>();
+                assert_matches_arrow(&input, options(num_columns, &all));
+                assert_matches_arrow(&input, options(num_columns, &[num_columns - 1]));
+                assert_matches_arrow(&input, options(num_columns, &[0]));
+                let mut truncated = rows(num_columns + 1, 0, b',', |_, _| vec![]);
+                truncated.extend_from_slice(&line);
+                truncated.push(b'\n');
+                truncated.extend_from_slice(&line);
+                truncated.extend_from_slice(b",tail\n");
+                let all = (0..=num_columns).collect::<Vec<_>>();
+                for projection in [&all[..], &[num_columns]] {
+                    assert_matches_arrow(
+                        &truncated,
+                        ProjectedCsvOptions {
+                            truncated_rows: true,
+                            ..options(num_columns + 1, projection)
+                        },
+                    );
+                }
+            }
+        }
+        // 200 columns with every field empty (one delimiter per byte) or one byte long
+        for width in [0, 1] {
+            let input = rows(200, 5, b',', |r, i| {
+                vec![b'0' + ((r + i) % 10) as u8; width]
+            });
+            let all = (0..200).collect::<Vec<_>>();
+            for projection in [&all[..], &[199], &[199, 0, 100, 63, 64], &[]] {
+                assert_matches_arrow(&input, options(200, projection));
+            }
+        }
+        // 187 short columns like the Backblaze files, some empty, a few quoted rows; `-`
+        // is `,` ^ 1, which a borrow-propagating zero-byte test would flag after a `,`
+        let input = rows(187, 40, b',', |r, i| match (r + i) % 5 {
+            0 => vec![],
+            1 => format!("-{}", (r * 31 + i) % 1000).into_bytes(),
+            2 if r % 13 == 0 => b"\"q,x\"".to_vec(),
+            _ => b"ab".to_vec(),
+        });
+        let all = (0..187).collect::<Vec<_>>();
+        for projection in [&all[..], &[186], &[0, 2, 4], &[186, 5, 100]] {
+            assert_matches_arrow(&input, options(187, projection));
+        }
+        // multi-byte UTF-8 (lead and continuation bytes 0x80..0xf4) adjacent to delimiters
+        let high = (0x80..=0x7ff)
+            .filter_map(char::from_u32)
+            .collect::<String>();
+        let input = format!(
+            "a,b,c,d\n\u{e9},\u{1F980}\u{7ff},\u{800}\u{ffff},\u{10ffff}\n\u{80}\u{bf},\u{c0}x,\u{10000},\u{fffd}\n{high},{high},{high},{high}\n"
+        );
+        for projection in [&[0, 1, 2, 3][..], &[3]] {
+            assert_matches_arrow(input.as_bytes(), options(4, projection));
+        }
+        // delimiters other than the comma, including 0x00, the pad value of a partial word
+        for delimiter in [b'|', 0x7f, 0x01, 0x00, b';'] {
+            let input = rows(5, 70, delimiter, |r, i| {
+                if (r + i) % 3 == 0 {
+                    vec![]
+                } else {
+                    vec![b'a'; (r * 7 + i * 13) % 40]
+                }
+            });
+            for projection in [&[4, 0, 2][..], &[0, 1, 2, 3, 4]] {
+                assert_matches_arrow(
+                    &input,
+                    ProjectedCsvOptions {
+                        delimiter,
+                        terminator: (delimiter == b';').then_some(b'\n'),
+                        ..options(5, projection)
+                    },
+                );
+            }
+        }
+        // the quote byte right after the terminator of a record carried in `pending`, and
+        // an extra delimiter in the second block of a record
+        let mut long = vec![b'y'; 130];
+        long[40] = b',';
+        long[100] = b',';
+        let mut input = b"a,b,c\n".to_vec();
+        input.extend_from_slice(&long);
+        input.extend_from_slice(b"\n\"q\",2,3\n");
+        input.extend_from_slice(&long);
+        input.extend_from_slice(b"\n\"\n");
+        assert_matches_arrow(&input, options(3, &p));
+        let mut input = b"a,b,c\n".to_vec();
+        input.extend_from_slice(&long);
+        input.extend_from_slice(b",\n");
+        assert_matches_arrow(&input, options(3, &p));
+    }
+
+    #[test]
+    fn test_eq_mask() {
+        fn naive(word: u64, delimiter: u8) -> u8 {
+            word.to_le_bytes()
+                .iter()
+                .enumerate()
+                .filter(|&(_, &b)| b == delimiter)
+                .fold(0, |mask, (i, _)| mask | (1 << i))
+        }
+        // xorshift64
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let mut random = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for delimiter in 0..=u8::MAX {
+            let pattern = u64::from(delimiter) * 0x0101_0101_0101_0101;
+            // every byte value in every position, the other bytes random
+            for position in 0..8 {
+                for value in 0..=u8::MAX {
+                    let mut bytes = random().to_le_bytes();
+                    bytes[position] = value;
+                    let word = u64::from_le_bytes(bytes);
+                    assert_eq!(eq_mask(word, pattern), naive(word, delimiter), "{word:#x}");
+                }
+            }
+            for _ in 0..1000 {
+                let word = random();
+                assert_eq!(eq_mask(word, pattern), naive(word, delimiter), "{word:#x}");
+            }
+            let mut block = [0; 64];
+            for _ in 0..64 {
+                for chunk in block.chunks_exact_mut(8) {
+                    chunk.copy_from_slice(&random().to_le_bytes());
+                }
+                let expected = block
+                    .iter()
+                    .enumerate()
+                    .filter(|&(_, &b)| b == delimiter)
+                    .fold(0u64, |mask, (i, _)| mask | (1 << i));
+                assert_eq!(delimiter_mask(&block, pattern), expected);
+                // a partial block (the tail of a line) with pad bytes masked off
+                let len = 1 + (random() % 63) as usize;
+                assert_eq!(
+                    delimiter_mask(&block[..len], pattern),
+                    expected & ((1 << len) - 1)
+                );
+            }
+        }
     }
 
     #[test]
