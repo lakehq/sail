@@ -145,6 +145,8 @@ message HigherOrderUdf {
     SparkArrayForallUdf forall = 4;
     SparkArrayAggregateUdf aggregate = 5;
     SparkArraySortUdf sort = 6;
+    SparkSequenceUdf spark_sequence_lazy = 7;
+    ConvertTzUdf convert_tz_lazy = 8;
   }
 }
 
@@ -229,6 +231,7 @@ message ExtendedScalarUdf {
     SparkMapFromArraysUdf spark_map_from_arrays = 37;
     SparkMapFromEntriesUdf spark_map_from_entries = 38;
     StrToMapUdf str_to_map = 39;
+    SparkSequenceUdf spark_sequence = 40;
   }
 }
 
@@ -299,6 +302,11 @@ message SparkFromXmlUdf {
 }
 
 message SparkUnixTimestampUdf {
+  string session_timezone = 1;
+  bool ansi_mode = 2;
+}
+
+message SparkSequenceUdf {
   string session_timezone = 1;
   bool ansi_mode = 2;
 }
@@ -428,6 +436,7 @@ message SparkMakeTimestampNtzUdf {
 
 message ConvertTzUdf {
   bool classic = 1;
+  bool null_short_circuit = 2;
 }
 
 message StandardUdaf {}

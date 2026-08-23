@@ -18,8 +18,10 @@ sail-catalog = { path = "../sail-catalog" }
 sail-catalog-glue = { path = "../sail-catalog-glue" }
 sail-catalog-hms = { path = "../sail-catalog-hms" }
 sail-catalog-iceberg = { path = "../sail-catalog-iceberg" }
+sail-catalog-unity = { path = "../sail-catalog-unity" }
 
 arrow-schema = { workspace = true }
+bytes = { workspace = true }
 pyo3 = { workspace = true }
 tokio = { workspace = true }
 log = { workspace = true }

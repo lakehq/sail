@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use futures::stream::{self, BoxStream};
 use sail_common::actor::ActorHandle;
 use tokio::sync::oneshot;
@@ -45,7 +46,7 @@ impl ShuffleClient {
         partition_id: i32,
         map_id: i32,
         attempt_id: i32,
-        data: Vec<u8>,
+        data: Bytes,
     ) -> CelebornResult<usize> {
         let (result, receiver) = oneshot::channel();
         self.handle
@@ -105,7 +106,7 @@ impl ShuffleClient {
         &self,
         shuffle_id: i32,
         partition_id: i32,
-    ) -> BoxStream<'static, CelebornResult<Vec<u8>>> {
+    ) -> BoxStream<'static, CelebornResult<Bytes>> {
         let (result, receiver) = oneshot::channel();
         if self
             .handle

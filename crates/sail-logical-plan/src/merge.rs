@@ -650,17 +650,6 @@ pub fn expand_merge(
         .project(target_proj_exprs)?
         .build()?;
 
-    if should_check_cardinality {
-        // Add stable per-target-row id before join; JOIN will duplicate this value for matches.
-        // Use a dedicated logical node so we don't rely on later expression rewriters (MERGE builds plans directly).
-        target_plan = LogicalPlan::Extension(Extension {
-            node: Arc::new(MonotonicIdNode::try_new(
-                Arc::new(target_plan),
-                TARGET_ROW_ID_COLUMN.to_string(),
-            )?),
-        });
-    }
-
     // To avoid duplicate unqualified names after JOIN, assign collision-free source aliases.
     let target_input_len = options.resolved_target_schema.fields().len();
     let mut target_rename_map: HashMap<String, String> = HashMap::new();
@@ -737,22 +726,6 @@ pub fn expand_merge(
         )?
         .build()?;
 
-    let target_schema = target_plan.schema();
-    let source_schema = source_plan.schema();
-    trace!(
-        "expand_merge target/source fields - target: {:?}, source: {:?}",
-        target_schema
-            .fields()
-            .iter()
-            .map(|f| f.name().clone())
-            .collect::<Vec<_>>(),
-        source_schema
-            .fields()
-            .iter()
-            .map(|f| f.name().clone())
-            .collect::<Vec<_>>()
-    );
-
     // Rewrite all expressions that reference source columns to the new prefixed names.
     let rewrite = |expr: Expr| rewrite_merge_columns(expr, &target_rename_map, &source_rename_map);
     options.on_condition = ExprWithSource::new(
@@ -799,6 +772,43 @@ pub fn expand_merge(
             })
         })
         .collect::<Result<Vec<_>>>()?;
+
+    if options.target.format.eq_ignore_ascii_case("delta") {
+        target_plan = filter_merge_target_partitions(
+            target_plan,
+            &options.target_only_predicates,
+            &options.target.partition_by,
+            !options.not_matched_by_source_clauses.is_empty(),
+            options.case_sensitive,
+        )?;
+    }
+
+    if should_check_cardinality {
+        // Add stable per-target-row id before join; JOIN will duplicate this value for matches.
+        // Use a dedicated logical node so we don't rely on later expression rewriters (MERGE builds plans directly).
+        target_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(MonotonicIdNode::try_new(
+                Arc::new(target_plan),
+                TARGET_ROW_ID_COLUMN.to_string(),
+            )?),
+        });
+    }
+
+    let target_schema = target_plan.schema();
+    let source_schema = source_plan.schema();
+    trace!(
+        "expand_merge target/source fields - target: {:?}, source: {:?}",
+        target_schema
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect::<Vec<_>>(),
+        source_schema
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect::<Vec<_>>()
+    );
     trace!(
         "expand_merge options after rewrite - join_key_pairs: {:?}, matched_clauses: {:?}, not_matched_by_source_clauses: {:?}, not_matched_by_target_clauses: {:?}, on_condition: {:?}",
         options.join_key_pairs,
@@ -1615,6 +1625,44 @@ fn combine_conjunction(exprs: &[Expr]) -> Option<Expr> {
     let mut iter = exprs.iter().cloned();
     let first = iter.next()?;
     Some(iter.fold(first, |acc, expr| acc.and(expr)))
+}
+
+/// Filter Delta target partitions that cannot satisfy partition-only MERGE conditions.
+/// Non-partition predicates must remain join residuals so touched-file rewrites keep
+/// target rows that do not satisfy the MERGE condition.
+fn filter_merge_target_partitions(
+    target_plan: LogicalPlan,
+    target_only_predicates: &[Expr],
+    partition_columns: &[String],
+    has_not_matched_by_source_clauses: bool,
+    case_sensitive: bool,
+) -> Result<LogicalPlan> {
+    // These clauses can act on target rows outside the ON predicate.
+    if has_not_matched_by_source_clauses {
+        return Ok(target_plan);
+    }
+
+    let mut partition_predicates = Vec::new();
+    for predicate in target_only_predicates {
+        let mut referenced_columns = HashSet::new();
+        expr_to_columns(predicate, &mut referenced_columns)?;
+        if !referenced_columns.is_empty()
+            && referenced_columns.iter().all(|column| {
+                partition_columns.iter().any(|partition_column| {
+                    merge_names_equal(&column.name, partition_column, case_sensitive)
+                })
+            })
+        {
+            partition_predicates.push(predicate.clone());
+        }
+    }
+
+    let Some(target_filter) = combine_conjunction(&partition_predicates) else {
+        return Ok(target_plan);
+    };
+    LogicalPlanBuilder::from(target_plan)
+        .filter(target_filter)?
+        .build()
 }
 
 fn combine_disjunction(exprs: &[Expr]) -> Option<Expr> {
