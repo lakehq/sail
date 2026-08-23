@@ -124,7 +124,6 @@ impl CsvSource {
             escape: self.escape(),
             comment: self.comment(),
             terminator: self.terminator(),
-            multi_line: self.options.newlines_in_values.unwrap_or(false),
             has_header: self.has_header(),
             truncated_rows: self.truncate_rows(),
             batch_size: self.batch_size()?,
