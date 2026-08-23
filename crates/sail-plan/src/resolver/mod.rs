@@ -7,7 +7,7 @@ use crate::config::PlanConfig;
 mod command;
 mod constraint;
 mod data_type;
-mod expression;
+pub(crate) mod expression;
 mod function;
 mod lakehouse;
 mod literal;

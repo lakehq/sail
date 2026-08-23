@@ -245,7 +245,7 @@ impl PlanResolver<'_> {
 /// Returns true if the cast from `from` to `to` involves a Struct
 /// (possibly nested in a List/LargeList/FixedSizeList/Map) whose field names
 /// don't share enough overlap for DataFusion's struct cast validator.
-fn needs_struct_field_rename(from: &DataType, to: &DataType) -> bool {
+pub(crate) fn needs_struct_field_rename(from: &DataType, to: &DataType) -> bool {
     match (from, to) {
         (DataType::Struct(a), DataType::Struct(b)) => {
             a.len() == b.len()
@@ -270,7 +270,7 @@ fn needs_struct_field_rename(from: &DataType, to: &DataType) -> bool {
 /// Build a target type that has the names from `to` but the data types from
 /// `from`. The result is what `SparkStructRename` produces; the subsequent
 /// regular CAST then handles any leaf-type conversion.
-fn build_rename_target_type(from: &DataType, to: &DataType) -> DataType {
+pub(crate) fn build_rename_target_type(from: &DataType, to: &DataType) -> DataType {
     match (from, to) {
         (DataType::Struct(src_fields), DataType::Struct(tgt_fields))
             if src_fields.len() == tgt_fields.len() =>

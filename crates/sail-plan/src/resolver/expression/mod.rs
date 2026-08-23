@@ -11,7 +11,7 @@ use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
 mod attribute;
-mod cast;
+pub(crate) mod cast;
 mod function;
 mod grouping;
 mod lambda;

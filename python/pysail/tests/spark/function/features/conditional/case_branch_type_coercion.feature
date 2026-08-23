@@ -407,7 +407,6 @@ Feature: CASE WHEN and IF type their result from every branch, not just the firs
 
     # Spark rejects a reordering outright; Sail resolves it by name instead. Pinned so the values
     # cannot silently land under the wrong field name if the pairing is ever revisited.
-    @sail-bug
     Scenario: struct branches listing the same fields in a different order are rejected
       When query
         """
@@ -416,18 +415,6 @@ Feature: CASE WHEN and IF type their result from every branch, not just the firs
         FROM VALUES (false) AS t(c)
         """
       Then query error .*DATA_DIFF_TYPES.*
-
-    @sail-only
-    Scenario: a reordered struct still resolves each field by its own name
-      When query
-        """
-        SELECT CAST(if(c, named_struct('a', CAST(1 AS INT), 'b', CAST(2 AS BIGINT)),
-                          named_struct('b', CAST(3 AS BIGINT), 'a', CAST(4 AS INT))) AS STRING) AS v
-        FROM VALUES (false) AS t(c)
-        """
-      Then query result
-        | v      |
-        | {4, 3} |
 
   Rule: Decimal256 branches keep their width, at any depth
 
@@ -449,6 +436,62 @@ Feature: CASE WHEN and IF type their result from every branch, not just the firs
         | case          | narrow                           | wide                       | result                |
         | a scalar pair | CAST(1 AS DECIMAL(50,10))        | CAST(1.5 AS DOUBLE)        | decimal(55,15)        |
         | inside array  | array(CAST(1 AS DECIMAL(50,10))) | array(CAST(1.5 AS DOUBLE)) | array<decimal(55,15)> |
+
+  Rule: Datetime branches keep Spark's timestamp flavor
+
+    Scenario Outline: <case> yields <result>
+      When query
+        """
+        SELECT typeof(<expr>) AS t FROM VALUES (false) AS t(c)
+        """
+      Then query result
+        | t        |
+        | <result> |
+
+      Examples:
+        | case      | expr                                                                                     | result        |
+        | NTZ, DATE | if(c, CAST('2020-01-02 03:04:05' AS TIMESTAMP_NTZ), DATE '2020-01-01')                   | timestamp_ntz |
+        | LTZ, NTZ  | if(c, CAST('2020-01-02 03:04:05' AS TIMESTAMP_LTZ), CAST('2020-01-01' AS TIMESTAMP_NTZ)) | timestamp     |
+
+    # `findWiderDateTimeType` (`TypeCoercionHelper.scala:243-255`) answers TimestampType for
+    # DATE against an LTZ timestamp; `temporal_coercion` drops the zone. The VALUE is right, so
+    # only the declared flavor diverges.
+    Scenario: a zoned timestamp against a date keeps its zone
+      When query
+        """
+        SELECT typeof(if(c, CAST('2020-01-02 03:04:05' AS TIMESTAMP_LTZ), DATE '2020-01-01')) AS t
+        FROM VALUES (false) AS t(c)
+        """
+      Then query result
+        | t         |
+        | timestamp |
+
+  Rule: Struct branches whose field names differ only in case
+
+    # Spark's resolver is case-insensitive under the default `spark.sql.caseSensitive = false`, so
+    # `A` and `a` are the same field and the branches merge. Sail agrees on the TYPE, but the cast
+    # that carries the values is DataFusion's, which matches struct fields by name case-SENSITIVELY
+    # and cannot rename `a` to `A` — so the query fails where Spark returns a row. Asserted apart
+    # so a strict xfail cannot be satisfied by the wrong half.
+    Scenario: the declared type merges them
+      When query
+        """
+        SELECT typeof(if(c, named_struct('A', CAST(1 AS INT)), named_struct('a', CAST(2 AS BIGINT)))) AS t
+        FROM VALUES (false) AS t(c)
+        """
+      Then query result
+        | t                |
+        | struct<A:bigint> |
+
+    Scenario: the value survives the rename
+      When query
+        """
+        SELECT CAST(if(c, named_struct('A', CAST(1 AS INT)), named_struct('a', CAST(2 AS BIGINT))) AS STRING) AS v
+        FROM VALUES (false) AS t(c)
+        """
+      Then query result
+        | v   |
+        | {2} |
 
   Rule: Branches with no common type are rejected instead of silently typed
 
@@ -473,7 +516,7 @@ Feature: CASE WHEN and IF type their result from every branch, not just the firs
 
     # ANSI's `findTightestCommonType` returns DoubleType for integral-meets-float
     # (`AnsiTypeCoercion.scala:113-124`); the non-ANSI path (`TypeCoercion.scala:88-92`) answers
-    # plain FLOAT, which is what Sail answers — hence the explicit ANSI pin.
+    # plain FLOAT. Both dialects are pinned because the answer genuinely differs between them.
     #
     # Still open, and not specific to CASE: `coalesce`, `greatest`, `least`, `array`, `UNION ALL`,
     # `+` and `*` all answer `float` too, so this belongs in a shared numeric-coercion fix rather
@@ -491,7 +534,6 @@ Feature: CASE WHEN and IF type their result from every branch, not just the firs
         | t     |
         | float |
 
-    @sail-bug
     Scenario Outline: <case> widens to double under ANSI
       Given config spark.sql.ansi.enabled = true
       When query
@@ -512,7 +554,6 @@ Feature: CASE WHEN and IF type their result from every branch, not just the firs
     # combined scenario could not tell "Sail answers float" from "Sail rounds through float32", and
     # would stay green if only one of the two were ever fixed. Read back through DECIMAL(20,0) so
     # the assertion pins the number and not how each engine formats a float.
-    @sail-bug
     Scenario Outline: <case> keeps an integral branch exact instead of rounding it through float32
       Given config spark.sql.ansi.enabled = true
       When query
