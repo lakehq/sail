@@ -641,6 +641,26 @@ def test_csv_read_ignores_comments_with_cr_line_endings(spark, tmp_path):
     assert rows == [Row(c="3", a="1")]
 
 
+def test_csv_read_projection_does_not_change_record_framing(spark, tmp_path):
+    # Decoder selection depends on the file schema, never on the projected columns, so
+    # selecting a string column, a typed column, or no file columns cannot change the
+    # number of records (Spark frames records before applying the required schema).
+    path = tmp_path / "csv_projection_independent_framing"
+    _write_csv(path, "data", b'"x\ny",1\nz,2\n')
+    df = (
+        spark.read.schema("s STRING, i INT")
+        .option("header", False)
+        .option("multiLine", False)
+        .option("allowTruncatedRows", True)
+        .csv(str(path))
+    )
+
+    string_rows = df.select("s").collect()
+    typed_rows = df.select("i").collect()
+
+    assert len(string_rows) == len(typed_rows) == df.count()
+
+
 def test_csv_read_field_count_mismatch(spark, tmp_path):
     # Existing Sail behavior (Spark PERMISSIVE would return the row with the extra
     # field dropped): the error text is unchanged by the projected decoder.
