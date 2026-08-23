@@ -9,6 +9,7 @@ import pyarrow.parquet as pq
 import pytest
 from pyspark.sql import Row
 from pyspark.sql import functions as F  # noqa: N812
+from pyspark.sql.types import IntegerType, StructField, StructType
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -171,6 +172,37 @@ def test_explicit_stats_columns_follow_nested_physical_names(spark, tmp_path: Pa
     assert stats["maxValues"] == {payload_physical: {value_physical: 10}}
     assert stats["nullCount"] == {payload_physical: {value_physical: 0}}
     assert spark.read.format("delta").load(str(base)).select("payload.value").collect() == [Row(value=10)]
+
+
+def test_explicit_stats_columns_parse_escaped_top_level_names(spark, tmp_path: Path):
+    base = tmp_path / "delta_explicit_stats_escaped_names"
+    schema = StructType(
+        [
+            StructField("a.b", IntegerType(), True),
+            StructField("c,", IntegerType(), True),
+            StructField("ignored", IntegerType(), True),
+        ]
+    )
+    source = spark.createDataFrame([(1, 2, 3)], schema=schema)
+    (
+        source.write.format("delta")
+        .mode("overwrite")
+        .option("delta.dataSkippingStatsColumns", "`a.b`,`c,`")
+        .save(str(base))
+    )
+
+    expected_values = {"a.b": 1, "c,": 2}
+    stats = _latest_add_stats(base)
+    assert stats["minValues"] == expected_values
+    assert stats["maxValues"] == expected_values
+    assert stats["nullCount"] == {"a.b": 0, "c,": 0}
+
+    spark.createDataFrame([(4, 5, 6)], schema=schema).write.format("delta").mode("append").save(str(base))
+    appended_values = {"a.b": 4, "c,": 5}
+    stats = _latest_add_stats(base)
+    assert stats["minValues"] == appended_values
+    assert stats["maxValues"] == appended_values
+    assert stats["nullCount"] == {"a.b": 0, "c,": 0}
 
 
 def test_create_and_append_with_column_mapping_id(spark, tmp_path: Path):

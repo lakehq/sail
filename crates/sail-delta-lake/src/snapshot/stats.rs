@@ -408,6 +408,18 @@ impl<'a> SnapshotPruningStats<'a> {
         let (physical_path, data_type, is_partition) = self.resolve_logical_path(logical_path)?;
         let null_count = if is_partition {
             self.partition_null_count(physical_path.first()?)
+        } else if matches!(
+            &data_type,
+            ArrowDataType::List(_)
+                | ArrowDataType::ListView(_)
+                | ArrowDataType::LargeList(_)
+                | ArrowDataType::LargeListView(_)
+                | ArrowDataType::FixedSizeList(_, _)
+                | ArrowDataType::Map(_, _)
+        ) {
+            // Repeated-leaf null counts can include null elements, so an unversioned log value is
+            // not safe as an exact aggregate input.
+            Precision::Absent
         } else {
             self.column_null_count(&physical_path)
         };
@@ -445,6 +457,20 @@ impl<'a> SnapshotPruningStats<'a> {
                 .any(|counts| counts.logical > 0 && counts.wide_bounds)
         });
         if !is_partition && has_wide_bounds {
+            min_value = min_value.to_inexact();
+            max_value = max_value.to_inexact();
+        }
+        if !is_partition
+            && matches!(
+                &data_type,
+                ArrowDataType::Decimal32(_, _)
+                    | ArrowDataType::Decimal64(_, _)
+                    | ArrowDataType::Decimal128(_, _)
+                    | ArrowDataType::Decimal256(_, _)
+            )
+        {
+            // Decimal bounds routed through binary floating point may be rounded. They remain
+            // useful for pruning, but are not safe inputs for metadata-only extrema.
             min_value = min_value.to_inexact();
             max_value = max_value.to_inexact();
         }

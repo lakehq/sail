@@ -385,6 +385,38 @@ Feature: Delta Lake read path (driver vs metadata-as-data)
         | minimum | maximum |
         | 2       | 10      |
 
+  Rule: Exact Delta aggregates preserve decimal bounds
+    Background:
+      Given variable location for temporary directory delta_exact_writer_stats
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_exact_writer_stats
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_exact_writer_stats (
+          amount DECIMAL(18, 0)
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_exact_writer_stats VALUES
+          (CAST('9007199254740993' AS DECIMAL(18, 0))),
+          (CAST('9007199254740995' AS DECIMAL(18, 0)))
+        """
+
+    Scenario: Decimal extrema retain values beyond exact floating point range
+      When query
+        """
+        SELECT MIN(amount) AS minimum, SUM(amount) AS total
+        FROM delta_exact_writer_stats
+        """
+      Then query result
+        | minimum          | total             |
+        | 9007199254740993 | 18014398509481988 |
+
   Rule: Append-only table with no remove actions is readable on metadata-as-data path
     Background:
       Given variable location for temporary directory delta_read_metadata_append_only

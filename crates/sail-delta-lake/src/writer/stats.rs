@@ -21,6 +21,7 @@
 use std::cmp::min;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ops::AddAssign;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -31,7 +32,6 @@ use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use parquet::file::statistics::Statistics;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use parquet_variant::{ObjectBuilder, VariantBuilder};
-use sail_common::spec::SAIL_LIST_FIELD_NAME;
 
 use crate::conversion::ScalarExt;
 use crate::deletion_vector::z85;
@@ -49,6 +49,7 @@ pub fn create_add(
     num_indexed_cols: i32,
     stats_columns: &Option<Vec<ColumnName>>,
     stats_excluded_columns: &HashSet<String>,
+    repeated_null_counts: &HashMap<ColumnName, u64>,
 ) -> Result<Add, DeltaTableError> {
     let stats = stats_from_file_metadata(
         partition_values,
@@ -56,6 +57,7 @@ pub fn create_add(
         num_indexed_cols,
         stats_columns,
         stats_excluded_columns,
+        repeated_null_counts,
     )?;
     let stats_string = stats
         .to_json_string()
@@ -104,6 +106,7 @@ fn stats_from_file_metadata(
     num_indexed_cols: i32,
     stats_columns: &Option<Vec<ColumnName>>,
     stats_excluded_columns: &HashSet<String>,
+    repeated_null_counts: &HashMap<ColumnName, u64>,
 ) -> Result<Stats, DeltaTableError> {
     let schema_descriptor = file_metadata.file_metadata().schema_descr();
     let row_group_metadata: Vec<RowGroupMetaData> = file_metadata.row_groups().to_vec();
@@ -116,6 +119,7 @@ fn stats_from_file_metadata(
         num_indexed_cols,
         stats_columns,
         stats_excluded_columns,
+        repeated_null_counts,
     )
 }
 
@@ -127,6 +131,7 @@ fn stats_from_metadata(
     num_indexed_cols: i32,
     stats_columns: &Option<Vec<ColumnName>>,
     stats_excluded_columns: &HashSet<String>,
+    repeated_null_counts: &HashMap<ColumnName, u64>,
 ) -> Result<Stats, DeltaTableError> {
     let mut min_values: HashMap<String, ColumnValueStat> = HashMap::new();
     let mut max_values: HashMap<String, ColumnValueStat> = HashMap::new();
@@ -178,6 +183,7 @@ fn stats_from_metadata(
                 &mut min_values,
                 &mut max_values,
                 &mut null_count,
+                repeated_null_counts,
             )?;
         }
 
@@ -419,7 +425,7 @@ fn variant_stats_scalar(scalar: StatsScalar) -> Option<StatsScalar> {
     match scalar {
         StatsScalar::Boolean(_)
         | StatsScalar::Bytes(_)
-        | StatsScalar::Decimal(_)
+        | StatsScalar::Decimal { .. }
         | StatsScalar::Uuid(_) => None,
         scalar => Some(scalar),
     }
@@ -458,7 +464,7 @@ fn insert_variant_stats_field(object: &mut ObjectBuilder<'_, ()>, path: &str, va
         StatsScalar::TimestampNtz(value) => object.insert(path, value),
         StatsScalar::String(value) => object.insert(path, value.as_str()),
         StatsScalar::Boolean(_)
-        | StatsScalar::Decimal(_)
+        | StatsScalar::Decimal { .. }
         | StatsScalar::Bytes(_)
         | StatsScalar::Uuid(_) => {}
     }
@@ -475,7 +481,7 @@ enum StatsScalar {
     Date(chrono::NaiveDate),
     Timestamp(chrono::NaiveDateTime),
     TimestampNtz(chrono::NaiveDateTime),
-    Decimal(f64),
+    Decimal { unscaled: i128, scale: i32 },
     String(String),
     Bytes(Vec<u8>),
     Uuid(uuid::Uuid),
@@ -506,10 +512,10 @@ impl StatsScalar {
                 let date = epoch_start + chrono::Duration::days(get_stat!(v) as i64);
                 Ok(Self::Date(date))
             }
-            (Statistics::Int32(v), Some(LogicalType::Decimal { scale, .. })) => {
-                let val = get_stat!(v) as f64 / 10.0_f64.powi(*scale);
-                Ok(Self::Decimal(val))
-            }
+            (Statistics::Int32(v), Some(LogicalType::Decimal { scale, .. })) => Ok(Self::Decimal {
+                unscaled: i128::from(get_stat!(v)),
+                scale: *scale,
+            }),
             (Statistics::Int32(v), _) => Ok(Self::Int32(get_stat!(v))),
             (
                 Statistics::Int64(v),
@@ -537,10 +543,10 @@ impl StatsScalar {
                     Ok(Self::TimestampNtz(timestamp.naive_utc()))
                 }
             }
-            (Statistics::Int64(v), Some(LogicalType::Decimal { scale, .. })) => {
-                let val = get_stat!(v) as f64 / 10.0_f64.powi(*scale);
-                Ok(Self::Decimal(val))
-            }
+            (Statistics::Int64(v), Some(LogicalType::Decimal { scale, .. })) => Ok(Self::Decimal {
+                unscaled: i128::from(get_stat!(v)),
+                scale: *scale,
+            }),
             (Statistics::Int64(v), _) => Ok(Self::Int64(get_stat!(v))),
             (Statistics::Float(v), _) => Ok(Self::Float32(get_stat!(v))),
             (Statistics::Double(v), _) => Ok(Self::Float64(get_stat!(v))),
@@ -574,23 +580,21 @@ impl StatsScalar {
                 }
                 .unwrap_or_default();
 
-                let val = if val.len() <= 16 {
-                    i128::from_be_bytes(sign_extend_be(val)) as f64
-                } else {
+                if val.is_empty() {
+                    return Err(DeltaTableError::generic(
+                        "Cannot decode an empty decimal statistic",
+                    ));
+                }
+                if val.len() > 16 {
                     return Err(DeltaTableError::generic(format!(
                         "Decimal too large: {val:?}, precision: {precision}"
                     )));
-                };
-
-                let mut val = val / 10.0_f64.powi(*scale);
-
-                if val.is_normal()
-                    && (val.trunc() as i128).to_string().len() > (precision - scale) as usize
-                {
-                    val = f64::from_bits(val.to_bits() - 1);
                 }
 
-                Ok(Self::Decimal(val))
+                Ok(Self::Decimal {
+                    unscaled: i128::from_be_bytes(sign_extend_be(val)),
+                    scale: *scale,
+                })
             }
             (Statistics::FixedLenByteArray(v), Some(LogicalType::Uuid)) => {
                 let val = if use_min {
@@ -631,29 +635,60 @@ pub fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
     result
 }
 
-impl From<StatsScalar> for StatValue {
-    fn from(scalar: StatsScalar) -> Self {
-        match scalar {
-            StatsScalar::Boolean(v) => StatValue::Boolean(v),
-            StatsScalar::Int32(v) => StatValue::Number(v.into()),
-            StatsScalar::Int64(v) => StatValue::Number(v.into()),
+fn decimal_stats_number(unscaled: i128, scale: i32) -> Result<serde_json::Number, DeltaTableError> {
+    let scale = usize::try_from(scale).map_err(|_| {
+        DeltaTableError::generic(format!("Decimal statistic has a negative scale: {scale}"))
+    })?;
+    let digits = unscaled.unsigned_abs().to_string();
+    let mut value = String::with_capacity(digits.len().saturating_add(scale).saturating_add(3));
+    if unscaled.is_negative() {
+        value.push('-');
+    }
+    match digits.len().checked_sub(scale) {
+        Some(integer_digits) if scale > 0 && integer_digits > 0 => {
+            value.push_str(&digits[..integer_digits]);
+            value.push('.');
+            value.push_str(&digits[integer_digits..]);
+        }
+        _ if scale > 0 => {
+            value.push_str("0.");
+            value.extend(std::iter::repeat_n('0', scale - digits.len()));
+            value.push_str(&digits);
+        }
+        _ => value.push_str(&digits),
+    }
+    serde_json::Number::from_str(&value).map_err(|error| {
+        DeltaTableError::generic(format!(
+            "Failed to encode decimal statistic {value}: {error}"
+        ))
+    })
+}
+
+impl TryFrom<StatsScalar> for StatValue {
+    type Error = DeltaTableError;
+
+    fn try_from(scalar: StatsScalar) -> Result<Self, Self::Error> {
+        Ok(match scalar {
+            StatsScalar::Boolean(v) => Self::Boolean(v),
+            StatsScalar::Int32(v) => Self::Number(v.into()),
+            StatsScalar::Int64(v) => Self::Number(v.into()),
             StatsScalar::Float32(v) => serde_json::Number::from_f64(v as f64)
-                .map(StatValue::Number)
-                .unwrap_or_else(|| StatValue::String(v.to_string())),
+                .map(Self::Number)
+                .unwrap_or_else(|| Self::String(v.to_string())),
             StatsScalar::Float64(v) => serde_json::Number::from_f64(v)
-                .map(StatValue::Number)
-                .unwrap_or_else(|| StatValue::String(v.to_string())),
-            StatsScalar::Date(v) => StatValue::String(v.format("%Y-%m-%d").to_string()),
+                .map(Self::Number)
+                .unwrap_or_else(|| Self::String(v.to_string())),
+            StatsScalar::Date(v) => Self::String(v.format("%Y-%m-%d").to_string()),
             StatsScalar::Timestamp(v) => {
-                StatValue::String(v.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
+                Self::String(v.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
             }
             StatsScalar::TimestampNtz(v) => {
-                StatValue::String(v.format("%Y-%m-%dT%H:%M:%S%.3f").to_string())
+                Self::String(v.format("%Y-%m-%dT%H:%M:%S%.3f").to_string())
             }
-            StatsScalar::Decimal(v) => serde_json::Number::from_f64(v)
-                .map(StatValue::Number)
-                .unwrap_or_else(|| StatValue::String(v.to_string())),
-            StatsScalar::String(v) => StatValue::String(v),
+            StatsScalar::Decimal { unscaled, scale } => {
+                Self::Number(decimal_stats_number(unscaled, scale)?)
+            }
+            StatsScalar::String(v) => Self::String(v),
             StatsScalar::Bytes(v) => {
                 let escaped_bytes = v
                     .into_iter()
@@ -661,16 +696,18 @@ impl From<StatsScalar> for StatValue {
                     .collect::<Vec<u8>>();
                 // escape_default always produces valid ASCII so we can use from_utf8_lossy here
                 let escaped_string = String::from_utf8_lossy(escaped_bytes.as_slice()).into_owned();
-                StatValue::String(escaped_string)
+                Self::String(escaped_string)
             }
-            StatsScalar::Uuid(v) => StatValue::String(v.hyphenated().to_string()),
-        }
+            StatsScalar::Uuid(v) => Self::String(v.hyphenated().to_string()),
+        })
     }
 }
 
-impl From<StatsScalar> for serde_json::Value {
-    fn from(scalar: StatsScalar) -> Self {
-        StatValue::from(scalar).into()
+impl TryFrom<StatsScalar> for serde_json::Value {
+    type Error = DeltaTableError;
+
+    fn try_from(scalar: StatsScalar) -> Result<Self, Self::Error> {
+        Ok(StatValue::try_from(scalar)?.into())
     }
 }
 
@@ -732,31 +769,32 @@ impl AddAssign for AggregatedStats {
     }
 }
 
-/// For list fields, extract the correct field name by removing list/element segments
-fn get_list_field_name(column_descr: &Arc<ColumnDescriptor>) -> Option<String> {
-    let max_rep_levels = column_descr.max_rep_level();
-    let column_path_parts = column_descr.path().parts();
-
-    if column_path_parts.len() > (2 * max_rep_levels + 1) as usize {
-        return None;
+fn insert_repeated_null_count(
+    null_counts: &mut HashMap<String, ColumnCountStat>,
+    path: &[String],
+    null_count: i64,
+) -> Result<(), DeltaTableError> {
+    let Some((field, remaining)) = path.split_first() else {
+        return Err(DeltaTableError::generic(
+            "repeated column statistic has an empty path",
+        ));
+    };
+    if remaining.is_empty() {
+        null_counts.insert(field.clone(), ColumnCountStat::Value(null_count));
+        return Ok(());
     }
 
-    let mut column_path_parts = column_path_parts.to_vec();
-    let mut items_seen = 0;
-    let mut lists_seen = 0;
-    while let Some(part) = column_path_parts.pop() {
-        match (part.as_str(), lists_seen, items_seen) {
-            ("list", seen, _) if seen == max_rep_levels => return Some("list".to_string()),
-            ("element", _, seen) if seen == max_rep_levels => return Some("element".to_string()),
-            (SAIL_LIST_FIELD_NAME, _, seen) if seen == max_rep_levels => {
-                return Some(SAIL_LIST_FIELD_NAME.to_string());
-            }
-            ("list", _, _) => lists_seen += 1,
-            ("element", _, _) | (SAIL_LIST_FIELD_NAME, _, _) => items_seen += 1,
-            (other, _, _) => return Some(other.to_string()),
+    let child = null_counts
+        .entry(field.clone())
+        .or_insert_with(|| ColumnCountStat::Column(HashMap::new()));
+    match child {
+        ColumnCountStat::Column(null_counts) => {
+            insert_repeated_null_count(null_counts, remaining, null_count)
         }
+        ColumnCountStat::Value(_) => Err(DeltaTableError::generic(format!(
+            "cannot nest a repeated column statistic below {field:?}"
+        ))),
     }
-    None
 }
 
 fn apply_min_max_for_column(
@@ -766,17 +804,18 @@ fn apply_min_max_for_column(
     min_values: &mut HashMap<String, ColumnValueStat>,
     max_values: &mut HashMap<String, ColumnValueStat>,
     null_counts: &mut HashMap<String, ColumnCountStat>,
+    repeated_null_counts: &HashMap<ColumnName, u64>,
 ) -> Result<(), DeltaTableError> {
-    // Special handling for list column
+    // A repeated Parquet leaf counts null elements as well as null containers. Delta requires the
+    // null count of the array or map itself, so only use counts observed from Arrow container data.
     if column_descr.max_rep_level() > 0 {
-        let key = get_list_field_name(&column_descr);
-
-        if let Some(key) = key
-            && let Some(null_count) = statistics
-                .null_count
-                .and_then(|value| i64::try_from(value).ok())
+        if let Some((path, null_count)) = repeated_null_counts
+            .iter()
+            .filter(|(path, _)| column_path_parts.starts_with(path.path()))
+            .max_by_key(|(path, _)| path.path().len())
+            .and_then(|(path, value)| i64::try_from(*value).ok().map(|value| (path, value)))
         {
-            null_counts.insert(key, ColumnCountStat::Value(null_count));
+            insert_repeated_null_count(null_counts, path.path(), null_count)?;
         }
 
         return Ok(());
@@ -788,12 +827,12 @@ fn apply_min_max_for_column(
             let key = column_descr.name().to_string();
 
             if let Some(min) = statistics.min {
-                let min = ColumnValueStat::Value(min.into());
+                let min = ColumnValueStat::Value(StatValue::try_from(min)?);
                 min_values.insert(key.clone(), min);
             }
 
             if let Some(max) = statistics.max {
-                let max = ColumnValueStat::Value(max.into());
+                let max = ColumnValueStat::Value(StatValue::try_from(max)?);
                 max_values.insert(key.clone(), max);
             }
 
@@ -837,6 +876,7 @@ fn apply_min_max_for_column(
                         mins,
                         maxes,
                         null_counts,
+                        repeated_null_counts,
                     )?;
 
                     Ok(())
@@ -891,8 +931,8 @@ mod tests {
             panic!("Expected timestamp ntz scalar");
         }
 
-        let timestamp_json = serde_json::Value::from(scalar_timestamp);
-        let timestamp_ntz_json = serde_json::Value::from(scalar_timestamp_ntz);
+        let timestamp_json = serde_json::Value::try_from(scalar_timestamp).unwrap();
+        let timestamp_ntz_json = serde_json::Value::try_from(scalar_timestamp_ntz).unwrap();
 
         assert_eq!(
             timestamp_json,
@@ -902,6 +942,23 @@ mod tests {
             timestamp_ntz_json,
             serde_json::Value::String(expected.format("%Y-%m-%dT%H:%M:%S%.3f").to_string())
         );
+    }
+
+    #[test]
+    fn decimal_stats_preserve_exact_values() {
+        let integer = serde_json::Value::try_from(StatsScalar::Decimal {
+            unscaled: 9_007_199_254_740_993,
+            scale: 0,
+        })
+        .unwrap();
+        let fractional = serde_json::Value::try_from(StatsScalar::Decimal {
+            unscaled: -12_345,
+            scale: 2,
+        })
+        .unwrap();
+
+        assert_eq!(integer.to_string(), "9007199254740993");
+        assert_eq!(fractional.to_string(), "-123.45");
     }
 
     #[test]

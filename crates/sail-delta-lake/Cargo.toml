@@ -40,7 +40,7 @@ async-trait = { workspace = true }
 object_store = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["arbitrary_precision"] }
 url = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
