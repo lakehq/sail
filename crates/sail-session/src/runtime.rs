@@ -45,9 +45,21 @@ impl RuntimeEnvFactory {
     {
         let registry = DynamicObjectStoreRegistry::new(self.runtime.clone());
         let cache_config = CacheManagerConfig::default()
-            .with_file_statistics_cache(Some(self.create_file_statistics_cache()))
-            .with_list_files_cache(Some(self.create_file_listing_cache()))
+            .with_file_statistics_cache(self.create_file_statistics_cache())
+            .with_list_files_cache(self.create_file_listing_cache())
             .with_file_metadata_cache(Some(self.create_file_metadata_cache()));
+        let cache_config = match &self.config.parquet.file_statistics_cache.r#type {
+            CacheType::None => cache_config.with_file_statistics_cache_limit(0),
+            CacheType::Global | CacheType::Session => cache_config,
+        };
+        let cache_config = match &self.config.execution.file_listing_cache.r#type {
+            CacheType::None => cache_config.with_list_files_cache_limit(0),
+            CacheType::Global | CacheType::Session => cache_config,
+        };
+        let cache_config = match &self.config.parquet.file_metadata_cache.r#type {
+            CacheType::None => cache_config.with_metadata_cache_limit(0),
+            CacheType::Global | CacheType::Session => cache_config,
+        };
         let builder = RuntimeEnvBuilder::default()
             .with_object_store_registry(Arc::new(registry))
             .with_cache_manager(cache_config)
@@ -86,50 +98,54 @@ impl RuntimeEnvFactory {
         builder
     }
 
-    fn create_file_statistics_cache(&mut self) -> Arc<dyn FileStatisticsCache> {
+    fn create_file_statistics_cache(&mut self) -> Option<Arc<dyn FileStatisticsCache>> {
         let ttl = self.config.parquet.file_statistics_cache.ttl;
         let max_entries = self.config.parquet.file_statistics_cache.max_entries;
         match &self.config.parquet.file_statistics_cache.r#type {
             CacheType::None => {
                 debug!("Not using file statistics cache");
-                Arc::new(MokaFileStatisticsCache::new(ttl, Some(0)))
+                None
             }
             CacheType::Global => {
                 debug!("Using global file statistics cache");
-                self.global_file_statistics_cache
-                    .get_or_insert_with(|| {
-                        Arc::new(MokaFileStatisticsCache::new(ttl, max_entries))
-                            as Arc<dyn FileStatisticsCache>
-                    })
-                    .clone()
+                Some(
+                    self.global_file_statistics_cache
+                        .get_or_insert_with(|| {
+                            Arc::new(MokaFileStatisticsCache::new(ttl, max_entries))
+                                as Arc<dyn FileStatisticsCache>
+                        })
+                        .clone(),
+                )
             }
             CacheType::Session => {
                 debug!("Using session file statistics cache");
-                Arc::new(MokaFileStatisticsCache::new(ttl, max_entries))
+                Some(Arc::new(MokaFileStatisticsCache::new(ttl, max_entries)))
             }
         }
     }
 
-    fn create_file_listing_cache(&mut self) -> Arc<dyn ListFilesCache> {
+    fn create_file_listing_cache(&mut self) -> Option<Arc<dyn ListFilesCache>> {
         let ttl = self.config.execution.file_listing_cache.ttl;
         let max_entries = self.config.execution.file_listing_cache.max_entries;
         match &self.config.execution.file_listing_cache.r#type {
             CacheType::None => {
                 debug!("Not using file listing cache");
-                Arc::new(MokaFileListingCache::new(ttl, Some(0)))
+                None
             }
             CacheType::Global => {
                 debug!("Using global file listing cache");
-                self.global_file_listing_cache
-                    .get_or_insert_with(|| {
-                        Arc::new(MokaFileListingCache::new(ttl, max_entries))
-                            as Arc<dyn ListFilesCache>
-                    })
-                    .clone()
+                Some(
+                    self.global_file_listing_cache
+                        .get_or_insert_with(|| {
+                            Arc::new(MokaFileListingCache::new(ttl, max_entries))
+                                as Arc<dyn ListFilesCache>
+                        })
+                        .clone(),
+                )
             }
             CacheType::Session => {
                 debug!("Using session file listing cache");
-                Arc::new(MokaFileListingCache::new(ttl, max_entries))
+                Some(Arc::new(MokaFileListingCache::new(ttl, max_entries)))
             }
         }
     }
