@@ -435,12 +435,11 @@ class JdbcDataSource(DataSource):
         dbtable = resolved["dbtable"]
         query = resolved["query"]
 
-        if conn_str.startswith("jdbc:mssql"):
+        if conn_str.startswith("mssql"):
             if query is not None:
-                schema_query = f"TOP 0 SELECT * FROM ({query}) AS _cx_schema_q"  # noqa: S608
+                schema_query = f"SELECT TOP 0 * FROM ({query}) AS _cx_schema_q"  # noqa: S608
             else:
-                schema_query = f"TOP 0 SELECT * FROM {dbtable}"  # noqa: S608
-        else:
+                schema_query = f"SELECT TOP 0 * FROM {dbtable}"  # noqa: S608: S608
             if query is not None:
                 schema_query = f"SELECT * FROM ({query}) AS _cx_schema_q LIMIT 0"  # noqa: S608
             else:
