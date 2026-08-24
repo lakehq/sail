@@ -47,7 +47,8 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | byte_byte | byte_int | date_int |
         | tinyint   | int      | date     |
 
-    @sail-bug
+    # @spark-4: `interval day` renders as bare `interval` on PySpark 3.5.
+    @sail-bug @spark-4
     Scenario: date minus date is a day interval
       # Spark returns `interval day`; Sail returns bigint. Not an operand-coercion gap —
       # the operands take no cast — but DataFusion's result type for Date32 - Date32.
@@ -687,10 +688,10 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
     #
     # Sail therefore agrees with Spark only where the operator is re-typed through a
     # `try_cast` (DataFusion types that nullable=true unconditionally): the capped
-    # multiply, the decimal divide and the remainder, all under ANSI off. Both sides of
-    # that split are pinned below, so the custom PhysicalExpr follow-up — which makes
-    # every one of them nullable=true — cannot silently regress the half that already
-    # agrees.
+    # multiply, the capped `+`/`-`, the decimal divide and the remainder, all under ANSI
+    # off. Both sides of that split are pinned below, so the custom PhysicalExpr follow-up
+    # — which makes every one of them nullable=true — cannot silently regress the half
+    # that already agrees.
     @sail-bug
     Scenario: decimal arithmetic reports nullable=true like Spark
       When query
@@ -717,11 +718,10 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
          |-- result: decimal(38,6) (nullable = true)
         """
 
-    @sail-bug
     Scenario: a capped decimal sum is nullable like Spark
-      # The `+`/`-` retype path narrows with a plain `cast`, so the field inherits
-      # the operands' nullability and Sail reports false. Value-safe (the retype
-      # provably fits), but Spark reports true — same gap as the native path above.
+      # p1-s1/p2-s2 push the exact precision past 38, so the retype narrows with
+      # `try_cast` under ANSI off (like the capped multiply above) and the declared
+      # nullability matches Spark without the custom-PhysicalExpr follow-up.
       Given config spark.sql.ansi.enabled = false
       When query
         """
@@ -1920,6 +1920,7 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
     # DATE - DATE to BIGINT instead of interval day, and fails at execution on
     # DATE - TIMESTAMP ("cast Duration(Nanosecond) to Spark data type").
 
+    # The timestamp-typed rows render identically on 3.5 and 4.x, so they stay ungated.
     @sail-bug
     Scenario Outline: Temporal arithmetic: <case>
       When query
@@ -1931,18 +1932,35 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | <t> | <r> |
 
       Examples:
-        | case                                          | expr                                                   | t                      | r                                   |
-        | date plus a day-time interval is a timestamp  | DATE'2024-01-15' + INTERVAL '1 02:03:04' DAY TO SECOND | timestamp              | 2024-01-16 02:03:04                 |
-        | date minus a day-time interval keeps the time | DATE'2024-01-15' - INTERVAL '1 02:03:04' DAY TO SECOND | timestamp              | 2024-01-13 21:56:56                 |
-        | date minus a timestamp is a day-time interval | DATE'2024-01-15' - TIMESTAMP'2024-01-14 06:30:00'      | interval day to second | INTERVAL '0 17:30:00' DAY TO SECOND |
-        | date minus a date is a day interval           | DATE'2024-03-01' - DATE'2024-01-15'                    | interval day           | INTERVAL '46' DAY                   |
-        | date plus NULL is a timestamp NULL            | DATE'2024-01-15' + NULL                                | timestamp              | NULL                                |
+        | case                                          | expr                                                   | t         | r                   |
+        | date plus a day-time interval is a timestamp  | DATE'2024-01-15' + INTERVAL '1 02:03:04' DAY TO SECOND | timestamp | 2024-01-16 02:03:04 |
+        | date minus a day-time interval keeps the time | DATE'2024-01-15' - INTERVAL '1 02:03:04' DAY TO SECOND | timestamp | 2024-01-13 21:56:56 |
+        | date plus NULL is a timestamp NULL            | DATE'2024-01-15' + NULL                                | timestamp | NULL                |
+
+    # @spark-4: `interval day to second` / `interval day` render as bare `interval`
+    # on PySpark 3.5, so these interval-typed rows only hold on the 4.x oracle.
+    @sail-bug @spark-4
+    Scenario Outline: Temporal arithmetic to an interval: <case>
+      When query
+        """
+        SELECT typeof(<expr>) AS t, CAST(<expr> AS STRING) AS r
+        """
+      Then query result
+        | t   | r   |
+        | <t> | <r> |
+
+      Examples:
+        | case                                          | expr                                              | t                      | r                                   |
+        | date minus a timestamp is a day-time interval | DATE'2024-01-15' - TIMESTAMP'2024-01-14 06:30:00' | interval day to second | INTERVAL '0 17:30:00' DAY TO SECOND |
+        | date minus a date is a day interval           | DATE'2024-03-01' - DATE'2024-01-15'               | interval day           | INTERVAL '46' DAY                   |
 
   Rule: Untyped NULL on both sides types as double (known gap)
     # Spark resolves NULL op NULL as double for all four operators; Sail types
     # +, - and * as bigint (division already agrees).
 
-    @sail-bug
+    # @spark-4: untyped `NULL op NULL` resolves to double only on 4.x (the same gate
+    # the sibling null_literal_inference.feature uses for the untyped-NULL family).
+    @sail-bug @spark-4
     Scenario: NULL against NULL is double for every operator
       When query
         """
@@ -1978,7 +1996,8 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
     # Spark multiplies and divides year-month intervals by numerics; Sail rejects
     # every IYM x numeric pair ("Cannot get result type for temporal operation").
 
-    @sail-bug
+    # @spark-4: `interval year to month` renders as bare `interval` on PySpark 3.5.
+    @sail-bug @spark-4
     Scenario Outline: Interval scaled by an integer: <case>
       When query
         """

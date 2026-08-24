@@ -82,7 +82,15 @@ fn spark_additive_operands(
         (Ok(DataType::Decimal128(p1, s1)), Ok(DataType::Decimal128(p2, s2)))
             if spark_decimal_add_diverges(p1, s1, p2, s2, allow_precision_loss) =>
         {
-            spark_decimal_add_retype(sum, p1, s1, p2, s2, allow_precision_loss)
+            spark_decimal_add_retype(
+                sum,
+                p1,
+                s1,
+                p2,
+                s2,
+                allow_precision_loss,
+                function_context.plan_config.ansi_mode,
+            )
         }
         _ => sum,
     }
@@ -341,13 +349,16 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
                     );
                     let product = cast(left, DataType::Decimal256(DECIMAL256_MAX_PRECISION, s1))
                         * cast(right, DataType::Decimal256(DECIMAL256_MAX_PRECISION, s2));
-                    let rounded = expr_fn::round(vec![product, lit(i32::from(result_scale))]);
-                    let target = DataType::Decimal128(result_precision, result_scale);
-                    if ansi_mode {
-                        cast(rounded, target)
+                    // The product already carries scale `s1 + s2`; only round when Spark's
+                    // capped scale is strictly smaller (the common `s1 + s2 <= 6` and the
+                    // whole `allowPrecisionLoss = false` shapes keep the full scale, where a
+                    // `round` to the same scale would be a wasted per-row kernel pass).
+                    let rounded = if i32::from(result_scale) == i32::from(s1) + i32::from(s2) {
+                        product
                     } else {
-                        try_cast(rounded, target)
-                    }
+                        expr_fn::round(vec![product, lit(i32::from(result_scale))])
+                    };
+                    narrow_decimal_by_ansi(rounded, result_precision, result_scale, ansi_mode)
                 }
                 _ => left * right,
             }
@@ -365,12 +376,12 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
 /// with a plain `min(_, 38)` that keeps the scale, giving `decimal(38,10)` — a silently
 /// wrong type under the default `allowPrecisionLoss = true`.
 ///
-/// This only fixes the TYPE. The sum itself stays on the native kernel, so its overflow
-/// behaviour is untouched (that is the custom-`PhysicalExpr` follow-up's job). The final
-/// `cast` cannot add an error path: it is only reached when Spark's scale is strictly
-/// below the native one (the gate skips the equal case), so the round drops digits and the
-/// value fits `(38-s+1)+n <= 38` — it never narrows into an overflow the native sum did
-/// not already have.
+/// The narrowing takes the ANSI gate like the capped multiply / divide paths do: `cast`
+/// under ANSI on, `try_cast` under ANSI off. The value is identical either way (the gate
+/// only fires when Spark's scale is strictly below the native one, so the round drops
+/// digits and the result fits `(38-s+1)+n <= 38` — never a new overflow), but `try_cast`
+/// makes the output field `nullable = true`, matching Spark's non-ANSI Add/Subtract
+/// (`CheckOverflow`, arithmetic.scala) where a plain `cast` would declare `nullable = false`.
 fn spark_decimal_add_retype(
     sum: Expr,
     p1: u8,
@@ -378,14 +389,25 @@ fn spark_decimal_add_retype(
     p2: u8,
     s2: i8,
     allow_precision_loss: bool,
+    ansi_mode: bool,
 ) -> Expr {
     let (result_precision, result_scale) =
         spark_decimal_add_type(p1, s1, p2, s2, allow_precision_loss);
     let rounded = expr_fn::round(vec![sum, lit(i32::from(result_scale))]);
-    cast(
-        rounded,
-        DataType::Decimal128(result_precision, result_scale),
-    )
+    narrow_decimal_by_ansi(rounded, result_precision, result_scale, ansi_mode)
+}
+
+/// Narrows a decimal expression to `Decimal128(precision, scale)` taking Spark's ANSI gate,
+/// shared by the capped `*`, `/` and `+`/`-` retypes: a strict `cast` under ANSI on (an
+/// out-of-range value raises), a `try_cast` under ANSI off (out-of-range yields NULL, and the
+/// field is declared nullable, matching Spark's `CheckOverflow` / non-ANSI decimal arithmetic).
+fn narrow_decimal_by_ansi(expr: Expr, precision: u8, scale: i8, ansi_mode: bool) -> Expr {
+    let target = DataType::Decimal128(precision, scale);
+    if ansi_mode {
+        cast(expr, target)
+    } else {
+        try_cast(expr, target)
+    }
 }
 
 /// Spark-specific operand coercion for `+ - *` applied at plan-construction time,
@@ -884,12 +906,7 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 DataType::Decimal256(DECIMAL256_MAX_PRECISION, dividend_scale),
             ) / cast(divisor, DataType::Decimal256(DECIMAL256_MAX_PRECISION, *s2));
             let rounded = expr_fn::round(vec![quotient, lit(result_scale as i32)]);
-            let target = DataType::Decimal128(result_precision, result_scale);
-            if ansi_mode {
-                cast(rounded, target)
-            } else {
-                try_cast(rounded, target)
-            }
+            narrow_decimal_by_ansi(rounded, result_precision, result_scale, ansi_mode)
         }
         // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
         //  Seems to be a bug in DataFusion.
