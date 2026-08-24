@@ -10,7 +10,9 @@ use datafusion::functions_aggregate::expr_fn::sum;
 use datafusion::logical_expr::logical_plan::{
     Aggregate, EmptyRelation, Projection, TableScan, Union,
 };
-use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, TableSource};
+use datafusion::logical_expr::{
+    Expr, LogicalPlan, LogicalPlanBuilder, TableScanBuilder, TableSource,
+};
 use log::debug;
 use sail_common_datafusion::logical_rewriter::LogicalRewriter;
 
@@ -96,13 +98,14 @@ impl<'a> DeltaAggregateInput<'a> {
 
     fn replace_source(&self, source: Arc<dyn TableSource>) -> Result<LogicalPlan> {
         let scan = self.scan();
-        let scan = LogicalPlan::TableScan(TableScan::try_new(
-            scan.table_name.clone(),
-            source,
-            scan.projection.clone(),
-            scan.filters.clone(),
-            scan.fetch,
-        )?);
+        let scan = LogicalPlan::TableScan(
+            TableScanBuilder::new(scan.table_name.clone(), source)
+                .with_projection(scan.projection.clone())
+                .with_filters(scan.filters.clone())
+                .with_fetch(scan.fetch)
+                .with_statistics_requests(scan.statistics_requests.clone())
+                .build()?,
+        );
         match self {
             Self::Scan(_) => Ok(scan),
             Self::Projection { projection, .. } => {

@@ -84,6 +84,7 @@ fn spark_sum(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         ignore_nulls,
         filter,
         order_by,
+        preserve_count_argument_columns: _,
         function_context,
     } = input;
     let supports_linear_rewrite =
@@ -216,6 +217,7 @@ fn grouping_id(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         ignore_nulls,
         filter,
         order_by,
+        preserve_count_argument_columns: _,
         function_context: _,
     } = input;
     if distinct || ignore_nulls.is_some() || filter.is_some() || !order_by.is_empty() {
@@ -456,6 +458,7 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         ignore_nulls,
         filter,
         order_by,
+        preserve_count_argument_columns,
         function_context,
     } = input;
     let null_treatment = get_null_treatment(ignore_nulls);
@@ -521,7 +524,7 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         return Ok(when(rows.gt(lit(0_i64)), lit(1_i64)).otherwise(lit(0_i64))?);
     }
 
-    if !distinct {
+    if !distinct && !preserve_count_argument_columns {
         let mut nullable_args = Vec::with_capacity(args.len());
         for argument in args {
             if argument.nullable(function_context.schema)?
@@ -1119,6 +1122,7 @@ mod tests {
             ignore_nulls: None,
             filter: Some(Box::new(filter.clone())),
             order_by: vec![],
+            preserve_count_argument_columns: false,
             function_context: FunctionContextInput {
                 argument_display_names: &argument_display_names,
                 plan_config: &plan_config,
