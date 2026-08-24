@@ -49,7 +49,7 @@ impl SparkDatePart {
             |second_arg| {
                 match second_arg.data_type() {
                     DataType::Duration(TimeUnit::Microsecond) => {
-                        truncate_duration_microseconds(second_arg.clone())
+                        truncate_duration_microseconds(second_arg.clone(), 60 * MICROSECONDS)
                     }
                     _ => self.inner.invoke_with_args(ScalarFunctionArgs {
                         args: vec![
@@ -134,10 +134,30 @@ impl ScalarUDFImpl for SparkDatePart {
             .unwrap_or_else(|| self.inner.return_field_from_args(args))
     }
 
-    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, mut args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         match args.return_field.data_type() {
             DataType::Decimal128(8, 6) => self.invoke_seconds(args),
-            _ => self.inner.invoke_with_args(args),
+            _ => {
+                let modulus = args
+                    .args
+                    .first()
+                    .and_then(|part| match part {
+                        ColumnarValue::Scalar(part) => part.try_as_str().flatten(),
+                        _ => None,
+                    })
+                    .and_then(|part| IntervalUnit::from_str(part).ok())
+                    .and_then(|unit| match unit {
+                        IntervalUnit::Hour => Some(24 * 60 * 60 * MICROSECONDS),
+                        IntervalUnit::Minute => Some(60 * 60 * MICROSECONDS),
+                        _ => None,
+                    });
+                if let (Some(modulus), Some(value)) = (modulus, args.args.get(1))
+                    && matches!(value.data_type(), DataType::Duration(TimeUnit::Microsecond))
+                {
+                    args.args[1] = truncate_duration_microseconds(value.clone(), modulus)?;
+                }
+                self.inner.invoke_with_args(args)
+            }
         }
     }
 
@@ -149,7 +169,7 @@ impl ScalarUDFImpl for SparkDatePart {
     }
 }
 
-fn truncate_duration_microseconds(value: ColumnarValue) -> Result<ColumnarValue> {
+fn truncate_duration_microseconds(value: ColumnarValue, modulus: i64) -> Result<ColumnarValue> {
     let (is_scalar, array) = match value {
         ColumnarValue::Array(arr) => (false, arr),
         ColumnarValue::Scalar(scalar) => (true, scalar.to_array()?),
@@ -161,12 +181,12 @@ fn truncate_duration_microseconds(value: ColumnarValue) -> Result<ColumnarValue>
         .map(|arr| {
             Arc::new(
                 arr.iter()
-                    .map(|v| v.map(|d| d % (60 * MICROSECONDS)))
+                    .map(|v| v.map(|d| d % modulus))
                     .collect::<DurationMicrosecondArray>(),
             ) as ArrayRef
         })
         .map_or_else(
-            || exec_err!("Spark `date_part`: Error truncating interval to seconds"),
+            || exec_err!("Spark `date_part`: Error truncating interval component"),
             |result_array| {
                 if is_scalar {
                     Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
@@ -178,4 +198,96 @@ fn truncate_duration_microseconds(value: ColumnarValue) -> Result<ColumnarValue>
                 }
             },
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::array::{AsArray, StringArray};
+    use datafusion::arrow::datatypes::Int32Type;
+    use datafusion_common::config::ConfigOptions;
+
+    use super::*;
+
+    fn invoke_duration_part_value(
+        part: ColumnarValue,
+        values: Vec<Option<i64>>,
+    ) -> Result<Vec<Option<i32>>> {
+        let number_rows = values.len();
+        let duration_type = DataType::Duration(TimeUnit::Microsecond);
+        let result = SparkDatePart::new().invoke_with_args(ScalarFunctionArgs {
+            args: vec![
+                part,
+                ColumnarValue::Array(Arc::new(DurationMicrosecondArray::from(values))),
+            ],
+            arg_fields: vec![
+                Arc::new(Field::new("part", DataType::Utf8, false)),
+                Arc::new(Field::new("value", duration_type, true)),
+            ],
+            number_rows,
+            return_field: Arc::new(Field::new("result", DataType::Int32, true)),
+            config_options: Arc::new(ConfigOptions::default()),
+        })?;
+
+        Ok(result
+            .into_array(number_rows)?
+            .as_primitive::<Int32Type>()
+            .iter()
+            .collect())
+    }
+
+    fn invoke_duration_part(part: &str, values: Vec<Option<i64>>) -> Result<Vec<Option<i32>>> {
+        invoke_duration_part_value(
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(part.to_string()))),
+            values,
+        )
+    }
+
+    #[test]
+    fn duration_hour_and_minute_are_components() -> Result<()> {
+        let values = vec![
+            Some(
+                2 * 24 * 60 * 60 * MICROSECONDS
+                    + 5 * 60 * 60 * MICROSECONDS
+                    + 3 * 60 * MICROSECONDS,
+            ),
+            Some(
+                -(2 * 24 * 60 * 60 * MICROSECONDS
+                    + 5 * 60 * 60 * MICROSECONDS
+                    + 3 * 60 * MICROSECONDS),
+            ),
+            None,
+        ];
+
+        assert_eq!(
+            invoke_duration_part("hour", values.clone())?,
+            vec![Some(5), Some(-5), None]
+        );
+        assert_eq!(
+            invoke_duration_part("minute", values)?,
+            vec![Some(3), Some(-3), None]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn duration_component_rejects_non_scalar_part() {
+        assert!(
+            invoke_duration_part_value(
+                ColumnarValue::Array(Arc::new(StringArray::from(vec!["hour"]))),
+                vec![Some(0)],
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn duration_component_rejects_non_duration_value() {
+        assert!(
+            truncate_duration_microseconds(
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(0))),
+                MICROSECONDS,
+            )
+            .is_err()
+        );
+    }
 }
