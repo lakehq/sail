@@ -482,6 +482,16 @@ fn coerce_spark_arithmetic_operands(
             cast(right, DataType::Float64),
         );
     }
+    // ANSI only: an integral combined with a 32-bit FLOAT promotes both to DOUBLE, not
+    // FLOAT — widening the integral into a float would lose precision. Non-ANSI keeps
+    // Spark's legacy FLOAT result. `AnsiTypeCoercion`: when the wider of two numerics is
+    // FloatType and the other side is integral, the common type is DoubleType (validated
+    // vs Spark 4.2.0). `float`/`double`/`decimal`/`string` peers already widen to DOUBLE
+    // above and elsewhere, so only the integral×float pair needs this.
+    // https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/AnsiTypeCoercion.scala
+    if ansi_mode && is_integral_float_pair(left_type, right_type) {
+        return (cast(left, DataType::Float64), cast(right, DataType::Float64));
+    }
     // integer literal x DECIMAL -> narrow the literal to its minimal decimal.
     // https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/types/DecimalType.scala
     let left = match spark_decimal_literal_datatype(&left, right_type, pick_minimum_precision) {
@@ -523,6 +533,33 @@ fn is_decimal_type(data_type: &DataType) -> bool {
         data_type,
         DataType::Decimal128(_, _) | DataType::Decimal256(_, _)
     )
+}
+
+/// A `/` dividend Spark rejects: not numeric and not an interval it could scale
+/// (booleans, dates, times, timestamps and binary are reinterpreted as raw integers by
+/// DataFusion, producing a meaningless quotient — or, for `time`, an unsupported-kernel
+/// error at execution where Spark rejects at analysis).
+fn rejects_as_divide_dividend(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Boolean
+            | DataType::Date32
+            | DataType::Date64
+            | DataType::Time32(_)
+            | DataType::Time64(_)
+            | DataType::Timestamp(_, _)
+            | DataType::Binary
+            | DataType::LargeBinary
+            | DataType::BinaryView
+    )
+}
+
+/// A `/` divisor Spark rejects: everything a dividend rejects, plus intervals/durations —
+/// Spark has no "number / interval", so DataFusion dividing by the interval's raw nanos is
+/// a silent wrong value.
+fn rejects_as_divide_divisor(data_type: &DataType) -> bool {
+    rejects_as_divide_dividend(data_type)
+        || matches!(data_type, DataType::Interval(_) | DataType::Duration(_))
 }
 
 /// Spark's `DecimalType.forType` for an integer type: the type-based decimal an
@@ -600,6 +637,13 @@ fn coerce_spark_divide_null_operand(
         ),
         _ => (dividend, divisor),
     }
+}
+
+/// One operand is a 32-bit `Float` and the other an integral type (either order) — the
+/// pair whose ANSI common type is `Double` (a `Float` result would lose precision).
+fn is_integral_float_pair(a: &DataType, b: &DataType) -> bool {
+    (matches!(a, DataType::Float32) && b.is_integer())
+        || (a.is_integer() && matches!(b, DataType::Float32))
 }
 
 /// True when one operand is a floating-point type and the other a decimal (either
@@ -807,13 +851,13 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
     let (dividend, divisor) = arguments.two()?;
 
-    // Plan-time check for literal zero divisors (fast path, better error UX).
-    if is_zero_literal(&divisor) {
-        if function_context.plan_config.ansi_mode {
-            return Err(PlanError::ArrowError(ArrowError::DivideByZero));
-        } else {
-            return Ok(Expr::Literal(ScalarValue::Null, None));
-        }
+    // A literal zero divisor under ANSI raises at plan time (better error UX). Under
+    // non-ANSI it falls through: the runtime `make_safe_divisor` guard below nulls the
+    // zero and gives the NULL the division's Spark result type, so a literal `x / 0`
+    // matches the column form. Returning a bare untyped NULL here instead would report
+    // `void` in the schema where Spark reports the numeric type.
+    if function_context.plan_config.ansi_mode && is_zero_literal(&divisor) {
+        return Err(PlanError::ArrowError(ArrowError::DivideByZero));
     }
 
     let ansi_mode = function_context.plan_config.ansi_mode;
@@ -854,6 +898,20 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
     let dividend_type = dividend.get_type(function_context.schema);
     let divisor_type = divisor.get_type(function_context.schema);
+
+    // Spark's `/` (`inputType = TypeCollection(DoubleType, DecimalType)`) rejects a
+    // non-numeric operand at analysis with DATATYPE_MISMATCH; DataFusion would instead
+    // reinterpret it (a boolean as 0/1, a timestamp/date as its raw integer, an interval
+    // as its raw nanos) and compute a meaningless number. Reject those pairs here so the
+    // failure is a plan-time error rather than a silent wrong value. Strings are already
+    // coerced to a numeric type upstream, so they never reach here as `Utf8`.
+    if let (Ok(dividend_type), Ok(divisor_type)) = (&dividend_type, &divisor_type) {
+        if rejects_as_divide_dividend(dividend_type) || rejects_as_divide_divisor(divisor_type) {
+            return Err(PlanError::invalid(format!(
+                "cannot resolve arithmetic '/' with operand types {dividend_type} and {divisor_type}"
+            )));
+        }
+    }
 
     // Apply runtime zero-divisor guard to the divisor before building the division expression.
     let effective_divisor_type = divisor_type.as_ref().cloned().unwrap_or(DataType::Int32);
