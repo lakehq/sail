@@ -5319,6 +5319,24 @@ mod tests {
     }
 
     #[test]
+    fn test_remote_encoding_strips_file_scan_partitioning_fence() -> Result<()> {
+        use datafusion::physical_plan::empty::EmptyExec;
+        use sail_physical_plan::file_scan_partitioning::FileScanPartitioningFenceExec;
+
+        let schema = Arc::new(Schema::empty());
+        let input = Arc::new(EmptyExec::new(schema)) as Arc<dyn ExecutionPlan>;
+        let plan = Arc::new(FileScanPartitioningFenceExec::new(input));
+        let codec = RemoteExecutionCodec;
+
+        let bytes = crate::proto::encode_remote_physical_plan(&codec, plan)?;
+        let decoded =
+            crate::proto::decode_remote_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+
+        assert!(decoded.is::<EmptyExec>());
+        Ok(())
+    }
+
+    #[test]
     fn test_round_trip_schema_evolution_cast_preserves_timezone_mode() -> Result<()> {
         let input_field = Arc::new(Field::new(
             "event_time",

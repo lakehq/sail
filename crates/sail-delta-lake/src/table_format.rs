@@ -96,6 +96,7 @@ impl TableFormat for DeltaTableFormat {
             partition_by: _,
             bucket_by: _,
             sort_order: _,
+            file_scan_partitioning: _,
             options,
             read_case_sensitive: _,
         } = info;
@@ -113,6 +114,7 @@ impl TableFormat for DeltaTableFormat {
             partition_by: _,
             bucket_by: _,
             sort_order: _,
+            file_scan_partitioning: _,
             options,
             read_case_sensitive: _,
         } = info;
@@ -134,6 +136,7 @@ impl TableFormat for DeltaTableFormat {
             partition_by: _,
             bucket_by: _,
             sort_order: _,
+            file_scan_partitioning: _,
             options,
             read_case_sensitive: _,
         } = info;

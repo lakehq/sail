@@ -42,6 +42,7 @@ impl TableFormat for RateTableFormat {
             partition_by,
             bucket_by,
             sort_order,
+            file_scan_partitioning: _,
             options,
             read_case_sensitive: _,
         } = info;

@@ -325,9 +325,81 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             output.tvf_allow_multiple_table_arguments = value;
         }
 
+        if let Some(value) = config.get_option(SparkConfigKey::SPARK_SQL_FILES_MAX_PARTITION_BYTES)
+        {
+            output.file_scan_partitioning.max_partition_bytes =
+                parse_spark_bytes(SparkConfigKey::SPARK_SQL_FILES_MAX_PARTITION_BYTES, value)?;
+        }
+        if let Some(value) = config.get_option(SparkConfigKey::SPARK_SQL_FILES_OPEN_COST_IN_BYTES) {
+            output.file_scan_partitioning.open_cost_bytes =
+                parse_spark_bytes(SparkConfigKey::SPARK_SQL_FILES_OPEN_COST_IN_BYTES, value)?;
+        }
+        output.file_scan_partitioning.min_partitions = config
+            .get_option(SparkConfigKey::SPARK_SQL_FILES_MIN_PARTITION_NUM)
+            .map(|value| (SparkConfigKey::SPARK_SQL_FILES_MIN_PARTITION_NUM, value))
+            .or_else(|| {
+                config
+                    .get_option(SparkConfigKey::SPARK_SQL_LEAF_NODE_DEFAULT_PARALLELISM)
+                    .map(|value| {
+                        (
+                            SparkConfigKey::SPARK_SQL_LEAF_NODE_DEFAULT_PARALLELISM,
+                            value,
+                        )
+                    })
+            })
+            .map(|(key, value)| parse_positive_usize(key, value))
+            .transpose()?;
+        output.file_scan_partitioning.max_partitions = config
+            .get_option(SparkConfigKey::SPARK_SQL_FILES_MAX_PARTITION_NUM)
+            .map(|value| {
+                parse_positive_usize(SparkConfigKey::SPARK_SQL_FILES_MAX_PARTITION_NUM, value)
+            })
+            .transpose()?;
+
         output.pyspark_udf_config = Arc::new(PySparkUdfConfig::try_from(config)?);
 
         Ok(output)
+    }
+}
+
+fn parse_spark_bytes(key: &str, value: &str) -> SparkResult<i64> {
+    let original = value;
+    let (value, sign) = match value.strip_prefix('-') {
+        Some(value) => (value, -1),
+        None => (value, 1),
+    };
+    let value = value.trim().to_ascii_lowercase();
+    let number_end = value
+        .find(|character: char| !character.is_ascii_digit())
+        .unwrap_or(value.len());
+    let (number, suffix) = value.split_at(number_end);
+    let multiplier = match suffix {
+        "" | "b" => 1,
+        "k" | "kb" => 1_i64 << 10,
+        "m" | "mb" => 1_i64 << 20,
+        "g" | "gb" => 1_i64 << 30,
+        "t" | "tb" => 1_i64 << 40,
+        "p" | "pb" => 1_i64 << 50,
+        _ => {
+            return Err(SparkError::invalid(format!(
+                "invalid byte size for {key}: {original}"
+            )));
+        }
+    };
+    number
+        .parse::<i64>()
+        .ok()
+        .and_then(|number| number.checked_mul(multiplier))
+        .and_then(|number| number.checked_mul(sign))
+        .ok_or_else(|| SparkError::invalid(format!("invalid byte size for {key}: {original}")))
+}
+
+fn parse_positive_usize(key: &str, value: &str) -> SparkResult<usize> {
+    match value.trim().parse::<i32>() {
+        Ok(value) if value > 0 => Ok(value as usize),
+        _ => Err(SparkError::invalid(format!(
+            "invalid positive integer for {key}: {value}"
+        ))),
     }
 }
 
@@ -427,5 +499,108 @@ impl TryFrom<&SparkRuntimeConfig> for PySparkUdfConfig {
         }
 
         Ok(output)
+    }
+}
+
+#[expect(clippy::unwrap_used)]
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn runtime_config() -> SparkRuntimeConfig {
+        pyo3::Python::initialize();
+        SparkRuntimeConfig::try_new().unwrap()
+    }
+
+    #[test]
+    fn spark_file_partition_defaults_match_sql_conf() {
+        let runtime = runtime_config();
+
+        let config = PlanConfig::try_from(&runtime).unwrap();
+
+        assert_eq!(config.file_scan_partitioning.max_partition_bytes, 128 << 20);
+        assert_eq!(config.file_scan_partitioning.open_cost_bytes, 4 << 20);
+        assert_eq!(config.file_scan_partitioning.min_partitions, None);
+        assert_eq!(config.file_scan_partitioning.max_partitions, None);
+    }
+
+    #[test]
+    fn parses_spark_file_partition_overrides() {
+        let mut runtime = runtime_config();
+        runtime
+            .set(
+                SparkConfigKey::SPARK_SQL_FILES_MAX_PARTITION_BYTES.to_string(),
+                "64MB".to_string(),
+            )
+            .unwrap();
+        runtime
+            .set(
+                SparkConfigKey::SPARK_SQL_FILES_OPEN_COST_IN_BYTES.to_string(),
+                "8m".to_string(),
+            )
+            .unwrap();
+        runtime
+            .set(
+                SparkConfigKey::SPARK_SQL_FILES_MIN_PARTITION_NUM.to_string(),
+                "3".to_string(),
+            )
+            .unwrap();
+        runtime
+            .set(
+                SparkConfigKey::SPARK_SQL_FILES_MAX_PARTITION_NUM.to_string(),
+                "7".to_string(),
+            )
+            .unwrap();
+
+        let config = PlanConfig::try_from(&runtime).unwrap();
+
+        assert_eq!(config.file_scan_partitioning.max_partition_bytes, 64 << 20);
+        assert_eq!(config.file_scan_partitioning.open_cost_bytes, 8 << 20);
+        assert_eq!(config.file_scan_partitioning.min_partitions, Some(3));
+        assert_eq!(config.file_scan_partitioning.max_partitions, Some(7));
+    }
+
+    #[test]
+    fn spark_file_min_partitions_fall_back_to_leaf_node_default() {
+        let mut runtime = runtime_config();
+        runtime
+            .set(
+                SparkConfigKey::SPARK_SQL_LEAF_NODE_DEFAULT_PARALLELISM.to_string(),
+                "5".to_string(),
+            )
+            .unwrap();
+
+        let config = PlanConfig::try_from(&runtime).unwrap();
+        assert_eq!(config.file_scan_partitioning.min_partitions, Some(5));
+
+        runtime
+            .set(
+                SparkConfigKey::SPARK_SQL_FILES_MIN_PARTITION_NUM.to_string(),
+                "3".to_string(),
+            )
+            .unwrap();
+
+        let config = PlanConfig::try_from(&runtime).unwrap();
+        assert_eq!(config.file_scan_partitioning.min_partitions, Some(3));
+    }
+
+    #[test]
+    fn spark_file_partition_counts_use_positive_int_range() {
+        assert_eq!(
+            parse_positive_usize("test", "2147483647").unwrap(),
+            i32::MAX as usize
+        );
+        for value in ["0", "-1", "2147483648"] {
+            assert!(parse_positive_usize("test", value).is_err());
+        }
+    }
+
+    #[test]
+    fn spark_byte_sizes_use_binary_units() {
+        assert_eq!(parse_spark_bytes("test", "1kb").unwrap(), 1 << 10);
+        assert_eq!(parse_spark_bytes("test", "2MB").unwrap(), 2 << 20);
+        assert_eq!(parse_spark_bytes("test", "-3GB").unwrap(), -(3_i64 << 30));
+        assert!(parse_spark_bytes("test", "1.5mb").is_err());
+        assert!(parse_spark_bytes("test", "9223372036854775808b").is_err());
     }
 }

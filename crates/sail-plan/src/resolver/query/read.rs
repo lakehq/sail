@@ -121,6 +121,7 @@ impl PlanResolver<'_> {
                     partition_by: partition_by.into_iter().map(|field| field.column).collect(),
                     bucket_by: bucket_by.map(|x| x.into()),
                     sort_order: sort_by.into_iter().map(|x| x.into()).collect(),
+                    file_scan_partitioning: self.config.file_scan_partitioning,
                     // TODO: detect duplicated keys in each set of options
                     options: vec![
                         OptionLayer::TablePropertyList { items: properties },
@@ -473,6 +474,7 @@ impl PlanResolver<'_> {
             partition_by: vec![],
             bucket_by: None,
             sort_order: vec![],
+            file_scan_partitioning: self.config.file_scan_partitioning,
             // TODO: detect duplicated keys in the set of options
             options: vec![OptionLayer::OptionList {
                 items: options.into_iter().collect(),

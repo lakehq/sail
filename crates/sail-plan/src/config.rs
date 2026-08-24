@@ -2,6 +2,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
 
+use sail_common_datafusion::datasource::FileScanPartitioningOptions;
 use sail_python_udf::config::PySparkUdfConfig;
 
 use crate::error::PlanResult;
@@ -60,6 +61,8 @@ pub struct PlanConfig {
     /// (`spark.sql.tvf.allowMultipleTableArguments.enabled`, default false). Multiple table
     /// arguments produce the cartesian product of their rows.
     pub tvf_allow_multiple_table_arguments: bool,
+    /// Spark-compatible file scan partition sizing and packing controls.
+    pub file_scan_partitioning: FileScanPartitioningOptions,
 }
 
 impl PlanConfig {
@@ -89,6 +92,7 @@ impl Default for PlanConfig {
             case_sensitive: false,
             pivot_max_values: 10000,
             tvf_allow_multiple_table_arguments: false,
+            file_scan_partitioning: FileScanPartitioningOptions::default(),
         }
     }
 }

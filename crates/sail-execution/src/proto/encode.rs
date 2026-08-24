@@ -19,6 +19,7 @@ use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::array::spark_sequence::SparkSequenceLazy;
 use sail_function::scalar::datetime::convert_tz::ConvertTzLazy;
 use sail_physical_plan::data_source::RemoteDataSourceExec;
+use sail_physical_plan::file_scan_partitioning::FileScanPartitioningFenceExec;
 
 use crate::plan::r#gen;
 use crate::plan::r#gen::higher_order_udf::HigherOrderUdfKind;
@@ -28,6 +29,18 @@ pub fn encode_remote_physical_plan(
     codec: &dyn PhysicalExtensionCodec,
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Vec<u8>> {
+    // This fence is normally removed by the physical optimizer. Strip it here
+    // as a codec safeguard so an unoptimized plan cannot leak an optimizer-only
+    // node into the remote protocol.
+    let plan = plan
+        .transform(|node| {
+            if let Some(fence) = node.downcast_ref::<FileScanPartitioningFenceExec>() {
+                Ok(Transformed::yes(fence.input().clone()))
+            } else {
+                Ok(Transformed::no(node))
+            }
+        })
+        .data()?;
     let plan = plan
         .transform(|node| {
             if let Some(data_source) = node.downcast_ref::<DataSourceExec>() {

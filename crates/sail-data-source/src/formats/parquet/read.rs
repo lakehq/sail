@@ -167,6 +167,10 @@ impl ReadFormat for ParquetReadFormat {
         Ok(config)
     }
 
+    fn is_splittable(&self) -> bool {
+        true
+    }
+
     fn requires_explicit_schema_validation(&self) -> bool {
         true
     }

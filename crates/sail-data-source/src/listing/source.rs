@@ -84,6 +84,14 @@ pub trait ReadFormat: Debug + Send + Sync + 'static {
     /// Build a scan configuration for listing reads.
     async fn scan(&self, ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig>;
 
+    /// Whether this read mode supports splitting files into byte ranges.
+    ///
+    /// Compression is checked separately because DataFusion cannot safely
+    /// range-scan externally compressed files.
+    fn is_splittable(&self) -> bool {
+        false
+    }
+
     /// Whether validating an explicit schema requires the physical file schema.
     fn requires_explicit_schema_validation(&self) -> bool {
         false
@@ -169,6 +177,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
             partition_by,
             bucket_by: _,
             sort_order,
+            file_scan_partitioning,
             options,
             read_case_sensitive,
         } = info;
@@ -266,6 +275,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
             file_sort_order: vec![sort_order],
             collect_stat: ctx.config().collect_statistics(),
             target_partitions: ctx.config().target_partitions(),
+            file_scan_partitioning,
             read_format: Arc::new(read_format),
             path_glob_filter,
             compression,
