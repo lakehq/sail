@@ -410,15 +410,18 @@ async fn broadcast_round_robin_error(
 }
 
 impl DisplayAs for ExplicitRepartitionExec {
-    fn fmt_as(&self, _t: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match &self.properties.partitioning {
-            Partitioning::RoundRobinBatch(partitions) => write!(
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => write!(
                 f,
-                "ExplicitRepartitionExec: partitioning=RoundRobinBatch({}), input_partitions={}",
-                partitions,
+                "{}: partitioning={}, input_partitions={}",
+                Self::static_name(),
+                self.properties.partitioning,
                 self.input.output_partitioning().partition_count(),
             ),
-            _ => write!(f, "{}", Self::static_name()),
+            DisplayFormatType::TreeRender => {
+                writeln!(f, "partitioning_scheme={}", self.properties.partitioning)
+            }
         }
     }
 }

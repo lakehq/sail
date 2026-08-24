@@ -69,6 +69,9 @@ pub struct PlanConfig {
     /// holds its *value* (`spark.sql.legacy.literal.pickMinimumPrecision`, default true).
     /// When false, the literal widens to its *type*-based decimal, as any integer column does.
     pub literal_pick_minimum_precision: bool,
+    /// Whether `COUNT()` is accepted with no arguments. Spark's legacy behavior returns zero;
+    /// it does not interpret the call as `COUNT(*)`.
+    pub legacy_allow_parameterless_count: bool,
 }
 
 impl PlanConfig {
@@ -100,6 +103,7 @@ impl Default for PlanConfig {
             tvf_allow_multiple_table_arguments: false,
             decimal_operations_allow_precision_loss: true,
             literal_pick_minimum_precision: true,
+            legacy_allow_parameterless_count: false,
         }
     }
 }

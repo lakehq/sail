@@ -3,7 +3,7 @@ use std::time::Duration;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
 use sail_common::utils::retry::RetryStrategy;
-use sail_common_datafusion::session::job::JobRunnerHistoryReporter;
+use sail_telemetry::system_event::SystemEventReporter;
 
 use crate::id::DriverId;
 use crate::shuffle::ShuffleBackendKind;
@@ -35,7 +35,7 @@ pub struct DriverOptions {
 
 pub struct DriverComponents {
     pub worker_manager: Box<dyn WorkerManager>,
-    pub history_reporter: Box<dyn JobRunnerHistoryReporter>,
+    pub event_reporter: SystemEventReporter,
 }
 
 impl DriverOptions {

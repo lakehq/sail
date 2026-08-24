@@ -10,6 +10,7 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::is_variant_storage_field;
+use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
@@ -24,6 +25,7 @@ use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::spark_string_to_numeric;
+use crate::function::is_spark_compatible_arrow_fixed_offset;
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
@@ -104,6 +106,28 @@ impl PlanResolver<'_> {
                 | DataType::Map(_, _)
         );
         let expr = match (expr_type, cast_to_type.clone(), is_try) {
+            (
+                DataType::Timestamp(_, None),
+                DataType::Timestamp(TimeUnit::Microsecond, Some(timezone)),
+                is_try,
+            ) => {
+                if is_spark_compatible_arrow_fixed_offset(timezone.as_ref()) {
+                    if is_try {
+                        try_cast(expr, cast_to_type)
+                    } else {
+                        cast(expr, cast_to_type)
+                    }
+                } else {
+                    let timestamp_ntz =
+                        cast(expr, DataType::Timestamp(TimeUnit::Microsecond, None));
+                    let instant = ScalarUDF::from(ConvertTz::new(false)).call(vec![
+                        lit(timezone.to_string()),
+                        lit("UTC"),
+                        timestamp_ntz,
+                    ]);
+                    cast(cast(instant, DataType::Int64), cast_to_type)
+                }
+            }
             (_, DataType::Utf8, _) if expr_is_variant => cast(
                 ScalarUDF::new_from_impl(SparkVariantToJsonUdf::new()).call(vec![expr]),
                 DataType::Utf8,
@@ -167,7 +191,8 @@ impl PlanResolver<'_> {
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Date32,
                 is_try,
-            ) => ScalarUDF::new_from_impl(SparkDate::new(is_try)).call(vec![expr]),
+            ) => ScalarUDF::new_from_impl(SparkDate::new(is_try || !self.config.ansi_mode))
+                .call(vec![expr]),
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Timestamp(TimeUnit::Microsecond, tz),

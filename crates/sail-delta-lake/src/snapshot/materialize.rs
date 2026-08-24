@@ -10,7 +10,6 @@ use datafusion::common::scalar::ScalarValue;
 
 use super::DeltaSnapshot;
 use crate::conversion::parse_optional_partition_value;
-use crate::schema::make_physical_arrow_schema;
 use crate::spec::fields::{
     FIELD_NAME_PARTITION_VALUES_PARSED, FIELD_NAME_STATS, FIELD_NAME_STATS_PARSED,
 };
@@ -20,7 +19,7 @@ use crate::spec::{
 };
 
 impl DeltaSnapshot {
-    pub(super) fn build_files_batch_from_adds(&self, adds: &[Add]) -> DeltaResult<RecordBatch> {
+    pub(crate) fn build_files_batch_from_adds(&self, adds: &[Add]) -> DeltaResult<RecordBatch> {
         let raw = encode_snapshot_add_rows(adds)?;
         parse_scan_row_columns(raw, self)
     }
@@ -74,7 +73,6 @@ fn build_partition_schema(
 
 fn build_stats_source_schema(snapshot: &DeltaSnapshot) -> DeltaResult<ArrowSchema> {
     let partition_columns = snapshot.metadata().partition_columns();
-    let mode = snapshot.effective_column_mapping_mode();
     let non_partition_fields: Vec<Field> = snapshot
         .schema()
         .fields()
@@ -82,8 +80,7 @@ fn build_stats_source_schema(snapshot: &DeltaSnapshot) -> DeltaResult<ArrowSchem
         .filter(|field| !partition_columns.contains(field.name()))
         .map(|field| field.as_ref().clone())
         .collect();
-    let logical_non_partition = ArrowSchema::new(non_partition_fields);
-    Ok(make_physical_arrow_schema(&logical_non_partition, mode))
+    Ok(ArrowSchema::new(non_partition_fields))
 }
 
 fn parse_scan_row_columns(raw: RecordBatch, snapshot: &DeltaSnapshot) -> DeltaResult<RecordBatch> {
@@ -94,10 +91,9 @@ fn parse_scan_row_columns(raw: RecordBatch, snapshot: &DeltaSnapshot) -> DeltaRe
     if let Some((stats_idx, _)) = raw.schema_ref().column_with_name(FIELD_NAME_STATS) {
         let stats_source_arrow = build_stats_source_schema(snapshot)?;
         let stats_source_kernel = StructType::try_from(&stats_source_arrow)?;
-        let stats_schema = Arc::new(stats_schema(
-            &stats_source_kernel,
-            snapshot.table_properties(),
-        )?);
+        let stats_schema =
+            stats_schema(&stats_source_kernel, snapshot.table_properties())?.make_physical(mode);
+        let stats_schema = Arc::new(stats_schema);
         let arrow_stats_schema = Arc::new(ArrowSchema::try_from(stats_schema.as_ref())?);
         let stats_batch = raw.project(&[stats_idx])?;
         let stats_json = stats_batch
@@ -175,10 +171,7 @@ pub(crate) fn parse_partition_values_array(
                 ));
             }
             let physical_name = field.physical_name(column_mapping_mode);
-            let value = raw_values
-                .get(physical_name)
-                .or_else(|| raw_values.get(field.name()))
-                .and_then(Clone::clone);
+            let value = raw_values.get(physical_name).and_then(Clone::clone);
             raw_collected
                 .get_mut(physical_name)
                 .ok_or_else(|| DeltaTableError::schema("partition field missing".to_string()))?
@@ -291,4 +284,57 @@ fn collect_partition_row(value: &StructArray) -> DeltaResult<HashMap<String, Opt
         }
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use datafusion::arrow::array::{Array, Int32Array};
+    use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
+
+    use super::{encode_snapshot_add_rows, parse_partition_values_array};
+    use crate::spec::{Add, ColumnMappingMode, DeltaError, DeltaResult, StructType};
+
+    fn mapped_field(logical_name: &str, physical_name: &str) -> Field {
+        Field::new(logical_name, ArrowDataType::Int32, true).with_metadata(HashMap::from([(
+            "delta.columnMapping.physicalName".to_string(),
+            physical_name.to_string(),
+        )]))
+    }
+
+    #[test]
+    fn mapped_partition_array_does_not_fallback_to_a_colliding_logical_name() -> DeltaResult<()> {
+        let partition_schema = StructType::try_from(&Schema::new(vec![
+            mapped_field("source", "col-source"),
+            mapped_field("col-source", "col-target"),
+        ]))?;
+        let action = Add {
+            path: "part-00000.parquet".to_string(),
+            partition_values: HashMap::from([("col-source".to_string(), Some("10".to_string()))]),
+            size: 1,
+            data_change: true,
+            ..Default::default()
+        };
+        let batch = encode_snapshot_add_rows(&[action])?;
+
+        let parsed = parse_partition_values_array(
+            &batch,
+            &partition_schema,
+            "partitionValues",
+            ColumnMappingMode::Name,
+        )?;
+        let source = parsed
+            .column_by_name("col-source")
+            .and_then(|array| array.as_any().downcast_ref::<Int32Array>())
+            .ok_or_else(|| DeltaError::schema("source partition field missing"))?;
+        let target = parsed
+            .column_by_name("col-target")
+            .and_then(|array| array.as_any().downcast_ref::<Int32Array>())
+            .ok_or_else(|| DeltaError::schema("target partition field missing"))?;
+
+        assert_eq!(source.value(0), 10);
+        assert!(target.is_null(0));
+        Ok(())
+    }
 }

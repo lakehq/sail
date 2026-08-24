@@ -1294,9 +1294,8 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         """
       Then query error CAST_INVALID_INPUT
 
-    @sail-bug
     Scenario: a fractional string cast to an integer truncates under ANSI off
-      # Spark truncates toward zero: 1, 1, -1, -1. Sail returns NULL for all four.
+      # Spark truncates toward zero: 1, 1, -1, -1; Sail matches.
       Given config spark.sql.ansi.enabled = false
       When query
         """
@@ -1362,11 +1361,10 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | r |
         | 5 |
 
-    @sail-bug
     Scenario: the DEL control character is trimmed by a cast to integer
       # Spark's integer parser trims a slightly wider set than 0x20 — DEL (0x7F) among the
-      # ISO controls — so Spark returns 5. Sail only trims 0x00..=0x20, so it yields NULL.
-      # A known minor gap of the string-to-integer surface.
+      # ISO controls — so Spark returns 5; Sail matches (Arrow's integer parser ignores the
+      # trailing DEL past the digits).
       Given config spark.sql.ansi.enabled = false
       When query
         """
