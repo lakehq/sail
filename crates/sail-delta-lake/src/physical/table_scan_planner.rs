@@ -9,7 +9,7 @@ use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use sail_logical_plan::merge::{MergeCardinalityCheckNode, RowLevelWriteNode};
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 
-use crate::logical::table_source::DeltaTableSource;
+use crate::logical::table_source::{DeltaFileSelection, DeltaTableSource};
 use crate::physical::scan_planner::{DeltaFileSource, plan_delta_scan};
 use crate::physical_plan::planner::create_row_level_write_physical_plan;
 use crate::table_format::{DeltaWriteNode, plan_delta_write};
@@ -86,10 +86,30 @@ impl ExtensionPlanner for DeltaPhysicalPlanner {
         let config = source.config();
         let filters = unnormalize_cols(scan.filters.clone());
         let projection = scan.projection.clone();
-        let file_source = if snapshot.load_config().require_files {
-            DeltaFileSource::Eager(snapshot.shared_adds())
-        } else {
-            DeltaFileSource::Replay
+        let file_source = match (
+            snapshot.load_config().require_files,
+            source.file_selection(),
+        ) {
+            (true, DeltaFileSelection::Snapshot) => DeltaFileSource::Eager(snapshot.shared_adds()),
+            (true, DeltaFileSelection::Selected(indices)) => {
+                let files = indices
+                    .iter()
+                    .map(|&index| {
+                        snapshot.adds().get(index).cloned().ok_or_else(|| {
+                            datafusion_common::DataFusionError::Internal(format!(
+                                "Delta file selection index {index} is out of range"
+                            ))
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                DeltaFileSource::Eager(Arc::new(files))
+            }
+            (false, DeltaFileSelection::Snapshot) => DeltaFileSource::Replay,
+            (false, DeltaFileSelection::Selected(_)) => {
+                return datafusion_common::internal_err!(
+                    "Delta file selection cannot be planned from a metadata-only snapshot"
+                );
+            }
         };
         let plan = plan_delta_scan(
             session_state,

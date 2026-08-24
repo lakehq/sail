@@ -155,6 +155,9 @@ impl ScalarConverter {
             StatValue::Null => Ok(Some(ScalarValue::try_new_null(field_dt)?)),
             StatValue::Boolean(value) => Self::bool_to_arrow_scalar_value(*value, field_dt),
             StatValue::Number(value) => Self::number_to_arrow_scalar_value(value, field_dt),
+            StatValue::ExactNumber(value) => {
+                Self::string_json_to_arrow_scalar_value(value.get(), field_dt)
+            }
             StatValue::String(value) => Self::string_json_to_arrow_scalar_value(value, field_dt),
         }
     }
