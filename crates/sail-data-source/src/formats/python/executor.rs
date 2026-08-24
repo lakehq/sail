@@ -13,6 +13,7 @@ use futures::stream::BoxStream;
 use pyo3::exceptions::PyAttributeError;
 use pyo3::prelude::*;
 use pyo3::types::PyAnyMethods;
+use sail_common_python::thread_state::pin_thread_state;
 
 use super::error::{PythonDataSourceContext, import_cloudpickle};
 use super::filter::{PythonFilter, filters_to_python};
@@ -240,7 +241,8 @@ impl PythonExecutor for InProcessExecutor {
 
         // Use spawn_blocking for GIL-bound operations
         tokio::task::spawn_blocking(move || {
-            pyo3::Python::attach(|py| {
+            Python::attach(|py| {
+                pin_thread_state(py);
                 // Deserialize and call schema()
                 let datasource = deserialize_datasource(py, &command)?;
 
@@ -277,7 +279,8 @@ impl PythonExecutor for InProcessExecutor {
         let schema = schema.clone();
 
         tokio::task::spawn_blocking(move || {
-            pyo3::Python::attach(|py| {
+            Python::attach(|py| {
+pin_thread_state(py);
                 let datasource = deserialize_datasource(py, &command)?;
 
                 // Get datasource name for error context
@@ -449,7 +452,8 @@ impl PythonExecutor for InProcessExecutor {
         let schema = schema.clone();
 
         tokio::task::spawn_blocking(move || {
-            pyo3::Python::attach(|py| {
+            Python::attach(|py| {
+                pin_thread_state(py);
                 let datasource = deserialize_datasource(py, &command)?;
 
                 // Get datasource name for error context
@@ -535,7 +539,8 @@ impl PythonExecutor for InProcessExecutor {
         let slow_write_warn_ms = self.slow_write_warn_ms;
 
         let result = tokio::task::spawn_blocking(move || {
-            pyo3::Python::attach(|py| {
+            Python::attach(|py| {
+                pin_thread_state(py);
                 // Deserialize the writer
                 let writer = deserialize_object(py, &pickled_writer)?;
 
@@ -608,7 +613,8 @@ impl PythonExecutor for InProcessExecutor {
         let pickled_writer = pickled_writer.to_vec();
 
         tokio::task::spawn_blocking(move || {
-            pyo3::Python::attach(|py| {
+            Python::attach(|py| {
+                pin_thread_state(py);
                 // Deserialize the writer
                 let writer = deserialize_object(py, &pickled_writer)?;
 
@@ -658,7 +664,8 @@ impl PythonExecutor for InProcessExecutor {
         let pickled_writer = pickled_writer.to_vec();
 
         tokio::task::spawn_blocking(move || {
-            pyo3::Python::attach(|py| {
+            Python::attach(|py| {
+                pin_thread_state(py);
                 // Deserialize the writer (best-effort: abort must not propagate errors
                 // since the original error from write/commit is more important)
                 let writer = match deserialize_object(py, &pickled_writer) {

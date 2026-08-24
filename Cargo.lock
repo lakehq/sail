@@ -7484,6 +7484,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sail-common-python"
+version = "0.7.0"
+dependencies = [
+ "pyo3",
+]
+
+[[package]]
 name = "sail-data-source"
 version = "0.7.1"
 dependencies = [
@@ -7515,6 +7522,7 @@ dependencies = [
  "sail-build-scripts",
  "sail-common",
  "sail-common-datafusion",
+ "sail-common-python",
  "sail-physical-plan",
  "sail-pyarrow",
  "sail-sql-analyzer",
@@ -7938,6 +7946,7 @@ dependencies = [
  "pyo3",
  "sail-common",
  "sail-common-datafusion",
+ "sail-common-python",
  "sail-pyarrow",
  "thiserror 2.0.20",
  "tokio",

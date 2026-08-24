@@ -7,6 +7,7 @@ use educe::Educe;
 use pyo3::Python;
 use sail_common_datafusion::rename::record_batch::rename_record_batch_stream;
 use sail_common_datafusion::udf::StreamUDF;
+use sail_common_python::thread_state::pin_thread_state;
 
 use crate::cereal::pyspark_udf::PySparkUdfPayload;
 use crate::config::PySparkUdfConfig;
@@ -79,6 +80,7 @@ impl StreamUDF for PySparkMapIterUDF {
 
     fn invoke(&self, input: SendableRecordBatchStream) -> Result<SendableRecordBatchStream> {
         let function = Python::attach(|py| -> PyUdfResult<_> {
+            pin_thread_state(py);
             let udf = PySparkUdfPayload::load(py, &self.payload)?;
             let udf = match self.kind {
                 PySparkMapIterKind::Pandas => PySpark::map_pandas_iter_udf(py, udf, &self.config)?,
