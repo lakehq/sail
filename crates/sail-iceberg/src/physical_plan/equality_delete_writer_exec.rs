@@ -345,9 +345,9 @@ fn equality_delete_fields(
     iceberg_schema: &crate::spec::Schema,
     input_schema: &SchemaRef,
 ) -> Result<Vec<EqualityDeleteField>> {
+    validate_equality_delete_schema(iceberg_schema)?;
     let mut fields = Vec::with_capacity(iceberg_schema.fields().len());
     for field in iceberg_schema.fields() {
-        validate_equality_delete_type(&field.name, &field.field_type)?;
         let arrow_field = Arc::new(iceberg_field_to_arrow(field)?);
         let input_field = input_schema.field_with_name(&field.name).map_err(|_| {
             DataFusionError::Plan(format!(
@@ -370,6 +370,13 @@ fn equality_delete_fields(
         });
     }
     Ok(fields)
+}
+
+pub(crate) fn validate_equality_delete_schema(iceberg_schema: &crate::spec::Schema) -> Result<()> {
+    for field in iceberg_schema.fields() {
+        validate_equality_delete_type(&field.name, &field.field_type)?;
+    }
+    Ok(())
 }
 
 fn validate_equality_delete_type(name: &str, ty: &Type) -> Result<()> {

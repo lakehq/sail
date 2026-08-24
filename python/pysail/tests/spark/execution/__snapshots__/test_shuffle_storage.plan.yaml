@@ -5,7 +5,7 @@ data:
   |-
     == Codegen ==
     Whole-stage codegen is not supported; showing physical plan instead.
-  
+
     == Plan Steps ==
     initial_logical_plan:
     Sort: #13 ASC NULLS FIRST
@@ -21,13 +21,13 @@ data:
                   ExplicitRepartition: kind=hash, n=Some(8), expr=[#4]
                     Projection: #3 AS k AS #4, #3 + Int32(1) AS v2 AS #5
                       Range: start=0, end=64, step=1, num_partitions=4
-  
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after type_coercion:
     Sort: #13 ASC NULLS FIRST
       Projection: #12 AS #13, count(Int64(1)) AS count AS #14, sum(#10) AS s1 AS #15, sum(#11) AS s2 AS #16
@@ -42,22 +42,22 @@ data:
                   ExplicitRepartition: kind=hash, n=Some(8), expr=[#4]
                     Projection: #3 AS k AS #4, #3 + CAST(Int32(1) AS Int64) AS v2 AS #5
                       Range: start=0, end=64, step=1, num_partitions=4
-  
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after optimize_unions:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after unions_to_filter:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after simplify_expressions:
     Sort: #13 ASC NULLS FIRST
       Projection: #12 AS #13, count(Int64(1)) AS count AS #14, sum(#10) AS s1 AS #15, sum(#11) AS s2 AS #16
@@ -72,64 +72,64 @@ data:
                   ExplicitRepartition: kind=hash, n=Some(8), expr=[#4]
                     Projection: #3 AS k AS #4, #3 + Int64(1) AS v2 AS #5
                       Range: start=0, end=64, step=1, num_partitions=4
-  
+
     logical_plan after replace_distinct_aggregate:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after eliminate_join:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after scalar_subquery_to_join:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after decorrelate_lateral_join:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after extract_equijoin_predicate:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after eliminate_duplicated_expr:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after eliminate_filter:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after eliminate_cross_join:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after eliminate_limit:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after propagate_empty_relation:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after filter_null_join_keys:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after push_down_limit:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after eliminate_group_by_constant:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after common_sub_expression_eliminate:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after extract_leaf_expressions:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after optimize_projections:
     Sort: #13 ASC NULLS FIRST
       Projection: #12 AS #13, count(Int64(1)) AS count AS #14, sum(#10) AS s1 AS #15, sum(#11) AS s2 AS #16
@@ -142,88 +142,88 @@ data:
               ExplicitRepartition: kind=hash, n=Some(8), expr=[#4]
                 Projection: #3 AS k AS #4, #3 + Int64(1) AS v2 AS #5
                   Range: start=0, end=64, step=1, num_partitions=4
-  
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after optimize_unions:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after unions_to_filter:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after simplify_expressions:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after replace_distinct_aggregate:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after eliminate_join:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after scalar_subquery_to_join:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after decorrelate_lateral_join:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after extract_equijoin_predicate:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after eliminate_duplicated_expr:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after eliminate_filter:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after eliminate_cross_join:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after eliminate_limit:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after propagate_empty_relation:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after filter_null_join_keys:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after push_down_limit:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after eliminate_group_by_constant:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after common_sub_expression_eliminate:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after extract_leaf_expressions:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
-  
+
     logical_plan:
     Sort: #13 ASC NULLS FIRST
       Projection: #12 AS #13, count(Int64(1)) AS count AS #14, sum(#10) AS s1 AS #15, sum(#11) AS s2 AS #16
@@ -236,7 +236,7 @@ data:
               ExplicitRepartition: kind=hash, n=Some(8), expr=[#4]
                 Projection: #3 AS k AS #4, #3 + Int64(1) AS v2 AS #5
                   Range: start=0, end=64, step=1, num_partitions=4
-  
+
     initial_physical_plan:
     SortExec: expr=[#13@0 ASC], preserve_partitioning=[false]
       ProjectionExec: expr=[#12@0 as #13, count(Int64(1))@1 as #14, sum(#10)@2 as #15, sum(#11)@3 as #16]
@@ -244,14 +244,14 @@ data:
           AggregateExec: mode=Partial, gby=[#12@2 as #12], aggr=[count(Int64(1)), sum(#10), sum(#11)]
             ProjectionExec: expr=[#2@1 as #10, #5@3 as #11, #1@0 % 4 as #12]
               HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
-                ExplicitRepartitionExec
+                ExplicitRepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4
                   ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2]
                     RangeExec
-                ExplicitRepartitionExec
+                ExplicitRepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4
                   ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
                     RangeExec
-  
-  
+
+
     initial_physical_plan_with_stats:
     SortExec: expr=[#13@0 ASC], preserve_partitioning=[false], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:)]]
       ProjectionExec: expr=[#12@0 as #13, count(Int64(1))@1 as #14, sum(#10)@2 as #15, sum(#11)@3 as #16], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:)]]
@@ -259,14 +259,14 @@ data:
           AggregateExec: mode=Partial, gby=[#12@2 as #12], aggr=[count(Int64(1)), sum(#10), sum(#11)], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:)]]
             ProjectionExec: expr=[#2@1 as #10, #5@3 as #11, #1@0 % 4 as #12], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:)]]
               HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:)]]
-                ExplicitRepartitionExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+                ExplicitRepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
                   ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
                     RangeExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
-                ExplicitRepartitionExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+                ExplicitRepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
                   ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
                     RangeExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
-  
-  
+
+
     initial_physical_plan_with_schema:
     SortExec: expr=[#13@0 ASC], preserve_partitioning=[false], schema=[#13:Int64, #14:Int64, #15:Int64;N, #16:Int64;N]
       ProjectionExec: expr=[#12@0 as #13, count(Int64(1))@1 as #14, sum(#10)@2 as #15, sum(#11)@3 as #16], schema=[#13:Int64, #14:Int64, #15:Int64;N, #16:Int64;N]
@@ -274,14 +274,14 @@ data:
           AggregateExec: mode=Partial, gby=[#12@2 as #12], aggr=[count(Int64(1)), sum(#10), sum(#11)], schema=[#12:Int64, count(Int64(1))[count]:Int64, sum(#10)[sum]:Int64;N, sum(#11)[sum]:Int64;N]
             ProjectionExec: expr=[#2@1 as #10, #5@3 as #11, #1@0 % 4 as #12], schema=[#10:Int64, #11:Int64, #12:Int64]
               HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], schema=[#1:Int64, #2:Int64, #4:Int64, #5:Int64]
-                ExplicitRepartitionExec, schema=[#1:Int64, #2:Int64]
+                ExplicitRepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4, schema=[#1:Int64, #2:Int64]
                   ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2], schema=[#1:Int64, #2:Int64]
                     RangeExec, schema=[#0:Int64]
-                ExplicitRepartitionExec, schema=[#4:Int64, #5:Int64]
+                ExplicitRepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4, schema=[#4:Int64, #5:Int64]
                   ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5], schema=[#4:Int64, #5:Int64]
                     RangeExec, schema=[#3:Int64]
-  
-  
+
+
     physical_plan after OutputRequirements:
     OutputRequirementExec: order_by=[(#13@0, asc)], dist_by=SinglePartition
       SortExec: expr=[#13@0 ASC], preserve_partitioning=[false]
@@ -290,17 +290,17 @@ data:
             AggregateExec: mode=Partial, gby=[#12@2 as #12], aggr=[count(Int64(1)), sum(#10), sum(#11)]
               ProjectionExec: expr=[#2@1 as #10, #5@3 as #11, #1@0 % 4 as #12]
                 HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
-                  ExplicitRepartitionExec
+                  ExplicitRepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4
                     ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2]
                       RangeExec
-                  ExplicitRepartitionExec
+                  ExplicitRepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4
                     ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
                       RangeExec
-  
-  
+
+
     physical_plan after aggregate_statistics:
     SAME TEXT AS ABOVE
-  
+
     physical_plan after join_selection:
     OutputRequirementExec: order_by=[(#13@0, asc)], dist_by=SinglePartition
       SortExec: expr=[#13@0 ASC], preserve_partitioning=[false]
@@ -309,23 +309,23 @@ data:
             AggregateExec: mode=Partial, gby=[#12@2 as #12], aggr=[count(Int64(1)), sum(#10), sum(#11)]
               ProjectionExec: expr=[#2@1 as #10, #5@3 as #11, #1@0 % 4 as #12]
                 HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@0, #4@0)]
-                  ExplicitRepartitionExec
+                  ExplicitRepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4
                     ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2]
                       RangeExec
-                  ExplicitRepartitionExec
+                  ExplicitRepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4
                     ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
                       RangeExec
-  
-  
+
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
-  
+
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
-  
+
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
-  
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[(#13@0, asc)], dist_by=SinglePartition
       SortPreservingMergeExec: [#13@0 ASC]
@@ -336,20 +336,20 @@ data:
                 AggregateExec: mode=Partial, gby=[#12@2 as #12], aggr=[count(Int64(1)), sum(#10), sum(#11)]
                   ProjectionExec: expr=[#2@1 as #10, #5@3 as #11, #1@0 % 4 as #12]
                     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@0, #4@0)]
-                      ExplicitRepartitionExec
+                      ExplicitRepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4
                         ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2]
                           RangeExec
-                      ExplicitRepartitionExec
+                      ExplicitRepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4
                         ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
                           RangeExec
-  
-  
+
+
     physical_plan after CombinePartialFinalAggregate:
     SAME TEXT AS ABOVE
-  
+
     physical_plan after OptimizeAggregateOrder:
     SAME TEXT AS ABOVE
-  
+
     physical_plan after ProjectionPushdown:
     OutputRequirementExec: order_by=[(#13@0, asc)], dist_by=SinglePartition
       SortPreservingMergeExec: [#13@0 ASC]
@@ -360,14 +360,14 @@ data:
                 AggregateExec: mode=Partial, gby=[#12@2 as #12], aggr=[count(Int64(1)), sum(#10), sum(#11)]
                   ProjectionExec: expr=[#2@0 as #10, #5@1 as #11, #1@2 % 4 as #12]
                     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@0, #4@0)], projection=[#2@1, #5@3, #1@0]
-                      ExplicitRepartitionExec
+                      ExplicitRepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4
                         ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2]
                           RangeExec
-                      ExplicitRepartitionExec
+                      ExplicitRepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4
                         ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
                           RangeExec
-  
-  
+
+
     physical_plan after OutputRequirements:
     SortPreservingMergeExec: [#13@0 ASC]
       ProjectionExec: expr=[#12@0 as #13, count(Int64(1))@1 as #14, sum(#10)@2 as #15, sum(#11)@3 as #16]
@@ -377,41 +377,41 @@ data:
               AggregateExec: mode=Partial, gby=[#12@2 as #12], aggr=[count(Int64(1)), sum(#10), sum(#11)]
                 ProjectionExec: expr=[#2@0 as #10, #5@1 as #11, #1@2 % 4 as #12]
                   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@0, #4@0)], projection=[#2@1, #5@3, #1@0]
-                    ExplicitRepartitionExec
+                    ExplicitRepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4
                       ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2]
                         RangeExec
-                    ExplicitRepartitionExec
+                    ExplicitRepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4
                       ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
                         RangeExec
-  
-  
+
+
     physical_plan after LimitAggregation:
     SAME TEXT AS ABOVE
-  
+
     physical_plan after LimitPushPastWindows:
     SAME TEXT AS ABOVE
-  
+
     physical_plan after HashJoinBuffering:
     SAME TEXT AS ABOVE
-  
+
     physical_plan after LimitPushdown:
     SAME TEXT AS ABOVE
-  
+
     physical_plan after TopKRepartition:
     SAME TEXT AS ABOVE
-  
+
     physical_plan after ProjectionPushdown:
     SAME TEXT AS ABOVE
-  
+
     physical_plan after PushdownSort:
     SAME TEXT AS ABOVE
-  
+
     physical_plan after EnsureCooperative:
     SAME TEXT AS ABOVE
-  
+
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
-  
+
     physical_plan after RewriteExplicitRepartition:
     SortPreservingMergeExec: [#13@0 ASC]
       ProjectionExec: expr=[#12@0 as #13, count(Int64(1))@1 as #14, sum(#10)@2 as #15, sum(#11)@3 as #16]
@@ -427,17 +427,17 @@ data:
                     RepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4
                       ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
                         RangeExec
-  
-  
+
+
     physical_plan after RewriteCollectLeftHashJoin:
     SAME TEXT AS ABOVE
-  
+
     physical_plan after EnforceBarrierPartitioning:
     SAME TEXT AS ABOVE
-  
+
     physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
-  
+
     physical_plan:
     ProjectionExec: expr=[#13@0 as g, #14@1 as count, #15@2 as s1, #16@3 as s2]
       SortPreservingMergeExec: [#13@0 ASC]
@@ -454,8 +454,8 @@ data:
                       RepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4
                         ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
                           RangeExec
-  
-  
+
+
     == Physical Plan ==
     ProjectionExec: expr=[#13@0 as g, #14@1 as count, #15@2 as s1, #16@3 as s2]
       SortPreservingMergeExec: [#13@0 ASC]
@@ -472,8 +472,8 @@ data:
                       RepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4
                         ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
                           RangeExec
-  
-  
+
+
     == Distributed Plan ==
     === stage 0 ===
     inputs=[]
@@ -483,7 +483,7 @@ data:
     placement=Worker
     ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2]
       RangeExec
-  
+
     === stage 1 ===
     inputs=[StageInput(stage=0, mode=Shuffle)]
     mode=Blocking
@@ -491,7 +491,7 @@ data:
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
     StageInputExec: input=0, partitioning=Hash([#1@0], 8)
-  
+
     === stage 2 ===
     inputs=[]
     mode=Pipelined
@@ -500,7 +500,7 @@ data:
     placement=Worker
     ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
       RangeExec
-  
+
     === stage 3 ===
     inputs=[StageInput(stage=2, mode=Shuffle)]
     mode=Blocking
@@ -508,7 +508,7 @@ data:
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
     StageInputExec: input=0, partitioning=Hash([#4@0], 8)
-  
+
     === stage 4 ===
     inputs=[StageInput(stage=1, mode=Forward), StageInput(stage=3, mode=Forward)]
     mode=Pipelined
@@ -520,7 +520,7 @@ data:
         HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@0, #4@0)], projection=[#2@1, #5@3, #1@0]
           StageInputExec: input=0, partitioning=Hash([#1@0], 8)
           StageInputExec: input=1, partitioning=Hash([#4@0], 8)
-  
+
     === stage 5 ===
     inputs=[StageInput(stage=4, mode=Shuffle)]
     mode=Blocking
@@ -528,7 +528,7 @@ data:
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
     StageInputExec: input=0, partitioning=Hash([#12@0], 4)
-  
+
     === stage 6 ===
     inputs=[StageInput(stage=5, mode=Forward)]
     mode=Pipelined
@@ -539,7 +539,7 @@ data:
       SortExec: expr=[#12@0 ASC], preserve_partitioning=[true]
         AggregateExec: mode=FinalPartitioned, gby=[#12@0 as #12], aggr=[count(Int64(1)), sum(#10), sum(#11)]
           StageInputExec: input=0, partitioning=Hash([#12@0], 4)
-  
+
     === stage 7 ===
     inputs=[StageInput(stage=6, mode=Merge)]
     mode=Pipelined

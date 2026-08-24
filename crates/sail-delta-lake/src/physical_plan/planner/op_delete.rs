@@ -13,7 +13,6 @@
 use std::sync::Arc;
 
 use datafusion::common::{DataFusionError, Result, ToDFSchema};
-use datafusion::physical_expr::expressions::NotExpr;
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
@@ -50,9 +49,11 @@ pub async fn build_delete_plan(
         .to_dfschema()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let condition_expr = condition.expr.clone();
-    let physical_condition = ctx
+    // DELETE removes rows only when the predicate is true; false and null rows remain.
+    let retention_condition = condition_expr.clone().is_not_true();
+    let physical_retention_condition = ctx
         .session()
-        .create_physical_expr(condition_expr.clone(), &table_df_schema)?;
+        .create_physical_expr(retention_condition, &table_df_schema)?;
 
     // Partition-only predicates can delete entire files without scanning data. In that case,
     // build a visible metadata pipeline over a log-derived meta table.
@@ -131,13 +132,12 @@ pub async fn build_delete_plan(
     let adapter = adapter_factory
         .create(table_schema.clone(), scan_exec.schema())
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let adapted_condition = adapter
-        .rewrite(physical_condition.clone())
+    let adapted_retention_condition = adapter
+        .rewrite(physical_retention_condition)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-    let negated_condition = Arc::new(NotExpr::new(adapted_condition));
     let filter_exec: Arc<dyn ExecutionPlan> =
-        Arc::new(FilterExec::try_new(negated_condition, scan_exec)?);
+        Arc::new(FilterExec::try_new(adapted_retention_condition, scan_exec)?);
 
     let operation = Some(DeltaOperation::Delete {
         predicate: condition.source,

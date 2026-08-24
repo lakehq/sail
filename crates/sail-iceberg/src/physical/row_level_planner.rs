@@ -12,6 +12,7 @@ use sail_logical_plan::merge::RowLevelWriteNode;
 
 use crate::operations::SnapshotUpdateKind;
 use crate::options::r#gen::IcebergWriteOptions;
+use crate::physical_plan::equality_delete_writer_exec::validate_equality_delete_schema;
 use crate::physical_plan::merge_row_projection::IcebergMergeRowProjection;
 use crate::physical_plan::{
     IcebergCommitExec, IcebergEqualityDeleteWriterExec, IcebergWriterExec,
@@ -113,6 +114,10 @@ async fn plan_iceberg_delete(
         Table::load_with_metadata_location(session, table_url.clone(), metadata_location_for_load)
             .await?;
     ensure_current_row_level_mode(&table, RowLevelCommand::Delete)?;
+    let current_schema = table.metadata().current_schema().ok_or_else(|| {
+        DataFusionError::Plan("Iceberg table metadata is missing current schema".to_string())
+    })?;
+    validate_equality_delete_schema(current_schema)?;
 
     let delete_plan = LogicalPlanBuilder::from(node.raw_target().as_ref().clone())
         .filter(condition.expr.clone())?
@@ -121,9 +126,6 @@ async fn plan_iceberg_delete(
 
     let writer_options = resolve_row_level_writer_options(session, node)?;
     let partition_columns = IcebergTableFormat::partition_columns_from_metadata(&table)?;
-    let current_schema = table.metadata().current_schema().ok_or_else(|| {
-        DataFusionError::Plan("Iceberg table metadata is missing current schema".to_string())
-    })?;
     let current_arrow_schema =
         crate::datasource::type_converter::iceberg_schema_to_arrow(current_schema)?;
     let write_context = prepare_iceberg_write_context(

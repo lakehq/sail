@@ -22,6 +22,8 @@ use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
 use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
+use sail_function::scalar::array::spark_sequence::{SparkSequence, SparkSequenceLazy};
+use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzLazy};
 
 use crate::plan::r#gen;
 use crate::plan::r#gen::higher_order_udf::HigherOrderUdfKind;
@@ -214,6 +216,26 @@ pub(super) fn try_decode_higher_order_udf(
             } else {
                 Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new()))
             }
+        }
+        HigherOrderUdfKind::SparkSequenceLazy(r#gen::SparkSequenceUdf {
+            session_timezone,
+            ansi_mode,
+        }) => Arc::new(HigherOrderUDF::new_from_impl(SparkSequenceLazy::new(
+            SparkSequence::new(Arc::from(session_timezone), ansi_mode),
+        ))),
+        HigherOrderUdfKind::ConvertTzLazy(r#gen::ConvertTzUdf {
+            classic,
+            null_short_circuit,
+        }) => {
+            let convert_tz = ConvertTz::new(classic);
+            let convert_tz = if null_short_circuit {
+                convert_tz.with_null_short_circuit()
+            } else {
+                convert_tz
+            };
+            Arc::new(HigherOrderUDF::new_from_impl(ConvertTzLazy::new(
+                convert_tz,
+            )))
         }
     })
 }

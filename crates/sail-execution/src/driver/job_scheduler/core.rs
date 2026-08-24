@@ -12,6 +12,7 @@ use log::{debug, warn};
 use sail_common::actor::ActorContext;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
+use sail_telemetry::system_event::SystemEvent;
 
 use crate::driver::DriverActor;
 use crate::driver::job_scheduler::state::{
@@ -66,6 +67,39 @@ impl JobScheduler {
         let descriptor = JobDescriptor::try_new(graph, JobState::Running { output }, context)?;
         self.jobs.insert(job_id, descriptor);
 
+        if let Some(job) = self.jobs.get(&job_id) {
+            let event_reporter = &self.event_reporter;
+            let session_id = &self.options.session_id;
+            event_reporter.report(SystemEvent::JobCreated {
+                session_id: session_id.clone(),
+                job_id: u64::from(job_id),
+                status: job.state.status().to_string(),
+                created_at: Utc::now(),
+            });
+            for (s, (stage, descriptor)) in job.graph.stages().iter().zip(&job.stages).enumerate() {
+                event_reporter.report(SystemEvent::StageCreated {
+                    session_id: session_id.clone(),
+                    job_id: u64::from(job_id),
+                    stage: s as u64,
+                    partitions: stage.plan.output_partitioning().partition_count() as u64,
+                    inputs: stage
+                        .inputs
+                        .iter()
+                        .map(|input| sail_common_datafusion::system::types::StageInput {
+                            stage: input.stage as u64,
+                            mode: input.mode.to_string(),
+                        })
+                        .collect(),
+                    group: stage.group.clone(),
+                    mode: stage.mode.to_string(),
+                    distribution: stage.distribution.to_string(),
+                    placement: stage.placement.to_string(),
+                    status: descriptor.state.status().to_string(),
+                    created_at: Utc::now(),
+                });
+            }
+        }
+
         Ok((job_id, stream))
     }
 
@@ -76,6 +110,8 @@ impl JobScheduler {
         message: Option<String>,
         cause: Option<CommonErrorCause>,
     ) {
+        let event_reporter = self.event_reporter.clone();
+        let session_id = self.options.session_id.clone();
         let Some(attempt) = self
             .jobs
             .get_mut(&key.job_id)
@@ -87,13 +123,19 @@ impl JobScheduler {
             return;
         };
         attempt.state = attempt.state.consolidate(state);
-        if attempt.state.is_terminal() && attempt.stopped_at.is_none() {
-            attempt.stopped_at = Some(Utc::now());
-        }
         attempt.messages.extend(message);
         if let Some(cause) = cause {
             attempt.cause = Some(cause);
         }
+        event_reporter.report(SystemEvent::TaskUpdated {
+            session_id,
+            job_id: u64::from(key.job_id),
+            stage: key.stage as u64,
+            partition: key.partition as u64,
+            attempt: key.attempt as u64,
+            status: attempt.state.status().to_string(),
+            updated_at: Utc::now(),
+        });
     }
 
     pub fn get_task_state(&self, key: &TaskKey) -> Option<TaskState> {
@@ -126,6 +168,8 @@ impl JobScheduler {
     ///   6. For each task region, schedule the tasks of the region if all the dependency
     ///      regions have succeeded.
     pub fn refresh_job(&mut self, job_id: JobId) -> Vec<JobAction> {
+        let event_reporter = self.event_reporter.clone();
+        let session_id = self.options.session_id.clone();
         let Some(job) = self.jobs.get_mut(&job_id) else {
             warn!("job {job_id} not found");
             return vec![];
@@ -136,9 +180,19 @@ impl JobScheduler {
 
         let mut actions = vec![];
 
-        actions.extend(Self::cascade_cancel_task_attempts(job_id, job));
+        actions.extend(Self::cascade_cancel_task_attempts(
+            job_id,
+            job,
+            &event_reporter,
+            &session_id,
+        ));
         actions.extend(Self::extend_job_output(job_id, job));
-        actions.extend(Self::clean_up_job_by_stage(job_id, job));
+        actions.extend(Self::clean_up_job_by_stage(
+            job_id,
+            job,
+            &event_reporter,
+            &session_id,
+        ));
 
         Self::update_task_regions(job, &self.options);
 
@@ -155,7 +209,12 @@ impl JobScheduler {
                 })
             }
             job.state = JobState::Failed;
-            job.stopped_at = Some(Utc::now());
+            event_reporter.report(SystemEvent::JobUpdated {
+                session_id,
+                job_id: u64::from(job_id),
+                status: job.state.status().to_string(),
+                updated_at: Utc::now(),
+            });
             return actions;
         }
 
@@ -167,10 +226,21 @@ impl JobScheduler {
             // This drops `JobOutputManager` in the job state,
             // so that `JobOutputStream` turns to the draining state as well.
             job.state = JobState::Draining;
+            event_reporter.report(SystemEvent::JobUpdated {
+                session_id,
+                job_id: u64::from(job_id),
+                status: job.state.status().to_string(),
+                updated_at: Utc::now(),
+            });
             return actions;
         }
 
-        actions.extend(Self::schedule_task_regions(job_id, job));
+        actions.extend(Self::schedule_task_regions(
+            job_id,
+            job,
+            &event_reporter,
+            &session_id,
+        ));
 
         actions
     }
@@ -205,7 +275,12 @@ impl JobScheduler {
         }
     }
 
-    fn cascade_cancel_task_attempts(job_id: JobId, job: &mut JobDescriptor) -> Vec<JobAction> {
+    fn cascade_cancel_task_attempts(
+        job_id: JobId,
+        job: &mut JobDescriptor,
+        event_reporter: &sail_telemetry::system_event::SystemEventReporter,
+        session_id: &str,
+    ) -> Vec<JobAction> {
         let mut actions = vec![];
 
         for region in &job.topology.regions {
@@ -227,7 +302,15 @@ impl JobScheduler {
                     for (a, attempt) in task.attempts.iter_mut().enumerate() {
                         if !attempt.state.is_terminal() {
                             attempt.state = TaskState::Canceled;
-                            attempt.stopped_at = Some(Utc::now());
+                            event_reporter.report(SystemEvent::TaskUpdated {
+                                session_id: session_id.to_string(),
+                                job_id: u64::from(job_id),
+                                stage: t.stage as u64,
+                                partition: t.partition as u64,
+                                attempt: a as u64,
+                                status: attempt.state.status().to_string(),
+                                updated_at: Utc::now(),
+                            });
                             actions.push(JobAction::CancelTask {
                                 key: TaskKey {
                                     job_id,
@@ -245,7 +328,12 @@ impl JobScheduler {
         actions
     }
 
-    fn clean_up_job_by_stage(job_id: JobId, job: &mut JobDescriptor) -> Vec<JobAction> {
+    fn clean_up_job_by_stage(
+        job_id: JobId,
+        job: &mut JobDescriptor,
+        event_reporter: &sail_telemetry::system_event::SystemEventReporter,
+        session_id: &str,
+    ) -> Vec<JobAction> {
         let mut actions = vec![];
 
         for (s, stage) in job.topology.stages.iter().enumerate() {
@@ -267,7 +355,13 @@ impl JobScheduler {
 
             if all_consumers_succeeded && !stage.consumers.is_empty() {
                 job.stages[s].state = StageState::Inactive;
-                job.stages[s].stopped_at = Some(Utc::now());
+                event_reporter.report(SystemEvent::StageUpdated {
+                    session_id: session_id.to_string(),
+                    job_id: u64::from(job_id),
+                    stage: s as u64,
+                    status: job.stages[s].state.status().to_string(),
+                    updated_at: Utc::now(),
+                });
                 actions.push(JobAction::CleanUpJob {
                     job_id,
                     stage: Some(s),
@@ -279,7 +373,12 @@ impl JobScheduler {
         actions
     }
 
-    fn schedule_task_regions(job_id: JobId, job: &mut JobDescriptor) -> Vec<JobAction> {
+    fn schedule_task_regions(
+        job_id: JobId,
+        job: &mut JobDescriptor,
+        event_reporter: &sail_telemetry::system_event::SystemEventReporter,
+        session_id: &str,
+    ) -> Vec<JobAction> {
         let mut actions = vec![];
 
         for (r, region) in job.topology.regions.iter().enumerate() {
@@ -308,16 +407,22 @@ impl JobScheduler {
             }
 
             for t in &region.tasks {
-                job.stages[t.stage].tasks[t.partition]
-                    .attempts
-                    .push(TaskAttemptDescriptor {
-                        state: TaskState::Created,
-                        messages: vec![],
-                        cause: None,
-                        job_output_fetched: false,
-                        created_at: Utc::now(),
-                        stopped_at: None,
-                    });
+                let attempts = &mut job.stages[t.stage].tasks[t.partition].attempts;
+                attempts.push(TaskAttemptDescriptor {
+                    state: TaskState::Created,
+                    messages: vec![],
+                    cause: None,
+                    job_output_fetched: false,
+                });
+                event_reporter.report(SystemEvent::TaskCreated {
+                    session_id: session_id.to_string(),
+                    job_id: u64::from(job_id),
+                    stage: t.stage as u64,
+                    partition: t.partition as u64,
+                    attempt: (attempts.len() - 1) as u64,
+                    status: TaskState::Created.status().to_string(),
+                    created_at: Utc::now(),
+                });
             }
 
             actions.push(JobAction::ScheduleTaskRegion {
@@ -474,6 +579,8 @@ impl JobScheduler {
     /// The method cancels all the task attempts that are not in terminal states
     /// and removes all the job output streams.
     pub fn clean_up_job(&mut self, job_id: JobId) -> Vec<JobAction> {
+        let event_reporter = self.event_reporter.clone();
+        let session_id = self.options.session_id.clone();
         let Some(job) = self.jobs.get_mut(&job_id) else {
             warn!("job {job_id} not found");
             return vec![];
@@ -495,10 +602,19 @@ impl JobScheduler {
                 }
             }
         }
-        for stage in job.stages.iter_mut() {
-            stage.state = StageState::Inactive;
-            if stage.stopped_at.is_none() {
-                stage.stopped_at = Some(Utc::now());
+        for (s, stage) in job.stages.iter_mut().enumerate() {
+            match stage.state {
+                StageState::Active => {
+                    stage.state = StageState::Inactive;
+                    event_reporter.report(SystemEvent::StageUpdated {
+                        session_id: session_id.clone(),
+                        job_id: u64::from(job_id),
+                        stage: s as u64,
+                        status: stage.state.status().to_string(),
+                        updated_at: Utc::now(),
+                    });
+                }
+                StageState::Inactive => {}
             }
         }
         actions.push(JobAction::CleanUpJob {
@@ -511,7 +627,12 @@ impl JobScheduler {
         } else {
             job.state = JobState::Canceled;
         }
-        job.stopped_at = Some(Utc::now());
+        event_reporter.report(SystemEvent::JobUpdated {
+            session_id,
+            job_id: u64::from(job_id),
+            status: job.state.status().to_string(),
+            updated_at: Utc::now(),
+        });
         actions
     }
 
@@ -550,7 +671,10 @@ impl JobScheduler {
     }
 
     pub fn stop(&mut self) {
-        for (_, job) in self.jobs.iter_mut() {
+        let event_reporter = self.event_reporter.clone();
+        let session_id = self.options.session_id.clone();
+        for (job_id, job) in self.jobs.iter_mut() {
+            let job_id = u64::from(*job_id);
             if matches!(job.state, JobState::Running { .. } | JobState::Draining) {
                 // For running jobs, the job output is dropped here.
                 // Internally, the job output manages the receiving end of the output stream.
@@ -561,18 +685,37 @@ impl JobScheduler {
                 // shuffle read nodes) are dropped. So the worker gRPC server will have no active
                 // clients subscribing to local streams, and the server can proceed with shutdown.
                 job.state = JobState::Canceled;
-                job.stopped_at = Some(Utc::now());
+                event_reporter.report(SystemEvent::JobUpdated {
+                    session_id: session_id.to_string(),
+                    job_id,
+                    status: job.state.status().to_string(),
+                    updated_at: Utc::now(),
+                });
             }
-            for stage in job.stages.iter_mut() {
+            for (s, stage) in job.stages.iter_mut().enumerate() {
                 if matches!(stage.state, StageState::Active) {
                     stage.state = StageState::Inactive;
-                    stage.stopped_at = Some(Utc::now());
+                    event_reporter.report(SystemEvent::StageUpdated {
+                        session_id: session_id.to_string(),
+                        job_id,
+                        stage: s as u64,
+                        status: stage.state.status().to_string(),
+                        updated_at: Utc::now(),
+                    });
                 }
-                for task in stage.tasks.iter_mut() {
-                    for attempt in task.attempts.iter_mut() {
+                for (partition, task) in stage.tasks.iter_mut().enumerate() {
+                    for (a, attempt) in task.attempts.iter_mut().enumerate() {
                         if !attempt.state.is_terminal() {
                             attempt.state = TaskState::Canceled;
-                            attempt.stopped_at = Some(Utc::now());
+                            event_reporter.report(SystemEvent::TaskUpdated {
+                                session_id: session_id.to_string(),
+                                job_id,
+                                stage: s as u64,
+                                partition: partition as u64,
+                                attempt: a as u64,
+                                status: attempt.state.status().to_string(),
+                                updated_at: Utc::now(),
+                            });
                         }
                     }
                 }

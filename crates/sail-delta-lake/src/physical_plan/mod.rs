@@ -46,7 +46,7 @@ pub use action_schema::{
 pub use commit_exec::DeltaCommitExec;
 pub use discovery_exec::DeltaDiscoveryExec;
 pub use dv_writer_exec::{DeletionVectorRowsWriterExec, DeletionVectorWriterExec};
-pub use log_replay_exec::DeltaLogReplayExec;
+pub use log_replay_exec::{DeltaLogReplayExec, DeltaLogReplayMode};
 pub use metadata_stats_exec::DeltaMetadataStatsExec;
 pub mod planner;
 pub use planner::{

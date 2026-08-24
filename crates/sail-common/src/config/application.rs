@@ -1,3 +1,6 @@
+use std::fmt::{Display, Formatter};
+use std::str::FromStr;
+
 use figment::providers::Env;
 use figment::value::{Dict, Empty, Map, Tag, Value};
 use figment::{Error, Figment, Metadata, Profile, Provider};
@@ -323,11 +326,71 @@ pub struct StorageShuffleBackend {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CelebornShuffleBackend {
-    pub master_host: String,
-    pub master_port: u16,
+    pub master_endpoints: Vec<String>,
+    pub compression: CelebornCompressionCodec,
+    pub heartbeat_interval_secs: u64,
     pub endpoint_overrides: Vec<CelebornEndpointOverride>,
     pub partition_split_threshold: i64,
     pub partition_split_mode: CelebornPartitionSplitMode,
+}
+
+/// Compression applied to Celeborn push-data batches.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub enum CelebornCompressionCodec {
+    None,
+    #[default]
+    Lz4,
+    Zstd {
+        level: i8,
+    },
+}
+
+impl Display for CelebornCompressionCodec {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::None => f.write_str("none"),
+            Self::Lz4 => f.write_str("lz4"),
+            Self::Zstd { level } => write!(f, "zstd({level})"),
+        }
+    }
+}
+
+impl FromStr for CelebornCompressionCodec {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "none" => Ok(Self::None),
+            "lz4" => Ok(Self::Lz4),
+            value => value
+                .strip_prefix("zstd(")
+                .and_then(|value| value.strip_suffix(')'))
+                .ok_or_else(|| format!("invalid Celeborn compression codec: {value}"))?
+                .parse::<i8>()
+                .map_err(|_| format!("invalid Celeborn zstd compression level: {value}"))
+                .and_then(|level| {
+                    (-5..=22)
+                        .contains(&level)
+                        .then_some(Self::Zstd { level })
+                        .ok_or_else(|| format!("invalid Celeborn zstd compression level: {value}"))
+                }),
+        }
+    }
+}
+
+impl TryFrom<String> for CelebornCompressionCodec {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        value.parse()
+    }
+}
+
+impl From<CelebornCompressionCodec> for String {
+    fn from(value: CelebornCompressionCodec) -> Self {
+        value.to_string()
+    }
 }
 
 /// The behavior a Celeborn worker uses when a partition exceeds its split threshold.
@@ -350,10 +413,8 @@ impl std::fmt::Display for CelebornPartitionSplitMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CelebornEndpointOverride {
-    pub internal_host: String,
-    pub internal_port: u16,
-    pub external_host: String,
-    pub external_port: u16,
+    pub internal: String,
+    pub external: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -404,8 +465,9 @@ mod shuffle_backend {
                         compression: super::ShuffleCompression::None,
                     },
                     celeborn: super::CelebornShuffleBackend {
-                        master_host: String::new(),
-                        master_port: 0,
+                        master_endpoints: vec![],
+                        compression: super::CelebornCompressionCodec::default(),
+                        heartbeat_interval_secs: 10,
                         endpoint_overrides: vec![],
                         partition_split_threshold: 1_i64 << 30,
                         partition_split_mode: super::CelebornPartitionSplitMode::Soft,
@@ -415,8 +477,9 @@ mod shuffle_backend {
                     r#type: Type::Storage,
                     storage,
                     celeborn: super::CelebornShuffleBackend {
-                        master_host: String::new(),
-                        master_port: 0,
+                        master_endpoints: vec![],
+                        compression: super::CelebornCompressionCodec::default(),
+                        heartbeat_interval_secs: 10,
                         endpoint_overrides: vec![],
                         partition_split_threshold: 1_i64 << 30,
                         partition_split_mode: super::CelebornPartitionSplitMode::Soft,
@@ -861,10 +924,33 @@ impl ClusterConfigEnv {
         SHUFFLE_BACKEND__STORAGE__PATH,
         SHUFFLE_BACKEND__STORAGE__MAX_FILE_SIZE,
         SHUFFLE_BACKEND__STORAGE__COMPRESSION,
-        SHUFFLE_BACKEND__CELEBORN__MASTER_HOST,
-        SHUFFLE_BACKEND__CELEBORN__MASTER_PORT,
+        SHUFFLE_BACKEND__CELEBORN__MASTER_ENDPOINTS,
+        SHUFFLE_BACKEND__CELEBORN__COMPRESSION,
+        SHUFFLE_BACKEND__CELEBORN__HEARTBEAT_INTERVAL_SECS,
         SHUFFLE_BACKEND__CELEBORN__ENDPOINT_OVERRIDES,
         SHUFFLE_BACKEND__CELEBORN__PARTITION_SPLIT_THRESHOLD,
         SHUFFLE_BACKEND__CELEBORN__PARTITION_SPLIT_MODE,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CelebornCompressionCodec;
+
+    #[test]
+    fn parses_celeborn_compression() {
+        assert_eq!("none".parse(), Ok(CelebornCompressionCodec::None));
+        assert_eq!("lz4".parse(), Ok(CelebornCompressionCodec::Lz4));
+        assert_eq!(
+            "zstd(1)".parse(),
+            Ok(CelebornCompressionCodec::Zstd { level: 1 })
+        );
+        assert!("zstd".parse::<CelebornCompressionCodec>().is_err());
+        assert_eq!(
+            "zstd(-5)".parse(),
+            Ok(CelebornCompressionCodec::Zstd { level: -5 })
+        );
+        assert!("zstd(-6)".parse::<CelebornCompressionCodec>().is_err());
+        assert!("zstd(127)".parse::<CelebornCompressionCodec>().is_err());
     }
 }

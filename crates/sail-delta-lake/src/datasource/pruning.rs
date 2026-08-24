@@ -36,8 +36,9 @@ use datafusion_common::{Column, DataFusionError};
 
 use crate::conversion::{ScalarConverter, parse_optional_partition_value};
 use crate::delta_log::LogStoreRef;
-use crate::spec::Add;
+use crate::schema::arrow_field_physical_name;
 use crate::spec::statistics::Stats;
+use crate::spec::{Add, ColumnMappingMode};
 use crate::table::DeltaSnapshot;
 
 fn widen_timestamp_max_struct_array(array: &StructArray) -> StructArray {
@@ -162,8 +163,9 @@ pub async fn prune_files(
         let referenced_columns = crate::datasource::collect_physical_columns(&physical_predicate);
         let stats = AddStatsPruningStatistics::try_new(
             logical_schema.clone(),
-            all_files.clone(),
+            &all_files,
             referenced_columns,
+            snapshot.effective_column_mapping_mode(),
         )?;
         let pruning_predicate = PruningPredicateBuilder::new()
             .with_file_schema(logical_schema)
@@ -216,16 +218,22 @@ pub async fn prune_files(
 ///
 /// Returns a boolean mask aligned with `adds` where `true` means "keep".
 pub(crate) fn prune_adds_by_physical_predicate(
-    adds: Vec<Add>,
+    adds: &[Add],
     table_schema: SchemaRef,
     predicate: Arc<dyn datafusion_physical_expr::PhysicalExpr>,
+    column_mapping_mode: ColumnMappingMode,
 ) -> Result<Vec<bool>> {
     if adds.is_empty() {
         return Ok(vec![]);
     }
 
     let referenced_columns = crate::datasource::collect_physical_columns(&predicate);
-    let stats = AddStatsPruningStatistics::try_new(table_schema.clone(), adds, referenced_columns)?;
+    let stats = AddStatsPruningStatistics::try_new(
+        table_schema.clone(),
+        adds,
+        referenced_columns,
+        column_mapping_mode,
+    )?;
 
     let pruning_predicate = PruningPredicateBuilder::new()
         .with_file_schema(table_schema)
@@ -241,22 +249,24 @@ struct MaterializedColumnStats {
 }
 
 #[derive(Debug)]
-struct AddStatsPruningStatistics {
+struct AddStatsPruningStatistics<'adds> {
     table_schema: SchemaRef,
-    adds: Vec<Add>,
+    adds: &'adds [Add],
     stats: Vec<Option<Stats>>,
     referenced_columns: std::collections::HashSet<String>,
     materialized_columns: std::collections::HashMap<String, MaterializedColumnStats>,
+    column_mapping_mode: ColumnMappingMode,
 }
 
-impl AddStatsPruningStatistics {
+impl<'adds> AddStatsPruningStatistics<'adds> {
     fn try_new(
         table_schema: SchemaRef,
-        adds: Vec<Add>,
+        adds: &'adds [Add],
         referenced_columns: std::collections::HashSet<String>,
+        column_mapping_mode: ColumnMappingMode,
     ) -> Result<Self> {
         let mut stats = Vec::with_capacity(adds.len());
-        for a in &adds {
+        for a in adds {
             let parsed = a
                 .get_stats()
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -268,6 +278,7 @@ impl AddStatsPruningStatistics {
             stats,
             referenced_columns,
             materialized_columns: Default::default(),
+            column_mapping_mode,
         };
         out.materialize_referenced_columns();
         Ok(out)
@@ -302,6 +313,11 @@ impl AddStatsPruningStatistics {
             .map(Arc::new)
     }
 
+    fn storage_name_for(&self, column: &Column) -> Option<String> {
+        let field = self.field_for(column)?;
+        Some(arrow_field_physical_name(&field, self.column_mapping_mode).to_string())
+    }
+
     fn should_build_stats_for(&self, column: &Column) -> bool {
         self.field_for(column)
             .is_some_and(|field| self.referenced_columns.contains(field.name()))
@@ -317,11 +333,11 @@ impl AddStatsPruningStatistics {
         }
 
         let field = self.field_for(column)?;
-        let name = column.name();
+        let storage_name = self.storage_name_for(column)?;
         if self
             .adds
             .iter()
-            .any(|add| add.partition_values.contains_key(name))
+            .any(|add| add.partition_values.contains_key(&storage_name))
         {
             return None;
         }
@@ -331,7 +347,9 @@ impl AddStatsPruningStatistics {
             .stats
             .iter()
             .map(|stats| {
-                let value = stats.as_ref().and_then(|stats| lookup(stats, name));
+                let value = stats
+                    .as_ref()
+                    .and_then(|stats| lookup(stats, &storage_name));
                 has_value |= value.is_some_and(|value| {
                     !matches!(
                         value,
@@ -402,11 +420,15 @@ impl AddStatsPruningStatistics {
         }
 
         let field = self.field_for(column)?;
-        let name = column.name();
+        let storage_name = self.storage_name_for(column)?;
         let values: Option<Vec<Option<&str>>> = self
             .adds
             .iter()
-            .map(|add| add.partition_values.get(name).map(|value| value.as_deref()))
+            .map(|add| {
+                add.partition_values
+                    .get(&storage_name)
+                    .map(|value| value.as_deref())
+            })
             .collect();
         let values = values?;
 
@@ -508,13 +530,13 @@ impl AddStatsPruningStatistics {
             return Some(array);
         }
 
+        let storage_name = self.storage_name_for(column)?;
         self.build_array(column, false, |a, s, dt| {
-            let name = column.name();
-            if let Some(pv) = a.partition_values.get(name) {
+            if let Some(pv) = a.partition_values.get(&storage_name) {
                 return Self::scalar_from_partition_value(dt, pv);
             }
             if let Some(s) = s
-                && let Some(v) = s.min_values.get(name)
+                && let Some(v) = s.min_values.get(&storage_name)
             {
                 return ScalarConverter::column_value_stat_to_arrow_scalar_value(v, dt)
                     .ok()
@@ -535,13 +557,13 @@ impl AddStatsPruningStatistics {
             return Some(widen_timestamp_max_stat(array));
         }
 
+        let storage_name = self.storage_name_for(column)?;
         self.build_array(column, false, |a, s, dt| {
-            let name = column.name();
-            if let Some(pv) = a.partition_values.get(name) {
+            if let Some(pv) = a.partition_values.get(&storage_name) {
                 return Self::scalar_from_partition_value(dt, pv);
             }
             if let Some(s) = s
-                && let Some(v) = s.max_values.get(name)
+                && let Some(v) = s.max_values.get(&storage_name)
             {
                 return ScalarConverter::column_value_stat_to_arrow_scalar_value(v, dt)
                     .ok()
@@ -554,21 +576,21 @@ impl AddStatsPruningStatistics {
     }
 
     fn compute_null_counts(&self, column: &Column) -> Option<ArrayRef> {
+        let storage_name = self.storage_name_for(column)?;
         self.build_count_array(column, |a, s| {
-            let name = column.name();
-            if let Some(pv) = a.partition_values.get(name) {
+            if let Some(pv) = a.partition_values.get(&storage_name) {
                 if pv.is_none() {
                     return s.map(|s| s.num_records.max(0) as u64);
                 }
                 return Some(0);
             }
-            s.and_then(|s| s.null_count_value(name))
+            s.and_then(|s| s.null_count_value(&storage_name))
                 .map(|v| v.max(0) as u64)
         })
     }
 }
 
-impl PruningStatistics for AddStatsPruningStatistics {
+impl PruningStatistics for AddStatsPruningStatistics<'_> {
     fn min_values(&self, column: &Column) -> Option<datafusion::arrow::array::ArrayRef> {
         self.materialized_columns
             .get(column.name())
@@ -634,7 +656,7 @@ mod tests {
     use datafusion_common::{Column, DataFusionError, Result, ScalarValue};
 
     use super::{AddStatsPruningStatistics, prune_adds_by_physical_predicate};
-    use crate::spec::Add;
+    use crate::spec::{Add, ColumnMappingMode};
 
     fn add_with_stats(stats_json: &str) -> Add {
         Add {
@@ -683,7 +705,12 @@ mod tests {
         let mut referenced_columns = HashSet::new();
         referenced_columns.insert("dec_col".to_string());
 
-        let stats = AddStatsPruningStatistics::try_new(table_schema, adds, referenced_columns)?;
+        let stats = AddStatsPruningStatistics::try_new(
+            table_schema,
+            &adds,
+            referenced_columns,
+            ColumnMappingMode::None,
+        )?;
         let array = stats.row_counts().ok_or_else(|| {
             DataFusionError::Internal("row count stats should be available".to_string())
         })?;
@@ -710,7 +737,12 @@ mod tests {
         let mut referenced_columns = HashSet::new();
         referenced_columns.insert("date_col".to_string());
 
-        let stats = AddStatsPruningStatistics::try_new(table_schema, adds, referenced_columns)?;
+        let stats = AddStatsPruningStatistics::try_new(
+            table_schema,
+            &adds,
+            referenced_columns,
+            ColumnMappingMode::None,
+        )?;
         let array = stats
             .null_counts(&Column::from_name("date_col"))
             .ok_or_else(|| {
@@ -739,7 +771,12 @@ mod tests {
         ];
         let referenced_columns = HashSet::from(["part_col".to_string()]);
 
-        let stats = AddStatsPruningStatistics::try_new(table_schema, adds, referenced_columns)?;
+        let stats = AddStatsPruningStatistics::try_new(
+            table_schema,
+            &adds,
+            referenced_columns,
+            ColumnMappingMode::None,
+        )?;
         let array = stats
             .min_values(&Column::from_name("part_col"))
             .ok_or_else(|| DataFusionError::Internal("partition min values missing".to_string()))?;
@@ -751,6 +788,46 @@ mod tests {
             .ok_or_else(|| DataFusionError::Internal("array should be Int32".to_string()))?;
         assert_eq!(values.value(0), 10);
         assert_eq!(values.value(1), 20);
+        Ok(())
+    }
+
+    #[test]
+    fn mapped_stats_do_not_fallback_to_a_colliding_logical_name() -> Result<()> {
+        let physical_name_key = "delta.columnMapping.physicalName".to_string();
+        let source_physical_name = "col-source";
+        let target_physical_name = "col-target";
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("source", DataType::Int64, true).with_metadata(HashMap::from([(
+                physical_name_key.clone(),
+                source_physical_name.to_string(),
+            )])),
+            Field::new(source_physical_name, DataType::Int64, true).with_metadata(HashMap::from([
+                (physical_name_key, target_physical_name.to_string()),
+            ])),
+        ]));
+        let add = add_with_stats(
+            r#"{
+                "numRecords":1,
+                "minValues":{"col-source":0},
+                "maxValues":{"col-source":0},
+                "nullCount":{"col-source":0}
+            }"#,
+        );
+        let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(PhysicalColumn::new(source_physical_name, 1)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int64(Some(50)))),
+        ));
+
+        assert_eq!(
+            prune_adds_by_physical_predicate(
+                &[add],
+                table_schema,
+                predicate,
+                ColumnMappingMode::Name,
+            )?,
+            vec![true]
+        );
         Ok(())
     }
 
@@ -779,8 +856,9 @@ mod tests {
         )];
         let stats = AddStatsPruningStatistics::try_new(
             table_schema,
-            adds,
+            &adds,
             HashSet::from(["payload".to_string()]),
+            ColumnMappingMode::None,
         )?;
 
         let min_values = stats
@@ -822,7 +900,11 @@ mod tests {
             .map_err(|error| DataFusionError::External(Box::new(error)))?
             .timestamp_micros();
 
-        for timezone in [Some(Arc::from("UTC")), None] {
+        for timezone in [
+            Some(Arc::from("UTC")),
+            Some(Arc::from("America/Los_Angeles")),
+            None,
+        ] {
             let table_schema = Arc::new(Schema::new(vec![Field::new(
                 "event_time",
                 DataType::Timestamp(TimeUnit::Microsecond, timezone.clone()),
@@ -839,8 +921,9 @@ mod tests {
             let add = add_with_stats(&stats_json);
             let stats = AddStatsPruningStatistics::try_new(
                 Arc::clone(&table_schema),
-                vec![add.clone()],
+                std::slice::from_ref(&add),
                 HashSet::from(["event_time".to_string()]),
+                ColumnMappingMode::None,
             )?;
             let timestamp_bound = |values: Option<ArrayRef>, bound: &str| -> Result<i64> {
                 let values = values.ok_or_else(|| {
@@ -876,7 +959,12 @@ mod tests {
             ));
 
             assert_eq!(
-                prune_adds_by_physical_predicate(vec![add], table_schema, predicate)?,
+                prune_adds_by_physical_predicate(
+                    std::slice::from_ref(&add),
+                    table_schema,
+                    predicate,
+                    ColumnMappingMode::None,
+                )?,
                 vec![true]
             );
         }
@@ -896,8 +984,9 @@ mod tests {
         )];
         let stats = AddStatsPruningStatistics::try_new(
             table_schema,
-            adds,
+            &adds,
             HashSet::from(["partition_time".to_string()]),
+            ColumnMappingMode::None,
         )?;
         let max_values = stats
             .max_values(&Column::from_name("partition_time"))

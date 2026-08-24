@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use datafusion::arrow::array::UInt64Array;
+use datafusion::arrow::array::Int64Array;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
@@ -64,6 +64,14 @@ const METRIC_NUM_COMMIT_RETRIES: &str = "num_commit_retries";
 const METRIC_CHECKPOINT_CREATED: &str = "checkpoint_created";
 const METRIC_LOG_FILES_CLEANED: &str = "log_files_cleaned";
 
+fn commit_count_batch(schema: SchemaRef, row_count: u64) -> Result<RecordBatch> {
+    let row_count = i64::try_from(row_count)
+        .map_err(|e| DataFusionError::Execution(format!("Delta commit row count overflow: {e}")))?;
+    let array = Arc::new(Int64Array::from(vec![row_count]));
+    RecordBatch::try_new(schema, vec![array])
+        .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
+}
+
 #[derive(Debug, Clone)]
 struct IdentityColumnCommitInfo {
     name: String,
@@ -106,7 +114,7 @@ impl DeltaCommitExec {
     ) -> Self {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "count",
-            DataType::UInt64,
+            DataType::Int64,
             true,
         )]));
         let cache = Self::compute_properties(schema);
@@ -643,9 +651,7 @@ impl ExecutionPlan for DeltaCommitExec {
             }
 
             if !has_data {
-                let array = Arc::new(UInt64Array::from(vec![0]));
-                let batch = RecordBatch::try_new(schema, vec![array])?;
-                return Ok(batch);
+                return commit_count_batch(schema, 0);
             }
 
             // Prepend initial actions
@@ -671,9 +677,7 @@ impl ExecutionPlan for DeltaCommitExec {
             );
 
             if !has_commit_payload_actions(&final_actions) {
-                let array = Arc::new(UInt64Array::from(vec![0]));
-                let batch = RecordBatch::try_new(schema, vec![array])?;
-                return Ok(batch);
+                return commit_count_batch(schema, 0);
             }
 
             let catalog_managed_table = match (catalog_table.as_deref(), lakehouse_table.as_ref()) {
@@ -783,9 +787,7 @@ impl ExecutionPlan for DeltaCommitExec {
                 && Self::existing_create_bootstrap_commit_matches(&log_store, &final_actions)
                     .await?
             {
-                let array = Arc::new(UInt64Array::from(vec![0]));
-                let batch = RecordBatch::try_new(schema, vec![array])?;
-                return Ok(batch);
+                return commit_count_batch(schema, 0);
             }
 
             let reference = if table_exists {
@@ -1038,9 +1040,7 @@ impl ExecutionPlan for DeltaCommitExec {
             // Expose row count through execution metrics as well.
             output_rows.add(usize::try_from(total_rows).unwrap_or(usize::MAX));
 
-            let array = Arc::new(UInt64Array::from(vec![total_rows]));
-            let batch = RecordBatch::try_new(schema, vec![array])?;
-            Ok(batch)
+            commit_count_batch(schema, total_rows)
         };
 
         let stream = stream::once(future);
