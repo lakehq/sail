@@ -9,6 +9,7 @@ use uuid::Uuid;
 use crate::common::{
     PartitionLocation, SlotReservation, UserIdentifier, WorkerIdentity, WorkerSlotLocations,
 };
+use crate::endpoint::parse_endpoint;
 use crate::error::{CelebornError, CelebornResult};
 use crate::protocol::StatusCode;
 use crate::protocol::proto::{
@@ -45,13 +46,9 @@ struct MasterConnection {
 
 impl MasterConnection {
     fn try_new(endpoint: String, timeout: Duration) -> Option<Self> {
-        let (host, port) = endpoint.rsplit_once(':')?;
-        if host.is_empty() {
-            return None;
-        }
-        let port = port.parse::<u16>().ok()?;
+        let (host, port) = parse_endpoint(&endpoint)?;
         Some(Self {
-            host: host.to_string(),
+            host: host.clone(),
             port,
             connection: TransportConnection::new(host, port, timeout),
         })
@@ -108,12 +105,9 @@ impl MasterConnections {
         }
     }
 
-    fn advance_after_failure(current: &AtomicUsize, index: usize, count: usize) -> usize {
+    fn advance_after_failure(current: &AtomicUsize, index: usize, count: usize) {
         let next = (index + 1) % count;
-        match current.compare_exchange(index, next, Ordering::Relaxed, Ordering::Relaxed) {
-            Ok(_) => next,
-            Err(updated) => updated,
-        }
+        let _ = current.compare_exchange(index, next, Ordering::Relaxed, Ordering::Relaxed);
     }
 }
 
@@ -354,17 +348,14 @@ impl MasterClient {
                         Ok(response) => return Ok(response),
                         Err(error) => {
                             last_error = Some(error);
-                            index = MasterConnections::advance_after_failure(
-                                current,
-                                index,
-                                valid.len(),
-                            );
+                            MasterConnections::advance_after_failure(current, index, valid.len());
+                            index = (index + 1) % valid.len();
                         }
                     },
                     Err(error) => {
                         last_error = Some(error);
-                        index =
-                            MasterConnections::advance_after_failure(current, index, valid.len());
+                        MasterConnections::advance_after_failure(current, index, valid.len());
+                        index = (index + 1) % valid.len();
                     }
                 }
             }

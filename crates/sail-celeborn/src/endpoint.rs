@@ -26,26 +26,57 @@ impl StaticEndpointResolver {
             overrides: mappings
                 .into_iter()
                 .filter_map(|(internal, external)| {
-                    let (internal_host, internal_port) = internal.rsplit_once(':')?;
-                    let internal_port = internal_port.parse().ok()?;
-                    let (external_host, external_port) = external.rsplit_once(':')?;
-                    let external_port = external_port.parse().ok()?;
-                    if internal_host.is_empty() || external_host.is_empty() {
-                        return None;
-                    }
-                    Some((
-                        (internal_host.to_string(), internal_port),
-                        (external_host.to_string(), external_port),
-                    ))
+                    Some((parse_endpoint(&internal)?, parse_endpoint(&external)?))
                 })
                 .collect(),
         }
     }
 }
 
+/// Parses a `host:port` endpoint, accepting the bracketed IPv6 form.
+pub(crate) fn parse_endpoint(endpoint: &str) -> Option<(String, u16)> {
+    let (host, port) = endpoint.rsplit_once(':')?;
+    let host = host
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(host);
+    if host.is_empty() {
+        return None;
+    }
+    Some((host.to_string(), port.parse().ok()?))
+}
+
 impl EndpointResolver for StaticEndpointResolver {
     fn resolve(&self, host: &str, port: u16) -> (String, u16) {
         let endpoint = (host.to_string(), port);
         self.overrides.get(&endpoint).cloned().unwrap_or(endpoint)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::{EndpointResolver, StaticEndpointResolver, parse_endpoint};
+
+    #[test]
+    fn parses_bracketed_ipv6_endpoint() {
+        assert_eq!(
+            parse_endpoint("[::1]:12097"),
+            Some(("::1".to_string(), 12097))
+        );
+    }
+
+    #[test]
+    fn resolves_bracketed_ipv6_mapping() {
+        let resolver = StaticEndpointResolver::from_mappings(HashMap::from([(
+            "[fd00::1]:12000".to_string(),
+            "[::1]:32000".to_string(),
+        )]));
+
+        assert_eq!(
+            resolver.resolve("fd00::1", 12000),
+            ("::1".to_string(), 32000)
+        );
     }
 }
