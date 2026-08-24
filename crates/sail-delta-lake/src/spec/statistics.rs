@@ -38,25 +38,32 @@ use crate::spec::{
 };
 
 /// Column statistics stored in `Stats`.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum StatValue {
     Null,
     Boolean(bool),
     Number(serde_json::Number),
+    /// A JSON number produced from exact typed statistics.
+    #[serde(skip_deserializing)]
+    ExactNumber(Box<serde_json::value::RawValue>),
     String(String),
 }
 
-impl From<StatValue> for serde_json::Value {
-    fn from(value: StatValue) -> Self {
-        match value {
-            StatValue::Null => serde_json::Value::Null,
-            StatValue::Boolean(value) => serde_json::Value::Bool(value),
-            StatValue::Number(value) => serde_json::Value::Number(value),
-            StatValue::String(value) => serde_json::Value::String(value),
+impl PartialEq for StatValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Null, Self::Null) => true,
+            (Self::Boolean(left), Self::Boolean(right)) => left == right,
+            (Self::Number(left), Self::Number(right)) => left == right,
+            (Self::ExactNumber(left), Self::ExactNumber(right)) => left.get() == right.get(),
+            (Self::String(left), Self::String(right)) => left == right,
+            _ => false,
         }
     }
 }
+
+impl Eq for StatValue {}
 
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/protocol/mod.rs#L23-L124>
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -377,7 +384,9 @@ fn null_count_stats_schema(schema: &StructType) -> Option<StructType> {
                 name: field.name.clone(),
                 data_type,
                 nullable: true,
-                metadata: Default::default(),
+                // Preserve mapping metadata so the selected logical stats schema can be renamed
+                // to the physical paths stored in Add.stats.
+                metadata: field.metadata.clone(),
             })
         })
         .collect();
@@ -457,7 +466,7 @@ fn base_stats_schema_fields(
                 name: field.name.clone(),
                 data_type: DataType::from(StructType::new_unchecked(inner_fields)),
                 nullable: true,
-                metadata: Default::default(),
+                metadata: field.metadata.clone(),
             }
         } else {
             *added_columns += 1;
@@ -466,7 +475,7 @@ fn base_stats_schema_fields(
                 name: field.name.clone(),
                 data_type: data_type.clone(),
                 nullable: true,
-                metadata: Default::default(),
+                metadata: field.metadata.clone(),
             }
         };
 
@@ -511,8 +520,46 @@ fn min_max_stats_schema(schema: &StructType) -> Option<StructType> {
 
 fn should_include_column(column_name: &ColumnName, column_names: &[ColumnName]) -> bool {
     column_names.iter().any(|name: &ColumnName| {
-        name.as_ref().starts_with(column_name) || column_name.as_ref().starts_with(name)
+        path_starts_with_case_insensitive(name.as_ref(), column_name.as_ref())
+            || path_starts_with_case_insensitive(column_name.as_ref(), name.as_ref())
     })
+}
+
+fn path_starts_with_case_insensitive(path: &[String], prefix: &[String]) -> bool {
+    path.len() >= prefix.len()
+        && path
+            .iter()
+            .zip(prefix)
+            .all(|(left, right)| left.eq_ignore_ascii_case(right))
+}
+
+/// Resolve configured logical data-skipping paths to the physical paths written to Parquet and
+/// Add.stats. Unknown or non-struct paths are ignored, matching stats-schema selection.
+pub(crate) fn physical_data_skipping_columns(
+    schema: &StructType,
+    columns: &[ColumnName],
+    mode: crate::spec::ColumnMappingMode,
+) -> Vec<ColumnName> {
+    columns
+        .iter()
+        .filter_map(|column| {
+            let mut current = schema;
+            let mut physical = Vec::with_capacity(column.path().len());
+            for (index, segment) in column.path().iter().enumerate() {
+                let field = current
+                    .fields()
+                    .find(|field| field.name().eq_ignore_ascii_case(segment))?;
+                physical.push(field.physical_name(mode).to_string());
+                if index + 1 < column.path().len() {
+                    let DataType::Struct(children) = field.data_type() else {
+                        return None;
+                    };
+                    current = children;
+                }
+            }
+            Some(ColumnName::new(physical))
+        })
+        .collect()
 }
 
 fn is_skipping_eligible_datatype(data_type: &PrimitiveType) -> bool {

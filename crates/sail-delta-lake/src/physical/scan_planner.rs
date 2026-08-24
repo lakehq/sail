@@ -174,7 +174,7 @@ pub(crate) async fn plan_delta_scan(
         None
     };
 
-    let (file_source, pruning_mask) = match file_source {
+    let file_source = match file_source {
         DeltaFileSource::Eager(files) => {
             if let Some(predicate) = pruning_predicate.as_ref() {
                 let pruning_mask = crate::datasource::pruning::prune_adds_by_physical_predicate(
@@ -189,15 +189,12 @@ pub(crate) async fn plan_delta_scan(
                     .filter(|(_, keep)| *keep)
                     .map(|(add, _)| add.clone())
                     .collect::<Vec<_>>();
-                (
-                    DeltaFileSource::Eager(Arc::new(pruned_files)),
-                    Some(pruning_mask),
-                )
+                DeltaFileSource::Eager(Arc::new(pruned_files))
             } else {
-                (DeltaFileSource::Eager(files), None)
+                DeltaFileSource::Eager(files)
             }
         }
-        DeltaFileSource::Replay => (DeltaFileSource::Replay, None),
+        DeltaFileSource::Replay => DeltaFileSource::Replay,
     };
 
     // Build physical file schema (non-partition columns)
@@ -274,7 +271,6 @@ pub(crate) async fn plan_delta_scan(
             files,
             &config,
             FileScanParams {
-                pruning_mask: pruning_mask.as_deref(),
                 projection: Some(&file_scan_projection),
                 limit,
                 pushdown_filter,
@@ -293,11 +289,20 @@ pub(crate) async fn plan_delta_scan(
     let target_partitions = session.config().target_partitions().max(1);
     let (find_files, output_statistics): (Arc<dyn ExecutionPlan>, Option<_>) = match file_source {
         DeltaFileSource::Eager(files) => {
-            let output_statistics = (!has_row_filter && limit.is_none())
-                .then(|| snapshot.datafusion_table_statistics(pruning_mask.as_deref()))
-                .flatten()
+            let output_statistics = snapshot
+                .datafusion_table_statistics_for_adds(files.as_ref())
                 .map(|statistics| {
                     map_statistics_to_schema(&statistics, &stats_source_schema, &logical_schema)
+                })
+                .map(|statistics| {
+                    if has_row_filter || limit.is_some() {
+                        // A predicate may be applied inside only some file scans, and a pushed limit
+                        // is enforced per execution partition. Selected-file statistics remain useful
+                        // upper-bound estimates but no longer describe this node exactly.
+                        statistics.to_inexact()
+                    } else {
+                        statistics
+                    }
                 });
             (
                 build_eager_adds_input(files.as_ref(), target_partitions)?,

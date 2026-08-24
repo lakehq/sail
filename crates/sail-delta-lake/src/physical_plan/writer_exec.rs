@@ -61,7 +61,8 @@ use crate::physical_plan::{
 };
 use crate::schema::adapt_array_to_physical_field;
 use crate::spec::{
-    Action, ColumnMappingMode, DeltaOperation, Metadata, Protocol, TableFeature, TableProperties,
+    Action, ColumnMappingMode, DataSkippingNumIndexedCols, DeltaOperation, Metadata, Protocol,
+    TableFeature, TableProperties, physical_data_skipping_columns,
 };
 use crate::transaction::OperationMetrics;
 use crate::writer::variant_shredding::{VariantShreddingConfig, variant_top_level_columns};
@@ -721,6 +722,37 @@ impl DeltaWriterExec {
                 Self::variant_shredding_config(&write_context, !stats_excluded_columns.is_empty())?;
             let physical_partition_columns = write_context.physical_partition_columns.clone();
             let logical_kernel_for_mapping = write_context.logical_kernel_for_mapping.clone();
+            let (_, effective_metadata) = Self::effective_protocol_and_metadata(&write_context);
+            let table_properties = effective_metadata
+                .map(|metadata| TableProperties::from(metadata.configuration().iter()))
+                .unwrap_or_default();
+            let logical_stats_schema = logical_kernel_for_mapping
+                .as_ref()
+                .unwrap_or(&write_context.final_schema);
+            let stats_columns =
+                table_properties
+                    .data_skipping_stats_columns
+                    .as_ref()
+                    .map(|columns| {
+                        physical_data_skipping_columns(logical_stats_schema, columns, kernel_mode)
+                    });
+            let num_indexed_cols = if stats_columns.is_some() {
+                0
+            } else {
+                match table_properties
+                    .data_skipping_num_indexed_cols
+                    .unwrap_or(DataSkippingNumIndexedCols::NumColumns(32))
+                {
+                    DataSkippingNumIndexedCols::AllColumns => -1,
+                    DataSkippingNumIndexedCols::NumColumns(count) => {
+                        i32::try_from(count).map_err(|_| {
+                            DataFusionError::Plan(format!(
+                                "delta.dataSkippingNumIndexedCols exceeds i32: {count}"
+                            ))
+                        })?
+                    }
+                }
+            };
 
             let writer_config = WriterConfig::new(
                 writer_schema.clone(),
@@ -729,8 +761,8 @@ impl DeltaWriterExec {
                 None,
                 *target_file_size,
                 write_batch_size.get(),
-                32,
-                None,
+                num_indexed_cols,
+                stats_columns,
                 stats_excluded_columns,
                 variant_shredding,
             );
