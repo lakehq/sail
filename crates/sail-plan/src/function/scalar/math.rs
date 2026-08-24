@@ -154,6 +154,13 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             left.get_type(function_context.schema),
             right.get_type(function_context.schema),
         );
+        if let (Ok(left_type), Ok(right_type)) = (&left_type, &right_type) {
+            if rejects_additive_or_multiply(false, left_type, right_type) {
+                return Err(PlanError::invalid(format!(
+                    "cannot resolve arithmetic '+' with operand types {left_type} and {right_type}"
+                )));
+            }
+        }
         Ok(match (left_type, right_type) {
             (
                 Ok(string_type @ (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)),
@@ -239,12 +246,26 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             left.get_type(function_context.schema),
             right.get_type(function_context.schema),
         );
+        if let (Ok(left_type), Ok(right_type)) = (&left_type, &right_type) {
+            if rejects_additive_or_multiply(false, left_type, right_type) {
+                return Err(PlanError::invalid(format!(
+                    "cannot resolve arithmetic '-' with operand types {left_type} and {right_type}"
+                )));
+            }
+        }
         Ok(match (left_type, right_type) {
             (Ok(DataType::Date32), Ok(DataType::Duration(TimeUnit::Microsecond))) => {
                 left - cast(right, DataType::Interval(IntervalUnit::MonthDayNano))
             }
             (Ok(DataType::Date32), Ok(right_type)) if right_type.is_numeric() => {
                 cast(cast(left, DataType::Int32) - right, DataType::Date32)
+            }
+            (Ok(DataType::Date32), Ok(DataType::Timestamp(_, _)))
+            | (Ok(DataType::Timestamp(_, _)), Ok(DataType::Date32)) => {
+                // DataFusion subtracts DATE and TIMESTAMP to a `Duration(Nanosecond)`, which
+                // is not a Spark type; Spark's DATE-TIMESTAMP is a day-time interval, mapped
+                // in Sail to `Duration(Microsecond)`.
+                cast(left - right, DataType::Duration(TimeUnit::Microsecond))
             }
             (Ok(left_type), Ok(right_type)) => spark_additive_operands(
                 left,
@@ -287,6 +308,13 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
         left.get_type(function_context.schema),
         right.get_type(function_context.schema),
     );
+    if let (Ok(left_type), Ok(right_type)) = (&left_type, &right_type) {
+        if rejects_additive_or_multiply(true, left_type, right_type) {
+            return Err(PlanError::invalid(format!(
+                "cannot resolve arithmetic '*' with operand types {left_type} and {right_type}"
+            )));
+        }
+    }
     Ok(match (left_type, right_type) {
         // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
         //  Seems to be a bug in DataFusion.
@@ -560,6 +588,71 @@ fn rejects_as_divide_dividend(data_type: &DataType) -> bool {
 fn rejects_as_divide_divisor(data_type: &DataType) -> bool {
     rejects_as_divide_dividend(data_type)
         || matches!(data_type, DataType::Interval(_) | DataType::Duration(_))
+}
+
+fn is_interval_like(data_type: &DataType) -> bool {
+    matches!(data_type, DataType::Interval(_) | DataType::Duration(_))
+}
+
+fn is_date_or_timestamp(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
+    )
+}
+
+/// The numeric offset Spark accepts for `DATE`/`TIMESTAMP` `+`/`-`: `DateAdd`/`DateSub` take
+/// an `INT`, so only integrals up to 32 bits qualify. A `BIGINT`, `FLOAT`, `DOUBLE` or
+/// `DECIMAL` offset is rejected at analysis (Sail would otherwise silently truncate it).
+fn is_date_offset_numeric(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Int8 | DataType::Int16 | DataType::Int32
+    )
+}
+
+/// Whether two interval operands belong to the same Spark interval class (year-month vs the
+/// day-time family): only same-class intervals may be added or subtracted.
+fn same_interval_class(left: &DataType, right: &DataType) -> bool {
+    let class = |data_type: &DataType| match data_type {
+        DataType::Interval(IntervalUnit::YearMonth) => 0u8,
+        DataType::Interval(_) | DataType::Duration(_) => 1,
+        _ => 2,
+    };
+    class(left) == class(right)
+}
+
+/// Whether Spark rejects this operand-type pair for `+`/`-` (`is_multiply` false) or `*`
+/// (`is_multiply` true) at analysis, while Sail's plan builder would otherwise compute a
+/// wrong value (a bogus interval, or a `DATE`/`TIMESTAMP` truncated by a too-wide offset).
+///
+/// This reproduces the operand-type rules of `Add`/`Subtract`/`Multiply` so those pairs fail
+/// at plan time as they do in Spark. Pairs Sail merely lacks a kernel for (e.g. `ival_m *
+/// int`, `date - date`) ERROR rather than over-accept and are deliberately left untouched —
+/// implementing them is follow-up work, not a plan-builder concern.
+fn rejects_additive_or_multiply(is_multiply: bool, left: &DataType, right: &DataType) -> bool {
+    let (left_interval, right_interval) = (is_interval_like(left), is_interval_like(right));
+    if is_multiply {
+        // `*` accepts only numeric×numeric and numeric×interval (either order). A string
+        // coerces to numeric, so leave `interval × string` for the kernel follow-up.
+        let numeric_like = |data_type: &DataType| data_type.is_numeric() || data_type.is_string();
+        return (left_interval && right_interval)
+            || (left_interval && !numeric_like(right))
+            || (right_interval && !numeric_like(left));
+    }
+    // A bare number combined with an interval is never valid (only interval±interval or
+    // date/timestamp±interval are).
+    if (left_interval && right.is_numeric()) || (right_interval && left.is_numeric()) {
+        return true;
+    }
+    // Two intervals must be the same class (year-month vs day-time).
+    if left_interval && right_interval && !same_interval_class(left, right) {
+        return true;
+    }
+    // A DATE/TIMESTAMP offset must be an `INT`; a wider integral, float or decimal is rejected.
+    let (left_temporal, right_temporal) = (is_date_or_timestamp(left), is_date_or_timestamp(right));
+    (left_temporal && right.is_numeric() && !is_date_offset_numeric(right))
+        || (right_temporal && left.is_numeric() && !is_date_offset_numeric(left))
 }
 
 /// Spark's `DecimalType.forType` for an integer type: the type-based decimal an
@@ -864,6 +957,44 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let allow_precision_loss = function_context
         .plan_config
         .decimal_operations_allow_precision_loss;
+
+    // Under ANSI mode Spark rejects `string / string`: with no numeric operand to anchor
+    // the implicit cast, a bare string cannot coerce to DOUBLE (a string paired with a
+    // numeric still coerces, and non-ANSI casts both to DOUBLE). Sail's `/` otherwise
+    // coerces both strings to DOUBLE and computes, where `+`/`-`/`*` already reject the
+    // pair — reject it here too so divide matches Spark and its sibling operators.
+    if ansi_mode {
+        if let (Ok(dividend_type), Ok(divisor_type)) = (
+            dividend.get_type(function_context.schema),
+            divisor.get_type(function_context.schema),
+        ) {
+            if dividend_type.is_string() && divisor_type.is_string() {
+                return Err(PlanError::invalid(format!(
+                    "cannot resolve arithmetic '/' with operand types {dividend_type} and {divisor_type}"
+                )));
+            }
+        }
+    }
+
+    // DataFusion scales an interval divisor by integers and floats but not by a decimal
+    // (`Duration / Decimal128` fails to coerce), while Spark scales an interval by any
+    // numeric. Cast a decimal divisor to DOUBLE so the interval division type-checks; the
+    // interval result type is unaffected.
+    let divisor = match (
+        dividend.get_type(function_context.schema),
+        divisor.get_type(function_context.schema),
+    ) {
+        (Ok(dividend_type), Ok(divisor_type))
+            if is_interval_like(&dividend_type)
+                && matches!(
+                    divisor_type,
+                    DataType::Decimal128(_, _) | DataType::Decimal256(_, _)
+                ) =>
+        {
+            cast(divisor, DataType::Float64)
+        }
+        _ => divisor,
+    };
 
     // Coerce operands the same way `*` does (narrow an integer literal combined with
     // a decimal, promote float×decimal to double) before deriving the division type,

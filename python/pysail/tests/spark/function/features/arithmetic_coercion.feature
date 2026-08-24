@@ -1971,26 +1971,35 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | a      | b      | c      | d      |
         | double | double | double | double |
 
-  Rule: Operand pairs Spark rejects at analysis (known gap — Sail over-accepts)
-    # Spark raises DATATYPE_MISMATCH at analysis for these pairs; Sail computes a
-    # value instead (true / 3 = 0.333..., TIMESTAMP / 3 = raw microseconds, DATE +
-    # BIGINT via date_add, year-month + day-time as a CalendarInterval).
-
-    @sail-bug
+  Rule: Operand pairs Spark rejects at analysis are rejected at plan time
+    # Spark raises DATATYPE_MISMATCH at analysis for these pairs (a boolean or timestamp
+    # in a division, a DATE/TIMESTAMP offset wider than INT, a bare number combined with
+    # an interval, a year-month interval mixed with a day-time one, an interval multiplied
+    # by a non-numeric). Left to DataFusion these compute a nonsense value (true / 3 =
+    # 0.333..., TIMESTAMP / 3 = raw microseconds, DATE + BIGINT truncated by date_add,
+    # year-month + day-time as a CalendarInterval), so Sail's arithmetic plan builders
+    # reject them at plan time — matching Spark's accept/reject decision. Sail reports its
+    # own "cannot resolve arithmetic" message rather than Spark's error class (Sail has no
+    # Spark error classes yet); that label gap is systemic and tracked separately, so these
+    # assert the reject decision via Sail's message.
     Scenario Outline: Rejected operand pair: <case>
       When query
         """
         SELECT <expr> AS r
         """
-      Then query error <error>
+      Then query error cannot resolve arithmetic
 
       Examples:
-        | case                                      | expr                                                               | error                 |
-        | a boolean divided by an integer           | true / CAST(3 AS INT)                                              | BINARY_OP_DIFF_TYPES  |
-        | a timestamp divided by an integer         | TIMESTAMP'2024-01-15 12:00:00' / CAST(3 AS INT)                    | BINARY_OP_DIFF_TYPES  |
-        | a date plus a bigint                      | DATE'2024-01-15' + CAST(3 AS BIGINT)                               | UNEXPECTED_INPUT_TYPE |
-        | a year-month plus a day-time interval     | INTERVAL '1-2' YEAR TO MONTH + INTERVAL '1 02:03:04' DAY TO SECOND | UNEXPECTED_INPUT_TYPE |
-        | an integer divided by a day-time interval | CAST(3 AS INT) / INTERVAL '1 02:03:04' DAY TO SECOND               | BINARY_OP_DIFF_TYPES  |
+        | case                                          | expr                                                               |
+        | a boolean divided by an integer               | true / CAST(3 AS INT)                                              |
+        | a timestamp divided by an integer             | TIMESTAMP'2024-01-15 12:00:00' / CAST(3 AS INT)                    |
+        | an integer divided by a day-time interval     | CAST(3 AS INT) / INTERVAL '1 02:03:04' DAY TO SECOND               |
+        | a date plus a bigint                          | DATE'2024-01-15' + CAST(3 AS BIGINT)                               |
+        | a date minus a bigint                         | DATE'2024-01-15' - CAST(3 AS BIGINT)                              |
+        | an integer plus a year-month interval         | CAST(3 AS INT) + INTERVAL '2' MONTH                                |
+        | a year-month plus a day-time interval         | INTERVAL '1-2' YEAR TO MONTH + INTERVAL '1 02:03:04' DAY TO SECOND |
+        | a date times a day-time interval              | DATE'2024-01-15' * INTERVAL '2' DAY                                |
+        | a year-month interval times a day-time one    | INTERVAL '1-2' YEAR TO MONTH * INTERVAL '2' DAY                    |
 
   Rule: An interval scaled by an integer (known gap — interval arithmetic)
     # Spark multiplies and divides year-month intervals by numerics; Sail rejects
@@ -2271,11 +2280,12 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | NULL |
 
   Rule: Division by a zero literal keeps the Spark result type
-    # The plan-time zero-divisor short circuit replaces the whole expression with an
-    # untyped NULL (`void`) under ANSI off, and raises at plan time under ANSI on, so even
-    # `typeof` fails. Spark types the division normally and only fails at evaluation.
+    # A plan-time zero-divisor short circuit used to replace the whole expression with an
+    # untyped NULL (`void`) under ANSI off; now the non-ANSI path falls through to the
+    # runtime guard, which gives the NULL the division's Spark result type, so `typeof`
+    # matches Spark. Under ANSI on the literal `x / 0` still raises at plan time (where
+    # Spark types the division and only fails at evaluation), so `typeof` there diverges.
 
-    @sail-bug
     Scenario: typeof of a decimal divided by a zero literal, ANSI off
       Given config spark.sql.ansi.enabled = false
       When query
