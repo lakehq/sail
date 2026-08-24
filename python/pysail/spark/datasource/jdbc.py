@@ -440,6 +440,7 @@ class JdbcDataSource(DataSource):
                 schema_query = f"SELECT TOP 0 * FROM ({query}) AS _cx_schema_q"  # noqa: S608
             else:
                 schema_query = f"SELECT TOP 0 * FROM {dbtable}"  # noqa: S608: S608
+        else:
             if query is not None:
                 schema_query = f"SELECT * FROM ({query}) AS _cx_schema_q LIMIT 0"  # noqa: S608
             else:
