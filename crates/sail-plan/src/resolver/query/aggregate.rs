@@ -43,19 +43,6 @@ type ResolvedProjections = (Vec<Option<NamedExpr>>, Vec<usize>);
 /// A map from a grouping generator expression to the column that materializes it.
 type GeneratorReplacements = Vec<(Expr, Expr)>;
 
-/// A grouping desugaring pass. Each one detects its own special expression in the
-/// grouping, rewrites the plan and grouping to materialize it as a column, and
-/// extends the replacement map; it is a no-op when its expression is absent. All
-/// passes share this signature so [`PlanResolver::expand_grouping`] can apply them
-/// uniformly as a list.
-type GroupingExpander<'a> = fn(
-    &PlanResolver<'a>,
-    LogicalPlan,
-    Vec<NamedExpr>,
-    GeneratorReplacements,
-    &mut PlanResolverState,
-) -> PlanResult<(LogicalPlan, Vec<NamedExpr>, GeneratorReplacements)>;
-
 /// Returns the name of a volatile (non-deterministic) scalar expression found
 /// in an aggregate context. Catches two Spark CheckAnalysis violations:
 /// 1. Volatile scalar UDF used directly in aggregate projections (outside any aggregate fn)
@@ -202,11 +189,9 @@ impl PlanResolver<'_> {
     }
 
     /// Resolves `GROUP BY <ordinal>` against the select list before grouping
-    /// expansion. A deferred (not yet resolved) select item leaves the ordinal
-    /// in place for [`Self::resolve_grouping_positions`] to finish later.
-    /// Returns the rewritten grouping plus a mask of positions it substituted,
-    /// so [`Self::resolve_grouping_positions`] does not re-read a substituted
-    /// integer literal (e.g. `SELECT 5 ... GROUP BY 1`) as another ordinal.
+    /// expansion; a deferred select item leaves the ordinal in place. Returns a
+    /// mask of substituted positions so [`Self::resolve_grouping_positions`]
+    /// does not re-read a substituted integer literal as another ordinal.
     fn resolve_grouping_positions_early(
         &self,
         exprs: Vec<NamedExpr>,
@@ -218,31 +203,40 @@ impl PlanResolver<'_> {
             .into_iter()
             .enumerate()
             .map(|(i, named_expr)| {
-                let NamedExpr { expr, .. } = &named_expr;
-                let Expr::Literal(scalar_value, _) = expr else {
-                    return Ok(named_expr);
-                };
-                let position = match scalar_value {
-                    ScalarValue::Int32(Some(position)) => *position as i64,
-                    ScalarValue::Int64(Some(position)) => *position,
-                    _ => return Ok(named_expr),
-                };
-                if position > 0_i64 && position <= num_projections {
-                    match &projections[(position - 1) as usize] {
+                match Self::grouping_position(&named_expr.expr, num_projections)? {
+                    Some(position) => match &projections[position] {
                         Some(resolved) => {
                             substituted[i] = true;
                             Ok(resolved.clone())
                         }
                         None => Ok(named_expr),
-                    }
-                } else {
-                    Err(PlanError::invalid(format!(
-                        "Cannot resolve column position {position}. Valid positions are 1 to {num_projections}."
-                    )))
+                    },
+                    None => Ok(named_expr),
                 }
             })
             .collect::<PlanResult<Vec<_>>>()?;
         Ok((exprs, substituted))
+    }
+
+    /// The zero-based select-list index of a `GROUP BY <ordinal>` integer
+    /// literal (`None` for non-ordinal expressions), erroring when it is out of
+    /// range.
+    fn grouping_position(expr: &Expr, num_projections: i64) -> PlanResult<Option<usize>> {
+        let Expr::Literal(scalar_value, _) = expr else {
+            return Ok(None);
+        };
+        let position = match scalar_value {
+            ScalarValue::Int32(Some(position)) => *position as i64,
+            ScalarValue::Int64(Some(position)) => *position,
+            _ => return Ok(None),
+        };
+        if position > 0_i64 && position <= num_projections {
+            Ok(Some((position - 1) as usize))
+        } else {
+            Err(PlanError::invalid(format!(
+                "Cannot resolve column position {position}. Valid positions are 1 to {num_projections}."
+            )))
+        }
     }
 
     fn resolve_grouping_positions(
@@ -259,23 +253,9 @@ impl PlanResolver<'_> {
                 if resolved_positions.get(i).copied().unwrap_or(false) {
                     return Ok(named_expr);
                 }
-                let NamedExpr { expr, .. } = &named_expr;
-                match expr {
-                    Expr::Literal(scalar_value, _metadata) => {
-                        let position = match scalar_value {
-                            ScalarValue::Int32(Some(position)) => *position as i64,
-                            ScalarValue::Int64(Some(position)) => *position,
-                            _ => return Ok(named_expr),
-                        };
-                        if position > 0_i64 && position <= num_projections {
-                            Ok(projections[(position - 1) as usize].clone())
-                        } else {
-                            Err(PlanError::invalid(format!(
-                                "Cannot resolve column position {position}. Valid positions are 1 to {num_projections}."
-                            )))
-                        }
-                    }
-                    _ => Ok(named_expr),
+                match Self::grouping_position(&named_expr.expr, num_projections)? {
+                    Some(position) => Ok(projections[position].clone()),
+                    None => Ok(named_expr),
                 }
             })
             .collect()
@@ -1032,16 +1012,10 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<(LogicalPlan, Vec<NamedExpr>, GeneratorReplacements)> {
         // Generators run first so that combining `window` with `session_window`
-        // is caught downstream. New grouping functions append an expander here.
-        let expanders: &[GroupingExpander<'_>] = &[
-            Self::expand_grouping_generators,
-            Self::expand_session_window,
-        ];
-        let mut acc = (input, grouping, GeneratorReplacements::new());
-        for expand in expanders {
-            acc = expand(self, acc.0, acc.1, acc.2, state)?;
-        }
-        Ok(acc)
+        // is caught downstream.
+        let (input, grouping, replacements) =
+            self.expand_grouping_generators(input, grouping, GeneratorReplacements::new(), state)?;
+        self.expand_session_window(input, grouping, replacements, state)
     }
 
     /// Expands a generator in the grouping into rows, naming the unnested
@@ -1119,7 +1093,7 @@ impl PlanResolver<'_> {
         let Some(node) = ext.node.as_any().downcast_ref::<SessionWindowNode>() else {
             return plan;
         };
-        if !Self::session_fusable(&agg.aggr_expr) {
+        if !Self::is_session_fusable(&agg.aggr_expr) {
             return plan;
         }
         // The fused node's input is the SessionWindowNode's child, which lacks
@@ -1167,7 +1141,7 @@ impl PlanResolver<'_> {
     /// Whether every aggregate can run through the fused session operator.
     /// DISTINCT, ordered-set, and group UDAFs fall back to the baseline
     /// `SessionWindowNode` path (as Spark does); `FILTER (WHERE)` is fused.
-    fn session_fusable(aggr_exprs: &[Expr]) -> bool {
+    fn is_session_fusable(aggr_exprs: &[Expr]) -> bool {
         aggr_exprs.iter().all(|e| {
             let inner = match e {
                 Expr::Alias(alias) => alias.expr.as_ref(),
@@ -1206,15 +1180,10 @@ impl PlanResolver<'_> {
             .unwrap_or(false)
     }
 
-    /// Rewrites a `session_window` grouping marker into a `SessionWindowNode`
-    /// appending the `{start, end}` struct column. A no-op without a marker.
-    ///
-    /// ```text
-    /// SessionWindowNode partition_by=[K...] time=#t end=#e0 output=#w
-    ///   Filter: #t IS NOT NULL AND #e0 > #t        (drop null time / non-positive gap)
-    ///     Projection: *, ts AS #t, ts + gap AS #e0
-    /// ```
-    /// The marker grouping expression becomes a reference to `#w`.
+    /// Rewrites a `session_window` grouping marker into a `SessionWindowNode`:
+    /// project `#t = ts` and `#e0 = ts + gap`, filter out null times and
+    /// non-positive gaps, and append the `{start, end}` struct as a column that
+    /// the marker grouping expression then references. A no-op without a marker.
     fn expand_session_window(
         &self,
         input: LogicalPlan,
@@ -1299,24 +1268,17 @@ impl PlanResolver<'_> {
             Expr::Alias(alias) => alias.expr.as_ref(),
             other => other,
         };
-        let (time_ts, gap_interval) = match marker {
-            Expr::ScalarFunction(f) => {
-                let mut args = f.args.iter().cloned();
-                match (args.next(), args.next()) {
-                    (Some(t), Some(g)) => (t, g),
-                    _ => {
-                        return Err(PlanError::internal(
-                            "session_window marker is missing arguments",
-                        ));
-                    }
-                }
-            }
-            _ => {
-                return Err(PlanError::internal(
-                    "session_window marker is not a scalar function",
-                ));
-            }
+        let Expr::ScalarFunction(f) = marker else {
+            return Err(PlanError::internal(
+                "session_window marker is not a scalar function",
+            ));
         };
+        let [time_ts, gap_interval] = f.args.as_slice() else {
+            return Err(PlanError::internal(
+                "session_window marker is missing arguments",
+            ));
+        };
+        let (time_ts, gap_interval) = (time_ts.clone(), gap_interval.clone());
 
         // Project every input column through, then add `#t = ts` and the per-row
         // session-end candidate `#e0 = ts + gap`.

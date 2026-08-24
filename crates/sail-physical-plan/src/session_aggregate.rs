@@ -24,7 +24,9 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
     RecordBatchStream,
 };
-use datafusion_common::{Result, ScalarValue, Statistics, exec_err, internal_err};
+use datafusion_common::{
+    Result, ScalarValue, Statistics, exec_err, internal_datafusion_err, internal_err,
+};
 use futures::Stream;
 
 /// Fused physical operator for Spark `session_window` aggregation (phase 2, the
@@ -43,28 +45,23 @@ pub struct SessionAggregateExec {
     /// Output group columns in order; exactly one equals the session struct column.
     group_columns: Vec<String>,
     /// Name of the `{start, end}` struct column among `group_columns`.
-    session_output: String,
+    output_column: String,
     aggregates: Vec<Arc<AggregateFunctionExpr>>,
-    /// Optional `FILTER (WHERE ...)` predicate per aggregate, aligned with
-    /// `aggregates`. `None` means the aggregate consumes every session row.
+    /// Optional `FILTER (WHERE ...)` predicate per aggregate, aligned with `aggregates`.
     filters: Vec<Option<Arc<dyn PhysicalExpr>>>,
     schema: SchemaRef,
     properties: Arc<PlanProperties>,
-    /// Required `(partition_columns..., time)` input ordering, resolved eagerly
-    /// so a missing column fails at construction instead of silently dropping
-    /// the sort requirement.
+    /// Required `(partition_columns..., time)` input ordering, resolved at
+    /// construction so a missing column fails early.
     required_ordering: Option<OrderingRequirements>,
     metrics: ExecutionPlanMetricsSet,
 }
 
-/// The emitted per-partition ordering: the `partition_columns` prefix —
-/// sessions close in scan order of the `(keys, time)`-sorted input. The output
-/// is also ordered by `session.start` within each key, but declaring that
-/// component needs a `get_field` expression built with the session's
-/// `ConfigOptions` (`ScalarFunctionExpr` equality compares config options, so
-/// one built from defaults never matches planner-built expressions and only
-/// adds comparison cost); threading the config here is a follow-up. Returns
-/// `None` when there are no keys.
+/// The `partition_columns` prefix of the emitted ordering (sessions close in
+/// scan order of the sorted input); `None` when there are no keys. The
+/// `session.start` component is omitted: declaring it needs a `get_field`
+/// expression built with the session's `ConfigOptions` (`ScalarFunctionExpr`
+/// equality compares them), which are not threaded here.
 fn output_ordering(schema: &SchemaRef, partition_columns: &[String]) -> Option<LexOrdering> {
     let options = SortOptions {
         descending: false,
@@ -89,7 +86,7 @@ impl SessionAggregateExec {
         time_column: String,
         end_column: String,
         group_columns: Vec<String>,
-        session_output: String,
+        output_column: String,
         aggregates: Vec<Arc<AggregateFunctionExpr>>,
         filters: Vec<Option<Arc<dyn PhysicalExpr>>>,
         schema: SchemaRef,
@@ -101,18 +98,16 @@ impl SessionAggregateExec {
                 aggregates.len()
             );
         }
-        if !group_columns.iter().any(|c| c == &session_output) {
+        if !group_columns.iter().any(|c| c == &output_column) {
             return internal_err!(
                 "SessionAggregateExec group columns {group_columns:?} must contain the session \
-                 output column {session_output:?}"
+                 output column {output_column:?}"
             );
         }
-        // Rows shrink to one per session but stay key-partitioned; report the
-        // input partitioning and the keys-prefix ordering so parents can reuse
-        // both. The input hash exprs are bound to input-schema indices,
-        // so rebind them to the output schema (columns move and most input
-        // columns disappear); anything that does not survive degrades to
-        // unknown partitioning instead of advertising dangling indices.
+        // Rows shrink to one per session but stay key-partitioned. The input
+        // hash exprs are bound to input-schema indices, so rebind them to the
+        // output schema; anything that does not survive degrades to unknown
+        // partitioning instead of advertising dangling indices.
         let eq_properties = match output_ordering(&schema, &partition_columns) {
             Some(ordering) => {
                 EquivalenceProperties::new_with_orderings(schema.clone(), vec![ordering])
@@ -168,7 +163,7 @@ impl SessionAggregateExec {
             time_column,
             end_column,
             group_columns,
-            session_output,
+            output_column,
             aggregates,
             filters,
             schema,
@@ -198,8 +193,8 @@ impl SessionAggregateExec {
         &self.group_columns
     }
 
-    pub fn session_output(&self) -> &str {
-        &self.session_output
+    pub fn output_column(&self) -> &str {
+        &self.output_column
     }
 
     pub fn aggregates(&self) -> &[Arc<AggregateFunctionExpr>] {
@@ -280,7 +275,7 @@ impl ExecutionPlan for SessionAggregateExec {
             self.time_column.clone(),
             self.end_column.clone(),
             self.group_columns.clone(),
-            self.session_output.clone(),
+            self.output_column.clone(),
             self.aggregates.clone(),
             self.filters.clone(),
             self.schema.clone(),
@@ -302,7 +297,7 @@ impl ExecutionPlan for SessionAggregateExec {
         let end_idx = input_schema.index_of(&self.end_column)?;
 
         // Locate the session struct field and its timezone in the output schema.
-        let session_idx = self.schema.index_of(&self.session_output)?;
+        let session_idx = self.schema.index_of(&self.output_column)?;
         let DataType::Struct(struct_fields) = self.schema.field(session_idx).data_type() else {
             return exec_err!("SessionAggregateExec session column must be a struct");
         };
@@ -316,7 +311,7 @@ impl ExecutionPlan for SessionAggregateExec {
         let mut group_sources = Vec::with_capacity(self.group_columns.len());
         let mut key_count = 0usize;
         for name in &self.group_columns {
-            if name == &self.session_output {
+            if name == &self.output_column {
                 group_sources.push(GroupSource::Session);
             } else {
                 group_sources.push(GroupSource::Key(key_count));
@@ -384,11 +379,8 @@ struct SessionAggregateStream {
     partition_indices: Vec<usize>,
     time_idx: usize,
     end_idx: usize,
-    /// One entry per output group column, in schema order.
     group_sources: Vec<GroupSource>,
     aggregates: Vec<Arc<AggregateFunctionExpr>>,
-    /// Optional `FILTER (WHERE ...)` predicate per aggregate, aligned with
-    /// `aggregates`.
     filters: Vec<Option<Arc<dyn PhysicalExpr>>>,
     /// Accumulators for the currently-open session (one per aggregate).
     accumulators: Vec<Box<dyn Accumulator>>,
@@ -396,7 +388,6 @@ struct SessionAggregateStream {
     cur_start: i64,
     cur_end: i64,
     baseline: BaselineMetrics,
-    /// Closed (emitted) sessions.
     num_sessions: Count,
     finished: bool,
 }
@@ -409,7 +400,6 @@ impl SessionAggregateStream {
             .collect()
     }
 
-    /// Open a fresh session at row `i`, creating new accumulators.
     fn start_session(&mut self, key: Vec<ScalarValue>, start: i64, end: i64) -> Result<()> {
         self.accumulators = self
             .aggregates
@@ -443,8 +433,8 @@ impl SessionAggregateStream {
                         .as_any()
                         .downcast_ref::<BooleanArray>()
                         .ok_or_else(|| {
-                            datafusion_common::DataFusionError::Internal(
-                                "session aggregate FILTER predicate must be boolean".to_string(),
+                            internal_datafusion_err!(
+                                "session aggregate FILTER predicate must be boolean"
                             )
                         })?;
                     Cow::Owned(filter_record_batch(slice, &normalize_mask(mask))?)
@@ -482,8 +472,6 @@ impl SessionAggregateStream {
         }))
     }
 
-    /// Group-key runs come from arrow's vectorized `partition` kernel, so
-    /// per-row work is only the `i64` time comparisons.
     fn process_batch(&mut self, batch: RecordBatch) -> Result<Option<RecordBatch>> {
         let n = batch.num_rows();
         if n == 0 {
@@ -508,8 +496,7 @@ impl SessionAggregateStream {
         let mut seg_start = 0usize;
 
         for (range_idx, range) in ranges.iter().enumerate() {
-            // The open session can only continue into this batch's FIRST key run;
-            // every later run starts a different key by construction.
+            // Only the batch's first key run can continue the open session.
             let continues_open = range_idx == 0
                 && match &self.cur_key {
                     Some(k) => *k == self.row_key(&batch, range.start)?,
@@ -564,8 +551,6 @@ impl SessionAggregateStream {
         }
     }
 
-    /// Build one output batch from finalized sessions, in output schema order:
-    /// the group columns (the session struct among them), then the aggregates.
     fn build_batch(&self, rows: Vec<SessionRow>) -> Result<RecordBatch> {
         self.num_sessions.add(rows.len());
         let mut columns: Vec<ArrayRef> = Vec::with_capacity(self.output_schema.fields().len());
@@ -605,9 +590,8 @@ impl SessionAggregateStream {
     }
 }
 
-/// Normalize a FILTER predicate mask so null entries are treated as `false`
-/// (SQL `FILTER (WHERE p)` keeps only rows where `p` is TRUE). Returns the mask
-/// unchanged when it has no nulls.
+/// Treats null mask entries as `false`: SQL `FILTER (WHERE p)` keeps only rows
+/// where `p` is TRUE.
 fn normalize_mask(mask: &BooleanArray) -> BooleanArray {
     if mask.null_count() == 0 {
         mask.clone()
@@ -621,9 +605,7 @@ fn as_micros(array: &ArrayRef) -> Result<&TimestampMicrosecondArray> {
         .as_any()
         .downcast_ref::<TimestampMicrosecondArray>()
         .ok_or_else(|| {
-            datafusion_common::DataFusionError::Internal(
-                "session_window expected a Timestamp(Microsecond) column".to_string(),
-            )
+            internal_datafusion_err!("session_window expected a Timestamp(Microsecond) column")
         })
 }
 
@@ -657,9 +639,6 @@ impl Stream for SessionAggregateStream {
                     }
                 }
                 Poll::Ready(None) => {
-                    if self.finished {
-                        return Poll::Ready(None);
-                    }
                     self.finished = true;
                     let _timer = baseline.elapsed_compute().timer();
                     match self.finalize() {
@@ -679,7 +658,7 @@ impl Stream for SessionAggregateStream {
 }
 
 #[cfg(test)]
-#[expect(clippy::expect_used)]
+#[expect(clippy::expect_used, clippy::panic)]
 mod tests {
     use datafusion::arrow::array::{Array, Int32Array, Int64Array, StructArray};
     use datafusion::arrow::compute::concat_batches;
@@ -690,21 +669,42 @@ mod tests {
     use datafusion::logical_expr::Operator;
     use datafusion::physical_expr::aggregate::AggregateExprBuilder;
     use datafusion::physical_expr::expressions::{BinaryExpr, Column, lit};
+    use datafusion::physical_plan::collect;
     use datafusion::prelude::SessionContext;
     use datafusion_common::ScalarValue;
-    use futures::StreamExt;
 
     use super::*;
 
+    fn micros_type() -> DataType {
+        DataType::Timestamp(TimeUnit::Microsecond, None)
+    }
+
+    fn session_field() -> Field {
+        let struct_type = DataType::Struct(Fields::from(vec![
+            Field::new("start", micros_type(), true),
+            Field::new("end", micros_type(), true),
+        ]));
+        Field::new("#w", struct_type, false)
+    }
+
+    fn input_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int32, true),
+            Field::new("#t", micros_type(), true),
+            Field::new("#e0", micros_type(), true),
+            Field::new("v", DataType::Int64, true),
+        ]))
+    }
+
     /// One row per (key, time, value); the end candidate is `time + 10`.
-    fn batch(schema: &SchemaRef, rows: &[(i32, i64, i64)]) -> RecordBatch {
+    fn batch(rows: &[(i32, i64, i64)]) -> RecordBatch {
         let keys = Int32Array::from(rows.iter().map(|r| r.0).collect::<Vec<_>>());
         let times = TimestampMicrosecondArray::from(rows.iter().map(|r| r.1).collect::<Vec<_>>());
         let ends =
             TimestampMicrosecondArray::from(rows.iter().map(|r| r.1 + 10).collect::<Vec<_>>());
         let values = Int64Array::from(rows.iter().map(|r| r.2).collect::<Vec<_>>());
         RecordBatch::try_new(
-            schema.clone(),
+            input_schema(),
             vec![
                 Arc::new(keys),
                 Arc::new(times),
@@ -715,111 +715,126 @@ mod tests {
         .expect("input batch")
     }
 
-    /// The fused operator must produce one row per session with correct
-    /// accumulator state when session rows span input batches, including a
-    /// `FILTER (WHERE ...)` mask applied across the boundary.
+    /// `count(v)` over the input schema, aliased.
+    fn count_agg(alias: &str) -> Result<Arc<AggregateFunctionExpr>> {
+        Ok(Arc::new(
+            AggregateExprBuilder::new(
+                count_udaf(),
+                vec![Arc::new(Column::new("v", 3)) as Arc<dyn PhysicalExpr>],
+            )
+            .schema(input_schema())
+            .alias(alias)
+            .build()?,
+        ))
+    }
+
+    fn fused_exec(
+        input: Arc<dyn ExecutionPlan>,
+        group_columns: &[&str],
+        aggregates: Vec<Arc<AggregateFunctionExpr>>,
+        filters: Vec<Option<Arc<dyn PhysicalExpr>>>,
+        output_schema: SchemaRef,
+    ) -> Result<Arc<SessionAggregateExec>> {
+        Ok(Arc::new(SessionAggregateExec::try_new(
+            input,
+            vec!["k".to_string()],
+            "#t".to_string(),
+            "#e0".to_string(),
+            group_columns.iter().map(|c| c.to_string()).collect(),
+            "#w".to_string(),
+            aggregates,
+            filters,
+            output_schema,
+        )?))
+    }
+
+    fn memory_input(batches: Vec<RecordBatch>) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(MemorySourceConfig::try_new_exec(
+            &[batches],
+            input_schema(),
+            None,
+        )?)
+    }
+
+    async fn run(exec: Arc<SessionAggregateExec>) -> Result<RecordBatch> {
+        let schema = exec.schema();
+        let ctx = SessionContext::new().task_ctx();
+        Ok(concat_batches(&schema, &collect(exec, ctx).await?)?)
+    }
+
+    /// The `(start, end)` pairs of the session struct column at index `i`.
+    fn session_bounds(output: &RecordBatch, i: usize) -> Result<Vec<(i64, i64)>> {
+        let sessions = output
+            .column(i)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("session struct column");
+        let starts = as_micros(sessions.column(0))?;
+        let ends = as_micros(sessions.column(1))?;
+        Ok(starts
+            .values()
+            .iter()
+            .zip(ends.values().iter())
+            .map(|(s, e)| (*s, *e))
+            .collect())
+    }
+
+    fn i32_values(output: &RecordBatch, i: usize) -> Vec<i32> {
+        output
+            .column(i)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("Int32 column")
+            .values()
+            .to_vec()
+    }
+
+    fn i64_values(output: &RecordBatch, i: usize) -> Vec<i64> {
+        output
+            .column(i)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("Int64 column")
+            .values()
+            .to_vec()
+    }
+
     #[tokio::test]
     async fn fused_aggregation_survives_batch_boundaries() -> Result<()> {
-        let ts = DataType::Timestamp(TimeUnit::Microsecond, None);
-        let input_schema = Arc::new(Schema::new(vec![
-            Field::new("k", DataType::Int32, true),
-            Field::new("#t", ts.clone(), true),
-            Field::new("#e0", ts.clone(), true),
-            Field::new("v", DataType::Int64, true),
-        ]));
-        let struct_type = DataType::Struct(Fields::from(vec![
-            Field::new("start", ts.clone(), true),
-            Field::new("end", ts, true),
-        ]));
         let output_schema = Arc::new(Schema::new(vec![
             Field::new("k", DataType::Int32, true),
-            Field::new("#w", struct_type, false),
+            session_field(),
             Field::new("cnt", DataType::Int64, true),
             Field::new("cnt_pos", DataType::Int64, true),
         ]));
-        let v_col = || Arc::new(Column::new("v", 3)) as Arc<dyn PhysicalExpr>;
-        let cnt = AggregateExprBuilder::new(count_udaf(), vec![v_col()])
-            .schema(input_schema.clone())
-            .alias("cnt")
-            .build()?;
-        let cnt_pos = AggregateExprBuilder::new(count_udaf(), vec![v_col()])
-            .schema(input_schema.clone())
-            .alias("cnt_pos")
-            .build()?;
         let positive: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
-            v_col(),
+            Arc::new(Column::new("v", 3)),
             Operator::Gt,
             lit(ScalarValue::Int64(Some(0))),
         ));
         // Same session layout as the `SessionWindowExec` test: key 2's session
         // spans the second batch boundary; its negative value lands in the
         // second batch, so the filter mask must apply across the carry-over.
-        let batches = vec![
-            batch(&input_schema, &[(1, 0, 1), (1, 5, -1)]),
-            batch(&input_schema, &[(1, 30, 2), (2, 100, 3)]),
-            batch(&input_schema, &[(2, 105, -3), (3, 200, 5)]),
-        ];
-        let input = MemorySourceConfig::try_new_exec(&[batches], input_schema.clone(), None)?;
-        let exec = SessionAggregateExec::try_new(
+        let input = memory_input(vec![
+            batch(&[(1, 0, 1), (1, 5, -1)]),
+            batch(&[(1, 30, 2), (2, 100, 3)]),
+            batch(&[(2, 105, -3), (3, 200, 5)]),
+        ])?;
+        let exec = fused_exec(
             input,
-            vec!["k".to_string()],
-            "#t".to_string(),
-            "#e0".to_string(),
-            vec!["k".to_string(), "#w".to_string()],
-            "#w".to_string(),
-            vec![Arc::new(cnt), Arc::new(cnt_pos)],
+            &["k", "#w"],
+            vec![count_agg("cnt")?, count_agg("cnt_pos")?],
             vec![None, Some(positive)],
-            output_schema.clone(),
+            output_schema,
         )?;
-        let ctx = SessionContext::new().task_ctx();
-        let mut stream = exec.execute(0, ctx)?;
-        let mut batches = vec![];
-        while let Some(batch) = stream.next().await {
-            batches.push(batch?);
-        }
-        let output = concat_batches(&output_schema, &batches)?;
-        assert_eq!(output.num_rows(), 4);
-        let keys = output
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("key column");
-        let sessions = output
-            .column(1)
-            .as_any()
-            .downcast_ref::<StructArray>()
-            .expect("session struct column");
-        let starts = as_micros(sessions.column(0))?;
-        let ends = as_micros(sessions.column(1))?;
-        let cnt = output
-            .column(2)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .expect("cnt column");
-        let cnt_pos = output
-            .column(3)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .expect("cnt_pos column");
-        let expected = [
-            (1, 0, 15, 2, 1),
-            (1, 30, 40, 1, 1),
-            (2, 100, 115, 2, 1),
-            (3, 200, 210, 1, 1),
-        ];
-        for (i, (key, start, end, count, count_pos)) in expected.iter().enumerate() {
-            assert_eq!(
-                (
-                    keys.value(i),
-                    starts.value(i),
-                    ends.value(i),
-                    cnt.value(i),
-                    cnt_pos.value(i)
-                ),
-                (*key, *start, *end, *count, *count_pos),
-                "session {i}"
-            );
-        }
+        let output = run(exec.clone()).await?;
+        assert_eq!(i32_values(&output, 0), [1, 1, 2, 3]);
+        assert_eq!(
+            session_bounds(&output, 1)?,
+            [(0, 15), (30, 40), (100, 115), (200, 210)]
+        );
+        assert_eq!(i64_values(&output, 2), [2, 1, 2, 1]);
+        assert_eq!(i64_values(&output, 3), [1, 1, 1, 1]);
         let metrics = exec.metrics().expect("metrics");
         assert_eq!(metrics.output_rows(), Some(4));
         assert_eq!(
@@ -829,127 +844,66 @@ mod tests {
         Ok(())
     }
 
-    /// Pins the fused merge rules: inclusive boundary, a key change at a
-    /// batch boundary within the carried gap, and multi-row segments at
-    /// nonzero offsets.
     #[tokio::test]
     async fn fused_merge_boundaries_and_segment_offsets() -> Result<()> {
-        let ts = DataType::Timestamp(TimeUnit::Microsecond, None);
-        let input_schema = Arc::new(Schema::new(vec![
-            Field::new("k", DataType::Int32, true),
-            Field::new("#t", ts.clone(), true),
-            Field::new("#e0", ts.clone(), true),
-            Field::new("v", DataType::Int64, true),
-        ]));
-        let struct_type = DataType::Struct(Fields::from(vec![
-            Field::new("start", ts.clone(), true),
-            Field::new("end", ts, true),
-        ]));
         let output_schema = Arc::new(Schema::new(vec![
             Field::new("k", DataType::Int32, true),
-            Field::new("#w", struct_type, false),
+            session_field(),
             Field::new("cnt", DataType::Int64, true),
         ]));
-        let cnt = AggregateExprBuilder::new(
-            count_udaf(),
-            vec![Arc::new(Column::new("v", 3)) as Arc<dyn PhysicalExpr>],
-        )
-        .schema(input_schema.clone())
-        .alias("cnt")
-        .build()?;
-        let batches = vec![
-            batch(
-                &input_schema,
-                &[
-                    (1, 0, 1),
-                    (1, 10, 1),
-                    (1, 25, 1),
-                    (1, 30, 1),
-                    (1, 50, 1),
-                    (2, 100, 1),
-                ],
-            ),
-            batch(&input_schema, &[(3, 104, 1), (3, 120, 1)]),
-        ];
-        let input = MemorySourceConfig::try_new_exec(&[batches], input_schema.clone(), None)?;
-        let exec = SessionAggregateExec::try_new(
+        // Batch 1: key 1 merges t=10 exactly on the session end (inclusive
+        // boundary), t=25 opens a second session extended by t=30, and t=50 a
+        // third (a mid-run close at a nonzero slice offset); key 2 changes
+        // mid-batch. Batch 2 starts with a key change at the batch boundary
+        // whose time (104) is within key 2's still-open gap.
+        let input = memory_input(vec![
+            batch(&[
+                (1, 0, 1),
+                (1, 10, 1),
+                (1, 25, 1),
+                (1, 30, 1),
+                (1, 50, 1),
+                (2, 100, 1),
+            ]),
+            batch(&[(3, 104, 1), (3, 120, 1)]),
+        ])?;
+        let exec = fused_exec(
             input,
-            vec!["k".to_string()],
-            "#t".to_string(),
-            "#e0".to_string(),
-            vec!["k".to_string(), "#w".to_string()],
-            "#w".to_string(),
-            vec![Arc::new(cnt)],
+            &["k", "#w"],
+            vec![count_agg("cnt")?],
             vec![None],
-            output_schema.clone(),
+            output_schema,
         )?;
-        let ctx = SessionContext::new().task_ctx();
-        let mut stream = exec.execute(0, ctx)?;
-        let mut batches = vec![];
-        while let Some(batch) = stream.next().await {
-            batches.push(batch?);
-        }
-        let output = concat_batches(&output_schema, &batches)?;
-        assert_eq!(output.num_rows(), 6);
-        let keys = output
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("key column");
-        let sessions = output
-            .column(1)
-            .as_any()
-            .downcast_ref::<StructArray>()
-            .expect("session struct column");
-        let starts = as_micros(sessions.column(0))?;
-        let ends = as_micros(sessions.column(1))?;
-        let cnts = output
-            .column(2)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .expect("count column");
-        let expected = [
-            (1, 0, 20, 2),
-            (1, 25, 40, 2),
-            (1, 50, 60, 1),
-            (2, 100, 110, 1),
-            (3, 104, 114, 1),
-            (3, 120, 130, 1),
-        ];
-        for (i, (key, start, end, count)) in expected.iter().enumerate() {
-            assert_eq!(
-                (keys.value(i), starts.value(i), ends.value(i), cnts.value(i)),
-                (*key, *start, *end, *count),
-                "session {i}"
-            );
-        }
+        let output = run(exec).await?;
+        assert_eq!(i32_values(&output, 0), [1, 1, 1, 2, 3, 3]);
+        assert_eq!(
+            session_bounds(&output, 1)?,
+            [
+                (0, 20),
+                (25, 40),
+                (50, 60),
+                (100, 110),
+                (104, 114),
+                (120, 130)
+            ]
+        );
+        assert_eq!(i64_values(&output, 2), [2, 2, 1, 1, 1, 1]);
         Ok(())
     }
 
-    /// The advertised output partitioning must be rebound to the output
-    /// schema: group columns move (the session struct is first here), so the
-    /// input's hash exprs carry stale indices.
+    /// The advertised output partitioning and ordering must be rebound to the
+    /// output schema: group columns move (the session struct is first here), so
+    /// the input's hash exprs carry stale indices.
     #[test]
     fn output_partitioning_rebinds_to_output_schema() -> Result<()> {
         use datafusion::physical_plan::repartition::RepartitionExec;
 
-        let ts = DataType::Timestamp(TimeUnit::Microsecond, None);
-        let input_schema = Arc::new(Schema::new(vec![
-            Field::new("k", DataType::Int32, true),
-            Field::new("#t", ts.clone(), true),
-            Field::new("#e0", ts.clone(), true),
-            Field::new("v", DataType::Int64, true),
-        ]));
-        let struct_type = DataType::Struct(Fields::from(vec![
-            Field::new("start", ts.clone(), true),
-            Field::new("end", ts, true),
-        ]));
         let output_schema = Arc::new(Schema::new(vec![
-            Field::new("#w", struct_type, false),
+            session_field(),
             Field::new("k", DataType::Int32, true),
             Field::new("cnt", DataType::Int64, true),
         ]));
-        let source = MemorySourceConfig::try_new_exec(&[vec![]], input_schema.clone(), None)?;
+        let source = MemorySourceConfig::try_new_exec(&[vec![]], input_schema(), None)?;
         let input = Arc::new(RepartitionExec::try_new(
             source,
             Partitioning::Hash(
@@ -957,54 +911,30 @@ mod tests {
                 4,
             ),
         )?);
-        let cnt = AggregateExprBuilder::new(
-            count_udaf(),
-            vec![Arc::new(Column::new("v", 3)) as Arc<dyn PhysicalExpr>],
-        )
-        .schema(input_schema.clone())
-        .alias("cnt")
-        .build()?;
-        let exec = SessionAggregateExec::try_new(
+        let exec = fused_exec(
             input,
-            vec!["k".to_string()],
-            "#t".to_string(),
-            "#e0".to_string(),
-            vec!["#w".to_string(), "k".to_string()],
-            "#w".to_string(),
-            vec![Arc::new(cnt)],
+            &["#w", "k"],
+            vec![count_agg("cnt")?],
             vec![None],
             output_schema,
         )?;
         let Partitioning::Hash(exprs, 4) = exec.properties().output_partitioning() else {
-            return internal_err!("expected hash output partitioning");
+            panic!("expected hash output partitioning");
         };
-        let column = exprs[0]
-            .downcast_ref::<Column>()
-            .ok_or_else(|| datafusion_common::DataFusionError::Internal("not a column".into()))?;
+        let column = exprs[0].downcast_ref::<Column>().expect("hash column");
         assert_eq!((column.name(), column.index()), ("k", 1));
-        let ordering = exec
-            .properties()
-            .output_ordering()
-            .ok_or_else(|| datafusion_common::DataFusionError::Internal("no ordering".into()))?;
+        let ordering = exec.properties().output_ordering().expect("ordering");
         let first = ordering[0]
             .expr
             .downcast_ref::<Column>()
-            .ok_or_else(|| datafusion_common::DataFusionError::Internal("not a column".into()))?;
+            .expect("ordering column");
         assert_eq!((first.name(), first.index()), ("k", 1));
         Ok(())
     }
 
-    /// A partition or time column missing from the input schema must fail at
-    /// construction, not silently drop the sort requirement later.
     #[test]
     fn try_new_rejects_missing_columns() -> Result<()> {
-        let ts = DataType::Timestamp(TimeUnit::Microsecond, None);
-        let input_schema = Arc::new(Schema::new(vec![
-            Field::new("k", DataType::Int32, true),
-            Field::new("#t", ts.clone(), true),
-            Field::new("#e0", ts, true),
-        ]));
-        let input = MemorySourceConfig::try_new_exec(&[vec![]], input_schema.clone(), None)?;
+        let input = MemorySourceConfig::try_new_exec(&[vec![]], input_schema(), None)?;
         let result = SessionAggregateExec::try_new(
             input,
             vec!["#missing".to_string()],
@@ -1014,12 +944,10 @@ mod tests {
             "#w".to_string(),
             vec![],
             vec![],
-            input_schema,
+            input_schema(),
         );
-        match result {
-            Err(e) => assert!(e.to_string().contains("#missing"), "{e}"),
-            Ok(_) => return internal_err!("expected a missing-column error"),
-        }
+        let err = result.expect_err("expected a missing-column error");
+        assert!(err.to_string().contains("#missing"), "{err}");
         Ok(())
     }
 }

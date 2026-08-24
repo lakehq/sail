@@ -26,8 +26,8 @@ pub struct SessionAggregateNode {
     /// Per-row session end candidate (`time + gap`).
     end_column: String,
     /// Output column name of the `{start, end}` session struct.
-    session_output: String,
-    /// Output group columns in order. Exactly one equals `session_output` (the
+    output_column: String,
+    /// Output group columns in order. Exactly one equals `output_column` (the
     /// struct); the rest are the key columns. Drives output column order.
     group_columns: Vec<String>,
     /// User aggregate expressions, in output order, after the group columns.
@@ -42,7 +42,7 @@ impl SessionAggregateNode {
         partition_columns: Vec<String>,
         time_column: String,
         end_column: String,
-        session_output: String,
+        output_column: String,
         group_columns: Vec<String>,
         aggregate_exprs: Vec<Expr>,
         schema: DFSchemaRef,
@@ -52,7 +52,7 @@ impl SessionAggregateNode {
             partition_columns,
             time_column,
             end_column,
-            session_output,
+            output_column,
             group_columns,
             aggregate_exprs,
             schema,
@@ -75,8 +75,8 @@ impl SessionAggregateNode {
         &self.end_column
     }
 
-    pub fn session_output(&self) -> &str {
-        &self.session_output
+    pub fn output_column(&self) -> &str {
+        &self.output_column
     }
 
     pub fn group_columns(&self) -> &[String] {
@@ -115,7 +115,7 @@ impl UserDefinedLogicalNodeCore for SessionAggregateNode {
             self.partition_columns.join(", "),
             self.time_column,
             self.end_column,
-            self.session_output,
+            self.output_column,
             self.aggregate_exprs.len()
         )
     }
@@ -134,7 +134,7 @@ impl UserDefinedLogicalNodeCore for SessionAggregateNode {
             partition_columns: self.partition_columns.clone(),
             time_column: self.time_column.clone(),
             end_column: self.end_column.clone(),
-            session_output: self.session_output.clone(),
+            output_column: self.output_column.clone(),
             group_columns: self.group_columns.clone(),
             aggregate_exprs: exprs,
             schema: Arc::clone(&self.schema),

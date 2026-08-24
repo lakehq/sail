@@ -482,7 +482,7 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 node.time_column().to_string(),
                 node.end_column().to_string(),
                 node.group_columns().to_vec(),
-                node.session_output().to_string(),
+                node.output_column().to_string(),
                 aggregates,
                 filters,
                 UserDefinedLogicalNode::schema(node).inner().clone(),

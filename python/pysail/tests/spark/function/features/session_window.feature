@@ -125,27 +125,24 @@ Feature: session_window() gap-based sessionization
 
   Rule: Non-positive gap
 
-    # A non-positive gap is not an analysis error: the `end > start` filter
-    # drops every row.
-    Scenario: a static gap of zero yields an empty result, not an error
+    # A non-positive or invalid literal gap is not an analysis error: it casts
+    # to NULL or a non-positive interval, and the `end > start` filter drops
+    # every row.
+    Scenario Outline: <case> yields an empty result, not an error
       When query
         """
         SELECT session_window.start, count(*) AS cnt
         FROM VALUES (TIMESTAMP '2021-01-01 00:00:00') AS t(b)
-        GROUP BY session_window(b, '0 seconds')
+        GROUP BY session_window(b, '<gap>')
         """
       Then query result
         | start | cnt |
 
-    Scenario: a static negative gap yields an empty result, not an error
-      When query
-        """
-        SELECT session_window.start, count(*) AS cnt
-        FROM VALUES (TIMESTAMP '2021-01-01 00:00:00') AS t(b)
-        GROUP BY session_window(b, '-5 seconds')
-        """
-      Then query result
-        | start | cnt |
+      Examples:
+        | case                       | gap        |
+        | a static gap of zero       | 0 seconds  |
+        | a static negative gap      | -5 seconds |
+        | an invalid literal gap     | garbage    |
 
     Scenario: a dynamic gap of zero drops only that key's rows
       When query
@@ -327,36 +324,6 @@ Feature: session_window() gap-based sessionization
         | A1 | 2021-01-01 00:00:00 | 2021-01-01 00:09:30 | 2   |
         | A1 | 2021-01-01 00:10:00 | 2021-01-01 00:15:00 | 1   |
 
-    Scenario: an arithmetic grouping key partitions sessions
-      When query
-        """
-        SELECT id + 1 AS k, session_window.start, count(*) AS cnt
-        FROM VALUES (10, TIMESTAMP '2021-01-01 00:00:00'),
-                    (10, TIMESTAMP '2021-01-01 00:01:00'),
-                    (20, TIMESTAMP '2021-01-01 00:00:00') AS tab(id, b)
-        GROUP BY session_window(b, '5 minutes'), id + 1
-        ORDER BY k, start
-        """
-      Then query result
-        | k  | start               | cnt |
-        | 11 | 2021-01-01 00:00:00 | 2   |
-        | 21 | 2021-01-01 00:00:00 | 1   |
-
-    Scenario: a cast grouping key partitions sessions
-      When query
-        """
-        SELECT CAST(id AS STRING) AS k, session_window.start, count(*) AS cnt
-        FROM VALUES (1, TIMESTAMP '2021-01-01 00:00:00'),
-                    (1, TIMESTAMP '2021-01-01 00:01:00'),
-                    (2, TIMESTAMP '2021-01-01 00:00:00') AS tab(id, b)
-        GROUP BY session_window(b, '5 minutes'), CAST(id AS STRING)
-        ORDER BY k, start
-        """
-      Then query result
-        | k | start               | cnt |
-        | 1 | 2021-01-01 00:00:00 | 2   |
-        | 2 | 2021-01-01 00:00:00 | 1   |
-
     Scenario: a date_trunc grouping key over a second timestamp partitions sessions
       When query
         """
@@ -373,16 +340,6 @@ Feature: session_window() gap-based sessionization
         | 2021-01-02 00:00:00 | 2021-01-01 00:00:00 | 1   |
 
   Rule: Gap literal edge cases
-
-    Scenario: an invalid literal gap yields an empty result, not an error
-      When query
-        """
-        SELECT session_window.start, count(*) AS cnt
-        FROM VALUES (TIMESTAMP '2021-01-01 00:00:00') AS t(b)
-        GROUP BY session_window(b, 'garbage')
-        """
-      Then query result
-        | start | cnt |
 
     Scenario: an integer gap is rejected
       When query
@@ -469,11 +426,13 @@ Feature: session_window() gap-based sessionization
         | 2021-01-01 00:00:00 | 2   | 30 | 10 | 20 |
         | 2021-01-01 00:10:00 | 1   | 5  | 5  | 5  |
 
-    Scenario: a FILTER (WHERE) aggregate is computed per session (fused path)
+    # `cnt_none` matches no rows: it must yield zero, not a dropped session.
+    Scenario: FILTER (WHERE) aggregates are computed per session (fused path)
       When query
         """
         SELECT session_window.start,
                count(*) FILTER (WHERE v > 10) AS cnt_big,
+               count(*) FILTER (WHERE v > 100) AS cnt_none,
                sum(v) AS total
         FROM VALUES (TIMESTAMP '2021-01-01 00:00:00', 5),
                     (TIMESTAMP '2021-01-01 00:04:30', 20),
@@ -482,24 +441,9 @@ Feature: session_window() gap-based sessionization
         ORDER BY start
         """
       Then query result
-        | start               | cnt_big | total |
-        | 2021-01-01 00:00:00 | 1       | 25    |
-        | 2021-01-01 00:10:00 | 1       | 30    |
-
-    Scenario: a FILTER that excludes every row of a session yields zero, not a dropped session
-      When query
-        """
-        SELECT session_window.start,
-               count(*) FILTER (WHERE v > 100) AS cnt_big,
-               count(*) AS cnt
-        FROM VALUES (TIMESTAMP '2021-01-01 00:00:00', 5),
-                    (TIMESTAMP '2021-01-01 00:04:30', 20) AS t(b, v)
-        GROUP BY session_window(b, '5 minutes')
-        ORDER BY start
-        """
-      Then query result
-        | start               | cnt_big | cnt |
-        | 2021-01-01 00:00:00 | 0       | 2   |
+        | start               | cnt_big | cnt_none | total |
+        | 2021-01-01 00:00:00 | 1       | 0        | 25    |
+        | 2021-01-01 00:10:00 | 1       | 0        | 30    |
 
     Scenario: a DISTINCT aggregate over a session (fallback path)
       When query

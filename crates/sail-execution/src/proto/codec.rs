@@ -1321,7 +1321,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 time_column,
                 end_column,
                 group_columns,
-                session_output,
+                output_column,
                 aggregates,
                 schema,
             }) => {
@@ -1330,9 +1330,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let input_schema = input.schema();
                 let decode_ctx = PhysicalPlanDecodeContext::new(ctx, self);
                 let converter = RemotePhysicalProtoConverter {};
-                // Each aggregate: a serialized `AggregateExpr`, its output
-                // alias, and an optional `FILTER (WHERE ...)` predicate applied
-                // by this operator.
                 let mut decoded_aggregates = Vec::with_capacity(aggregates.len());
                 let mut filters = Vec::with_capacity(aggregates.len());
                 for agg in aggregates {
@@ -1355,12 +1352,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         input_schema.as_ref(),
                         &converter,
                     )?;
-                    let order_bys = parse_physical_sort_exprs(
-                        &agg_node.ordering_req,
-                        &decode_ctx,
-                        input_schema.as_ref(),
-                        &converter,
-                    )?;
+                    // The fused operator feeds accumulators only the argument
+                    // expressions (no order-by columns appended, unlike
+                    // DataFusion's `AggregateExec`), so an ordering requirement
+                    // would be silently ignored — reject it instead.
+                    if !agg_node.ordering_req.is_empty() {
+                        return plan_err!(
+                            "SessionAggregateExec does not support ordered aggregates"
+                        );
+                    }
                     // Prefer the serialized UDAF definition, falling back to
                     // the registry by name (as datafusion's decode does).
                     let udaf = match &agg_node.fun_definition {
@@ -1369,21 +1369,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                             .udaf(udaf_name)
                             .or_else(|_| self.try_decode_udaf(udaf_name, &[]))?,
                     };
-                    // The fused operator feeds accumulators only the argument
-                    // expressions (no order-by columns appended, unlike
-                    // DataFusion's `AggregateExec`), so an ordering requirement
-                    // would be silently ignored — reject it instead.
-                    if !order_bys.is_empty() {
-                        return plan_err!(
-                            "SessionAggregateExec does not support ordered aggregates"
-                        );
-                    }
                     let aggregate = AggregateExprBuilder::new(udaf, args)
                         .schema(input_schema.clone())
                         .alias(agg.output_name)
                         .with_ignore_nulls(agg_node.ignore_nulls)
                         .with_distinct(agg_node.distinct)
-                        .order_by(order_bys)
                         .build()?;
                     let filter = agg
                         .filter
@@ -1401,7 +1391,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     time_column,
                     end_column,
                     group_columns,
-                    session_output,
+                    output_column,
                     decoded_aggregates,
                     filters,
                     schema,
@@ -2461,7 +2451,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 time_column: session_aggregate.time_column().to_string(),
                 end_column: session_aggregate.end_column().to_string(),
                 group_columns: session_aggregate.group_columns().to_vec(),
-                session_output: session_aggregate.session_output().to_string(),
+                output_column: session_aggregate.output_column().to_string(),
                 aggregates,
                 schema,
             })
@@ -6735,6 +6725,8 @@ mod tests {
         let mut buf = vec![];
         codec.try_encode(Arc::new(exec) as Arc<dyn ExecutionPlan>, &mut buf)?;
 
+        // `SessionContext` (not the bare `TaskContext` other tests use) so the
+        // decode can resolve `sum`/`count` from the UDAF registry.
         let ctx = SessionContext::new().task_ctx();
         let decoded = codec.try_decode(&buf, &[], &ctx)?;
         let decoded = decoded
@@ -6745,7 +6737,7 @@ mod tests {
         assert_eq!(decoded.time_column(), "#t");
         assert_eq!(decoded.end_column(), "#e0");
         assert_eq!(decoded.group_columns(), ["k".to_string(), "#w".to_string()]);
-        assert_eq!(decoded.session_output(), "#w");
+        assert_eq!(decoded.output_column(), "#w");
         assert_eq!(decoded.schema(), output_schema);
 
         assert_eq!(decoded.aggregates().len(), 2);
@@ -6770,7 +6762,6 @@ mod tests {
     fn test_round_trip_session_window_exec() -> Result<()> {
         use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema, TimeUnit};
         use datafusion::physical_plan::empty::EmptyExec;
-        use datafusion::prelude::SessionContext;
         use sail_physical_plan::session_window::SessionWindowExec;
 
         let tz: Arc<str> = Arc::from("America/New_York");
@@ -6799,11 +6790,8 @@ mod tests {
         )?;
 
         let codec = RemoteExecutionCodec;
-        let mut buf = vec![];
-        codec.try_encode(Arc::new(exec) as Arc<dyn ExecutionPlan>, &mut buf)?;
-
-        let ctx = SessionContext::new().task_ctx();
-        let decoded = codec.try_decode(&buf, &[], &ctx)?;
+        let bytes = try_encode_physical_plan(&codec, Arc::new(exec))?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
         let decoded = decoded
             .downcast_ref::<SessionWindowExec>()
             .ok_or_else(|| plan_datafusion_err!("decoded plan should be a SessionWindowExec"))?;

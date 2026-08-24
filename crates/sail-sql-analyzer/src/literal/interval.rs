@@ -493,11 +493,8 @@ fn parse_unqualified_interval_string_full(s: &str, negated: bool) -> SqlResult<I
 
 /// A calendar interval with Spark `stringToInterval` bucketing: the unit the
 /// user wrote decides the bucket (year/month → `months`, week/day → `days`,
-/// sub-day units → `microseconds`), and nothing is rebucketed across the day
-/// boundary. This is the semantics `session_window`/`window` gaps need — a
-/// `'1 day'` gap spans a calendar day across a DST transition while a
-/// `'25 hours'` gap spans 25 absolute hours. The typed SQL literal paths keep
-/// the legacy [IntervalValue] shapes from [parse_unqualified_interval_string].
+/// sub-day units → `microseconds`); nothing is rebucketed across the day
+/// boundary, so a `'1 day'` gap stays calendar and `'25 hours'` stays absolute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CalendarInterval {
     pub months: i32,
@@ -506,12 +503,10 @@ pub struct CalendarInterval {
 }
 
 impl CalendarInterval {
-    /// Splits the microsecond bucket for nanosecond-based consumers: whole
-    /// days move into the day bucket ONLY when the microseconds do not fit
-    /// i64 nanoseconds — an interval beyond ~106751 days of sub-day units,
-    /// which Spark's microsecond-based `CalendarInterval` still represents.
-    /// Below that bound the calendar/absolute distinction is preserved
-    /// exactly; above it the sub-day remainder stays absolute.
+    /// Splits whole days out of the microsecond bucket only when the
+    /// microseconds do not fit `i64` nanoseconds (Spark's microsecond-based
+    /// `CalendarInterval` still represents such values); below that bound the
+    /// calendar/absolute distinction is preserved exactly.
     pub fn days_and_nanoseconds(&self) -> Option<(i32, i64)> {
         if let Some(nanoseconds) = self.microseconds.checked_mul(1_000) {
             return Some((self.days, nanoseconds));
@@ -563,9 +558,12 @@ pub fn parse_calendar_interval_string(s: &str) -> SqlResult<CalendarInterval> {
     }
 }
 
-/// Per-unit bucketing over the same term scanner as the fast interval parser;
-/// declines (`None`) anything the scanner does not recognize.
-fn parse_calendar_interval_string_fast(s: &str) -> Option<CalendarInterval> {
+/// A scanned interval term: (negated, integer digits, fraction digits, unit).
+type IntervalTerm<'a> = (bool, &'a str, Option<&'a str>, Unit);
+
+/// Scans `[interval] (value unit)+` into terms; `None` when any word is not a
+/// simple signed value or unit (the caller then falls back to the full parser).
+fn scan_interval_terms(s: &str) -> Option<Vec<IntervalTerm<'_>>> {
     let mut words = s.split_ascii_whitespace().peekable();
     if words
         .peek()
@@ -573,17 +571,29 @@ fn parse_calendar_interval_string_fast(s: &str) -> Option<CalendarInterval> {
     {
         words.next();
     }
-    let mut months: i32 = 0;
-    let mut days: i32 = 0;
-    let mut delta = TimeDelta::zero();
-    let mut seen = false;
+    let mut terms = Vec::new();
     while let Some(value_word) = words.next() {
         let (neg, int_part, fraction) = parse_value_word(value_word)?;
         let unit = parse_unit_word(words.next()?)?;
         if fraction.is_some() && unit != Unit::Second {
             return None;
         }
-        seen = true;
+        terms.push((neg, int_part, fraction, unit));
+    }
+    Some(terms)
+}
+
+/// Per-unit bucketing over [scan_interval_terms]; declines (`None`) anything
+/// the scanner does not recognize.
+fn parse_calendar_interval_string_fast(s: &str) -> Option<CalendarInterval> {
+    let terms = scan_interval_terms(s)?;
+    if terms.is_empty() {
+        return None;
+    }
+    let mut months: i32 = 0;
+    let mut days: i32 = 0;
+    let mut delta = TimeDelta::zero();
+    for (neg, int_part, fraction, unit) in terms {
         use Unit::*;
         match unit {
             Year | Month => {
@@ -627,9 +637,6 @@ fn parse_calendar_interval_string_fast(s: &str) -> Option<CalendarInterval> {
                 delta = delta.checked_add(&part)?;
             }
         }
-    }
-    if !seen {
-        return None;
     }
     Some(CalendarInterval {
         months,
@@ -782,30 +789,12 @@ fn fraction_microseconds(fraction: Option<&str>) -> Option<i64> {
     }
 }
 
-/// Fast parser for the common `[interval] (value unit)+` strings, e.g.
-/// `5 minutes`, `-2 days`, `1.5 seconds`. Anything else (quoted values, `+`,
-/// qualifiers like `day to second`) returns `None` and the caller falls back
-/// to the full parser. Accepted strings reproduce [from_ast_signed_interval]
-/// exactly, quirks included: a single year/month term is year-month even when
-/// zero, single-term seconds are `i64` but multi-term `u32`, and overflow is
-/// declined so the full parser reports the error.
+/// Fast parser for the common `[interval] (value unit)+` strings. Anything
+/// else (quoted values, `+`, qualifiers like `day to second`) returns `None`
+/// and the caller falls back to the full parser; accepted strings reproduce
+/// [from_ast_signed_interval] exactly, quirks and overflow-decline included.
 fn parse_unqualified_interval_string_fast(s: &str, negated: bool) -> Option<IntervalValue> {
-    let mut words = s.split_ascii_whitespace().peekable();
-    if words
-        .peek()
-        .is_some_and(|w| w.eq_ignore_ascii_case("interval"))
-    {
-        words.next();
-    }
-    let mut terms: Vec<(bool, &str, Option<&str>, Unit)> = Vec::new();
-    while let Some(value_word) = words.next() {
-        let (neg, int_part, fraction) = parse_value_word(value_word)?;
-        let unit = parse_unit_word(words.next()?)?;
-        if fraction.is_some() && unit != Unit::Second {
-            return None;
-        }
-        terms.push((neg, int_part, fraction, unit));
-    }
+    let terms = scan_interval_terms(s)?;
 
     // A single term follows the standard-interval path for its units;
     // everything else accumulates as multi-unit.

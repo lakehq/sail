@@ -1171,12 +1171,10 @@ fn session_window_gap(gap: Expr, schema: &DFSchemaRef) -> PlanResult<Expr> {
     // filter then drops every row, matching Spark.
     if let Expr::Literal(value, _) = &gap {
         if let Some(s) = value.try_as_str().flatten() {
-            // Spark bucketing: the unit the user wrote decides the bucket, so
-            // a `'1 day'` gap is a calendar day (25h across a DST fall-back)
-            // while `'25 hours'` is 25 absolute hours.
-            // Spark casts the gap with `safeStringToInterval`: an invalid or
-            // out-of-range literal becomes NULL, every row is dropped by the
-            // `end > time` filter, and the query returns an empty result.
+            // The unit the user wrote decides the bucket (`'1 day'` is a
+            // calendar day across DST, `'25 hours'` is absolute); an invalid or
+            // out-of-range literal becomes NULL (`safeStringToInterval`), and
+            // the `end > time` filter then drops every row.
             let value = parse_calendar_interval_string(s).ok().and_then(|interval| {
                 interval
                     .days_and_nanoseconds()
@@ -1271,19 +1269,12 @@ fn session_window_gap(gap: Expr, schema: &DFSchemaRef) -> PlanResult<Expr> {
 fn session_window(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let schema = input.function_context.schema;
     let session_tz = input.function_context.plan_config.session_timezone.clone();
-    let args = input.arguments;
-    if args.len() != 2 {
-        return Err(PlanError::invalid(format!(
+    let [time, gap]: [Expr; 2] = input.arguments.try_into().map_err(|args: Vec<Expr>| {
+        PlanError::invalid(format!(
             "session_window requires exactly 2 arguments (time column, gap duration), got {}",
             args.len()
-        )));
-    }
-    let mut args = args.into_iter();
-    let (Some(time), Some(gap)) = (args.next(), args.next()) else {
-        return Err(PlanError::internal(
-            "session_window arguments missing after length check",
-        ));
-    };
+        ))
+    })?;
     // Cast the time column to a microsecond timestamp (same rule as `window`).
     let field_type = window_field_type(&time.get_type(schema)?, &session_tz)?;
     let time_ts = cast(time, field_type);

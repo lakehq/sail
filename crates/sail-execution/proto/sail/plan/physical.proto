@@ -934,7 +934,7 @@ message SessionAggregateExecNode {
   string time_column = 3;
   string end_column = 4;
   repeated string group_columns = 5;
-  string session_output = 6;
+  string output_column = 6;
   repeated SessionAggregateFunctionNode aggregates = 7;
   bytes schema = 8;
 }
