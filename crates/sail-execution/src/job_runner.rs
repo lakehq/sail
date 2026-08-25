@@ -25,6 +25,27 @@ impl LocalJobRunner {
             stopped: AtomicBool::new(false),
         }
     }
+
+    fn start_job(
+        &self,
+        ctx: &SessionContext,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<(SendableRecordBatchStream, Arc<dyn ExecutionPlan>)> {
+        if self.stopped.load(Ordering::Relaxed) {
+            return internal_err!("job runner is stopped");
+        }
+        let job_id = self.next_job_id.fetch_add(1, Ordering::Relaxed);
+        let options = TracingExecOptions {
+            metrics: global_metrics(),
+            job_id: Some(job_id),
+            stage: None,
+            attempt: None,
+            operator_id: None,
+        };
+        let plan = trace_execution_plan(plan, options)?;
+        let stream = execute_stream(Arc::clone(&plan), ctx.task_ctx())?;
+        Ok((stream, plan))
+    }
 }
 
 impl Default for LocalJobRunner {
@@ -62,19 +83,22 @@ impl JobRunner for LocalJobRunner {
         ctx: &SessionContext,
         plan: Arc<dyn ExecutionPlan>,
     ) -> Result<SendableRecordBatchStream> {
+        let (stream, _) = self.start_job(ctx, plan)?;
+        Ok(stream)
+    }
+
+    async fn execute_for_explain(
+        &self,
+        ctx: &SessionContext,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<(SendableRecordBatchStream, Arc<dyn ExecutionPlan>)> {
         if self.stopped.load(Ordering::Relaxed) {
             return internal_err!("job runner is stopped");
         }
-        let job_id = self.next_job_id.fetch_add(1, Ordering::Relaxed);
-        let options = TracingExecOptions {
-            metrics: global_metrics(),
-            job_id: Some(job_id),
-            stage: None,
-            attempt: None,
-            operator_id: None,
-        };
-        let plan = trace_execution_plan(plan, options)?;
-        Ok(execute_stream(plan, ctx.task_ctx())?)
+        let _ = self.next_job_id.fetch_add(1, Ordering::Relaxed);
+        // Keep metrics attached to the exact plan rendered by EXPLAIN ANALYZE.
+        let stream = execute_stream(Arc::clone(&plan), ctx.task_ctx())?;
+        Ok((stream, plan))
     }
 
     async fn stop(&self) {

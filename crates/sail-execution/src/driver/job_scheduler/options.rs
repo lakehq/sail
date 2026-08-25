@@ -37,3 +37,19 @@ impl From<&DriverOptions> for JobSchedulerOptions {
         }
     }
 }
+
+#[cfg(test)]
+impl JobSchedulerOptions {
+    pub(crate) fn for_test(
+        execution_mode: DistributedExecutionMode,
+        shuffle_backend: ShuffleBackendKind,
+    ) -> Self {
+        Self {
+            execution_mode,
+            session_id: "test-session".to_string(),
+            task_launch_timeout: Duration::from_secs(1),
+            task_max_attempts: 1,
+            shuffle_backend,
+        }
+    }
+}

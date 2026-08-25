@@ -363,14 +363,18 @@ fn should_show(previous_plan: &StringifiedPlan, this_plan: &StringifiedPlan) -> 
 
 async fn maybe_collect_metrics(
     options: &ExplainOptions,
-    physical: &Option<Arc<dyn ExecutionPlan>>,
+    physical: &mut Option<Arc<dyn ExecutionPlan>>,
     ctx: &SessionContext,
 ) -> Result<()> {
     if options.analyze {
-        if let Some(plan) = physical {
+        if let Some(plan) = physical.as_ref() {
             let service = ctx.extension::<JobService>()?;
-            let stream = service.runner().execute(ctx, Arc::clone(plan)).await?;
+            let (stream, executed_plan) = service
+                .runner()
+                .execute_for_explain(ctx, Arc::clone(plan))
+                .await?;
             let _ = collect_stream(stream).await?;
+            *physical = Some(executed_plan);
         }
     }
     Ok(())
@@ -452,10 +456,10 @@ pub async fn distributed_explain_string_from_logical_plan(
 
 async fn explain_from_collected(
     ctx: &SessionContext,
-    collected: CollectedPlan,
+    mut collected: CollectedPlan,
     options: ExplainOptions,
 ) -> PlanResult<ExplainString> {
-    maybe_collect_metrics(&options, &collected.physical_plan, ctx)
+    maybe_collect_metrics(&options, &mut collected.physical_plan, ctx)
         .await
         .map_err(PlanError::from)?;
 

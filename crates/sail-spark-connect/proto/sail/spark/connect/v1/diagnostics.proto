@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package sail.spark.connect.v1;
+
+import "spark/connect/relations.proto";
+
+message ExplainRelation {
+  .spark.connect.Relation input = 1;
+  SailExplainOptions options = 2;
+}
+
+message SailExplainOptions {
+  SailExplainType type = 1;
+  SailExplainFormat format = 2;
+  bool verbose = 3;
+  bool analyze = 4;
+}
+
+enum SailExplainType {
+  SAIL_EXPLAIN_TYPE_UNSPECIFIED = 0;
+  SAIL_EXPLAIN_TYPE_DISTRIBUTED = 1;
+}
+
+enum SailExplainFormat {
+  SAIL_EXPLAIN_FORMAT_UNSPECIFIED = 0;
+  SAIL_EXPLAIN_FORMAT_TEXT = 1;
+  SAIL_EXPLAIN_FORMAT_JSON = 2;
+  SAIL_EXPLAIN_FORMAT_GRAPHVIZ = 3;
+}

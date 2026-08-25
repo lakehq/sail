@@ -1079,7 +1079,7 @@ Feature: Delta Lake Merge
         | 3  | vip      | 300    | priority_priority |
         | 4  | standard | 25     | default_regular   |
 
-  Rule: EXPLAIN CODEGEN shows stepwise optimization for MERGE
+  Rule: EXPLAIN VERBOSE shows stepwise optimization for MERGE
     Background:
       Given variable location for temporary directory merge_explain_codegen
       Given final statement
@@ -1119,10 +1119,10 @@ Feature: Delta Lake Merge
         AS src(id, category, amount, note)
         """
 
-    Scenario: EXPLAIN CODEGEN includes plan steps and merge rewrite artifacts
+    Scenario: EXPLAIN VERBOSE includes plan steps and merge rewrite artifacts
       When query
         """
-        EXPLAIN CODEGEN
+        EXPLAIN VERBOSE
         MERGE INTO delta_merge_explain_codegen AS t
         USING (
           SELECT *

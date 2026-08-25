@@ -110,13 +110,6 @@ Feature: Delta Lake read path (driver vs metadata-as-data)
         | 1  |
         | 4  |
 
-    Scenario: EXPLAIN CODEGEN shows the distributed metadata replay stages
-      When query
-        """
-        EXPLAIN CODEGEN SELECT * FROM delta_read_metadata_path
-        """
-      Then query plan matches snapshot
-
   Rule: EXPLAIN shows partition-pruned driver path with default options
     Background:
       Given variable location for temporary directory delta_read_driver_partitioned

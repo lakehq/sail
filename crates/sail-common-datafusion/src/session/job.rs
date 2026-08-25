@@ -69,6 +69,17 @@ pub trait JobRunner: Send + Sync + 'static {
         plan: Arc<dyn ExecutionPlan>,
     ) -> Result<SendableRecordBatchStream>;
 
+    /// Executes a plan and returns the physical plan whose metrics should be
+    /// rendered by EXPLAIN ANALYZE.
+    async fn execute_for_explain(
+        &self,
+        ctx: &SessionContext,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<(SendableRecordBatchStream, Arc<dyn ExecutionPlan>)> {
+        let stream = self.execute(ctx, Arc::clone(&plan)).await?;
+        Ok((stream, plan))
+    }
+
     async fn stop(&self);
 }
 

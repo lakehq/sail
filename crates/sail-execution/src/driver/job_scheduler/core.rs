@@ -755,6 +755,50 @@ impl JobScheduler {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::Schema;
+    use datafusion::physical_plan::ExecutionPlan;
+    use datafusion::physical_plan::empty::EmptyExec;
+    use opentelemetry::logs::LoggerProvider;
+    use opentelemetry_sdk::logs::SdkLoggerProvider;
+    use sail_common::diagnostics::DistributedExecutionMode;
+    use sail_telemetry::system_event::SystemEventReporter;
+
+    use super::*;
+    use crate::driver::job_scheduler::JobSchedulerOptions;
+    use crate::shuffle::ShuffleBackendKind;
+
+    #[test]
+    fn prepared_snapshot_matches_the_graph_owned_by_the_scheduler() {
+        let provider = SdkLoggerProvider::builder().build();
+        let reporter = SystemEventReporter::new(provider.logger("test"));
+        let mut scheduler = JobScheduler::new(
+            JobSchedulerOptions::for_test(
+                DistributedExecutionMode::LocalCluster,
+                ShuffleBackendKind::Flight,
+            ),
+            reporter,
+        );
+        let plan = Arc::new(EmptyExec::new(Arc::new(Schema::empty()))) as Arc<dyn ExecutionPlan>;
+
+        let (job_id, snapshot) = scheduler.prepare_job(plan).unwrap();
+        let owned_graph = scheduler.prepared_jobs.get(&job_id).unwrap();
+
+        assert_eq!(
+            snapshot,
+            owned_graph.distributed_plan(DistributedExecutionMode::LocalCluster)
+        );
+        assert_eq!(scheduler.prepared_jobs.len(), 1);
+
+        scheduler.discard_prepared_job(job_id).unwrap();
+        assert!(scheduler.prepared_jobs.is_empty());
+        assert!(scheduler.discard_prepared_job(job_id).is_err());
+    }
+}
+
 struct TaskInputBuilder<'a> {
     job: &'a JobDescriptor,
     key: &'a TaskKey,

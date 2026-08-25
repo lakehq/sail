@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use prost::Message;
+use sail_common::diagnostics::ExplainFormat;
 use sail_common::spec;
 use sail_sql_analyzer::expression::{from_ast_expression, from_ast_object_name};
 use sail_sql_analyzer::parser::{
@@ -9,6 +11,9 @@ use sail_sql_analyzer::statement::from_ast_statement;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::proto::data_type::{DEFAULT_FIELD_NAME, parse_spark_data_type};
+use crate::sail::spark::connect::v1::{
+    ExplainRelation, SailExplainFormat, SailExplainOptions, SailExplainType,
+};
 use crate::spark::connect as sc;
 use crate::spark::connect::catalog::CatType;
 use crate::spark::connect::relation::RelType;
@@ -18,6 +23,8 @@ use crate::spark::connect::{
     StreamingForeachFunction, TransformWithStateInfo, WriteOperation, WriteOperationV2,
     WriteStreamOperationStart, plan,
 };
+
+const EXPLAIN_RELATION_TYPE_URL: &str = "type.googleapis.com/sail.spark.connect.v1.ExplainRelation";
 
 struct RelationMetadata {
     plan_id: Option<i64>,
@@ -169,6 +176,48 @@ impl RelationNode {
             _ => Err(SparkError::invalid("expected command node")),
         }
     }
+}
+
+fn parse_extension_relation(extension: pbjson_types::Any) -> SparkResult<RelationNode> {
+    if extension.type_url != EXPLAIN_RELATION_TYPE_URL {
+        return Err(SparkError::unsupported(format!(
+            "extension relation type URL: {}",
+            extension.type_url
+        )));
+    }
+    let ExplainRelation { input, options } = ExplainRelation::decode(extension.value.as_ref())?;
+    let input: spec::Plan = input.required("explain relation input")?.try_into()?;
+    let SailExplainOptions {
+        r#type,
+        format,
+        verbose,
+        analyze,
+    } = options.required("explain relation options")?;
+    match SailExplainType::try_from(r#type)? {
+        SailExplainType::Distributed => {}
+        SailExplainType::Unspecified => {
+            return Err(SparkError::invalid("distributed explain type is required"));
+        }
+    }
+    let format = match SailExplainFormat::try_from(format)? {
+        SailExplainFormat::Unspecified | SailExplainFormat::Text => ExplainFormat::Text,
+        SailExplainFormat::Json => ExplainFormat::Json,
+        SailExplainFormat::Graphviz => ExplainFormat::Graphviz,
+    };
+    if analyze && !matches!(&input, spec::Plan::Query(_)) {
+        return Err(SparkError::unsupported(
+            "distributed EXPLAIN ANALYZE for statements that may write data",
+        ));
+    }
+    Ok(RelationNode::Command(spec::CommandNode::Explain {
+        request: spec::ExplainRequest::Sail {
+            kind: spec::SailExplainKind::Distributed,
+            format,
+            analyze,
+            verbose,
+        },
+        input: Box::new(input),
+    }))
 }
 
 impl TryFrom<RelType> for RelationNode {
@@ -1336,7 +1385,7 @@ impl TryFrom<RelType> for RelationNode {
             RelType::RelationChanges(_) => Err(SparkError::unsupported("relation changes")),
             RelType::NearestByJoin(_) => Err(SparkError::unsupported("nearest-by join")),
             RelType::MlRelation(_) => Err(SparkError::unsupported("ML relation")),
-            RelType::Extension(_) => Err(SparkError::unsupported("extension relation")),
+            RelType::Extension(extension) => parse_extension_relation(extension),
             RelType::Unknown(_) => Err(SparkError::unsupported("unknown relation")),
         }
     }
@@ -2137,13 +2186,103 @@ impl TryFrom<StreamingForeachFunction> for spec::FunctionDefinition {
 
 #[cfg(test)]
 mod tests {
+    use prost::Message;
     use sail_common::spec;
     use sail_common::tests::test_gold_set;
     use sail_sql_analyzer::parser::parse_one_statement;
     use sail_sql_analyzer::statement::from_ast_statement;
 
+    use super::{EXPLAIN_RELATION_TYPE_URL, RelationNode, parse_extension_relation};
     use crate::error::{SparkError, SparkResult};
+    use crate::sail::spark::connect::v1::{
+        ExplainRelation, SailExplainFormat, SailExplainOptions, SailExplainType,
+    };
     use crate::spark::connect as sc;
+
+    #[test]
+    fn test_distributed_explain_extension_round_trip() -> SparkResult<()> {
+        let input = sc::Relation {
+            common: None,
+            rel_type: Some(sc::relation::RelType::Sql({
+                #[expect(deprecated)]
+                sc::Sql {
+                    query: "select 1".to_string(),
+                    args: Default::default(),
+                    pos_args: vec![],
+                    named_arguments: Default::default(),
+                    pos_arguments: vec![],
+                }
+            })),
+        };
+        let value = ExplainRelation {
+            input: Some(input),
+            options: Some(SailExplainOptions {
+                r#type: SailExplainType::Distributed.into(),
+                format: SailExplainFormat::Json.into(),
+                verbose: true,
+                analyze: false,
+            }),
+        }
+        .encode_to_vec();
+        let node = parse_extension_relation(pbjson_types::Any {
+            type_url: EXPLAIN_RELATION_TYPE_URL.to_string(),
+            value: value.into(),
+        })?;
+        let RelationNode::Command(spec::CommandNode::Explain { request, input }) = node else {
+            return Err(SparkError::internal("expected distributed explain command"));
+        };
+        assert!(matches!(*input, spec::Plan::Query(_)));
+        assert!(matches!(
+            request,
+            spec::ExplainRequest::Sail {
+                kind: spec::SailExplainKind::Distributed,
+                format: sail_common::diagnostics::ExplainFormat::Json,
+                analyze: false,
+                verbose: true,
+            }
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn test_extension_relation_rejects_unknown_type_url() {
+        let error = parse_extension_relation(pbjson_types::Any {
+            type_url: "type.googleapis.com/example.UnknownRelation".to_string(),
+            value: Default::default(),
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("extension relation type URL"));
+    }
+
+    #[test]
+    fn test_distributed_explain_extension_requires_options() {
+        let value = ExplainRelation {
+            input: Some(sc::Relation {
+                common: None,
+                rel_type: Some(sc::relation::RelType::Sql({
+                    #[expect(deprecated)]
+                    sc::Sql {
+                        query: "select 1".to_string(),
+                        args: Default::default(),
+                        pos_args: vec![],
+                        named_arguments: Default::default(),
+                        pos_arguments: vec![],
+                    }
+                })),
+            }),
+            options: None,
+        }
+        .encode_to_vec();
+
+        let error = parse_extension_relation(pbjson_types::Any {
+            type_url: EXPLAIN_RELATION_TYPE_URL.to_string(),
+            value: value.into(),
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("explain relation options"));
+    }
 
     #[test]
     fn test_sql_to_plan() -> SparkResult<()> {

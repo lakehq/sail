@@ -22,6 +22,7 @@ templates_path = ["_templates"]
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
 autosummary_generate = True
+autodoc_mock_imports = ["pyspark"]
 
 
 class _JSONHTMLBuilder(JSONHTMLBuilder):
