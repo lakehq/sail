@@ -550,7 +550,7 @@
   default:
     value: "true"
     parser: crate::options::parsers::parse_bool
-  supported: false
+  supported: true
   rust_type: bool
   scopes:
     - read

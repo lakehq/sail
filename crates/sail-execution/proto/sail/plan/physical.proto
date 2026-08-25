@@ -680,6 +680,7 @@ message NdJsonExecNode {
 message CsvExecNode {
   bytes base_config = 1;
   bytes options = 2;
+  optional bool enforce_schema = 3;
 }
 
 message ParquetExecNode {

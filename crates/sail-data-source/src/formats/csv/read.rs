@@ -125,7 +125,9 @@ impl ReadFormat for CsvReadFormat {
         options.has_header = Some(has_header);
         options.newlines_in_values = Some(newlines_in_values);
 
-        let source = CsvSource::new(input.schema).with_csv_options(options.clone());
+        let source = CsvSource::new(input.schema)
+            .with_csv_options(options.clone())
+            .with_enforce_schema(self.options.enforce_schema);
 
         let config = FileScanConfigBuilder::new(input.object_store_url, Arc::new(source))
             .with_file_groups(input.file_groups)

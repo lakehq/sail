@@ -29,6 +29,7 @@ impl BuildPartialOptions<CsvReadPartialOptions> for CsvOptions {
             compression: Some(self.compression.to_string()),
             allow_truncated_rows: self.truncated_rows,
             path_glob_filter: None,
+            enforce_schema: None,
         })
     }
 }
@@ -64,6 +65,7 @@ impl CsvReadOptions {
             compression,
             allow_truncated_rows,
             path_glob_filter: _,
+            enforce_schema: _,
         } = self;
         let null_regex = match (null_value.as_str(), null_regex.as_str()) {
             (nv, nr) if !nv.is_empty() && !nr.is_empty() => {

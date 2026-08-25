@@ -561,13 +561,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::Csv(r#gen::CsvExecNode {
                 base_config,
                 options,
+                enforce_schema,
             }) => {
                 let base_config = try_decode_message(&base_config)?;
                 let table_schema = parse_table_schema_from_proto(&base_config)?;
                 let options = try_decode_message::<gen_datafusion_common::CsvOptions>(&options)?;
                 let csv_options: CsvOptions = (&options).try_into()?;
                 let file_compression_type: FileCompressionType = csv_options.compression.into();
-                let source = CsvSource::new(table_schema).with_csv_options(csv_options);
+                let source = CsvSource::new(table_schema)
+                    .with_csv_options(csv_options)
+                    .with_enforce_schema(enforce_schema.unwrap_or(true));
                 let source = parse_protobuf_file_scan_config(
                     &base_config,
                     &PhysicalPlanDecodeContext::new(ctx, self),
@@ -1923,6 +1926,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     NodeKind::Csv(r#gen::CsvExecNode {
                         base_config,
                         options,
+                        enforce_schema: Some(csv_source.enforce_schema()),
                     })
                 } else if let Some(parquet_source) = file_source.downcast_ref::<ParquetSource>() {
                     let base_config = try_encode_message(serialize_file_scan_config(
@@ -5293,7 +5297,11 @@ mod tests {
         };
         let mut expected_options = csv_options.clone();
         expected_options.compression = CompressionTypeVariant::GZIP;
-        let source = Arc::new(CsvSource::new(table_schema).with_csv_options(csv_options));
+        let source = Arc::new(
+            CsvSource::new(table_schema)
+                .with_csv_options(csv_options)
+                .with_enforce_schema(false),
+        );
         let file_scan = FileScanConfigBuilder::new(
             datafusion::execution::object_store::ObjectStoreUrl::local_filesystem(),
             source,
@@ -5315,6 +5323,7 @@ mod tests {
 
         assert_eq!(file_scan.file_compression_type, FileCompressionType::GZIP);
         assert_eq!(csv_source.options(), &expected_options);
+        assert!(!csv_source.enforce_schema());
         Ok(())
     }
 
