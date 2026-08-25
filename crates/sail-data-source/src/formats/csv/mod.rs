@@ -12,6 +12,7 @@ use crate::options::r#gen::{CsvReadOptions, CsvWriteOptions};
 // [CREDIT]: https://github.com/apache/datafusion/blob/54.1.0/datafusion/datasource-csv/src/source.rs
 
 mod decoder;
+mod header;
 mod options;
 mod projected;
 mod read;
