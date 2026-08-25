@@ -2408,7 +2408,9 @@ mod tests {
             ..
         }) = plan
         else {
-            panic!("expected distributed explain command")
+            return Err(SqlError::InternalError(
+                "expected distributed explain command".to_string(),
+            ));
         };
         assert_eq!(format, SailExplainFormat::Json);
         assert!(!analyze);
@@ -2434,7 +2436,9 @@ mod tests {
             ..
         }) = plan
         else {
-            panic!("expected distributed explain command")
+            return Err(SqlError::InternalError(
+                "expected distributed explain command".to_string(),
+            ));
         };
         assert_eq!(format, SailExplainFormat::Text);
         assert!(!analyze);
@@ -2443,21 +2447,31 @@ mod tests {
     }
 
     #[test]
-    fn rejects_duplicate_distributed_explain_options() {
-        let error =
-            analyze("EXPLAIN (TYPE DISTRIBUTED, FORMAT JSON, FORMAT TEXT) SELECT 1").unwrap_err();
+    fn rejects_duplicate_distributed_explain_options() -> SqlResult<()> {
+        let Err(error) = analyze("EXPLAIN (TYPE DISTRIBUTED, FORMAT JSON, FORMAT TEXT) SELECT 1")
+        else {
+            return Err(SqlError::InternalError(
+                "expected duplicate distributed explain options to fail".to_string(),
+            ));
+        };
         assert!(
             error
                 .to_string()
                 .contains("duplicate EXPLAIN FORMAT option")
         );
+        Ok(())
     }
 
     #[test]
-    fn rejects_distributed_analyze_for_writes() {
-        let error =
+    fn rejects_distributed_analyze_for_writes() -> SqlResult<()> {
+        let Err(error) =
             analyze("EXPLAIN (TYPE DISTRIBUTED, ANALYZE TRUE) INSERT INTO target VALUES (1)")
-                .unwrap_err();
+        else {
+            return Err(SqlError::InternalError(
+                "expected distributed explain analyze for a write to fail".to_string(),
+            ));
+        };
         assert!(error.to_string().contains("statements that may write data"));
+        Ok(())
     }
 }

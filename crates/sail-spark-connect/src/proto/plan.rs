@@ -2245,18 +2245,22 @@ mod tests {
     }
 
     #[test]
-    fn test_extension_relation_rejects_unknown_type_url() {
-        let error = parse_extension_relation(pbjson_types::Any {
+    fn test_extension_relation_rejects_unknown_type_url() -> SparkResult<()> {
+        let Err(error) = parse_extension_relation(pbjson_types::Any {
             type_url: "type.googleapis.com/example.UnknownRelation".to_string(),
             value: Default::default(),
-        })
-        .unwrap_err();
+        }) else {
+            return Err(SparkError::internal(
+                "expected an unknown extension relation type URL to fail",
+            ));
+        };
 
         assert!(error.to_string().contains("extension relation type URL"));
+        Ok(())
     }
 
     #[test]
-    fn test_distributed_explain_extension_requires_options() {
+    fn test_distributed_explain_extension_requires_options() -> SparkResult<()> {
         let value = ExplainRelation {
             input: Some(sc::Relation {
                 common: None,
@@ -2275,13 +2279,17 @@ mod tests {
         }
         .encode_to_vec();
 
-        let error = parse_extension_relation(pbjson_types::Any {
+        let Err(error) = parse_extension_relation(pbjson_types::Any {
             type_url: EXPLAIN_RELATION_TYPE_URL.to_string(),
             value: value.into(),
-        })
-        .unwrap_err();
+        }) else {
+            return Err(SparkError::internal(
+                "expected distributed explain without options to fail",
+            ));
+        };
 
         assert!(error.to_string().contains("explain relation options"));
+        Ok(())
     }
 
     #[test]

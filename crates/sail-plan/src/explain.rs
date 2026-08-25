@@ -366,16 +366,16 @@ async fn maybe_collect_metrics(
     physical: &mut Option<Arc<dyn ExecutionPlan>>,
     ctx: &SessionContext,
 ) -> Result<()> {
-    if options.analyze {
-        if let Some(plan) = physical.as_ref() {
-            let service = ctx.extension::<JobService>()?;
-            let (stream, executed_plan) = service
-                .runner()
-                .execute_for_explain(ctx, Arc::clone(plan))
-                .await?;
-            let _ = collect_stream(stream).await?;
-            *physical = Some(executed_plan);
-        }
+    if options.analyze
+        && let Some(plan) = physical.as_ref()
+    {
+        let service = ctx.extension::<JobService>()?;
+        let (stream, executed_plan) = service
+            .runner()
+            .execute_for_explain(ctx, Arc::clone(plan))
+            .await?;
+        let _ = collect_stream(stream).await?;
+        *physical = Some(executed_plan);
     }
     Ok(())
 }
