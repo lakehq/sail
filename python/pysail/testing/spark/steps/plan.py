@@ -241,3 +241,10 @@ def query_plan_matches_snapshot(query, spark, snapshot: SnapshotAssertion):
     """Executes the SQL query and only asserts against the stored snapshot."""
     plan = _collect_plan(query, spark)
     assert snapshot == normalize_plan_text(plan)
+
+
+@then("query text output matches snapshot")
+def query_text_output_matches_snapshot(query, spark, snapshot: SnapshotAssertion):
+    """Snapshot a single text result without rewriting structured output."""
+    output = _collect_plan(query, spark)
+    assert snapshot == textwrap.dedent(output).strip()

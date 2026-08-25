@@ -26,3 +26,52 @@ data:
 
     === exchanges ===
     stage 0 -> stage 1: kind=shuffle, distribution=hash(#2@0), channels=4
+---
+name: "test_distributed_explain_prints_the_graphviz_stage_graph"
+data:
+  |-
+    digraph distributed_plan {
+      rankdir=LR;
+      stage_0 [shape=box, label="stage 0\lplacement=worker\lpartitions=1\loutput_mode=pipelined\lAggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)]\l  ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]\l    DataSourceExec: partitions=1, partition_sizes=[1]"];
+      stage_1 [shape=box, label="stage 1\lplacement=worker\lpartitions=4\loutput_mode=pipelined\lProjectionExec: expr=[#4@0 as k, #5@1 as total]\l  ProjectionExec: expr=[#2@0 as #4, sum(t.#3)@1 as #5]\l    AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(t.#3)]\l      StageInputExec: input=0, partitioning=Hash([#2@0], 4)"];
+      stage_0 -> stage_1 [label="shuffle / hash(#2@0) / 4 channels"];
+    }
+---
+name: "test_distributed_explain_prints_the_json_stage_graph"
+data:
+  |-
+    {
+      "schema_version": 1,
+      "execution_mode": "local_cluster",
+      "executed": false,
+      "stages": [
+        {
+          "stage_id": 0,
+          "placement": "worker",
+          "partition_count": 1,
+          "output_mode": "pipelined",
+          "operator_tree": "AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)]\n  ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]\n    DataSourceExec: partitions=1, partition_sizes=[1]\n"
+        },
+        {
+          "stage_id": 1,
+          "placement": "worker",
+          "partition_count": 4,
+          "output_mode": "pipelined",
+          "operator_tree": "ProjectionExec: expr=[#4@0 as k, #5@1 as total]\n  ProjectionExec: expr=[#2@0 as #4, sum(t.#3)@1 as #5]\n    AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(t.#3)]\n      StageInputExec: input=0, partitioning=Hash([#2@0], 4)\n"
+        }
+      ],
+      "edges": [
+        {
+          "from_stage": 0,
+          "to_stage": 1,
+          "exchange_kind": "shuffle",
+          "distribution": {
+            "kind": "hash",
+            "keys": [
+              "#2@0"
+            ]
+          },
+          "channel_count": 4
+        }
+      ]
+    }
