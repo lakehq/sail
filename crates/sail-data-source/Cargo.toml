@@ -28,6 +28,8 @@ chumsky = { workspace = true }
 glob = { workspace = true }
 url = { workspace = true }
 regex = { workspace = true }
+csv-core = { workspace = true }
+memchr = { workspace = true }
 percent-encoding = { workspace = true }
 log = { workspace = true }
 bytes = { workspace = true }

@@ -498,7 +498,7 @@ pub fn resolve_data_skipping_num_indexed_cols(
 ) -> DeltaResult<DataSkippingNumIndexedCols> {
     Ok(props
         .data_skipping_num_indexed_cols
-        .unwrap_or(DataSkippingNumIndexedCols::AllColumns))
+        .unwrap_or(DataSkippingNumIndexedCols::NumColumns(32)))
 }
 
 #[cfg(test)]

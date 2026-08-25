@@ -85,6 +85,22 @@ Feature: System catalog queries
       | count |
       | 1     |
 
+  Scenario: LIMIT 0 for system tables
+    When query
+      """
+      SELECT count(*) > 0 AS n FROM system.session.sessions
+      """
+    Then query result
+      | n    |
+      | true |
+
+    When query
+      """
+      SELECT session_id FROM system.session.sessions LIMIT 0
+      """
+    Then query result
+      | session_id |
+
   @sail-only
   Scenario: Filter and limit pushdown for system.session.options
     When query

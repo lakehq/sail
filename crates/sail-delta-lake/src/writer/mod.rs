@@ -24,13 +24,13 @@ mod partitioning;
 mod stats;
 pub(crate) mod variant_shredding;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_buffer::AsyncShareableBuffer;
 use bytes::Bytes;
-use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+use datafusion::arrow::array::{Array, ArrayRef, RecordBatch, StructArray};
+use datafusion::arrow::datatypes::{DataType, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use datafusion::common::scalar::ScalarValue;
 use indexmap::IndexMap;
 use object_store::path::Path;
@@ -49,7 +49,7 @@ use variant_shredding::{
 };
 
 use crate::conversion::ScalarExt;
-use crate::spec::{Add, DeltaError as DeltaTableError};
+use crate::spec::{Add, ColumnName, DeltaError as DeltaTableError, DeltaResult};
 
 /// Trait for creating hive partition paths from partition values
 pub trait PartitionsExt {
@@ -94,7 +94,7 @@ pub struct WriterConfig {
     /// Number of indexed columns for statistics
     pub num_indexed_cols: i32,
     /// Specific columns to collect stats from
-    pub stats_columns: Option<Vec<String>>,
+    pub stats_columns: Option<Vec<ColumnName>>,
     /// Top-level data columns that must not appear in Delta stats.
     pub stats_excluded_columns: HashSet<String>,
     /// Variant shredding behavior for data files written by this writer.
@@ -111,7 +111,7 @@ impl WriterConfig {
         target_file_size: u64,
         write_batch_size: usize,
         num_indexed_cols: i32,
-        stats_columns: Option<Vec<String>>,
+        stats_columns: Option<Vec<ColumnName>>,
         stats_excluded_columns: HashSet<String>,
         variant_shredding: VariantShreddingConfig,
     ) -> Self {
@@ -352,8 +352,9 @@ pub struct PartitionWriter {
     part_counter: usize,
     files_written: Vec<Add>,
     num_indexed_cols: i32,
-    stats_columns: Option<Vec<String>>,
+    stats_columns: Option<Vec<ColumnName>>,
     stats_excluded_columns: HashSet<String>,
+    repeated_null_counts: HashMap<ColumnName, u64>,
 }
 
 impl PartitionWriter {
@@ -361,7 +362,7 @@ impl PartitionWriter {
         object_store: Arc<dyn ObjectStore>,
         config: PartitionWriterConfig,
         num_indexed_cols: i32,
-        stats_columns: Option<Vec<String>>,
+        stats_columns: Option<Vec<ColumnName>>,
         stats_excluded_columns: HashSet<String>,
     ) -> Result<Self, DeltaTableError> {
         let physical_file_schema = config.file_schema.clone();
@@ -397,6 +398,7 @@ impl PartitionWriter {
             num_indexed_cols,
             stats_columns,
             stats_excluded_columns,
+            repeated_null_counts: HashMap::new(),
         })
     }
 
@@ -457,6 +459,7 @@ impl PartitionWriter {
                     DeltaTableError::generic(format!("Failed to write batch slice: {e}"))
                 })?;
             }
+            self.accumulate_repeated_null_counts(&slice)?;
 
             // Check if need to flush after writing the slice
             let buffer_len = if let Some(buffer) = self.buffer.as_ref() {
@@ -476,6 +479,86 @@ impl PartitionWriter {
             }
         }
 
+        Ok(())
+    }
+
+    fn accumulate_repeated_null_counts(&mut self, batch: &RecordBatch) -> DeltaResult<()> {
+        for (field, column) in batch.schema().fields().iter().zip(batch.columns()) {
+            let mut path = vec![field.name().clone()];
+            self.accumulate_repeated_column_null_counts(
+                field.data_type(),
+                column,
+                &mut path,
+                None,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn accumulate_repeated_column_null_counts(
+        &mut self,
+        data_type: &DataType,
+        column: &ArrayRef,
+        path: &mut Vec<String>,
+        ancestor_nulls: Option<&[bool]>,
+    ) -> DeltaResult<()> {
+        match data_type {
+            DataType::Struct(fields) => {
+                let values = column
+                    .as_any()
+                    .downcast_ref::<StructArray>()
+                    .ok_or_else(|| {
+                        DeltaTableError::generic(format!(
+                            "expected struct data for repeated-column path {}",
+                            path.join(".")
+                        ))
+                    })?;
+                let effective_nulls = (0..values.len())
+                    .map(|index| {
+                        ancestor_nulls.is_some_and(|nulls| nulls[index]) || values.is_null(index)
+                    })
+                    .collect::<Vec<_>>();
+                for (index, field) in fields.iter().enumerate() {
+                    path.push(field.name().clone());
+                    self.accumulate_repeated_column_null_counts(
+                        field.data_type(),
+                        values.column(index),
+                        path,
+                        Some(&effective_nulls),
+                    )?;
+                    path.pop();
+                }
+            }
+            DataType::List(_)
+            | DataType::ListView(_)
+            | DataType::LargeList(_)
+            | DataType::LargeListView(_)
+            | DataType::FixedSizeList(_, _)
+            | DataType::Map(_, _) => {
+                let null_count = (0..column.len())
+                    .filter(|index| {
+                        ancestor_nulls.is_some_and(|nulls| nulls[*index]) || column.is_null(*index)
+                    })
+                    .count();
+                let null_count = u64::try_from(null_count).map_err(|_| {
+                    DeltaTableError::generic(format!(
+                        "null count exceeds u64 for repeated column {}",
+                        path.join(".")
+                    ))
+                })?;
+                let total = self
+                    .repeated_null_counts
+                    .entry(ColumnName::new(path.iter().cloned()))
+                    .or_default();
+                *total = total.checked_add(null_count).ok_or_else(|| {
+                    DeltaTableError::generic(format!(
+                        "null count overflow for repeated column {}",
+                        path.join(".")
+                    ))
+                })?;
+            }
+            _ => {}
+        }
         Ok(())
     }
 
@@ -653,6 +736,7 @@ impl PartitionWriter {
             self.num_indexed_cols,
             &self.stats_columns,
             &self.stats_excluded_columns,
+            &self.repeated_null_counts,
         )
     }
 
@@ -667,6 +751,7 @@ impl PartitionWriter {
         .map_err(|e| DeltaTableError::generic(format!("Failed to create new arrow writer: {e}")))?;
         self.buffer = Some(buffer);
         self.arrow_writer = Some(arrow_writer);
+        self.repeated_null_counts.clear();
         Ok(())
     }
 

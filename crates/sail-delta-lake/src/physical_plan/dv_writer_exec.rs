@@ -30,6 +30,7 @@ use crate::physical_plan::{
     COL_ACTION, ExecCommitMeta, current_timestamp_millis, decode_adds_from_batch,
     delta_action_schema, encode_actions, meta_adds,
 };
+use crate::schema::PhysicalPartitionColumn;
 use crate::spec::{Action, Add, RemoveOptions};
 use crate::transaction::OperationMetrics;
 
@@ -77,7 +78,7 @@ pub struct DeletionVectorWriterExec {
     /// Table version.
     version: i64,
     /// Mapping from replay output partition column names to Delta log partition value keys.
-    partition_value_columns: Option<Vec<(String, String)>>,
+    partition_value_columns: Option<Vec<PhysicalPartitionColumn>>,
     /// The delta operation to record in the commit log.
     operation: Option<crate::spec::DeltaOperation>,
     /// Metrics set.
@@ -93,7 +94,7 @@ impl DeletionVectorWriterExec {
         condition: Arc<dyn PhysicalExpr>,
         table_schema: datafusion::arrow::datatypes::SchemaRef,
         version: i64,
-        partition_value_columns: Option<Vec<(String, String)>>,
+        partition_value_columns: Option<Vec<PhysicalPartitionColumn>>,
         operation: Option<crate::spec::DeltaOperation>,
     ) -> Result<Self> {
         let schema = delta_action_schema()?;
@@ -137,7 +138,7 @@ impl DeletionVectorWriterExec {
         self.version
     }
 
-    pub fn partition_value_columns(&self) -> Option<&[(String, String)]> {
+    pub fn partition_value_columns(&self) -> Option<&[PhysicalPartitionColumn]> {
         self.partition_value_columns.as_deref()
     }
 
@@ -158,7 +159,7 @@ pub struct DeletionVectorRowsWriterExec {
     path_column: String,
     row_index_column: String,
     version: i64,
-    partition_value_columns: Option<Vec<(String, String)>>,
+    partition_value_columns: Option<Vec<PhysicalPartitionColumn>>,
     operation: Option<crate::spec::DeltaOperation>,
     metrics: ExecutionPlanMetricsSet,
     cache: Arc<PlanProperties>,
@@ -172,7 +173,7 @@ impl DeletionVectorRowsWriterExec {
         path_column: impl Into<String>,
         row_index_column: impl Into<String>,
         version: i64,
-        partition_value_columns: Option<Vec<(String, String)>>,
+        partition_value_columns: Option<Vec<PhysicalPartitionColumn>>,
         operation: Option<crate::spec::DeltaOperation>,
     ) -> Result<Self> {
         let path_column = path_column.into();
@@ -236,7 +237,7 @@ impl DeletionVectorRowsWriterExec {
         self.version
     }
 
-    pub fn partition_value_columns(&self) -> Option<&[(String, String)]> {
+    pub fn partition_value_columns(&self) -> Option<&[PhysicalPartitionColumn]> {
         self.partition_value_columns.as_deref()
     }
 

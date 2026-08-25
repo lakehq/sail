@@ -29,8 +29,8 @@ impl DriverHandle {
     pub(crate) async fn send(
         &self,
         message: DriverMessage,
-    ) -> Result<(), SendError<DriverMessage>> {
-        self.handle.send(message).await
+    ) -> Result<(), Box<SendError<DriverMessage>>> {
+        self.handle.send(message).await.map_err(Box::new)
     }
 
     pub(crate) async fn celeborn_lifecycle_manager(

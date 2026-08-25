@@ -290,16 +290,26 @@
     `lz4`, and `zstd`.
   experimental: true
 
-- key: cluster.shuffle_backend.celeborn.master_host
-  type: string
-  default: ""
-  description: The hostname of the Celeborn master.
+- key: cluster.shuffle_backend.celeborn.master_endpoints
+  type: array
+  default: "[]"
+  description: |
+    The endpoints of Celeborn masters. Each entry is a `host:port` string.
+    Multiple entries enable master high availability.
   experimental: true
 
-- key: cluster.shuffle_backend.celeborn.master_port
+- key: cluster.shuffle_backend.celeborn.compression
+  type: string
+  default: "lz4"
+  description: |
+    Compression for Celeborn push-data batches. Valid values are `none`, `lz4`, and
+    `zstd(level)`, for example `zstd(1)`.
+  experimental: true
+
+- key: cluster.shuffle_backend.celeborn.heartbeat_interval_secs
   type: number
-  default: "0"
-  description: The port of the Celeborn master.
+  default: "10"
+  description: The interval in seconds between Celeborn application heartbeats.
   experimental: true
 
 - key: cluster.shuffle_backend.celeborn.endpoint_overrides
@@ -307,8 +317,8 @@
   default: "[]"
   description: |
     Optional endpoint mappings for Celeborn workers advertised from an
-    isolated network. Each entry maps `internal_host` and `internal_port` to
-    `external_host` and `external_port`.
+    isolated network. Each entry is an object with `internal` and `external`
+    `host:port` strings.
     This option is intended for use in tests only.
   experimental: true
   hidden: true

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use bytes::Bytes;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use pyo3::exceptions::PyRuntimeError;
@@ -34,7 +35,7 @@ pub(super) struct PyShufflePartitionStream {
     runtime: RuntimeHandle,
     shuffle_id: i32,
     partition_id: i32,
-    stream: Option<BoxStream<'static, Result<Vec<u8>, CelebornError>>>,
+    stream: Option<BoxStream<'static, Result<Bytes, CelebornError>>>,
 }
 
 #[pymethods]
@@ -55,7 +56,11 @@ impl PyShufflePartitionStream {
                     Some(stream) => stream,
                     None => client.read_partition_stream(shuffle_id, partition_id).await,
                 };
-                let result = stream.next().await.transpose();
+                let result = stream
+                    .next()
+                    .await
+                    .transpose()
+                    .map(|data| data.map(|data| data.to_vec()));
                 (result, stream)
             })
         });
@@ -88,12 +93,13 @@ impl PyShuffleClient {
             ));
         }
         let runtime = self.runtime.clone();
-        let (application_id, lifecycle_manager, endpoint_resolver) = {
+        let (application_id, lifecycle_manager, endpoint_resolver, compression) = {
             let lifecycle_manager = self.lifecycle_manager.bind(py).borrow();
             (
                 lifecycle_manager.application_id().to_string(),
                 lifecycle_manager.manager()?,
                 lifecycle_manager.endpoint_resolver(),
+                lifecycle_manager.compression(),
             )
         };
         let state = py.detach(move || {
@@ -104,6 +110,7 @@ impl PyShuffleClient {
                         application_id,
                         Arc::new(lifecycle_manager),
                         endpoint_resolver,
+                        compression,
                     ),
                 ));
                 Ok::<_, CelebornError>(ShuffleClientState::Running { system, client })
@@ -131,7 +138,12 @@ impl PyShuffleClient {
                 max_workers,
             ))
         });
-        Ok(response.map_err(to_py_error)?.worker_ids)
+        Ok(response
+            .map_err(to_py_error)?
+            .worker_ids
+            .into_iter()
+            .map(|worker| worker.to_string())
+            .collect())
     }
 
     fn push_data(
@@ -151,7 +163,7 @@ impl PyShuffleClient {
                 partition_id,
                 map_id,
                 attempt_id,
-                data,
+                Bytes::from(data),
             ))
         })
         .map_err(to_py_error)

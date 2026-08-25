@@ -1,15 +1,12 @@
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
 use datafusion::execution::TaskContext;
 use datafusion::physical_plan::ExecutionPlanProperties;
 use sail_common_datafusion::error::CommonErrorCause;
-use sail_common_datafusion::session::job::{JobSnapshot, StageSnapshot, TaskSnapshot};
 
 use crate::driver::job_scheduler::topology::JobTopology;
 use crate::driver::output::JobOutputManager;
 use crate::error::ExecutionResult;
-use crate::id::JobId;
 use crate::job_graph::JobGraph;
 
 /// Tracks graph/topology and runtime state for a single job.
@@ -20,8 +17,6 @@ pub struct JobDescriptor {
     pub stages: Vec<StageDescriptor>,
     pub regions: Vec<TaskRegionDescriptor>,
     pub state: JobState,
-    pub created_at: DateTime<Utc>,
-    pub stopped_at: Option<DateTime<Utc>>,
 }
 
 pub enum JobState {
@@ -55,8 +50,6 @@ impl JobDescriptor {
             let mut descriptor = StageDescriptor {
                 tasks: vec![],
                 state: StageState::Active,
-                created_at: Utc::now(),
-                stopped_at: None,
             };
             for _ in 0..stage.plan.output_partitioning().partition_count() {
                 descriptor.tasks.push(TaskDescriptor { attempts: vec![] });
@@ -76,73 +69,7 @@ impl JobDescriptor {
             stages,
             regions,
             state,
-            created_at: Utc::now(),
-            stopped_at: None,
         })
-    }
-
-    pub fn job_snapshot(&self, job_id: JobId) -> JobSnapshot {
-        JobSnapshot {
-            job_id: job_id.into(),
-            status: self.state.status().to_string(),
-            created_at: self.created_at,
-            stopped_at: self.stopped_at,
-        }
-    }
-
-    pub fn stage_snapshots(&self, job_id: JobId) -> Vec<StageSnapshot> {
-        self.graph
-            .stages()
-            .iter()
-            .zip(self.stages.iter())
-            .enumerate()
-            .map(|(s, (stage, descriptor))| {
-                let inputs = stage
-                    .inputs
-                    .iter()
-                    .map(|x| sail_common_datafusion::system::types::StageInput {
-                        stage: x.stage as u64,
-                        mode: x.mode.to_string(),
-                    })
-                    .collect();
-                StageSnapshot {
-                    job_id: job_id.into(),
-                    stage: s as u64,
-                    partitions: stage.plan.output_partitioning().partition_count() as u64,
-                    inputs,
-                    group: stage.group.clone(),
-                    mode: stage.mode.to_string(),
-                    distribution: stage.distribution.to_string(),
-                    placement: stage.placement.to_string(),
-                    status: descriptor.state.status().to_string(),
-                    created_at: descriptor.created_at,
-                    stopped_at: descriptor.stopped_at,
-                }
-            })
-            .collect()
-    }
-
-    pub fn task_snapshots(&self, job_id: JobId) -> Vec<TaskSnapshot> {
-        self.stages
-            .iter()
-            .enumerate()
-            .flat_map(|(s, stage)| {
-                stage.tasks.iter().enumerate().flat_map(move |(p, task)| {
-                    task.attempts
-                        .iter()
-                        .enumerate()
-                        .map(move |(a, attempt)| TaskSnapshot {
-                            job_id: job_id.into(),
-                            stage: s as u64,
-                            partition: p as u64,
-                            attempt: a as u64,
-                            status: attempt.state.status().to_string(),
-                            created_at: attempt.created_at,
-                            stopped_at: attempt.stopped_at,
-                        })
-                })
-            })
-            .collect()
     }
 }
 
@@ -151,8 +78,6 @@ pub struct StageDescriptor {
     /// A list of tasks for each partition of the stage.
     pub tasks: Vec<TaskDescriptor>,
     pub state: StageState,
-    pub created_at: DateTime<Utc>,
-    pub stopped_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -200,8 +125,6 @@ pub struct TaskAttemptDescriptor {
     /// This will always be false if the task does not belong to
     /// the final stages of the job.
     pub job_output_fetched: bool,
-    pub created_at: DateTime<Utc>,
-    pub stopped_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -4049,11 +4049,11 @@ mod tests {
     }
 
     fn error_with_status(status: reqwest::StatusCode) -> ApiError<()> {
-        ApiError::Unknown(crate::r#gen::Response {
+        ApiError::Unknown(Box::new(crate::r#gen::Response {
             inner: (),
             status,
             headers: reqwest::header::HeaderMap::new(),
-        })
+        }))
     }
 
     #[tokio::test]
