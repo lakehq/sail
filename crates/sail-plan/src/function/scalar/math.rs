@@ -1441,6 +1441,31 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let (dividend, divisor) = arguments.two()?;
     let ansi_mode = function_context.plan_config.ansi_mode;
 
+    // Spark's `%` (`Remainder`, `inputType = NumericType`) rejects a non-numeric operand on
+    // either side at analysis with DATATYPE_MISMATCH; DataFusion would instead reinterpret a
+    // boolean/date/timestamp as its raw integer or an interval as its raw nanos and compute a
+    // meaningless remainder. Reject those pairs at plan time, matching the sibling `/` (its
+    // divisor reject set — numeric-only, intervals included — is exactly `%`'s on both sides).
+    // Strings are coerced to a numeric type upstream under ANSI off; under ANSI on they arrive
+    // as `Utf8` and Spark rejects string arithmetic, so a string operand is rejected there too.
+    if let (Ok(dividend_type), Ok(divisor_type)) = (
+        dividend.get_type(function_context.schema),
+        divisor.get_type(function_context.schema),
+    ) {
+        let is_string_or_null =
+            |data_type: &DataType| data_type.is_string() || matches!(data_type, DataType::Null);
+        let string_rejected = ansi_mode
+            && (dividend_type.is_string() || divisor_type.is_string())
+            && is_string_or_null(&dividend_type)
+            && is_string_or_null(&divisor_type);
+        if string_rejected
+            || rejects_as_divide_divisor(&dividend_type)
+            || rejects_as_divide_divisor(&divisor_type)
+        {
+            return Err(arithmetic_operand_error('%', &dividend_type, &divisor_type));
+        }
+    }
+
     // Apply Spark operand coercion (e.g. narrow an integer literal combined with a
     // decimal) so the modulo result type matches Spark, before the zero guard.
     let (dividend, divisor, remainder_type) =

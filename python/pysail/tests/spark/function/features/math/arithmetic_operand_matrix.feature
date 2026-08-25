@@ -1283,13 +1283,13 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | case | l | r | result |
         | unull % unull | NULL | NULL | double |
 
-    Scenario Outline: modulo ansi-off: rejected pair [.*]: <case>
+    Scenario Outline: modulo ansi-off: rejected pair [cannot resolve]: <case>
       Given config spark.sql.ansi.enabled = false
       When query
         """
         SELECT typeof((<l>) % (<r>)) AS t
         """
-      Then query error .*
+      Then query error (?i)cannot resolve
 
       Examples:
         | case | l | r |
@@ -2696,13 +2696,13 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | case | l | r | result |
         | unull % unull | NULL | NULL | double |
 
-    Scenario Outline: modulo ansi-on: rejected pair [.*]: <case>
+    Scenario Outline: modulo ansi-on: rejected pair [cannot resolve]: <case>
       Given config spark.sql.ansi.enabled = true
       When query
         """
         SELECT typeof((<l>) % (<r>)) AS t
         """
-      Then query error .*
+      Then query error (?i)cannot resolve
 
       Examples:
         | case | l | r |

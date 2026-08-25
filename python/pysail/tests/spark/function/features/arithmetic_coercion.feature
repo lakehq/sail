@@ -2226,6 +2226,35 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | a year-month plus a day-time interval         | INTERVAL '1-2' YEAR TO MONTH + INTERVAL '1 02:03:04' DAY TO SECOND |
         | a date times a day-time interval              | DATE'2024-01-15' * INTERVAL '2' DAY                                |
         | a year-month interval times a day-time one    | INTERVAL '1-2' YEAR TO MONTH * INTERVAL '2' DAY                    |
+        | a boolean modulo an integer                   | true % CAST(3 AS INT)                                              |
+        | a date modulo an integer                      | DATE'2024-01-15' % CAST(3 AS INT)                                  |
+        | a timestamp modulo an integer                 | TIMESTAMP'2024-01-15 12:00:00' % CAST(3 AS INT)                    |
+        | an integer modulo a day-time interval         | CAST(3 AS INT) % INTERVAL '1 02:03:04' DAY TO SECOND               |
+        | an integer modulo a year-month interval       | CAST(3 AS INT) % INTERVAL '2' MONTH                                |
+        | binary modulo an integer                      | CAST('6' AS BINARY) % CAST(3 AS INT)                              |
+        | a boolean modulo an untyped null              | true % NULL                                                       |
+
+  Rule: Modulo rejects a non-numeric operand under both ANSI modes
+    # Spark's `%` (`Remainder`, `inputType = NumericType`) rejects a non-numeric operand at
+    # analysis regardless of ANSI mode, so the reject holds under both. A typed NULL keeps its
+    # declared type, so `CAST(NULL AS DATE)` is still a rejected (non-numeric) operand, not a
+    # free pass. Pinned in both modes because the curated scenario above runs in one mode only.
+    Scenario Outline: Modulo rejects a non-numeric operand (<ansi>): <case>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT <expr> AS r
+        """
+      Then query error (?i)cannot resolve
+
+      Examples:
+        | case                             | expr                                | ansi  |
+        | a boolean modulo an integer      | true % CAST(3 AS INT)               | false |
+        | a boolean modulo an integer      | true % CAST(3 AS INT)               | true  |
+        | an integer modulo an interval    | CAST(3 AS INT) % INTERVAL '2' DAY   | false |
+        | an integer modulo an interval    | CAST(3 AS INT) % INTERVAL '2' DAY   | true  |
+        | an integer modulo a typed date null | CAST(3 AS INT) % CAST(NULL AS DATE) | false |
+        | an integer modulo a typed date null | CAST(3 AS INT) % CAST(NULL AS DATE) | true  |
 
   Rule: An interval scaled by an integer (known gap — interval arithmetic)
     # Spark multiplies and divides year-month intervals by numerics; Sail rejects
