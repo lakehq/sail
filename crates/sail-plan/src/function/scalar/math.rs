@@ -595,13 +595,14 @@ fn is_interval_like(data_type: &DataType) -> bool {
 }
 
 /// The numeric offset Spark accepts for a `DATE` in `+`/`-`: `DateAdd`/`DateSub` take an
-/// `INT` (`IntegerType | ShortType | ByteType`), so only integrals up to 32 bits qualify. A
-/// `BIGINT`, `FLOAT`, `DOUBLE` or `DECIMAL` offset is rejected at analysis (Sail would
-/// otherwise silently truncate it).
+/// `INT` (`IntegerType | ShortType | ByteType`), so only integrals that fit losslessly in an
+/// `INT` qualify. A `BIGINT`, `FLOAT`, `DOUBLE` or `DECIMAL` offset is rejected at analysis
+/// (Sail would otherwise silently truncate it). Spark has no unsigned types, but Arrow-native
+/// sources can, so `UInt8`/`UInt16` (both within `INT` range) are accepted too.
 fn is_date_offset_numeric(data_type: &DataType) -> bool {
     matches!(
         data_type,
-        DataType::Int8 | DataType::Int16 | DataType::Int32
+        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::UInt8 | DataType::UInt16
     )
 }
 
@@ -628,8 +629,13 @@ fn rejects_additive_or_multiply(is_multiply: bool, left: &DataType, right: &Data
     let (left_interval, right_interval) = (is_interval_like(left), is_interval_like(right));
     if is_multiply {
         // `*` accepts only numeric×numeric and numeric×interval (either order). A string
-        // coerces to numeric, so leave `interval × string` for the kernel follow-up.
-        let numeric_like = |data_type: &DataType| data_type.is_numeric() || data_type.is_string();
+        // coerces to numeric, and an untyped NULL casts to the numeric side (Spark's
+        // `MultiplyDTInterval`/`MultiplyYMInterval` are `ImplicitCastInputTypes`, so
+        // `interval * NULL` is a typed-NULL interval, not a rejection); both are left for the
+        // generic arm rather than hard-rejected here.
+        let numeric_like = |data_type: &DataType| {
+            data_type.is_numeric() || data_type.is_string() || matches!(data_type, DataType::Null)
+        };
         return (left_interval && right_interval)
             || (left_interval && !numeric_like(right))
             || (right_interval && !numeric_like(left));
@@ -959,17 +965,22 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
         .plan_config
         .decimal_operations_allow_precision_loss;
 
-    // Under ANSI mode Spark rejects `string / string`: with no numeric operand to anchor
-    // the implicit cast, a bare string cannot coerce to DOUBLE (a string paired with a
-    // numeric still coerces, and non-ANSI casts both to DOUBLE). Sail's `/` otherwise
-    // coerces both strings to DOUBLE and computes, where `+`/`-`/`*` already reject the
-    // pair — reject it here too so divide matches Spark and its sibling operators.
+    // Under ANSI mode Spark rejects a `/` where a STRING operand has no numeric partner to
+    // anchor the implicit cast: `string / string`, `string / NULL` and `NULL / string` all
+    // fail analysis (a string paired with a numeric still coerces, and non-ANSI casts both to
+    // DOUBLE). Sail's `/` otherwise coerces the string(s) to DOUBLE and computes, where
+    // `+`/`-`/`*` already reject the pair — reject it here too so divide matches Spark.
     if ansi_mode {
         if let (Ok(dividend_type), Ok(divisor_type)) = (
             dividend.get_type(function_context.schema),
             divisor.get_type(function_context.schema),
         ) {
-            if dividend_type.is_string() && divisor_type.is_string() {
+            let is_string_or_null =
+                |data_type: &DataType| data_type.is_string() || matches!(data_type, DataType::Null);
+            if (dividend_type.is_string() || divisor_type.is_string())
+                && is_string_or_null(&dividend_type)
+                && is_string_or_null(&divisor_type)
+            {
                 return Err(PlanError::invalid(format!(
                     "cannot resolve arithmetic '/' with operand types {dividend_type} and {divisor_type}"
                 )));

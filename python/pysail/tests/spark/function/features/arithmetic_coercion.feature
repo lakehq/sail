@@ -704,6 +704,23 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
          |-- result: decimal(12,2) (nullable = true)
         """
 
+    # `decimal(38,0) + decimal(38,0)` has exact precision 39, yet both `cap` and `bounded`
+    # collapse to (38,0), so `spark_decimal_add_diverges` is false and the sum stays a native
+    # add reporting nullable=false — unlike `*`, whose gate fires on `p1+p2+1 > 38` regardless
+    # of type equality. Same custom-PhysicalExpr follow-up; pinned so this type-unchanged `+`/`-`
+    # shape is not mistaken for covered.
+    @sail-bug
+    Scenario: a wide decimal sum whose type is unchanged is still nullable like Spark
+      When query
+        """
+        SELECT CAST(1 AS DECIMAL(38,0)) + CAST(1 AS DECIMAL(38,0)) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: decimal(38,0) (nullable = true)
+        """
+
     Scenario: a capped decimal multiply is already nullable like Spark
       # p1+p2+1 > 38, so the product is narrowed with `try_cast` and the declared
       # nullability matches Spark without the follow-up.
@@ -1982,6 +1999,126 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | a      | b      | c      | d      |
         | double | double | double | double |
 
+  Rule: A numeric operand with an untyped NULL keeps the numeric result type
+    # An untyped NULL literal (`DataType::Null`, distinct from `CAST(NULL AS INT)` which is a
+    # typed INT and stays numeric×numeric) casts to the numeric operand: +, - and * keep the
+    # numeric type, / promotes to DOUBLE (Divide's Double input type), and the value is always
+    # NULL. Verified identical to Spark 4.2.0 under ANSI on and off.
+
+    Scenario Outline: numeric with untyped NULL, ANSI off: <case>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT typeof(<expr>) AS t, (<expr>) AS r
+        """
+      Then query result
+        | t   | r    |
+        | <t> | NULL |
+
+      Examples:
+        | case                    | expr                  | t      |
+        | integer plus NULL       | CAST(6 AS INT) + NULL | int    |
+        | NULL plus integer       | NULL + CAST(6 AS INT) | int    |
+        | integer minus NULL      | CAST(6 AS INT) - NULL | int    |
+        | integer times NULL      | CAST(6 AS INT) * NULL | int    |
+        | integer divided by NULL | CAST(6 AS INT) / NULL | double |
+        | NULL divided by integer | NULL / CAST(6 AS INT) | double |
+
+    Scenario Outline: numeric with untyped NULL, ANSI on: <case>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT typeof(<expr>) AS t, (<expr>) AS r
+        """
+      Then query result
+        | t   | r    |
+        | <t> | NULL |
+
+      Examples:
+        | case                    | expr                  | t      |
+        | integer plus NULL       | CAST(6 AS INT) + NULL | int    |
+        | NULL plus integer       | NULL + CAST(6 AS INT) | int    |
+        | integer minus NULL      | CAST(6 AS INT) - NULL | int    |
+        | integer times NULL      | CAST(6 AS INT) * NULL | int    |
+        | integer divided by NULL | CAST(6 AS INT) / NULL | double |
+        | NULL divided by integer | NULL / CAST(6 AS INT) | double |
+
+  Rule: A day-time interval times an untyped NULL is a typed-NULL interval
+    # Spark's `MultiplyDTInterval` is `ImplicitCastInputTypes`, so an untyped NULL factor
+    # casts to the numeric side and `interval * NULL` is a typed-NULL day-time interval, not a
+    # rejection (both operand orders). Year-month interval scaling is still unimplemented, so
+    # `INTERVAL '1' YEAR * NULL` remains the tracked interval-scaling gap, not this case.
+
+    Scenario: a day-time interval times an untyped NULL keeps the interval type
+      When query
+        """
+        SELECT typeof(INTERVAL '2' DAY * NULL) AS t, (INTERVAL '2' DAY * NULL) AS r1,
+               (NULL * INTERVAL '2' DAY) AS r2
+        """
+      Then query result
+        | t                      | r1   | r2   |
+        | interval day to second | NULL | NULL |
+
+  Rule: A string divided by an untyped NULL follows ANSI mode
+    # Like `string / string`, `string / NULL` has no numeric operand to anchor the implicit
+    # cast: ANSI off casts both to DOUBLE (NULL value), ANSI on rejects at analysis. Both
+    # operand orders behave the same. Verified against Spark 4.2.0.
+
+    Scenario Outline: string over untyped NULL, ANSI off: <case>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT typeof(<expr>) AS t, (<expr>) AS r
+        """
+      Then query result
+        | t      | r    |
+        | double | NULL |
+
+      Examples:
+        | case             | expr       |
+        | string over NULL | '6' / NULL |
+        | NULL over string | NULL / '6' |
+
+    Scenario Outline: string over untyped NULL, ANSI on: <case>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT <expr> AS r
+        """
+      Then query error (?i)cannot resolve
+
+      Examples:
+        | case             | expr       |
+        | string over NULL | '6' / NULL |
+        | NULL over string | NULL / '6' |
+
+  Rule: Temporal and interval operands with an untyped NULL (known gaps)
+    # From the untyped-NULL sweep vs Spark 4.2.0. An untyped NULL against a DATE/TIMESTAMP is
+    # cast to a day-time interval (Spark's `_: DatetimeType, _: NullType` rule), so `date +
+    # NULL` is a TIMESTAMP and `date - NULL` a day-time interval; Sail does not coerce the NULL
+    # and errors or returns BIGINT. And an interval plus/minus a NULL keeps the operand's
+    # narrower field qualifier in Spark (`interval day` / `interval month`) where Sail always
+    # widens to `interval day to second` / `interval year to month` (Arrow carries no interval
+    # start/end field). Year-month interval scaling by NULL is still unimplemented.
+    @sail-bug
+    Scenario Outline: untyped NULL against a temporal or interval operand: <case>
+      When query
+        """
+        SELECT typeof(<expr>) AS t
+        """
+      Then query result
+        | t   |
+        | <t> |
+
+      Examples:
+        | case                                  | expr                     | t                      |
+        | date plus untyped NULL is a timestamp | DATE'2024-01-15' + NULL  | timestamp              |
+        | date minus untyped NULL is an interval| DATE'2024-01-15' - NULL  | interval day           |
+        | timestamp plus untyped NULL           | TIMESTAMP'2024-01-15 12:00:00' + NULL | timestamp |
+        | day-time interval plus untyped NULL   | INTERVAL '2' DAY + NULL  | interval day           |
+        | year-month interval plus untyped NULL | INTERVAL '2' MONTH + NULL | interval month        |
+        | year-month interval times untyped NULL| INTERVAL '2' MONTH * NULL | interval year to month|
+
   Rule: Operand pairs Spark rejects at analysis are rejected at plan time
     # Spark raises DATATYPE_MISMATCH at analysis for these pairs (a boolean or timestamp
     # in a division, a DATE/TIMESTAMP offset wider than INT, a bare number combined with
@@ -1989,16 +2126,17 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
     # by a non-numeric). Left to DataFusion these compute a nonsense value (true / 3 =
     # 0.333..., TIMESTAMP / 3 = raw microseconds, DATE + BIGINT truncated by date_add,
     # year-month + day-time as a CalendarInterval), so Sail's arithmetic plan builders
-    # reject them at plan time — matching Spark's accept/reject decision. Sail reports its
-    # own "cannot resolve arithmetic" message rather than Spark's error class (Sail has no
-    # Spark error classes yet); that label gap is systemic and tracked separately, so these
-    # assert the reject decision via Sail's message.
+    # reject them at plan time — matching Spark's accept/reject decision. Spark rejects the
+    # same pairs at analysis with DATATYPE_MISMATCH, whose message ("Cannot resolve ... due
+    # to data type mismatch") shares the "cannot resolve" prefix with Sail's own "cannot
+    # resolve arithmetic" message, so the assertion is oracle-portable across both engines
+    # (verified against JVM Spark 4.2.0). Sail's exact error class is a separate systemic gap.
     Scenario Outline: Rejected operand pair: <case>
       When query
         """
         SELECT <expr> AS r
         """
-      Then query error cannot resolve arithmetic
+      Then query error (?i)cannot resolve
 
       Examples:
         | case                                          | expr                                                               |
