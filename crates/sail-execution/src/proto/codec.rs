@@ -5830,6 +5830,69 @@ mod tests {
     }
 
     #[test]
+    fn test_remote_plan_round_trip_preserves_task_local_dynamic_filter_state() -> Result<()> {
+        use datafusion::physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
+        use datafusion::physical_plan::filter::FilterExec;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            false,
+        )]));
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::new(Column::new("value", 0)) as Arc<dyn PhysicalExpr>],
+            lit(true),
+        )) as Arc<dyn PhysicalExpr>;
+        let parquet_source = Arc::new(
+            ParquetSource::new(Arc::clone(&schema)).with_predicate(Arc::clone(&dynamic_filter)),
+        );
+        let file_scan = FileScanConfigBuilder::new(
+            datafusion::execution::object_store::ObjectStoreUrl::local_filesystem(),
+            parquet_source,
+        )
+        .build();
+        let scan = DataSourceExec::from_data_source(file_scan) as Arc<dyn ExecutionPlan>;
+        let plan = Arc::new(FilterExec::try_new(Arc::clone(&dynamic_filter), scan)?)
+            as Arc<dyn ExecutionPlan>;
+
+        let codec = RemoteExecutionCodec;
+        let bytes = crate::proto::encode_remote_physical_plan(&codec, plan)?;
+        let decoded =
+            crate::proto::decode_remote_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let filter = decoded
+            .downcast_ref::<FilterExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not a filter"))?;
+        let scan = filter
+            .input()
+            .downcast_ref::<DataSourceExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded filter input is not a data source"))?;
+        let (_, parquet_source) = scan
+            .downcast_to_file_source::<ParquetSource>()
+            .ok_or_else(|| plan_datafusion_err!("decoded data source is not Parquet"))?;
+        let scan_filter = parquet_source
+            .filter()
+            .ok_or_else(|| plan_datafusion_err!("decoded Parquet source has no predicate"))?;
+
+        let outer_filter = filter
+            .predicate()
+            .downcast_ref::<DynamicFilterPhysicalExpr>()
+            .ok_or_else(|| plan_datafusion_err!("outer predicate is not a dynamic filter"))?;
+        let scan_filter = scan_filter
+            .downcast_ref::<DynamicFilterPhysicalExpr>()
+            .ok_or_else(|| plan_datafusion_err!("scan predicate is not a dynamic filter"))?;
+        assert_eq!(outer_filter.expression_id(), scan_filter.expression_id());
+
+        let generation = scan_filter.snapshot_generation();
+        outer_filter.update(lit(false))?;
+        assert_eq!(scan_filter.snapshot_generation(), generation + 1);
+        assert_eq!(
+            format!("{:?}", scan_filter.current()?),
+            format!("{:?}", lit(false))
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_round_trip_schema_evolution_cast_preserves_timezone_mode() -> Result<()> {
         let input_field = Arc::new(Field::new(
             "event_time",

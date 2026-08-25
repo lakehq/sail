@@ -185,7 +185,16 @@ impl ServerSessionFactory {
         optimizer.join_reordering = self.config.optimizer.enable_join_swap;
         optimizer.prefer_hash_join = self.config.optimizer.prefer_hash_join;
         optimizer.expand_views_at_output = self.config.optimizer.expand_views_at_output;
-        disable_dynamic_filter_pushdown_for_cluster(config, &self.config.mode)
+        // DataFusion 55's hash-join dynamic filter assumes every plan partition reports to
+        // process-local state. Cluster execution uses independently decoded task plans, so keep
+        // join filters disabled while allowing task-local TopK and aggregate filters.
+        if matches!(
+            self.config.mode,
+            ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster
+        ) {
+            optimizer.enable_join_dynamic_filter_pushdown = false;
+        }
+        Ok(())
     }
 
     fn apply_execution_parquet_config(&mut self, config: &mut SessionConfig) {
@@ -237,20 +246,4 @@ impl ServerSessionFactory {
         parquet.content_defined_chunking.norm_level =
             self.config.parquet.content_defined_chunking.norm_level;
     }
-}
-
-fn disable_dynamic_filter_pushdown_for_cluster(
-    config: &mut SessionConfig,
-    mode: &ExecutionMode,
-) -> Result<()> {
-    if matches!(
-        mode,
-        ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster
-    ) {
-        config.options_mut().set(
-            "datafusion.optimizer.enable_dynamic_filter_pushdown",
-            "false",
-        )?;
-    }
-    Ok(())
 }
