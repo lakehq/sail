@@ -3,17 +3,17 @@ use sail_common::spec;
 use crate::error::{SparkError, SparkResult};
 use crate::spark::connect::analyze_plan_request::explain::ExplainMode;
 
-impl TryFrom<ExplainMode> for spec::ExplainMode {
+impl TryFrom<ExplainMode> for spec::SparkExplainMode {
     type Error = SparkError;
 
-    fn try_from(value: ExplainMode) -> SparkResult<spec::ExplainMode> {
+    fn try_from(value: ExplainMode) -> SparkResult<spec::SparkExplainMode> {
         match value {
-            ExplainMode::Unspecified => Ok(spec::ExplainMode::Unspecified),
-            ExplainMode::Simple => Ok(spec::ExplainMode::Simple),
-            ExplainMode::Extended => Ok(spec::ExplainMode::Extended),
-            ExplainMode::Codegen => Ok(spec::ExplainMode::Codegen),
-            ExplainMode::Cost => Ok(spec::ExplainMode::Cost),
-            ExplainMode::Formatted => Ok(spec::ExplainMode::Formatted),
+            ExplainMode::Unspecified => Ok(spec::SparkExplainMode::Unspecified),
+            ExplainMode::Simple => Ok(spec::SparkExplainMode::Simple),
+            ExplainMode::Extended => Ok(spec::SparkExplainMode::Extended),
+            ExplainMode::Codegen => Ok(spec::SparkExplainMode::Codegen),
+            ExplainMode::Cost => Ok(spec::SparkExplainMode::Cost),
+            ExplainMode::Formatted => Ok(spec::SparkExplainMode::Formatted),
         }
     }
 }

@@ -148,11 +148,15 @@ impl Actor for DriverActor {
             DriverMessage::ProbeLostWorker { worker_id, instant } => {
                 self.handle_probe_lost_worker(ctx, worker_id, instant)
             }
-            DriverMessage::ExecuteJob {
-                plan,
+            DriverMessage::PrepareJob { plan, result } => self.handle_prepare_job(plan, result),
+            DriverMessage::ExecutePreparedJob {
+                job_id,
                 context,
                 result,
-            } => self.handle_execute_job(ctx, plan, context, result),
+            } => self.handle_execute_prepared_job(ctx, job_id, context, result),
+            DriverMessage::DiscardPreparedJob { job_id, result } => {
+                self.handle_discard_prepared_job(job_id, result)
+            }
             DriverMessage::CleanUpJob { job_id } => self.handle_clean_up_job(ctx, job_id),
             DriverMessage::UpdateTask {
                 key,

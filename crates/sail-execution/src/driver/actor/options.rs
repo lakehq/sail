@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use sail_common::config::AppConfig;
+use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_common::utils::retry::RetryStrategy;
 use sail_telemetry::system_event::SystemEventReporter;
@@ -11,6 +11,7 @@ use crate::worker_manager::WorkerManager;
 
 #[readonly::make]
 pub struct DriverOptions {
+    pub execution_mode: ExecutionMode,
     pub enable_tls: bool,
     pub session_id: String,
     pub driver_id: DriverId,
@@ -47,6 +48,7 @@ impl DriverOptions {
         driver_server_port: u16,
     ) -> Self {
         Self {
+            execution_mode: config.mode.clone(),
             enable_tls: config.cluster.enable_tls,
             session_id,
             driver_id,

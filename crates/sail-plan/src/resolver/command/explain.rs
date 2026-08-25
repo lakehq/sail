@@ -4,7 +4,9 @@ use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, col, lit};
 use sail_common::spec;
 
 use crate::error::PlanResult;
-use crate::explain::{ExplainOptions, explain_string_from_logical_plan};
+use crate::explain::{
+    ExplainOptions, distributed_explain_string_from_logical_plan, explain_string_from_logical_plan,
+};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
@@ -13,7 +15,7 @@ impl PlanResolver<'_> {
     pub(super) async fn resolve_command_explain(
         &self,
         input: spec::Plan,
-        mode: spec::ExplainMode,
+        request: spec::ExplainRequest,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let (plan, fields) = match input {
@@ -27,8 +29,23 @@ impl PlanResolver<'_> {
                 (plan, None)
             }
         };
-        let options = ExplainOptions::from_mode(mode);
-        let explain = explain_string_from_logical_plan(self.ctx, plan, fields, options).await?;
+        let explain = match request {
+            spec::ExplainRequest::Spark { mode } => {
+                let options = ExplainOptions::from_mode(mode);
+                explain_string_from_logical_plan(self.ctx, plan, fields, options).await?
+            }
+            spec::ExplainRequest::Sail {
+                kind: spec::SailExplainKind::Distributed,
+                format,
+                analyze,
+                verbose,
+            } => {
+                distributed_explain_string_from_logical_plan(
+                    self.ctx, plan, fields, format, analyze, verbose,
+                )
+                .await?
+            }
+        };
         let plan =
             LogicalPlanBuilder::values(vec![vec![lit(ScalarValue::Utf8(Some(explain.output)))]])?
                 .project(vec![col("column1").alias("plan")])?

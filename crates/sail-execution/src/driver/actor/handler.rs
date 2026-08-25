@@ -159,20 +159,49 @@ impl DriverActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_execute_job(
+    pub(super) fn handle_prepare_job(
+        &mut self,
+        plan: Arc<dyn ExecutionPlan>,
+        result: oneshot::Sender<
+            ExecutionResult<(JobId, sail_common::diagnostics::DistributedPlanV1)>,
+        >,
+    ) -> ActorAction {
+        match self.job_scheduler.prepare_job(plan) {
+            Ok((job_id, distributed_plan)) => {
+                if result.send(Ok((job_id, distributed_plan))).is_err() {
+                    let _ = self.job_scheduler.discard_prepared_job(job_id);
+                }
+            }
+            Err(error) => {
+                let _ = result.send(Err(error));
+            }
+        }
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_execute_prepared_job(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        plan: Arc<dyn ExecutionPlan>,
+        job_id: JobId,
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     ) -> ActorAction {
-        let out = self.job_scheduler.accept_job(ctx, plan, context);
-        if let Ok((job_id, _)) = &out {
-            self.refresh_job(ctx, *job_id);
+        let out = self.job_scheduler.accept_prepared_job(ctx, job_id, context);
+        if out.is_ok() {
+            self.refresh_job(ctx, job_id);
             self.run_tasks(ctx);
             self.scale_up_workers(ctx);
         }
         let _ = result.send(out.map(|(_, stream)| stream));
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_discard_prepared_job(
+        &mut self,
+        job_id: JobId,
+        result: oneshot::Sender<ExecutionResult<()>>,
+    ) -> ActorAction {
+        let _ = result.send(self.job_scheduler.discard_prepared_job(job_id));
         ActorAction::Continue
     }
 

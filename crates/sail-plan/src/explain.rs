@@ -1,13 +1,17 @@
+use std::collections::BTreeMap;
 use std::future::Future;
+use std::mem;
 use std::sync::Arc;
 
 use datafusion::execution::session_state::SessionStateBuilder;
+use datafusion::physical_plan::common::collect as collect_stream;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
-use datafusion::physical_plan::{ExecutionPlan, collect, displayable};
+use datafusion::physical_plan::{ExecutionPlan, displayable};
 use datafusion::prelude::SessionContext;
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::LogicalPlan;
+use sail_common::diagnostics::ExplainFormat;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
@@ -35,39 +39,39 @@ pub struct ExplainOptions {
 }
 
 impl ExplainOptions {
-    pub fn from_mode(mode: spec::ExplainMode) -> Self {
+    pub fn from_mode(mode: spec::SparkExplainMode) -> Self {
         match mode {
-            spec::ExplainMode::Unspecified | spec::ExplainMode::Simple => Self {
+            spec::SparkExplainMode::Unspecified | spec::SparkExplainMode::Simple => Self {
                 kind: ExplainKind::Simple,
                 verbose: false,
                 analyze: false,
             },
-            spec::ExplainMode::Extended => Self {
+            spec::SparkExplainMode::Extended => Self {
                 kind: ExplainKind::Extended,
                 verbose: false,
                 analyze: false,
             },
-            spec::ExplainMode::Codegen => Self {
+            spec::SparkExplainMode::Codegen => Self {
                 kind: ExplainKind::Codegen,
                 verbose: false,
                 analyze: false,
             },
-            spec::ExplainMode::Cost => Self {
+            spec::SparkExplainMode::Cost => Self {
                 kind: ExplainKind::Cost,
                 verbose: false,
                 analyze: false,
             },
-            spec::ExplainMode::Formatted => Self {
+            spec::SparkExplainMode::Formatted => Self {
                 kind: ExplainKind::Formatted,
                 verbose: true,
                 analyze: false,
             },
-            spec::ExplainMode::Analyze => Self {
+            spec::SparkExplainMode::Analyze => Self {
                 kind: ExplainKind::Simple,
                 verbose: true,
                 analyze: true,
             },
-            spec::ExplainMode::Verbose => Self {
+            spec::SparkExplainMode::Verbose => Self {
                 kind: ExplainKind::Simple,
                 verbose: true,
                 analyze: false,
@@ -363,24 +367,13 @@ async fn maybe_collect_metrics(
     ctx: &SessionContext,
 ) -> Result<()> {
     if options.analyze {
-        // Run the plan to populate metrics. Ignore the output batches.
         if let Some(plan) = physical {
-            let _ = collect(Arc::clone(plan), ctx.task_ctx()).await?;
+            let service = ctx.extension::<JobService>()?;
+            let stream = service.runner().execute(ctx, Arc::clone(plan)).await?;
+            let _ = collect_stream(stream).await?;
         }
     }
     Ok(())
-}
-
-fn distributed_plan_string(
-    ctx: &SessionContext,
-    physical: &Option<Arc<dyn ExecutionPlan>>,
-) -> Option<String> {
-    let plan = physical.as_ref()?;
-    let service = ctx.extension::<JobService>().ok()?;
-    match service.runner().explain(Arc::clone(plan)) {
-        Ok(plan) => Some(plan),
-        Err(err) => Some(format!("Distributed plan error: {err}")),
-    }
 }
 
 pub async fn explain_string(
@@ -406,6 +399,55 @@ pub async fn explain_string_from_logical_plan(
 ) -> PlanResult<ExplainString> {
     let collected = collect_plan_with(ctx, async move { Ok((plan, fields)) }).await?;
     explain_from_collected(ctx, collected, options).await
+}
+
+pub async fn distributed_explain_string_from_logical_plan(
+    ctx: &SessionContext,
+    plan: LogicalPlan,
+    fields: Option<Vec<String>>,
+    format: ExplainFormat,
+    analyze: bool,
+    verbose: bool,
+) -> PlanResult<ExplainString> {
+    let mut collected = collect_plan_with(ctx, async move { Ok((plan, fields)) }).await?;
+    let physical = collected.physical_plan.take().ok_or_else(|| {
+        PlanError::internal(
+            collected
+                .physical_error
+                .take()
+                .unwrap_or_else(|| "distributed physical plan is unavailable".to_string()),
+        )
+    })?;
+    let service = ctx.extension::<JobService>().map_err(PlanError::from)?;
+    let prepared = service
+        .runner()
+        .prepare(physical)
+        .await
+        .map_err(PlanError::from)?;
+    let job_id = prepared.handle().value();
+    let mut distributed_plan = prepared.distributed_plan().clone();
+    if analyze {
+        let stream = service
+            .runner()
+            .execute_prepared(ctx, prepared)
+            .await
+            .map_err(PlanError::from)?;
+        let _ = collect_stream(stream).await.map_err(PlanError::from)?;
+        distributed_plan.mark_executed(job_id, BTreeMap::new());
+    } else {
+        service
+            .runner()
+            .discard_prepared(prepared)
+            .await
+            .map_err(PlanError::from)?;
+    }
+    let output = distributed_plan.render(format, verbose).map_err(|error| {
+        PlanError::internal(format!("failed to render distributed plan: {error}"))
+    })?;
+    Ok(ExplainString {
+        output,
+        stringified_plans: mem::take(&mut collected.stringified),
+    })
 }
 
 async fn explain_from_collected(
@@ -438,6 +480,10 @@ async fn explain_from_collected(
             let mut sections = vec![render_section("Physical Plan", physical_for_mode)];
             if options.verbose && !options.analyze {
                 sections.push(render_section(
+                    "Plan Steps",
+                    &render_stringified_plans(&collected.stringified),
+                ));
+                sections.push(render_section(
                     "Physical Plan (with statistics)",
                     physical.with_stats(&collected),
                 ));
@@ -465,14 +511,10 @@ async fn explain_from_collected(
             ]
         }
         ExplainKind::Codegen => {
-            let mut sections = vec![
+            vec![
                 render_section(
                     "Codegen",
                     "Whole-stage codegen is not supported; showing physical plan instead.",
-                ),
-                render_section(
-                    "Plan Steps",
-                    &render_stringified_plans(&collected.stringified),
                 ),
                 render_section(
                     "Physical Plan",
@@ -482,11 +524,7 @@ async fn explain_from_collected(
                         physical.plain(&collected, options.verbose)
                     },
                 ),
-            ];
-            if let Some(plan) = distributed_plan_string(ctx, &collected.physical_plan) {
-                sections.push(render_section("Distributed Plan", &plan));
-            }
-            sections
+            ]
         }
         ExplainKind::Cost => {
             vec![

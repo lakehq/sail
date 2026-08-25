@@ -1,5 +1,6 @@
 pub mod actor;
 pub mod config;
+pub mod diagnostics;
 pub mod error;
 pub mod geoarrow;
 pub mod runtime;

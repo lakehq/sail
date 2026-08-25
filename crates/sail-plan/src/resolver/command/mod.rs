@@ -240,8 +240,8 @@ impl PlanResolver<'_> {
             CommandNode::WriteStream(write_stream) => {
                 self.resolve_command_write_stream(write_stream, state).await
             }
-            CommandNode::Explain { mode, input } => {
-                self.resolve_command_explain(*input, mode, state).await
+            CommandNode::Explain { request, input } => {
+                self.resolve_command_explain(*input, request, state).await
             }
             CommandNode::InsertOverwriteDirectory {
                 input,

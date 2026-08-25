@@ -7,6 +7,11 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use sail_common::diagnostics::{
+    DistributedDistributionV1, DistributedEdgeV1, DistributedExchangeKind,
+    DistributedExecutionMode, DistributedOutputMode, DistributedPlacement, DistributedPlanV1,
+    DistributedStageV1,
+};
 
 use crate::shuffle::ShuffleBackendKind;
 
@@ -42,6 +47,65 @@ impl JobGraph {
 
     pub(crate) fn shuffle_backend(&self) -> &ShuffleBackendKind {
         &self.options.shuffle_backend
+    }
+
+    pub fn distributed_plan(&self, execution_mode: DistributedExecutionMode) -> DistributedPlanV1 {
+        let stages = self
+            .stages
+            .iter()
+            .enumerate()
+            .map(|(stage_id, stage)| DistributedStageV1 {
+                stage_id,
+                placement: match stage.placement {
+                    TaskPlacement::Driver => DistributedPlacement::Driver,
+                    TaskPlacement::Worker => DistributedPlacement::Worker,
+                },
+                partition_count: stage.plan.output_partitioning().partition_count(),
+                output_mode: match stage.mode {
+                    OutputMode::Pipelined => DistributedOutputMode::Pipelined,
+                    OutputMode::Blocking => DistributedOutputMode::Blocking,
+                },
+                operator_tree: DisplayableExecutionPlan::new(stage.plan.as_ref())
+                    .indent(true)
+                    .to_string(),
+            })
+            .collect();
+        let edges = self
+            .stages
+            .iter()
+            .enumerate()
+            .flat_map(|(to_stage, stage)| {
+                stage.inputs.iter().map(move |input| {
+                    let distribution = &self.stages[input.stage].distribution;
+                    DistributedEdgeV1 {
+                        from_stage: input.stage,
+                        to_stage,
+                        exchange_kind: match input.mode {
+                            InputMode::Forward => DistributedExchangeKind::Forward,
+                            InputMode::Merge => DistributedExchangeKind::Merge,
+                            InputMode::Shuffle => DistributedExchangeKind::Shuffle,
+                            InputMode::Broadcast => DistributedExchangeKind::Broadcast,
+                            InputMode::Rescale => DistributedExchangeKind::Rescale,
+                        },
+                        distribution: match distribution {
+                            OutputDistribution::Hash { keys, .. } => {
+                                DistributedDistributionV1::Hash {
+                                    keys: keys.iter().map(ToString::to_string).collect(),
+                                }
+                            }
+                            OutputDistribution::RoundRobinBatch { .. } => {
+                                DistributedDistributionV1::RoundRobinBatch
+                            }
+                            OutputDistribution::RoundRobinRow { .. } => {
+                                DistributedDistributionV1::RoundRobinRow
+                            }
+                        },
+                        channel_count: distribution.channels(),
+                    }
+                })
+            })
+            .collect();
+        DistributedPlanV1::new(execution_mode, stages, edges)
     }
 
     /// Get the required number of output replicas for the given stage.

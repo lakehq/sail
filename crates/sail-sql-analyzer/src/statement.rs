@@ -1,4 +1,5 @@
 use either::Either;
+use sail_common::diagnostics::ExplainFormat as SailExplainFormat;
 use sail_common::spec;
 use sail_common::spec::QueryPlan;
 use sail_sql_parser::ast::expression::{BooleanLiteral, Expr, OrderDirection};
@@ -13,7 +14,8 @@ use sail_sql_parser::ast::statement::{
     ColumnAlterationOption, ColumnDefinition, ColumnDefinitionList, ColumnDefinitionOption,
     ColumnPosition, ColumnTypeDefinition, CommentValue, CreateDatabaseClause, CreateTableClause,
     CreateViewClause, CreateViewDefinition, DeleteTableAlias, DescribeFunctionName, DescribeItem,
-    ExplainFormat, FileFormat, InsertDirectoryDestination, MergeMatchClause, MergeMatchedAction,
+    ExplainFormat, ExplainOption, ExplainOptionList, ExplainOutputFormat, FileFormat,
+    InsertDirectoryDestination, MergeMatchClause, MergeMatchedAction,
     MergeNotMatchedBySourceAction, MergeNotMatchedByTargetAction, MergeSource, PartitionByItem,
     PartitionByList, PartitionClause, PartitionValue, PartitionValueList, PropertyKey,
     PropertyKeyList, PropertyKeyValue, PropertyList, PropertyValue, RowFormat,
@@ -621,10 +623,17 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             format,
             statement,
         } => {
-            let mode = from_ast_explain_format(format)?;
+            let request = from_ast_explain_format(format)?;
             let statement = from_ast_statement(*statement)?;
+            if matches!(&request, spec::ExplainRequest::Sail { analyze: true, .. })
+                && !matches!(&statement, spec::Plan::Query(_))
+            {
+                return Err(SqlError::unsupported(
+                    "distributed EXPLAIN ANALYZE for statements that may write data",
+                ));
+            }
             let node = spec::CommandNode::Explain {
-                mode,
+                request,
                 input: Box::new(statement),
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
@@ -2098,22 +2107,84 @@ fn from_ast_sort_column(sort: SortColumn) -> SqlResult<spec::SortOrder> {
     })
 }
 
-fn from_ast_explain_format(format: Option<ExplainFormat>) -> SqlResult<spec::ExplainMode> {
+fn from_ast_explain_format(format: Option<ExplainFormat>) -> SqlResult<spec::ExplainRequest> {
     // TODO(spark-compat):
     //   - COST: match Spark (logical + stats, not physical-with-stats).
     //   - FORMATTED: add outline + node-details sections to mirror Spark.
     //   - CODEGEN: keep "unsupported" notice until DataFusion adds support.
     //   - ANALYZE: align metrics formatting with Spark once available.
     //   Reference: https://spark.apache.org/docs/latest/sql-ref-syntax-qry-explain.html
+    let spark = |mode| Ok(spec::ExplainRequest::Spark { mode });
     match format {
-        None => Ok(spec::ExplainMode::Simple),
-        Some(ExplainFormat::Extended(_)) => Ok(spec::ExplainMode::Extended),
-        Some(ExplainFormat::Codegen(_)) => Ok(spec::ExplainMode::Codegen),
-        Some(ExplainFormat::Cost(_)) => Ok(spec::ExplainMode::Cost),
-        Some(ExplainFormat::Formatted(_)) => Ok(spec::ExplainMode::Formatted),
-        Some(ExplainFormat::Analyze(_)) => Ok(spec::ExplainMode::Analyze),
-        Some(ExplainFormat::Verbose(_)) => Ok(spec::ExplainMode::Verbose),
+        None => spark(spec::SparkExplainMode::Simple),
+        Some(ExplainFormat::Extended(_)) => spark(spec::SparkExplainMode::Extended),
+        Some(ExplainFormat::Codegen(_)) => spark(spec::SparkExplainMode::Codegen),
+        Some(ExplainFormat::Cost(_)) => spark(spec::SparkExplainMode::Cost),
+        Some(ExplainFormat::Formatted(_)) => spark(spec::SparkExplainMode::Formatted),
+        Some(ExplainFormat::Analyze(_)) => spark(spec::SparkExplainMode::Analyze),
+        Some(ExplainFormat::Verbose(_)) => spark(spec::SparkExplainMode::Verbose),
+        Some(ExplainFormat::Options(options)) => from_ast_explain_options(options),
     }
+}
+
+fn from_ast_explain_options(options: ExplainOptionList) -> SqlResult<spec::ExplainRequest> {
+    let ExplainOptionList {
+        left: _,
+        options,
+        right: _,
+    } = options;
+    let mut distributed = false;
+    let mut format = SailExplainFormat::Text;
+    let mut format_seen = false;
+    let mut analyze = false;
+    let mut analyze_seen = false;
+    let mut verbose = false;
+    let mut verbose_seen = false;
+
+    for option in options.into_items() {
+        match option {
+            ExplainOption::Type(_, _) => {
+                if distributed {
+                    return Err(SqlError::invalid("duplicate EXPLAIN TYPE option"));
+                }
+                distributed = true;
+            }
+            ExplainOption::Format(_, value) => {
+                if format_seen {
+                    return Err(SqlError::invalid("duplicate EXPLAIN FORMAT option"));
+                }
+                format_seen = true;
+                format = match value {
+                    ExplainOutputFormat::Text(_) => SailExplainFormat::Text,
+                    ExplainOutputFormat::Json(_) => SailExplainFormat::Json,
+                    ExplainOutputFormat::Graphviz(_) => SailExplainFormat::Graphviz,
+                };
+            }
+            ExplainOption::Analyze(_, value) => {
+                if analyze_seen {
+                    return Err(SqlError::invalid("duplicate EXPLAIN ANALYZE option"));
+                }
+                analyze_seen = true;
+                analyze = matches!(value, BooleanLiteral::True(_));
+            }
+            ExplainOption::Verbose(_, value) => {
+                if verbose_seen {
+                    return Err(SqlError::invalid("duplicate EXPLAIN VERBOSE option"));
+                }
+                verbose_seen = true;
+                verbose = matches!(value, BooleanLiteral::True(_));
+            }
+        }
+    }
+    if !distributed {
+        return Err(SqlError::missing("EXPLAIN TYPE DISTRIBUTED option"));
+    }
+    Ok(spec::ExplainRequest::Sail {
+        kind: spec::SailExplainKind::Distributed,
+        format,
+        analyze,
+        verbose,
+    })
 }
 
 fn from_ast_comment_value(value: CommentValue) -> SqlResult<Option<String>> {
@@ -2304,4 +2375,89 @@ fn from_ast_alter_view_operation(
     _operation: AlterViewOperation,
 ) -> SqlResult<spec::AlterViewOperation> {
     Ok(spec::AlterViewOperation::Unknown)
+}
+
+#[cfg(test)]
+mod tests {
+    use sail_common::diagnostics::ExplainFormat as SailExplainFormat;
+
+    use super::*;
+    use crate::parser::parse_one_statement;
+
+    fn analyze(sql: &str) -> SqlResult<spec::Plan> {
+        from_ast_statement(parse_one_statement(sql)?)
+    }
+
+    #[test]
+    fn parses_distributed_explain_options() -> SqlResult<()> {
+        let plan = analyze(
+            "EXPLAIN (TYPE DISTRIBUTED, FORMAT JSON, VERBOSE TRUE, ANALYZE FALSE) SELECT 1",
+        )?;
+        let spec::Plan::Command(spec::CommandPlan {
+            node:
+                spec::CommandNode::Explain {
+                    request:
+                        spec::ExplainRequest::Sail {
+                            kind: spec::SailExplainKind::Distributed,
+                            format,
+                            analyze,
+                            verbose,
+                        },
+                    ..
+                },
+            ..
+        }) = plan
+        else {
+            panic!("expected distributed explain command")
+        };
+        assert_eq!(format, SailExplainFormat::Json);
+        assert!(!analyze);
+        assert!(verbose);
+        Ok(())
+    }
+
+    #[test]
+    fn distributed_explain_defaults_to_text_without_execution() -> SqlResult<()> {
+        let plan = analyze("EXPLAIN (TYPE DISTRIBUTED) SELECT 1")?;
+        let spec::Plan::Command(spec::CommandPlan {
+            node:
+                spec::CommandNode::Explain {
+                    request:
+                        spec::ExplainRequest::Sail {
+                            format,
+                            analyze,
+                            verbose,
+                            ..
+                        },
+                    ..
+                },
+            ..
+        }) = plan
+        else {
+            panic!("expected distributed explain command")
+        };
+        assert_eq!(format, SailExplainFormat::Text);
+        assert!(!analyze);
+        assert!(!verbose);
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_duplicate_distributed_explain_options() {
+        let error =
+            analyze("EXPLAIN (TYPE DISTRIBUTED, FORMAT JSON, FORMAT TEXT) SELECT 1").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate EXPLAIN FORMAT option")
+        );
+    }
+
+    #[test]
+    fn rejects_distributed_analyze_for_writes() {
+        let error =
+            analyze("EXPLAIN (TYPE DISTRIBUTED, ANALYZE TRUE) INSERT INTO target VALUES (1)")
+                .unwrap_err();
+        assert!(error.to_string().contains("statements that may write data"));
+    }
 }
