@@ -17,7 +17,7 @@ Feature: Lakehouse commits in distributed execution
     Scenario: Delta commit runs on the driver after parallel file writing
       When query
         """
-        EXPLAIN CODEGEN
+        EXPLAIN (TYPE DISTRIBUTED, FORMAT TEXT, VERBOSE TRUE)
         INSERT INTO distributed_delta_commit
         SELECT id FROM range(0, 400, 1, 4)
         """
@@ -38,6 +38,33 @@ Feature: Lakehouse commits in distributed execution
         | count |
         | 400   |
 
+  Rule: Delta metadata replay in distributed execution
+    Background:
+      Given variable location for temporary directory distributed_delta_metadata
+      Given final statement
+        """
+        DROP TABLE IF EXISTS distributed_delta_metadata
+        """
+      Given statement template
+        """
+        CREATE TABLE distributed_delta_metadata
+        USING delta
+        LOCATION {{ location.sql }}
+        OPTIONS (metadataAsDataRead 'true')
+        AS SELECT * FROM VALUES
+          (1, 'a', 10),
+          (2, 'b', 20)
+        AS t(id, name, value)
+        """
+
+    Scenario: Distributed EXPLAIN shows Delta metadata replay stages
+      When query
+        """
+        EXPLAIN (TYPE DISTRIBUTED, FORMAT TEXT, VERBOSE TRUE)
+        SELECT * FROM distributed_delta_metadata
+        """
+      Then query plan matches snapshot
+
   Rule: Iceberg commit execution
     Background:
       Given variable location for temporary directory distributed_iceberg_commit
@@ -55,7 +82,7 @@ Feature: Lakehouse commits in distributed execution
     Scenario: Iceberg commit runs on the driver after parallel file writing
       When query
         """
-        EXPLAIN CODEGEN
+        EXPLAIN (TYPE DISTRIBUTED, FORMAT TEXT, VERBOSE TRUE)
         INSERT INTO distributed_iceberg_commit
         SELECT id FROM range(0, 400, 1, 4)
         """

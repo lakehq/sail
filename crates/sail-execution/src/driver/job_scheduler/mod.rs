@@ -17,11 +17,13 @@ pub use state::TaskState;
 use crate::driver::job_scheduler::state::JobDescriptor;
 use crate::driver::output::JobOutputHandle;
 use crate::id::{IdGenerator, JobId, TaskKey, TaskStreamKey};
+use crate::job_graph::JobGraph;
 use crate::proto::RemoteExecutionCodec;
 use crate::task::scheduling::TaskRegion;
 
 pub struct JobScheduler {
     options: JobSchedulerOptions,
+    prepared_jobs: IndexMap<JobId, JobGraph>,
     jobs: IndexMap<JobId, JobDescriptor>,
     job_id_generator: IdGenerator<JobId>,
     codec: Box<dyn PhysicalExtensionCodec>,
@@ -32,6 +34,7 @@ impl JobScheduler {
     pub fn new(options: JobSchedulerOptions, event_reporter: SystemEventReporter) -> Self {
         Self {
             options,
+            prepared_jobs: IndexMap::new(),
             jobs: IndexMap::new(),
             job_id_generator: IdGenerator::new(),
             codec: Box::new(RemoteExecutionCodec),

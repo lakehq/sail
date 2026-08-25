@@ -340,7 +340,7 @@ Feature: Delta Lake Delete
         | 4  | Diana | Sales      |
         | 5  | NULL  | NULL       |
 
-  Rule: EXPLAIN CODEGEN shows stepwise optimization for DELETE
+  Rule: EXPLAIN VERBOSE shows stepwise optimization for DELETE
     Background:
       Given variable location for temporary directory delete_explain_codegen
       Given final statement
@@ -373,10 +373,10 @@ Feature: Delta Lake Delete
           (8, 'Henry', 33, 'HR', 60000, true)
         """
 
-    Scenario: EXPLAIN CODEGEN includes plan steps and delta rewrite artifacts for DELETE
+    Scenario: EXPLAIN VERBOSE includes plan steps and delta rewrite artifacts for DELETE
       When query
         """
-        EXPLAIN CODEGEN
+        EXPLAIN VERBOSE
         DELETE FROM delta_delete_explain_codegen
         WHERE salary + 1 > 70000
           AND (department = 'Engineering' OR department = 'Marketing')

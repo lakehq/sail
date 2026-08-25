@@ -35,6 +35,7 @@ fn build_proto() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/spark/connect/ml_common.proto",
                 "proto/spark/connect/relations.proto",
                 "proto/spark/connect/types.proto",
+                "proto/sail/spark/connect/v1/diagnostics.proto",
             ],
             &["proto"],
         )?;

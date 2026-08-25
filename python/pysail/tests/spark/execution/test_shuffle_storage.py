@@ -6,6 +6,7 @@ import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql.types import Row
 
+from pysail.spark import diagnostics
 from pysail.testing.spark.session import spark_connect_server
 from pysail.testing.spark.steps.plan import normalize_plan_text
 from pysail.testing.spark.utils.common import is_jvm_spark
@@ -51,7 +52,7 @@ def test_query_execution_with_storage_shuffle(spark, snapshot):
         .orderBy("g")
     )
 
-    plan = normalize_plan_text(df._explain_string(mode="codegen"))  # noqa: SLF001
+    plan = normalize_plan_text(diagnostics.explain(df, verbose=True).text)
     assert plan == snapshot
 
     actual = df.toPandas()

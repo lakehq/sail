@@ -7588,6 +7588,8 @@ dependencies = [
  "kube",
  "log",
  "object_store",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "prost",
  "prost-build",
  "rand 0.10.2",

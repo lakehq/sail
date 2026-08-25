@@ -11,14 +11,14 @@ use crate::ast::keywords::{
     Comment, Compute, Constraint, Cost, Create, Data, Database, Databases, Dbproperties, Default,
     Defined, Delete, Delimited, Desc, Describe, Directory, Distributed, Drop, Escaped, Evolution,
     Exists, Explain, Extended, External, Fields, Fileformat, First, For, Format, Formatted, From,
-    Function, Functions, Generated, Global, Identity, If, In, Increment, Inpath, Inputformat,
-    Insert, Into, Is, Items, Keys, Lazy, Like, Lines, Load, Local, Location, Map, Matched, Merge,
-    Name, Namespace, Namespaces, Noscan, Not, Null, On, Options, Or, Outputformat, Overwrite,
-    Partition, Partitioned, Partitions, Properties, Purge, Recover, Refresh, Rename, Replace,
-    Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show, Sorted, Source, Start,
-    Statistics, Stored, System, Table, Tables, Target, Tblproperties, Temp, Temporary, Terminated,
-    Then, Time, To, Type, Uncache, Unset, Update, Use, User, Using, Values, Verbose, View, Views,
-    When, With, Zone,
+    Function, Functions, Generated, Global, Graphviz, Identity, If, In, Increment, Inpath,
+    Inputformat, Insert, Into, Is, Items, Json, Keys, Lazy, Like, Lines, Load, Local, Location,
+    Map, Matched, Merge, Name, Namespace, Namespaces, Noscan, Not, Null, On, Options, Or,
+    Outputformat, Overwrite, Partition, Partitioned, Partitions, Properties, Purge, Recover,
+    Refresh, Rename, Replace, Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show,
+    Sorted, Source, Start, Statistics, Stored, System, Table, Tables, Target, Tblproperties, Temp,
+    Temporary, Terminated, Text, Then, Time, To, Type, Uncache, Unset, Update, Use, User, Using,
+    Values, Verbose, View, Views, When, With, Zone,
 };
 use crate::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
 use crate::ast::operator::{
@@ -352,12 +352,35 @@ pub enum Statement {
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 pub enum ExplainFormat {
+    Options(ExplainOptionList),
     Extended(Extended),
     Codegen(Codegen),
     Cost(Cost),
     Formatted(Formatted),
     Analyze(Analyze),
     Verbose(Verbose),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub struct ExplainOptionList {
+    pub left: LeftParenthesis,
+    pub options: Sequence<ExplainOption, Comma>,
+    pub right: RightParenthesis,
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum ExplainOption {
+    Type(Type, Distributed),
+    Format(Format, ExplainOutputFormat),
+    Verbose(Verbose, BooleanLiteral),
+    Analyze(Analyze, BooleanLiteral),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum ExplainOutputFormat {
+    Text(Text),
+    Json(Json),
+    Graphviz(Graphviz),
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]

@@ -367,14 +367,14 @@ Feature: Delta Lake Deletion Vectors (Merge-on-Read)
         """
       Then query plan matches snapshot
 
-    Scenario: EXPLAIN CODEGEN filtered DV scan retains estimated statistics
+    Scenario: EXPLAIN VERBOSE filtered DV scan retains estimated statistics
       Given statement
         """
         DELETE FROM delta_dv_explain WHERE id = 1
         """
       When query
         """
-        EXPLAIN CODEGEN
+        EXPLAIN VERBOSE
         SELECT COUNT(*) AS cnt
         FROM delta_dv_explain
         WHERE value > 100

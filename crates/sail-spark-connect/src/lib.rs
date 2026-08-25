@@ -13,6 +13,16 @@ mod streaming;
 
 pub use proto::data_type_json::JsonDataType;
 
+pub(crate) mod sail {
+    pub(crate) mod spark {
+        pub(crate) mod connect {
+            pub(crate) mod v1 {
+                tonic::include_proto!("sail.spark.connect.v1");
+            }
+        }
+    }
+}
+
 pub mod spark {
     #[expect(clippy::all, clippy::allow_attributes)]
     pub mod connect {

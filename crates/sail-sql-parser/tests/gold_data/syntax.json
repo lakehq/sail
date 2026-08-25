@@ -3013,6 +3013,13 @@
                   {
                     "sequence": [
                       {
+                        "nonTerminal": "ExplainOptionList"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
                         "nonTerminal": "Keyword(Extended)"
                       }
                     ]
@@ -3049,6 +3056,97 @@
                     "sequence": [
                       {
                         "nonTerminal": "Keyword(Verbose)"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "name": "ExplainOption",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Type)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Distributed)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Format)"
+                      },
+                      {
+                        "nonTerminal": "ExplainOutputFormat"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Verbose)"
+                      },
+                      {
+                        "nonTerminal": "BooleanLiteral"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Analyze)"
+                      },
+                      {
+                        "nonTerminal": "BooleanLiteral"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "name": "ExplainOptionList",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Operator(LeftParenthesis)"
+                  },
+                  {
+                    "nonTerminal": "Sequence(ExplainOption, Operator(Comma))"
+                  },
+                  {
+                    "nonTerminal": "Operator(RightParenthesis)"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "ExplainOutputFormat",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Text)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Json)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Graphviz)"
                       }
                     ]
                   }
@@ -5084,6 +5182,14 @@
               }
             },
             {
+              "name": "Keyword(Graphviz)",
+              "node": {
+                "terminal": {
+                  "keyword": "GRAPHVIZ"
+                }
+              }
+            },
+            {
               "name": "Keyword(Group)",
               "node": {
                 "terminal": {
@@ -5312,6 +5418,14 @@
               "node": {
                 "terminal": {
                   "keyword": "JOIN"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Json)",
+              "node": {
+                "terminal": {
+                  "keyword": "JSON"
                 }
               }
             },
@@ -8855,6 +8969,28 @@
                         },
                         {
                           "nonTerminal": "ColumnDefinition"
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "name": "Sequence(ExplainOption, Operator(Comma))",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "ExplainOption"
+                  },
+                  {
+                    "zeroOrMore": {
+                      "sequence": [
+                        {
+                          "nonTerminal": "Operator(Comma)"
+                        },
+                        {
+                          "nonTerminal": "ExplainOption"
                         }
                       ]
                     }

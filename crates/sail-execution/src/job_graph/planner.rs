@@ -995,6 +995,9 @@ mod tests {
     use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties, displayable};
     use sail_catalog::command::CatalogCommand;
     use sail_celeborn::common::PartitionSplitMode;
+    use sail_common::diagnostics::{
+        DistributedDistributionV1, DistributedExchangeKind, DistributedExecutionMode,
+    };
     use sail_physical_plan::barrier::BarrierExec;
     use sail_physical_plan::catalog_command::CatalogCommandExec;
     use sail_physical_plan::coalesce::CoalesceExec;
@@ -1002,7 +1005,10 @@ mod tests {
     use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
     use super::{JobGraph, JobGraphOptions, create_scalar_subquery_input};
-    use crate::job_graph::{InputMode, OutputDistribution, OutputMode, StageInput, TaskPlacement};
+    use crate::job_graph::{
+        InputMode, OutputDistribution, OutputMode, StageInput, TaskPlacement,
+        distributed_distribution,
+    };
     use crate::plan::StageInputExec;
     use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
 
@@ -1086,6 +1092,39 @@ mod tests {
                 mode: InputMode::Shuffle,
             }]
         ));
+    }
+
+    #[test]
+    fn test_distributed_plan_is_a_typed_snapshot_of_job_graph() {
+        let graph = JobGraph::try_new(
+            Arc::new(
+                RepartitionExec::try_new(empty_plan(), Partitioning::RoundRobinBatch(4)).unwrap(),
+            ),
+            flight_shuffle_options(),
+        )
+        .unwrap();
+
+        let plan = graph.distributed_plan(DistributedExecutionMode::LocalCluster);
+
+        assert_eq!(plan.stages.len(), graph.stages().len());
+        for (stage, snapshot) in graph.stages().iter().zip(&plan.stages) {
+            assert_eq!(
+                snapshot.distribution,
+                distributed_distribution(&stage.distribution)
+            );
+        }
+        assert_eq!(plan.edges.len(), 1);
+        assert_eq!(plan.edges[0].from_stage, 0);
+        assert_eq!(plan.edges[0].to_stage, 1);
+        assert_eq!(
+            plan.edges[0].exchange_kind,
+            DistributedExchangeKind::Shuffle
+        );
+        assert_eq!(
+            plan.edges[0].distribution,
+            DistributedDistributionV1::RoundRobinBatch
+        );
+        assert_eq!(plan.edges[0].channel_count, 4);
     }
 
     #[test]

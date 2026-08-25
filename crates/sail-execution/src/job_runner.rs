@@ -6,23 +6,12 @@ use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::{ExecutionPlan, execute_stream};
 use datafusion::prelude::SessionContext;
 use sail_common::actor::ActorSystem;
-use sail_common_datafusion::session::job::JobRunner;
+use sail_common_datafusion::session::job::{JobRunner, PreparedJob, PreparedJobHandle};
 use sail_telemetry::telemetry::global_metrics;
 use sail_telemetry::{TracingExecOptions, trace_execution_plan};
 use tokio::sync::oneshot;
 
 use crate::driver::{DriverActor, DriverComponents, DriverHandle, DriverMessage, DriverOptions};
-use crate::job_graph::{JobGraph, JobGraphOptions};
-use crate::shuffle::ShuffleBackendKind;
-
-fn explain_job_graph(
-    plan: Arc<dyn ExecutionPlan>,
-    shuffle_backend: ShuffleBackendKind,
-) -> Result<String> {
-    JobGraph::try_new(plan, JobGraphOptions { shuffle_backend })
-        .map(|graph| graph.to_string())
-        .map_err(|e| DataFusionError::External(Box::new(e)))
-}
 
 pub struct LocalJobRunner {
     next_job_id: AtomicU64,
@@ -36,25 +25,12 @@ impl LocalJobRunner {
             stopped: AtomicBool::new(false),
         }
     }
-}
 
-impl Default for LocalJobRunner {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[tonic::async_trait]
-impl JobRunner for LocalJobRunner {
-    fn explain(&self, plan: Arc<dyn ExecutionPlan>) -> Result<String> {
-        explain_job_graph(plan, ShuffleBackendKind::Flight)
-    }
-
-    async fn execute(
+    fn start_job(
         &self,
         ctx: &SessionContext,
         plan: Arc<dyn ExecutionPlan>,
-    ) -> Result<SendableRecordBatchStream> {
+    ) -> Result<(SendableRecordBatchStream, Arc<dyn ExecutionPlan>)> {
         if self.stopped.load(Ordering::Relaxed) {
             return internal_err!("job runner is stopped");
         }
@@ -67,7 +43,62 @@ impl JobRunner for LocalJobRunner {
             operator_id: None,
         };
         let plan = trace_execution_plan(plan, options)?;
-        Ok(execute_stream(plan, ctx.task_ctx())?)
+        let stream = execute_stream(Arc::clone(&plan), ctx.task_ctx())?;
+        Ok((stream, plan))
+    }
+}
+
+impl Default for LocalJobRunner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[tonic::async_trait]
+impl JobRunner for LocalJobRunner {
+    async fn prepare(&self, _plan: Arc<dyn ExecutionPlan>) -> Result<PreparedJob> {
+        Err(DataFusionError::NotImplemented(
+            "distributed explain is not supported in local execution mode".to_string(),
+        ))
+    }
+
+    async fn execute_prepared(
+        &self,
+        _ctx: &SessionContext,
+        _job: PreparedJob,
+    ) -> Result<SendableRecordBatchStream> {
+        Err(DataFusionError::NotImplemented(
+            "prepared distributed jobs are not supported in local execution mode".to_string(),
+        ))
+    }
+
+    async fn discard_prepared(&self, _job: PreparedJob) -> Result<()> {
+        Err(DataFusionError::NotImplemented(
+            "prepared distributed jobs are not supported in local execution mode".to_string(),
+        ))
+    }
+
+    async fn execute(
+        &self,
+        ctx: &SessionContext,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<SendableRecordBatchStream> {
+        let (stream, _) = self.start_job(ctx, plan)?;
+        Ok(stream)
+    }
+
+    async fn execute_for_explain(
+        &self,
+        ctx: &SessionContext,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<(SendableRecordBatchStream, Arc<dyn ExecutionPlan>)> {
+        if self.stopped.load(Ordering::Relaxed) {
+            return internal_err!("job runner is stopped");
+        }
+        let _ = self.next_job_id.fetch_add(1, Ordering::Relaxed);
+        // Keep metrics attached to the exact plan rendered by EXPLAIN ANALYZE.
+        let stream = execute_stream(Arc::clone(&plan), ctx.task_ctx())?;
+        Ok((stream, plan))
     }
 
     async fn stop(&self) {
@@ -77,7 +108,6 @@ impl JobRunner for LocalJobRunner {
 
 pub struct ClusterJobRunner {
     driver: DriverHandle,
-    shuffle_backend: ShuffleBackendKind,
 }
 
 impl ClusterJobRunner {
@@ -86,12 +116,8 @@ impl ClusterJobRunner {
         options: DriverOptions,
         components: DriverComponents,
     ) -> Self {
-        let shuffle_backend = options.shuffle_backend.clone();
         let driver = DriverHandle::new(system.spawn::<DriverActor>((options, components)));
-        Self {
-            driver,
-            shuffle_backend,
-        }
+        Self { driver }
     }
 
     pub fn driver(&self) -> DriverHandle {
@@ -101,20 +127,32 @@ impl ClusterJobRunner {
 
 #[tonic::async_trait]
 impl JobRunner for ClusterJobRunner {
-    fn explain(&self, plan: Arc<dyn ExecutionPlan>) -> Result<String> {
-        explain_job_graph(plan, self.shuffle_backend.clone())
-    }
-
-    /// Executes a plan on the cluster. This is where the cool stuff happens.
-    async fn execute(
-        &self,
-        ctx: &SessionContext,
-        plan: Arc<dyn ExecutionPlan>,
-    ) -> Result<SendableRecordBatchStream> {
+    async fn prepare(&self, plan: Arc<dyn ExecutionPlan>) -> Result<PreparedJob> {
         let (tx, rx) = oneshot::channel();
         self.driver
-            .send(DriverMessage::ExecuteJob {
-                plan,
+            .send(DriverMessage::PrepareJob { plan, result: tx })
+            .await
+            .map_err(|e| internal_datafusion_err!("{e}"))?;
+        let (job_id, distributed_plan) = rx
+            .await
+            .map_err(|e| internal_datafusion_err!("failed to prepare job: {e}"))?
+            .map_err(|e| internal_datafusion_err!("{e}"))?;
+        Ok(PreparedJob::new(
+            PreparedJobHandle::new(job_id.into()),
+            distributed_plan,
+        ))
+    }
+
+    async fn execute_prepared(
+        &self,
+        ctx: &SessionContext,
+        job: PreparedJob,
+    ) -> Result<SendableRecordBatchStream> {
+        let (handle, _) = job.into_parts();
+        let (tx, rx) = oneshot::channel();
+        self.driver
+            .send(DriverMessage::ExecutePreparedJob {
+                job_id: handle.value().into(),
                 context: ctx.task_ctx(),
                 result: tx,
             })
@@ -123,6 +161,31 @@ impl JobRunner for ClusterJobRunner {
         rx.await
             .map_err(|e| internal_datafusion_err!("failed to create job stream: {e}"))?
             .map_err(|e| internal_datafusion_err!("{e}"))
+    }
+
+    async fn discard_prepared(&self, job: PreparedJob) -> Result<()> {
+        let (handle, _) = job.into_parts();
+        let (tx, rx) = oneshot::channel();
+        self.driver
+            .send(DriverMessage::DiscardPreparedJob {
+                job_id: handle.value().into(),
+                result: tx,
+            })
+            .await
+            .map_err(|e| internal_datafusion_err!("{e}"))?;
+        rx.await
+            .map_err(|e| internal_datafusion_err!("failed to discard prepared job: {e}"))?
+            .map_err(|e| internal_datafusion_err!("{e}"))
+    }
+
+    /// Executes a plan on the cluster. This is where the cool stuff happens.
+    async fn execute(
+        &self,
+        ctx: &SessionContext,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<SendableRecordBatchStream> {
+        let job = self.prepare(plan).await?;
+        self.execute_prepared(ctx, job).await
     }
 
     async fn stop(&self) {

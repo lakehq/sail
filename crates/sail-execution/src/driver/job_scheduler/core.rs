@@ -9,6 +9,7 @@ use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use indexmap::{IndexMap, IndexSet};
 use log::{debug, warn};
 use sail_common::actor::ActorContext;
+use sail_common::diagnostics::DistributedPlanV1;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
 use sail_telemetry::system_event::SystemEvent;
@@ -40,16 +41,13 @@ impl JobScheduler {
         self.job_id_generator.generate()
     }
 
-    pub fn accept_job(
+    pub fn prepare_job(
         &mut self,
-        ctx: &mut ActorContext<DriverActor>,
         plan: Arc<dyn ExecutionPlan>,
-        context: Arc<TaskContext>,
-    ) -> ExecutionResult<(JobId, SendableRecordBatchStream)> {
+    ) -> ExecutionResult<(JobId, DistributedPlanV1)> {
         let job_id = self.next_job_id()?;
-
         debug!(
-            "job {job_id} execution plan\n{}",
+            "prepared job {job_id} execution plan\n{}",
             DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
         );
         let graph = JobGraph::try_new(
@@ -58,6 +56,30 @@ impl JobScheduler {
                 shuffle_backend: self.options.shuffle_backend.clone(),
             },
         )?;
+        debug!("prepared job {job_id} job graph \n{graph}");
+        let distributed_plan = graph.distributed_plan(self.options.execution_mode);
+        self.prepared_jobs.insert(job_id, graph);
+        Ok((job_id, distributed_plan))
+    }
+
+    pub fn discard_prepared_job(&mut self, job_id: JobId) -> ExecutionResult<()> {
+        self.prepared_jobs
+            .shift_remove(&job_id)
+            .map(|_| ())
+            .ok_or_else(|| {
+                ExecutionError::InvalidArgument(format!("prepared job {job_id} not found"))
+            })
+    }
+
+    pub fn accept_prepared_job(
+        &mut self,
+        ctx: &mut ActorContext<DriverActor>,
+        job_id: JobId,
+        context: Arc<TaskContext>,
+    ) -> ExecutionResult<(JobId, SendableRecordBatchStream)> {
+        let graph = self.prepared_jobs.shift_remove(&job_id).ok_or_else(|| {
+            ExecutionError::InvalidArgument(format!("prepared job {job_id} not found"))
+        })?;
         debug!("job {job_id} job graph \n{graph}");
 
         let (output, stream) = build_job_output(ctx, job_id, graph.schema().clone());
@@ -668,6 +690,7 @@ impl JobScheduler {
     }
 
     pub fn stop(&mut self) {
+        self.prepared_jobs.clear();
         let event_reporter = self.event_reporter.clone();
         let session_id = self.options.session_id.clone();
         for (job_id, job) in self.jobs.iter_mut() {
@@ -729,6 +752,51 @@ impl JobScheduler {
             .get(stage)
             .and_then(|stage| stage.tasks.get(partition))
             .and_then(|task| task.attempts.split_last().map(|(_, head)| head.len()))
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::Schema;
+    use datafusion::physical_plan::ExecutionPlan;
+    use datafusion::physical_plan::empty::EmptyExec;
+    use opentelemetry::logs::LoggerProvider;
+    use opentelemetry_sdk::logs::SdkLoggerProvider;
+    use sail_common::diagnostics::DistributedExecutionMode;
+    use sail_telemetry::system_event::SystemEventReporter;
+
+    use super::*;
+    use crate::driver::job_scheduler::JobSchedulerOptions;
+    use crate::shuffle::ShuffleBackendKind;
+
+    #[test]
+    fn prepared_snapshot_matches_the_graph_owned_by_the_scheduler() {
+        let provider = SdkLoggerProvider::builder().build();
+        let reporter = SystemEventReporter::new(provider.logger("test"));
+        let mut scheduler = JobScheduler::new(
+            JobSchedulerOptions::for_test(
+                DistributedExecutionMode::LocalCluster,
+                ShuffleBackendKind::Flight,
+            ),
+            reporter,
+        );
+        let plan = Arc::new(EmptyExec::new(Arc::new(Schema::empty()))) as Arc<dyn ExecutionPlan>;
+
+        let (job_id, snapshot) = scheduler.prepare_job(plan).unwrap();
+        let owned_graph = scheduler.prepared_jobs.get(&job_id).unwrap();
+
+        assert_eq!(
+            snapshot,
+            owned_graph.distributed_plan(DistributedExecutionMode::LocalCluster)
+        );
+        assert_eq!(scheduler.prepared_jobs.len(), 1);
+
+        scheduler.discard_prepared_job(job_id).unwrap();
+        assert!(scheduler.prepared_jobs.is_empty());
+        assert!(scheduler.discard_prepared_job(job_id).is_err());
     }
 }
 

@@ -8,6 +8,7 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::ExecutionPlan;
 use sail_celeborn::lifecycle::LifecycleManagerActor;
 use sail_common::actor::ActorHandle;
+use sail_common::diagnostics::DistributedPlanV1;
 use sail_common::telemetry::{SpanAssociation, SpanAttribute};
 use sail_common_datafusion::error::CommonErrorCause;
 use tokio::sync::oneshot;
@@ -44,10 +45,18 @@ pub enum DriverMessage {
         worker_id: WorkerId,
         instant: Instant,
     },
-    ExecuteJob {
+    PrepareJob {
         plan: Arc<dyn ExecutionPlan>,
+        result: oneshot::Sender<ExecutionResult<(JobId, DistributedPlanV1)>>,
+    },
+    ExecutePreparedJob {
+        job_id: JobId,
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
+    },
+    DiscardPreparedJob {
+        job_id: JobId,
+        result: oneshot::Sender<ExecutionResult<()>>,
     },
     CleanUpJob {
         job_id: JobId,
@@ -134,7 +143,9 @@ impl SpanAssociation for DriverMessage {
             DriverMessage::ProbePendingWorker { .. } => "ProbePendingWorker",
             DriverMessage::ProbeIdleWorker { .. } => "ProbeIdleWorker",
             DriverMessage::ProbeLostWorker { .. } => "ProbeLostWorker",
-            DriverMessage::ExecuteJob { .. } => "ExecuteJob",
+            DriverMessage::PrepareJob { .. } => "PrepareJob",
+            DriverMessage::ExecutePreparedJob { .. } => "ExecutePreparedJob",
+            DriverMessage::DiscardPreparedJob { .. } => "DiscardPreparedJob",
             DriverMessage::CleanUpJob { .. } => "CleanUpJob",
             DriverMessage::UpdateTask { .. } => "UpdateTask",
             DriverMessage::ProbePendingTask { .. } => "ProbePendingTask",
@@ -176,11 +187,15 @@ impl SpanAssociation for DriverMessage {
             } => {
                 p.push((SpanAttribute::CLUSTER_WORKER_ID, worker_id.to_string()));
             }
-            DriverMessage::ExecuteJob {
-                plan: _,
+            DriverMessage::PrepareJob { plan: _, result: _ } => {}
+            DriverMessage::ExecutePreparedJob {
+                job_id,
                 context: _,
                 result: _,
-            } => {}
+            }
+            | DriverMessage::DiscardPreparedJob { job_id, result: _ } => {
+                p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+            }
             DriverMessage::CleanUpJob { job_id } => {
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
             }

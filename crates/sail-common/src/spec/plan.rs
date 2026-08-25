@@ -2,6 +2,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
+use crate::diagnostics::ExplainFormat;
 use crate::error::CommonError;
 use crate::spec::data_type::Schema;
 use crate::spec::expression::{
@@ -456,7 +457,7 @@ pub enum CommandNode {
     WriteStream(WriteStream),
     Explain {
         // TODO: Support stringified_plans
-        mode: ExplainMode,
+        request: ExplainRequest,
         input: Box<Plan>,
     },
     InsertInto {
@@ -1357,7 +1358,7 @@ pub enum TableRowFormat {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum ExplainMode {
+pub enum SparkExplainMode {
     Unspecified,
     Simple,
     Analyze,
@@ -1366,6 +1367,26 @@ pub enum ExplainMode {
     Codegen,
     Cost,
     Formatted,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum ExplainRequest {
+    Spark {
+        mode: SparkExplainMode,
+    },
+    Sail {
+        kind: SailExplainKind,
+        format: ExplainFormat,
+        analyze: bool,
+        verbose: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SailExplainKind {
+    Distributed,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
