@@ -6,7 +6,8 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
   # assert an error (the message is Sail's own reject text where the plan-builder guard
   # fires). Both modes are pinned because Spark's numeric/string coercion is ANSI-dependent.
   # `@sail-bug` marks cells where Sail still diverges; `@spark-4` gates the untyped-NULL-pair
-  # rows (`NULL op NULL` resolves to double only on 4.x).
+  # rows (`NULL op NULL` resolves to double only on 4.x). Interval `typeof` renders identically
+  # on 3.5.9 and 4.2 (measured), so interval rows need no version gate.
 
 # ============================ ANSI OFF ============================
 

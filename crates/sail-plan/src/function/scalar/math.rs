@@ -41,6 +41,7 @@ use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, Spar
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
     FunctionContextInput, ScalarFunction, ScalarFunctionInput, spark_string_to_numeric,
+    spark_type_name,
 };
 use crate::function::decimal::{
     spark_decimal_add_diverges, spark_decimal_add_type, spark_decimal_divide_type,
@@ -79,7 +80,7 @@ fn spark_additive_operands(
     );
     match operands {
         (Ok(DataType::Decimal128(p1, s1)), Ok(DataType::Decimal128(p2, s2)))
-            if spark_decimal_add_diverges(p1, s1, p2, s2, allow_precision_loss) =>
+            if spark_decimal_add_diverges(p1, s1, p2, s2) =>
         {
             // Widen the operands to Decimal256 BEFORE adding (mirroring the capped multiply
             // path). Spark reduces the result scale via `adjustPrecisionScale`, but the native
@@ -467,7 +468,9 @@ fn narrow_decimal_by_ansi(expr: Expr, precision: u8, scale: i8, ansi_mode: bool)
 /// yet); the shared `cannot resolve` prefix is what the `.feature` reject scenarios assert.
 fn arithmetic_operand_error(op: char, left: &DataType, right: &DataType) -> PlanError {
     PlanError::invalid(format!(
-        "cannot resolve arithmetic '{op}' with operand types {left} and {right}"
+        "cannot resolve arithmetic '{op}' with operand types {} and {}",
+        spark_type_name(left),
+        spark_type_name(right)
     ))
 }
 
@@ -1140,16 +1143,12 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
     // fail analysis (a string paired with a numeric still coerces, and non-ANSI casts both to
     // DOUBLE). Sail's `/` otherwise coerces the string(s) to DOUBLE and computes, where
     // `+`/`-`/`*` already reject the pair — reject it here too so divide matches Spark.
-    let is_string_or_null =
-        |data_type: &DataType| data_type.is_string() || matches!(data_type, DataType::Null);
     if ansi_mode
         && let (Ok(dividend_type), Ok(divisor_type)) = (
             dividend.get_type(function_context.schema),
             divisor.get_type(function_context.schema),
         )
-        && (dividend_type.is_string() || divisor_type.is_string())
-        && is_string_or_null(&dividend_type)
-        && is_string_or_null(&divisor_type)
+        && unanchored_string_pair(operand_role(&dividend_type), operand_role(&divisor_type))
     {
         return Err(arithmetic_operand_error('/', &dividend_type, &divisor_type));
     }
@@ -1599,12 +1598,8 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
         dividend.get_type(function_context.schema),
         divisor.get_type(function_context.schema),
     ) {
-        let is_string_or_null =
-            |data_type: &DataType| data_type.is_string() || matches!(data_type, DataType::Null);
         let string_rejected = ansi_mode
-            && (dividend_type.is_string() || divisor_type.is_string())
-            && is_string_or_null(&dividend_type)
-            && is_string_or_null(&divisor_type);
+            && unanchored_string_pair(operand_role(&dividend_type), operand_role(&divisor_type));
         if string_rejected
             || rejects_as_divide_divisor(&dividend_type)
             || rejects_as_divide_divisor(&divisor_type)

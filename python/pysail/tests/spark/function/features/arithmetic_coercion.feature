@@ -597,22 +597,19 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         """
       Then query error ARITHMETIC_OVERFLOW
 
-  Rule: A capped decimal + or - overflows to NULL under ANSI off (known gap)
-    # Spark wraps a capped decimal result in CheckOverflow(nullOnOverflow = !ansi), so an
-    # overflowing sum is NULL under ANSI off. Arrow's checked kernel raises in both modes,
-    # so Sail errors instead. `*` already agrees, because its precision-38 capping path
-    # narrows with try_cast; `+`/`-` have no such path.
+  Rule: A capped decimal + or - overflows to NULL under ANSI off and raises under ANSI on
+    # Spark wraps a capped decimal result in CheckOverflow(nullOnOverflow = !ansi): an
+    # overflowing sum/difference is NULL under ANSI off and raises under ANSI on. Under ANSI
+    # off Sail now matches — the `+`/`-` retype path widens to Decimal256 and narrows with
+    # try_cast (like the capped `*`), so the overflow becomes NULL instead of an Arrow error.
     #
-    # Deliberately left to the custom PhysicalExpr follow-up rather than fixed here:
-    # overflow on the native BinaryExpr is scoped as future work, with this PR limited to
-    # type coercion.
-
-    # Both engines raise, so the behaviour agrees; only the error class diverges. Spark's
-    # message is "... cannot be represented as Decimal(38, 0)" (class NUMERIC_VALUE_OUT_OF_RANGE),
-    # which does not contain the word "overflow" — Sail reports its own Arrow overflow error.
-    # We assert Spark's class so this xfails on Sail; a lax `(?i)overflow` pattern would
-    # instead pass against Spark for the wrong reason (the word appears only in the JVM
-    # stack trace, not in the error message).
+    # Under ANSI ON both engines raise, so the behaviour agrees; only the error class diverges.
+    # Spark's message is "... cannot be represented as Decimal(38, 0)" (class
+    # NUMERIC_VALUE_OUT_OF_RANGE), which does not contain the word "overflow" — Sail reports its
+    # own Arrow overflow error. We assert Spark's class so the ANSI-on rows xfail on Sail; a lax
+    # `(?i)overflow` pattern would instead pass against Spark for the wrong reason (the word
+    # appears only in the JVM stack trace, not in the error message). The remaining error-class
+    # divergence is deferred to the Spark-error-classes follow-up.
     @sail-bug
     Scenario: a capped decimal sum that overflows raises under ANSI on
       Given config spark.sql.ansi.enabled = true
@@ -622,7 +619,6 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         """
       Then query error NUMERIC_VALUE_OUT_OF_RANGE
 
-    @sail-bug
     Scenario: a capped decimal sum that overflows is NULL under ANSI off
       Given config spark.sql.ansi.enabled = false
       When query
@@ -642,7 +638,6 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         """
       Then query error NUMERIC_VALUE_OUT_OF_RANGE
 
-    @sail-bug
     Scenario: a capped decimal difference that overflows is NULL under ANSI off
       Given config spark.sql.ansi.enabled = false
       When query

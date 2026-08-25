@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, IntervalUnit};
 use datafusion::logical_expr::expr::NullTreatment;
 use datafusion::prelude::SessionContext;
 use datafusion_common::tree_node::TreeNode;
@@ -153,7 +153,7 @@ fn spark_cast_raise_on_empty(trimmed: expr::Expr, target: DataType) -> expr::Exp
 }
 
 /// The Spark name of a numeric type, for error messages that quote it.
-fn spark_type_name(data_type: &DataType) -> String {
+pub(crate) fn spark_type_name(data_type: &DataType) -> String {
     match data_type {
         DataType::Decimal32(precision, scale)
         | DataType::Decimal64(precision, scale)
@@ -175,6 +175,21 @@ fn spark_type_name(data_type: &DataType) -> String {
         DataType::UInt32 => "UNSIGNED INT".to_string(),
         DataType::UInt64 => "UNSIGNED BIGINT".to_string(),
         DataType::Float16 => "HALF FLOAT".to_string(),
+        // The non-numeric types the arithmetic operand-reject error surfaces, named the Spark
+        // way rather than leaking Arrow's `Debug` (`Utf8`, `Boolean`, `Interval(...)`).
+        DataType::Boolean => "BOOLEAN".to_string(),
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => "STRING".to_string(),
+        DataType::Binary
+        | DataType::LargeBinary
+        | DataType::BinaryView
+        | DataType::FixedSizeBinary(_) => "BINARY".to_string(),
+        DataType::Date32 | DataType::Date64 => "DATE".to_string(),
+        DataType::Timestamp(_, Some(_)) => "TIMESTAMP".to_string(),
+        DataType::Timestamp(_, None) => "TIMESTAMP_NTZ".to_string(),
+        DataType::Time32(_) | DataType::Time64(_) => "TIME".to_string(),
+        DataType::Interval(IntervalUnit::YearMonth) => "INTERVAL YEAR TO MONTH".to_string(),
+        DataType::Interval(_) | DataType::Duration(_) => "INTERVAL DAY TO SECOND".to_string(),
+        DataType::Null => "VOID".to_string(),
         other => format!("{other:?}"),
     }
 }

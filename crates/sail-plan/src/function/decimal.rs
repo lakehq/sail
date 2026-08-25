@@ -29,6 +29,11 @@ fn adjust_precision_scale(precision: i32, scale: i32) -> (u8, i8) {
     let max_precision = DECIMAL128_MAX_PRECISION as i32;
     if precision <= max_precision {
         (precision as u8, scale as i8)
+    } else if scale < 0 {
+        // Spark keeps a negative scale unchanged here (DecimalType.scala:182), reachable only
+        // with `spark.sql.legacy.allowNegativeScaleOfDecimal`. Mirror it exactly for faithfulness;
+        // the `+ - * %` formulas keep `scale = max(s1, s2) >= 0`, so this is not hit in practice.
+        (DECIMAL128_MAX_PRECISION, scale as i8)
     } else {
         let int_digits = precision - scale;
         let min_scale = scale.min(SPARK_MINIMUM_ADJUSTED_SCALE);
@@ -104,23 +109,19 @@ pub fn spark_decimal_add_type(
     cap(precision, scale, allow_precision_loss)
 }
 
-/// Whether Spark's `+`/`-` result type actually differs from Arrow's for these decimals.
+/// Whether Spark's `+`/`-` needs the wide Decimal256 retype path instead of Arrow's native
+/// i128 add/sub kernel.
 ///
-/// Arrow caps the same precision with a plain `min(_, 38)` that keeps the scale — exactly
-/// Spark's [`bounded`]. So the two agree whenever the precision fits in 38, AND whenever
-/// `allow_precision_loss` is false (both use `bounded`), AND when `adjustPrecisionScale`
-/// happens to leave the scale untouched (e.g. `decimal(38,2) + decimal(38,2)`). Re-typing
-/// only when they genuinely differ avoids a needless per-row `round`+`cast` on the common
-/// max-precision shapes.
-pub fn spark_decimal_add_diverges(
-    p1: u8,
-    s1: i8,
-    p2: u8,
-    s2: i8,
-    allow_precision_loss: bool,
-) -> bool {
-    let (precision, scale) = spark_add_precision_scale(p1, s1, p2, s2);
-    cap(precision, scale, allow_precision_loss) != bounded(precision, scale)
+/// The gate is "does the exact sum need more than 38 digits", mirroring the capped multiply
+/// gate — NOT the narrower "does Spark's result TYPE differ from Arrow's". Once the precision
+/// exceeds 38, Arrow caps it and the native i128 kernel RAISES on a sum that no longer fits,
+/// while Spark yields NULL under ANSI off (`CheckOverflow`) and represents the value when the
+/// capped type fits. This holds even when the two result TYPES agree — a scale-unchanged
+/// overflow like `decimal(38,0) + decimal(38,0)` — and regardless of `allowPrecisionLoss`
+/// (Spark's `bounded` still overflows to NULL), so the gate cannot be the old `cap != bounded`.
+/// Below precision 38 nothing is capped, the sum is exact, and it stays on the native kernel.
+pub fn spark_decimal_add_diverges(p1: u8, s1: i8, p2: u8, s2: i8) -> bool {
+    spark_add_precision_scale(p1, s1, p2, s2).0 > DECIMAL128_MAX_PRECISION as i32
 }
 
 /// Result `(precision, scale)` of Spark `DECIMAL(p1,s1) % DECIMAL(p2,s2)` — also the
