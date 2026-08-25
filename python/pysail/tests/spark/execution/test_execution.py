@@ -113,7 +113,7 @@ def test_top_k_dynamic_filter_pushdown_is_enabled_in_cluster_mode(spark, tmp_pat
     path = str(tmp_path / "dynamic_filter_top_k")
     spark.range(100, numPartitions=4).write.parquet(path)
 
-    query = spark.read.parquet(path).filter(F.col("id") >= 10).orderBy(F.col("id").desc()).limit(5)
+    query = spark.read.parquet(path).filter(F.col("id") >= 10).orderBy(F.col("id").desc()).limit(5)  # noqa: PLR2004
     assert "DynamicFilter" in query._explain_string()  # noqa: SLF001
     assert [row.id for row in query.collect()] == [99, 98, 97, 96, 95]
 
@@ -122,9 +122,7 @@ def test_top_k_dynamic_filter_pushdown_is_enabled_in_cluster_mode(spark, tmp_pat
 def test_join_dynamic_filter_is_disabled_in_cluster_mode(spark, tmp_path):
     build_path = str(tmp_path / "dynamic_filter_build")
     probe_path = str(tmp_path / "dynamic_filter_probe")
-    spark.createDataFrame([(1, "one"), (3, "three")], "id LONG, label STRING").coalesce(1).write.parquet(
-        build_path
-    )
+    spark.createDataFrame([(1, "one"), (3, "three")], "id LONG, label STRING").coalesce(1).write.parquet(build_path)
     spark.range(100, numPartitions=4).write.parquet(probe_path)
 
     build = spark.read.parquet(build_path)
