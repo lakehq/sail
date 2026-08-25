@@ -2233,6 +2233,12 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | an integer modulo a year-month interval       | CAST(3 AS INT) % INTERVAL '2' MONTH                                |
         | binary modulo an integer                      | CAST('6' AS BINARY) % CAST(3 AS INT)                              |
         | a boolean modulo an untyped null              | true % NULL                                                       |
+        | a boolean plus an integer                     | true + CAST(3 AS INT)                                             |
+        | an integer plus a boolean                     | CAST(3 AS INT) + true                                             |
+        | a binary times an integer                     | CAST('6' AS BINARY) * CAST(3 AS INT)                             |
+        | a boolean minus an integer                    | true - CAST(3 AS INT)                                             |
+        | a date plus a date                            | DATE'2024-01-15' + DATE'2024-01-16'                               |
+        | a timestamp times an integer                  | TIMESTAMP'2024-01-15 12:00:00' * CAST(3 AS INT)                   |
 
   Rule: Modulo rejects a non-numeric operand under both ANSI modes
     # Spark's `%` (`Remainder`, `inputType = NumericType`) rejects a non-numeric operand at
