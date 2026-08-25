@@ -1686,6 +1686,33 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | t             | r        |
         | decimal(38,6) | 3.750000 |
 
+  Rule: Decimal division stays on the cheaper i128 kernel when the intermediate fits
+    # The `/` decimal path gates its i256 widening: when the rescaled numerator provably fits
+    # 38 digits it computes the quotient in i128 (2-4x cheaper per row), only widening to i256
+    # for the wide cases (the D1 gap below). Both are value-identical to Spark's BigDecimal
+    # HALF_UP; these pin the i128 fast-path across the boundary so a broken gate (an i128
+    # overflow) fails a test — the `two thirds` row also discriminates HALF_UP from half-even
+    # (0.666...667, not ...666). Verified against Spark 4.2.0.
+
+    Scenario Outline: i128 decimal division: <case>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT typeof(<expr>) AS t, CAST((<expr>) AS STRING) AS r
+        """
+      Then query result
+        | t   | r   |
+        | <t> | <r> |
+
+      Examples:
+        | case                         | expr                                                                             | t              | r                    |
+        | one third rounds HALF_UP     | CAST(1 AS DECIMAL(10,2)) / CAST(3 AS DECIMAL(10,2))                               | decimal(23,13) | 0.3333333333333      |
+        | two thirds rounds HALF_UP    | CAST(2 AS DECIMAL(10,2)) / CAST(3 AS DECIMAL(10,2))                               | decimal(23,13) | 0.6666666666667      |
+        | a narrow ratio               | CAST('12345.67' AS DECIMAL(10,2)) / CAST('3.14' AS DECIMAL(10,2))                 | decimal(23,13) | 3931.7420382165605   |
+        | a scale-10 self-division     | CAST('55.1234567891' AS DECIMAL(20,10)) / CAST('55.1234567891' AS DECIMAL(20,10)) | decimal(38,18) | 1.000000000000000000 |
+        | a near-boundary division     | CAST('7.123456789012345678' AS DECIMAL(38,18)) / CAST('3.5' AS DECIMAL(38,18))    | decimal(38,6)  | 2.035273             |
+        | a wide dividend narrow ratio | CAST('99.1234567891' AS DECIMAL(38,10)) / CAST('7' AS DECIMAL(38,10))             | decimal(38,6)  | 14.160494            |
+
   Rule: A full-scale decimal(38,38) division overflows the intermediate (known gap)
     # Spark computes decimal division in BigDecimal at scale 39, so its intermediate is
     # unbounded in practice. Sail rewrites the division over a widened i256, but Arrow's

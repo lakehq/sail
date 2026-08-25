@@ -162,12 +162,12 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             left.get_type(function_context.schema),
             right.get_type(function_context.schema),
         );
-        if let (Ok(left_type), Ok(right_type)) = (&left_type, &right_type) {
-            if rejects_additive_or_multiply(false, left_type, right_type) {
-                return Err(PlanError::invalid(format!(
-                    "cannot resolve arithmetic '+' with operand types {left_type} and {right_type}"
-                )));
-            }
+        if let (Ok(left_type), Ok(right_type)) = (&left_type, &right_type)
+            && rejects_additive_or_multiply(false, left_type, right_type)
+        {
+            return Err(PlanError::invalid(format!(
+                "cannot resolve arithmetic '+' with operand types {left_type} and {right_type}"
+            )));
         }
         Ok(match (left_type, right_type) {
             (
@@ -254,12 +254,12 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             left.get_type(function_context.schema),
             right.get_type(function_context.schema),
         );
-        if let (Ok(left_type), Ok(right_type)) = (&left_type, &right_type) {
-            if rejects_additive_or_multiply(false, left_type, right_type) {
-                return Err(PlanError::invalid(format!(
-                    "cannot resolve arithmetic '-' with operand types {left_type} and {right_type}"
-                )));
-            }
+        if let (Ok(left_type), Ok(right_type)) = (&left_type, &right_type)
+            && rejects_additive_or_multiply(false, left_type, right_type)
+        {
+            return Err(PlanError::invalid(format!(
+                "cannot resolve arithmetic '-' with operand types {left_type} and {right_type}"
+            )));
         }
         Ok(match (left_type, right_type) {
             (Ok(DataType::Date32), Ok(DataType::Duration(TimeUnit::Microsecond))) => {
@@ -316,12 +316,12 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
         left.get_type(function_context.schema),
         right.get_type(function_context.schema),
     );
-    if let (Ok(left_type), Ok(right_type)) = (&left_type, &right_type) {
-        if rejects_additive_or_multiply(true, left_type, right_type) {
-            return Err(PlanError::invalid(format!(
-                "cannot resolve arithmetic '*' with operand types {left_type} and {right_type}"
-            )));
-        }
+    if let (Ok(left_type), Ok(right_type)) = (&left_type, &right_type)
+        && rejects_additive_or_multiply(true, left_type, right_type)
+    {
+        return Err(PlanError::invalid(format!(
+            "cannot resolve arithmetic '*' with operand types {left_type} and {right_type}"
+        )));
     }
     Ok(match (left_type, right_type) {
         // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
@@ -978,22 +978,20 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
     // fail analysis (a string paired with a numeric still coerces, and non-ANSI casts both to
     // DOUBLE). Sail's `/` otherwise coerces the string(s) to DOUBLE and computes, where
     // `+`/`-`/`*` already reject the pair — reject it here too so divide matches Spark.
-    if ansi_mode {
-        if let (Ok(dividend_type), Ok(divisor_type)) = (
+    let is_string_or_null =
+        |data_type: &DataType| data_type.is_string() || matches!(data_type, DataType::Null);
+    if ansi_mode
+        && let (Ok(dividend_type), Ok(divisor_type)) = (
             dividend.get_type(function_context.schema),
             divisor.get_type(function_context.schema),
-        ) {
-            let is_string_or_null =
-                |data_type: &DataType| data_type.is_string() || matches!(data_type, DataType::Null);
-            if (dividend_type.is_string() || divisor_type.is_string())
-                && is_string_or_null(&dividend_type)
-                && is_string_or_null(&divisor_type)
-            {
-                return Err(PlanError::invalid(format!(
-                    "cannot resolve arithmetic '/' with operand types {dividend_type} and {divisor_type}"
-                )));
-            }
-        }
+        )
+        && (dividend_type.is_string() || divisor_type.is_string())
+        && is_string_or_null(&dividend_type)
+        && is_string_or_null(&divisor_type)
+    {
+        return Err(PlanError::invalid(format!(
+            "cannot resolve arithmetic '/' with operand types {dividend_type} and {divisor_type}"
+        )));
     }
 
     // DataFusion scales an interval divisor by integers and floats but not by a decimal
@@ -1061,12 +1059,12 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
     // as its raw nanos) and compute a meaningless number. Reject those pairs here so the
     // failure is a plan-time error rather than a silent wrong value. Strings are already
     // coerced to a numeric type upstream, so they never reach here as `Utf8`.
-    if let (Ok(dividend_type), Ok(divisor_type)) = (&dividend_type, &divisor_type) {
-        if rejects_as_divide_dividend(dividend_type) || rejects_as_divide_divisor(divisor_type) {
-            return Err(PlanError::invalid(format!(
-                "cannot resolve arithmetic '/' with operand types {dividend_type} and {divisor_type}"
-            )));
-        }
+    if let (Ok(dividend_type), Ok(divisor_type)) = (&dividend_type, &divisor_type)
+        && (rejects_as_divide_dividend(dividend_type) || rejects_as_divide_divisor(divisor_type))
+    {
+        return Err(PlanError::invalid(format!(
+            "cannot resolve arithmetic '/' with operand types {dividend_type} and {divisor_type}"
+        )));
     }
 
     // Apply runtime zero-divisor guard to the divisor before building the division expression.
@@ -1099,14 +1097,14 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
         // follow-up.
         // https://github.com/apache/arrow-rs/blob/58.3.0/arrow-arith/src/numeric.rs (Op::Div)
         //
-        // Performance: this path is heavier than the previous native i128 divide (it
-        // widens to i256 and adds a HALF_UP `round` pass). That is the inherent cost
-        // of Spark's decimal-division semantics — Spark itself computes it in
-        // `BigDecimal`, and no pure-`Expr` alternative is both correct and cheaper.
-        // It stays fully vectorized (native Arrow kernels, no UDF dispatch), and only
-        // decimal/decimal division pays it; `+ - * %`, integer and float division are
-        // unchanged. A future optimization could keep the intermediate in i128 when it
-        // provably cannot overflow, instead of always widening to i256.
+        // Performance: this path adds a HALF_UP `round` pass and, when needed, an i256
+        // intermediate. That is the inherent cost of Spark's decimal-division semantics —
+        // Spark itself computes it in `BigDecimal`, and no pure-`Expr` alternative is both
+        // correct and cheaper. It stays fully vectorized (native Arrow kernels, no UDF
+        // dispatch), and only decimal/decimal division pays it; `+ - * %`, integer and float
+        // division are unchanged. The i256 widening is GATED: the intermediate stays in the
+        // cheaper i128 kernel whenever the rescaled numerator provably fits 38 digits (the
+        // common narrow-decimal case), and only widens to i256 when it does not.
         (Ok(DataType::Decimal128(p1, s1)), Ok(DataType::Decimal128(p2, s2))) => {
             let (result_precision, result_scale) =
                 spark_decimal_divide_type(*p1, *s1, *p2, *s2, allow_precision_loss);
@@ -1115,10 +1113,28 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
             // truncating divide: the digit at `result_scale + 1` survives truncation, so
             // it decides the carry the same way the exact quotient would.
             let dividend_scale = (*s1).max(result_scale - (ARROW_DIV_SCALE_INCREMENT - 1));
-            let quotient = cast(
-                dividend,
-                DataType::Decimal256(DECIMAL256_MAX_PRECISION, dividend_scale),
-            ) / cast(divisor, DataType::Decimal256(DECIMAL256_MAX_PRECISION, *s2));
+            // Arrow's decimal `div` rescales the numerator to
+            // `(p1 - s1) + dividend_scale + ARROW_DIV_SCALE_INCREMENT + s2` digits. When that
+            // fits Decimal128 the quotient is computed in i128 (2-4x cheaper per row);
+            // otherwise it widens to i256. The two are value-identical whenever the
+            // intermediate does not overflow, so this is a pure performance gate.
+            let intermediate_digits = i32::from(*p1) - i32::from(*s1)
+                + i32::from(dividend_scale)
+                + i32::from(ARROW_DIV_SCALE_INCREMENT)
+                + i32::from(*s2);
+            let (dividend_target, divisor_target) =
+                if intermediate_digits <= i32::from(DECIMAL128_MAX_PRECISION) {
+                    (
+                        DataType::Decimal128(DECIMAL128_MAX_PRECISION, dividend_scale),
+                        DataType::Decimal128(DECIMAL128_MAX_PRECISION, *s2),
+                    )
+                } else {
+                    (
+                        DataType::Decimal256(DECIMAL256_MAX_PRECISION, dividend_scale),
+                        DataType::Decimal256(DECIMAL256_MAX_PRECISION, *s2),
+                    )
+                };
+            let quotient = cast(dividend, dividend_target) / cast(divisor, divisor_target);
             let rounded = expr_fn::round(vec![quotient, lit(result_scale as i32)]);
             narrow_decimal_by_ansi(rounded, result_precision, result_scale, ansi_mode)
         }
