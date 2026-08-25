@@ -479,6 +479,23 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | r |
         | 3 |
 
+    Scenario: a capped sum that overflows only at the native scale keeps Spark's value
+      # A native i128 add at the bounded scale 10 would overflow (1.75e28 needs more than i128
+      # holds), but Spark's adjusted type decimal(38,6) represents the sum — so the `+`/`-`
+      # retype path widens to Decimal256 before adding (like the capped multiply) and both
+      # engines return the VALUE.
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT typeof(CAST(8750000000000000000000000000 AS DECIMAL(38,10))
+                      + CAST(8750000000000000000000000000 AS DECIMAL(38,2))) AS t,
+               CAST(8750000000000000000000000000 AS DECIMAL(38,10))
+               + CAST(8750000000000000000000000000 AS DECIMAL(38,2)) AS r
+        """
+      Then query result
+        | t             | r                                    |
+        | decimal(38,6) | 17500000000000000000000000000.000000 |
+
   Rule: Integer overflow wraps under ANSI off and raises under ANSI on (known gap)
     # ANSI off agrees: both engines wrap, which is Spark's documented behaviour.
     # ANSI on does not: Spark raises, while Sail's native BinaryExpr keeps wrapping and
@@ -635,25 +652,6 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
       Then query result
         | r    |
         | NULL |
-
-    @sail-bug
-    Scenario: a capped sum that overflows only at the native scale keeps Spark's value
-      # The window between the two overflow behaviours: the native kernel adds at the
-      # bounded scale 10, where 1.75e28 needs more than i128 holds, so Sail raises —
-      # but Spark's adjusted type decimal(38,6) represents the sum, so Spark returns it.
-      # Belongs to the same custom PhysicalExpr follow-up as the scenarios above; this
-      # subcase is pinned separately because Spark yields a VALUE here, not NULL/error.
-      Given config spark.sql.ansi.enabled = false
-      When query
-        """
-        SELECT typeof(CAST(8750000000000000000000000000 AS DECIMAL(38,10))
-                      + CAST(8750000000000000000000000000 AS DECIMAL(38,2))) AS t,
-               CAST(8750000000000000000000000000 AS DECIMAL(38,10))
-               + CAST(8750000000000000000000000000 AS DECIMAL(38,2)) AS r
-        """
-      Then query result
-        | t             | r                                    |
-        | decimal(38,6) | 17500000000000000000000000000.000000 |
 
     Scenario: a capped decimal sum that fits is exact
       # The literal is spelled out rather than written `1e37`, which is a DOUBLE and
@@ -1917,10 +1915,10 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | t             |
         | decimal(38,6) |
 
-    @sail-bug
     Scenario: a wide decimal sum computes without an intermediate overflow
-      # Deferred (overflow = custom PhysicalExpr follow-up): the native kernel adds at the
-      # wider scale and overflows i128 before the scale reduction. Spark uses BigDecimal.
+      # A native i128 add at the wider scale would overflow before the scale reduction; the
+      # `+`/`-` retype path widens to Decimal256 first (like the capped multiply), matching
+      # Spark's BigDecimal result.
       Given config spark.sql.ansi.enabled = false
       When query
         """
@@ -1933,9 +1931,9 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
 
   Rule: Date and timestamp operands follow Spark's temporal arithmetic (known gaps)
     # From the 17x17 operator type-matrix sweep against Spark JVM 4.2 (2026-08-06).
-    # Sail types DATE +/- day-time interval as DATE (dropping the time part), maps
-    # DATE - DATE to BIGINT instead of interval day, and fails at execution on
-    # DATE - TIMESTAMP ("cast Duration(Nanosecond) to Spark data type").
+    # Sail types DATE +/- day-time interval as DATE (dropping the time part) and maps
+    # DATE - DATE to BIGINT instead of interval day. DATE - TIMESTAMP now types correctly
+    # as a day-time interval (below), but diverges under a non-UTC session timezone.
 
     # The timestamp-typed rows render identically on 3.5 and 4.x, so they stay ungated.
     @sail-bug
@@ -1967,6 +1965,22 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
       Then query result
         | t                      | r                                   |
         | interval day to second | INTERVAL '0 17:30:00' DAY TO SECOND |
+
+    # Correct under UTC (above), but under a non-UTC session timezone the value diverges:
+    # Spark casts the DATE to TIMESTAMP in the session tz before subtracting
+    # (SubtractTimestamps), while Sail/DataFusion computes DATE - TIMESTAMP in UTC, so the
+    # result is off by the session offset (here Spark 04:00:00 vs Sail -01:00:00). tz-aware
+    # temporal arithmetic is the interval workstream. @spark-4 for the interval rendering.
+    @sail-bug @spark-4
+    Scenario: a date minus a timestamp under a non-UTC session timezone
+      Given config spark.sql.session.timeZone = America/New_York
+      When query
+        """
+        SELECT CAST(DATE'2020-01-02' - TIMESTAMP'2020-01-01 20:00:00' AS STRING) AS r
+        """
+      Then query result
+        | r                                   |
+        | INTERVAL '0 04:00:00' DAY TO SECOND |
 
     # @spark-4: `interval day` renders as bare `interval` on PySpark 3.5. Sail still types
     # DATE - DATE as BIGINT instead of an interval day (interval workstream — Arrow keeps
@@ -2118,6 +2132,24 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | day-time interval plus untyped NULL   | INTERVAL '2' DAY + NULL  | interval day           |
         | year-month interval plus untyped NULL | INTERVAL '2' MONTH + NULL | interval month        |
         | year-month interval times untyped NULL| INTERVAL '2' MONTH * NULL | interval year to month|
+
+  Rule: A DATE offset accepts any integral that fits an INT (including SMALLINT)
+    # Spark's DateAdd/DateSub take an INT (IntegerType | ShortType | ByteType), so SMALLINT and
+    # TINYINT widen to it and are accepted, while BIGINT/FLOAT/DECIMAL are rejected (the reject
+    # half is pinned below). This pins the SMALLINT/TINYINT accept arm of the offset guard so
+    # narrowing it — which would wrongly reject `date + smallint` — fails a test.
+
+    Scenario: a date plus or minus a smallint or tinyint stays a date
+      When query
+        """
+        SELECT typeof(DATE'2024-01-15' + CAST(2 AS SMALLINT)) AS a,
+               CAST(DATE'2024-01-15' + CAST(2 AS SMALLINT) AS STRING) AS av,
+               CAST(DATE'2024-01-15' - CAST(2 AS SMALLINT) AS STRING) AS bv,
+               CAST(DATE'2024-01-15' + CAST(3 AS TINYINT) AS STRING) AS cv
+        """
+      Then query result
+        | a    | av         | bv         | cv         |
+        | date | 2024-01-17 | 2024-01-13 | 2024-01-18 |
 
   Rule: Operand pairs Spark rejects at analysis are rejected at plan time
     # Spark raises DATATYPE_MISMATCH at analysis for these pairs (a boolean or timestamp

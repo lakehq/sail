@@ -77,13 +77,21 @@ fn spark_additive_operands(
         left.get_type(function_context.schema),
         right.get_type(function_context.schema),
     );
-    let sum = op(left, right);
     match operands {
         (Ok(DataType::Decimal128(p1, s1)), Ok(DataType::Decimal128(p2, s2)))
             if spark_decimal_add_diverges(p1, s1, p2, s2, allow_precision_loss) =>
         {
+            // Widen the operands to Decimal256 BEFORE adding (mirroring the capped multiply
+            // path). Spark reduces the result scale via `adjustPrecisionScale`, but the native
+            // i128 kernel would add at the un-reduced scale and OVERFLOW on values Spark
+            // represents fine (e.g. `decimal(38,10) + decimal(38,2)` = `decimal(38,6)`); the
+            // i256 intermediate has the headroom, then the retype rounds and narrows.
+            let wide_sum = op(
+                cast(left, DataType::Decimal256(DECIMAL256_MAX_PRECISION, s1)),
+                cast(right, DataType::Decimal256(DECIMAL256_MAX_PRECISION, s2)),
+            );
             spark_decimal_add_retype(
-                sum,
+                wide_sum,
                 p1,
                 s1,
                 p2,
@@ -92,7 +100,7 @@ fn spark_additive_operands(
                 function_context.plan_config.ansi_mode,
             )
         }
-        _ => sum,
+        _ => op(left, right),
     }
 }
 
@@ -1412,15 +1420,14 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let (dividend, divisor, remainder_type) =
         coerce_spark_remainder_operands(dividend, divisor, &function_context);
 
-    // Plan-time check for literal zero divisors.
-    if is_zero_literal(&divisor) {
-        if ansi_mode {
-            return Err(PlanError::ArrowError(ArrowError::ArithmeticOverflow(
-                "Remainder by zero".to_string(),
-            )));
-        } else {
-            return Ok(Expr::Literal(ScalarValue::Null, None));
-        }
+    // Plan-time check for a literal zero divisor: under ANSI raise at plan time (better error
+    // UX); under non-ANSI fall through to `make_safe_divisor`, which nulls the zero and gives
+    // the NULL the modulo's Spark result type. Returning a bare untyped NULL here would report
+    // `void` in the schema where Spark reports the numeric type (matching the sibling `/`).
+    if ansi_mode && is_zero_literal(&divisor) {
+        return Err(PlanError::ArrowError(ArrowError::ArithmeticOverflow(
+            "Remainder by zero".to_string(),
+        )));
     }
 
     let divisor_type = divisor.get_type(function_context.schema);
