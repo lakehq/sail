@@ -594,16 +594,10 @@ fn is_interval_like(data_type: &DataType) -> bool {
     matches!(data_type, DataType::Interval(_) | DataType::Duration(_))
 }
 
-fn is_date_or_timestamp(data_type: &DataType) -> bool {
-    matches!(
-        data_type,
-        DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
-    )
-}
-
-/// The numeric offset Spark accepts for `DATE`/`TIMESTAMP` `+`/`-`: `DateAdd`/`DateSub` take
-/// an `INT`, so only integrals up to 32 bits qualify. A `BIGINT`, `FLOAT`, `DOUBLE` or
-/// `DECIMAL` offset is rejected at analysis (Sail would otherwise silently truncate it).
+/// The numeric offset Spark accepts for a `DATE` in `+`/`-`: `DateAdd`/`DateSub` take an
+/// `INT` (`IntegerType | ShortType | ByteType`), so only integrals up to 32 bits qualify. A
+/// `BIGINT`, `FLOAT`, `DOUBLE` or `DECIMAL` offset is rejected at analysis (Sail would
+/// otherwise silently truncate it).
 fn is_date_offset_numeric(data_type: &DataType) -> bool {
     matches!(
         data_type,
@@ -649,10 +643,17 @@ fn rejects_additive_or_multiply(is_multiply: bool, left: &DataType, right: &Data
     if left_interval && right_interval && !same_interval_class(left, right) {
         return true;
     }
-    // A DATE/TIMESTAMP offset must be an `INT`; a wider integral, float or decimal is rejected.
-    let (left_temporal, right_temporal) = (is_date_or_timestamp(left), is_date_or_timestamp(right));
-    (left_temporal && right.is_numeric() && !is_date_offset_numeric(right))
-        || (right_temporal && left.is_numeric() && !is_date_offset_numeric(left))
+    // A DATE takes only an `INT` numeric offset (Spark's `DateAdd`/`DateSub`, whose `days`
+    // input is `IntegerType | ShortType | ByteType`); a wider integral, float or decimal is
+    // rejected. A TIMESTAMP takes no numeric offset at all.
+    let temporal_offset_rejected = |temporal: &DataType, other: &DataType| match temporal {
+        DataType::Date32 | DataType::Date64 => {
+            other.is_numeric() && !is_date_offset_numeric(other)
+        }
+        DataType::Timestamp(_, _) => other.is_numeric(),
+        _ => false,
+    };
+    temporal_offset_rejected(left, right) || temporal_offset_rejected(right, left)
 }
 
 /// Spark's `DecimalType.forType` for an integer type: the type-based decimal an
@@ -980,6 +981,11 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
     // (`Duration / Decimal128` fails to coerce), while Spark scales an interval by any
     // numeric. Cast a decimal divisor to DOUBLE so the interval division type-checks; the
     // interval result type is unaffected.
+    //
+    // NOTE: this routes a decimal divisor through Spark's fractional path (double division),
+    // whereas Spark's `DivideDTInterval` divides a decimal divisor in `BigDecimal`
+    // (`intervalExpressions.scala`), so the scaled micros can differ at a HALF_UP rounding
+    // boundary. Exact decimal scaling belongs to the interval-arithmetic follow-up.
     let divisor = match (
         dividend.get_type(function_context.schema),
         divisor.get_type(function_context.schema),

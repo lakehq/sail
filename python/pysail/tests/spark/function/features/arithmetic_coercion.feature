@@ -1937,22 +1937,33 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | date minus a day-time interval keeps the time | DATE'2024-01-15' - INTERVAL '1 02:03:04' DAY TO SECOND | timestamp | 2024-01-13 21:56:56 |
         | date plus NULL is a timestamp NULL            | DATE'2024-01-15' + NULL                                | timestamp | NULL                |
 
-    # @spark-4: `interval day to second` / `interval day` render as bare `interval`
-    # on PySpark 3.5, so these interval-typed rows only hold on the 4.x oracle.
-    @sail-bug @spark-4
-    Scenario Outline: Temporal arithmetic to an interval: <case>
+    # @spark-4: `interval day to second` renders as bare `interval` on PySpark 3.5, so
+    # this interval-typed row only holds on the 4.x oracle. The `-` plan builder casts
+    # DATE - TIMESTAMP to a day-time interval, matching Spark.
+    @spark-4
+    Scenario: a date minus a timestamp is a day-time interval
       When query
         """
-        SELECT typeof(<expr>) AS t, CAST(<expr> AS STRING) AS r
+        SELECT typeof(DATE'2024-01-15' - TIMESTAMP'2024-01-14 06:30:00') AS t,
+               CAST(DATE'2024-01-15' - TIMESTAMP'2024-01-14 06:30:00' AS STRING) AS r
         """
       Then query result
-        | t   | r   |
-        | <t> | <r> |
+        | t                      | r                                   |
+        | interval day to second | INTERVAL '0 17:30:00' DAY TO SECOND |
 
-      Examples:
-        | case                                          | expr                                              | t                      | r                                   |
-        | date minus a timestamp is a day-time interval | DATE'2024-01-15' - TIMESTAMP'2024-01-14 06:30:00' | interval day to second | INTERVAL '0 17:30:00' DAY TO SECOND |
-        | date minus a date is a day interval           | DATE'2024-03-01' - DATE'2024-01-15'               | interval day           | INTERVAL '46' DAY                   |
+    # @spark-4: `interval day` renders as bare `interval` on PySpark 3.5. Sail still types
+    # DATE - DATE as BIGINT instead of an interval day (interval workstream — Arrow keeps
+    # no start/end field, so the result cannot render as `interval day`), a known gap.
+    @sail-bug @spark-4
+    Scenario: a date minus a date is a day interval
+      When query
+        """
+        SELECT typeof(DATE'2024-03-01' - DATE'2024-01-15') AS t,
+               CAST(DATE'2024-03-01' - DATE'2024-01-15' AS STRING) AS r
+        """
+      Then query result
+        | t            | r                 |
+        | interval day | INTERVAL '46' DAY |
 
   Rule: Untyped NULL on both sides types as double (known gap)
     # Spark resolves NULL op NULL as double for all four operators; Sail types
