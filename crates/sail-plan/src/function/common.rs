@@ -152,7 +152,8 @@ fn spark_cast_raise_on_empty(trimmed: expr::Expr, target: DataType) -> expr::Exp
     })
 }
 
-/// The Spark name of a numeric type, for error messages that quote it.
+/// The Spark type name (`INT`, `STRING`, `INTERVAL DAY TO SECOND`, ...), for error messages that
+/// quote operand types rather than leaking Arrow's `Debug` (`Int32`, `Utf8`, `Interval(...)`).
 pub(crate) fn spark_type_name(data_type: &DataType) -> String {
     match data_type {
         DataType::Decimal32(precision, scale)

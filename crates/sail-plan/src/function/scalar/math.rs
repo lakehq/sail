@@ -420,10 +420,12 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
 /// wrong type under the default `allowPrecisionLoss = true`.
 ///
 /// The narrowing takes the ANSI gate like the capped multiply / divide paths do: `cast`
-/// under ANSI on, `try_cast` under ANSI off. The value is identical either way (the gate
-/// only fires when Spark's scale is strictly below the native one, so the round drops
-/// digits and the result fits `(38-s+1)+n <= 38` — never a new overflow), but `try_cast`
-/// makes the output field `nullable = true`, matching Spark's non-ANSI Add/Subtract
+/// under ANSI on, `try_cast` under ANSI off. The gate (`spark_decimal_add_diverges`) fires
+/// whenever the exact precision exceeds 38. When Spark only reduces the scale, the round drops
+/// digits and the value is the same either way; when the capped result also overflows (a
+/// scale-unchanged shape like `decimal(38,0) + decimal(38,0)`), `try_cast` yields NULL under
+/// ANSI off while `cast` raises under ANSI on — exactly Spark's `CheckOverflow`. Either way
+/// `try_cast` makes the output field `nullable = true`, matching Spark's non-ANSI Add/Subtract
 /// (`CheckOverflow`, arithmetic.scala) where a plain `cast` would declare `nullable = false`.
 fn spark_decimal_add_retype(
     sum: Expr,
@@ -710,7 +712,7 @@ fn unanchored_string_pair(a: OperandRole, b: OperandRole) -> bool {
 }
 
 /// [`unanchored_string_pair`] as Spark rejects it: only under ANSI on.
-fn string_pair_unanchored(a: OperandRole, b: OperandRole, ansi_mode: bool) -> bool {
+fn rejects_unanchored_string_pair(a: OperandRole, b: OperandRole, ansi_mode: bool) -> bool {
     ansi_mode && unanchored_string_pair(a, b)
 }
 
@@ -735,7 +737,7 @@ fn rejects_multiply(left: &DataType, right: &DataType, ansi_mode: bool) -> bool 
         let other = if is_interval(a) { b } else { a };
         return !matches!(other, Numeric | Str | UntypedNull);
     }
-    string_pair_unanchored(a, b, ansi_mode)
+    rejects_unanchored_string_pair(a, b, ansi_mode)
 }
 
 /// Whether Spark rejects this operand pair for `+` (`Add`) at analysis. `Add` is commutative, so
@@ -749,7 +751,7 @@ fn rejects_add(left: &DataType, right: &DataType, ansi_mode: bool) -> bool {
     }
     let numlike = |r: OperandRole| matches!(r, Numeric | Str | UntypedNull);
     if numlike(a) && numlike(b) {
-        return string_pair_unanchored(a, b, ansi_mode);
+        return rejects_unanchored_string_pair(a, b, ansi_mode);
     }
     // A DATE takes an interval, an untyped NULL, or an INT-width numeric offset (`DateAdd`, whose
     // `days` input is `IntegerType | ShortType | ByteType`); a wider integral, a string, another
@@ -1598,8 +1600,11 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
         dividend.get_type(function_context.schema),
         divisor.get_type(function_context.schema),
     ) {
-        let string_rejected = ansi_mode
-            && unanchored_string_pair(operand_role(&dividend_type), operand_role(&divisor_type));
+        let string_rejected = rejects_unanchored_string_pair(
+            operand_role(&dividend_type),
+            operand_role(&divisor_type),
+            ansi_mode,
+        );
         if string_rejected
             || rejects_as_divide_divisor(&dividend_type)
             || rejects_as_divide_divisor(&divisor_type)

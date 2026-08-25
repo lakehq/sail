@@ -1626,8 +1626,9 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | double | NULL |
 
     # Both pairings are rejected by Spark and by Sail, so the coercion side already
-    # matches — what diverges is the error itself: Spark raises the
-    # BINARY_OP_WRONG_TYPE class, while Sail reports the Arrow types (`Utf8 + Utf8`).
+    # matches — what diverges is the error itself: Spark raises the BINARY_OP_WRONG_TYPE
+    # class, while Sail reports its own "cannot resolve arithmetic ..." (`STRING and STRING`
+    # for `'5' + '6'`, `STRING and VOID` for `'5' + NULL`).
     # These assert Spark's error class, so they xfail until Sail grows Spark error
     # classes; the pattern is deliberately the class name rather than a substring both
     # happen to share, which would only assert "some error".

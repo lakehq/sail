@@ -31,8 +31,9 @@ fn adjust_precision_scale(precision: i32, scale: i32) -> (u8, i8) {
         (precision as u8, scale as i8)
     } else if scale < 0 {
         // Spark keeps a negative scale unchanged here (DecimalType.scala:182), reachable only
-        // with `spark.sql.legacy.allowNegativeScaleOfDecimal`. Mirror it exactly for faithfulness;
-        // the `+ - * %` formulas keep `scale = max(s1, s2) >= 0`, so this is not hit in practice.
+        // with `spark.sql.legacy.allowNegativeScaleOfDecimal` (negative-scale decimals). Mirror it
+        // exactly for faithfulness; with non-negative operand scales the `+ - * %` result scale
+        // stays `>= 0` (`*` uses `s1 + s2`), so this branch is not hit in practice.
         (DECIMAL128_MAX_PRECISION, scale as i8)
     } else {
         let int_digits = precision - scale;
