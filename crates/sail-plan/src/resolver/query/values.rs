@@ -28,7 +28,7 @@ impl PlanResolver<'_> {
             Ok::<_, PlanError>(results)
         }
         .await?;
-        let plan = LogicalPlanBuilder::values(values)?.build()?;
+        let plan = update_values_nullability(LogicalPlanBuilder::values(values)?.build()?)?;
         let expr = plan
             .schema()
             .columns()
@@ -148,6 +148,32 @@ impl PlanResolver<'_> {
 
         Ok(map_positions)
     }
+}
+
+/// Updates a VALUES schema using the nullability of its resolved expressions.
+fn update_values_nullability(plan: LogicalPlan) -> PlanResult<LogicalPlan> {
+    let LogicalPlan::Values(mut values) = plan else {
+        return Err(PlanError::internal("expected VALUES plan"));
+    };
+    let schema = DFSchema::empty();
+    let fields = values
+        .schema
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(index, field)| {
+            let nullable = values.values.iter().try_fold(false, |nullable, row| {
+                Ok::<_, PlanError>(nullable || row[index].nullable(&schema)?)
+            })?;
+            Ok(Arc::new(field.as_ref().clone().with_nullable(nullable)))
+        })
+        .collect::<PlanResult<Vec<_>>>()?
+        .into();
+    values.schema = Arc::new(DFSchema::from_unqualified_fields(
+        fields,
+        values.schema.metadata().clone(),
+    )?);
+    Ok(LogicalPlan::Values(values))
 }
 
 fn merge_map_value_nullability(left: DataType, right: DataType) -> DataType {
