@@ -1594,8 +1594,10 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
     // boolean/date/timestamp as its raw integer or an interval as its raw nanos and compute a
     // meaningless remainder. Reject those pairs at plan time, matching the sibling `/` (its
     // divisor reject set — numeric-only, intervals included — is exactly `%`'s on both sides).
-    // Strings are coerced to a numeric type upstream under ANSI off; under ANSI on they arrive
-    // as `Utf8` and Spark rejects string arithmetic, so a string operand is rejected there too.
+    // A string paired with a numeric operand is coerced to a numeric type (upstream under ANSI
+    // off; via Spark's ANSI string promotion under ANSI on), so it is NOT rejected here. Only a
+    // string with no numeric anchor — string×string or string×untyped-NULL — stays non-numeric,
+    // which Spark rejects under ANSI on; that is the `rejects_unanchored_string_pair` case below.
     if let (Ok(dividend_type), Ok(divisor_type)) = (
         dividend.get_type(function_context.schema),
         divisor.get_type(function_context.schema),

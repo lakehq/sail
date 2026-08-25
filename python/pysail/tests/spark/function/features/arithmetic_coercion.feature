@@ -697,13 +697,13 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
          |-- result: decimal(12,2) (nullable = true)
         """
 
-    # `decimal(38,0) + decimal(38,0)` has exact precision 39, yet both `cap` and `bounded`
-    # collapse to (38,0), so `spark_decimal_add_diverges` is false and the sum stays a native
-    # add reporting nullable=false — unlike `*`, whose gate fires on `p1+p2+1 > 38` regardless
-    # of type equality. Same custom-PhysicalExpr follow-up; pinned so this type-unchanged `+`/`-`
-    # shape is not mistaken for covered.
-    @sail-bug
-    Scenario: a wide decimal sum whose type is unchanged is still nullable like Spark
+    # `decimal(38,0) + decimal(38,0)` has exact precision 39 but keeps scale 0, so its result
+    # type (38,0) equals Arrow's. The widened `spark_decimal_add_diverges` (fires on precision
+    # > 38 regardless of type equality, like `*`) still routes it through the Decimal256 retype,
+    # whose `try_cast` under ANSI off declares nullable=true — matching Spark's non-ANSI decimal
+    # Add (`arithmetic.scala` nullable), not the native-i128 nullable=false it used to report.
+    Scenario: a wide decimal sum whose type is unchanged is nullable like Spark
+      Given config spark.sql.ansi.enabled = false
       When query
         """
         SELECT CAST(1 AS DECIMAL(38,0)) + CAST(1 AS DECIMAL(38,0)) AS result
