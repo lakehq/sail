@@ -485,7 +485,7 @@ data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#42@0 as avg_yearly]
-      ProjectionExec: expr=[CAST(round(CAST(sum(lineitem.#5)@0 AS Decimal256(76, 3)) / Some(70),76,1, 6) AS Decimal128(22, 6)) as #42]
+      ProjectionExec: expr=[CAST(round(CAST(sum(lineitem.#5)@0 AS Decimal128(38, 3)) / Some(70),38,1, 6) AS Decimal128(22, 6)) as #42]
         AggregateExec: mode=Final, gby=[], aggr=[sum(lineitem.#5)]
           CoalescePartitionsExec
             AggregateExec: mode=Partial, gby=[], aggr=[sum(lineitem.#5)]

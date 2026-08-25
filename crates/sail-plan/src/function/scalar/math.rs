@@ -165,9 +165,7 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
         if let (Ok(left_type), Ok(right_type)) = (&left_type, &right_type)
             && rejects_additive_or_multiply(false, left_type, right_type)
         {
-            return Err(PlanError::invalid(format!(
-                "cannot resolve arithmetic '+' with operand types {left_type} and {right_type}"
-            )));
+            return Err(arithmetic_operand_error('+', left_type, right_type));
         }
         Ok(match (left_type, right_type) {
             (
@@ -257,9 +255,7 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
         if let (Ok(left_type), Ok(right_type)) = (&left_type, &right_type)
             && rejects_additive_or_multiply(false, left_type, right_type)
         {
-            return Err(PlanError::invalid(format!(
-                "cannot resolve arithmetic '-' with operand types {left_type} and {right_type}"
-            )));
+            return Err(arithmetic_operand_error('-', left_type, right_type));
         }
         Ok(match (left_type, right_type) {
             (Ok(DataType::Date32), Ok(DataType::Duration(TimeUnit::Microsecond))) => {
@@ -319,9 +315,7 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
     if let (Ok(left_type), Ok(right_type)) = (&left_type, &right_type)
         && rejects_additive_or_multiply(true, left_type, right_type)
     {
-        return Err(PlanError::invalid(format!(
-            "cannot resolve arithmetic '*' with operand types {left_type} and {right_type}"
-        )));
+        return Err(arithmetic_operand_error('*', left_type, right_type));
     }
     Ok(match (left_type, right_type) {
         // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
@@ -433,17 +427,36 @@ fn spark_decimal_add_retype(
     narrow_decimal_by_ansi(rounded, result_precision, result_scale, ansi_mode)
 }
 
-/// Narrows a decimal expression to `Decimal128(precision, scale)` taking Spark's ANSI gate,
-/// shared by the capped `*`, `/` and `+`/`-` retypes: a strict `cast` under ANSI on (an
-/// out-of-range value raises), a `try_cast` under ANSI off (out-of-range yields NULL, and the
-/// field is declared nullable, matching Spark's `CheckOverflow` / non-ANSI decimal arithmetic).
-fn narrow_decimal_by_ansi(expr: Expr, precision: u8, scale: i8, ansi_mode: bool) -> Expr {
-    let target = DataType::Decimal128(precision, scale);
-    if ansi_mode {
-        cast(expr, target)
-    } else {
-        try_cast(expr, target)
+/// Applies Spark's ANSI gate to an optional cast target: a strict `cast` under ANSI on (an
+/// out-of-range value raises), a `try_cast` under ANSI off (out-of-range yields NULL and the
+/// field is declared nullable, matching Spark's `CheckOverflow` / non-ANSI decimal arithmetic);
+/// `None` leaves the expression unchanged. Shared by the capped decimal retypes and the `%`/
+/// `pmod` result narrowing so the ANSI→nullability rule lives in one place.
+fn ansi_cast_opt(expr: Expr, target: Option<DataType>, ansi_mode: bool) -> Expr {
+    match target {
+        Some(target) if ansi_mode => cast(expr, target),
+        Some(target) => try_cast(expr, target),
+        None => expr,
     }
+}
+
+/// Narrows a decimal expression to `Decimal128(precision, scale)` taking Spark's ANSI gate,
+/// shared by the capped `*`, `/` and `+`/`-` retypes.
+fn narrow_decimal_by_ansi(expr: Expr, precision: u8, scale: i8, ansi_mode: bool) -> Expr {
+    ansi_cast_opt(
+        expr,
+        Some(DataType::Decimal128(precision, scale)),
+        ansi_mode,
+    )
+}
+
+/// The plan-time rejection Spark raises at analysis (`DATATYPE_MISMATCH`) for an arithmetic
+/// operand pair it cannot resolve. Sail reports its own message (it has no Spark error classes
+/// yet); the shared `cannot resolve` prefix is what the `.feature` reject scenarios assert.
+fn arithmetic_operand_error(op: char, left: &DataType, right: &DataType) -> PlanError {
+    PlanError::invalid(format!(
+        "cannot resolve arithmetic '{op}' with operand types {left} and {right}"
+    ))
 }
 
 /// Spark-specific operand coercion for `+ - *` applied at plan-construction time,
@@ -526,7 +539,10 @@ fn coerce_spark_arithmetic_operands(
     // above and elsewhere, so only the integral×float pair needs this.
     // https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/AnsiTypeCoercion.scala
     if ansi_mode && is_integral_float_pair(left_type, right_type) {
-        return (cast(left, DataType::Float64), cast(right, DataType::Float64));
+        return (
+            cast(left, DataType::Float64),
+            cast(right, DataType::Float64),
+        );
     }
     // integer literal x DECIMAL -> narrow the literal to its minimal decimal.
     // https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/types/DecimalType.scala
@@ -636,11 +652,12 @@ fn same_interval_class(left: &DataType, right: &DataType) -> bool {
 fn rejects_additive_or_multiply(is_multiply: bool, left: &DataType, right: &DataType) -> bool {
     let (left_interval, right_interval) = (is_interval_like(left), is_interval_like(right));
     if is_multiply {
-        // `*` accepts only numeric×numeric and numeric×interval (either order). A string
-        // coerces to numeric, and an untyped NULL casts to the numeric side (Spark's
-        // `MultiplyDTInterval`/`MultiplyYMInterval` are `ImplicitCastInputTypes`, so
-        // `interval * NULL` is a typed-NULL interval, not a rejection); both are left for the
-        // generic arm rather than hard-rejected here.
+        // `*` accepts only numeric×numeric and numeric×interval (either order). Spark's
+        // `MultiplyDTInterval`/`MultiplyYMInterval` (`ImplicitCastInputTypes`) also accept a
+        // string (→ numeric) or an untyped NULL peer, so those are NOT hard-rejected here — they
+        // fall through to the generic arm, where `interval * NULL` yields a typed-NULL interval
+        // while `interval * string` still ERRORS (the interval×string coercion is an unimplemented
+        // kernel gap, tracked separately). Only a genuinely non-numeric peer is rejected here.
         let numeric_like = |data_type: &DataType| {
             data_type.is_numeric() || data_type.is_string() || matches!(data_type, DataType::Null)
         };
@@ -661,9 +678,7 @@ fn rejects_additive_or_multiply(is_multiply: bool, left: &DataType, right: &Data
     // input is `IntegerType | ShortType | ByteType`); a wider integral, float or decimal is
     // rejected. A TIMESTAMP takes no numeric offset at all.
     let temporal_offset_rejected = |temporal: &DataType, other: &DataType| match temporal {
-        DataType::Date32 | DataType::Date64 => {
-            other.is_numeric() && !is_date_offset_numeric(other)
-        }
+        DataType::Date32 | DataType::Date64 => other.is_numeric() && !is_date_offset_numeric(other),
         DataType::Timestamp(_, _) => other.is_numeric(),
         _ => false,
     };
@@ -989,9 +1004,7 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
         && is_string_or_null(&dividend_type)
         && is_string_or_null(&divisor_type)
     {
-        return Err(PlanError::invalid(format!(
-            "cannot resolve arithmetic '/' with operand types {dividend_type} and {divisor_type}"
-        )));
+        return Err(arithmetic_operand_error('/', &dividend_type, &divisor_type));
     }
 
     // DataFusion scales an interval divisor by integers and floats but not by a decimal
@@ -1062,9 +1075,7 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
     if let (Ok(dividend_type), Ok(divisor_type)) = (&dividend_type, &divisor_type)
         && (rejects_as_divide_dividend(dividend_type) || rejects_as_divide_divisor(divisor_type))
     {
-        return Err(PlanError::invalid(format!(
-            "cannot resolve arithmetic '/' with operand types {dividend_type} and {divisor_type}"
-        )));
+        return Err(arithmetic_operand_error('/', dividend_type, divisor_type));
     }
 
     // Apply runtime zero-divisor guard to the divisor before building the division expression.
@@ -1183,13 +1194,12 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
     let (dividend, divisor) = arguments.two()?;
 
-    // Plan-time check for literal zero divisors.
-    if is_zero_literal(&divisor) {
-        if function_context.plan_config.ansi_mode {
-            return Err(PlanError::ArrowError(ArrowError::DivideByZero));
-        } else {
-            return Ok(Expr::Literal(ScalarValue::Null, None));
-        }
+    // Plan-time check for a literal zero divisor: under ANSI raise at plan time; under non-ANSI
+    // fall through to `make_safe_divisor`, which nulls the zero and gives the NULL the division's
+    // Spark result type. A bare untyped NULL here would report `void` in the schema where Spark
+    // reports the integral type (matching the sibling `/` and `%`).
+    if is_zero_literal(&divisor) && function_context.plan_config.ansi_mode {
+        return Err(PlanError::ArrowError(ArrowError::DivideByZero));
     }
 
     let ansi_mode = function_context.plan_config.ansi_mode;
@@ -1465,11 +1475,7 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
     // Narrow DataFusion's wider decimal result down to Spark's remainder type, the same
     // way `pmod` does. A remainder is bounded by both operands, so unlike `pmod` this
     // cast cannot overflow; it takes the ANSI gate only to keep the two paths identical.
-    Ok(match remainder_type {
-        Some(target) if ansi_mode => cast(modulo, target),
-        Some(target) => try_cast(modulo, target),
-        None => modulo,
-    })
+    Ok(ansi_cast_opt(modulo, remainder_type, ansi_mode))
 }
 
 fn spark_abs(input: ScalarFunctionInput) -> PlanResult<Expr> {
@@ -1523,11 +1529,7 @@ fn spark_pmod(input: ScalarFunctionInput) -> PlanResult<Expr> {
     // but can reach 99994.00. Spark's CheckOverflow turns that into NULL under ANSI off
     // and raises under ANSI on.
     let call = udf.call(vec![left, right]);
-    Ok(match pmod_type {
-        Some(target) if ansi_mode => cast(call, target),
-        Some(target) => try_cast(call, target),
-        None => call,
-    })
+    Ok(ansi_cast_opt(call, pmod_type, ansi_mode))
 }
 
 /// Negate a numeric literal at planning time so a constant operand stays a

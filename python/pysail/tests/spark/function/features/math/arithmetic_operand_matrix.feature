@@ -1,13 +1,12 @@
-@arithmetic_matrix
 Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
 
   # Auto-generated full cartesian product of the operand types below crossed with each
-  # operator, under BOTH ANSI modes, measured against Spark JVM 4.2.0 (the expected
-  # column is Spark's). Value pairs assert the result `typeof`; pairs Spark rejects at
-  # analysis assert an error. Both modes are pinned because Spark's numeric/string
-  # coercion is ANSI-dependent (e.g. `int + float` -> float off / double on;
-  # `int + str` -> double off / bigint on). `@sail-bug` marks the cells where Sail
-  # still diverges — clean them up as the coercion/overflow follow-ups land.
+  # operator, under BOTH ANSI modes, measured against Spark JVM 4.2.0 (the expected column
+  # is Spark's). Value pairs assert the result `typeof`; pairs Spark rejects at analysis
+  # assert an error (the message is Sail's own reject text where the plan-builder guard
+  # fires). Both modes are pinned because Spark's numeric/string coercion is ANSI-dependent.
+  # `@sail-bug` marks cells where Sail still diverges; `@spark-4` gates the untyped-NULL-pair
+  # rows (`NULL op NULL` resolves to double only on 4.x).
 
 # ============================ ANSI OFF ============================
 
@@ -145,9 +144,86 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | unull + ts | NULL | TIMESTAMP'2024-01-15 12:00:00' | timestamp |
         | unull + ival_d | NULL | INTERVAL '2' DAY | interval day |
         | unull + ival_m | NULL | INTERVAL '2' MONTH | interval month |
+
+    @sail-bug @spark-4
+    Scenario Outline: plus ansi-off: valid pair type (Sail diverges), untyped NULL pair: <case>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT typeof((<l>) + (<r>)) AS t
+        """
+      Then query result
+        | t        |
+        | <result> |
+
+      Examples:
+        | case | l | r | result |
         | unull + unull | NULL | NULL | double |
 
-    Scenario Outline: plus ansi-off: rejected pair: <case>
+    Scenario Outline: plus ansi-off: rejected pair [cannot resolve]: <case>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT typeof((<l>) + (<r>)) AS t
+        """
+      Then query error (?i)cannot resolve
+
+      Examples:
+        | case | l | r |
+        | tinyint + ts | CAST(6 AS TINYINT) | TIMESTAMP'2024-01-15 12:00:00' |
+        | tinyint + ival_d | CAST(6 AS TINYINT) | INTERVAL '2' DAY |
+        | tinyint + ival_m | CAST(6 AS TINYINT) | INTERVAL '2' MONTH |
+        | int + ts | CAST(6 AS INT) | TIMESTAMP'2024-01-15 12:00:00' |
+        | int + ival_d | CAST(6 AS INT) | INTERVAL '2' DAY |
+        | int + ival_m | CAST(6 AS INT) | INTERVAL '2' MONTH |
+        | bigint + date | CAST(6 AS BIGINT) | DATE'2024-01-15' |
+        | bigint + ts | CAST(6 AS BIGINT) | TIMESTAMP'2024-01-15 12:00:00' |
+        | bigint + ival_d | CAST(6 AS BIGINT) | INTERVAL '2' DAY |
+        | bigint + ival_m | CAST(6 AS BIGINT) | INTERVAL '2' MONTH |
+        | float + date | CAST(6 AS FLOAT) | DATE'2024-01-15' |
+        | float + ts | CAST(6 AS FLOAT) | TIMESTAMP'2024-01-15 12:00:00' |
+        | float + ival_d | CAST(6 AS FLOAT) | INTERVAL '2' DAY |
+        | float + ival_m | CAST(6 AS FLOAT) | INTERVAL '2' MONTH |
+        | double + date | CAST(6 AS DOUBLE) | DATE'2024-01-15' |
+        | double + ts | CAST(6 AS DOUBLE) | TIMESTAMP'2024-01-15 12:00:00' |
+        | double + ival_d | CAST(6 AS DOUBLE) | INTERVAL '2' DAY |
+        | double + ival_m | CAST(6 AS DOUBLE) | INTERVAL '2' MONTH |
+        | dec + date | CAST(6 AS DECIMAL(10,2)) | DATE'2024-01-15' |
+        | dec + ts | CAST(6 AS DECIMAL(10,2)) | TIMESTAMP'2024-01-15 12:00:00' |
+        | dec + ival_d | CAST(6 AS DECIMAL(10,2)) | INTERVAL '2' DAY |
+        | dec + ival_m | CAST(6 AS DECIMAL(10,2)) | INTERVAL '2' MONTH |
+        | date + bigint | DATE'2024-01-15' | CAST(2 AS BIGINT) |
+        | date + float | DATE'2024-01-15' | CAST(2 AS FLOAT) |
+        | date + double | DATE'2024-01-15' | CAST(2 AS DOUBLE) |
+        | date + dec | DATE'2024-01-15' | CAST(2 AS DECIMAL(10,2)) |
+        | ts + tinyint | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS TINYINT) |
+        | ts + int | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS INT) |
+        | ts + bigint | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS BIGINT) |
+        | ts + float | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS FLOAT) |
+        | ts + double | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS DOUBLE) |
+        | ts + dec | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS DECIMAL(10,2)) |
+        | ts + null | TIMESTAMP'2024-01-15 12:00:00' | CAST(NULL AS INT) |
+        | ival_d + tinyint | INTERVAL '2' DAY | CAST(2 AS TINYINT) |
+        | ival_d + int | INTERVAL '2' DAY | CAST(2 AS INT) |
+        | ival_d + bigint | INTERVAL '2' DAY | CAST(2 AS BIGINT) |
+        | ival_d + float | INTERVAL '2' DAY | CAST(2 AS FLOAT) |
+        | ival_d + double | INTERVAL '2' DAY | CAST(2 AS DOUBLE) |
+        | ival_d + dec | INTERVAL '2' DAY | CAST(2 AS DECIMAL(10,2)) |
+        | ival_d + ival_m | INTERVAL '2' DAY | INTERVAL '2' MONTH |
+        | ival_d + null | INTERVAL '2' DAY | CAST(NULL AS INT) |
+        | ival_m + tinyint | INTERVAL '2' MONTH | CAST(2 AS TINYINT) |
+        | ival_m + int | INTERVAL '2' MONTH | CAST(2 AS INT) |
+        | ival_m + bigint | INTERVAL '2' MONTH | CAST(2 AS BIGINT) |
+        | ival_m + float | INTERVAL '2' MONTH | CAST(2 AS FLOAT) |
+        | ival_m + double | INTERVAL '2' MONTH | CAST(2 AS DOUBLE) |
+        | ival_m + dec | INTERVAL '2' MONTH | CAST(2 AS DECIMAL(10,2)) |
+        | ival_m + ival_d | INTERVAL '2' MONTH | INTERVAL '2' DAY |
+        | ival_m + null | INTERVAL '2' MONTH | CAST(NULL AS INT) |
+        | null + ts | CAST(NULL AS INT) | TIMESTAMP'2024-01-15 12:00:00' |
+        | null + ival_d | CAST(NULL AS INT) | INTERVAL '2' DAY |
+        | null + ival_m | CAST(NULL AS INT) | INTERVAL '2' MONTH |
+
+    Scenario Outline: plus ansi-off: rejected pair [.*]: <case>
       Given config spark.sql.ansi.enabled = false
       When query
         """
@@ -173,38 +249,16 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | bool + null | true | CAST(NULL AS INT) |
         | bool + unull | true | NULL |
         | tinyint + bool | CAST(6 AS TINYINT) | true |
-        | tinyint + ts | CAST(6 AS TINYINT) | TIMESTAMP'2024-01-15 12:00:00' |
-        | tinyint + ival_d | CAST(6 AS TINYINT) | INTERVAL '2' DAY |
-        | tinyint + ival_m | CAST(6 AS TINYINT) | INTERVAL '2' MONTH |
         | tinyint + bin | CAST(6 AS TINYINT) | CAST('2' AS BINARY) |
         | int + bool | CAST(6 AS INT) | true |
-        | int + ts | CAST(6 AS INT) | TIMESTAMP'2024-01-15 12:00:00' |
-        | int + ival_d | CAST(6 AS INT) | INTERVAL '2' DAY |
-        | int + ival_m | CAST(6 AS INT) | INTERVAL '2' MONTH |
         | int + bin | CAST(6 AS INT) | CAST('2' AS BINARY) |
         | bigint + bool | CAST(6 AS BIGINT) | true |
-        | bigint + date | CAST(6 AS BIGINT) | DATE'2024-01-15' |
-        | bigint + ts | CAST(6 AS BIGINT) | TIMESTAMP'2024-01-15 12:00:00' |
-        | bigint + ival_d | CAST(6 AS BIGINT) | INTERVAL '2' DAY |
-        | bigint + ival_m | CAST(6 AS BIGINT) | INTERVAL '2' MONTH |
         | bigint + bin | CAST(6 AS BIGINT) | CAST('2' AS BINARY) |
         | float + bool | CAST(6 AS FLOAT) | true |
-        | float + date | CAST(6 AS FLOAT) | DATE'2024-01-15' |
-        | float + ts | CAST(6 AS FLOAT) | TIMESTAMP'2024-01-15 12:00:00' |
-        | float + ival_d | CAST(6 AS FLOAT) | INTERVAL '2' DAY |
-        | float + ival_m | CAST(6 AS FLOAT) | INTERVAL '2' MONTH |
         | float + bin | CAST(6 AS FLOAT) | CAST('2' AS BINARY) |
         | double + bool | CAST(6 AS DOUBLE) | true |
-        | double + date | CAST(6 AS DOUBLE) | DATE'2024-01-15' |
-        | double + ts | CAST(6 AS DOUBLE) | TIMESTAMP'2024-01-15 12:00:00' |
-        | double + ival_d | CAST(6 AS DOUBLE) | INTERVAL '2' DAY |
-        | double + ival_m | CAST(6 AS DOUBLE) | INTERVAL '2' MONTH |
         | double + bin | CAST(6 AS DOUBLE) | CAST('2' AS BINARY) |
         | dec + bool | CAST(6 AS DECIMAL(10,2)) | true |
-        | dec + date | CAST(6 AS DECIMAL(10,2)) | DATE'2024-01-15' |
-        | dec + ts | CAST(6 AS DECIMAL(10,2)) | TIMESTAMP'2024-01-15 12:00:00' |
-        | dec + ival_d | CAST(6 AS DECIMAL(10,2)) | INTERVAL '2' DAY |
-        | dec + ival_m | CAST(6 AS DECIMAL(10,2)) | INTERVAL '2' MONTH |
         | dec + bin | CAST(6 AS DECIMAL(10,2)) | CAST('2' AS BINARY) |
         | str + bool | '6' | true |
         | str + date | '6' | DATE'2024-01-15' |
@@ -212,47 +266,20 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | str + ival_m | '6' | INTERVAL '2' MONTH |
         | str + bin | '6' | CAST('2' AS BINARY) |
         | date + bool | DATE'2024-01-15' | true |
-        | date + bigint | DATE'2024-01-15' | CAST(2 AS BIGINT) |
-        | date + float | DATE'2024-01-15' | CAST(2 AS FLOAT) |
-        | date + double | DATE'2024-01-15' | CAST(2 AS DOUBLE) |
-        | date + dec | DATE'2024-01-15' | CAST(2 AS DECIMAL(10,2)) |
         | date + str | DATE'2024-01-15' | '2' |
         | date + date | DATE'2024-01-15' | DATE'2024-01-15' |
         | date + ts | DATE'2024-01-15' | TIMESTAMP'2024-01-15 12:00:00' |
         | date + bin | DATE'2024-01-15' | CAST('2' AS BINARY) |
         | ts + bool | TIMESTAMP'2024-01-15 12:00:00' | true |
-        | ts + tinyint | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS TINYINT) |
-        | ts + int | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS INT) |
-        | ts + bigint | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS BIGINT) |
-        | ts + float | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS FLOAT) |
-        | ts + double | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS DOUBLE) |
-        | ts + dec | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS DECIMAL(10,2)) |
         | ts + str | TIMESTAMP'2024-01-15 12:00:00' | '2' |
         | ts + date | TIMESTAMP'2024-01-15 12:00:00' | DATE'2024-01-15' |
         | ts + ts | TIMESTAMP'2024-01-15 12:00:00' | TIMESTAMP'2024-01-15 12:00:00' |
         | ts + bin | TIMESTAMP'2024-01-15 12:00:00' | CAST('2' AS BINARY) |
-        | ts + null | TIMESTAMP'2024-01-15 12:00:00' | CAST(NULL AS INT) |
         | ival_d + bool | INTERVAL '2' DAY | true |
-        | ival_d + tinyint | INTERVAL '2' DAY | CAST(2 AS TINYINT) |
-        | ival_d + int | INTERVAL '2' DAY | CAST(2 AS INT) |
-        | ival_d + bigint | INTERVAL '2' DAY | CAST(2 AS BIGINT) |
-        | ival_d + float | INTERVAL '2' DAY | CAST(2 AS FLOAT) |
-        | ival_d + double | INTERVAL '2' DAY | CAST(2 AS DOUBLE) |
-        | ival_d + dec | INTERVAL '2' DAY | CAST(2 AS DECIMAL(10,2)) |
-        | ival_d + ival_m | INTERVAL '2' DAY | INTERVAL '2' MONTH |
         | ival_d + bin | INTERVAL '2' DAY | CAST('2' AS BINARY) |
-        | ival_d + null | INTERVAL '2' DAY | CAST(NULL AS INT) |
         | ival_m + bool | INTERVAL '2' MONTH | true |
-        | ival_m + tinyint | INTERVAL '2' MONTH | CAST(2 AS TINYINT) |
-        | ival_m + int | INTERVAL '2' MONTH | CAST(2 AS INT) |
-        | ival_m + bigint | INTERVAL '2' MONTH | CAST(2 AS BIGINT) |
-        | ival_m + float | INTERVAL '2' MONTH | CAST(2 AS FLOAT) |
-        | ival_m + double | INTERVAL '2' MONTH | CAST(2 AS DOUBLE) |
-        | ival_m + dec | INTERVAL '2' MONTH | CAST(2 AS DECIMAL(10,2)) |
         | ival_m + str | INTERVAL '2' MONTH | '2' |
-        | ival_m + ival_d | INTERVAL '2' MONTH | INTERVAL '2' DAY |
         | ival_m + bin | INTERVAL '2' MONTH | CAST('2' AS BINARY) |
-        | ival_m + null | INTERVAL '2' MONTH | CAST(NULL AS INT) |
         | bin + bool | CAST('6' AS BINARY) | true |
         | bin + tinyint | CAST('6' AS BINARY) | CAST(2 AS TINYINT) |
         | bin + int | CAST('6' AS BINARY) | CAST(2 AS INT) |
@@ -269,9 +296,6 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | bin + null | CAST('6' AS BINARY) | CAST(NULL AS INT) |
         | bin + unull | CAST('6' AS BINARY) | NULL |
         | null + bool | CAST(NULL AS INT) | true |
-        | null + ts | CAST(NULL AS INT) | TIMESTAMP'2024-01-15 12:00:00' |
-        | null + ival_d | CAST(NULL AS INT) | INTERVAL '2' DAY |
-        | null + ival_m | CAST(NULL AS INT) | INTERVAL '2' MONTH |
         | null + bin | CAST(NULL AS INT) | CAST('2' AS BINARY) |
         | unull + bool | NULL | true |
         | unull + bin | NULL | CAST('2' AS BINARY) |
@@ -407,9 +431,86 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | unull - date | NULL | DATE'2024-01-15' | interval day |
         | unull - ival_d | NULL | INTERVAL '2' DAY | interval day |
         | unull - ival_m | NULL | INTERVAL '2' MONTH | interval month |
+
+    @sail-bug @spark-4
+    Scenario Outline: minus ansi-off: valid pair type (Sail diverges), untyped NULL pair: <case>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT typeof((<l>) - (<r>)) AS t
+        """
+      Then query result
+        | t        |
+        | <result> |
+
+      Examples:
+        | case | l | r | result |
         | unull - unull | NULL | NULL | double |
 
-    Scenario Outline: minus ansi-off: rejected pair: <case>
+    Scenario Outline: minus ansi-off: rejected pair [cannot resolve]: <case>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT typeof((<l>) - (<r>)) AS t
+        """
+      Then query error (?i)cannot resolve
+
+      Examples:
+        | case | l | r |
+        | tinyint - ts | CAST(6 AS TINYINT) | TIMESTAMP'2024-01-15 12:00:00' |
+        | tinyint - ival_d | CAST(6 AS TINYINT) | INTERVAL '2' DAY |
+        | tinyint - ival_m | CAST(6 AS TINYINT) | INTERVAL '2' MONTH |
+        | int - ts | CAST(6 AS INT) | TIMESTAMP'2024-01-15 12:00:00' |
+        | int - ival_d | CAST(6 AS INT) | INTERVAL '2' DAY |
+        | int - ival_m | CAST(6 AS INT) | INTERVAL '2' MONTH |
+        | bigint - date | CAST(6 AS BIGINT) | DATE'2024-01-15' |
+        | bigint - ts | CAST(6 AS BIGINT) | TIMESTAMP'2024-01-15 12:00:00' |
+        | bigint - ival_d | CAST(6 AS BIGINT) | INTERVAL '2' DAY |
+        | bigint - ival_m | CAST(6 AS BIGINT) | INTERVAL '2' MONTH |
+        | float - date | CAST(6 AS FLOAT) | DATE'2024-01-15' |
+        | float - ts | CAST(6 AS FLOAT) | TIMESTAMP'2024-01-15 12:00:00' |
+        | float - ival_d | CAST(6 AS FLOAT) | INTERVAL '2' DAY |
+        | float - ival_m | CAST(6 AS FLOAT) | INTERVAL '2' MONTH |
+        | double - date | CAST(6 AS DOUBLE) | DATE'2024-01-15' |
+        | double - ts | CAST(6 AS DOUBLE) | TIMESTAMP'2024-01-15 12:00:00' |
+        | double - ival_d | CAST(6 AS DOUBLE) | INTERVAL '2' DAY |
+        | double - ival_m | CAST(6 AS DOUBLE) | INTERVAL '2' MONTH |
+        | dec - date | CAST(6 AS DECIMAL(10,2)) | DATE'2024-01-15' |
+        | dec - ts | CAST(6 AS DECIMAL(10,2)) | TIMESTAMP'2024-01-15 12:00:00' |
+        | dec - ival_d | CAST(6 AS DECIMAL(10,2)) | INTERVAL '2' DAY |
+        | dec - ival_m | CAST(6 AS DECIMAL(10,2)) | INTERVAL '2' MONTH |
+        | date - bigint | DATE'2024-01-15' | CAST(2 AS BIGINT) |
+        | date - float | DATE'2024-01-15' | CAST(2 AS FLOAT) |
+        | date - double | DATE'2024-01-15' | CAST(2 AS DOUBLE) |
+        | date - dec | DATE'2024-01-15' | CAST(2 AS DECIMAL(10,2)) |
+        | ts - tinyint | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS TINYINT) |
+        | ts - int | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS INT) |
+        | ts - bigint | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS BIGINT) |
+        | ts - float | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS FLOAT) |
+        | ts - double | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS DOUBLE) |
+        | ts - dec | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS DECIMAL(10,2)) |
+        | ts - null | TIMESTAMP'2024-01-15 12:00:00' | CAST(NULL AS INT) |
+        | ival_d - tinyint | INTERVAL '2' DAY | CAST(2 AS TINYINT) |
+        | ival_d - int | INTERVAL '2' DAY | CAST(2 AS INT) |
+        | ival_d - bigint | INTERVAL '2' DAY | CAST(2 AS BIGINT) |
+        | ival_d - float | INTERVAL '2' DAY | CAST(2 AS FLOAT) |
+        | ival_d - double | INTERVAL '2' DAY | CAST(2 AS DOUBLE) |
+        | ival_d - dec | INTERVAL '2' DAY | CAST(2 AS DECIMAL(10,2)) |
+        | ival_d - ival_m | INTERVAL '2' DAY | INTERVAL '2' MONTH |
+        | ival_d - null | INTERVAL '2' DAY | CAST(NULL AS INT) |
+        | ival_m - tinyint | INTERVAL '2' MONTH | CAST(2 AS TINYINT) |
+        | ival_m - int | INTERVAL '2' MONTH | CAST(2 AS INT) |
+        | ival_m - bigint | INTERVAL '2' MONTH | CAST(2 AS BIGINT) |
+        | ival_m - float | INTERVAL '2' MONTH | CAST(2 AS FLOAT) |
+        | ival_m - double | INTERVAL '2' MONTH | CAST(2 AS DOUBLE) |
+        | ival_m - dec | INTERVAL '2' MONTH | CAST(2 AS DECIMAL(10,2)) |
+        | ival_m - ival_d | INTERVAL '2' MONTH | INTERVAL '2' DAY |
+        | ival_m - null | INTERVAL '2' MONTH | CAST(NULL AS INT) |
+        | null - ts | CAST(NULL AS INT) | TIMESTAMP'2024-01-15 12:00:00' |
+        | null - ival_d | CAST(NULL AS INT) | INTERVAL '2' DAY |
+        | null - ival_m | CAST(NULL AS INT) | INTERVAL '2' MONTH |
+
+    Scenario Outline: minus ansi-off: rejected pair [.*]: <case>
       Given config spark.sql.ansi.enabled = false
       When query
         """
@@ -436,87 +537,38 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | bool - unull | true | NULL |
         | tinyint - bool | CAST(6 AS TINYINT) | true |
         | tinyint - date | CAST(6 AS TINYINT) | DATE'2024-01-15' |
-        | tinyint - ts | CAST(6 AS TINYINT) | TIMESTAMP'2024-01-15 12:00:00' |
-        | tinyint - ival_d | CAST(6 AS TINYINT) | INTERVAL '2' DAY |
-        | tinyint - ival_m | CAST(6 AS TINYINT) | INTERVAL '2' MONTH |
         | tinyint - bin | CAST(6 AS TINYINT) | CAST('2' AS BINARY) |
         | int - bool | CAST(6 AS INT) | true |
         | int - date | CAST(6 AS INT) | DATE'2024-01-15' |
-        | int - ts | CAST(6 AS INT) | TIMESTAMP'2024-01-15 12:00:00' |
-        | int - ival_d | CAST(6 AS INT) | INTERVAL '2' DAY |
-        | int - ival_m | CAST(6 AS INT) | INTERVAL '2' MONTH |
         | int - bin | CAST(6 AS INT) | CAST('2' AS BINARY) |
         | bigint - bool | CAST(6 AS BIGINT) | true |
-        | bigint - date | CAST(6 AS BIGINT) | DATE'2024-01-15' |
-        | bigint - ts | CAST(6 AS BIGINT) | TIMESTAMP'2024-01-15 12:00:00' |
-        | bigint - ival_d | CAST(6 AS BIGINT) | INTERVAL '2' DAY |
-        | bigint - ival_m | CAST(6 AS BIGINT) | INTERVAL '2' MONTH |
         | bigint - bin | CAST(6 AS BIGINT) | CAST('2' AS BINARY) |
         | float - bool | CAST(6 AS FLOAT) | true |
-        | float - date | CAST(6 AS FLOAT) | DATE'2024-01-15' |
-        | float - ts | CAST(6 AS FLOAT) | TIMESTAMP'2024-01-15 12:00:00' |
-        | float - ival_d | CAST(6 AS FLOAT) | INTERVAL '2' DAY |
-        | float - ival_m | CAST(6 AS FLOAT) | INTERVAL '2' MONTH |
         | float - bin | CAST(6 AS FLOAT) | CAST('2' AS BINARY) |
         | double - bool | CAST(6 AS DOUBLE) | true |
-        | double - date | CAST(6 AS DOUBLE) | DATE'2024-01-15' |
-        | double - ts | CAST(6 AS DOUBLE) | TIMESTAMP'2024-01-15 12:00:00' |
-        | double - ival_d | CAST(6 AS DOUBLE) | INTERVAL '2' DAY |
-        | double - ival_m | CAST(6 AS DOUBLE) | INTERVAL '2' MONTH |
         | double - bin | CAST(6 AS DOUBLE) | CAST('2' AS BINARY) |
         | dec - bool | CAST(6 AS DECIMAL(10,2)) | true |
-        | dec - date | CAST(6 AS DECIMAL(10,2)) | DATE'2024-01-15' |
-        | dec - ts | CAST(6 AS DECIMAL(10,2)) | TIMESTAMP'2024-01-15 12:00:00' |
-        | dec - ival_d | CAST(6 AS DECIMAL(10,2)) | INTERVAL '2' DAY |
-        | dec - ival_m | CAST(6 AS DECIMAL(10,2)) | INTERVAL '2' MONTH |
         | dec - bin | CAST(6 AS DECIMAL(10,2)) | CAST('2' AS BINARY) |
         | str - bool | '6' | true |
         | str - ts | '6' | TIMESTAMP'2024-01-15 12:00:00' |
         | str - ival_m | '6' | INTERVAL '2' MONTH |
         | str - bin | '6' | CAST('2' AS BINARY) |
         | date - bool | DATE'2024-01-15' | true |
-        | date - bigint | DATE'2024-01-15' | CAST(2 AS BIGINT) |
-        | date - float | DATE'2024-01-15' | CAST(2 AS FLOAT) |
-        | date - double | DATE'2024-01-15' | CAST(2 AS DOUBLE) |
-        | date - dec | DATE'2024-01-15' | CAST(2 AS DECIMAL(10,2)) |
         | date - str | DATE'2024-01-15' | '2' |
         | date - bin | DATE'2024-01-15' | CAST('2' AS BINARY) |
         | ts - bool | TIMESTAMP'2024-01-15 12:00:00' | true |
-        | ts - tinyint | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS TINYINT) |
-        | ts - int | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS INT) |
-        | ts - bigint | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS BIGINT) |
-        | ts - float | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS FLOAT) |
-        | ts - double | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS DOUBLE) |
-        | ts - dec | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS DECIMAL(10,2)) |
         | ts - str | TIMESTAMP'2024-01-15 12:00:00' | '2' |
         | ts - bin | TIMESTAMP'2024-01-15 12:00:00' | CAST('2' AS BINARY) |
-        | ts - null | TIMESTAMP'2024-01-15 12:00:00' | CAST(NULL AS INT) |
         | ival_d - bool | INTERVAL '2' DAY | true |
-        | ival_d - tinyint | INTERVAL '2' DAY | CAST(2 AS TINYINT) |
-        | ival_d - int | INTERVAL '2' DAY | CAST(2 AS INT) |
-        | ival_d - bigint | INTERVAL '2' DAY | CAST(2 AS BIGINT) |
-        | ival_d - float | INTERVAL '2' DAY | CAST(2 AS FLOAT) |
-        | ival_d - double | INTERVAL '2' DAY | CAST(2 AS DOUBLE) |
-        | ival_d - dec | INTERVAL '2' DAY | CAST(2 AS DECIMAL(10,2)) |
         | ival_d - str | INTERVAL '2' DAY | '2' |
         | ival_d - date | INTERVAL '2' DAY | DATE'2024-01-15' |
         | ival_d - ts | INTERVAL '2' DAY | TIMESTAMP'2024-01-15 12:00:00' |
-        | ival_d - ival_m | INTERVAL '2' DAY | INTERVAL '2' MONTH |
         | ival_d - bin | INTERVAL '2' DAY | CAST('2' AS BINARY) |
-        | ival_d - null | INTERVAL '2' DAY | CAST(NULL AS INT) |
         | ival_m - bool | INTERVAL '2' MONTH | true |
-        | ival_m - tinyint | INTERVAL '2' MONTH | CAST(2 AS TINYINT) |
-        | ival_m - int | INTERVAL '2' MONTH | CAST(2 AS INT) |
-        | ival_m - bigint | INTERVAL '2' MONTH | CAST(2 AS BIGINT) |
-        | ival_m - float | INTERVAL '2' MONTH | CAST(2 AS FLOAT) |
-        | ival_m - double | INTERVAL '2' MONTH | CAST(2 AS DOUBLE) |
-        | ival_m - dec | INTERVAL '2' MONTH | CAST(2 AS DECIMAL(10,2)) |
         | ival_m - str | INTERVAL '2' MONTH | '2' |
         | ival_m - date | INTERVAL '2' MONTH | DATE'2024-01-15' |
         | ival_m - ts | INTERVAL '2' MONTH | TIMESTAMP'2024-01-15 12:00:00' |
-        | ival_m - ival_d | INTERVAL '2' MONTH | INTERVAL '2' DAY |
         | ival_m - bin | INTERVAL '2' MONTH | CAST('2' AS BINARY) |
-        | ival_m - null | INTERVAL '2' MONTH | CAST(NULL AS INT) |
         | bin - bool | CAST('6' AS BINARY) | true |
         | bin - tinyint | CAST('6' AS BINARY) | CAST(2 AS TINYINT) |
         | bin - int | CAST('6' AS BINARY) | CAST(2 AS INT) |
@@ -534,9 +586,6 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | bin - unull | CAST('6' AS BINARY) | NULL |
         | null - bool | CAST(NULL AS INT) | true |
         | null - date | CAST(NULL AS INT) | DATE'2024-01-15' |
-        | null - ts | CAST(NULL AS INT) | TIMESTAMP'2024-01-15 12:00:00' |
-        | null - ival_d | CAST(NULL AS INT) | INTERVAL '2' DAY |
-        | null - ival_m | CAST(NULL AS INT) | INTERVAL '2' MONTH |
         | null - bin | CAST(NULL AS INT) | CAST('2' AS BINARY) |
         | unull - bool | NULL | true |
         | unull - bin | NULL | CAST('2' AS BINARY) |
@@ -685,9 +734,54 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | ival_m * unull | INTERVAL '2' MONTH | NULL | interval year to month |
         | null * ival_m | CAST(NULL AS INT) | INTERVAL '2' MONTH | interval year to month |
         | unull * ival_m | NULL | INTERVAL '2' MONTH | interval year to month |
+
+    @sail-bug @spark-4
+    Scenario Outline: times ansi-off: valid pair type (Sail diverges), untyped NULL pair: <case>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT typeof((<l>) * (<r>)) AS t
+        """
+      Then query result
+        | t        |
+        | <result> |
+
+      Examples:
+        | case | l | r | result |
         | unull * unull | NULL | NULL | double |
 
-    Scenario Outline: times ansi-off: rejected pair: <case>
+    Scenario Outline: times ansi-off: rejected pair [cannot resolve]: <case>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT typeof((<l>) * (<r>)) AS t
+        """
+      Then query error (?i)cannot resolve
+
+      Examples:
+        | case | l | r |
+        | bool * ival_d | true | INTERVAL '2' DAY |
+        | bool * ival_m | true | INTERVAL '2' MONTH |
+        | date * ival_d | DATE'2024-01-15' | INTERVAL '2' DAY |
+        | date * ival_m | DATE'2024-01-15' | INTERVAL '2' MONTH |
+        | ts * ival_d | TIMESTAMP'2024-01-15 12:00:00' | INTERVAL '2' DAY |
+        | ts * ival_m | TIMESTAMP'2024-01-15 12:00:00' | INTERVAL '2' MONTH |
+        | ival_d * bool | INTERVAL '2' DAY | true |
+        | ival_d * date | INTERVAL '2' DAY | DATE'2024-01-15' |
+        | ival_d * ts | INTERVAL '2' DAY | TIMESTAMP'2024-01-15 12:00:00' |
+        | ival_d * ival_d | INTERVAL '2' DAY | INTERVAL '2' DAY |
+        | ival_d * ival_m | INTERVAL '2' DAY | INTERVAL '2' MONTH |
+        | ival_d * bin | INTERVAL '2' DAY | CAST('2' AS BINARY) |
+        | ival_m * bool | INTERVAL '2' MONTH | true |
+        | ival_m * date | INTERVAL '2' MONTH | DATE'2024-01-15' |
+        | ival_m * ts | INTERVAL '2' MONTH | TIMESTAMP'2024-01-15 12:00:00' |
+        | ival_m * ival_d | INTERVAL '2' MONTH | INTERVAL '2' DAY |
+        | ival_m * ival_m | INTERVAL '2' MONTH | INTERVAL '2' MONTH |
+        | ival_m * bin | INTERVAL '2' MONTH | CAST('2' AS BINARY) |
+        | bin * ival_d | CAST('6' AS BINARY) | INTERVAL '2' DAY |
+        | bin * ival_m | CAST('6' AS BINARY) | INTERVAL '2' MONTH |
+
+    Scenario Outline: times ansi-off: rejected pair [.*]: <case>
       Given config spark.sql.ansi.enabled = false
       When query
         """
@@ -707,8 +801,6 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | bool * str | true | '2' |
         | bool * date | true | DATE'2024-01-15' |
         | bool * ts | true | TIMESTAMP'2024-01-15 12:00:00' |
-        | bool * ival_d | true | INTERVAL '2' DAY |
-        | bool * ival_m | true | INTERVAL '2' MONTH |
         | bool * bin | true | CAST('2' AS BINARY) |
         | bool * null | true | CAST(NULL AS INT) |
         | bool * unull | true | NULL |
@@ -750,8 +842,6 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | date * str | DATE'2024-01-15' | '2' |
         | date * date | DATE'2024-01-15' | DATE'2024-01-15' |
         | date * ts | DATE'2024-01-15' | TIMESTAMP'2024-01-15 12:00:00' |
-        | date * ival_d | DATE'2024-01-15' | INTERVAL '2' DAY |
-        | date * ival_m | DATE'2024-01-15' | INTERVAL '2' MONTH |
         | date * bin | DATE'2024-01-15' | CAST('2' AS BINARY) |
         | date * null | DATE'2024-01-15' | CAST(NULL AS INT) |
         | date * unull | DATE'2024-01-15' | NULL |
@@ -765,23 +855,9 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | ts * str | TIMESTAMP'2024-01-15 12:00:00' | '2' |
         | ts * date | TIMESTAMP'2024-01-15 12:00:00' | DATE'2024-01-15' |
         | ts * ts | TIMESTAMP'2024-01-15 12:00:00' | TIMESTAMP'2024-01-15 12:00:00' |
-        | ts * ival_d | TIMESTAMP'2024-01-15 12:00:00' | INTERVAL '2' DAY |
-        | ts * ival_m | TIMESTAMP'2024-01-15 12:00:00' | INTERVAL '2' MONTH |
         | ts * bin | TIMESTAMP'2024-01-15 12:00:00' | CAST('2' AS BINARY) |
         | ts * null | TIMESTAMP'2024-01-15 12:00:00' | CAST(NULL AS INT) |
         | ts * unull | TIMESTAMP'2024-01-15 12:00:00' | NULL |
-        | ival_d * bool | INTERVAL '2' DAY | true |
-        | ival_d * date | INTERVAL '2' DAY | DATE'2024-01-15' |
-        | ival_d * ts | INTERVAL '2' DAY | TIMESTAMP'2024-01-15 12:00:00' |
-        | ival_d * ival_d | INTERVAL '2' DAY | INTERVAL '2' DAY |
-        | ival_d * ival_m | INTERVAL '2' DAY | INTERVAL '2' MONTH |
-        | ival_d * bin | INTERVAL '2' DAY | CAST('2' AS BINARY) |
-        | ival_m * bool | INTERVAL '2' MONTH | true |
-        | ival_m * date | INTERVAL '2' MONTH | DATE'2024-01-15' |
-        | ival_m * ts | INTERVAL '2' MONTH | TIMESTAMP'2024-01-15 12:00:00' |
-        | ival_m * ival_d | INTERVAL '2' MONTH | INTERVAL '2' DAY |
-        | ival_m * ival_m | INTERVAL '2' MONTH | INTERVAL '2' MONTH |
-        | ival_m * bin | INTERVAL '2' MONTH | CAST('2' AS BINARY) |
         | bin * bool | CAST('6' AS BINARY) | true |
         | bin * tinyint | CAST('6' AS BINARY) | CAST(2 AS TINYINT) |
         | bin * int | CAST('6' AS BINARY) | CAST(2 AS INT) |
@@ -792,8 +868,6 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | bin * str | CAST('6' AS BINARY) | '2' |
         | bin * date | CAST('6' AS BINARY) | DATE'2024-01-15' |
         | bin * ts | CAST('6' AS BINARY) | TIMESTAMP'2024-01-15 12:00:00' |
-        | bin * ival_d | CAST('6' AS BINARY) | INTERVAL '2' DAY |
-        | bin * ival_m | CAST('6' AS BINARY) | INTERVAL '2' MONTH |
         | bin * bin | CAST('6' AS BINARY) | CAST('2' AS BINARY) |
         | bin * null | CAST('6' AS BINARY) | CAST(NULL AS INT) |
         | bin * unull | CAST('6' AS BINARY) | NULL |
@@ -909,6 +983,20 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | unull / dec | NULL | CAST(2 AS DECIMAL(10,2)) | double |
         | unull / str | NULL | '2' | double |
         | unull / null | NULL | CAST(NULL AS INT) | double |
+
+    @spark-4
+    Scenario Outline: divide ansi-off: valid pair type, untyped NULL pair: <case>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT typeof((<l>) / (<r>)) AS t
+        """
+      Then query result
+        | t        |
+        | <result> |
+
+      Examples:
+        | case | l | r | result |
         | unull / unull | NULL | NULL | double |
 
     @sail-bug
@@ -934,13 +1022,13 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | ival_m / null | INTERVAL '2' MONTH | CAST(NULL AS INT) | interval year to month |
         | ival_m / unull | INTERVAL '2' MONTH | NULL | interval year to month |
 
-    Scenario Outline: divide ansi-off: rejected pair: <case>
+    Scenario Outline: divide ansi-off: rejected pair [cannot resolve]: <case>
       Given config spark.sql.ansi.enabled = false
       When query
         """
         SELECT typeof((<l>) / (<r>)) AS t
         """
-      Then query error .*
+      Then query error (?i)cannot resolve
 
       Examples:
         | case | l | r |
@@ -1179,9 +1267,23 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
       Examples:
         | case | l | r | result |
         | tinyint % unull | CAST(6 AS TINYINT) | NULL | tinyint |
+
+    @sail-bug @spark-4
+    Scenario Outline: modulo ansi-off: valid pair type (Sail diverges), untyped NULL pair: <case>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT typeof((<l>) % (<r>)) AS t
+        """
+      Then query result
+        | t        |
+        | <result> |
+
+      Examples:
+        | case | l | r | result |
         | unull % unull | NULL | NULL | double |
 
-    Scenario Outline: modulo ansi-off: rejected pair: <case>
+    Scenario Outline: modulo ansi-off: rejected pair [.*]: <case>
       Given config spark.sql.ansi.enabled = false
       When query
         """
@@ -1469,9 +1571,86 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | unull + ts | NULL | TIMESTAMP'2024-01-15 12:00:00' | timestamp |
         | unull + ival_d | NULL | INTERVAL '2' DAY | interval day |
         | unull + ival_m | NULL | INTERVAL '2' MONTH | interval month |
+
+    @sail-bug @spark-4
+    Scenario Outline: plus ansi-on: valid pair type (Sail diverges), untyped NULL pair: <case>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT typeof((<l>) + (<r>)) AS t
+        """
+      Then query result
+        | t        |
+        | <result> |
+
+      Examples:
+        | case | l | r | result |
         | unull + unull | NULL | NULL | double |
 
-    Scenario Outline: plus ansi-on: rejected pair: <case>
+    Scenario Outline: plus ansi-on: rejected pair [cannot resolve]: <case>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT typeof((<l>) + (<r>)) AS t
+        """
+      Then query error (?i)cannot resolve
+
+      Examples:
+        | case | l | r |
+        | tinyint + ts | CAST(6 AS TINYINT) | TIMESTAMP'2024-01-15 12:00:00' |
+        | tinyint + ival_d | CAST(6 AS TINYINT) | INTERVAL '2' DAY |
+        | tinyint + ival_m | CAST(6 AS TINYINT) | INTERVAL '2' MONTH |
+        | int + ts | CAST(6 AS INT) | TIMESTAMP'2024-01-15 12:00:00' |
+        | int + ival_d | CAST(6 AS INT) | INTERVAL '2' DAY |
+        | int + ival_m | CAST(6 AS INT) | INTERVAL '2' MONTH |
+        | bigint + date | CAST(6 AS BIGINT) | DATE'2024-01-15' |
+        | bigint + ts | CAST(6 AS BIGINT) | TIMESTAMP'2024-01-15 12:00:00' |
+        | bigint + ival_d | CAST(6 AS BIGINT) | INTERVAL '2' DAY |
+        | bigint + ival_m | CAST(6 AS BIGINT) | INTERVAL '2' MONTH |
+        | float + date | CAST(6 AS FLOAT) | DATE'2024-01-15' |
+        | float + ts | CAST(6 AS FLOAT) | TIMESTAMP'2024-01-15 12:00:00' |
+        | float + ival_d | CAST(6 AS FLOAT) | INTERVAL '2' DAY |
+        | float + ival_m | CAST(6 AS FLOAT) | INTERVAL '2' MONTH |
+        | double + date | CAST(6 AS DOUBLE) | DATE'2024-01-15' |
+        | double + ts | CAST(6 AS DOUBLE) | TIMESTAMP'2024-01-15 12:00:00' |
+        | double + ival_d | CAST(6 AS DOUBLE) | INTERVAL '2' DAY |
+        | double + ival_m | CAST(6 AS DOUBLE) | INTERVAL '2' MONTH |
+        | dec + date | CAST(6 AS DECIMAL(10,2)) | DATE'2024-01-15' |
+        | dec + ts | CAST(6 AS DECIMAL(10,2)) | TIMESTAMP'2024-01-15 12:00:00' |
+        | dec + ival_d | CAST(6 AS DECIMAL(10,2)) | INTERVAL '2' DAY |
+        | dec + ival_m | CAST(6 AS DECIMAL(10,2)) | INTERVAL '2' MONTH |
+        | date + bigint | DATE'2024-01-15' | CAST(2 AS BIGINT) |
+        | date + float | DATE'2024-01-15' | CAST(2 AS FLOAT) |
+        | date + double | DATE'2024-01-15' | CAST(2 AS DOUBLE) |
+        | date + dec | DATE'2024-01-15' | CAST(2 AS DECIMAL(10,2)) |
+        | ts + tinyint | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS TINYINT) |
+        | ts + int | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS INT) |
+        | ts + bigint | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS BIGINT) |
+        | ts + float | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS FLOAT) |
+        | ts + double | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS DOUBLE) |
+        | ts + dec | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS DECIMAL(10,2)) |
+        | ts + null | TIMESTAMP'2024-01-15 12:00:00' | CAST(NULL AS INT) |
+        | ival_d + tinyint | INTERVAL '2' DAY | CAST(2 AS TINYINT) |
+        | ival_d + int | INTERVAL '2' DAY | CAST(2 AS INT) |
+        | ival_d + bigint | INTERVAL '2' DAY | CAST(2 AS BIGINT) |
+        | ival_d + float | INTERVAL '2' DAY | CAST(2 AS FLOAT) |
+        | ival_d + double | INTERVAL '2' DAY | CAST(2 AS DOUBLE) |
+        | ival_d + dec | INTERVAL '2' DAY | CAST(2 AS DECIMAL(10,2)) |
+        | ival_d + ival_m | INTERVAL '2' DAY | INTERVAL '2' MONTH |
+        | ival_d + null | INTERVAL '2' DAY | CAST(NULL AS INT) |
+        | ival_m + tinyint | INTERVAL '2' MONTH | CAST(2 AS TINYINT) |
+        | ival_m + int | INTERVAL '2' MONTH | CAST(2 AS INT) |
+        | ival_m + bigint | INTERVAL '2' MONTH | CAST(2 AS BIGINT) |
+        | ival_m + float | INTERVAL '2' MONTH | CAST(2 AS FLOAT) |
+        | ival_m + double | INTERVAL '2' MONTH | CAST(2 AS DOUBLE) |
+        | ival_m + dec | INTERVAL '2' MONTH | CAST(2 AS DECIMAL(10,2)) |
+        | ival_m + ival_d | INTERVAL '2' MONTH | INTERVAL '2' DAY |
+        | ival_m + null | INTERVAL '2' MONTH | CAST(NULL AS INT) |
+        | null + ts | CAST(NULL AS INT) | TIMESTAMP'2024-01-15 12:00:00' |
+        | null + ival_d | CAST(NULL AS INT) | INTERVAL '2' DAY |
+        | null + ival_m | CAST(NULL AS INT) | INTERVAL '2' MONTH |
+
+    Scenario Outline: plus ansi-on: rejected pair [.*]: <case>
       Given config spark.sql.ansi.enabled = true
       When query
         """
@@ -1497,38 +1676,16 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | bool + null | true | CAST(NULL AS INT) |
         | bool + unull | true | NULL |
         | tinyint + bool | CAST(6 AS TINYINT) | true |
-        | tinyint + ts | CAST(6 AS TINYINT) | TIMESTAMP'2024-01-15 12:00:00' |
-        | tinyint + ival_d | CAST(6 AS TINYINT) | INTERVAL '2' DAY |
-        | tinyint + ival_m | CAST(6 AS TINYINT) | INTERVAL '2' MONTH |
         | tinyint + bin | CAST(6 AS TINYINT) | CAST('2' AS BINARY) |
         | int + bool | CAST(6 AS INT) | true |
-        | int + ts | CAST(6 AS INT) | TIMESTAMP'2024-01-15 12:00:00' |
-        | int + ival_d | CAST(6 AS INT) | INTERVAL '2' DAY |
-        | int + ival_m | CAST(6 AS INT) | INTERVAL '2' MONTH |
         | int + bin | CAST(6 AS INT) | CAST('2' AS BINARY) |
         | bigint + bool | CAST(6 AS BIGINT) | true |
-        | bigint + date | CAST(6 AS BIGINT) | DATE'2024-01-15' |
-        | bigint + ts | CAST(6 AS BIGINT) | TIMESTAMP'2024-01-15 12:00:00' |
-        | bigint + ival_d | CAST(6 AS BIGINT) | INTERVAL '2' DAY |
-        | bigint + ival_m | CAST(6 AS BIGINT) | INTERVAL '2' MONTH |
         | bigint + bin | CAST(6 AS BIGINT) | CAST('2' AS BINARY) |
         | float + bool | CAST(6 AS FLOAT) | true |
-        | float + date | CAST(6 AS FLOAT) | DATE'2024-01-15' |
-        | float + ts | CAST(6 AS FLOAT) | TIMESTAMP'2024-01-15 12:00:00' |
-        | float + ival_d | CAST(6 AS FLOAT) | INTERVAL '2' DAY |
-        | float + ival_m | CAST(6 AS FLOAT) | INTERVAL '2' MONTH |
         | float + bin | CAST(6 AS FLOAT) | CAST('2' AS BINARY) |
         | double + bool | CAST(6 AS DOUBLE) | true |
-        | double + date | CAST(6 AS DOUBLE) | DATE'2024-01-15' |
-        | double + ts | CAST(6 AS DOUBLE) | TIMESTAMP'2024-01-15 12:00:00' |
-        | double + ival_d | CAST(6 AS DOUBLE) | INTERVAL '2' DAY |
-        | double + ival_m | CAST(6 AS DOUBLE) | INTERVAL '2' MONTH |
         | double + bin | CAST(6 AS DOUBLE) | CAST('2' AS BINARY) |
         | dec + bool | CAST(6 AS DECIMAL(10,2)) | true |
-        | dec + date | CAST(6 AS DECIMAL(10,2)) | DATE'2024-01-15' |
-        | dec + ts | CAST(6 AS DECIMAL(10,2)) | TIMESTAMP'2024-01-15 12:00:00' |
-        | dec + ival_d | CAST(6 AS DECIMAL(10,2)) | INTERVAL '2' DAY |
-        | dec + ival_m | CAST(6 AS DECIMAL(10,2)) | INTERVAL '2' MONTH |
         | dec + bin | CAST(6 AS DECIMAL(10,2)) | CAST('2' AS BINARY) |
         | str + bool | '6' | true |
         | str + str | '6' | '2' |
@@ -1538,47 +1695,20 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | str + bin | '6' | CAST('2' AS BINARY) |
         | str + unull | '6' | NULL |
         | date + bool | DATE'2024-01-15' | true |
-        | date + bigint | DATE'2024-01-15' | CAST(2 AS BIGINT) |
-        | date + float | DATE'2024-01-15' | CAST(2 AS FLOAT) |
-        | date + double | DATE'2024-01-15' | CAST(2 AS DOUBLE) |
-        | date + dec | DATE'2024-01-15' | CAST(2 AS DECIMAL(10,2)) |
         | date + str | DATE'2024-01-15' | '2' |
         | date + date | DATE'2024-01-15' | DATE'2024-01-15' |
         | date + ts | DATE'2024-01-15' | TIMESTAMP'2024-01-15 12:00:00' |
         | date + bin | DATE'2024-01-15' | CAST('2' AS BINARY) |
         | ts + bool | TIMESTAMP'2024-01-15 12:00:00' | true |
-        | ts + tinyint | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS TINYINT) |
-        | ts + int | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS INT) |
-        | ts + bigint | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS BIGINT) |
-        | ts + float | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS FLOAT) |
-        | ts + double | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS DOUBLE) |
-        | ts + dec | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS DECIMAL(10,2)) |
         | ts + str | TIMESTAMP'2024-01-15 12:00:00' | '2' |
         | ts + date | TIMESTAMP'2024-01-15 12:00:00' | DATE'2024-01-15' |
         | ts + ts | TIMESTAMP'2024-01-15 12:00:00' | TIMESTAMP'2024-01-15 12:00:00' |
         | ts + bin | TIMESTAMP'2024-01-15 12:00:00' | CAST('2' AS BINARY) |
-        | ts + null | TIMESTAMP'2024-01-15 12:00:00' | CAST(NULL AS INT) |
         | ival_d + bool | INTERVAL '2' DAY | true |
-        | ival_d + tinyint | INTERVAL '2' DAY | CAST(2 AS TINYINT) |
-        | ival_d + int | INTERVAL '2' DAY | CAST(2 AS INT) |
-        | ival_d + bigint | INTERVAL '2' DAY | CAST(2 AS BIGINT) |
-        | ival_d + float | INTERVAL '2' DAY | CAST(2 AS FLOAT) |
-        | ival_d + double | INTERVAL '2' DAY | CAST(2 AS DOUBLE) |
-        | ival_d + dec | INTERVAL '2' DAY | CAST(2 AS DECIMAL(10,2)) |
-        | ival_d + ival_m | INTERVAL '2' DAY | INTERVAL '2' MONTH |
         | ival_d + bin | INTERVAL '2' DAY | CAST('2' AS BINARY) |
-        | ival_d + null | INTERVAL '2' DAY | CAST(NULL AS INT) |
         | ival_m + bool | INTERVAL '2' MONTH | true |
-        | ival_m + tinyint | INTERVAL '2' MONTH | CAST(2 AS TINYINT) |
-        | ival_m + int | INTERVAL '2' MONTH | CAST(2 AS INT) |
-        | ival_m + bigint | INTERVAL '2' MONTH | CAST(2 AS BIGINT) |
-        | ival_m + float | INTERVAL '2' MONTH | CAST(2 AS FLOAT) |
-        | ival_m + double | INTERVAL '2' MONTH | CAST(2 AS DOUBLE) |
-        | ival_m + dec | INTERVAL '2' MONTH | CAST(2 AS DECIMAL(10,2)) |
         | ival_m + str | INTERVAL '2' MONTH | '2' |
-        | ival_m + ival_d | INTERVAL '2' MONTH | INTERVAL '2' DAY |
         | ival_m + bin | INTERVAL '2' MONTH | CAST('2' AS BINARY) |
-        | ival_m + null | INTERVAL '2' MONTH | CAST(NULL AS INT) |
         | bin + bool | CAST('6' AS BINARY) | true |
         | bin + tinyint | CAST('6' AS BINARY) | CAST(2 AS TINYINT) |
         | bin + int | CAST('6' AS BINARY) | CAST(2 AS INT) |
@@ -1595,9 +1725,6 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | bin + null | CAST('6' AS BINARY) | CAST(NULL AS INT) |
         | bin + unull | CAST('6' AS BINARY) | NULL |
         | null + bool | CAST(NULL AS INT) | true |
-        | null + ts | CAST(NULL AS INT) | TIMESTAMP'2024-01-15 12:00:00' |
-        | null + ival_d | CAST(NULL AS INT) | INTERVAL '2' DAY |
-        | null + ival_m | CAST(NULL AS INT) | INTERVAL '2' MONTH |
         | null + bin | CAST(NULL AS INT) | CAST('2' AS BINARY) |
         | unull + bool | NULL | true |
         | unull + str | NULL | '2' |
@@ -1734,9 +1861,86 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | unull - date | NULL | DATE'2024-01-15' | interval day |
         | unull - ival_d | NULL | INTERVAL '2' DAY | interval day |
         | unull - ival_m | NULL | INTERVAL '2' MONTH | interval month |
+
+    @sail-bug @spark-4
+    Scenario Outline: minus ansi-on: valid pair type (Sail diverges), untyped NULL pair: <case>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT typeof((<l>) - (<r>)) AS t
+        """
+      Then query result
+        | t        |
+        | <result> |
+
+      Examples:
+        | case | l | r | result |
         | unull - unull | NULL | NULL | double |
 
-    Scenario Outline: minus ansi-on: rejected pair: <case>
+    Scenario Outline: minus ansi-on: rejected pair [cannot resolve]: <case>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT typeof((<l>) - (<r>)) AS t
+        """
+      Then query error (?i)cannot resolve
+
+      Examples:
+        | case | l | r |
+        | tinyint - ts | CAST(6 AS TINYINT) | TIMESTAMP'2024-01-15 12:00:00' |
+        | tinyint - ival_d | CAST(6 AS TINYINT) | INTERVAL '2' DAY |
+        | tinyint - ival_m | CAST(6 AS TINYINT) | INTERVAL '2' MONTH |
+        | int - ts | CAST(6 AS INT) | TIMESTAMP'2024-01-15 12:00:00' |
+        | int - ival_d | CAST(6 AS INT) | INTERVAL '2' DAY |
+        | int - ival_m | CAST(6 AS INT) | INTERVAL '2' MONTH |
+        | bigint - date | CAST(6 AS BIGINT) | DATE'2024-01-15' |
+        | bigint - ts | CAST(6 AS BIGINT) | TIMESTAMP'2024-01-15 12:00:00' |
+        | bigint - ival_d | CAST(6 AS BIGINT) | INTERVAL '2' DAY |
+        | bigint - ival_m | CAST(6 AS BIGINT) | INTERVAL '2' MONTH |
+        | float - date | CAST(6 AS FLOAT) | DATE'2024-01-15' |
+        | float - ts | CAST(6 AS FLOAT) | TIMESTAMP'2024-01-15 12:00:00' |
+        | float - ival_d | CAST(6 AS FLOAT) | INTERVAL '2' DAY |
+        | float - ival_m | CAST(6 AS FLOAT) | INTERVAL '2' MONTH |
+        | double - date | CAST(6 AS DOUBLE) | DATE'2024-01-15' |
+        | double - ts | CAST(6 AS DOUBLE) | TIMESTAMP'2024-01-15 12:00:00' |
+        | double - ival_d | CAST(6 AS DOUBLE) | INTERVAL '2' DAY |
+        | double - ival_m | CAST(6 AS DOUBLE) | INTERVAL '2' MONTH |
+        | dec - date | CAST(6 AS DECIMAL(10,2)) | DATE'2024-01-15' |
+        | dec - ts | CAST(6 AS DECIMAL(10,2)) | TIMESTAMP'2024-01-15 12:00:00' |
+        | dec - ival_d | CAST(6 AS DECIMAL(10,2)) | INTERVAL '2' DAY |
+        | dec - ival_m | CAST(6 AS DECIMAL(10,2)) | INTERVAL '2' MONTH |
+        | date - bigint | DATE'2024-01-15' | CAST(2 AS BIGINT) |
+        | date - float | DATE'2024-01-15' | CAST(2 AS FLOAT) |
+        | date - double | DATE'2024-01-15' | CAST(2 AS DOUBLE) |
+        | date - dec | DATE'2024-01-15' | CAST(2 AS DECIMAL(10,2)) |
+        | ts - tinyint | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS TINYINT) |
+        | ts - int | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS INT) |
+        | ts - bigint | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS BIGINT) |
+        | ts - float | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS FLOAT) |
+        | ts - double | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS DOUBLE) |
+        | ts - dec | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS DECIMAL(10,2)) |
+        | ts - null | TIMESTAMP'2024-01-15 12:00:00' | CAST(NULL AS INT) |
+        | ival_d - tinyint | INTERVAL '2' DAY | CAST(2 AS TINYINT) |
+        | ival_d - int | INTERVAL '2' DAY | CAST(2 AS INT) |
+        | ival_d - bigint | INTERVAL '2' DAY | CAST(2 AS BIGINT) |
+        | ival_d - float | INTERVAL '2' DAY | CAST(2 AS FLOAT) |
+        | ival_d - double | INTERVAL '2' DAY | CAST(2 AS DOUBLE) |
+        | ival_d - dec | INTERVAL '2' DAY | CAST(2 AS DECIMAL(10,2)) |
+        | ival_d - ival_m | INTERVAL '2' DAY | INTERVAL '2' MONTH |
+        | ival_d - null | INTERVAL '2' DAY | CAST(NULL AS INT) |
+        | ival_m - tinyint | INTERVAL '2' MONTH | CAST(2 AS TINYINT) |
+        | ival_m - int | INTERVAL '2' MONTH | CAST(2 AS INT) |
+        | ival_m - bigint | INTERVAL '2' MONTH | CAST(2 AS BIGINT) |
+        | ival_m - float | INTERVAL '2' MONTH | CAST(2 AS FLOAT) |
+        | ival_m - double | INTERVAL '2' MONTH | CAST(2 AS DOUBLE) |
+        | ival_m - dec | INTERVAL '2' MONTH | CAST(2 AS DECIMAL(10,2)) |
+        | ival_m - ival_d | INTERVAL '2' MONTH | INTERVAL '2' DAY |
+        | ival_m - null | INTERVAL '2' MONTH | CAST(NULL AS INT) |
+        | null - ts | CAST(NULL AS INT) | TIMESTAMP'2024-01-15 12:00:00' |
+        | null - ival_d | CAST(NULL AS INT) | INTERVAL '2' DAY |
+        | null - ival_m | CAST(NULL AS INT) | INTERVAL '2' MONTH |
+
+    Scenario Outline: minus ansi-on: rejected pair [.*]: <case>
       Given config spark.sql.ansi.enabled = true
       When query
         """
@@ -1763,39 +1967,17 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | bool - unull | true | NULL |
         | tinyint - bool | CAST(6 AS TINYINT) | true |
         | tinyint - date | CAST(6 AS TINYINT) | DATE'2024-01-15' |
-        | tinyint - ts | CAST(6 AS TINYINT) | TIMESTAMP'2024-01-15 12:00:00' |
-        | tinyint - ival_d | CAST(6 AS TINYINT) | INTERVAL '2' DAY |
-        | tinyint - ival_m | CAST(6 AS TINYINT) | INTERVAL '2' MONTH |
         | tinyint - bin | CAST(6 AS TINYINT) | CAST('2' AS BINARY) |
         | int - bool | CAST(6 AS INT) | true |
         | int - date | CAST(6 AS INT) | DATE'2024-01-15' |
-        | int - ts | CAST(6 AS INT) | TIMESTAMP'2024-01-15 12:00:00' |
-        | int - ival_d | CAST(6 AS INT) | INTERVAL '2' DAY |
-        | int - ival_m | CAST(6 AS INT) | INTERVAL '2' MONTH |
         | int - bin | CAST(6 AS INT) | CAST('2' AS BINARY) |
         | bigint - bool | CAST(6 AS BIGINT) | true |
-        | bigint - date | CAST(6 AS BIGINT) | DATE'2024-01-15' |
-        | bigint - ts | CAST(6 AS BIGINT) | TIMESTAMP'2024-01-15 12:00:00' |
-        | bigint - ival_d | CAST(6 AS BIGINT) | INTERVAL '2' DAY |
-        | bigint - ival_m | CAST(6 AS BIGINT) | INTERVAL '2' MONTH |
         | bigint - bin | CAST(6 AS BIGINT) | CAST('2' AS BINARY) |
         | float - bool | CAST(6 AS FLOAT) | true |
-        | float - date | CAST(6 AS FLOAT) | DATE'2024-01-15' |
-        | float - ts | CAST(6 AS FLOAT) | TIMESTAMP'2024-01-15 12:00:00' |
-        | float - ival_d | CAST(6 AS FLOAT) | INTERVAL '2' DAY |
-        | float - ival_m | CAST(6 AS FLOAT) | INTERVAL '2' MONTH |
         | float - bin | CAST(6 AS FLOAT) | CAST('2' AS BINARY) |
         | double - bool | CAST(6 AS DOUBLE) | true |
-        | double - date | CAST(6 AS DOUBLE) | DATE'2024-01-15' |
-        | double - ts | CAST(6 AS DOUBLE) | TIMESTAMP'2024-01-15 12:00:00' |
-        | double - ival_d | CAST(6 AS DOUBLE) | INTERVAL '2' DAY |
-        | double - ival_m | CAST(6 AS DOUBLE) | INTERVAL '2' MONTH |
         | double - bin | CAST(6 AS DOUBLE) | CAST('2' AS BINARY) |
         | dec - bool | CAST(6 AS DECIMAL(10,2)) | true |
-        | dec - date | CAST(6 AS DECIMAL(10,2)) | DATE'2024-01-15' |
-        | dec - ts | CAST(6 AS DECIMAL(10,2)) | TIMESTAMP'2024-01-15 12:00:00' |
-        | dec - ival_d | CAST(6 AS DECIMAL(10,2)) | INTERVAL '2' DAY |
-        | dec - ival_m | CAST(6 AS DECIMAL(10,2)) | INTERVAL '2' MONTH |
         | dec - bin | CAST(6 AS DECIMAL(10,2)) | CAST('2' AS BINARY) |
         | str - bool | '6' | true |
         | str - str | '6' | '2' |
@@ -1803,46 +1985,19 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | str - bin | '6' | CAST('2' AS BINARY) |
         | str - unull | '6' | NULL |
         | date - bool | DATE'2024-01-15' | true |
-        | date - bigint | DATE'2024-01-15' | CAST(2 AS BIGINT) |
-        | date - float | DATE'2024-01-15' | CAST(2 AS FLOAT) |
-        | date - double | DATE'2024-01-15' | CAST(2 AS DOUBLE) |
-        | date - dec | DATE'2024-01-15' | CAST(2 AS DECIMAL(10,2)) |
         | date - bin | DATE'2024-01-15' | CAST('2' AS BINARY) |
         | ts - bool | TIMESTAMP'2024-01-15 12:00:00' | true |
-        | ts - tinyint | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS TINYINT) |
-        | ts - int | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS INT) |
-        | ts - bigint | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS BIGINT) |
-        | ts - float | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS FLOAT) |
-        | ts - double | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS DOUBLE) |
-        | ts - dec | TIMESTAMP'2024-01-15 12:00:00' | CAST(2 AS DECIMAL(10,2)) |
         | ts - bin | TIMESTAMP'2024-01-15 12:00:00' | CAST('2' AS BINARY) |
-        | ts - null | TIMESTAMP'2024-01-15 12:00:00' | CAST(NULL AS INT) |
         | ival_d - bool | INTERVAL '2' DAY | true |
-        | ival_d - tinyint | INTERVAL '2' DAY | CAST(2 AS TINYINT) |
-        | ival_d - int | INTERVAL '2' DAY | CAST(2 AS INT) |
-        | ival_d - bigint | INTERVAL '2' DAY | CAST(2 AS BIGINT) |
-        | ival_d - float | INTERVAL '2' DAY | CAST(2 AS FLOAT) |
-        | ival_d - double | INTERVAL '2' DAY | CAST(2 AS DOUBLE) |
-        | ival_d - dec | INTERVAL '2' DAY | CAST(2 AS DECIMAL(10,2)) |
         | ival_d - str | INTERVAL '2' DAY | '2' |
         | ival_d - date | INTERVAL '2' DAY | DATE'2024-01-15' |
         | ival_d - ts | INTERVAL '2' DAY | TIMESTAMP'2024-01-15 12:00:00' |
-        | ival_d - ival_m | INTERVAL '2' DAY | INTERVAL '2' MONTH |
         | ival_d - bin | INTERVAL '2' DAY | CAST('2' AS BINARY) |
-        | ival_d - null | INTERVAL '2' DAY | CAST(NULL AS INT) |
         | ival_m - bool | INTERVAL '2' MONTH | true |
-        | ival_m - tinyint | INTERVAL '2' MONTH | CAST(2 AS TINYINT) |
-        | ival_m - int | INTERVAL '2' MONTH | CAST(2 AS INT) |
-        | ival_m - bigint | INTERVAL '2' MONTH | CAST(2 AS BIGINT) |
-        | ival_m - float | INTERVAL '2' MONTH | CAST(2 AS FLOAT) |
-        | ival_m - double | INTERVAL '2' MONTH | CAST(2 AS DOUBLE) |
-        | ival_m - dec | INTERVAL '2' MONTH | CAST(2 AS DECIMAL(10,2)) |
         | ival_m - str | INTERVAL '2' MONTH | '2' |
         | ival_m - date | INTERVAL '2' MONTH | DATE'2024-01-15' |
         | ival_m - ts | INTERVAL '2' MONTH | TIMESTAMP'2024-01-15 12:00:00' |
-        | ival_m - ival_d | INTERVAL '2' MONTH | INTERVAL '2' DAY |
         | ival_m - bin | INTERVAL '2' MONTH | CAST('2' AS BINARY) |
-        | ival_m - null | INTERVAL '2' MONTH | CAST(NULL AS INT) |
         | bin - bool | CAST('6' AS BINARY) | true |
         | bin - tinyint | CAST('6' AS BINARY) | CAST(2 AS TINYINT) |
         | bin - int | CAST('6' AS BINARY) | CAST(2 AS INT) |
@@ -1860,9 +2015,6 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | bin - unull | CAST('6' AS BINARY) | NULL |
         | null - bool | CAST(NULL AS INT) | true |
         | null - date | CAST(NULL AS INT) | DATE'2024-01-15' |
-        | null - ts | CAST(NULL AS INT) | TIMESTAMP'2024-01-15 12:00:00' |
-        | null - ival_d | CAST(NULL AS INT) | INTERVAL '2' DAY |
-        | null - ival_m | CAST(NULL AS INT) | INTERVAL '2' MONTH |
         | null - bin | CAST(NULL AS INT) | CAST('2' AS BINARY) |
         | unull - bool | NULL | true |
         | unull - str | NULL | '2' |
@@ -2009,9 +2161,54 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | ival_m * unull | INTERVAL '2' MONTH | NULL | interval year to month |
         | null * ival_m | CAST(NULL AS INT) | INTERVAL '2' MONTH | interval year to month |
         | unull * ival_m | NULL | INTERVAL '2' MONTH | interval year to month |
+
+    @sail-bug @spark-4
+    Scenario Outline: times ansi-on: valid pair type (Sail diverges), untyped NULL pair: <case>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT typeof((<l>) * (<r>)) AS t
+        """
+      Then query result
+        | t        |
+        | <result> |
+
+      Examples:
+        | case | l | r | result |
         | unull * unull | NULL | NULL | double |
 
-    Scenario Outline: times ansi-on: rejected pair: <case>
+    Scenario Outline: times ansi-on: rejected pair [cannot resolve]: <case>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT typeof((<l>) * (<r>)) AS t
+        """
+      Then query error (?i)cannot resolve
+
+      Examples:
+        | case | l | r |
+        | bool * ival_d | true | INTERVAL '2' DAY |
+        | bool * ival_m | true | INTERVAL '2' MONTH |
+        | date * ival_d | DATE'2024-01-15' | INTERVAL '2' DAY |
+        | date * ival_m | DATE'2024-01-15' | INTERVAL '2' MONTH |
+        | ts * ival_d | TIMESTAMP'2024-01-15 12:00:00' | INTERVAL '2' DAY |
+        | ts * ival_m | TIMESTAMP'2024-01-15 12:00:00' | INTERVAL '2' MONTH |
+        | ival_d * bool | INTERVAL '2' DAY | true |
+        | ival_d * date | INTERVAL '2' DAY | DATE'2024-01-15' |
+        | ival_d * ts | INTERVAL '2' DAY | TIMESTAMP'2024-01-15 12:00:00' |
+        | ival_d * ival_d | INTERVAL '2' DAY | INTERVAL '2' DAY |
+        | ival_d * ival_m | INTERVAL '2' DAY | INTERVAL '2' MONTH |
+        | ival_d * bin | INTERVAL '2' DAY | CAST('2' AS BINARY) |
+        | ival_m * bool | INTERVAL '2' MONTH | true |
+        | ival_m * date | INTERVAL '2' MONTH | DATE'2024-01-15' |
+        | ival_m * ts | INTERVAL '2' MONTH | TIMESTAMP'2024-01-15 12:00:00' |
+        | ival_m * ival_d | INTERVAL '2' MONTH | INTERVAL '2' DAY |
+        | ival_m * ival_m | INTERVAL '2' MONTH | INTERVAL '2' MONTH |
+        | ival_m * bin | INTERVAL '2' MONTH | CAST('2' AS BINARY) |
+        | bin * ival_d | CAST('6' AS BINARY) | INTERVAL '2' DAY |
+        | bin * ival_m | CAST('6' AS BINARY) | INTERVAL '2' MONTH |
+
+    Scenario Outline: times ansi-on: rejected pair [.*]: <case>
       Given config spark.sql.ansi.enabled = true
       When query
         """
@@ -2031,8 +2228,6 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | bool * str | true | '2' |
         | bool * date | true | DATE'2024-01-15' |
         | bool * ts | true | TIMESTAMP'2024-01-15 12:00:00' |
-        | bool * ival_d | true | INTERVAL '2' DAY |
-        | bool * ival_m | true | INTERVAL '2' MONTH |
         | bool * bin | true | CAST('2' AS BINARY) |
         | bool * null | true | CAST(NULL AS INT) |
         | bool * unull | true | NULL |
@@ -2076,8 +2271,6 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | date * str | DATE'2024-01-15' | '2' |
         | date * date | DATE'2024-01-15' | DATE'2024-01-15' |
         | date * ts | DATE'2024-01-15' | TIMESTAMP'2024-01-15 12:00:00' |
-        | date * ival_d | DATE'2024-01-15' | INTERVAL '2' DAY |
-        | date * ival_m | DATE'2024-01-15' | INTERVAL '2' MONTH |
         | date * bin | DATE'2024-01-15' | CAST('2' AS BINARY) |
         | date * null | DATE'2024-01-15' | CAST(NULL AS INT) |
         | date * unull | DATE'2024-01-15' | NULL |
@@ -2091,23 +2284,9 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | ts * str | TIMESTAMP'2024-01-15 12:00:00' | '2' |
         | ts * date | TIMESTAMP'2024-01-15 12:00:00' | DATE'2024-01-15' |
         | ts * ts | TIMESTAMP'2024-01-15 12:00:00' | TIMESTAMP'2024-01-15 12:00:00' |
-        | ts * ival_d | TIMESTAMP'2024-01-15 12:00:00' | INTERVAL '2' DAY |
-        | ts * ival_m | TIMESTAMP'2024-01-15 12:00:00' | INTERVAL '2' MONTH |
         | ts * bin | TIMESTAMP'2024-01-15 12:00:00' | CAST('2' AS BINARY) |
         | ts * null | TIMESTAMP'2024-01-15 12:00:00' | CAST(NULL AS INT) |
         | ts * unull | TIMESTAMP'2024-01-15 12:00:00' | NULL |
-        | ival_d * bool | INTERVAL '2' DAY | true |
-        | ival_d * date | INTERVAL '2' DAY | DATE'2024-01-15' |
-        | ival_d * ts | INTERVAL '2' DAY | TIMESTAMP'2024-01-15 12:00:00' |
-        | ival_d * ival_d | INTERVAL '2' DAY | INTERVAL '2' DAY |
-        | ival_d * ival_m | INTERVAL '2' DAY | INTERVAL '2' MONTH |
-        | ival_d * bin | INTERVAL '2' DAY | CAST('2' AS BINARY) |
-        | ival_m * bool | INTERVAL '2' MONTH | true |
-        | ival_m * date | INTERVAL '2' MONTH | DATE'2024-01-15' |
-        | ival_m * ts | INTERVAL '2' MONTH | TIMESTAMP'2024-01-15 12:00:00' |
-        | ival_m * ival_d | INTERVAL '2' MONTH | INTERVAL '2' DAY |
-        | ival_m * ival_m | INTERVAL '2' MONTH | INTERVAL '2' MONTH |
-        | ival_m * bin | INTERVAL '2' MONTH | CAST('2' AS BINARY) |
         | bin * bool | CAST('6' AS BINARY) | true |
         | bin * tinyint | CAST('6' AS BINARY) | CAST(2 AS TINYINT) |
         | bin * int | CAST('6' AS BINARY) | CAST(2 AS INT) |
@@ -2118,8 +2297,6 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | bin * str | CAST('6' AS BINARY) | '2' |
         | bin * date | CAST('6' AS BINARY) | DATE'2024-01-15' |
         | bin * ts | CAST('6' AS BINARY) | TIMESTAMP'2024-01-15 12:00:00' |
-        | bin * ival_d | CAST('6' AS BINARY) | INTERVAL '2' DAY |
-        | bin * ival_m | CAST('6' AS BINARY) | INTERVAL '2' MONTH |
         | bin * bin | CAST('6' AS BINARY) | CAST('2' AS BINARY) |
         | bin * null | CAST('6' AS BINARY) | CAST(NULL AS INT) |
         | bin * unull | CAST('6' AS BINARY) | NULL |
@@ -2233,6 +2410,20 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | unull / double | NULL | CAST(2 AS DOUBLE) | double |
         | unull / dec | NULL | CAST(2 AS DECIMAL(10,2)) | double |
         | unull / null | NULL | CAST(NULL AS INT) | double |
+
+    @spark-4
+    Scenario Outline: divide ansi-on: valid pair type, untyped NULL pair: <case>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT typeof((<l>) / (<r>)) AS t
+        """
+      Then query result
+        | t        |
+        | <result> |
+
+      Examples:
+        | case | l | r | result |
         | unull / unull | NULL | NULL | double |
 
     @sail-bug
@@ -2258,13 +2449,13 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | ival_m / null | INTERVAL '2' MONTH | CAST(NULL AS INT) | interval year to month |
         | ival_m / unull | INTERVAL '2' MONTH | NULL | interval year to month |
 
-    Scenario Outline: divide ansi-on: rejected pair: <case>
+    Scenario Outline: divide ansi-on: rejected pair [cannot resolve]: <case>
       Given config spark.sql.ansi.enabled = true
       When query
         """
         SELECT typeof((<l>) / (<r>)) AS t
         """
-      Then query error .*
+      Then query error (?i)cannot resolve
 
       Examples:
         | case | l | r |
@@ -2490,8 +2681,8 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | unull % dec | NULL | CAST(2 AS DECIMAL(10,2)) | decimal(10,2) |
         | unull % null | NULL | CAST(NULL AS INT) | int |
 
-    @sail-bug
-    Scenario Outline: modulo ansi-on: valid pair type (Sail diverges): <case>
+    @sail-bug @spark-4
+    Scenario Outline: modulo ansi-on: valid pair type (Sail diverges), untyped NULL pair: <case>
       Given config spark.sql.ansi.enabled = true
       When query
         """
@@ -2505,7 +2696,7 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | case | l | r | result |
         | unull % unull | NULL | NULL | double |
 
-    Scenario Outline: modulo ansi-on: rejected pair: <case>
+    Scenario Outline: modulo ansi-on: rejected pair [.*]: <case>
       Given config spark.sql.ansi.enabled = true
       When query
         """

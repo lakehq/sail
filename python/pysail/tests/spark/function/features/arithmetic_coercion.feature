@@ -748,6 +748,24 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
          |-- result: decimal(38,6) (nullable = true)
         """
 
+    Scenario: a capped decimal multiply and sum are non-nullable under ANSI on
+      # The complement of the two ANSI-off scenarios above: under ANSI on the retype narrows
+      # with a strict `cast`, so `nullOnOverflow = false` and the result is nullable=false,
+      # matching Spark's CheckOverflow. Pinned so the custom-PhysicalExpr follow-up cannot
+      # blindly force nullable=true across both modes and regress the ANSI-on half undetected.
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST(1 AS DECIMAL(38,18)) * CAST(1 AS DECIMAL(38,18)) AS m,
+               CAST(1 AS DECIMAL(38,10)) + CAST(1 AS DECIMAL(38,2)) AS s
+        """
+      Then query schema
+        """
+        root
+         |-- m: decimal(38,6) (nullable = false)
+         |-- s: decimal(38,6) (nullable = false)
+        """
+
     Scenario: division, remainder and pmod are nullable under ANSI on
       # Spark's DivModLike.nullable and Pmod.nullable are unconditionally true,
       # not ANSI-dependent. Sail already agrees; pinned so the custom PhysicalExpr
