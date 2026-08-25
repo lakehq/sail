@@ -22,6 +22,7 @@ def test_distributed_explain_returns_a_versioned_typed_report(spark):
     assert report.edges
     assert all(stage.partitions > 0 for stage in report.stages)
     assert any(stage.placement == "worker" for stage in report.stages)
+    assert all(stage.distribution["kind"] for stage in report.stages)
     assert any(stage.operator_tree for stage in report.stages)
     assert json.loads(report.text)["schema_version"] == 1
 
@@ -32,11 +33,14 @@ def test_distributed_explain_renders_text_and_graphviz(spark):
     text = diagnostics.explain(dataframe, verbose=True).text
     graphviz = diagnostics.explain(dataframe, format="graphviz").text
 
-    assert text.startswith("Distributed Plan V1\n")
+    assert text.startswith("Distributed Plan\n")
+    assert "inputs=[StageInput(stage=0, mode=Shuffle)]" in text
+    assert "distribution=round_robin_batch" in text
     assert "=== exchanges ===" in text
     assert "RangeExec" in text
     assert graphviz.startswith("digraph distributed_plan {")
     assert "stage_0 -> stage_1" in graphviz
+    assert "distribution=round_robin_batch" in graphviz
     assert "RangeExec" not in graphviz
 
 

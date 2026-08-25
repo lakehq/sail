@@ -15,6 +15,16 @@ use sail_common::diagnostics::{
 
 use crate::shuffle::ShuffleBackendKind;
 
+fn distributed_distribution(distribution: &OutputDistribution) -> DistributedDistributionV1 {
+    match distribution {
+        OutputDistribution::Hash { keys, .. } => DistributedDistributionV1::Hash {
+            keys: keys.iter().map(ToString::to_string).collect(),
+        },
+        OutputDistribution::RoundRobinBatch { .. } => DistributedDistributionV1::RoundRobinBatch,
+        OutputDistribution::RoundRobinRow { .. } => DistributedDistributionV1::RoundRobinRow,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct JobGraphOptions {
     pub shuffle_backend: ShuffleBackendKind,
@@ -65,6 +75,7 @@ impl JobGraph {
                     OutputMode::Pipelined => DistributedOutputMode::Pipelined,
                     OutputMode::Blocking => DistributedOutputMode::Blocking,
                 },
+                distribution: distributed_distribution(&stage.distribution),
                 operator_tree: DisplayableExecutionPlan::new(stage.plan.as_ref())
                     .indent(true)
                     .to_string(),
@@ -87,19 +98,7 @@ impl JobGraph {
                             InputMode::Broadcast => DistributedExchangeKind::Broadcast,
                             InputMode::Rescale => DistributedExchangeKind::Rescale,
                         },
-                        distribution: match distribution {
-                            OutputDistribution::Hash { keys, .. } => {
-                                DistributedDistributionV1::Hash {
-                                    keys: keys.iter().map(ToString::to_string).collect(),
-                                }
-                            }
-                            OutputDistribution::RoundRobinBatch { .. } => {
-                                DistributedDistributionV1::RoundRobinBatch
-                            }
-                            OutputDistribution::RoundRobinRow { .. } => {
-                                DistributedDistributionV1::RoundRobinRow
-                            }
-                        },
+                        distribution: distributed_distribution(distribution),
                         channel_count: distribution.channels(),
                     }
                 })

@@ -67,6 +67,7 @@ class DistributedStage:
     placement: str
     partitions: int
     output_mode: str
+    distribution: dict[str, Any]
     operator_tree: str
 
 
@@ -94,6 +95,7 @@ class ExplainReport:
                 placement=stage["placement"],
                 partitions=stage["partition_count"],
                 output_mode=stage["output_mode"],
+                distribution=stage["distribution"],
                 operator_tree=stage["operator_tree"],
             )
             for stage in model["stages"]
@@ -142,20 +144,27 @@ class ExplainReport:
 
     def _render_text(self) -> str:
         lines = [
-            f"Distributed Plan V{self.schema_version}",
+            "Distributed Plan",
             f"execution_mode={self.execution_mode.replace('_', '-')}",
             f"executed={str(self.executed).lower()}",
         ]
         if self.job_id is not None:
             lines.append(f"job_id={self.job_id}")
         for stage in self.stages:
+            inputs = ", ".join(
+                f"StageInput(stage={edge.from_stage}, mode={edge.exchange_kind.capitalize()})"
+                for edge in self.edges
+                if edge.to_stage == stage.id
+            )
             lines.extend(
                 [
                     "",
                     f"=== stage {stage.id} ===",
+                    f"inputs=[{inputs}]",
                     f"placement={stage.placement}",
                     f"partitions={stage.partitions}",
                     f"output_mode={stage.output_mode}",
+                    f"distribution={_format_distribution(stage.distribution)}",
                 ]
             )
             if self._verbose:
@@ -178,6 +187,7 @@ class ExplainReport:
             label = (
                 f"stage {stage.id}\nplacement={stage.placement}\npartitions={stage.partitions}"
                 f"\noutput_mode={stage.output_mode}"
+                f"\ndistribution={_format_distribution(stage.distribution)}"
             )
             if self._verbose:
                 label += f"\n{stage.operator_tree.rstrip()}"

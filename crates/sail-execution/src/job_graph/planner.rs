@@ -1005,7 +1005,10 @@ mod tests {
     use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
     use super::{JobGraph, JobGraphOptions, create_scalar_subquery_input};
-    use crate::job_graph::{InputMode, OutputDistribution, OutputMode, StageInput, TaskPlacement};
+    use crate::job_graph::{
+        InputMode, OutputDistribution, OutputMode, StageInput, TaskPlacement,
+        distributed_distribution,
+    };
     use crate::plan::StageInputExec;
     use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
 
@@ -1104,6 +1107,12 @@ mod tests {
         let plan = graph.distributed_plan(DistributedExecutionMode::LocalCluster);
 
         assert_eq!(plan.stages.len(), graph.stages().len());
+        for (stage, snapshot) in graph.stages().iter().zip(&plan.stages) {
+            assert_eq!(
+                snapshot.distribution,
+                distributed_distribution(&stage.distribution)
+            );
+        }
         assert_eq!(plan.edges.len(), 1);
         assert_eq!(plan.edges[0].from_stage, 0);
         assert_eq!(plan.edges[0].to_stage, 1);

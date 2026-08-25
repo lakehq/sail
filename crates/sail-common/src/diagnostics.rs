@@ -71,7 +71,7 @@ impl DistributedPlanV1 {
 
     fn render_text(&self, verbose: bool) -> String {
         let mut output = String::new();
-        let _ = writeln!(output, "Distributed Plan V{}", self.schema_version);
+        let _ = writeln!(output, "Distributed Plan");
         let _ = writeln!(output, "execution_mode={}", self.execution_mode.as_str());
         let _ = writeln!(output, "executed={}", self.executed);
         if let Some(execution) = &self.execution {
@@ -81,9 +81,24 @@ impl DistributedPlanV1 {
         for stage in &self.stages {
             let _ = writeln!(output);
             let _ = writeln!(output, "=== stage {} ===", stage.stage_id);
+            let inputs = self
+                .edges
+                .iter()
+                .filter(|edge| edge.to_stage == stage.stage_id)
+                .map(|edge| {
+                    format!(
+                        "StageInput(stage={}, mode={})",
+                        edge.from_stage,
+                        edge.exchange_kind.stage_input_mode_name(),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let _ = writeln!(output, "inputs=[{inputs}]");
             let _ = writeln!(output, "placement={}", stage.placement.as_str());
             let _ = writeln!(output, "partitions={}", stage.partition_count);
             let _ = writeln!(output, "output_mode={}", stage.output_mode.as_str());
+            let _ = writeln!(output, "distribution={}", stage.distribution);
             if verbose {
                 let _ = writeln!(output, "{}", stage.operator_tree.trim_end());
             }
@@ -118,11 +133,12 @@ impl DistributedPlanV1 {
         let mut output = String::from("digraph distributed_plan {\n  rankdir=LR;\n");
         for stage in &self.stages {
             let mut label = format!(
-                "stage {}\nplacement={}\npartitions={}\noutput_mode={}",
+                "stage {}\nplacement={}\npartitions={}\noutput_mode={}\ndistribution={}",
                 stage.stage_id,
                 stage.placement.as_str(),
                 stage.partition_count,
                 stage.output_mode.as_str(),
+                stage.distribution,
             );
             if verbose {
                 label.push('\n');
@@ -161,6 +177,7 @@ pub struct DistributedStageV1 {
     pub placement: DistributedPlacement,
     pub partition_count: usize,
     pub output_mode: DistributedOutputMode,
+    pub distribution: DistributedDistributionV1,
     pub operator_tree: String,
 }
 
@@ -225,6 +242,16 @@ impl DistributedExchangeKind {
             Self::Rescale => "rescale",
         }
     }
+
+    fn stage_input_mode_name(self) -> &'static str {
+        match self {
+            Self::Forward => "Forward",
+            Self::Merge => "Merge",
+            Self::Shuffle => "Shuffle",
+            Self::Broadcast => "Broadcast",
+            Self::Rescale => "Rescale",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -252,6 +279,7 @@ pub struct DistributedExecutionV1 {
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -263,6 +291,7 @@ mod tests {
                 placement: DistributedPlacement::Worker,
                 partition_count: 2,
                 output_mode: DistributedOutputMode::Pipelined,
+                distribution: DistributedDistributionV1::RoundRobinBatch,
                 operator_tree: "ProjectionExec\n  DataSourceExec".to_string(),
             }],
             vec![],
@@ -276,6 +305,10 @@ mod tests {
         assert_eq!(value["schema_version"], 1);
         assert_eq!(value["execution_mode"], "local_cluster");
         assert_eq!(value["stages"][0]["stage_id"], 0);
+        assert_eq!(
+            value["stages"][0]["distribution"]["kind"],
+            "round_robin_batch"
+        );
     }
 
     #[test]
@@ -297,5 +330,30 @@ mod tests {
                 .unwrap()
                 .contains("ProjectionExec")
         );
+    }
+
+    #[test]
+    fn text_renderer_preserves_stage_inputs_without_versioned_title() {
+        let mut plan = plan();
+        let mut downstream = plan.stages[0].clone();
+        downstream.stage_id = 1;
+        plan.stages.push(downstream);
+        plan.edges.push(DistributedEdgeV1 {
+            from_stage: 0,
+            to_stage: 1,
+            exchange_kind: DistributedExchangeKind::Shuffle,
+            distribution: DistributedDistributionV1::Hash {
+                keys: vec!["#1@0".to_string()],
+            },
+            channel_count: 2,
+        });
+
+        let output = plan.render(ExplainFormat::Text, false).unwrap();
+
+        assert!(output.starts_with("Distributed Plan\n"));
+        assert!(!output.contains("Distributed Plan V1"));
+        assert!(output.contains("=== stage 0 ===\ninputs=[]\n"));
+        assert!(output.contains("=== stage 1 ===\ninputs=[StageInput(stage=0, mode=Shuffle)]\n"));
+        assert!(output.contains("distribution=round_robin_batch"));
     }
 }
