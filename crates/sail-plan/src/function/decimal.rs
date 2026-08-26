@@ -17,6 +17,22 @@ const SPARK_MINIMUM_ADJUSTED_SCALE: i32 = 6;
 /// Spark's `DecimalType.MAX_SCALE`.
 const SPARK_MAX_SCALE: i32 = 38;
 
+/// Narrows a computed `(precision, scale)` to Arrow's storage types.
+///
+/// Spark guards this with `assert(precision >= scale)` and `checkNegativeScale`
+/// (`DecimalType.scala:160-176`); Sail has no equivalent, and a bare `as u8` would WRAP rather
+/// than fail — a computed precision of `-43` becomes `213`, producing a `Decimal128(213, 6)`
+/// that only fails much later inside Arrow. Clamping to the representable range keeps the
+/// failure, if any, in Arrow's own validation with an honest type. For every precision/scale a
+/// non-negative-scale operand can produce this is a no-op, so it changes nothing reachable
+/// today; it exists so a future negative-scale path cannot wrap silently.
+fn narrow(precision: i32, scale: i32) -> (u8, i8) {
+    (
+        precision.clamp(1, DECIMAL128_MAX_PRECISION as i32) as u8,
+        scale.clamp(-SPARK_MAX_SCALE, SPARK_MAX_SCALE) as i8,
+    )
+}
+
 /// Spark's `adjustPrecisionScale`: when a computed decimal precision exceeds 38,
 /// cap it at 38 and reduce the scale, keeping at least
 /// `min(scale, SPARK_MINIMUM_ADJUSTED_SCALE)` fractional digits. DataFusion's
@@ -28,18 +44,18 @@ const SPARK_MAX_SCALE: i32 = 38;
 fn adjust_precision_scale(precision: i32, scale: i32) -> (u8, i8) {
     let max_precision = DECIMAL128_MAX_PRECISION as i32;
     if precision <= max_precision {
-        (precision as u8, scale as i8)
+        narrow(precision, scale)
     } else if scale < 0 {
         // Spark keeps a negative scale unchanged here (DecimalType.scala:182), reachable only
         // with `spark.sql.legacy.allowNegativeScaleOfDecimal` (negative-scale decimals). Mirror it
         // exactly for faithfulness; with non-negative operand scales the `+ - * %` result scale
         // stays `>= 0` (`*` uses `s1 + s2`), so this branch is not hit in practice.
-        (DECIMAL128_MAX_PRECISION, scale as i8)
+        narrow(max_precision, scale)
     } else {
         let int_digits = precision - scale;
         let min_scale = scale.min(SPARK_MINIMUM_ADJUSTED_SCALE);
         let adjusted_scale = (max_precision - int_digits).max(min_scale);
-        (DECIMAL128_MAX_PRECISION, adjusted_scale as i8)
+        narrow(max_precision, adjusted_scale)
     }
 }
 
@@ -49,9 +65,9 @@ fn adjust_precision_scale(precision: i32, scale: i32) -> (u8, i8) {
 /// unrepresentable result yields NULL at runtime rather than a rounded value.
 /// <https://github.com/apache/spark/blob/v4.2.0/sql/api/src/main/scala/org/apache/spark/sql/types/DecimalType.scala#L144-L146>
 fn bounded(precision: i32, scale: i32) -> (u8, i8) {
-    (
-        min(precision, DECIMAL128_MAX_PRECISION as i32) as u8,
-        min(scale, SPARK_MAX_SCALE) as i8,
+    narrow(
+        min(precision, DECIMAL128_MAX_PRECISION as i32),
+        min(scale, SPARK_MAX_SCALE),
     )
 }
 

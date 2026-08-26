@@ -76,6 +76,14 @@ pub fn spark_string_to_numeric(
             // message can quote it exactly like Spark.
             if value_trimmed.is_empty() {
                 return if null_on_failure {
+                    // `try_from` builds the typed NULL for `target`; it delegates to
+                    // `ScalarValue::try_new_null`, which covers every numeric variant, and every
+                    // caller gates on a numeric target — so the fallback is unreachable. It is a
+                    // fallback rather than a `?` because this function returns `Expr`, and
+                    // threading `PlanResult` through it would ripple into
+                    // `coerce_spark_arithmetic_operands` and all of its callers for a branch
+                    // that cannot be taken. If a caller ever passes a non-numeric target, the
+                    // untyped NULL is the symptom to look for.
                     expr::Expr::Literal(
                         ScalarValue::try_from(&target).unwrap_or(ScalarValue::Null),
                         metadata,
@@ -196,10 +204,15 @@ pub(crate) fn spark_type_name(data_type: &DataType) -> String {
         // which decide on the peer's type and so can surface any type at all. Without these
         // arms the fallback below leaks Arrow's `Debug` for the whole nested type
         // (`Struct([Field { name: "a", data_type: Int32, nullable: true, .. }])`). Spark spells
-        // them `STRUCT<a: INT NOT NULL>`, `ARRAY<INT>` and `MAP<STRING, INT>`; the recursion
-        // mirrors `SparkPlanFormatter::data_type_to_simple_string`, which is unusable here
-        // because it needs the session context and lowercases the field names along with the
-        // type names.
+        // them `STRUCT<a: INT NOT NULL>`, `ARRAY<INT>` and `MAP<STRING, INT>`.
+        //
+        // This deliberately duplicates the shape of `SparkPlanFormatter::data_type_to_simple_string`
+        // (formatter.rs), which is NOT reused here because it answers a different question: it
+        // renders Spark's lowercase `simpleString` for plan/catalog output, while an operand
+        // error needs Spark's uppercase `DATATYPE_MISMATCH` spelling, the ` NOT NULL` field
+        // suffix, a VARIANT arm, and `Decimal32`/`Decimal64` (which the formatter rejects with
+        // `not_impl_err!`). It is also infallible, which the reject path needs. Keep the two
+        // tables in sync when adding a type to either.
         DataType::List(field)
         | DataType::LargeList(field)
         | DataType::ListView(field)
@@ -234,6 +247,13 @@ pub(crate) fn spark_type_name(data_type: &DataType) -> String {
             ),
             other => format!("MAP<{}>", spark_type_name(other)),
         },
+        // A dictionary-encoded column carries its logical type in the VALUE type, and
+        // `rejects_as_divide_dividend` deliberately does not reject `Dictionary` (it may wrap a
+        // numeric), so one can reach this function as the PEER of a rejected operand. Naming the
+        // value type keeps the message in Spark's vocabulary; the encoding is an Arrow storage
+        // detail Spark has no name for.
+        DataType::Dictionary(_, value_type) => spark_type_name(value_type),
+        DataType::RunEndEncoded(_, values) => spark_type_name(values.data_type()),
         other => format!("{other:?}"),
     }
 }
