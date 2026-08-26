@@ -9,8 +9,8 @@ use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
-    PlanProperties, SendableRecordBatchStream,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
+    Partitioning, PlanProperties, ReplaceChildrenOptions, SendableRecordBatchStream,
 };
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DataFusionError, Result, internal_err};
@@ -169,27 +169,43 @@ impl ExecutionPlan for DeltaDiscoveryExec {
         Ok(TreeNodeRecursion::Continue)
     }
 
-    #[expect(deprecated)]
     fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
-        _options: datafusion::physical_plan::ReplaceChildrenOptions,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.with_new_children(children)
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        if _children.len() != 1 {
+        if children.len() != 1 {
             return internal_err!(
                 "DeltaDiscoveryExec requires exactly one child when used as a unary node"
             );
         }
-        let mut cloned = (*self).clone();
-        cloned.input = _children[0].clone();
-        Ok(Arc::new(cloned))
+        let input = Arc::clone(&children[0]);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => {
+                let mut cloned = (*self).clone();
+                cloned.input = input;
+                Ok(Arc::new(cloned))
+            }
+            ChildrenPropertiesMode::Recompute => Ok(Arc::new(Self::new(
+                input,
+                self.table_url.clone(),
+                self.predicate.clone(),
+                self.table_schema.clone(),
+                self.version,
+                self.input_partition_columns.clone(),
+                self.input_partition_scan,
+            )?)),
+        }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(

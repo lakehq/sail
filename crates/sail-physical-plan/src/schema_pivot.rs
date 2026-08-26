@@ -9,7 +9,8 @@ use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion::physical_plan::{
-    DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    ChildrenPropertiesMode, DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    ReplaceChildrenOptions,
 };
 use datafusion_common::{DataFusionError, Result, exec_err, internal_datafusion_err};
 use futures::{Stream, StreamExt};
@@ -94,26 +95,35 @@ impl ExecutionPlan for SchemaPivotExec {
         Ok(TreeNodeRecursion::Continue)
     }
 
-    #[expect(deprecated)]
     fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
-        _options: datafusion::physical_plan::ReplaceChildrenOptions,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.with_new_children(children)
+        let input = children
+            .one()
+            .map_err(|_| internal_datafusion_err!("SchemaPivotExec should have one child"))?;
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
+                input,
+                ..self.as_ref().clone()
+            })),
+            ChildrenPropertiesMode::Recompute => Ok(Arc::new(Self::new(
+                input,
+                self.names.clone(),
+                self.schema.clone(),
+            ))),
+        }
     }
 
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input = children
-            .one()
-            .map_err(|_| internal_datafusion_err!("SchemaPivotExec should have one child"))?;
-        Ok(Arc::new(Self {
-            input,
-            ..self.as_ref().clone()
-        }))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(

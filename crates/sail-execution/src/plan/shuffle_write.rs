@@ -14,8 +14,8 @@ use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::repartition::BatchPartitioner;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
-    apply_expression_roots,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
+    PlanProperties, ReplaceChildrenOptions, apply_expression_roots,
 };
 use futures::StreamExt;
 use sail_physical_plan::repartition::RowRoundRobinPartitioner;
@@ -175,27 +175,36 @@ impl ExecutionPlan for ShuffleWriteExec {
         }
     }
 
-    #[expect(deprecated)]
     fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
-        _options: datafusion::physical_plan::ReplaceChildrenOptions,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.with_new_children(children)
+        if children.len() != 1 {
+            return plan_err!("ShuffleWriteExec should have one child");
+        }
+        let plan = Arc::clone(&children[0]);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
+                plan,
+                ..self.as_ref().clone()
+            })),
+            ChildrenPropertiesMode::Recompute => Ok(Arc::new(Self::new(
+                plan,
+                Arc::clone(&self.writer),
+                self.partitioning.clone(),
+            ))),
+        }
     }
 
     fn with_new_children(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let child = children.pop();
-        match (child, children.is_empty()) {
-            (Some(plan), true) => Ok(Arc::new(Self {
-                plan,
-                ..self.as_ref().clone()
-            })),
-            _ => plan_err!("ShuffleWriteExec should have one child"),
-        }
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
