@@ -443,7 +443,7 @@ def test_snapshot_procedure_commits_through_rest_catalog(
           table => '{table_fqn}',
           snapshot_id => {target_snapshot_id}
         )
-        """  # noqa: S608
+        """
     ).first()
     assert result.previous_snapshot_id == previous_snapshot_id
     assert result.current_snapshot_id == target_snapshot_id

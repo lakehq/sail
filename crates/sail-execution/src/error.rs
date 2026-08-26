@@ -46,6 +46,12 @@ impl<T> From<mpsc::error::SendError<T>> for ExecutionError {
     }
 }
 
+impl<T> From<Box<mpsc::error::SendError<T>>> for ExecutionError {
+    fn from(error: Box<mpsc::error::SendError<T>>) -> Self {
+        ExecutionError::InternalError(error.to_string())
+    }
+}
+
 impl From<oneshot::error::RecvError> for ExecutionError {
     fn from(error: oneshot::error::RecvError) -> Self {
         ExecutionError::InternalError(error.to_string())

@@ -7,7 +7,10 @@ import pytest
 
 INTEGRATION_TEST_PATHS = [
     Path(__file__).parent / "celeborn",
+    Path(__file__).parent / "catalog" / "glue",
     Path(__file__).parent / "catalog" / "hms",
+    Path(__file__).parent / "catalog" / "iceberg_rest",
+    Path(__file__).parent / "catalog" / "unity",
     Path(__file__).parent / "spark" / "catalog" / "glue",
     Path(__file__).parent / "spark" / "catalog" / "hms",
     Path(__file__).parent / "spark" / "catalog" / "iceberg_rest",
@@ -25,7 +28,10 @@ def pytest_configure(config: pytest.Config) -> None:
     """
 
     config.pluginmanager.import_plugin("pysail.testing.containers.celeborn")
+    config.pluginmanager.import_plugin("pysail.testing.containers.glue")
     config.pluginmanager.import_plugin("pysail.testing.containers.hms")
+    config.pluginmanager.import_plugin("pysail.testing.containers.iceberg_rest")
+    config.pluginmanager.import_plugin("pysail.testing.containers.unity")
 
     # Note: configuration set via `config.inicfg` may not have an effect due to the cache used
     # in `config.getini()`. In such a case, we may have to clear the INI cache in `config`.

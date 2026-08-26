@@ -23,7 +23,7 @@ Rust's zero-cost abstractions allow for modular Sail internals with a low memory
 
 There is no need for JVM tuning anymore. You no longer need to worry about memory usage from overhead in JVM objects or squeeze performance out of Spark memory configuration.
 
-In our [Benchmark Results](../benchmark-results/), Sail delivers a 4x speed-up over Apache Spark and reduces hardware costs by up to 94% due to the combined effect of shorter query execution times and lower memory usage.
+In our [Benchmark Results](../benchmark-results/), Sail delivers a 10x speed-up over Apache Spark and reduces hardware costs by up to 98% due to the combined effect of shorter query execution times and lower memory usage.
 
 ## Robustness
 

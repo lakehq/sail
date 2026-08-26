@@ -42,25 +42,21 @@ def test_iceberg_snapshot_procedures(spark, tmp_path):
         snapshot_ids = [row.snapshot_id for row in snapshots]
         assert len(snapshot_ids) == 3  # noqa: PLR2004
 
-        ancestors = spark.sql(
-            f"CALL SyStEm.AnCeStOrS_Of(table => '{table_name}')"  # noqa: S608
-        ).collect()
+        ancestors = spark.sql(f"CALL SyStEm.AnCeStOrS_Of(table => '{table_name}')").collect()
         assert [row.snapshot_id for row in ancestors] == list(reversed(snapshot_ids))
 
         ancestors_from_middle = spark.sql(
-            f"CALL sail.system.ancestors_of('{table_name}', snapshot_id => {snapshot_ids[1]})"  # noqa: S608
+            f"CALL sail.system.ancestors_of('{table_name}', snapshot_id => {snapshot_ids[1]})"
         ).collect()
         assert [row.snapshot_id for row in ancestors_from_middle] == list(reversed(snapshot_ids[:2]))
 
-        rollback = spark.sql(
-            f"CALL system.rollback_to_snapshot('{table_name}', {snapshot_ids[0]})"  # noqa: S608
-        ).first()
+        rollback = spark.sql(f"CALL system.rollback_to_snapshot('{table_name}', {snapshot_ids[0]})").first()
         assert rollback.previous_snapshot_id == snapshot_ids[2]
         assert rollback.current_snapshot_id == snapshot_ids[0]
         assert [row.id for row in spark.table(table_name).orderBy("id").collect()] == [1]
 
         restored = spark.sql(
-            f"CALL system.set_current_snapshot(table => '{table_name}', snapshot_id => {snapshot_ids[2]})"  # noqa: S608
+            f"CALL system.set_current_snapshot(table => '{table_name}', snapshot_id => {snapshot_ids[2]})"
         ).first()
         assert restored.previous_snapshot_id == snapshot_ids[0]
         assert restored.current_snapshot_id == snapshot_ids[2]
@@ -78,7 +74,7 @@ def test_iceberg_snapshot_procedures(spark, tmp_path):
         _edit_latest_metadata(table_path, set_snapshot_times)
         cutoff = (base_time + timedelta(seconds=1, milliseconds=500)).strftime("%Y-%m-%d %H:%M:%S.%f")
         rollback_by_time = spark.sql(
-            f"CALL system.rollback_to_timestamp(table => '{table_name}', timestamp => TIMESTAMP '{cutoff}')"  # noqa: S608
+            f"CALL system.rollback_to_timestamp(table => '{table_name}', timestamp => TIMESTAMP '{cutoff}')"
         ).first()
         assert rollback_by_time.previous_snapshot_id == snapshot_ids[2]
         assert rollback_by_time.current_snapshot_id == snapshot_ids[1]
@@ -91,14 +87,14 @@ def test_iceberg_snapshot_procedures(spark, tmp_path):
 
         _edit_latest_metadata(table_path, add_branches)
         forwarded = spark.sql(
-            f"CALL system.fast_forward(table => '{table_name}', branch => 'audit', to => 'tip')"  # noqa: S608
+            f"CALL system.fast_forward(table => '{table_name}', branch => 'audit', to => 'tip')"
         ).first()
         assert forwarded.branch_updated == "audit"
         assert forwarded.previous_ref == snapshot_ids[0]
         assert forwarded.updated_ref == snapshot_ids[2]
 
         current_from_ref = spark.sql(
-            f"CALL system.set_current_snapshot(table => '{table_name}', ref => 'audit')"  # noqa: S608
+            f"CALL system.set_current_snapshot(table => '{table_name}', ref => 'audit')"
         ).first()
         assert current_from_ref.previous_snapshot_id == snapshot_ids[1]
         assert current_from_ref.current_snapshot_id == snapshot_ids[2]
@@ -108,7 +104,7 @@ def test_iceberg_snapshot_procedures(spark, tmp_path):
             Exception,
             match="Iceberg system procedure 'expire_snapshots' is recognized but not implemented",
         ):
-            spark.sql(f"CALL system.expire_snapshots('{table_name}')").collect()  # noqa: S608
+            spark.sql(f"CALL system.expire_snapshots('{table_name}')").collect()
 
         with pytest.raises(Exception, match="Exactly one of snapshot_id or ref"):
             spark.sql(

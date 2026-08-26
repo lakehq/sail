@@ -1009,6 +1009,69 @@ Feature: from_json function parses JSON strings into structured types
          |    |-- a: integer (nullable = true)
         """
 
+    # `JsonToStructs` forces the user-supplied schema nullable before using it
+    # (`schema.asNullable`, jsonExpressions.scala:271), so a NOT NULL field in the DDL is ignored.
+    # `asNullable` recurses into structs, arrays and maps.
+
+    @sail-bug
+    Scenario: a NOT NULL field in the JSON schema is forced nullable
+      When query
+        """
+        SELECT from_json('{"a": null}', 'a INT NOT NULL') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: struct (nullable = true)
+         |    |-- a: integer (nullable = true)
+        """
+
+    @sail-bug
+    Scenario: a NOT NULL field nested in a JSON struct is forced nullable
+      When query
+        """
+        SELECT from_json('{"s": {"b": null}}', 's STRUCT<b: INT NOT NULL>') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: struct (nullable = true)
+         |    |-- s: struct (nullable = true)
+         |    |    |-- b: integer (nullable = true)
+        """
+
+    # The schema scenarios above only analyse; these execute, which is where the corruption
+    # `asNullable` exists to prevent would actually surface (jsonExpressions.scala:268-271).
+
+    Scenario: a null value under a plain JSON field is returned
+      When query
+        """
+        SELECT from_json('{"a": null}', 'a INT') AS result
+        """
+      Then query result
+        | result |
+        | {NULL} |
+
+    @sail-bug
+    Scenario: a null value under a NOT NULL JSON field is returned
+      When query
+        """
+        SELECT from_json('{"a": null}', 'a INT NOT NULL') AS result
+        """
+      Then query result
+        | result |
+        | {NULL} |
+
+    @sail-bug
+    Scenario: a null value nested under a NOT NULL JSON field is returned
+      When query
+        """
+        SELECT from_json('{"s": {"b": null}}', 's STRUCT<b: INT NOT NULL>') AS result
+        """
+      Then query result
+        | result   |
+        | {{NULL}} |
+
   Rule: Result values (migrated from test_from_json.txt doctests)
 
     Scenario Outline: Result values: <case>

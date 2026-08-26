@@ -23,6 +23,7 @@ use sail_common_datafusion::rename::table_provider::RenameTableProvider;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
+use super::sample::SAMPLE_ROUNDING_EPSILON;
 use crate::error::{PlanError, PlanResult};
 use crate::function::{get_built_in_table_function, is_built_in_generator_function};
 use crate::resolver::PlanResolver;
@@ -321,7 +322,7 @@ impl PlanResolver<'_> {
             spec::TableSampleMethod::Percent { value } => {
                 let percent = self.evaluate_sample_expr_to_f64(value, state).await?;
                 let fraction = percent / 100.0;
-                if !(0.0..=1.0).contains(&fraction) {
+                if !(-SAMPLE_ROUNDING_EPSILON..=1.0 + SAMPLE_ROUNDING_EPSILON).contains(&fraction) {
                     return Err(PlanError::invalid(format!(
                         "Sampling fraction ({fraction}) must be on interval [0, 1]"
                     )));
@@ -335,15 +336,13 @@ impl PlanResolver<'_> {
                 numerator,
                 denominator,
             } => {
-                if numerator == 0 || numerator > denominator {
+                let fraction = numerator as f64 / denominator as f64;
+                if !(-SAMPLE_ROUNDING_EPSILON..=1.0 + SAMPLE_ROUNDING_EPSILON).contains(&fraction) {
                     return Err(PlanError::invalid(format!(
-                        "invalid TABLESAMPLE bucket: {numerator} out of {denominator}"
+                        "Sampling fraction ({fraction}) must be on interval [0, 1]"
                     )));
                 }
-                let fraction = 1.0 / denominator as f64;
-                let lower = (numerator - 1) as f64 * fraction;
-                let upper = numerator as f64 * fraction;
-                (lower, upper)
+                (0.0, fraction)
             }
         };
 

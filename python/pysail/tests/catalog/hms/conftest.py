@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 def hms_catalog(hms_service: HmsService) -> object:
     from pysail import _native
 
-    catalog = _native._hms.HmsCatalog(  # noqa: SLF001
+    catalog = _native._catalog._hms.HmsCatalogProvider(  # noqa: SLF001
         "native-hms-tests",
         [hms_service.endpoint],
     )

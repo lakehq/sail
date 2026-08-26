@@ -17,10 +17,9 @@ use sail_data_source::formats::text::TextDataSource;
 use sail_delta_lake::DeltaLakeSource;
 use sail_iceberg::IcebergLakeSource;
 
-pub(crate) fn create_source_registry() -> Result<Arc<DataSourceRegistry>> {
+pub(crate) fn create_data_source_registry() -> Result<Arc<DataSourceRegistry>> {
     let registry = Arc::new(DataSourceRegistry::new());
     register_builtin_data_sources(&registry)?;
-    register_lake_sources(&registry)?;
     register_external_data_sources(&registry)?;
     Ok(registry)
 }
@@ -37,10 +36,6 @@ fn register_builtin_data_sources(registry: &DataSourceRegistry) -> Result<()> {
     registry.register_data_source(Arc::new(RateDataSource))?;
     registry.register_data_source(Arc::new(ConsoleDataSource))?;
     registry.register_data_source(Arc::new(NoopDataSource))?;
-    Ok(())
-}
-
-fn register_lake_sources(registry: &DataSourceRegistry) -> Result<()> {
     registry.register_data_source(Arc::new(DeltaLakeSource))?;
     registry.register_data_source(Arc::new(IcebergLakeSource))?;
     Ok(())
@@ -64,7 +59,6 @@ mod tests {
     fn separates_data_sources_from_lake_sources() -> Result<()> {
         let registry = DataSourceRegistry::new();
         register_builtin_data_sources(&registry)?;
-        register_lake_sources(&registry)?;
 
         for name in ["parquet", "rate", "console"] {
             assert!(registry.get_data_source(name).is_ok());
