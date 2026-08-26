@@ -12,9 +12,9 @@ use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use sail_logical_plan::merge::{MergeCardinalityCheckNode, RowLevelWriteNode};
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 
+use crate::lake_source::{IcebergWriteNode, plan_iceberg_write};
 use crate::logical::IcebergTableSource;
 use crate::physical::row_level_planner::plan_iceberg_row_level_write;
-use crate::table_format::{IcebergWriteNode, plan_iceberg_write};
 
 pub struct IcebergPhysicalPlanner;
 

@@ -12,7 +12,7 @@ use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::{DFSchema, DFSchemaRef, Result, internal_err, not_impl_err, plan_err};
 use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
 use educe::Educe;
-use sail_common_datafusion::datasource::{SinkInfo, SinkMode, SourceInfo, TableFormat};
+use sail_common_datafusion::datasource::{DataSource, SinkInfo, SinkMode, SourceInfo};
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
 
@@ -22,10 +22,10 @@ use crate::options::r#gen::ConsoleWriteOptions;
 
 /// Write data to stdout for testing purposes.
 #[derive(Debug)]
-pub struct ConsoleTableFormat;
+pub struct ConsoleDataSource;
 
 #[async_trait]
-impl TableFormat for ConsoleTableFormat {
+impl DataSource for ConsoleDataSource {
     fn name(&self) -> &str {
         "console"
     }
@@ -35,7 +35,7 @@ impl TableFormat for ConsoleTableFormat {
         _ctx: &dyn Session,
         _info: SourceInfo,
     ) -> Result<Arc<dyn TableSource>> {
-        not_impl_err!("console table format does not support reading")
+        not_impl_err!("console data source does not support reading")
     }
 
     async fn create_writer(&self, ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
@@ -49,13 +49,13 @@ impl TableFormat for ConsoleTableFormat {
             lakehouse_table: _,
         } = info;
         if !matches!(mode, SinkMode::Append) {
-            return not_impl_err!("the console table format only supports append mode");
+            return not_impl_err!("the console data source only supports append mode");
         }
         if !partition_by.is_empty() {
-            return not_impl_err!("the console table format does not support partitioning");
+            return not_impl_err!("the console data source does not support partitioning");
         }
         if bucket_by.is_some() || !sort_order.is_empty() {
-            return not_impl_err!("the console table format does not support bucketing");
+            return not_impl_err!("the console data source does not support bucketing");
         }
         let ConsoleWriteOptions {} = ConsoleWriteOptions::resolve(ctx, options)?;
         Ok(LogicalPlan::Extension(Extension {
@@ -133,7 +133,7 @@ impl ExtensionPlanner for ConsolePhysicalPlanner {
             return internal_err!("ConsoleWriteNode requires exactly one physical input");
         };
         if !is_flow_event_schema(input.schema().as_ref()) {
-            return plan_err!("the console table format only supports streaming data");
+            return plan_err!("the console data source only supports streaming data");
         }
         Ok(Some(Arc::new(ConsoleSinkExec::new(input.clone()))))
     }

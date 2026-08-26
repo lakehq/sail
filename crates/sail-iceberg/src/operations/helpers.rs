@@ -35,9 +35,9 @@ impl Transaction {
         &self,
         schema: &Schema,
         partition_spec: &PartitionSpec,
-        table_format_version: FormatVersion,
+        requested_format_version: FormatVersion,
     ) -> ManifestMetadata {
-        let format_version = table_format_version.max(format_version_for_schema(schema));
+        let format_version = requested_format_version.max(format_version_for_schema(schema));
         ManifestMetadata::new(
             std::sync::Arc::new(schema.clone()),
             schema.schema_id(),

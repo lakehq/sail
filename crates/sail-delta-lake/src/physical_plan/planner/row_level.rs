@@ -12,13 +12,13 @@ use sail_data_source::resolve_listing_urls;
 use sail_logical_plan::merge::RowLevelWriteNode;
 use url::Url;
 
+use crate::lake_source::{DeltaLakeSource, split_delta_write_options_and_table_properties};
 use crate::options::r#gen::DeltaWriteOptions;
 use crate::physical_plan::planner::{
     DeltaPlannerConfig, MergePredicateInfo, OperationOverride, PlannerContext, RowLevelTargetInfo,
     RowLevelWriteInfo, plan_delete, plan_delete_mor, plan_merge, plan_merge_mor,
 };
 use crate::table::open_table_with_object_store;
-use crate::table_format::{DeltaTableFormat, split_delta_write_options_and_table_properties};
 
 /// Creates a Delta physical execution plan for a unified `RowLevelWriteNode`.
 pub async fn create_row_level_write_physical_plan(
@@ -119,7 +119,7 @@ async fn create_delta_row_level_writer(
 
     match (effective_strategy, info.command) {
         (MergeStrategy::MergeOnRead, RowLevelCommand::Delete) => {
-            let table_url = DeltaTableFormat::parse_table_url(ctx, vec![info.target.path]).await?;
+            let table_url = DeltaLakeSource::parse_table_url(ctx, vec![info.target.path]).await?;
             let condition = info.condition.ok_or_else(|| {
                 DataFusionError::Plan("DELETE operation requires a WHERE condition".to_string())
             })?;
@@ -138,7 +138,7 @@ async fn create_delta_row_level_writer(
         }
         (MergeStrategy::MergeOnRead, RowLevelCommand::Merge) => {
             let table_url =
-                DeltaTableFormat::parse_table_url(ctx, vec![info.target.path.clone()]).await?;
+                DeltaLakeSource::parse_table_url(ctx, vec![info.target.path.clone()]).await?;
             let delta_options = DeltaWriteOptions::resolve(ctx, target_options.clone())?;
             let merge_config = DeltaPlannerConfig::new(
                 table_url,
@@ -156,7 +156,7 @@ async fn create_delta_row_level_writer(
             not_impl_err!("Merge-on-Read strategy for UPDATE is not yet implemented for Delta Lake")
         }
         (MergeStrategy::Eager, RowLevelCommand::Delete) => {
-            let table_url = DeltaTableFormat::parse_table_url(ctx, vec![info.target.path]).await?;
+            let table_url = DeltaLakeSource::parse_table_url(ctx, vec![info.target.path]).await?;
             let condition = info.condition.ok_or_else(|| {
                 DataFusionError::Plan("DELETE operation requires a WHERE condition".to_string())
             })?;
@@ -175,7 +175,7 @@ async fn create_delta_row_level_writer(
         }
         (MergeStrategy::Eager, RowLevelCommand::Merge) => {
             let table_url =
-                DeltaTableFormat::parse_table_url(ctx, vec![info.target.path.clone()]).await?;
+                DeltaLakeSource::parse_table_url(ctx, vec![info.target.path.clone()]).await?;
             let delta_options = DeltaWriteOptions::resolve(ctx, target_options.clone())?;
             let merge_config = DeltaPlannerConfig::new(
                 table_url,
