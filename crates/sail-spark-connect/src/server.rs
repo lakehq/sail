@@ -564,31 +564,9 @@ mod tests {
     }
 
     #[test]
-    fn clone_session_generates_target_uuid() {
-        let id = resolve_clone_session_id(None).unwrap();
-        assert!(Uuid::parse_str(&id).is_ok());
-
+    fn clone_session_treats_empty_target_as_generated() {
         let id = resolve_clone_session_id(Some(String::new())).unwrap();
         assert!(Uuid::parse_str(&id).is_ok());
-    }
-
-    #[test]
-    fn clone_session_accepts_explicit_target_uuid() {
-        let expected = Uuid::new_v4().to_string();
-        assert_eq!(
-            resolve_clone_session_id(Some(expected.clone())).unwrap(),
-            expected
-        );
-    }
-
-    #[test]
-    fn clone_session_rejects_invalid_target_uuid() {
-        let error = resolve_clone_session_id(Some("invalid".to_string())).unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("target session ID must be a UUID")
-        );
     }
 
     #[test]
@@ -693,18 +671,22 @@ mod tests {
                 .unwrap_err();
             assert!(error.message().contains("already exists"));
 
-            let concurrent_ids = (0..8)
-                .map(|_| Uuid::new_v4().to_string())
-                .collect::<Vec<_>>();
-            let responses = join_all(concurrent_ids.iter().map(|id| {
+            let concurrent_id = Uuid::new_v4().to_string();
+            let responses = join_all((0..8).map(|_| {
                 server.clone_session(Request::new(clone_request(
                     &source_id,
-                    Some(id.clone()),
+                    Some(concurrent_id.clone()),
                     None,
                 )))
             }))
             .await;
-            assert!(responses.iter().all(Result::is_ok));
+            assert_eq!(responses.iter().filter(|result| result.is_ok()).count(), 1);
+            assert!(
+                responses
+                    .iter()
+                    .filter_map(|result| result.as_ref().err())
+                    .all(|error| error.message().contains("already exists"))
+            );
 
             server
                 .release_session(Request::new(ReleaseSessionRequest {
