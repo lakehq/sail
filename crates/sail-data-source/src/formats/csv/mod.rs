@@ -3,7 +3,7 @@ use datafusion::catalog::Session;
 use datafusion_common::{DataFusionError, Result};
 use sail_common_datafusion::datasource::OptionLayer;
 
-use crate::listing::source::{FormatFactory, ListingTableFormat};
+use crate::listing::source::{FormatFactory, ListingDataSource};
 use crate::options::ResolveOptions;
 use crate::options::r#gen::{CsvReadOptions, CsvWriteOptions};
 
@@ -22,7 +22,7 @@ pub use read::CsvReadFormat;
 pub use source::CsvSource;
 pub use write::CsvWriteFormat;
 
-pub type CsvTableFormat = ListingTableFormat<CsvFormatFactory>;
+pub type CsvDataSource = ListingDataSource<CsvFormatFactory>;
 
 fn convert_string_columns(schema: Schema) -> Schema {
     let string_fields = schema

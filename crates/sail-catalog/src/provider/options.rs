@@ -46,11 +46,11 @@ pub struct CreateTableOptions {
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub enum CreateTableMetadataRequirement {
     None,
-    TableFormat { mode: TableFormatCreateMetadataMode },
+    LakeSource { mode: LakeSourceCreateMetadataMode },
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
-pub enum TableFormatCreateMetadataMode {
+pub enum LakeSourceCreateMetadataMode {
     PathManaged,
     CatalogCoordinated,
 }
@@ -64,8 +64,8 @@ pub fn plain_lakehouse_create_table_metadata_requirement(
     if options.format.eq_ignore_ascii_case("delta")
         || options.format.eq_ignore_ascii_case("iceberg")
     {
-        CreateTableMetadataRequirement::TableFormat {
-            mode: TableFormatCreateMetadataMode::PathManaged,
+        CreateTableMetadataRequirement::LakeSource {
+            mode: LakeSourceCreateMetadataMode::PathManaged,
         }
     } else {
         CreateTableMetadataRequirement::None

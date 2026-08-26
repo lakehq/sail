@@ -40,7 +40,7 @@ Feature: Table names with digit-leading identifiers
   # Spark 3.5 with the in-memory catalog rejects it at analysis time
   # (NOT_SUPPORTED_COMMAND_WITHOUT_HIVE_SUPPORT), while Spark 4.x creates a
   # data source table with the default format. Sail always uses the default
-  # table format, so the scenario is pinned to Sail only.
+  # data source format, so the scenario is pinned to Sail only.
   @sail-only
   Scenario: Create a table with a digit-leading name without an explicit data source
     Given final statement
