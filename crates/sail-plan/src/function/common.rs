@@ -11,6 +11,7 @@ use datafusion_expr::{
     WindowFunctionDefinition, WindowUDF, cast, expr, lit,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_common_datafusion::variant::is_variant_storage_type;
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 use sail_function::sketch::{DEFAULT_HLL_LG_CONFIG_K, DEFAULT_THETA_LG_NOM_ENTRIES};
@@ -51,7 +52,7 @@ fn spark_trim_chars() -> String {
 /// a malformed input; Arrow's parser does neither, so `' 5 '` is rejected and
 /// `'not-a-number'` raises. Trim up front, then let the failure be a NULL unless ANSI mode
 /// (or an explicit `TRY_CAST`) says otherwise.
-/// <https://github.com/apache/spark/blob/v4.1.1/common/unsafe/src/main/java/org/apache/spark/unsafe/types/UTF8String.java>
+/// <https://github.com/apache/spark/blob/v4.2.0/common/unsafe/src/main/java/org/apache/spark/unsafe/types/UTF8String.java>
 pub fn spark_string_to_numeric(
     expr: expr::Expr,
     target: DataType,
@@ -191,6 +192,48 @@ pub(crate) fn spark_type_name(data_type: &DataType) -> String {
         DataType::Interval(IntervalUnit::YearMonth) => "INTERVAL YEAR TO MONTH".to_string(),
         DataType::Interval(_) | DataType::Duration(_) => "INTERVAL DAY TO SECOND".to_string(),
         DataType::Null => "VOID".to_string(),
+        // The container types reach this function through the `/` and `%` operand rejects,
+        // which decide on the peer's type and so can surface any type at all. Without these
+        // arms the fallback below leaks Arrow's `Debug` for the whole nested type
+        // (`Struct([Field { name: "a", data_type: Int32, nullable: true, .. }])`). Spark spells
+        // them `STRUCT<a: INT NOT NULL>`, `ARRAY<INT>` and `MAP<STRING, INT>`; the recursion
+        // mirrors `SparkPlanFormatter::data_type_to_simple_string`, which is unusable here
+        // because it needs the session context and lowercases the field names along with the
+        // type names.
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field)
+        | DataType::FixedSizeList(field, _) => {
+            format!("ARRAY<{}>", spark_type_name(field.data_type()))
+        }
+        // A VARIANT is stored as a struct of binary `metadata`/`value` columns, so it has to be
+        // named before the generic struct arm below — otherwise the message reports Sail's
+        // physical shredding layout (`STRUCT<value: BINARY NOT NULL, ...>`) for a value Spark
+        // simply calls "VARIANT".
+        DataType::Struct(_) if is_variant_storage_type(data_type) => "VARIANT".to_string(),
+        DataType::Struct(fields) => {
+            let fields = fields
+                .iter()
+                .map(|field| {
+                    let nullability = if field.is_nullable() { "" } else { " NOT NULL" };
+                    format!(
+                        "{}: {}{nullability}",
+                        field.name(),
+                        spark_type_name(field.data_type())
+                    )
+                })
+                .collect::<Vec<_>>();
+            format!("STRUCT<{}>", fields.join(", "))
+        }
+        DataType::Map(field, _) => match field.data_type() {
+            DataType::Struct(entries) if entries.len() == 2 => format!(
+                "MAP<{}, {}>",
+                spark_type_name(entries[0].data_type()),
+                spark_type_name(entries[1].data_type())
+            ),
+            other => format!("MAP<{}>", spark_type_name(other)),
+        },
         other => format!("{other:?}"),
     }
 }

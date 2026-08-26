@@ -24,7 +24,7 @@ const SPARK_MAX_SCALE: i32 = 38;
 ///
 /// Spark calls this only when `spark.sql.decimalOperations.allowPrecisionLoss` is
 /// true; otherwise it uses [`bounded`].
-/// <https://github.com/apache/spark/blob/v4.1.1/sql/api/src/main/scala/org/apache/spark/sql/types/DecimalType.scala#L166-L201>
+/// <https://github.com/apache/spark/blob/v4.2.0/sql/api/src/main/scala/org/apache/spark/sql/types/DecimalType.scala#L166-L201>
 fn adjust_precision_scale(precision: i32, scale: i32) -> (u8, i8) {
     let max_precision = DECIMAL128_MAX_PRECISION as i32;
     if precision <= max_precision {
@@ -47,7 +47,7 @@ fn adjust_precision_scale(precision: i32, scale: i32) -> (u8, i8) {
 /// *without* reducing the scale to protect the integer part. This is what Spark uses
 /// when `spark.sql.decimalOperations.allowPrecisionLoss` is false, where an
 /// unrepresentable result yields NULL at runtime rather than a rounded value.
-/// <https://github.com/apache/spark/blob/v4.1.1/sql/api/src/main/scala/org/apache/spark/sql/types/DecimalType.scala#L144-L146>
+/// <https://github.com/apache/spark/blob/v4.2.0/sql/api/src/main/scala/org/apache/spark/sql/types/DecimalType.scala#L144-L146>
 fn bounded(precision: i32, scale: i32) -> (u8, i8) {
     (
         min(precision, DECIMAL128_MAX_PRECISION as i32) as u8,
@@ -69,7 +69,7 @@ fn cap(precision: i32, scale: i32, allow_precision_loss: bool) -> (u8, i8) {
 /// precision `p1 + p2 + 1` and scale `s1 + s2`, capped per `allow_precision_loss`.
 /// DataFusion caps the precision at 38 but keeps the full scale, diverging from Spark
 /// for wide products.
-/// <https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L603-L611>
+/// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L603-L611>
 pub fn spark_decimal_multiply_type(
     p1: u8,
     s1: i8,
@@ -98,7 +98,7 @@ fn spark_add_precision_scale(p1: u8, s1: i8, p2: u8, s2: i8) -> (i32, i32) {
 /// `min(_, 38)` that keeps the scale — i.e. Spark's `bounded`, never `adjustPrecisionScale`.
 /// So the two only diverge once the exact precision exceeds 38, and only under the default
 /// `allowPrecisionLoss = true`.
-/// <https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L430-L438>
+/// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L430-L438>
 pub fn spark_decimal_add_type(
     p1: u8,
     s1: i8,
@@ -128,7 +128,7 @@ pub fn spark_decimal_add_diverges(p1: u8, s1: i8, p2: u8, s2: i8) -> bool {
 /// Result `(precision, scale)` of Spark `DECIMAL(p1,s1) % DECIMAL(p2,s2)` — also the
 /// rule for `pmod`, which Spark documents as "This follows Remainder rule":
 /// scale `max(s1,s2)` and precision `min(p1-s1, p2-s2) + scale`.
-/// <https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L983-L991>
+/// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L983-L991>
 pub fn spark_decimal_remainder_type(
     p1: u8,
     s1: i8,
@@ -151,7 +151,7 @@ pub fn spark_decimal_remainder_type(
 /// Without it, division does **not** simply swap in `bounded` like the other
 /// operators: Spark keeps Hive's older sizing, which trims the fractional digits by
 /// `diff / 2 + 1` and gives the rest to the integer part.
-/// <https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L824-L840>
+/// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L824-L840>
 pub fn spark_decimal_divide_type(
     p1: u8,
     s1: i8,

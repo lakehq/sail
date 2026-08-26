@@ -146,8 +146,8 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | unull + ival_d | NULL | INTERVAL '2' DAY | interval day |
         | unull + ival_m | NULL | INTERVAL '2' MONTH | interval month |
 
-    @sail-bug @spark-4
-    Scenario Outline: plus ansi-off: valid pair type (Sail diverges), untyped NULL pair: <case>
+    @spark-4
+    Scenario Outline: plus ansi-off: valid pair type, untyped NULL pair: <case>
       Given config spark.sql.ansi.enabled = false
       When query
         """
@@ -422,8 +422,8 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | unull - ival_d | NULL | INTERVAL '2' DAY | interval day |
         | unull - ival_m | NULL | INTERVAL '2' MONTH | interval month |
 
-    @sail-bug @spark-4
-    Scenario Outline: minus ansi-off: valid pair type (Sail diverges), untyped NULL pair: <case>
+    @spark-4
+    Scenario Outline: minus ansi-off: valid pair type, untyped NULL pair: <case>
       Given config spark.sql.ansi.enabled = false
       When query
         """
@@ -714,8 +714,8 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | null * ival_m | CAST(NULL AS INT) | INTERVAL '2' MONTH | interval year to month |
         | unull * ival_m | NULL | INTERVAL '2' MONTH | interval year to month |
 
-    @sail-bug @spark-4
-    Scenario Outline: times ansi-off: valid pair type (Sail diverges), untyped NULL pair: <case>
+    @spark-4
+    Scenario Outline: times ansi-off: valid pair type, untyped NULL pair: <case>
       Given config spark.sql.ansi.enabled = false
       When query
         """
@@ -1236,8 +1236,8 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | case | l | r | result |
         | tinyint % unull | CAST(6 AS TINYINT) | NULL | tinyint |
 
-    @sail-bug @spark-4
-    Scenario Outline: modulo ansi-off: valid pair type (Sail diverges), untyped NULL pair: <case>
+    @spark-4
+    Scenario Outline: modulo ansi-off: valid pair type, untyped NULL pair: <case>
       Given config spark.sql.ansi.enabled = false
       When query
         """
@@ -1540,8 +1540,8 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | unull + ival_d | NULL | INTERVAL '2' DAY | interval day |
         | unull + ival_m | NULL | INTERVAL '2' MONTH | interval month |
 
-    @sail-bug @spark-4
-    Scenario Outline: plus ansi-on: valid pair type (Sail diverges), untyped NULL pair: <case>
+    @spark-4
+    Scenario Outline: plus ansi-on: valid pair type, untyped NULL pair: <case>
       Given config spark.sql.ansi.enabled = true
       When query
         """
@@ -1819,8 +1819,8 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | unull - ival_d | NULL | INTERVAL '2' DAY | interval day |
         | unull - ival_m | NULL | INTERVAL '2' MONTH | interval month |
 
-    @sail-bug @spark-4
-    Scenario Outline: minus ansi-on: valid pair type (Sail diverges), untyped NULL pair: <case>
+    @spark-4
+    Scenario Outline: minus ansi-on: valid pair type, untyped NULL pair: <case>
       Given config spark.sql.ansi.enabled = true
       When query
         """
@@ -2108,8 +2108,8 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | null * ival_m | CAST(NULL AS INT) | INTERVAL '2' MONTH | interval year to month |
         | unull * ival_m | NULL | INTERVAL '2' MONTH | interval year to month |
 
-    @sail-bug @spark-4
-    Scenario Outline: times ansi-on: valid pair type (Sail diverges), untyped NULL pair: <case>
+    @spark-4
+    Scenario Outline: times ansi-on: valid pair type, untyped NULL pair: <case>
       Given config spark.sql.ansi.enabled = true
       When query
         """
@@ -2616,8 +2616,8 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
         | unull % dec | NULL | CAST(2 AS DECIMAL(10,2)) | decimal(10,2) |
         | unull % null | NULL | CAST(NULL AS INT) | int |
 
-    @sail-bug @spark-4
-    Scenario Outline: modulo ansi-on: valid pair type (Sail diverges), untyped NULL pair: <case>
+    @spark-4
+    Scenario Outline: modulo ansi-on: valid pair type, untyped NULL pair: <case>
       Given config spark.sql.ansi.enabled = true
       When query
         """

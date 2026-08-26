@@ -2,7 +2,7 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
 
   # DataFusion's BinaryTypeCoercer does not perform these Spark coercions; Sail
   # applies them in the arithmetic plan builders (math.rs) so the *result type*
-  # matches Spark 4.1.1. Values and precision/scale are asserted below via typeof.
+  # matches Spark 4.2.0. Values and precision/scale are asserted below via typeof.
   #
   # Known remaining gap (see the @sail-bug scenario): Spark marks decimal
   # arithmetic nullable=true (overflow may yield NULL) even for non-null operands,
@@ -780,6 +780,54 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
          |-- p: integer (nullable = true)
         """
 
+  @function(nullability)
+  Rule: A STRING to numeric cast is nullable in Spark under both ANSI modes
+    # `Cast.nullable = child.nullable || Cast.forceNullable(from, to)` and `forceNullable`
+    # returns true for `(_: StringType, _)` unconditionally (Cast.scala:433, :630-631) — it is
+    # NOT ANSI-gated. Sail emits `try_cast` under ANSI off (nullable=true, agrees) but a strict
+    # `cast` under ANSI on, and DataFusion derives Cast's nullability from the CHILD
+    # (expr_schema.rs:353), so the flag comes out false. Fixing it needs the custom
+    # return_field_from_args follow-up, so the divergence is pinned rather than fixed here.
+    # Both halves are pinned so the follow-up cannot regress the ANSI-off half undetected.
+
+    Scenario: a string to numeric cast is nullable under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST('5' AS BIGINT) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = true)
+        """
+
+    @sail-bug
+    Scenario: a string to numeric cast is nullable under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST('5' AS BIGINT) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: long (nullable = true)
+        """
+
+    @sail-bug
+    Scenario: a string to numeric type constructor is nullable under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT DOUBLE('5') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: double (nullable = true)
+        """
+
   Rule: try_add shares the + operator's decimal typing (known gap)
     # Spark evaluates try_* through the same resultDecimalType as the operators
     # (EvalMode.TRY), so try_add(decimal(38,10), decimal(38,2)) is decimal(38,6).
@@ -954,7 +1002,7 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | double | Infinity | NaN | NaN | Infinity |
 
   Rule: ANSI string promotion and pmod follow the operators' coercion
-    # Validated against Spark 4.1.1.
+    # Validated against Spark 4.2.0.
 
     Scenario: ANSI string plus integer widens to bigint like Spark
       Given config spark.sql.ansi.enabled = true
@@ -1287,6 +1335,62 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
       Then query result
         | float_t | double_t | decimal_t |
         | double  | double   | double    |
+
+  Rule: DIV with a string operand follows Spark's ANSI-dependent rule
+    # `IntegralDivide` takes TypeCollection(LongType, DecimalType, YearMonthIntervalType,
+    # DayTimeIntervalType) (arithmetic.scala:876-905). Under ANSI off `PromoteStrings` casts the
+    # string to DOUBLE, which does not implicitly cast to LONG, so Spark REJECTS the pair; under
+    # ANSI on `findWiderTypeForString` gives LONG and Spark accepts. Sail's `spark_div` received
+    # none of the operand coercion that `/` and `%` got in this change, so it is wrong in BOTH
+    # directions: it accepts `7 div '2'` under ANSI off (where Spark rejects) and rejects both
+    # orders under ANSI on (where Spark returns 3). Measured against Spark 4.2.0.
+
+    Scenario Outline: DIV rejects a string operand under ANSI off: <case>
+      # The reject decision itself matches; the error class does not (Sail says "cannot coerce",
+      # Spark raises DATATYPE_MISMATCH), so the pattern is deliberately portable across both.
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT <expr> AS r
+        """
+      Then query error (?i)cannot (resolve|coerce)
+
+      Examples:
+        | case                 | expr      |
+        | a string dividend    | '7' div 2 |
+
+    Scenario: DIV rejects a string divisor under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT 7 div '2' AS r
+        """
+      Then query error (?i)cannot (resolve|coerce)
+
+    Scenario Outline: DIV promotes a string operand to BIGINT under ANSI on: <case>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT typeof(<expr>) AS t, <expr> AS r
+        """
+      Then query result
+        | t      | r |
+        | bigint | 3 |
+
+      Examples:
+        | case              | expr      |
+        | a string dividend | '7' div 2 |
+        | a string divisor  | 7 div '2' |
+
+    Scenario: DIV rejects two string operands under ANSI on
+      # `findWiderTypeForString` gives StringType for (String, String), which is not in
+      # IntegralDivide's input collection, so Spark raises BINARY_OP_WRONG_TYPE.
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT '7' div '2' AS r
+        """
+      Then query error (?i)cannot (resolve|coerce)
 
   Rule: Literal narrowing over every integer literal type
     # `DataTypeUtils.fromLiteral` matches Short, Int and Long by value; a Byte literal
@@ -1700,6 +1804,46 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | t             | r        |
         | decimal(38,6) | 3.750000 |
 
+  Rule: allowPrecisionLoss=false keeps the exact scale for + and -
+    # The revert test for the `+`/`-` branch of `spark_decimal_add_type`: with the knob false
+    # the result goes through `bounded()` (no adjustPrecisionScale), so the scale is kept at
+    # max(s1,s2)=10 instead of being reduced to 6. Reverting that branch to call
+    # adjust_precision_scale unconditionally makes these two rows report decimal(38,6).
+    # The knob was previously exercised only for `*` and `/`. Measured against Spark 4.2.0.
+
+    Scenario Outline: a capped decimal <op> keeps its scale when precision loss is disallowed
+      Given config spark.sql.decimalOperations.allowPrecisionLoss = false
+      When query
+        """
+        SELECT typeof(CAST(1 AS DECIMAL(38,10)) <op> CAST(1 AS DECIMAL(38,2))) AS t
+        """
+      Then query result
+        | t              |
+        | decimal(38,10) |
+
+      Examples:
+        | op |
+        | +  |
+        | -  |
+
+    Scenario Outline: a capped decimal <op> adjusts its scale by default
+      # The discriminating complement: with the knob at its default the same pair reduces to
+      # scale 6, so a scenario asserting only the `false` side could not tell the two branches
+      # apart.
+      Given config spark.sql.decimalOperations.allowPrecisionLoss = true
+      When query
+        """
+        SELECT typeof(CAST(1 AS DECIMAL(38,10)) <op> CAST(1 AS DECIMAL(38,2))) AS t
+        """
+      Then query result
+        | t             |
+        | decimal(38,6) |
+
+      Examples:
+        | op |
+        | +  |
+        | -  |
+
   Rule: Decimal division stays on the cheaper i128 kernel when the intermediate fits
     # The `/` decimal path gates its i256 widening: when the rescaled numerator provably fits
     # 38 digits it computes the quotient in i128 (2-4x cheaper per row), only widening to i256
@@ -1887,7 +2031,7 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | decimal(38,37) | 1.0000000000000000000000000000000000000 |
 
   Rule: Type derivation holds over VALUES inference, columns, foldable scales and NULL peers
-    # Each scenario below reproduces a divergence confirmed against Spark 4.1.1. All but the
+    # Each scenario below reproduces a divergence confirmed against Spark 4.2.0. All but the
     # last are closed; the remaining `@sail-bug` belongs to the deferred overflow work.
 
     Scenario: a heterogeneous VALUES list with NaN infers double
@@ -2037,13 +2181,13 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | t            | r                 |
         | interval day | INTERVAL '46' DAY |
 
-  Rule: Untyped NULL on both sides types as double (known gap)
+  Rule: Untyped NULL on both sides types as double
     # Spark resolves NULL op NULL as double for all four operators; Sail types
     # +, - and * as bigint (division already agrees).
 
     # @spark-4: untyped `NULL op NULL` resolves to double only on 4.x (the same gate
     # the sibling null_literal_inference.feature uses for the untyped-NULL family).
-    @sail-bug @spark-4
+    @spark-4
     Scenario: NULL against NULL is double for every operator
       When query
         """
@@ -2258,6 +2402,196 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | an integer modulo a typed date null | CAST(3 AS INT) % CAST(NULL AS DATE) | false |
         | an integer modulo a typed date null | CAST(3 AS INT) % CAST(NULL AS DATE) | true  |
 
+  Rule: A STRUCT, ARRAY or MAP operand is rejected at analysis, not at execution
+    # Spark rejects a non-atomic operand in `checkInputDataTypes` with
+    # DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES, i.e. at ANALYSIS, for every arithmetic operator.
+    # Sail's `*` and `%` reject at plan time too (different message, same decision), but `/`
+    # validates against the raw type allowlists `rejects_as_divide_dividend`/`_divisor`, which
+    # do not cover the container types — so the operand falls through to a Float64 cast and
+    # dies in the EXECUTOR with "Unsupported CAST", a runtime error where Spark has an analysis
+    # one. Measured against Spark 4.2.0.
+
+    Scenario Outline: a container operand is rejected: <case>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT <expr> AS r
+        """
+      Then query error (?i)cannot (resolve|coerce)
+
+      Examples:
+        | case                            | expr                                    |
+        | a struct times an integer       | named_struct('a',1) * 2                 |
+        | a struct modulo an integer      | named_struct('a',1) % 2                 |
+        | an array times an integer       | array(1,2) * 2                          |
+        | a map times an integer          | map('a',1) * 2                          |
+        | a from_json struct times an int | from_json('{"a":1}','a INT') * 2        |
+
+    Scenario Outline: dividing by a container operand fails at analysis, not at runtime: <case>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT <expr> AS r
+        """
+      Then query error (?i)cannot (resolve|coerce)
+
+      Examples:
+        | case                          | expr                    |
+        | a struct divided by an integer | named_struct('a',1) / 2 |
+        | an array divided by an integer | array(1,2) / 2          |
+        | a map divided by an integer    | map('a',1) / 2          |
+
+    Scenario Outline: extracting a numeric field first makes the arithmetic legal: <case>
+      # The discriminating counterpart: the gap is arithmetic on the CONTAINER, not on a value
+      # pulled out of it. Without these rows a fix that rejected all JSON-derived expressions
+      # would look correct.
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT typeof(<expr>) AS t, <expr> AS r
+        """
+      Then query result
+        | t   | r   |
+        | <t> | <r> |
+
+      Examples:
+        | case                             | expr                                    | ansi  | t      | r   |
+        | get_json_object times an integer | get_json_object('{"a":1}','$.a') * 2    | false | double | 2.0 |
+        | get_json_object under ANSI       | get_json_object('{"a":1}','$.a') * 2    | true  | bigint | 2   |
+        | a from_json field times an int   | from_json('{"a":1}','a INT').a * 2      | false | int    | 2   |
+
+  @spark-4
+  Rule: A VARIANT or XML-derived operand follows the same analysis-time rule
+    # Split from the rule above because `parse_json` and `from_xml` do not exist before
+    # Spark 4.x. Spark names the type "VARIANT" in the error; Sail leaks the physical
+    # shredding representation (a struct of two binary columns) instead.
+
+    Scenario: a variant times an integer is rejected
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT parse_json('1') * 2 AS r
+        """
+      Then query error (?i)cannot (resolve|coerce)
+
+    Scenario: a variant divided by an integer is rejected at analysis
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT parse_json('1') / 2 AS r
+        """
+      Then query error (?i)cannot (resolve|coerce)
+
+    Scenario: a from_xml struct times an integer is rejected
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT from_xml('<r><a>1</a></r>','a INT') * 2 AS r
+        """
+      Then query error (?i)cannot (resolve|coerce)
+
+    Scenario: a from_xml field times an integer is legal
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT typeof(from_xml('<r><a>1</a></r>','a INT').a * 2) AS t,
+               from_xml('<r><a>1</a></r>','a INT').a * 2 AS r
+        """
+      Then query result
+        | t   | r |
+        | int | 2 |
+
+  Rule: The reject message names the operand types the way Spark does
+    # The plan builders' reject message embeds `spark_type_name` (function/common.rs), whose
+    # ~20 arms were asserted nowhere: every reject scenario matched only "(?i)cannot resolve",
+    # so replacing the whole table with Arrow's `{:?}` would have kept the suite green. These
+    # scenarios pin one arm each.
+    #
+    # The patterns are portable across both engines: Sail writes `... operand types X and Y`
+    # while Spark's DATATYPE_MISMATCH writes `... incompatible types ("X" and "Y")`, so the
+    # optional quote in `X"? and "?Y` matches either. Measured against Spark 4.2.0.
+    #
+    # A boolean peer is used to reach the reject for the ordinary types because `/` decides on
+    # the peer's type; a timestamp peer is used for the containers, which a boolean would not
+    # reach. Both orders of the message are exercised (the named type is on the right for the
+    # scalar rows and on the left for the container ones).
+
+    Scenario Outline: the reject message names the operand type: <case>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT <expr> AS r
+        """
+      Then query error <pattern>
+
+      Examples:
+        | case            | expr                                                          | pattern                                     |
+        | int             | true / CAST(3 AS INT)                                         | (?i)cannot resolve.*BOOLEAN"? and "?INT         |
+        | tinyint         | true / CAST(3 AS TINYINT)                                     | (?i)cannot resolve.*BOOLEAN"? and "?TINYINT     |
+        | smallint        | true / CAST(3 AS SMALLINT)                                    | (?i)cannot resolve.*BOOLEAN"? and "?SMALLINT    |
+        | bigint          | true / CAST(3 AS BIGINT)                                      | (?i)cannot resolve.*BOOLEAN"? and "?BIGINT      |
+        | float           | true / CAST(3 AS FLOAT)                                       | (?i)cannot resolve.*BOOLEAN"? and "?FLOAT       |
+        | double          | true / CAST(3 AS DOUBLE)                                      | (?i)cannot resolve.*BOOLEAN"? and "?DOUBLE      |
+        | decimal         | true / CAST(3 AS DECIMAL(10,2))                               | (?i)cannot resolve.*BOOLEAN"? and "?DECIMAL     |
+        | binary          | true / CAST('6' AS BINARY)                                    | (?i)cannot resolve.*BOOLEAN"? and "?BINARY      |
+        | date            | true / DATE'2024-01-15'                                       | (?i)cannot resolve.*BOOLEAN"? and "?DATE        |
+        | timestamp       | true / TIMESTAMP'2024-01-15 00:00:00'                         | (?i)cannot resolve.*BOOLEAN"? and "?TIMESTAMP   |
+        | timestamp_ntz   | true / CAST(TIMESTAMP'2024-01-15 00:00:00' AS TIMESTAMP_NTZ)  | (?i)cannot resolve.*BOOLEAN"? and "?TIMESTAMP_NTZ |
+        | void            | true / NULL                                                   | (?i)cannot resolve.*BOOLEAN"? and "?VOID        |
+        | struct          | named_struct('a',1) / TIMESTAMP'2024-01-15 00:00:00'          | (?i)cannot resolve.*"?STRUCT<a: INT             |
+        | array           | array(1,2) / TIMESTAMP'2024-01-15 00:00:00'                   | (?i)cannot resolve.*"?ARRAY<INT>                |
+        | map             | map('a',1) / TIMESTAMP'2024-01-15 00:00:00'                   | (?i)cannot resolve.*"?MAP<STRING, INT>          |
+        | nested array    | array(named_struct('a',1)) / TIMESTAMP'2024-01-15 00:00:00'   | (?i)cannot resolve.*"?ARRAY<STRUCT<a: INT       |
+        | struct, modulo  | named_struct('a',1) % TIMESTAMP'2024-01-15 00:00:00'          | (?i)cannot resolve.*"?STRUCT<a: INT             |
+
+    @sail-bug
+    Scenario Outline: the reject message names the operand type Spark reports: <case>
+      # Three arms where the two engines legitimately name DIFFERENT types, so the pattern
+      # above cannot be shared:
+      #  - a string operand: Spark runs `PromoteStrings` BEFORE `checkInputDataTypes`, so its
+      #    message reports the promoted DOUBLE; Sail names the pre-promotion STRING.
+      #  - an interval operand: Spark's type name carries the literal's declared field range
+      #    (`INTERVAL MONTH`, `INTERVAL DAY`), which Arrow erases — Sail can only name the full
+      #    `INTERVAL YEAR TO MONTH` / `INTERVAL DAY TO SECOND` range.
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT <expr> AS r
+        """
+      Then query error <pattern>
+
+      Examples:
+        | case                     | expr                        | pattern                                 |
+        | a string reports DOUBLE  | true / '3'                  | (?i)cannot resolve.*BOOLEAN"? and "?DOUBLE  |
+        | a year-month interval    | true / INTERVAL '2' MONTH   | (?i)cannot resolve.*BOOLEAN"? and "?INTERVAL MONTH |
+        | a day-time interval      | true / INTERVAL '2' DAY     | (?i)cannot resolve.*BOOLEAN"? and "?INTERVAL DAY"  |
+
+  @spark-4
+  Rule: The reject message names a VARIANT operand VARIANT, not its storage layout
+    # Sail stores a VARIANT as a struct of binary `metadata`/`value` columns, so the generic
+    # struct arm of `spark_type_name` would report the physical shredding layout
+    # (`STRUCT<value: BINARY NOT NULL, metadata: BINARY NOT NULL>`) for a value Spark simply
+    # calls "VARIANT" — a name that is not merely differently spelled but wrong, and one that
+    # looks like a legitimate user struct rather than obviously-internal output.
+    #
+    # The nested row matters separately: it is what proves the VARIANT check runs on every
+    # recursion step and not only at the top level. Measured against Spark 4.2.0.
+
+    Scenario Outline: a variant operand is named VARIANT: <case>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT <expr> AS r
+        """
+      Then query error <pattern>
+
+      Examples:
+        | case                       | expr                                                        | pattern                                              |
+        | a variant dividend         | parse_json('1') / TIMESTAMP'2024-01-15 00:00:00'            | (?i)cannot resolve.*VARIANT"? and "?TIMESTAMP        |
+        | a variant divisor          | TIMESTAMP'2024-01-15 00:00:00' / parse_json('1')            | (?i)cannot resolve.*TIMESTAMP"? and "?VARIANT        |
+        | a variant modulo operand   | parse_json('1') % TIMESTAMP'2024-01-15 00:00:00'            | (?i)cannot resolve.*VARIANT"? and "?TIMESTAMP        |
+        | a variant nested in array  | array(parse_json('1')) / TIMESTAMP'2024-01-15 00:00:00'     | (?i)cannot resolve.*ARRAY<VARIANT>                   |
+
   Rule: An interval scaled by an integer (known gap — interval arithmetic)
     # Spark multiplies and divides year-month intervals by numerics; Sail rejects
     # every IYM x numeric pair ("Cannot get result type for temporal operation").
@@ -2277,6 +2611,45 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | case                                        | expr                                          | t                      | r                            |
         | a year-month interval times an integer      | INTERVAL '1-2' YEAR TO MONTH * CAST(2 AS INT) | interval year to month | INTERVAL '2-4' YEAR TO MONTH |
         | a year-month interval divided by an integer | INTERVAL '2-4' YEAR TO MONTH / CAST(2 AS INT) | interval year to month | INTERVAL '1-2' YEAR TO MONTH |
+
+  Rule: An interval scaled by a string operand computes a value, not just a type
+    # `MultiplyDTInterval`/`DivideDTInterval` take a NumericType, and `implicitCast(StringType,
+    # NumericType)` gives DOUBLE (TypeCoercion.scala:212), so Spark accepts a string operand in
+    # both ANSI modes. Sail's `Duration` match arms in `spark_multiply` and `spark_divide`
+    # return BEFORE `coerce_spark_arithmetic_operands` runs, so the string is never coerced.
+    #
+    # The operand matrix asserts only `typeof` for these cells and is GREEN, because the plan
+    # builder's return-type path and the expression-build path disagree. These scenarios assert
+    # the VALUE, which is what actually fails. Measured against Spark 4.2.0.
+
+    Scenario: dividing a day-time interval by a string works under ANSI off
+      # The one cell of this family Sail already computes; pinned so a fix for the others
+      # cannot regress it.
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT INTERVAL '2' DAY / '2' AS r
+        """
+      Then query result
+        | r                                   |
+        | INTERVAL '1 00:00:00' DAY TO SECOND |
+
+    Scenario Outline: an interval scaled by a string yields a value (<ansi>): <case>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT <expr> AS r
+        """
+      Then query result
+        | r        |
+        | <result> |
+
+      Examples:
+        | case                        | expr                     | ansi  | result                              |
+        | interval times a string     | INTERVAL '2' DAY * '2'   | false | INTERVAL '4 00:00:00' DAY TO SECOND |
+        | a string times an interval  | '2' * INTERVAL '2' DAY   | false | INTERVAL '4 00:00:00' DAY TO SECOND |
+        | interval times a string     | INTERVAL '2' DAY * '2'   | true  | INTERVAL '4 00:00:00' DAY TO SECOND |
+        | interval divided by string  | INTERVAL '2' DAY / '2'   | true  | INTERVAL '1 00:00:00' DAY TO SECOND |
 
   Rule: pmod operand typing after the generic numeric coercion
     # `SparkPmod` inherits DataFusion's `Signature::numeric`, which unifies both operands to
@@ -2478,7 +2851,7 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | NULL |
 
   Rule: Unary plus and positive() over a string coerce to double like unary minus
-    # Validated against Spark 4.1.1: `+'5'`, `positive('5')` and `negative('5')` are
+    # Validated against Spark 4.2.0: `+'5'`, `positive('5')` and `negative('5')` are
     # DOUBLE in both ANSI modes — `positive` and `negative` are `UnaryPositive` and
     # `UnaryMinus` under function names. The same string-to-numeric parse as the
     # binary operators applies: trim, NULL under ANSI off, raise under ANSI on.
@@ -2555,7 +2928,6 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | a             | b              | c      |
         | decimal(14,6) | decimal(23,13) | double |
 
-    @sail-bug
     Scenario: typeof of a decimal divided by a zero literal, ANSI on
       Given config spark.sql.ansi.enabled = true
       When query
@@ -2565,6 +2937,65 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
       Then query result
         | a             |
         | decimal(14,6) |
+
+  Rule: A literal zero divisor does not make the expression unresolvable
+    # Spark's `Divide`/`Remainder`/`IntegralDivide` raise from `DivModLike.eval`, i.e. at
+    # EVALUATION time; there is no analysis-time zero check in arithmetic.scala. So under ANSI
+    # the expression still RESOLVES (its type is observable) and a row that is never evaluated
+    # never raises. Sail short-circuits a literal zero divisor in the plan builder instead
+    # (math.rs `spark_divide` / `spark_div` / `spark_modulo`), which kills the whole query
+    # regardless of whether any row reaches the division. `make_safe_divisor` already emits the
+    # correct runtime raise, so the plan-time check is redundant as well as divergent.
+    # Measured against Spark 4.2.0. ANSI off already matches and is pinned in the rule below.
+
+    Scenario Outline: the type of a division by a literal zero is observable under ANSI: <case>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT typeof(<expr>) AS t
+        """
+      Then query result
+        | t   |
+        | <t> |
+
+      Examples:
+        | case                   | expr    | t      |
+        | ordinary division      | 1 / 0   | double |
+        | integral division      | 5 div 0 | bigint |
+        | remainder              | 5 % 0   | int    |
+
+    Scenario Outline: a division by a literal zero on a filtered-out row does not raise: <case>
+      # The sharpest form: the filter removes every row, so Spark never evaluates the division
+      # and returns an empty result. Sail raises at plan time, before any row exists.
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT <expr> AS r FROM VALUES (1) AS t(a) WHERE false
+        """
+      Then query result
+        | r |
+
+      Examples:
+        | case                 | expr |
+        | a filtered division  | a/0  |
+        | a filtered remainder | a%0  |
+
+  Rule: A division by a literal zero keeps its Spark type under ANSI off
+    # The complement of the rule above, and the revert test for the plan builders' change from
+    # returning an untyped `void` NULL to routing through `make_safe_divisor`. Reverting either
+    # `spark_div` or `spark_modulo` makes `typeof` report `void` here. Sail already matches.
+
+    Scenario: DIV and % by a literal zero are typed NULLs, not void
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT typeof(10 div 0) AS dt, 10 div 0 AS dv,
+               typeof(10 % 0) AS mt, 10 % 0 AS mv,
+               typeof(CAST(1.5 AS DECIMAL(10,2)) % 0) AS et
+        """
+      Then query result
+        | dt     | dv   | mt  | mv   | et            |
+        | bigint | NULL | int | NULL | decimal(3,2)  |
 
   Rule: Unary minus over a wide decimal
     # Spark's unary minus routes the value through `MathContext.DECIMAL128`, which keeps

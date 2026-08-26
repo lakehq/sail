@@ -1,16 +1,14 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{
-    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DataType, IntervalUnit, TimeUnit, i256,
+    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DataType, IntervalUnit, TimeUnit,
 };
-use datafusion::arrow::error::ArrowError;
 use datafusion::functions::expr_fn;
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::{
     BinaryExpr, Expr, ExprSchemable, Operator, ScalarUDF, cast, expr, lit, try_cast,
 };
 use datafusion_spark::function::math::expr_fn as math_fn;
-use half::f16;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::error::generic_exec_err;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
@@ -333,15 +331,27 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
     Ok(match (left_type, right_type) {
         // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
         //  Seems to be a bug in DataFusion.
-        (Ok(DataType::Duration(TimeUnit::Microsecond)), Ok(_)) => {
+        (Ok(DataType::Duration(TimeUnit::Microsecond)), Ok(right_type)) => {
             // Match duration because we cast Spark's DayTime interval to Duration.
+            // These arms return before `coerce_spark_arithmetic_operands` runs, so the
+            // scaling operand is anchored here instead.
+            let right = coerce_interval_scale_operand(
+                right,
+                &right_type,
+                function_context.plan_config.ansi_mode,
+            );
             cast(
                 cast(left, DataType::Int64) * right,
                 DataType::Duration(TimeUnit::Microsecond),
             )
         }
-        (Ok(_), Ok(DataType::Duration(TimeUnit::Microsecond))) => {
+        (Ok(left_type), Ok(DataType::Duration(TimeUnit::Microsecond))) => {
             // Match duration because we cast Spark's DayTime interval to Duration.
+            let left = coerce_interval_scale_operand(
+                left,
+                &left_type,
+                function_context.plan_config.ansi_mode,
+            );
             cast(
                 left * cast(right, DataType::Int64),
                 DataType::Duration(TimeUnit::Microsecond),
@@ -494,7 +504,7 @@ fn coerce_spark_arithmetic_operands(
     pick_minimum_precision: bool,
 ) -> (Expr, Expr) {
     // STRING operands. DataFusion rejects string arithmetic; Spark coerces
-    // (validated vs Spark 4.1.1):
+    // (validated vs Spark 4.2.0):
     //   ANSI off -> a string paired with a string, numeric or NULL promotes BOTH to
     //               DOUBLE, and a string that does not parse yields NULL rather than
     //               an error (so the cast must be a `try_cast`).
@@ -502,8 +512,22 @@ fn coerce_spark_arithmetic_operands(
     //               with a FRACTIONAL numeric (float or decimal) to DOUBLE. The cast
     //               is strict: a malformed string raises. `string + string` and
     //               `string + NULL` are left as-is; Spark rejects both.
-    // https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/TypeCoercion.scala (PromoteStrings)
-    // https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/AnsiTypeCoercion.scala
+    // https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/TypeCoercion.scala (PromoteStrings)
+    // https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/AnsiTypeCoercion.scala
+    // Two untyped NULLs have no peer to take a type from, so Spark falls back to the
+    // operator's declared input type: `implicitCast(NullType, target)` returns
+    // `target.defaultConcreteType` (TypeCoercion.scala:202), the operator's `inputType` is
+    // `TypeCollection.NumericAndInterval` (arithmetic.scala:417), a TypeCollection's default is
+    // its head's (AbstractDataType.scala:66), and that head is `NumericType`, whose default is
+    // `DoubleType` (AbstractDataType.scala:81-89, :131). So `NULL <op> NULL` is DOUBLE under
+    // both ANSI modes, where DataFusion instead settles on BIGINT (and on INT for `%`, which
+    // also makes the remainder type depend on the ANSI mode).
+    if matches!(left_type, DataType::Null) && matches!(right_type, DataType::Null) {
+        return (
+            cast(left, DataType::Float64),
+            cast(right, DataType::Float64),
+        );
+    }
     let left_string = left_type.is_string();
     let right_string = right_type.is_string();
     if left_string || right_string {
@@ -541,7 +565,7 @@ fn coerce_spark_arithmetic_operands(
         }
     }
     // FLOAT/DOUBLE x DECIMAL -> DOUBLE.
-    // https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/DecimalPrecision.scala
+    // https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/DecimalPrecision.scala
     if is_float_decimal_pair(left_type, right_type) {
         return (
             cast(left, DataType::Float64),
@@ -562,7 +586,7 @@ fn coerce_spark_arithmetic_operands(
         );
     }
     // integer literal x DECIMAL -> narrow the literal to its minimal decimal.
-    // https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/types/DecimalType.scala
+    // https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/types/DecimalType.scala
     let left = match spark_decimal_literal_datatype(&left, right_type, pick_minimum_precision) {
         Some(target) => cast(left, target),
         None => left,
@@ -597,6 +621,13 @@ fn coerce_string_operand(
     }
 }
 
+/// Deliberately narrower than `DataType::is_decimal()`, which also admits `Decimal32`/
+/// `Decimal64`: every Spark result-type rule below is written against `Decimal128` (and
+/// `Decimal256` as its widened intermediate), so admitting the narrow widths here would route
+/// them into retype arms that cannot match them. They keep DataFusion's coercion instead.
+/// Sail has no SQL syntax that produces a `Decimal32`/`Decimal64` column — they arrive only
+/// from an Arrow or Parquet source — so the gap is not reachable from a BDD scenario and is
+/// left as is rather than changed untested.
 fn is_decimal_type(data_type: &DataType) -> bool {
     matches!(
         data_type,
@@ -620,6 +651,19 @@ fn rejects_as_divide_dividend(data_type: &DataType) -> bool {
             | DataType::Binary
             | DataType::LargeBinary
             | DataType::BinaryView
+            // Container types (and VARIANT, which is stored as a struct). Spark rejects them
+            // at ANALYSIS with DATATYPE_MISMATCH for every arithmetic operator, while `/`
+            // otherwise lets them fall through to a `Float64` cast that fails in the EXECUTOR
+            // — a runtime error where Spark has an analysis one, so a never-evaluated row
+            // changes the outcome. `Dictionary` and `RunEndEncoded` are deliberately absent:
+            // they wrap a value type that may well be numeric.
+            | DataType::Struct(_)
+            | DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::ListView(_)
+            | DataType::LargeListView(_)
+            | DataType::FixedSizeList(_, _)
+            | DataType::Map(_, _)
     )
 }
 
@@ -633,6 +677,42 @@ fn rejects_as_divide_divisor(data_type: &DataType) -> bool {
 
 fn is_interval_like(data_type: &DataType) -> bool {
     matches!(data_type, DataType::Interval(_) | DataType::Duration(_))
+}
+
+/// Anchors the numeric operand that scales an interval, which is the one case where a STRING
+/// does NOT follow the general arithmetic promotion rule.
+///
+/// `BinaryArithmeticWithDatetimeResolver` rewrites `interval * x` / `interval / x` by the
+/// operands' *data types*, before any coercion, so a STRING still enters as the `num` child of
+/// `MultiplyDTInterval`/`DivideDTInterval` (`BinaryArithmeticWithDatetimeResolver.scala:147-163`).
+/// Those are `ImplicitCastInputTypes` with `Seq(DayTimeIntervalType, NumericType)`
+/// (`intervalExpressions.scala:650-658`, `:819-827`), so the string is cast by
+/// `implicitCast(StringType, NumericType)` — and BOTH coercion rules agree on the target:
+/// `TypeCoercion.scala:212` and `AnsiTypeCoercion.scala:195-196` return
+/// `NumericType.defaultConcreteType`, which is `DoubleType` (`AbstractDataType.scala:131`).
+///
+/// So this is DOUBLE under both ANSI modes, unlike the general string promotion (where an
+/// integral peer gives BIGINT under ANSI on) — the expected type here is the abstract
+/// `NumericType` of the interval expression, not the peer's type. The ANSI gate only decides
+/// whether a malformed string raises or yields NULL, which is what the shared helper does.
+/// Promotes a STRING operand of `DIV` to BIGINT, the first member of `IntegralDivide`'s input
+/// collection that a string implicitly casts to (see the note in [`spark_div`]). Only reached
+/// under ANSI on, where a malformed string raises rather than yielding NULL — which is what
+/// `null_on_failure = !ansi_mode` gives the shared helper.
+fn coerce_integral_divide_operand(expr: Expr, data_type: &DataType, ansi_mode: bool) -> Expr {
+    if data_type.is_string() {
+        spark_string_to_numeric(expr, DataType::Int64, !ansi_mode)
+    } else {
+        expr
+    }
+}
+
+fn coerce_interval_scale_operand(expr: Expr, data_type: &DataType, ansi_mode: bool) -> Expr {
+    if data_type.is_string() {
+        spark_string_to_numeric(expr, DataType::Float64, !ansi_mode)
+    } else {
+        expr
+    }
 }
 
 /// The numeric offset Spark accepts for a `DATE` in `+`/`-`: `DateAdd`/`DateSub` take an
@@ -888,7 +968,7 @@ fn coerce_decimal_peer_operand(left: Expr, right: Expr, schema: &DFSchemaRef) ->
     }
 }
 
-/// Spark's NullType coercion for `/`, which is asymmetric (validated vs Spark 4.1.1).
+/// Spark's NullType coercion for `/`, which is asymmetric (validated vs Spark 4.2.0).
 ///
 /// `decimal / NULL` coerces the NULL to the dividend's decimal, so the Spark divide
 /// rule applies (`decimal(10,2) / NULL` is `decimal(23,13)`), while `NULL / decimal`
@@ -938,7 +1018,7 @@ fn is_float_decimal_pair(a: &DataType, b: &DataType) -> bool {
 /// not fire, and the literal falls through to the same type-based decimal any integer
 /// *column* gets (`Decimal(10, 0)` for an INT), so `decimal(10,2) * 3` widens from
 /// `decimal(12,2)` to `decimal(21,2)`.
-/// <https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/DecimalPrecisionTypeCoercion.scala#L150-L188>
+/// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/DecimalPrecisionTypeCoercion.scala#L150-L188>
 fn spark_decimal_literal_datatype(
     expr: &Expr,
     other_type: &DataType,
@@ -982,7 +1062,7 @@ fn spark_decimal_literal_datatype(
 /// deliberately absent here (`decimal(10,2) * 3Y` is `decimal(14,2)` in Spark, not
 /// `decimal(12,2)`). Byte operands are widened by [`coerce_decimal_peer_operand`]
 /// like any other integer column.
-/// <https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/types/DataTypeUtils.scala#L246-L251>
+/// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/types/DataTypeUtils.scala#L253-L257>
 fn scalar_integer_value(scalar: &ScalarValue) -> Option<i128> {
     Some(match scalar {
         ScalarValue::Int16(Some(v)) => i128::from(*v),
@@ -999,52 +1079,6 @@ fn scalar_integer_value(scalar: &ScalarValue) -> Option<i128> {
 fn integer_digit_count(value: i128) -> u8 {
     // `checked_ilog10` is `None` only for zero, which Spark counts as one digit.
     value.unsigned_abs().checked_ilog10().unwrap_or(0) as u8 + 1
-}
-
-/// Check if an expression represents a zero literal value.
-/// Handles both direct literals and CAST expressions wrapping literals.
-fn is_zero_literal(expr: &Expr) -> bool {
-    // Helper to check if a ScalarValue is zero
-    fn is_scalar_zero(scalar: &ScalarValue) -> bool {
-        match scalar {
-            ScalarValue::Int8(Some(0))
-            | ScalarValue::Int16(Some(0))
-            | ScalarValue::Int32(Some(0))
-            | ScalarValue::Int64(Some(0))
-            | ScalarValue::UInt8(Some(0))
-            | ScalarValue::UInt16(Some(0))
-            | ScalarValue::UInt32(Some(0))
-            | ScalarValue::UInt64(Some(0))
-            | ScalarValue::Decimal128(Some(0), _, _) => true,
-            ScalarValue::Float32(Some(v)) if *v == 0.0 => true,
-            ScalarValue::Float64(Some(v)) if *v == 0.0 => true,
-            ScalarValue::Float16(Some(f)) if *f == f16::from_f32(0.0) => true,
-            ScalarValue::Decimal256(Some(v), _, _) if *v == i256::ZERO => true,
-            _ => false,
-        }
-    }
-
-    match expr {
-        // Direct literal
-        Expr::Literal(scalar, _) => is_scalar_zero(scalar),
-        // CAST(literal AS type) - unwrap the cast and check the inner literal
-        Expr::Cast(cast_expr) => {
-            if let Expr::Literal(scalar, _) = cast_expr.expr.as_ref() {
-                is_scalar_zero(scalar)
-            } else {
-                false
-            }
-        }
-        // TryCast is similar to Cast
-        Expr::TryCast(try_cast_expr) => {
-            if let Expr::Literal(scalar, _) = try_cast_expr.expr.as_ref() {
-                is_scalar_zero(scalar)
-            } else {
-                false
-            }
-        }
-        _ => false,
-    }
 }
 
 /// Returns a guarded divisor expression that handles division by zero at runtime.
@@ -1097,6 +1131,14 @@ fn make_safe_divisor(
     }
 }
 
+/// The fixed scale increment Arrow's decimal `Op::Div` adds to the dividend's scale
+/// (`result_scale = min(s1 + 4, MAX_SCALE)`), following Postgres and MySQL. The decimal
+/// division path below rescales the dividend against it to buy the guard digit HALF_UP
+/// needs, so a change to this constant upstream silently makes every decimal division
+/// one ulp wrong — it is named here so a DataFusion/Arrow bump has to look at it.
+/// <https://github.com/apache/arrow-rs/blob/58.3.0/arrow-arith/src/numeric.rs>
+const ARROW_DIV_SCALE_INCREMENT: i8 = 4;
+
 /// Arguments:
 ///   - dividend: A numeric or INTERVAL expression.
 ///   - divisor: A numeric expression.
@@ -1110,14 +1152,6 @@ fn make_safe_divisor(
 /// All of the above conditions should be handled by the DataFusion.
 /// If there is a discrepancy in parity, check the link below and adjust Sail's logic accordingly:
 ///   https://github.com/apache/datafusion/blob/a28f2834c6969a0c0eb26165031f8baa1e1156a5/datafusion/expr-common/src/type_coercion/binary.rs#L194
-/// The fixed scale increment Arrow's decimal `Op::Div` adds to the dividend's scale
-/// (`result_scale = min(s1 + 4, MAX_SCALE)`), following Postgres and MySQL. The decimal
-/// division path below rescales the dividend against it to buy the guard digit HALF_UP
-/// needs, so a change to this constant upstream silently makes every decimal division
-/// one ulp wrong — it is named here so a DataFusion/Arrow bump has to look at it.
-/// <https://github.com/apache/arrow-rs/blob/58.3.0/arrow-arith/src/numeric.rs>
-const ARROW_DIV_SCALE_INCREMENT: i8 = 4;
-
 fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let ScalarFunctionInput {
         arguments,
@@ -1125,15 +1159,6 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
     } = input;
 
     let (dividend, divisor) = arguments.two()?;
-
-    // A literal zero divisor under ANSI raises at plan time (better error UX). Under
-    // non-ANSI it falls through: the runtime `make_safe_divisor` guard below nulls the
-    // zero and gives the NULL the division's Spark result type, so a literal `x / 0`
-    // matches the column form. Returning a bare untyped NULL here instead would report
-    // `void` in the schema where Spark reports the numeric type.
-    if function_context.plan_config.ansi_mode && is_zero_literal(&divisor) {
-        return Err(PlanError::ArrowError(ArrowError::DivideByZero));
-    }
 
     let ansi_mode = function_context.plan_config.ansi_mode;
     let allow_precision_loss = function_context
@@ -1176,6 +1201,13 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 ) =>
         {
             cast(divisor, DataType::Float64)
+        }
+        // A STRING divisor scaling an interval is DOUBLE in both ANSI modes — see
+        // `coerce_interval_scale_operand`. Anchoring it here rather than leaving it to
+        // `coerce_spark_arithmetic_operands` below is what makes the ANSI-on case work: that
+        // helper needs a numeric peer to pick the width, and an interval peer is not one.
+        (Ok(dividend_type), Ok(divisor_type)) if is_interval_like(&dividend_type) => {
+            coerce_interval_scale_operand(divisor, &divisor_type, ansi_mode)
         }
         _ => divisor,
     };
@@ -1232,7 +1264,7 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
         divisor,
         &effective_divisor_type,
         ansi_mode,
-        "Division by zero",
+        "[DIVIDE_BY_ZERO] Division by zero.",
     );
 
     let div_expr = match (&dividend_type, &divisor_type) {
@@ -1342,15 +1374,36 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
     let (dividend, divisor) = arguments.two()?;
 
-    // Plan-time check for a literal zero divisor: under ANSI raise at plan time; under non-ANSI
-    // fall through to `make_safe_divisor`, which nulls the zero and gives the NULL the division's
-    // Spark result type. A bare untyped NULL here would report `void` in the schema where Spark
-    // reports the integral type (matching the sibling `/` and `%`).
-    if is_zero_literal(&divisor) && function_context.plan_config.ansi_mode {
-        return Err(PlanError::ArrowError(ArrowError::DivideByZero));
-    }
-
     let ansi_mode = function_context.plan_config.ansi_mode;
+
+    // `IntegralDivide` takes `TypeCollection(LongType, DecimalType, YearMonthIntervalType,
+    // DayTimeIntervalType)` and returns `LongType` (arithmetic.scala:890-893), so a STRING
+    // operand resolves differently from the other operators, and differently per ANSI mode:
+    //   ANSI off -> `PromoteStrings` casts the string to DOUBLE, which is not the peer's
+    //               integral type, so Spark rejects with BINARY_OP_DIFF_TYPES.
+    //   ANSI on  -> `implicitCast(StringType, TypeCollection(..))` takes the first castable
+    //               member, `LongType` (AnsiTypeCoercion.scala:213 falling into :195), so the
+    //               string becomes BIGINT and the division proceeds.
+    // Two strings have no common integral type and are rejected in both modes.
+    let (dividend, divisor) = {
+        let (dividend_type, divisor_type) = (
+            dividend.get_type(function_context.schema),
+            divisor.get_type(function_context.schema),
+        );
+        match (&dividend_type, &divisor_type) {
+            (Ok(left), Ok(right)) if left.is_string() || right.is_string() => {
+                if !ansi_mode || (left.is_string() && right.is_string()) {
+                    return Err(arithmetic_operand_error('/', left, right));
+                }
+                (
+                    coerce_integral_divide_operand(dividend, left, ansi_mode),
+                    coerce_integral_divide_operand(divisor, right, ansi_mode),
+                )
+            }
+            _ => (dividend, divisor),
+        }
+    };
+
     let dividend_type = dividend.get_type(function_context.schema);
     let divisor_type = divisor.get_type(function_context.schema);
 
@@ -1360,7 +1413,7 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
         divisor,
         &effective_divisor_type,
         ansi_mode,
-        "Division by zero",
+        "[DIVIDE_BY_ZERO] Division by zero.",
     );
 
     let div_expr = match (&dividend_type, &divisor_type) {
@@ -1529,8 +1582,8 @@ fn double2(func: impl Fn(Expr, Expr) -> Expr) -> impl Fn(Expr, Expr) -> Expr {
 /// The types are re-derived from the coerced expressions rather than taken from the
 /// caller, so a caller that rewrites an operand first (as `pmod` does for a bare NULL)
 /// cannot feed a stale type into the rule.
-/// <https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L980-L991>
-/// <https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L1065-L1071>
+/// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L980-L991>
+/// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L1065-L1071>
 fn coerce_spark_remainder_operands(
     left: Expr,
     right: Expr,
@@ -1620,16 +1673,6 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let (dividend, divisor, remainder_type) =
         coerce_spark_remainder_operands(dividend, divisor, &function_context);
 
-    // Plan-time check for a literal zero divisor: under ANSI raise at plan time (better error
-    // UX); under non-ANSI fall through to `make_safe_divisor`, which nulls the zero and gives
-    // the NULL the modulo's Spark result type. Returning a bare untyped NULL here would report
-    // `void` in the schema where Spark reports the numeric type (matching the sibling `/`).
-    if ansi_mode && is_zero_literal(&divisor) {
-        return Err(PlanError::ArrowError(ArrowError::ArithmeticOverflow(
-            "Remainder by zero".to_string(),
-        )));
-    }
-
     let divisor_type = divisor.get_type(function_context.schema);
 
     // Apply runtime zero-divisor guard to the divisor before building the modulo expression.
@@ -1638,7 +1681,7 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
         divisor,
         &effective_divisor_type,
         ansi_mode,
-        "Remainder by zero",
+        "[REMAINDER_BY_ZERO] Remainder by zero.",
     );
 
     let modulo = Expr::BinaryExpr(BinaryExpr {
@@ -1762,7 +1805,7 @@ fn spark_unary_negate(arg: Expr, ansi_mode: bool, schema: &DFSchemaRef) -> Expr 
 /// Spark's unary plus (`UnaryPositive`): a string operand coerces to DOUBLE with the
 /// same parse the binary operators, unary minus and `CAST` use — surrounding
 /// whitespace is trimmed, and an invalid string is NULL under ANSI off but raises
-/// under ANSI on (validated vs Spark 4.1.1: `+'5'` and `positive('5')` are DOUBLE in
+/// under ANSI on (validated vs Spark 4.2.0: `+'5'` and `positive('5')` are DOUBLE in
 /// both ANSI modes). Any other operand passes through unchanged.
 fn spark_unary_plus(arg: Expr, ansi_mode: bool, schema: &DFSchemaRef) -> Expr {
     match arg.get_type(schema) {
