@@ -36,6 +36,7 @@ impl From<ConfigKeyValue> for connect::KeyValue {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct SparkRuntimeConfig {
     entries:
         &'static phf::Map<&'static str, &'static crate::spark::config::SparkConfigEntry<'static>>,

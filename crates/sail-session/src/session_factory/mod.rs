@@ -2,7 +2,7 @@ mod job_runner;
 mod server;
 mod worker;
 
-use datafusion::common::Result;
+use datafusion::common::{Result, not_impl_err};
 use datafusion::prelude::SessionContext;
 pub use job_runner::{
     ServerSessionJobRunnerFactory, SessionJobRunner, SessionJobRunnerFactory, SessionJobRunnerInfo,
@@ -15,4 +15,8 @@ pub trait SessionFactory<I>: Send {
     /// This method takes `&mut self` so that the factory can maintain internal state if needed.
     /// This method takes an opaque parameter of type `I` for session-specific information.
     fn create(&mut self, info: I) -> Result<SessionContext>;
+
+    fn clone_session(&mut self, _source: &SessionContext, _info: I) -> Result<SessionContext> {
+        not_impl_err!("cloning sessions is not supported by this session factory")
+    }
 }

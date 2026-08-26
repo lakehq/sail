@@ -16,13 +16,12 @@ mod tests {
     use sail_common_datafusion::extension::SessionExtensionAccessor;
     use sail_common_datafusion::session::job::JobService;
     use sail_plan::resolve_and_execute_plan;
-    use sail_telemetry::telemetry::{ResourceOptions, init_telemetry};
     use serde::{Deserialize, Serialize};
 
     use crate::error::{SparkError, SparkResult};
     use crate::proto::data_type_json::JsonDataType;
     use crate::session::SparkSession;
-    use crate::session_manager::create_spark_session_manager;
+    use crate::session_manager::{create_spark_session_manager, init_test_telemetry};
     use crate::spark::connect::relation::RelType;
     use crate::spark::connect::{Relation, Sql};
 
@@ -63,9 +62,9 @@ mod tests {
         let config = Arc::new(AppConfig::load()?);
         let runtime = RuntimeManager::try_new(&config.runtime)?;
         let handle = runtime.handle();
-        handle.primary().block_on(async {
-            init_telemetry(&config.telemetry, ResourceOptions { kind: "server" })
-        })?;
+        handle
+            .primary()
+            .block_on(async { init_test_telemetry(&config) });
         let mut system = ActorSystem::new();
         // The driver gateway is initialized before the session manager in cluster mode, so the
         // manager must be created inside an async context.

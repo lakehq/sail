@@ -169,6 +169,12 @@ impl SparkSession {
         Ok(state.config.is_modifiable(key))
     }
 
+    pub(crate) fn clone_state_from(&self, source: &Self) -> SparkResult<()> {
+        let config = source.state.lock()?.config.clone();
+        self.state.lock()?.config = config;
+        Ok(())
+    }
+
     pub(crate) fn add_executor(&self, executor: Executor) -> SparkResult<()> {
         let mut state = self.state.lock()?;
         let id = executor.metadata.operation_id.clone();
@@ -318,5 +324,69 @@ impl SparkSessionState {
             executors: HashMap::new(),
             streaming_queries: StreamingQueryManager::new(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::unwrap_used)]
+
+    use super::*;
+
+    fn session(id: &str) -> SparkSession {
+        pyo3::Python::initialize();
+        SparkSession::try_new(
+            id.to_string(),
+            "user".to_string(),
+            SparkSessionOptions {
+                execution_heartbeat_interval: Duration::from_secs(1),
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn cloned_state_copies_config_then_mutates_independently() {
+        let source = session("source");
+        let clone = session("clone");
+        source
+            .set_config(vec![ConfigKeyValue {
+                key: "spark.test.clone".to_string(),
+                value: Some("source".to_string()),
+            }])
+            .unwrap();
+
+        clone.clone_state_from(&source).unwrap();
+        source
+            .set_config(vec![ConfigKeyValue {
+                key: "spark.test.clone".to_string(),
+                value: Some("parent".to_string()),
+            }])
+            .unwrap();
+        clone
+            .set_config(vec![ConfigKeyValue {
+                key: "spark.test.clone".to_string(),
+                value: Some("clone".to_string()),
+            }])
+            .unwrap();
+
+        assert_eq!(
+            source
+                .get_config(vec!["spark.test.clone".to_string()])
+                .unwrap()[0]
+                .value
+                .as_deref(),
+            Some("parent")
+        );
+        assert_eq!(
+            clone
+                .get_config(vec!["spark.test.clone".to_string()])
+                .unwrap()[0]
+                .value
+                .as_deref(),
+            Some("clone")
+        );
+        assert!(clone.state.lock().unwrap().executors.is_empty());
+        assert!(clone.list_active_streaming_queries().unwrap().is_empty());
     }
 }

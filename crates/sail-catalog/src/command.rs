@@ -1085,7 +1085,7 @@ mod tests {
     use datafusion::execution::context::SessionConfig;
     use datafusion::prelude::SessionContext;
     use datafusion_common::not_impl_err;
-    use datafusion_expr::{LogicalPlan, TableSource};
+    use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, TableSource};
     use sail_common_datafusion::catalog::display::{CatalogObjectDisplay, DefaultCatalogDisplay};
     use sail_common_datafusion::catalog::{
         DatabaseStatus, FunctionStatus, TableColumnStatus, TableKind, TableStatus,
@@ -1490,5 +1490,86 @@ mod tests {
         assert!(
             matches!(error, CatalogError::External(message) if message.contains("catalog sync failed"))
         );
+    }
+
+    #[tokio::test]
+    async fn cloned_catalog_state_copies_views_functions_and_namespace_independently()
+    -> CatalogResult<()> {
+        let ctx = test_session_context();
+        let source = test_manager(None);
+        let clone = test_manager(None);
+        let plan = Arc::new(LogicalPlanBuilder::empty(false).build()?);
+        source
+            .create_temporary_view(
+                "items",
+                CreateTemporaryViewOptions {
+                    input: plan.clone(),
+                    columns: vec![],
+                    if_not_exists: false,
+                    replace: false,
+                    comment: Some("source".to_string()),
+                    properties: vec![],
+                    source: None,
+                },
+            )
+            .await?;
+        let udf = ctx
+            .state()
+            .scalar_functions()
+            .values()
+            .next()
+            .ok_or_else(|| CatalogError::NotFound(CatalogObject::Function, "test UDF".into()))?
+            .as_ref()
+            .clone();
+        let udf_name = udf.name().to_string();
+        source.register_function(udf)?;
+        let tracked = source.track_logical_plan(plan)?;
+
+        clone.clone_state_from(&source)?;
+
+        assert_eq!(clone.default_catalog()?, source.default_catalog()?);
+        assert_eq!(clone.default_database()?, source.default_database()?);
+        assert!(clone.get_temporary_view("items").await.is_ok());
+        assert!(clone.get_function(&udf_name)?.is_some());
+        assert!(clone.get_tracked_logical_plan(tracked).is_ok());
+
+        let replacement = Arc::new(LogicalPlanBuilder::empty(true).build()?);
+        clone
+            .create_temporary_view(
+                "items",
+                CreateTemporaryViewOptions {
+                    input: replacement.clone(),
+                    columns: vec![],
+                    if_not_exists: false,
+                    replace: true,
+                    comment: Some("clone".to_string()),
+                    properties: vec![],
+                    source: None,
+                },
+            )
+            .await?;
+        assert!(matches!(
+            source.get_temporary_view("items").await?.kind,
+            TableKind::TemporaryView {
+                comment: Some(comment),
+                ..
+            } if comment == "source"
+        ));
+        assert!(matches!(
+            clone.get_temporary_view("items").await?.kind,
+            TableKind::TemporaryView {
+                comment: Some(comment),
+                ..
+            } if comment == "clone"
+        ));
+
+        clone
+            .drop_temporary_view("items", DropTemporaryViewOptions { if_exists: false })
+            .await?;
+        clone.deregister_function(&[&udf_name], false, true).await?;
+
+        assert!(source.get_temporary_view("items").await.is_ok());
+        assert!(source.get_function(&udf_name)?.is_some());
+        Ok(())
     }
 }

@@ -1,19 +1,22 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
+use datafusion::catalog::MemoryCatalogProviderList;
 use datafusion::common::parquet_config::DFParquetWriterVersion;
-use datafusion::common::{Result, internal_err};
+use datafusion::common::{Result, internal_datafusion_err, internal_err};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::{SessionState, SessionStateBuilder};
 use datafusion::functions_aggregate::first_last::first_value_udaf;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_expr::registry::FunctionRegistry;
 use sail_cache::remote_checkpoint::RemoteCheckpointRegistry;
+use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::CatalogCacheManager;
 use sail_catalog_system::service::SystemTableService;
 use sail_common::actor::ActorHandle;
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::activity::ActivityTracker;
 use sail_common_datafusion::session::job::{JobRunner, JobService};
 use sail_common_datafusion::session::repartition::RepartitionBufferConfig;
@@ -52,6 +55,14 @@ pub trait ServerSessionMutator: Send {
         builder: RuntimeEnvBuilder,
         info: &ServerSessionInfo,
     ) -> Result<RuntimeEnvBuilder>;
+
+    fn clone_session_state(
+        &self,
+        _source: &SessionContext,
+        _target: &SessionContext,
+    ) -> Result<()> {
+        Ok(())
+    }
 }
 
 pub struct ServerSessionFactory {
@@ -96,6 +107,27 @@ impl SessionFactory<ServerSessionInfo> for ServerSessionFactory {
             .write()
             .register_udaf(first_value_udaf())?;
 
+        Ok(context)
+    }
+
+    fn clone_session(
+        &mut self,
+        source: &SessionContext,
+        mut info: ServerSessionInfo,
+    ) -> Result<SessionContext> {
+        let target = self.create_session_state(&mut info)?;
+        let state = SessionStateBuilder::new_from_existing(source.state())
+            .with_config(target.config().clone())
+            .with_runtime_env(target.runtime_env().clone())
+            .with_catalog_list(Arc::new(MemoryCatalogProviderList::new()))
+            .with_execution_props(target.execution_props().clone())
+            .build();
+        let context = SessionContext::new_with_state(state);
+        context
+            .extension::<CatalogManager>()?
+            .clone_state_from(source.extension::<CatalogManager>()?.as_ref())
+            .map_err(|e| internal_datafusion_err!("{e}"))?;
+        self.mutator.clone_session_state(source, &context)?;
         Ok(context)
     }
 }

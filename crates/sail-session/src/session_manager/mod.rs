@@ -71,6 +71,26 @@ impl SessionManager {
             .map_err(|e| SessionError::internal(format!("failed to delete session: {e}")))?
     }
 
+    pub async fn clone_session_context(
+        &self,
+        source_session_id: String,
+        target_session_id: String,
+        user_id: String,
+        client_observed_server_side_session_id: Option<String>,
+    ) -> SessionResult<SessionContext> {
+        let (tx, rx) = oneshot::channel();
+        let message = SessionManagerMessage::CloneSession {
+            source_session_id,
+            target_session_id,
+            user_id,
+            client_observed_server_side_session_id,
+            result: tx,
+        };
+        self.handle.send(message).await?;
+        rx.await
+            .map_err(|e| SessionError::internal(format!("failed to clone session: {e}")))?
+    }
+
     /// Shut down the session manager and all resources it owns.
     pub async fn shutdown(&self) -> SessionResult<()> {
         let (tx, rx) = oneshot::channel();

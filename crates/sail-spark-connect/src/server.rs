@@ -47,6 +47,15 @@ fn is_reattachable(
     false
 }
 
+fn resolve_clone_session_id(session_id: Option<String>) -> SparkResult<String> {
+    let session_id = session_id
+        .filter(|id| !id.is_empty())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    Uuid::parse_str(&session_id)
+        .map_err(|_| SparkError::invalid("target session ID must be a UUID"))?;
+    Ok(session_id)
+}
+
 /// Utility function to handle execution of a command by routing it to the appropriate handler.
 /// Still has some CommandTypes that are not implemented.
 async fn handle_command(
@@ -483,7 +492,29 @@ impl SparkConnectService for SparkConnectServer {
     ) -> Result<Response<CloneSessionResponse>, Status> {
         let request = request.into_inner();
         debug!("{request:?}");
-        Err(Status::unimplemented("clone session"))
+        let source_session_id = request.session_id.clone();
+        let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
+        let target_session_id = resolve_clone_session_id(request.new_session_id)?;
+        let observed_session_id = request
+            .client_observed_server_side_session_id
+            .filter(|id| !id.is_empty());
+        self.session_manager
+            .clone_session_context(
+                source_session_id.clone(),
+                target_session_id.clone(),
+                user_id,
+                observed_session_id,
+            )
+            .await
+            .map_err(SparkError::from)?;
+        let response = CloneSessionResponse {
+            session_id: source_session_id.clone(),
+            server_side_session_id: source_session_id,
+            new_session_id: target_session_id.clone(),
+            new_server_side_session_id: target_session_id,
+        };
+        debug!("{response:?}");
+        Ok(Response::new(response))
     }
 
     async fn get_status(
@@ -492,5 +523,281 @@ impl SparkConnectService for SparkConnectServer {
     ) -> Result<Response<GetStatusResponse>, Status> {
         debug!("{:?}", request.into_inner());
         Err(Status::unimplemented("get status"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::unwrap_used)]
+
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use futures::future::join_all;
+    use pyo3::Python;
+    use sail_common::actor::ActorSystem;
+    use sail_common::config::{AppConfig, ExecutionMode};
+    use sail_common::runtime::RuntimeManager;
+    use sail_common_datafusion::extension::SessionExtensionAccessor;
+    use sail_common_datafusion::session::activity::ActivityTracker;
+
+    use super::*;
+    use crate::session_manager::{create_spark_session_manager, init_test_telemetry};
+    use crate::spark::connect::{ReleaseSessionRequest, UserContext};
+
+    fn clone_request(
+        source: &str,
+        target: Option<String>,
+        observed: Option<String>,
+    ) -> CloneSessionRequest {
+        CloneSessionRequest {
+            session_id: source.to_string(),
+            client_observed_server_side_session_id: observed,
+            user_context: Some(UserContext {
+                user_id: "user".to_string(),
+                user_name: String::new(),
+                extensions: vec![],
+            }),
+            client_type: None,
+            new_session_id: target,
+        }
+    }
+
+    #[test]
+    fn clone_session_generates_target_uuid() {
+        let id = resolve_clone_session_id(None).unwrap();
+        assert!(Uuid::parse_str(&id).is_ok());
+
+        let id = resolve_clone_session_id(Some(String::new())).unwrap();
+        assert!(Uuid::parse_str(&id).is_ok());
+    }
+
+    #[test]
+    fn clone_session_accepts_explicit_target_uuid() {
+        let expected = Uuid::new_v4().to_string();
+        assert_eq!(
+            resolve_clone_session_id(Some(expected.clone())).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn clone_session_rejects_invalid_target_uuid() {
+        let error = resolve_clone_session_id(Some("invalid".to_string())).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("target session ID must be a UUID")
+        );
+    }
+
+    #[test]
+    fn clone_session_rpc_enforces_identity_and_target_lifecycle() {
+        Python::initialize();
+        let mut config = AppConfig::load().unwrap();
+        config.mode = ExecutionMode::Local;
+        let config = Arc::new(config);
+        let runtime = RuntimeManager::try_new(&config.runtime).unwrap();
+        let handle = runtime.handle();
+        handle
+            .primary()
+            .block_on(async { init_test_telemetry(&config) });
+        let mut system = ActorSystem::new();
+        let manager = handle
+            .primary()
+            .block_on(create_spark_session_manager(
+                config,
+                handle.clone(),
+                &mut system,
+            ))
+            .unwrap();
+        let server = SparkConnectServer::new(manager.clone());
+        let source_id = Uuid::new_v4().to_string();
+        let clone_id = Uuid::new_v4().to_string();
+
+        handle.primary().block_on(async {
+            let unknown = Uuid::new_v4().to_string();
+            let error = server
+                .clone_session(Request::new(clone_request(
+                    &unknown,
+                    Some(Uuid::new_v4().to_string()),
+                    None,
+                )))
+                .await
+                .unwrap_err();
+            assert!(error.message().contains("session not found"));
+
+            let source = manager
+                .get_or_create_session_context(source_id.clone(), "user".to_string())
+                .await
+                .unwrap();
+            let source_activity = source.extension::<ActivityTracker>().unwrap();
+            let source_active_at = source_activity.active_at().unwrap();
+
+            let error = server
+                .clone_session(Request::new(clone_request(
+                    &source_id,
+                    Some(Uuid::new_v4().to_string()),
+                    Some(Uuid::new_v4().to_string()),
+                )))
+                .await
+                .unwrap_err();
+            assert!(error.message().contains("client-observed"));
+
+            let mut wrong_user = clone_request(&source_id, Some(Uuid::new_v4().to_string()), None);
+            wrong_user.user_context.as_mut().unwrap().user_id = "other".to_string();
+            let error = server
+                .clone_session(Request::new(wrong_user))
+                .await
+                .unwrap_err();
+            assert!(error.message().contains("session not found"));
+
+            let foreign_target = Uuid::new_v4().to_string();
+            manager
+                .get_or_create_session_context(foreign_target.clone(), "other".to_string())
+                .await
+                .unwrap();
+            let error = server
+                .clone_session(Request::new(clone_request(
+                    &source_id,
+                    Some(foreign_target),
+                    None,
+                )))
+                .await
+                .unwrap_err();
+            assert!(error.message().contains("not available"));
+            assert!(!error.message().contains("already exists"));
+
+            let response = server
+                .clone_session(Request::new(clone_request(
+                    &source_id,
+                    Some(clone_id.clone()),
+                    Some(source_id.clone()),
+                )))
+                .await
+                .unwrap()
+                .into_inner();
+            assert!(source_activity.active_at().unwrap() > source_active_at);
+            assert_eq!(response.session_id, source_id);
+            assert_eq!(response.server_side_session_id, source_id);
+            assert_eq!(response.new_session_id, clone_id);
+            assert_eq!(response.new_server_side_session_id, clone_id);
+
+            let error = server
+                .clone_session(Request::new(clone_request(
+                    &source_id,
+                    Some(clone_id.clone()),
+                    None,
+                )))
+                .await
+                .unwrap_err();
+            assert!(error.message().contains("already exists"));
+
+            let concurrent_ids = (0..8)
+                .map(|_| Uuid::new_v4().to_string())
+                .collect::<Vec<_>>();
+            let responses = join_all(concurrent_ids.iter().map(|id| {
+                server.clone_session(Request::new(clone_request(
+                    &source_id,
+                    Some(id.clone()),
+                    None,
+                )))
+            }))
+            .await;
+            assert!(responses.iter().all(Result::is_ok));
+
+            server
+                .release_session(Request::new(ReleaseSessionRequest {
+                    session_id: clone_id,
+                    user_context: None,
+                    client_type: None,
+                    allow_reconnect: false,
+                }))
+                .await
+                .unwrap();
+            assert!(
+                manager
+                    .get_or_create_session_context(source_id.clone(), "user".to_string())
+                    .await
+                    .is_ok()
+            );
+
+            let error = server
+                .clone_session(Request::new(clone_request(
+                    &source_id,
+                    Some(response.new_session_id),
+                    None,
+                )))
+                .await
+                .unwrap_err();
+            assert!(error.message().contains("previously closed"));
+
+            manager.shutdown().await.unwrap();
+        });
+        handle.primary().block_on(system.join());
+    }
+
+    #[test]
+    fn cloned_session_uses_normal_timeout_cleanup() {
+        Python::initialize();
+        let mut config = AppConfig::load().unwrap();
+        config.mode = ExecutionMode::Local;
+        config.spark.session_timeout_secs = 1;
+        let config = Arc::new(config);
+        let runtime = RuntimeManager::try_new(&config.runtime).unwrap();
+        let handle = runtime.handle();
+        handle
+            .primary()
+            .block_on(async { init_test_telemetry(&config) });
+        let mut system = ActorSystem::new();
+        let manager = handle
+            .primary()
+            .block_on(create_spark_session_manager(
+                config,
+                handle.clone(),
+                &mut system,
+            ))
+            .unwrap();
+        let server = SparkConnectServer::new(manager.clone());
+        let source_id = Uuid::new_v4().to_string();
+        let clone_id = Uuid::new_v4().to_string();
+
+        handle.primary().block_on(async {
+            manager
+                .get_or_create_session_context(source_id.clone(), "user".to_string())
+                .await
+                .unwrap();
+            server
+                .clone_session(Request::new(clone_request(
+                    &source_id,
+                    Some(clone_id.clone()),
+                    None,
+                )))
+                .await
+                .unwrap();
+
+            tokio::time::sleep(Duration::from_millis(1200)).await;
+
+            assert!(
+                manager
+                    .get_or_create_session_context(source_id, "user".to_string())
+                    .await
+                    .err()
+                    .unwrap()
+                    .to_string()
+                    .contains("not running")
+            );
+            assert!(
+                manager
+                    .get_or_create_session_context(clone_id, "user".to_string())
+                    .await
+                    .err()
+                    .unwrap()
+                    .to_string()
+                    .contains("not running")
+            );
+            manager.shutdown().await.unwrap();
+        });
+        handle.primary().block_on(system.join());
     }
 }

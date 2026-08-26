@@ -85,6 +85,20 @@ impl Actor for SessionManagerActor {
                 user_id,
                 result,
             } => self.handle_get_or_create_session(ctx, session_id, user_id, result),
+            SessionManagerMessage::CloneSession {
+                source_session_id,
+                target_session_id,
+                user_id,
+                client_observed_server_side_session_id,
+                result,
+            } => self.handle_clone_session(
+                ctx,
+                source_session_id,
+                target_session_id,
+                user_id,
+                client_observed_server_side_session_id,
+                result,
+            ),
             SessionManagerMessage::ProbeIdleSession {
                 session_id,
                 instant,

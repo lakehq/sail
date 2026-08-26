@@ -14,6 +14,7 @@ use sail_execution::error::ExecutionResult;
 use sail_telemetry::system_event::SystemEvent;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
+use uuid::Uuid;
 
 use crate::error::{SessionError, SessionResult};
 use crate::session_factory::{ServerSessionInfo, SessionJobRunnerInfo};
@@ -39,7 +40,11 @@ impl SessionManagerActor {
         result: oneshot::Sender<SessionResult<SessionContext>>,
     ) -> ActorAction {
         let context = if let Some(session) = self.sessions.get(&session_id) {
-            if let ServerSessionState::Running { context, .. } = &session.state {
+            if session.user_id != user_id {
+                Err(SessionError::invalid(format!(
+                    "session not found: {session_id}"
+                )))
+            } else if let ServerSessionState::Running { context, .. } = &session.state {
                 Ok(context.clone())
             } else {
                 Err(SessionError::invalid(format!(
@@ -51,132 +56,204 @@ impl SessionManagerActor {
             //   across all session managers, and it should contain only valid characters for a
             //   path segment. Right now the session ID is generated as a UUID by the Spark client,
             //   so this is true in practice, but we may still want some validation here.
-            let session_id = session_id.clone();
-            info!("creating session {session_id}");
-            let span = Span::root(
-                "SessionManagerActor::create_session_context",
-                SpanContext::random(),
-            );
-            let _guard = span.set_local_parent();
-            let driver_id = match self.driver_id_generator.generate() {
-                Ok(driver_id) => driver_id,
-                Err(e) => {
-                    let output = Err(SessionError::internal(e.to_string()));
-                    let _ = result.send(output);
-                    return ActorAction::Continue;
-                }
-            };
-            let runner = self.job_runner_factory.create(
-                ctx.children_mut(),
-                SessionJobRunnerInfo {
-                    session_id: session_id.clone(),
-                    driver_id,
-                    driver_server_port: self.driver_gateway.as_ref().map(|x| x.port()),
-                    event_reporter: self.event_reporter.clone(),
-                },
-            );
-            match runner {
-                Ok(runner) => {
-                    let (runner, driver) = runner.into_parts();
-                    let registered_driver_id = driver.as_ref().map(|_| driver_id);
-                    if let Some(driver) = &driver
-                        && let Err(e) = self.drivers.insert(driver_id, driver.clone())
-                    {
-                        let session = ServerSession {
-                            state: ServerSessionState::Failed,
-                        };
-                        let status = session.state.status().to_string();
-                        self.sessions.insert(session_id.clone(), session);
-                        self.event_reporter.report(SystemEvent::SessionCreated {
-                            session_id: session_id.clone(),
-                            user_id,
-                            status,
-                            created_at: Utc::now(),
-                        });
-                        let driver = driver.clone();
-                        ctx.spawn(async move {
-                            if let Err(e) = driver.shutdown().await {
-                                warn!("failed to shut down driver {driver_id}: {e}");
-                            }
-                        });
-                        let output = Err(e.into());
-                        let _ = result.send(output);
-                        return ActorAction::Continue;
-                    }
-                    let info = ServerSessionInfo {
-                        session_id: session_id.clone(),
-                        user_id: user_id.clone(),
-                        session_manager: ctx.handle().clone(),
-                        job_runner: Some(runner),
-                    };
-                    match self.session_factory.create(info) {
-                        Ok(context) => {
-                            if let Some(driver) = driver {
-                                ctx.spawn(async move {
-                                    if let Err(e) = driver.activate().await {
-                                        warn!("failed to activate driver {driver_id}: {e}");
-                                    }
-                                });
-                            }
-                            let session = ServerSession {
-                                state: ServerSessionState::Running {
-                                    context: context.clone(),
-                                    driver_id: registered_driver_id,
-                                },
-                            };
-                            let status = session.state.status().to_string();
-                            self.sessions.insert(session_id.clone(), session);
-                            self.event_reporter.report(SystemEvent::SessionCreated {
-                                session_id: session_id.clone(),
-                                user_id,
-                                status,
-                                created_at: Utc::now(),
-                            });
-                            Ok(context)
-                        }
-                        Err(e) => {
-                            if let Some(driver_id) = registered_driver_id
-                                && let Some(driver) = self.drivers.remove(driver_id)
-                            {
-                                ctx.spawn(async move {
-                                    if let Err(e) = driver.shutdown().await {
-                                        warn!("failed to shut down driver {driver_id}: {e}");
-                                    }
-                                });
-                            }
-                            let session = ServerSession {
-                                state: ServerSessionState::Failed,
-                            };
-                            let status = session.state.status().to_string();
-                            self.sessions.insert(session_id.clone(), session);
-                            self.event_reporter.report(SystemEvent::SessionCreated {
-                                session_id: session_id.clone(),
-                                user_id,
-                                status,
-                                created_at: Utc::now(),
-                            });
-                            Err(e.into())
-                        }
-                    }
-                }
-                Err(e) => Err(e.into()),
-            }
+            self.create_session_context(ctx, session_id.clone(), user_id, None)
         };
-        if let Ok(context) = &context
-            && let Ok(active_at) = context
-                .extension::<ActivityTracker>()
-                .and_then(|tracker| tracker.track_activity())
+        if let Ok(context) = &context {
+            self.track_session_activity(ctx, &session_id, context);
+        }
+        let _ = result.send(context);
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_clone_session(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        source_session_id: String,
+        target_session_id: String,
+        user_id: String,
+        client_observed_server_side_session_id: Option<String>,
+        result: oneshot::Sender<SessionResult<SessionContext>>,
+    ) -> ActorAction {
+        let source = match self.sessions.get(&source_session_id) {
+            Some(session) if session.user_id == user_id => match &session.state {
+                ServerSessionState::Running { context, .. } => Ok(context.clone()),
+                ServerSessionState::Deleted | ServerSessionState::Failed => Err(
+                    SessionError::invalid(format!("session {source_session_id} is not running")),
+                ),
+            },
+            _ => Err(SessionError::invalid(format!(
+                "session not found: {source_session_id}"
+            ))),
+        };
+        if let Ok(source) = &source {
+            self.track_session_activity(ctx, &source_session_id, source);
+        }
+        let context = source.and_then(|source| {
+            if client_observed_server_side_session_id
+                .is_some_and(|observed| observed != source_session_id)
+            {
+                return Err(SessionError::invalid(format!(
+                    "client-observed server-side session ID does not match session {source_session_id}"
+                )));
+            }
+            Uuid::parse_str(&target_session_id)
+                .map_err(|_| SessionError::invalid("target session ID must be a UUID"))?;
+            if let Some(session) = self.sessions.get(&target_session_id) {
+                let message = match (session.user_id == user_id, &session.state) {
+                    (false, _) | (true, ServerSessionState::Failed) => "is not available",
+                    (true, ServerSessionState::Running { .. }) => "already exists",
+                    (true, ServerSessionState::Deleted) => "was previously closed",
+                };
+                return Err(SessionError::invalid(format!(
+                    "target session {target_session_id} {message}"
+                )));
+            }
+            self.create_session_context(
+                ctx,
+                target_session_id.clone(),
+                user_id,
+                Some(&source),
+            )
+        });
+        if let Ok(context) = &context {
+            self.track_session_activity(ctx, &target_session_id, context);
+        }
+        let _ = result.send(context);
+        ActorAction::Continue
+    }
+
+    fn create_session_context(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        session_id: String,
+        user_id: String,
+        source: Option<&SessionContext>,
+    ) -> SessionResult<SessionContext> {
+        info!("creating session {session_id}");
+        let span = Span::root(
+            "SessionManagerActor::create_session_context",
+            SpanContext::random(),
+        );
+        let _guard = span.set_local_parent();
+        let driver_id = self
+            .driver_id_generator
+            .generate()
+            .map_err(|e| SessionError::internal(e.to_string()))?;
+        let runner = self.job_runner_factory.create(
+            ctx.children_mut(),
+            SessionJobRunnerInfo {
+                session_id: session_id.clone(),
+                driver_id,
+                driver_server_port: self.driver_gateway.as_ref().map(|x| x.port()),
+                event_reporter: self.event_reporter.clone(),
+            },
+        )?;
+        let (runner, driver) = runner.into_parts();
+        let registered_driver_id = driver.as_ref().map(|_| driver_id);
+        if let Some(driver) = &driver
+            && let Err(e) = self.drivers.insert(driver_id, driver.clone())
+        {
+            let session = ServerSession {
+                user_id: user_id.clone(),
+                state: ServerSessionState::Failed,
+            };
+            let status = session.state.status().to_string();
+            self.sessions.insert(session_id.clone(), session);
+            self.event_reporter.report(SystemEvent::SessionCreated {
+                session_id,
+                user_id,
+                status,
+                created_at: Utc::now(),
+            });
+            let driver = driver.clone();
+            ctx.spawn(async move {
+                if let Err(e) = driver.shutdown().await {
+                    warn!("failed to shut down driver {driver_id}: {e}");
+                }
+            });
+            return Err(e.into());
+        }
+        let info = ServerSessionInfo {
+            session_id: session_id.clone(),
+            user_id: user_id.clone(),
+            session_manager: ctx.handle().clone(),
+            job_runner: Some(runner),
+        };
+        let context = match source {
+            Some(source) => self.session_factory.clone_session(source, info),
+            None => self.session_factory.create(info),
+        };
+        match context {
+            Ok(context) => {
+                if let Some(driver) = driver {
+                    ctx.spawn(async move {
+                        if let Err(e) = driver.activate().await {
+                            warn!("failed to activate driver {driver_id}: {e}");
+                        }
+                    });
+                }
+                let session = ServerSession {
+                    user_id: user_id.clone(),
+                    state: ServerSessionState::Running {
+                        context: context.clone(),
+                        driver_id: registered_driver_id,
+                    },
+                };
+                let status = session.state.status().to_string();
+                self.sessions.insert(session_id.clone(), session);
+                self.event_reporter.report(SystemEvent::SessionCreated {
+                    session_id,
+                    user_id,
+                    status,
+                    created_at: Utc::now(),
+                });
+                Ok(context)
+            }
+            Err(e) => {
+                if let Some(driver_id) = registered_driver_id
+                    && let Some(driver) = self.drivers.remove(driver_id)
+                {
+                    ctx.spawn(async move {
+                        if let Err(e) = driver.shutdown().await {
+                            warn!("failed to shut down driver {driver_id}: {e}");
+                        }
+                    });
+                }
+                let session = ServerSession {
+                    user_id: user_id.clone(),
+                    state: ServerSessionState::Failed,
+                };
+                let status = session.state.status().to_string();
+                self.sessions.insert(session_id.clone(), session);
+                self.event_reporter.report(SystemEvent::SessionCreated {
+                    session_id,
+                    user_id,
+                    status,
+                    created_at: Utc::now(),
+                });
+                Err(e.into())
+            }
+        }
+    }
+
+    fn track_session_activity(
+        &self,
+        ctx: &mut ActorContext<Self>,
+        session_id: &str,
+        context: &SessionContext,
+    ) {
+        if let Ok(active_at) = context
+            .extension::<ActivityTracker>()
+            .and_then(|tracker| tracker.track_activity())
         {
             ctx.send_with_delay(
                 SessionManagerMessage::ProbeIdleSession {
-                    session_id: session_id.clone(),
+                    session_id: session_id.to_string(),
                     instant: active_at,
                 },
                 self.options.session_timeout,
             );
         }
-        let _ = result.send(context);
-        ActorAction::Continue
     }
 
     pub(super) fn handle_probe_idle_session(

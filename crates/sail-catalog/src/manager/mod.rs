@@ -69,6 +69,32 @@ impl CatalogManager {
         })
     }
 
+    pub fn clone_state_from(&self, source: &Self) -> CatalogResult<()> {
+        let (functions, default_catalog, default_database) = {
+            let state = source.state()?;
+            (
+                state.functions.clone(),
+                state.default_catalog.clone(),
+                state.default_database.clone(),
+            )
+        };
+        {
+            let mut state = self.state()?;
+            if !state.catalogs.contains_key(&default_catalog) {
+                return Err(CatalogError::NotFound(
+                    CatalogObject::Catalog,
+                    default_catalog.to_string(),
+                ));
+            }
+            state.functions = functions;
+            state.default_catalog = default_catalog;
+            state.default_database = default_database;
+        }
+        self.temporary_views
+            .clone_state_from(&source.temporary_views)?;
+        self.tracker.clone_state_from(&source.tracker)
+    }
+
     pub(super) fn state(&self) -> CatalogResult<MutexGuard<'_, CatalogManagerState>> {
         self.state
             .lock()

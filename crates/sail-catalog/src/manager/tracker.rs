@@ -12,7 +12,7 @@ pub struct CatalogFunctionId(u64);
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct CatalogLogicalPlanId(u64);
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct CatalogObjectTrackerState {
     next_function_id: u64,
     next_logical_plan_id: u64,
@@ -34,6 +34,12 @@ impl CatalogObjectTracker {
         self.state
             .lock()
             .map_err(|e| CatalogError::Internal(e.to_string()))
+    }
+
+    pub(crate) fn clone_state_from(&self, source: &Self) -> CatalogResult<()> {
+        let state = source.state()?.clone();
+        *self.state()? = state;
+        Ok(())
     }
 
     pub fn track_function(&self, udf: ScalarUDF) -> CatalogResult<CatalogFunctionId> {

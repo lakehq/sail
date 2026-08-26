@@ -2,6 +2,7 @@ use datafusion::prelude::SessionContext;
 use sail_execution::DriverId;
 
 pub struct ServerSession {
+    pub user_id: String,
     pub state: ServerSessionState,
 }
 

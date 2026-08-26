@@ -9,6 +9,7 @@ use sail_common::actor::ActorSystem;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_plan::catalog::SparkCatalogObjectDisplay;
 use sail_plan::formatter::SparkPlanFormatter;
@@ -64,6 +65,17 @@ impl ServerSessionMutator for SparkSessionMutator {
     ) -> Result<RuntimeEnvBuilder> {
         Ok(builder)
     }
+
+    fn clone_session_state(
+        &self,
+        source: &datafusion::prelude::SessionContext,
+        target: &datafusion::prelude::SessionContext,
+    ) -> Result<()> {
+        target
+            .extension::<SparkSession>()?
+            .clone_state_from(source.extension::<SparkSession>()?.as_ref())
+            .map_err(|e| internal_datafusion_err!("{e}"))
+    }
 }
 
 fn create_spark_session_factory(
@@ -89,4 +101,17 @@ pub async fn create_spark_session_manager(
         system,
     )
     .await?)
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+pub(crate) fn init_test_telemetry(config: &AppConfig) {
+    static INIT: std::sync::Once = std::sync::Once::new();
+    INIT.call_once(|| {
+        sail_telemetry::telemetry::init_telemetry(
+            &config.telemetry,
+            sail_telemetry::telemetry::ResourceOptions { kind: "server" },
+        )
+        .unwrap();
+    });
 }

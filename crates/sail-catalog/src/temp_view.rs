@@ -68,6 +68,12 @@ impl TemporaryViewManager {
         }
     }
 
+    pub(crate) fn clone_state_from(&self, source: &Self) -> CatalogResult<()> {
+        let views = source.read()?.clone();
+        *self.write()? = views;
+        Ok(())
+    }
+
     fn read(&self) -> CatalogResult<RwLockReadGuard<'_, HashMap<String, Arc<TemporaryView>>>> {
         self.views
             .read()
