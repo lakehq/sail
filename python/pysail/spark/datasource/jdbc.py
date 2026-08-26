@@ -356,6 +356,7 @@ class JdbcDataSource(DataSource):
         if not dbtable and not query:
             msg = "Either 'dbtable' or 'query' must be specified for the jdbc data source."
             raise ValueError(msg)
+        query = query.strip().rstrip(";") if query is not None else None
 
         # --- auth ---
         user = opts.get("user") or None
