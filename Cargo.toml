@@ -186,16 +186,16 @@ datafusion-session = { version = "55.0.0" }
 datafusion-spark = { version = "55.0.0", features = ["core"] }
 pyo3 = { version = "0.29.0", features = ["serde"] }
 jiter = { version = "0.15.0", default-features = false }
-arrow = { version = "=59.2.0", features = ["chrono-tz"] }
-arrow-array = { version = "=59.2.0", features = ["ffi"] }
-arrow-buffer = { version = "=59.2.0" }
-arrow-data = { version = "=59.2.0" }
-arrow-schema = { version = "=59.2.0", features = ["serde"] }
-arrow-flight = { version = "=59.2.0", features = ["flight-sql-experimental"] }
-parquet = { version = "=59.2.0" }
-parquet-variant = { version = "=59.2.0" }
-parquet-variant-compute = { version = "=59.2.0" }
-parquet-variant-json = { version = "=59.2.0" }
+arrow = { version = "59.2.0", features = ["chrono-tz"] }
+arrow-array = { version = "59.2.0", features = ["ffi"] }
+arrow-buffer = { version = "59.2.0" }
+arrow-data = { version = "59.2.0" }
+arrow-schema = { version = "59.2.0", features = ["serde"] }
+arrow-flight = { version = "59.2.0", features = ["flight-sql-experimental"] }
+parquet = { version = "59.2.0" }
+parquet-variant = { version = "59.2.0" }
+parquet-variant-compute = { version = "59.2.0" }
+parquet-variant-json = { version = "59.2.0" }
 serde_arrow = { version = "0.14.2", features = ["arrow-59"] }
 # The `object_store` version must match the one used in DataFusion.
 object_store = { version = "0.13.2", features = ["aws", "gcp", "azure", "http"] }
