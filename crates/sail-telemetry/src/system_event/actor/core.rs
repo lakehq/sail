@@ -29,18 +29,23 @@ impl Actor for SystemEventActor {
             SystemEventActorMessage::ReadStages {
                 session_id,
                 job_id,
+                stage,
                 fetch,
                 result,
             } => {
-                let _ = result.send(self.read_stages(session_id, job_id, fetch));
+                let _ = result.send(self.read_stages(session_id, job_id, stage, fetch));
             }
             SystemEventActorMessage::ReadTasks {
                 session_id,
                 job_id,
+                stage,
+                partition,
+                attempt,
                 fetch,
                 result,
             } => {
-                let _ = result.send(self.read_tasks(session_id, job_id, fetch));
+                let _ = result
+                    .send(self.read_tasks(session_id, job_id, stage, partition, attempt, fetch));
             }
             SystemEventActorMessage::ReadOptions { key, fetch, result } => {
                 let _ = result.send(self.read_options(key, fetch));
