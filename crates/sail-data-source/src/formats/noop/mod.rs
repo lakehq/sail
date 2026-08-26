@@ -9,7 +9,7 @@ use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::{DFSchema, DFSchemaRef, Result, internal_err, not_impl_err};
 use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
 use educe::Educe;
-use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
+use sail_common_datafusion::datasource::{DataSource, SinkInfo, SourceInfo};
 use sail_common_datafusion::utils::items::ItemTaker;
 
 pub use crate::formats::noop::writer::NoopSinkExec;
@@ -17,10 +17,10 @@ pub use crate::formats::noop::writer::NoopSinkExec;
 mod writer;
 
 #[derive(Debug, Default)]
-pub struct NoopTableFormat;
+pub struct NoopDataSource;
 
 #[async_trait]
-impl TableFormat for NoopTableFormat {
+impl DataSource for NoopDataSource {
     fn name(&self) -> &str {
         "noop"
     }

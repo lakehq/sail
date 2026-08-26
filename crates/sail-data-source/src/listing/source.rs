@@ -19,7 +19,7 @@ use datafusion_datasource::{ListingTableUrl, TableSchema};
 use futures::TryStreamExt;
 use object_store::{ObjectMeta, ObjectStore};
 use sail_common_datafusion::datasource::{
-    OptionLayer, SinkInfo, SinkMode, SourceInfo, TableFormat, find_path_in_options,
+    DataSource, OptionLayer, SinkInfo, SinkMode, SourceInfo, find_path_in_options,
     get_partition_columns_and_file_schema,
 };
 use url::Url;
@@ -146,12 +146,12 @@ pub trait WriteFormat: Debug + Send + Sync + 'static {
 }
 
 #[derive(Debug, Default)]
-pub struct ListingTableFormat<T: FormatFactory> {
+pub struct ListingDataSource<T: FormatFactory> {
     phantom: PhantomData<T>,
 }
 
 #[async_trait]
-impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
+impl<T: FormatFactory> DataSource for ListingDataSource<T> {
     fn name(&self) -> &str {
         T::name()
     }
@@ -288,10 +288,10 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         } = info;
         let catalog_managed = lakehouse_table.is_some();
         if bucket_by.is_some() {
-            return not_impl_err!("bucketing for writing listing table format");
+            return not_impl_err!("bucketing for writing listing data source");
         }
         if partition_by.iter().any(|field| field.transform.is_some()) {
-            return not_impl_err!("partition transforms for writing listing table format");
+            return not_impl_err!("partition transforms for writing listing data source");
         }
         let url = resolve_listing_writer_url(path.clone())?;
         let overwrite = match mode {
