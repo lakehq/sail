@@ -17,7 +17,7 @@ use sail_common::actor::ActorSystem;
 use sail_common::config::ClusterConfigEnv;
 use sail_common::telemetry::ContextPropagationEnv;
 use sail_common::utils::retry::RetryStrategy;
-use tokio::sync::OnceCell;
+use tokio::sync::{OnceCell, RwLock};
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::WorkerId;
@@ -40,6 +40,7 @@ pub struct KubernetesWorkerService {
     name: String,
     options: KubernetesWorkerManagerOptions,
     pods: OnceCell<Api<Pod>>,
+    stopped: RwLock<bool>,
 }
 
 pub struct KubernetesWorkerManager {
@@ -60,6 +61,7 @@ impl KubernetesWorkerService {
             name: Self::generate_name(),
             options,
             pods: OnceCell::new(),
+            stopped: RwLock::new(false),
         }
     }
 
@@ -364,6 +366,10 @@ impl KubernetesWorkerService {
         id: WorkerId,
         options: WorkerLaunchOptions,
     ) -> ExecutionResult<()> {
+        let stopped = self.stopped.read().await;
+        if *stopped {
+            return Ok(());
+        }
         let name = format!(
             "{}{}-{}",
             self.options.worker_pod_name_prefix, self.name, id
@@ -412,10 +418,13 @@ impl KubernetesWorkerService {
         };
         let pp = Default::default();
         self.pods().await?.create(&pp, &p).await?;
+        drop(stopped);
         Ok(())
     }
 
     async fn stop(&self) -> ExecutionResult<()> {
+        let mut stopped = self.stopped.write().await;
+        *stopped = true;
         self.pods()
             .await?
             .delete_collection(
@@ -424,13 +433,153 @@ impl KubernetesWorkerService {
                     .labels(&format!("sail.lakesail.com/worker-manager={}", self.name)),
             )
             .await?;
+        drop(stopped);
         Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::convert::Infallible;
+    use std::time::Duration;
+
+    use kube::Client;
+    use kube::client::Body;
+    use sail_common::utils::retry::RetryStrategy;
+    use tokio::sync::Notify;
+    use tokio::time::timeout;
+    use tonic::codegen::http::{Method, Request, Response};
+    use tower::service_fn;
+
     use super::*;
+    use crate::id::DriverId;
+    use crate::shuffle::ShuffleBackendKind;
+
+    fn test_options() -> KubernetesWorkerManagerOptions {
+        KubernetesWorkerManagerOptions {
+            image: "sail:test".to_string(),
+            image_pull_policy: "IfNotPresent".to_string(),
+            namespace: "test".to_string(),
+            driver_pod_name: String::new(),
+            worker_pod_name_prefix: "sail-worker-".to_string(),
+            worker_service_account_name: "default".to_string(),
+            worker_pod_template: String::new(),
+        }
+    }
+
+    fn test_launch_options() -> WorkerLaunchOptions {
+        WorkerLaunchOptions {
+            enable_tls: false,
+            session_id: "session".to_string(),
+            driver_id: DriverId::from(1),
+            driver_external_host: "127.0.0.1".to_string(),
+            driver_external_port: 50051,
+            worker_heartbeat_interval: Duration::from_secs(10),
+            task_stream_buffer: 16,
+            task_stream_creation_timeout: Duration::from_secs(60),
+            rpc_retry_strategy: RetryStrategy::Fixed {
+                max_count: 1,
+                delay: Duration::ZERO,
+            },
+            shuffle_backend: ShuffleBackendKind::Flight,
+        }
+    }
+
+    #[tokio::test]
+    #[expect(clippy::unwrap_used)]
+    async fn stop_waits_for_in_flight_worker_creation_before_deleting_pods() {
+        let create_started = Arc::new(Notify::new());
+        let allow_create = Arc::new(Notify::new());
+        let delete_seen = Arc::new(Notify::new());
+        let service = service_fn({
+            let create_started = create_started.clone();
+            let allow_create = allow_create.clone();
+            let delete_seen = delete_seen.clone();
+            move |request: Request<Body>| {
+                let create_started = create_started.clone();
+                let allow_create = allow_create.clone();
+                let delete_seen = delete_seen.clone();
+                async move {
+                    let body = match *request.method() {
+                        Method::POST => {
+                            create_started.notify_one();
+                            allow_create.notified().await;
+                            serde_json::json!({
+                                "apiVersion": "v1",
+                                "kind": "Pod",
+                                "metadata": { "name": "sail-worker-test-1" }
+                            })
+                        }
+                        Method::DELETE => {
+                            delete_seen.notify_one();
+                            serde_json::json!({
+                                "apiVersion": "v1",
+                                "kind": "Status",
+                                "metadata": {},
+                                "status": "Success",
+                                "code": 200
+                            })
+                        }
+                        _ => serde_json::json!({
+                            "apiVersion": "v1",
+                            "kind": "Status",
+                            "metadata": {},
+                            "status": "Failure",
+                            "message": format!("unexpected Kubernetes request: {request:?}"),
+                            "code": 500
+                        }),
+                    };
+                    Ok::<_, Infallible>(
+                        Response::builder()
+                            .header("content-type", "application/json")
+                            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                            .unwrap(),
+                    )
+                }
+            }
+        });
+        let client = Client::new(service, "test");
+        let worker_service = Arc::new(KubernetesWorkerService::new(test_options()));
+        worker_service
+            .pods
+            .set(Api::namespaced(client, "test"))
+            .unwrap();
+
+        let launch = tokio::spawn({
+            let worker_service = worker_service.clone();
+            async move {
+                worker_service
+                    .launch_worker(WorkerId::from(1), test_launch_options())
+                    .await
+            }
+        });
+        create_started.notified().await;
+        let stop = tokio::spawn({
+            let worker_service = worker_service.clone();
+            async move { worker_service.stop().await }
+        });
+
+        assert!(
+            timeout(Duration::from_millis(50), delete_seen.notified())
+                .await
+                .is_err(),
+            "worker deletion raced ahead of in-flight worker creation"
+        );
+
+        allow_create.notify_one();
+        launch.await.unwrap().unwrap();
+        stop.await.unwrap().unwrap();
+        timeout(Duration::from_secs(1), delete_seen.notified())
+            .await
+            .unwrap();
+        timeout(
+            Duration::from_millis(50),
+            worker_service.launch_worker(WorkerId::from(2), test_launch_options()),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    }
 
     #[test]
     #[expect(clippy::unwrap_used)]
