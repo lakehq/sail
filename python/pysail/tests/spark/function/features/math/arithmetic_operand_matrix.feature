@@ -135,16 +135,29 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
 
       Examples:
         | case | l | r | result |
-        | date + unull | DATE'2024-01-15' | NULL | timestamp |
-        | ts + unull | TIMESTAMP'2024-01-15 12:00:00' | NULL | timestamp |
         | ival_d + ival_d | INTERVAL '2' DAY | INTERVAL '2' DAY | interval day |
         | ival_d + unull | INTERVAL '2' DAY | NULL | interval day |
         | ival_m + ival_m | INTERVAL '2' MONTH | INTERVAL '2' MONTH | interval month |
         | ival_m + unull | INTERVAL '2' MONTH | NULL | interval month |
-        | unull + date | NULL | DATE'2024-01-15' | timestamp |
-        | unull + ts | NULL | TIMESTAMP'2024-01-15 12:00:00' | timestamp |
         | unull + ival_d | NULL | INTERVAL '2' DAY | interval day |
         | unull + ival_m | NULL | INTERVAL '2' MONTH | interval month |
+
+    Scenario Outline: plus ansi-off: valid pair type (Sail diverges), datetime with untyped NULL: <case>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT typeof((<l>) + (<r>)) AS t
+        """
+      Then query result
+        | t        |
+        | <result> |
+
+      Examples:
+        | case | l | r | result |
+        | date + unull | DATE'2024-01-15' | NULL | timestamp |
+        | ts + unull | TIMESTAMP'2024-01-15 12:00:00' | NULL | timestamp |
+        | unull + date | NULL | DATE'2024-01-15' | timestamp |
+        | unull + ts | NULL | TIMESTAMP'2024-01-15 12:00:00' | timestamp |
 
     @spark-4
     Scenario Outline: plus ansi-off: valid pair type, untyped NULL pair: <case>
@@ -1529,16 +1542,29 @@ Feature: arithmetic operator operand-type matrix (+ - * / %) vs Spark 4.2.0
 
       Examples:
         | case | l | r | result |
-        | date + unull | DATE'2024-01-15' | NULL | timestamp |
-        | ts + unull | TIMESTAMP'2024-01-15 12:00:00' | NULL | timestamp |
         | ival_d + ival_d | INTERVAL '2' DAY | INTERVAL '2' DAY | interval day |
         | ival_d + unull | INTERVAL '2' DAY | NULL | interval day |
         | ival_m + ival_m | INTERVAL '2' MONTH | INTERVAL '2' MONTH | interval month |
         | ival_m + unull | INTERVAL '2' MONTH | NULL | interval month |
-        | unull + date | NULL | DATE'2024-01-15' | timestamp |
-        | unull + ts | NULL | TIMESTAMP'2024-01-15 12:00:00' | timestamp |
         | unull + ival_d | NULL | INTERVAL '2' DAY | interval day |
         | unull + ival_m | NULL | INTERVAL '2' MONTH | interval month |
+
+    Scenario Outline: plus ansi-on: valid pair type (Sail diverges), datetime with untyped NULL: <case>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT typeof((<l>) + (<r>)) AS t
+        """
+      Then query result
+        | t        |
+        | <result> |
+
+      Examples:
+        | case | l | r | result |
+        | date + unull | DATE'2024-01-15' | NULL | timestamp |
+        | ts + unull | TIMESTAMP'2024-01-15 12:00:00' | NULL | timestamp |
+        | unull + date | NULL | DATE'2024-01-15' | timestamp |
+        | unull + ts | NULL | TIMESTAMP'2024-01-15 12:00:00' | timestamp |
 
     @spark-4
     Scenario Outline: plus ansi-on: valid pair type, untyped NULL pair: <case>

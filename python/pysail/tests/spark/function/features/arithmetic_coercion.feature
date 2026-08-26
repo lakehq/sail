@@ -2135,6 +2135,18 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | case                                          | expr                                                   | t         | r                   |
         | date plus a day-time interval is a timestamp  | DATE'2024-01-15' + INTERVAL '1 02:03:04' DAY TO SECOND | timestamp | 2024-01-16 02:03:04 |
         | date minus a day-time interval keeps the time | DATE'2024-01-15' - INTERVAL '1 02:03:04' DAY TO SECOND | timestamp | 2024-01-13 21:56:56 |
+
+    Scenario Outline: Temporal arithmetic (untyped NULL): <case>
+      When query
+        """
+        SELECT typeof(<expr>) AS t, CAST(<expr> AS STRING) AS r
+        """
+      Then query result
+        | t   | r   |
+        | <t> | <r> |
+
+      Examples:
+        | case                                          | expr                                                   | t         | r                   |
         | date plus NULL is a timestamp NULL            | DATE'2024-01-15' + NULL                                | timestamp | NULL                |
 
     # @spark-4: `interval day to second` renders as bare `interval` on PySpark 3.5, so
@@ -2311,12 +2323,24 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
 
       Examples:
         | case                                  | expr                     | t                      |
-        | date plus untyped NULL is a timestamp | DATE'2024-01-15' + NULL  | timestamp              |
         | date minus untyped NULL is an interval| DATE'2024-01-15' - NULL  | interval day           |
-        | timestamp plus untyped NULL           | TIMESTAMP'2024-01-15 12:00:00' + NULL | timestamp |
         | day-time interval plus untyped NULL   | INTERVAL '2' DAY + NULL  | interval day           |
         | year-month interval plus untyped NULL | INTERVAL '2' MONTH + NULL | interval month        |
         | year-month interval times untyped NULL| INTERVAL '2' MONTH * NULL | interval year to month|
+
+    Scenario Outline: untyped NULL against a temporal or interval operand (datetime plus): <case>
+      When query
+        """
+        SELECT typeof(<expr>) AS t
+        """
+      Then query result
+        | t   |
+        | <t> |
+
+      Examples:
+        | case                                  | expr                     | t                      |
+        | date plus untyped NULL is a timestamp | DATE'2024-01-15' + NULL  | timestamp              |
+        | timestamp plus untyped NULL           | TIMESTAMP'2024-01-15 12:00:00' + NULL | timestamp |
 
   Rule: A DATE offset accepts any integral that fits an INT (including SMALLINT)
     # Spark's DateAdd/DateSub take an INT (IntegerType | ShortType | ByteType), so SMALLINT and

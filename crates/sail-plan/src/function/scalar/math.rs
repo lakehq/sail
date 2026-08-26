@@ -103,6 +103,15 @@ fn spark_additive_operands(
     }
 }
 
+/// Spark's `TimestampType`, i.e. the session-timezone timestamp `Cast(date, TimestampType)`
+/// produces in the datetime rewrite rules.
+fn session_timestamp_type(function_context: &FunctionContextInput<'_>) -> DataType {
+    DataType::Timestamp(
+        TimeUnit::Microsecond,
+        Some(Arc::clone(&function_context.plan_config.session_timezone)),
+    )
+}
+
 fn add_day_time_interval_to_string(
     string: Expr,
     interval: Expr,
@@ -196,6 +205,32 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             }
             (Ok(DataType::Duration(TimeUnit::Microsecond)), Ok(DataType::Date32)) => {
                 cast(left, DataType::Interval(IntervalUnit::MonthDayNano)) + right
+            }
+            // Spark's `Add` casts an untyped NULL beside a datetime to
+            // `DayTimeIntervalType.DEFAULT` — NOT to the peer's type, which is what `Subtract`
+            // does instead (BinaryArithmeticWithDatetimeResolver.scala:88-92 vs :119-122). The
+            // rewrite then re-runs on the new pair: `(DateType, DayTimeIntervalType)` becomes
+            // `TimestampAddInterval(Cast(date, TimestampType), ..)` (:69) and a TIMESTAMP peer
+            // keeps its own type (:93-94), so the result is TIMESTAMP either way.
+            //
+            // The non-NULL `date + interval` case cannot follow this rule: Spark keeps DATE only
+            // for a `DayTimeIntervalType(DAY, DAY)` operand (:68) and Arrow erases the interval's
+            // declared field range, so the two are indistinguishable. A NULL has no such
+            // ambiguity — the default range applies — which is why this pair is fixable and the
+            // general one is not.
+            (Ok(DataType::Date32), Ok(DataType::Null)) => {
+                cast(left, session_timestamp_type(&function_context))
+                    + cast(right, DataType::Interval(IntervalUnit::MonthDayNano))
+            }
+            (Ok(DataType::Null), Ok(DataType::Date32)) => {
+                cast(right, session_timestamp_type(&function_context))
+                    + cast(left, DataType::Interval(IntervalUnit::MonthDayNano))
+            }
+            (Ok(DataType::Timestamp(_, _)), Ok(DataType::Null)) => {
+                left + cast(right, DataType::Interval(IntervalUnit::MonthDayNano))
+            }
+            (Ok(DataType::Null), Ok(DataType::Timestamp(_, _))) => {
+                right + cast(left, DataType::Interval(IntervalUnit::MonthDayNano))
             }
             (Ok(left_type), Ok(DataType::Date32)) if left_type.is_numeric() => {
                 cast(left + cast(right, DataType::Int32), DataType::Date32)
