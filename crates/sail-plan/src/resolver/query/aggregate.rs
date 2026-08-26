@@ -11,14 +11,17 @@ use datafusion_expr::logical_plan::{FetchType, SkipType};
 use datafusion_expr::utils::find_aggregate_exprs;
 use datafusion_expr::{
     Aggregate, AggregateUDF, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder,
-    Projection, SortExpr, Volatility, bitwise_and, bitwise_shift_right, cast,
+    Projection, SortExpr, Volatility, bitwise_and, bitwise_shift_right, cast, ident,
 };
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::try_avg::TryAvgFunction;
+use sail_function::scalar::datetime::spark_session_window::SparkSessionWindow;
 use sail_function::scalar::explode::Explode;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
+use sail_logical_plan::session_aggregate::SessionAggregateNode;
+use sail_logical_plan::session_window::SessionWindowNode;
 use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
 use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
 use sail_python_udf::get_udf_display_name;
@@ -91,10 +94,17 @@ impl PlanResolver<'_> {
                 .await?
         };
 
-        // Expand a generator (e.g. window's `explode`) in the grouping into a named
-        // column; a no-op for ordinary aggregates.
+        // GROUP BY ordinals must resolve before grouping expansion: an
+        // unresolved ordinal literal would otherwise be materialized as a
+        // constant grouping key by the session_window expander, and a marker
+        // referenced only by ordinal would never desugar.
+        let (grouping, resolved_positions) =
+            self.resolve_grouping_positions_early(grouping, &resolved_projections)?;
+
+        // Expand any special grouping expressions into materialized grouping
+        // columns; a no-op for ordinary aggregates.
         let (input, grouping, generator_replacements) =
-            self.expand_grouping_generators(input, grouping, state)?;
+            self.expand_grouping(input, grouping, state)?;
         let schema = input.schema();
 
         // Resolve the deferred projections (grouping columns are now in scope) and
@@ -138,42 +148,114 @@ impl PlanResolver<'_> {
             }
         };
 
+        // Spark evaluates `session_window` inside an aggregate function
+        // argument with per-row (pre-merge) semantics; Sail does not implement
+        // that path, so reject it (in SELECT and HAVING alike) instead of
+        // silently aggregating the merged struct.
+        let session_columns: Vec<&Expr> = generator_replacements
+            .iter()
+            .filter(|(from, _)| Self::contains_session_window(from))
+            .map(|(_, to)| to)
+            .collect();
+        if !session_columns.is_empty() {
+            let all_exprs = projections
+                .iter()
+                .map(|p| p.expr.clone())
+                .chain(having.iter().cloned())
+                .collect::<Vec<_>>();
+            for agg in find_aggregate_exprs(&all_exprs) {
+                let references_session = agg
+                    .exists(|e| Ok(session_columns.contains(&e)))
+                    .unwrap_or(false);
+                if references_session {
+                    return Err(PlanError::AnalysisError(
+                        "session_window inside an aggregate function has per-row semantics \
+                         and is not supported"
+                            .to_string(),
+                    ));
+                }
+            }
+        }
+
         self.rewrite_aggregate(
             input,
             projections,
             grouping,
             having,
             with_grouping_expressions,
+            &resolved_positions,
             state,
         )
+    }
+
+    /// Resolves `GROUP BY <ordinal>` against the select list before grouping
+    /// expansion; a deferred select item leaves the ordinal in place. Returns a
+    /// mask of substituted positions so [`Self::resolve_grouping_positions`]
+    /// does not re-read a substituted integer literal as another ordinal.
+    fn resolve_grouping_positions_early(
+        &self,
+        exprs: Vec<NamedExpr>,
+        projections: &[Option<NamedExpr>],
+    ) -> PlanResult<(Vec<NamedExpr>, Vec<bool>)> {
+        let num_projections = projections.len() as i64;
+        let mut substituted = vec![false; exprs.len()];
+        let exprs = exprs
+            .into_iter()
+            .enumerate()
+            .map(|(i, named_expr)| {
+                match Self::grouping_position(&named_expr.expr, num_projections)? {
+                    Some(position) => match &projections[position] {
+                        Some(resolved) => {
+                            substituted[i] = true;
+                            Ok(resolved.clone())
+                        }
+                        None => Ok(named_expr),
+                    },
+                    None => Ok(named_expr),
+                }
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+        Ok((exprs, substituted))
+    }
+
+    /// The zero-based select-list index of a `GROUP BY <ordinal>` integer
+    /// literal (`None` for non-ordinal expressions), erroring when it is out of
+    /// range.
+    fn grouping_position(expr: &Expr, num_projections: i64) -> PlanResult<Option<usize>> {
+        let Expr::Literal(scalar_value, _) = expr else {
+            return Ok(None);
+        };
+        let position = match scalar_value {
+            ScalarValue::Int32(Some(position)) => *position as i64,
+            ScalarValue::Int64(Some(position)) => *position,
+            _ => return Ok(None),
+        };
+        if position > 0_i64 && position <= num_projections {
+            Ok(Some((position - 1) as usize))
+        } else {
+            Err(PlanError::invalid(format!(
+                "Cannot resolve column position {position}. Valid positions are 1 to {num_projections}."
+            )))
+        }
     }
 
     fn resolve_grouping_positions(
         &self,
         exprs: Vec<NamedExpr>,
         projections: &[NamedExpr],
+        resolved_positions: &[bool],
     ) -> PlanResult<Vec<NamedExpr>> {
         let num_projections = projections.len() as i64;
         exprs
             .into_iter()
-            .map(|named_expr| {
-                let NamedExpr { expr, .. } = &named_expr;
-                match expr {
-                    Expr::Literal(scalar_value, _metadata) => {
-                        let position = match scalar_value {
-                            ScalarValue::Int32(Some(position)) => *position as i64,
-                            ScalarValue::Int64(Some(position)) => *position,
-                            _ => return Ok(named_expr),
-                        };
-                        if position > 0_i64 && position <= num_projections {
-                            Ok(projections[(position - 1) as usize].clone())
-                        } else {
-                            Err(PlanError::invalid(format!(
-                                "Cannot resolve column position {position}. Valid positions are 1 to {num_projections}."
-                            )))
-                        }
-                    }
-                    _ => Ok(named_expr),
+            .enumerate()
+            .map(|(i, named_expr)| {
+                if resolved_positions.get(i).copied().unwrap_or(false) {
+                    return Ok(named_expr);
+                }
+                match Self::grouping_position(&named_expr.expr, num_projections)? {
+                    Some(position) => Ok(projections[position].clone()),
+                    None => Ok(named_expr),
                 }
             })
             .collect()
@@ -186,9 +268,11 @@ impl PlanResolver<'_> {
         grouping: Vec<NamedExpr>,
         having: Option<Expr>,
         with_grouping_expressions: bool,
+        resolved_positions: &[bool],
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let grouping = self.resolve_grouping_positions(grouping, &projections)?;
+        let grouping =
+            self.resolve_grouping_positions(grouping, &projections, resolved_positions)?;
         let group_exprs = grouping.iter().map(|x| x.expr.clone()).collect::<Vec<_>>();
         let has_grouping_set = Self::has_grouping_set(&group_exprs);
         let grouping_exprs = Self::distinct_grouping_expressions_from_exprs(&group_exprs);
@@ -210,6 +294,11 @@ impl PlanResolver<'_> {
         let plan = LogicalPlanBuilder::from(input)
             .aggregate(group_exprs, aggregate_exprs.clone())?
             .build()?;
+        // Phase 2: if this is a `session_window` aggregate with fusable aggregates,
+        // fuse the `Aggregate` + `SessionWindowNode` into one `SessionAggregateNode`
+        // (Spark's `MergingSessionsExec`). A no-op otherwise — including DISTINCT,
+        // which stays on the baseline `SessionWindowNode` path (Spark's fallback).
+        let plan = Self::maybe_fuse_session_aggregate(plan);
         let (grouping_exprs, aggregate_or_grouping_exprs) = {
             let mut grouping_exprs = vec![];
             let mut aggregate_or_grouping_exprs = aggregate_exprs;
@@ -912,22 +1001,38 @@ impl PlanResolver<'_> {
         ))
     }
 
-    /// Expands a generator in the grouping into rows, naming the unnested column
-    /// after the grouping output. Returns a map from each generator to its column.
-    /// A no-op when the grouping has no generator.
-    fn expand_grouping_generators(
+    /// Single entry point for desugaring special grouping expressions into
+    /// materialized grouping columns. Each expander detects its own marker and
+    /// is a no-op otherwise. Returns the rewritten plan and grouping, plus the
+    /// map from each original expression to its column (for SELECT/HAVING).
+    fn expand_grouping(
         &self,
         input: LogicalPlan,
         grouping: Vec<NamedExpr>,
         state: &mut PlanResolverState,
     ) -> PlanResult<(LogicalPlan, Vec<NamedExpr>, GeneratorReplacements)> {
+        // Generators run first so that combining `window` with `session_window`
+        // is caught downstream.
+        let (input, grouping, replacements) =
+            self.expand_grouping_generators(input, grouping, GeneratorReplacements::new(), state)?;
+        self.expand_session_window(input, grouping, replacements, state)
+    }
+
+    /// Expands a generator in the grouping into rows, naming the unnested
+    /// column after the grouping output. A no-op without a generator.
+    fn expand_grouping_generators(
+        &self,
+        input: LogicalPlan,
+        grouping: Vec<NamedExpr>,
+        mut replacements: GeneratorReplacements,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<(LogicalPlan, Vec<NamedExpr>, GeneratorReplacements)> {
         if !grouping.iter().any(Self::grouping_has_generator) {
-            return Ok((input, grouping, vec![]));
+            return Ok((input, grouping, replacements));
         }
         let generators = grouping.iter().map(|x| x.expr.clone()).collect::<Vec<_>>();
         let (input, mut grouping) =
             self.rewrite_projection::<ExplodeRewriter>(input, grouping, state)?;
-        let mut replacements = vec![];
         for (group, generator) in grouping.iter_mut().zip(generators) {
             // The rewriter returns the unnested column wrapped in an alias. Rename
             // that column to the grouping's output name and use it directly.
@@ -973,6 +1078,274 @@ impl PlanResolver<'_> {
                 None => Ok(Transformed::no(e)),
             })
             .data()?)
+    }
+
+    /// Fuses an `Aggregate` directly on a `SessionWindowNode` into a single
+    /// `SessionAggregateNode` (Spark's `MergingSessionsExec`) when the
+    /// aggregates allow it; otherwise returns the plan untouched.
+    fn maybe_fuse_session_aggregate(plan: LogicalPlan) -> LogicalPlan {
+        let LogicalPlan::Aggregate(agg) = &plan else {
+            return plan;
+        };
+        let LogicalPlan::Extension(ext) = agg.input.as_ref() else {
+            return plan;
+        };
+        let Some(node) = ext.node.as_any().downcast_ref::<SessionWindowNode>() else {
+            return plan;
+        };
+        if !Self::is_session_fusable(&agg.aggr_expr) {
+            return plan;
+        }
+        // The fused node's input is the SessionWindowNode's child, which lacks
+        // the session struct; an aggregate (or its FILTER) referencing it —
+        // e.g. `max(session_window(...).start)` — must stay on the baseline
+        // path where the struct exists.
+        let input_has = |name: &str| {
+            node.input()
+                .schema()
+                .field_with_unqualified_name(name)
+                .is_ok()
+        };
+        let references_missing_column = agg.aggr_expr.iter().any(|e| {
+            e.column_refs()
+                .iter()
+                .any(|c| c.name == node.output_column() || !input_has(&c.name))
+        });
+        if references_missing_column {
+            return plan;
+        }
+        // The leading `group_expr.len()` output fields are the group columns (the
+        // session struct among them), in order.
+        let group_columns = agg
+            .schema
+            .fields()
+            .iter()
+            .take(agg.group_expr.len())
+            .map(|f| f.name().clone())
+            .collect::<Vec<_>>();
+        let fused = SessionAggregateNode::new(
+            Arc::clone(node.input()),
+            node.partition_columns().to_vec(),
+            node.time_column().to_string(),
+            node.end_column().to_string(),
+            node.output_column().to_string(),
+            group_columns,
+            agg.aggr_expr.clone(),
+            Arc::clone(&agg.schema),
+        );
+        LogicalPlan::Extension(Extension {
+            node: Arc::new(fused),
+        })
+    }
+
+    /// Whether every aggregate can run through the fused session operator.
+    /// DISTINCT, ordered-set, and group UDAFs fall back to the baseline
+    /// `SessionWindowNode` path (as Spark does); `FILTER (WHERE)` is fused.
+    fn is_session_fusable(aggr_exprs: &[Expr]) -> bool {
+        aggr_exprs.iter().all(|e| {
+            let inner = match e {
+                Expr::Alias(alias) => alias.expr.as_ref(),
+                other => other,
+            };
+            match inner {
+                Expr::AggregateFunction(af) => {
+                    !af.params.distinct
+                        && af.params.order_by.is_empty()
+                        && af
+                            .func
+                            .inner()
+                            .downcast_ref::<PySparkGroupAggregateUDF>()
+                            .is_none()
+                }
+                _ => false,
+            }
+        })
+    }
+
+    /// Whether an expression is a top-level `session_window` marker call.
+    fn is_session_window_marker(expr: &Expr) -> bool {
+        // Grouping by a projection alias (`GROUP BY sw`, `.alias("sw")`) keeps
+        // the `Expr::Alias` wrapper around the marker, so peel one layer.
+        let inner = match expr {
+            Expr::Alias(alias) => alias.expr.as_ref(),
+            other => other,
+        };
+        matches!(inner, Expr::ScalarFunction(f)
+            if f.func.inner().downcast_ref::<SparkSessionWindow>().is_some())
+    }
+
+    /// Whether an expression contains a `session_window` marker anywhere.
+    pub(super) fn contains_session_window(expr: &Expr) -> bool {
+        expr.exists(|e| Ok(Self::is_session_window_marker(e)))
+            .unwrap_or(false)
+    }
+
+    /// Rewrites a `session_window` grouping marker into a `SessionWindowNode`:
+    /// project `#t = ts` and `#e0 = ts + gap`, filter out null times and
+    /// non-positive gaps, and append the `{start, end}` struct as a column that
+    /// the marker grouping expression then references. A no-op without a marker.
+    fn expand_session_window(
+        &self,
+        input: LogicalPlan,
+        mut grouping: Vec<NamedExpr>,
+        mut replacements: GeneratorReplacements,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<(LogicalPlan, Vec<NamedExpr>, GeneratorReplacements)> {
+        let Some(marker_idx) = grouping
+            .iter()
+            .position(|g| Self::is_session_window_marker(&g.expr))
+        else {
+            // A marker inside a larger grouping expression gets per-row
+            // semantics in Spark (no merge); Sail does not implement that path,
+            // so reject it at analysis time.
+            if grouping
+                .iter()
+                .any(|g| Self::contains_session_window(&g.expr))
+            {
+                return Err(PlanError::AnalysisError(
+                    "session_window is only supported as a top-level grouping expression"
+                        .to_string(),
+                ));
+            }
+            return Ok((input, grouping, replacements));
+        };
+
+        // Only one time-window expression per grouping; `session_window` cannot
+        // be combined with `window` (its generator fills `replacements`).
+        let marker_expr = grouping[marker_idx].expr.clone();
+        let extra_window = grouping.iter().enumerate().any(|(i, g)| {
+            i != marker_idx && g.expr != marker_expr && Self::contains_session_window(&g.expr)
+        });
+        if extra_window || !replacements.is_empty() {
+            return Err(PlanError::AnalysisError(
+                "only one session_window or window expression is allowed in a grouping".to_string(),
+            ));
+        }
+
+        // Non-marker grouping keys form the session partition. An expression key
+        // is projected to a fresh column so the operator can partition by it;
+        // the grouping and SELECT/HAVING re-uses point at that same column, so
+        // the downstream aggregate reuses the hash distribution (no reshuffle).
+        let mut partition_columns = Vec::new();
+        let mut key_projections: Vec<Expr> = Vec::new();
+        let mut duplicate_markers: Vec<usize> = Vec::new();
+        for (i, g) in grouping.iter_mut().enumerate() {
+            if i == marker_idx {
+                continue;
+            }
+            // Spark collapses duplicate identical session_window keys; point
+            // them at the same struct column instead of materializing (and
+            // executing) the marker as an expression key.
+            if g.expr == marker_expr {
+                duplicate_markers.push(i);
+                continue;
+            }
+            match &g.expr {
+                Expr::Column(col) => partition_columns.push(col.name().to_string()),
+                // A grouping-set sibling cannot be materialized as a key
+                // column; reject it cleanly instead of a downstream internal
+                // error (and silently destroyed CUBE/ROLLUP semantics).
+                Expr::GroupingSet(_) => {
+                    return Err(PlanError::AnalysisError(
+                        "session_window cannot be combined with GROUPING SETS, CUBE, or ROLLUP"
+                            .to_string(),
+                    ));
+                }
+                _ => {
+                    let key_name = state.register_field_name("");
+                    key_projections.push(g.expr.clone().alias(&key_name));
+                    partition_columns.push(key_name.clone());
+                    let key_col = ident(&key_name);
+                    replacements.push((g.expr.clone(), key_col.clone()));
+                    g.expr = key_col;
+                }
+            }
+        }
+
+        // Pull the (already cast) time column and normalized gap interval out of
+        // the marker call (peeling a projection alias if present).
+        let marker = match &grouping[marker_idx].expr {
+            Expr::Alias(alias) => alias.expr.as_ref(),
+            other => other,
+        };
+        let Expr::ScalarFunction(f) = marker else {
+            return Err(PlanError::internal(
+                "session_window marker is not a scalar function",
+            ));
+        };
+        let [time_ts, gap_interval] = f.args.as_slice() else {
+            return Err(PlanError::internal(
+                "session_window marker is missing arguments",
+            ));
+        };
+        let (time_ts, gap_interval) = (time_ts.clone(), gap_interval.clone());
+
+        // Project every input column through, then add `#t = ts` and the per-row
+        // session-end candidate `#e0 = ts + gap`.
+        let t_name = state.register_field_name("");
+        let e0_name = state.register_field_name("");
+        let mut proj: Vec<Expr> = input
+            .schema()
+            .columns()
+            .into_iter()
+            .map(Expr::Column)
+            .collect();
+        // Materialize any expression grouping keys as fresh columns alongside.
+        proj.extend(key_projections);
+        proj.push(time_ts.clone().alias(&t_name));
+        proj.push((time_ts + gap_interval).alias(&e0_name));
+        let projected = LogicalPlanBuilder::from(input).project(proj)?.build()?;
+
+        // Drop the rows Spark's `SessionWindowing` rule drops: null time, or a
+        // non-positive gap (`end <= time`).
+        let t_col = ident(&t_name);
+        let e0_col = ident(&e0_name);
+        let filtered = LogicalPlanBuilder::from(projected)
+            .filter(t_col.clone().is_not_null().and(e0_col.gt(t_col)))?
+            .build()?;
+
+        // Append the session `{start, end}` struct column.
+        let w_name = state.register_field_name("");
+        let node = SessionWindowNode::try_new(
+            Arc::new(filtered),
+            partition_columns,
+            t_name,
+            e0_name,
+            w_name.clone(),
+        )?;
+        let plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(node),
+        });
+
+        // Name the struct column after the grouping output (`session_window`) so
+        // `session_window.start` / `.end` resolve, then point the grouping (and any
+        // re-use of the marker in SELECT/HAVING) at that column.
+        if let [display_name] = grouping[marker_idx].name.as_slice() {
+            state.set_field_name(&w_name, display_name);
+        }
+        let w_col = ident(&w_name);
+        let original_marker = grouping[marker_idx].expr.clone();
+        // Register both the grouping form and (when aliased) the bare marker,
+        // so SELECT/HAVING re-uses of either shape resolve to the struct.
+        if let Expr::Alias(alias) = &original_marker {
+            replacements.push((alias.expr.as_ref().clone(), w_col.clone()));
+        }
+        replacements.push((original_marker, w_col.clone()));
+        grouping[marker_idx].expr = w_col;
+        // Drop the duplicate keys entirely (their SELECT/HAVING re-uses go
+        // through `replacements` like the primary's).
+        if !duplicate_markers.is_empty() {
+            let duplicates: std::collections::HashSet<usize> =
+                duplicate_markers.into_iter().collect();
+            grouping = grouping
+                .into_iter()
+                .enumerate()
+                .filter(|(i, _)| !duplicates.contains(i))
+                .map(|(_, g)| g)
+                .collect();
+        }
+
+        Ok((plan, grouping, replacements))
     }
 
     /// Reference: [datafusion_sql::utils::rebase_expr]

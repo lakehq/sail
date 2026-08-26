@@ -9,6 +9,7 @@ use datafusion_expr::{
 };
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_logical_plan::session_aggregate::SessionAggregateNode;
 use sail_logical_plan::sort::SortWithinPartitionsNode;
 
 use crate::error::{PlanError, PlanResult};
@@ -90,8 +91,31 @@ impl PlanResolver<'_> {
                 .into_iter()
                 .map(|x| Self::rebase_sort(x, &base, input.as_ref()))
                 .collect::<PlanResult<Vec<_>>>()
+        } else if let Some(node) = Self::input_session_aggregate(input.as_ref()) {
+            // The fused session aggregate is an extension node, not a
+            // `LogicalPlan::Aggregate`; rebase aggregate expressions in the
+            // sort onto its output columns the same way (group columns are
+            // already materialized columns and need no rebasing).
+            let base = node.aggregate_exprs().to_vec();
+            sorts
+                .into_iter()
+                .map(|x| Self::rebase_sort(x, &base, node.input().as_ref()))
+                .collect::<PlanResult<Vec<_>>>()
         } else {
             Ok(sorts)
+        }
+    }
+
+    fn input_session_aggregate(plan: &LogicalPlan) -> Option<&SessionAggregateNode> {
+        match plan {
+            LogicalPlan::Extension(ext) => ext.node.as_any().downcast_ref::<SessionAggregateNode>(),
+            LogicalPlan::Window(Window { input, .. }) => match input.as_ref() {
+                LogicalPlan::Extension(ext) => {
+                    ext.node.as_any().downcast_ref::<SessionAggregateNode>()
+                }
+                _ => None,
+            },
+            _ => None,
         }
     }
 

@@ -33,6 +33,7 @@ use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::coalesce::CoalesceExec;
 use sail_physical_plan::remote_checkpoint::RemoteCheckpointCommitExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
+use sail_physical_plan::session_aggregate::SessionAggregateExec;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::job_graph::{
@@ -649,6 +650,18 @@ fn plan_node_has_scalar_subquery_expr(plan: &Arc<dyn ExecutionPlan>) -> bool {
     }
     if let Some(aggregate) = plan.downcast_ref::<AggregateExec>() {
         return aggregate_has_scalar_subquery_expr(aggregate);
+    }
+    if let Some(session) = plan.downcast_ref::<SessionAggregateExec>() {
+        return session
+            .filters()
+            .iter()
+            .flatten()
+            .any(physical_expr_has_scalar_subquery)
+            || session.aggregates().iter().any(|agg| {
+                agg.expressions()
+                    .iter()
+                    .any(physical_expr_has_scalar_subquery)
+            });
     }
     if let Some(sort) = plan.downcast_ref::<SortExec>() {
         return sort

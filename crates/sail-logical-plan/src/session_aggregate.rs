@@ -1,0 +1,169 @@
+use std::collections::BTreeSet;
+use std::fmt::Formatter;
+use std::sync::Arc;
+
+use datafusion_common::{DFSchemaRef, Result, internal_err};
+use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
+use educe::Educe;
+use sail_common_datafusion::utils::items::ItemTaker;
+
+/// Fused logical node for Spark `session_window` aggregation (the
+/// `MergingSessionsExec`-equivalent): replaces an `Aggregate` over a
+/// [`SessionWindowNode`](crate::session_window::SessionWindowNode) when the
+/// aggregates allow it (no `DISTINCT`), merging sessions and driving the
+/// accumulators in one pass with O(1) state per open session. The output
+/// schema is identical to the `Aggregate` it replaces.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
+#[educe(PartialOrd)]
+pub struct SessionAggregateNode {
+    /// The `SessionWindowNode`'s former child, already filtered of null time /
+    /// non-positive gap rows.
+    input: Arc<LogicalPlan>,
+    /// Session group keys (column names in `input`); the partition of the merge.
+    partition_columns: Vec<String>,
+    /// Per-row session start candidate (`Timestamp(us)`).
+    time_column: String,
+    /// Per-row session end candidate (`time + gap`).
+    end_column: String,
+    /// Output column name of the `{start, end}` session struct.
+    output_column: String,
+    /// Output group columns in order. Exactly one equals `output_column` (the
+    /// struct); the rest are the key columns. Drives output column order.
+    group_columns: Vec<String>,
+    /// User aggregate expressions, in output order, after the group columns.
+    aggregate_exprs: Vec<Expr>,
+    #[educe(PartialOrd(ignore))]
+    schema: DFSchemaRef,
+}
+
+impl SessionAggregateNode {
+    pub fn new(
+        input: Arc<LogicalPlan>,
+        partition_columns: Vec<String>,
+        time_column: String,
+        end_column: String,
+        output_column: String,
+        group_columns: Vec<String>,
+        aggregate_exprs: Vec<Expr>,
+        schema: DFSchemaRef,
+    ) -> Self {
+        Self {
+            input,
+            partition_columns,
+            time_column,
+            end_column,
+            output_column,
+            group_columns,
+            aggregate_exprs,
+            schema,
+        }
+    }
+
+    pub fn input(&self) -> &Arc<LogicalPlan> {
+        &self.input
+    }
+
+    pub fn partition_columns(&self) -> &[String] {
+        &self.partition_columns
+    }
+
+    pub fn time_column(&self) -> &str {
+        &self.time_column
+    }
+
+    pub fn end_column(&self) -> &str {
+        &self.end_column
+    }
+
+    pub fn output_column(&self) -> &str {
+        &self.output_column
+    }
+
+    pub fn group_columns(&self) -> &[String] {
+        &self.group_columns
+    }
+
+    pub fn aggregate_exprs(&self) -> &[Expr] {
+        &self.aggregate_exprs
+    }
+}
+
+impl UserDefinedLogicalNodeCore for SessionAggregateNode {
+    fn name(&self) -> &str {
+        "SessionAggregate"
+    }
+
+    fn inputs(&self) -> Vec<&LogicalPlan> {
+        vec![self.input.as_ref()]
+    }
+
+    fn schema(&self) -> &DFSchemaRef {
+        &self.schema
+    }
+
+    fn expressions(&self) -> Vec<Expr> {
+        // The aggregate expressions reference input columns, so expose them for the
+        // optimizer to rewrite. Group/time/end columns are referenced by name (like
+        // `SessionWindowNode`) and are not listed here.
+        self.aggregate_exprs.clone()
+    }
+
+    fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "SessionAggregate: partition_by=[{}], time={}, end={}, session={}, aggs={}",
+            self.partition_columns.join(", "),
+            self.time_column,
+            self.end_column,
+            self.output_column,
+            self.aggregate_exprs.len()
+        )
+    }
+
+    fn with_exprs_and_inputs(&self, exprs: Vec<Expr>, inputs: Vec<LogicalPlan>) -> Result<Self> {
+        if exprs.len() != self.aggregate_exprs.len() {
+            return internal_err!(
+                "SessionAggregateNode expects {} expressions, got {}",
+                self.aggregate_exprs.len(),
+                exprs.len()
+            );
+        }
+        let input = Arc::new(inputs.one()?);
+        Ok(Self {
+            input,
+            partition_columns: self.partition_columns.clone(),
+            time_column: self.time_column.clone(),
+            end_column: self.end_column.clone(),
+            output_column: self.output_column.clone(),
+            group_columns: self.group_columns.clone(),
+            aggregate_exprs: exprs,
+            schema: Arc::clone(&self.schema),
+        })
+    }
+
+    fn necessary_children_exprs(&self, _output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {
+        // Only the keys, time/end, and aggregate inputs are needed; the rest of
+        // the desugar's `*` projection can be pruned before the repartition +
+        // sort below. The output schema does not depend on the input width, so
+        // the cloned schema in `with_exprs_and_inputs` stays valid.
+        let input_schema = self.input.schema();
+        let mut needed = BTreeSet::new();
+        for name in self
+            .partition_columns
+            .iter()
+            .chain([&self.time_column, &self.end_column])
+        {
+            let index = input_schema
+                .fields()
+                .iter()
+                .position(|field| field.name() == name)?;
+            needed.insert(index);
+        }
+        for expr in &self.aggregate_exprs {
+            for column in expr.column_refs() {
+                needed.insert(input_schema.maybe_index_of_column(column)?);
+            }
+        }
+        Some(vec![needed.into_iter().collect()])
+    }
+}

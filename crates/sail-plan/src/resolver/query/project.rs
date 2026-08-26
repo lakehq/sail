@@ -50,7 +50,7 @@ impl PlanResolver<'_> {
                 .unwrap_or(false)
         });
         if has_aggregate {
-            self.rewrite_aggregate(input, expr, vec![], None, false, state)
+            self.rewrite_aggregate(input, expr, vec![], None, false, &[], state)
         } else {
             let expr = self.rewrite_named_expressions(expr, state)?;
             Ok(LogicalPlan::Projection(Projection::try_new(

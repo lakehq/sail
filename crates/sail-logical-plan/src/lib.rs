@@ -7,6 +7,8 @@ pub mod range;
 pub mod remote_checkpoint;
 pub mod repartition;
 pub mod schema_pivot;
+pub mod session_aggregate;
+pub mod session_window;
 pub mod show_string;
 pub mod sort;
 pub mod spark_partition_id;
