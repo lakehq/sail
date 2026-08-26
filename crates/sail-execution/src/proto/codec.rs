@@ -1108,8 +1108,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             NodeKind::DeltaDiscovery(r#gen::DeltaDiscoveryExecNode {
                 table_url,
-                predicate,
-                table_schema,
                 version,
                 input,
                 input_partition_columns,
@@ -1117,33 +1115,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }) => {
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
-                let table_schema = if let Some(schema_bytes) = table_schema {
-                    Some(Arc::new(try_decode_schema(&schema_bytes)?))
-                } else {
-                    None
-                };
-                let predicate = if let Some(pred_bytes) = predicate {
-                    let empty_schema = Arc::new(Schema::empty());
-                    let schema = table_schema.as_ref().unwrap_or(&empty_schema);
-                    Some(try_decode_physical_expr_with_converter(
-                        ctx,
-                        self,
-                        proto_converter,
-                        &pred_bytes,
-                        schema,
-                    )?)
-                } else {
-                    None
-                };
                 let input = input
                     .ok_or_else(|| plan_datafusion_err!("Missing input for DeltaDiscoveryExec"))?;
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
-                Ok(Arc::new(DeltaDiscoveryExec::with_input(
+                Ok(Arc::new(DeltaDiscoveryExec::new(
                     input,
                     table_url,
-                    predicate,
-                    table_schema,
                     version,
                     input_partition_columns,
                     input_partition_scan,
@@ -2339,24 +2317,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 proto_converter,
                 delta_discovery_exec.input(),
             )?);
-            let predicate = if let Some(pred) = delta_discovery_exec.predicate() {
-                Some(try_encode_physical_expr_with_converter(
-                    self,
-                    proto_converter,
-                    &pred.clone(),
-                )?)
-            } else {
-                None
-            };
-            let table_schema = if let Some(schema) = delta_discovery_exec.table_schema() {
-                Some(try_encode_schema(schema)?)
-            } else {
-                None
-            };
             NodeKind::DeltaDiscovery(r#gen::DeltaDiscoveryExecNode {
                 table_url: delta_discovery_exec.table_url().to_string(),
-                predicate,
-                table_schema,
                 version: delta_discovery_exec.version(),
                 input,
                 input_partition_columns: delta_discovery_exec.input_partition_columns().to_vec(),
@@ -5441,6 +5403,38 @@ mod tests {
         let mut buf = vec![];
         codec.try_encode_udwf(udwf.as_ref(), &mut buf)?;
         codec.try_decode_udwf(&name, &buf)
+    }
+
+    #[test]
+    fn test_round_trip_delta_discovery_preserves_state() -> Result<()> {
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
+        let table_url = Url::parse("file:///tmp/delta-table")
+            .map_err(|e| plan_datafusion_err!("invalid test table URL: {e}"))?;
+        let plan = Arc::new(DeltaDiscoveryExec::new(
+            input,
+            table_url.clone(),
+            42,
+            vec!["part".to_string()],
+            true,
+        )?);
+        let expected_schema = plan.schema();
+
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, plan)?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let discovery = decoded
+            .downcast_ref::<DeltaDiscoveryExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not DeltaDiscoveryExec"))?;
+
+        assert_eq!(discovery.table_url(), &table_url);
+        assert_eq!(discovery.version(), 42);
+        assert_eq!(discovery.input_partition_columns(), &["part"]);
+        assert!(discovery.input_partition_scan());
+        assert_eq!(discovery.schema(), expected_schema);
+        assert!(discovery.input().downcast_ref::<EmptyExec>().is_some());
+        Ok(())
     }
 
     #[test]

@@ -21,8 +21,6 @@ use url::Url;
 #[derive(Debug)]
 pub struct DeltaDiscoveryExec {
     table_url: Url,
-    predicate: Option<Arc<dyn PhysicalExpr>>,
-    table_schema: Option<SchemaRef>,
     version: i64,
     input: Arc<dyn ExecutionPlan>,
     input_partition_columns: Vec<String>,
@@ -34,8 +32,6 @@ impl DeltaDiscoveryExec {
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         table_url: Url,
-        predicate: Option<Arc<dyn PhysicalExpr>>,
-        table_schema: Option<SchemaRef>,
         version: i64,
         partition_columns: Vec<String>,
         partition_scan: bool,
@@ -51,52 +47,12 @@ impl DeltaDiscoveryExec {
         let cache = Self::compute_properties(schema, output_partitions);
         Ok(Self {
             table_url,
-            predicate,
-            table_schema,
             version,
             input,
             input_partition_columns: partition_columns,
             input_partition_scan: partition_scan,
             cache,
         })
-    }
-
-    pub fn from_log_scan(
-        input: Arc<dyn ExecutionPlan>,
-        table_url: Url,
-        version: i64,
-        partition_columns: Vec<String>,
-        partition_scan: bool,
-    ) -> Result<Self> {
-        Self::new(
-            input,
-            table_url,
-            None,
-            None,
-            version,
-            partition_columns,
-            partition_scan,
-        )
-    }
-
-    pub fn with_input(
-        input: Arc<dyn ExecutionPlan>,
-        table_url: Url,
-        predicate: Option<Arc<dyn PhysicalExpr>>,
-        table_schema: Option<SchemaRef>,
-        version: i64,
-        partition_columns: Vec<String>,
-        partition_scan: bool,
-    ) -> Result<Self> {
-        Self::new(
-            input,
-            table_url,
-            predicate,
-            table_schema,
-            version,
-            partition_columns,
-            partition_scan,
-        )
     }
 
     fn compute_properties(schema: SchemaRef, output_partitions: usize) -> Arc<PlanProperties> {
@@ -111,16 +67,6 @@ impl DeltaDiscoveryExec {
     /// Get the table URL
     pub fn table_url(&self) -> &Url {
         &self.table_url
-    }
-
-    /// Get the predicate
-    pub fn predicate(&self) -> &Option<Arc<dyn PhysicalExpr>> {
-        &self.predicate
-    }
-
-    /// Get the table schema
-    pub fn table_schema(&self) -> &Option<SchemaRef> {
-        &self.table_schema
     }
 
     /// Get the table version
@@ -189,8 +135,6 @@ impl ExecutionPlan for DeltaDiscoveryExec {
             ChildrenPropertiesMode::Recompute => Ok(Arc::new(Self::new(
                 input,
                 self.table_url.clone(),
-                self.predicate.clone(),
-                self.table_schema.clone(),
                 self.version,
                 self.input_partition_columns.clone(),
                 self.input_partition_scan,
@@ -257,8 +201,6 @@ impl Clone for DeltaDiscoveryExec {
     fn clone(&self) -> Self {
         Self {
             table_url: self.table_url.clone(),
-            predicate: self.predicate.clone(),
-            table_schema: self.table_schema.clone(),
             version: self.version,
             input: Arc::clone(&self.input),
             input_partition_columns: self.input_partition_columns.clone(),

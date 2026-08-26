@@ -480,6 +480,8 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         }
     }
 
+    // Implicit SQL PIVOT grouping collects columns from the resolved aggregate, so its
+    // preservation scope must retain the original arguments through constant-filter folding.
     let filter = match filter {
         Some(filter)
             if matches!(
@@ -490,11 +492,12 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
             None
         }
         Some(filter)
-            if matches!(
-                filter.as_ref(),
-                expr::Expr::Literal(ScalarValue::Boolean(Some(false) | None), _)
-                    | expr::Expr::Literal(ScalarValue::Null, _)
-            ) =>
+            if !preserve_count_argument_columns
+                && matches!(
+                    filter.as_ref(),
+                    expr::Expr::Literal(ScalarValue::Boolean(Some(false) | None), _)
+                        | expr::Expr::Literal(ScalarValue::Null, _)
+                ) =>
         {
             args = vec![lit(ScalarValue::Null)];
             None
