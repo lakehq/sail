@@ -134,9 +134,25 @@ pub enum LakeProcedureResolution {
     Supported(LakeProcedure),
 }
 
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum LakeProcedureCatalogResolution {
+    Unrecognized,
+    Ambiguous {
+        lake_sources: Vec<String>,
+    },
+    Unsupported {
+        lake_source: String,
+        reason: String,
+    },
+    Supported {
+        lake_source: String,
+        procedure: LakeProcedure,
+    },
+}
+
 #[async_trait]
 pub trait LakeProcedureProvider: Send + Sync {
-    fn resolve_procedure(&self, name: &str) -> LakeProcedureResolution;
+    fn resolve_procedure(&self, namespace: &[String], name: &str) -> LakeProcedureResolution;
 
     async fn execute_procedure(
         &self,

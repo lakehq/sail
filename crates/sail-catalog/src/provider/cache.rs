@@ -289,6 +289,10 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         self.inner.lakehouse_capabilities()
     }
 
+    fn lake_procedure_sources(&self) -> Vec<String> {
+        self.inner.lake_procedure_sources()
+    }
+
     async fn resolve_lakehouse_table(
         &self,
         database: &Namespace,
@@ -510,6 +514,10 @@ mod tests {
                 LakehouseCapability::CatalogCommit,
                 LakehouseCapability::DeltaRatifiedCommits,
             ]
+        }
+
+        fn lake_procedure_sources(&self) -> Vec<String> {
+            vec!["iceberg".to_string()]
         }
 
         async fn create_database(
@@ -801,6 +809,7 @@ mod tests {
             view_cache_ttl_secs: Some(60),
         };
         let provider = CachingCatalogProvider::new(mock.clone(), config, None);
+        assert_eq!(provider.lake_procedure_sources(), ["iceberg"]);
 
         // First call - should hit mock
         let dbs = provider.list_databases(None).await.unwrap();

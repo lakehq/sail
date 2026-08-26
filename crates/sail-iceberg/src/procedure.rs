@@ -58,7 +58,10 @@ const ICEBERG_PROCEDURES: &[&str] = &[
 
 #[async_trait]
 impl LakeProcedureProvider for IcebergLakeSource {
-    fn resolve_procedure(&self, name: &str) -> LakeProcedureResolution {
+    fn resolve_procedure(&self, namespace: &[String], name: &str) -> LakeProcedureResolution {
+        if namespace.len() != 1 || !namespace[0].eq_ignore_ascii_case("system") {
+            return LakeProcedureResolution::Unrecognized;
+        }
         if let Some(procedure) = supported_procedure(name) {
             return LakeProcedureResolution::Supported(procedure);
         }
@@ -923,16 +926,21 @@ mod tests {
     #[test]
     fn recognized_procedures_are_distinct_from_unknown_procedures() {
         let source = IcebergLakeSource;
+        let namespace = vec!["system".to_string()];
         assert!(matches!(
-            source.resolve_procedure("rollback_to_snapshot"),
+            source.resolve_procedure(&namespace, "rollback_to_snapshot"),
             LakeProcedureResolution::Supported(_)
         ));
         assert!(matches!(
-            source.resolve_procedure("expire_snapshots"),
+            source.resolve_procedure(&namespace, "expire_snapshots"),
             LakeProcedureResolution::Unsupported { .. }
         ));
         assert_eq!(
-            source.resolve_procedure("not_an_iceberg_procedure"),
+            source.resolve_procedure(&namespace, "not_an_iceberg_procedure"),
+            LakeProcedureResolution::Unrecognized
+        );
+        assert_eq!(
+            source.resolve_procedure(&["maintenance".to_string()], "rollback_to_snapshot"),
             LakeProcedureResolution::Unrecognized
         );
     }

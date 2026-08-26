@@ -166,6 +166,9 @@ pub enum CatalogCommand {
         extended: bool,
     },
     CallProcedure {
+        catalog: String,
+        namespace: Vec<String>,
+        lake_source: String,
         table: Vec<String>,
         invocation: LakeProcedureInvocation,
     },
@@ -761,13 +764,28 @@ impl CatalogCommand {
 
                 serializer.build_record_batch(&rows)?
             }
-            CatalogCommand::CallProcedure { table, invocation } => {
+            CatalogCommand::CallProcedure {
+                catalog,
+                namespace,
+                lake_source,
+                table,
+                invocation,
+            } => {
                 let task_context = task_context.ok_or_else(|| {
                     CatalogError::Internal(
                         "Lakehouse procedures require task-context execution".to_string(),
                     )
                 })?;
-                execute_lake_procedure(task_context, manager, &table, invocation).await?
+                execute_lake_procedure(
+                    task_context,
+                    manager,
+                    &catalog,
+                    &namespace,
+                    &lake_source,
+                    &table,
+                    invocation,
+                )
+                .await?
             }
         };
         Ok(batch)
@@ -777,9 +795,21 @@ impl CatalogCommand {
 async fn execute_lake_procedure(
     ctx: &TaskContext,
     manager: &CatalogManager,
+    catalog: &str,
+    namespace: &[String],
+    lake_source: &str,
     table: &[String],
     invocation: LakeProcedureInvocation,
 ) -> CatalogResult<RecordBatch> {
+    if !table
+        .first()
+        .is_some_and(|table_catalog| table_catalog.eq_ignore_ascii_case(catalog))
+    {
+        return Err(CatalogError::InvalidArgument(format!(
+            "Cannot run procedure from catalog '{catalog}' against table '{}'",
+            table.join(".")
+        )));
+    }
     let status = manager.get_table(table).await?;
     let TableKind::Table {
         location,
@@ -793,25 +823,29 @@ async fn execute_lake_procedure(
             table.join(".")
         )));
     };
+    if !format.eq_ignore_ascii_case(lake_source) {
+        return Err(CatalogError::Conflict(format!(
+            "Lake procedure '{}' was bound to source '{lake_source}', but table '{}' now has format '{format}'",
+            invocation.procedure.name,
+            table.join(".")
+        )));
+    }
     let registry = ctx.extension::<DataSourceRegistry>().map_err(|error| {
         CatalogError::External(format!(
             "missing DataSourceRegistry for lakehouse procedure: {error}"
         ))
     })?;
-    let lake_source = registry.get_lake_source(&format).map_err(|error| {
+    let source = registry.get_lake_source(lake_source).map_err(|error| {
         CatalogError::External(format!(
-            "unknown lake source '{format}' for lakehouse procedure: {error}"
+            "unknown lake source '{lake_source}' for lakehouse procedure: {error}"
         ))
     })?;
-    let provider = lake_source
-        .capabilities()
-        .procedure_provider
-        .ok_or_else(|| {
-            CatalogError::NotSupported(format!(
-                "Lake source '{format}' does not provide procedures"
-            ))
-        })?;
-    match provider.resolve_procedure(&invocation.procedure.name) {
+    let provider = source.capabilities().procedure_provider.ok_or_else(|| {
+        CatalogError::NotSupported(format!(
+            "Lake source '{lake_source}' does not provide procedures"
+        ))
+    })?;
+    match provider.resolve_procedure(namespace, &invocation.procedure.name) {
         LakeProcedureResolution::Supported(procedure) if procedure == invocation.procedure => {}
         LakeProcedureResolution::Supported(_) => {
             return Err(CatalogError::Conflict(format!(

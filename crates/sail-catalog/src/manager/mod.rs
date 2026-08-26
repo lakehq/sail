@@ -196,19 +196,33 @@ impl CatalogManagerState {
         &self,
         reference: &[T],
     ) -> CatalogResult<(Arc<str>, Namespace, Arc<str>)> {
+        self.resolve_object_reference_with_default_catalog(&self.default_catalog, reference)
+    }
+
+    pub fn resolve_object_reference_with_default_catalog<T: AsRef<str>>(
+        &self,
+        default_catalog: &str,
+        reference: &[T],
+    ) -> CatalogResult<(Arc<str>, Namespace, Arc<str>)> {
+        self.get_catalog(default_catalog)?;
         match reference {
             [] => Err(CatalogError::InvalidArgument(
                 "empty object reference".to_string(),
             )),
             [name] => {
                 let table = name.as_ref().into();
-                let catalog = self.default_catalog.clone();
+                let catalog = Arc::from(default_catalog);
                 let database = self.default_database.clone();
                 Ok((catalog, database, table))
             }
             [x @ .., last] => {
                 let table = last.as_ref().into();
-                let (catalog, database) = self.resolve_database_reference(x)?;
+                let (catalog, database) = match x {
+                    [head, tail @ ..] if self.catalogs.contains_key(head.as_ref()) => {
+                        (head.as_ref().into(), tail.try_into()?)
+                    }
+                    database => (Arc::from(default_catalog), database.try_into()?),
+                };
                 Ok((catalog, database, table))
             }
         }

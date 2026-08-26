@@ -72,6 +72,10 @@ impl CatalogProvider for MemoryCatalogProvider {
         &self.name
     }
 
+    fn lake_procedure_sources(&self) -> Vec<String> {
+        vec!["iceberg".to_string()]
+    }
+
     async fn create_database(
         &self,
         database: &Namespace,

@@ -18,6 +18,7 @@ use datafusion_expr::{Expr, TableSource};
 
 use crate::catalog::{CatalogPartitionField, LakehouseExecutionContext};
 use crate::extension::SessionExtension;
+use crate::lakeprocedure::{LakeProcedureCatalogResolution, LakeProcedureResolution};
 use crate::lakesource::LakeSource;
 use crate::logical_expr::ExprWithSource;
 
@@ -498,6 +499,52 @@ impl DataSourceRegistry {
             .cloned()
             .and_then(|source| source.as_lake_source()))
     }
+
+    /// Resolves a procedure only among the lake sources exposed by a catalog.
+    pub fn resolve_lake_procedure(
+        &self,
+        lake_sources: &[String],
+        namespace: &[String],
+        name: &str,
+    ) -> Result<LakeProcedureCatalogResolution> {
+        let mut lake_sources = lake_sources.to_vec();
+        lake_sources.sort_unstable();
+        lake_sources.dedup();
+
+        let mut resolutions = Vec::new();
+        for lake_source in lake_sources {
+            let source = self.get_lake_source(&lake_source)?;
+            let Some(provider) = source.capabilities().procedure_provider else {
+                continue;
+            };
+            match provider.resolve_procedure(namespace, name) {
+                LakeProcedureResolution::Unrecognized => {}
+                resolution => resolutions.push((lake_source, resolution)),
+            }
+        }
+
+        match resolutions.as_slice() {
+            [] => Ok(LakeProcedureCatalogResolution::Unrecognized),
+            [(lake_source, LakeProcedureResolution::Supported(procedure))] => {
+                Ok(LakeProcedureCatalogResolution::Supported {
+                    lake_source: lake_source.clone(),
+                    procedure: procedure.clone(),
+                })
+            }
+            [(lake_source, LakeProcedureResolution::Unsupported { reason })] => {
+                Ok(LakeProcedureCatalogResolution::Unsupported {
+                    lake_source: lake_source.clone(),
+                    reason: reason.clone(),
+                })
+            }
+            resolutions => Ok(LakeProcedureCatalogResolution::Ambiguous {
+                lake_sources: resolutions
+                    .iter()
+                    .map(|(lake_source, _)| lake_source.clone())
+                    .collect(),
+            }),
+        }
+    }
 }
 
 fn missing_data_source_error(name: &str) -> datafusion::common::DataFusionError {
@@ -580,6 +627,13 @@ pub fn get_partition_columns_and_file_schema(
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
+    use datafusion::arrow::array::RecordBatch;
+    use datafusion::execution::TaskContext;
+
+    use crate::lakeprocedure::{
+        LakeProcedure, LakeProcedureAccess, LakeProcedureInvocation, LakeProcedureProvider,
+    };
+    use crate::lakesource::LakeSourceCapabilities;
 
     use super::*;
 
@@ -629,7 +683,39 @@ mod tests {
         }
     }
 
-    impl LakeSource for TestLakeSource {}
+    impl LakeSource for TestLakeSource {
+        fn capabilities(self: Arc<Self>) -> LakeSourceCapabilities {
+            LakeSourceCapabilities {
+                relation_provider: None,
+                procedure_provider: Some(self),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl LakeProcedureProvider for TestLakeSource {
+        fn resolve_procedure(&self, namespace: &[String], name: &str) -> LakeProcedureResolution {
+            if namespace == ["system"] && name.eq_ignore_ascii_case("known") {
+                LakeProcedureResolution::Supported(LakeProcedure {
+                    name: "known".to_string(),
+                    parameters: vec![],
+                    output: vec![],
+                    access: LakeProcedureAccess::MetadataRead,
+                })
+            } else {
+                LakeProcedureResolution::Unrecognized
+            }
+        }
+
+        async fn execute_procedure(
+            &self,
+            _ctx: &TaskContext,
+            _info: SourceInfo,
+            _invocation: LakeProcedureInvocation,
+        ) -> Result<RecordBatch> {
+            Err(not_impl_datafusion_err!("test procedure is not executable"))
+        }
+    }
 
     #[test]
     fn lake_source_registration_replaces_an_ordinary_source() -> Result<()> {
@@ -668,6 +754,38 @@ mod tests {
             registry.get_lake_source("test"),
             Err(datafusion_common::DataFusionError::NotImplemented(_))
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn procedure_resolution_is_scoped_by_catalog_sources_and_namespace() -> Result<()> {
+        let registry = DataSourceRegistry::new();
+        registry.register_data_source(Arc::new(TestLakeSource))?;
+
+        let supported = registry.resolve_lake_procedure(
+            &["test".to_string()],
+            &["system".to_string()],
+            "known",
+        )?;
+        assert!(matches!(
+            supported,
+            LakeProcedureCatalogResolution::Supported {
+                lake_source,
+                procedure,
+            } if lake_source == "test" && procedure.name == "known"
+        ));
+        assert_eq!(
+            registry.resolve_lake_procedure(
+                &["test".to_string()],
+                &["maintenance".to_string()],
+                "known",
+            )?,
+            LakeProcedureCatalogResolution::Unrecognized
+        );
+        assert_eq!(
+            registry.resolve_lake_procedure(&[], &["system".to_string()], "known")?,
+            LakeProcedureCatalogResolution::Unrecognized
+        );
         Ok(())
     }
 

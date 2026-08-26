@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 
@@ -17,6 +18,64 @@ def _edit_latest_metadata(table_path, edit):
     metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
     edit(metadata)
     metadata_file.write_text(json.dumps(metadata, separators=(",", ":")), encoding="utf-8")
+
+
+def test_procedure_catalog_and_name_are_resolved_before_arguments(spark):
+    with pytest.raises(Exception, match=r"Procedure not found: sail\.system\.not_a_procedure"):
+        spark.sql("CALL sail.system.not_a_procedure()").collect()
+
+    with pytest.raises(Exception, match=r"Catalog not found: missing_catalog"):
+        spark.sql("CALL missing_catalog.system.ancestors_of()").collect()
+
+
+@pytest.fixture
+def multi_catalog_spark():
+    catalogs = (
+        '[{name="first", type="memory", initial_database=["default"]}, '
+        '{name="second", type="memory", initial_database=["default"]}]'
+    )
+    with (
+        spark_connect_server(
+            envs={
+                "SAIL_CATALOG__DEFAULT_CATALOG": "first",
+                "SAIL_CATALOG__DEFAULT_DATABASE": '["default"]',
+                "SAIL_CATALOG__LIST": catalogs,
+            }
+        ) as server,
+        spark_session_factory(server.remote) as sessions,
+    ):
+        yield sessions.create()
+
+
+def test_explicit_procedure_catalog_owns_unqualified_target(multi_catalog_spark, tmp_path):
+    spark = multi_catalog_spark
+    table_name = "procedure_catalog_target"
+    for catalog, inserts in [("first", 1), ("second", 2)]:
+        location = (tmp_path / catalog / table_name).as_uri()
+        spark.sql(
+            f"""
+            CREATE TABLE {catalog}.default.{table_name} (id BIGINT)
+            USING ICEBERG
+            LOCATION '{escape_sql_string_literal(location)}'
+            """
+        )
+        for identifier in range(inserts):
+            spark.sql(f"INSERT INTO {catalog}.default.{table_name} VALUES ({identifier})")  # noqa: S608
+
+    ancestors = spark.sql(f"CALL second.system.ancestors_of(table => 'default.{table_name}')").collect()
+    assert len(ancestors) == 2  # noqa: PLR2004
+
+    with pytest.raises(
+        Exception,
+        match=r"Cannot run procedure from catalog 'second'.*catalog 'first'",
+    ):
+        spark.sql(f"CALL second.system.ancestors_of(table => 'first.default.{table_name}')").collect()
+
+    with pytest.raises(
+        Exception,
+        match=r"Cannot run procedure from catalog 'second'.*catalog 'first'",
+    ):
+        spark.sql("CALL second.system.ancestors_of(table => 'first.default.missing_table')").collect()
 
 
 def test_iceberg_snapshot_procedures(spark, tmp_path):
