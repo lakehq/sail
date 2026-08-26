@@ -451,10 +451,9 @@ mod tests {
     use tonic::codegen::http::{Method, Request, Response};
     use tower::service_fn;
 
+    use super::*;
     use crate::id::DriverId;
     use crate::shuffle::ShuffleBackendKind;
-
-    use super::*;
 
     fn test_options() -> KubernetesWorkerManagerOptions {
         KubernetesWorkerManagerOptions {

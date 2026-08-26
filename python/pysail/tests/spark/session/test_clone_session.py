@@ -10,6 +10,9 @@ from pytest_bdd import given, parsers, scenarios, then, when
 
 from pysail.testing.spark.session import spark_session_factory
 
+PARENT_VIEW_ROWS = 2
+CLONE_VIEW_ROWS = 3
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
@@ -106,8 +109,8 @@ def cloned_state_remains_isolated(clone_sessions) -> None:
     clone.sql("CREATE OR REPLACE TEMP VIEW clone_view AS SELECT * FROM VALUES (1), (2), (3)")
     assert source.conf.get("spark.test.clone") == "parent"
     assert clone.conf.get("spark.test.clone") == "clone"
-    assert source.table("clone_view").count() == 2
-    assert clone.table("clone_view").count() == 3
+    assert source.table("clone_view").count() == PARENT_VIEW_ROWS
+    assert clone.table("clone_view").count() == CLONE_VIEW_ROWS
 
 
 @then("the clone uses that target UUID")
