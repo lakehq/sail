@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::common::Result;
 use sail_common::telemetry::SpanAssociation;
-use sail_common_datafusion::system::predicate::Predicate;
+use sail_common_datafusion::system::predicate::ValueFilter;
 use tokio::sync::oneshot;
 
 use crate::system_event::SystemEvent;
@@ -12,36 +12,40 @@ use crate::system_event::SystemEvent;
 pub enum SystemEventActorMessage {
     Apply(SystemEvent),
     ReadJobs {
-        session_id: Predicate<String>,
-        job_id: Predicate<u64>,
+        session_id: ValueFilter<String>,
+        job_id: ValueFilter<u64>,
         fetch: usize,
         result: oneshot::Sender<Result<RecordBatch>>,
     },
     ReadStages {
-        session_id: Predicate<String>,
-        job_id: Predicate<u64>,
+        session_id: ValueFilter<String>,
+        job_id: ValueFilter<u64>,
+        stage: ValueFilter<u64>,
         fetch: usize,
         result: oneshot::Sender<Result<RecordBatch>>,
     },
     ReadTasks {
-        session_id: Predicate<String>,
-        job_id: Predicate<u64>,
+        session_id: ValueFilter<String>,
+        job_id: ValueFilter<u64>,
+        stage: ValueFilter<u64>,
+        partition: ValueFilter<u64>,
+        attempt: ValueFilter<u64>,
         fetch: usize,
         result: oneshot::Sender<Result<RecordBatch>>,
     },
     ReadOptions {
-        key: Predicate<String>,
+        key: ValueFilter<String>,
         fetch: usize,
         result: oneshot::Sender<Result<RecordBatch>>,
     },
     ReadSessions {
-        session_id: Predicate<String>,
+        session_id: ValueFilter<String>,
         fetch: usize,
         result: oneshot::Sender<Result<RecordBatch>>,
     },
     ReadWorkers {
-        session_id: Predicate<String>,
-        worker_id: Predicate<u64>,
+        session_id: ValueFilter<String>,
+        worker_id: ValueFilter<u64>,
         fetch: usize,
         result: oneshot::Sender<Result<RecordBatch>>,
     },
