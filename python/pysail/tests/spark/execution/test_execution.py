@@ -39,6 +39,17 @@ def test_basic_query_execution(spark):
     assert result[0]["result"] == 2  # noqa: PLR2004
 
 
+def test_metrics_attribute_filter_in_cluster_mode(spark):
+    rows = spark.sql(
+        """
+        SELECT *
+        FROM system.telemetry.metrics
+        WHERE attributes['execution.job.id'] = '1'
+        """
+    ).collect()
+    assert all(row.attributes["execution.job.id"] == "1" for row in rows)
+
+
 @pytest.mark.timeout(30)
 @pytest.mark.parametrize(
     ("with_replacement", "expected"),

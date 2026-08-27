@@ -25,6 +25,8 @@ use datafusion::execution::TaskContext;
 use datafusion::functions::core::greatest::GreatestFunc;
 use datafusion::functions::core::least::LeastFunc;
 use datafusion::functions::string::overlay::OverlayFunc;
+use datafusion::functions_nested::extract::ArrayElement;
+use datafusion::functions_nested::map_extract::MapExtract;
 use datafusion::functions_window::cume_dist::cume_dist_udwf;
 use datafusion::functions_window::lead_lag::{lag_udwf, lead_udwf};
 use datafusion::functions_window::nth_value::{first_value_udwf, last_value_udwf, nth_value_udwf};
@@ -3160,6 +3162,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
         };
         match name {
+            "array_element" => Ok(Arc::new(ScalarUDF::from(ArrayElement::new()))),
+            "map_extract" => Ok(Arc::new(ScalarUDF::from(MapExtract::new()))),
             "array_item_with_position" => {
                 Ok(Arc::new(ScalarUDF::from(ArrayItemWithPosition::new())))
             }
@@ -3358,7 +3362,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
         // TODO: Implement custom registry to avoid codec for built-in functions
         let node_inner = node.inner();
-        let udf_kind: UdfKind = if node_inner.is::<ArrayItemWithPosition>()
+        let udf_kind: UdfKind = if node_inner.is::<ArrayElement>()
+            || node_inner.is::<MapExtract>()
+            || node_inner.is::<ArrayItemWithPosition>()
             || node_inner.is::<ArrayStructField>()
             || node_inner.is::<ArrayMax>()
             || node_inner.is::<ArrayMin>()
@@ -6009,6 +6015,17 @@ mod tests {
                 .is_some()
         );
         assert_eq!(decoded.name(), "spark_variant_explode");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_metric_attribute_access_udfs() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(ArrayElement::new()))?;
+        downcast_udf::<ArrayElement>(&decoded, "ArrayElement")?;
+
+        let decoded = round_trip_udf(ScalarUDF::from(MapExtract::new()))?;
+        downcast_udf::<MapExtract>(&decoded, "MapExtract")?;
 
         Ok(())
     }

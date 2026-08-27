@@ -1,7 +1,7 @@
 use datafusion::arrow::array::RecordBatch;
 use datafusion::common::{Result, internal_datafusion_err};
 use sail_common::actor::ActorHandle;
-use sail_common_datafusion::system::predicate::ValueFilter;
+use sail_common_datafusion::system::predicate::{MapValueFilter, TimestampMicros, ValueFilter};
 use tokio::sync::oneshot;
 
 use crate::system_event::{SystemEventActor, SystemEventActorMessage};
@@ -34,6 +34,27 @@ impl SystemEventReader {
         receiver
             .await
             .map_err(|e| internal_datafusion_err!("failed to read system event jobs: {e}"))?
+    }
+
+    pub async fn read_metrics(
+        &self,
+        timestamp: ValueFilter<TimestampMicros>,
+        name: ValueFilter<String>,
+        attributes: Vec<MapValueFilter<String, String>>,
+        fetch: usize,
+    ) -> Result<RecordBatch> {
+        let (result, receiver) = oneshot::channel();
+        self.send(SystemEventActorMessage::ReadMetrics {
+            timestamp,
+            name,
+            attributes,
+            fetch,
+            result,
+        })
+        .await?;
+        receiver
+            .await
+            .map_err(|e| internal_datafusion_err!("failed to read system event metrics: {e}"))?
     }
 
     pub async fn read_stages(

@@ -6,6 +6,7 @@ use fastrace::future::FutureExt;
 use log::info;
 use sail_celeborn::shuffle::{ShuffleClient, ShuffleClientActor, ShuffleClientOptions};
 use sail_common::actor::{Actor, ActorAction, ActorContext};
+use sail_telemetry::metrics::set_metric_sender;
 
 use crate::driver::DriverClientSet;
 use crate::rpc::{ClientOptions, ServerMonitor};
@@ -37,6 +38,16 @@ impl Actor for WorkerActor {
                 port: options.driver_port,
             },
         );
+        let metrics_client = driver_client_set.core.clone();
+        set_metric_sender(move |metrics| {
+            let client = metrics_client.clone();
+            async move {
+                client
+                    .report_metrics(metrics)
+                    .await
+                    .map_err(|error| error.to_string())
+            }
+        });
         Self {
             options,
             server: ServerMonitor::new(),

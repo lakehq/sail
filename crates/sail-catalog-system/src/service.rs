@@ -41,6 +41,19 @@ impl SystemTableService {
                     .read_jobs(session_id, job_id, fetch)
                     .await?
             }
+            SystemTable::Metrics => {
+                let timestamp = filters
+                    .extract("timestamp")?
+                    .unwrap_or_else(|| ValueFilter::all(Predicates::always_true()));
+                let name = filters
+                    .extract("name")?
+                    .unwrap_or_else(|| ValueFilter::all(Predicates::always_true()));
+                let attributes = filters.extract_map_values("attributes")?;
+                filters.finalize()?;
+                self.event_reader
+                    .read_metrics(timestamp, name, attributes, fetch)
+                    .await?
+            }
             SystemTable::Stages => {
                 let session_id = filters
                     .extract("session_id")?

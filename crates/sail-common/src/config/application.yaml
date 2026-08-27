@@ -914,7 +914,9 @@
 - key: telemetry.export_metrics
   type: boolean
   default: "false"
-  description: Whether to export metrics to an OpenTelemetry collector.
+  description: |
+    Whether to export metrics to the system telemetry table
+    and to a configured OpenTelemetry collector.
   experimental: true
 
 - key: telemetry.export_logs

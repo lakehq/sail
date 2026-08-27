@@ -23,12 +23,16 @@ use crate::error::{TelemetryError, TelemetryResult};
 use crate::execution::join_set::DefaultJoinSetTracer;
 use crate::loggers::composite::CompositeLogger;
 use crate::loggers::span::SpanEventLogger;
-use crate::metrics::{MetricManager, MetricRegistry};
-use crate::system_event::{SystemEventLogProcessor, SystemEventReader, SystemEventReporter};
+use crate::metrics::{
+    MetricManager, MetricRegistry, SystemMetricExporter, SystemMetricExporterTarget,
+};
+use crate::system_event::{
+    SystemEventLogProcessor, SystemEventReader, SystemEventReporter, SystemMetricReporter,
+};
 
 enum TelemetryStatus {
     Uninitialized,
-    Initialized(TelemetryState),
+    Initialized(Box<TelemetryState>),
     Failed,
     Finalized,
 }
@@ -43,6 +47,7 @@ struct TelemetryState {
     actor_system: Option<ActorSystem>,
     system_event_reader: Option<SystemEventReader>,
     system_event_reporter: Option<SystemEventReporter>,
+    system_metric_reporter: Option<SystemMetricReporter>,
 }
 
 static TELEMETRY_STATUS: Mutex<TelemetryStatus> = Mutex::new(TelemetryStatus::Uninitialized);
@@ -60,13 +65,13 @@ pub fn init_telemetry(config: &TelemetryConfig, resource: ResourceOptions) -> Te
         TelemetryStatus::Uninitialized => {
             let mut state = TelemetryState::default();
             match init_traces(config, &mut state, &resource)
-                .and_then(|()| init_metrics(config, &mut state, &resource))
                 .and_then(|()| init_logs(config, &mut state, &resource))
+                .and_then(|()| init_metrics(config, &mut state, &resource))
                 .and_then(|()| init_datafusion_telemetry())
             {
                 Ok(()) => {
                     debug!("OpenTelemetry initialized");
-                    *status = TelemetryStatus::Initialized(state);
+                    *status = TelemetryStatus::Initialized(Box::new(state));
                     Ok(())
                 }
                 Err(e) => {
@@ -123,25 +128,36 @@ fn init_metrics(
     state: &mut TelemetryState,
     resource: &ResourceOptions,
 ) -> TelemetryResult<()> {
-    if config.export_metrics
-        && let Some(endpoint) = &config.exporter.otlp.endpoint
-    {
-        let exporter = opentelemetry_otlp::MetricExporter::builder()
-            .with_tonic()
-            .with_endpoint(endpoint.clone())
-            .with_protocol(get_otlp_protocol(&config.exporter.otlp.protocol))
-            .with_timeout(Duration::from_secs(config.exporter.otlp.timeout_secs))
-            // Emit only active metrics. Since metrics may have attributes for sessions or jobs,
-            // we do not want to emit metrics after the session or job has ended.
-            .with_temporality(Temporality::Delta)
-            .build()?;
-        let reader = PeriodicReader::builder(exporter)
+    if config.export_metrics {
+        let target = if resource.kind == "worker" {
+            SystemMetricExporterTarget::Remote
+        } else {
+            SystemMetricExporterTarget::Local(state.system_metric_reporter.clone().ok_or_else(
+                || TelemetryError::internal("system event telemetry is not initialized"),
+            )?)
+        };
+        let system_reader = PeriodicReader::builder(SystemMetricExporter::new(target))
             .with_interval(Duration::from_secs(config.metrics_export_interval_secs))
             .build();
-        let provider = SdkMeterProvider::builder()
-            .with_reader(reader)
-            .with_resource(get_resource(resource))
-            .build();
+        let mut provider = SdkMeterProvider::builder()
+            .with_reader(system_reader)
+            .with_resource(get_resource(resource));
+        if let Some(endpoint) = &config.exporter.otlp.endpoint {
+            let exporter = opentelemetry_otlp::MetricExporter::builder()
+                .with_tonic()
+                .with_endpoint(endpoint.clone())
+                .with_protocol(get_otlp_protocol(&config.exporter.otlp.protocol))
+                .with_timeout(Duration::from_secs(config.exporter.otlp.timeout_secs))
+                // Emit only active metrics. Since metrics may have attributes for sessions or jobs,
+                // we do not want to emit metrics after the session or job has ended.
+                .with_temporality(Temporality::Delta)
+                .build()?;
+            let reader = PeriodicReader::builder(exporter)
+                .with_interval(Duration::from_secs(config.metrics_export_interval_secs))
+                .build();
+            provider = provider.with_reader(reader);
+        }
+        let provider = provider.build();
         global::set_meter_provider(provider.clone());
         let meter = global::meter_with_scope(get_instrumentation_scope());
         state.meter_provider = Some(provider);
@@ -177,6 +193,7 @@ fn init_logs(
     let mut actor_system = ActorSystem::new();
     let system_event_actor = actor_system.spawn(());
     let system_event_reader = SystemEventReader::new(system_event_actor.clone());
+    let system_metric_reporter = SystemMetricReporter::new(system_event_actor.clone());
     let runtime = tokio::runtime::Handle::try_current()
         .map_err(|e| TelemetryError::internal(format!("failed to get runtime handle: {e}")))?;
     let mut provider = SdkLoggerProvider::builder()
@@ -221,6 +238,7 @@ fn init_logs(
     state.runtime = Some(runtime);
     state.actor_system = Some(actor_system);
     state.system_event_reader = Some(system_event_reader);
+    state.system_metric_reporter = Some(system_metric_reporter);
     state.logger_provider = Some(provider);
     if config.export_traces && config.exporter.otlp.endpoint.is_some() {
         secondary.push(Box::new(SpanEventLogger));
@@ -290,6 +308,16 @@ pub fn global_system_event_reporter() -> Option<SystemEventReporter> {
         .ok()
         .and_then(|status| match &*status {
             TelemetryStatus::Initialized(state) => state.system_event_reporter.clone(),
+            _ => None,
+        })
+}
+
+pub fn global_system_metric_reporter() -> Option<SystemMetricReporter> {
+    TELEMETRY_STATUS
+        .lock()
+        .ok()
+        .and_then(|status| match &*status {
+            TelemetryStatus::Initialized(state) => state.system_metric_reporter.clone(),
             _ => None,
         })
 }
