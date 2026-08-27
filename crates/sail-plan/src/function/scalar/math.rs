@@ -1174,6 +1174,30 @@ fn make_safe_divisor(
     }
 }
 
+/// Zero-divisor guard for `interval / number`, which does NOT share the numeric divide
+/// contract `make_safe_divisor` encodes. Spark raises `INTERVAL_DIVIDED_BY_ZERO`
+/// UNCONDITIONALLY — in both ANSI modes — for a zero divisor; only `try_divide` returns
+/// NULL. `IntervalUtils.divideByZeroCheck` throws with no `evalMode` branch
+/// (`opt/spark/.../catalyst/util/IntervalUtils.scala:753`, dispatched from
+/// `intervalExpressions.scala:712-720`), so the numeric rule (NULL under ANSI-off,
+/// `DIVIDE_BY_ZERO` under ANSI-on) is wrong on both axes for an interval numerator.
+fn make_interval_safe_divisor(divisor: Expr, divisor_type: &DataType) -> Expr {
+    let zero = match divisor_type.is_numeric() {
+        true => ScalarValue::new_zero(divisor_type).map_or_else(|_| lit(0), lit),
+        false => lit(0),
+    };
+    let zero_check = divisor.clone().eq(zero);
+    let raise = Expr::ScalarFunction(expr::ScalarFunction {
+        func: Arc::new(ScalarUDF::from(RaiseError::new())),
+        args: vec![lit("[INTERVAL_DIVIDED_BY_ZERO] Division by zero.")],
+    });
+    Expr::Case(expr::Case {
+        expr: None,
+        when_then_expr: vec![(Box::new(zero_check), Box::new(raise))],
+        else_expr: Some(Box::new(divisor)),
+    })
+}
+
 /// The fixed scale increment Arrow's decimal `Op::Div` adds to the dividend's scale
 /// (`result_scale = min(s1 + 4, MAX_SCALE)`), following Postgres and MySQL. The decimal
 /// division path below rescales the dividend against it to buy the guard digit HALF_UP
@@ -1302,13 +1326,19 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
     }
 
     // Apply runtime zero-divisor guard to the divisor before building the division expression.
+    // An interval numerator has its own contract: Spark raises `INTERVAL_DIVIDED_BY_ZERO`
+    // in both ANSI modes, so route it to the interval guard rather than the numeric one.
     let effective_divisor_type = divisor_type.as_ref().cloned().unwrap_or(DataType::Int32);
-    let divisor = make_safe_divisor(
-        divisor,
-        &effective_divisor_type,
-        ansi_mode,
-        "[DIVIDE_BY_ZERO] Division by zero.",
-    );
+    let divisor = if dividend_type.as_ref().is_ok_and(is_interval_like) {
+        make_interval_safe_divisor(divisor, &effective_divisor_type)
+    } else {
+        make_safe_divisor(
+            divisor,
+            &effective_divisor_type,
+            ansi_mode,
+            "[DIVIDE_BY_ZERO] Division by zero.",
+        )
+    };
 
     let div_expr = match (&dividend_type, &divisor_type) {
         // Spark DECIMAL / DECIMAL: DataFusion (Arrow `div`) uses a smaller scale and

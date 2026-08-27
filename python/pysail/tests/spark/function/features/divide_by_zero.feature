@@ -184,3 +184,37 @@ Feature: Division by zero behavior
       Then query result
         | result |
         | 5.0    |
+
+  Rule: Interval divided by zero raises INTERVAL_DIVIDED_BY_ZERO in both ANSI modes
+    # Unlike numeric `/`, an interval numerator does NOT return NULL under ANSI off:
+    # `IntervalUtils.divideByZeroCheck` throws INTERVAL_DIVIDED_BY_ZERO unconditionally in
+    # both modes (only `try_divide` tolerates a zero divisor). Assert the distinctive error
+    # class, not a blind `divide.*zero`, so the numeric class cannot pass this in its place.
+    # Only day-time intervals are covered: year-month interval division is not yet supported
+    # in Sail (`INTERVAL '10' YEAR / 2` already fails to resolve), a separate gap from this
+    # zero-divisor contract.
+    Scenario Outline: Interval by literal zero raises (ansi=<ansi>): <case>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT <expr> AS result
+        """
+      Then query error (?i)interval_divided_by_zero
+
+      Examples:
+        | case                  | expr                   | ansi  |
+        | day-time interval / 0 | INTERVAL '10' DAY / 0  | false |
+        | day-time interval / 0 | INTERVAL '10' DAY / 0  | true  |
+
+    Scenario Outline: Interval by dynamic zero raises (ansi=<ansi>)
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT INTERVAL '10' DAY / id AS result FROM (VALUES (0)) AS t(id)
+        """
+      Then query error (?i)interval_divided_by_zero
+
+      Examples:
+        | ansi  |
+        | false |
+        | true  |
