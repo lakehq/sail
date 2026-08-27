@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
+use educe::Educe;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::datasource::{
     MergeIntoOptions, OptionLayer, RowLevelCommand, RowLevelTarget,
@@ -68,42 +69,26 @@ impl RowLevelCommitInfo {
 }
 
 /// Unified post-expansion node for DELETE, UPDATE, and MERGE.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
+#[educe(PartialOrd)]
 pub struct RowLevelWriteNode {
     target: RowLevelTarget,
     raw_target: Arc<LogicalPlan>,
     raw_source: Option<Arc<LogicalPlan>>,
+    #[educe(PartialOrd(method(partial_cmp_by_equality), rank = 0))]
     raw_input_schema: DFSchemaRef,
     effects: Vec<RowLevelEffect>,
+    #[educe(PartialOrd(method(partial_cmp_by_equality), rank = 1))]
     commit: RowLevelCommitInfo,
     /// `Some` means the target scan must still match at commit time. The inner
     /// value is `None` when the table had no current snapshot when it was read.
     expected_snapshot_id: Option<Option<i64>>,
+    #[educe(PartialOrd(method(partial_cmp_by_equality), rank = 2))]
     schema: DFSchemaRef,
 }
 
-impl PartialOrd for RowLevelWriteNode {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        if self == other {
-            return Some(Ordering::Equal);
-        }
-
-        (
-            &self.target,
-            &self.raw_target,
-            &self.raw_source,
-            &self.effects,
-            &self.expected_snapshot_id,
-        )
-            .partial_cmp(&(
-                &other.target,
-                &other.raw_target,
-                &other.raw_source,
-                &other.effects,
-                &other.expected_snapshot_id,
-            ))
-            .filter(|ordering| *ordering != Ordering::Equal)
-    }
+fn partial_cmp_by_equality<T: PartialEq>(left: &T, right: &T) -> Option<Ordering> {
+    left.eq(right).then_some(Ordering::Equal)
 }
 
 impl RowLevelWriteNode {
