@@ -7,8 +7,11 @@ use sail_common::spec;
 use sail_common_datafusion::catalog::{
     LakehouseExecutionContext, LakehouseOperation, TableKind, TableStatus,
 };
-use sail_common_datafusion::datasource::{DataSourceRegistry, DeleteInfo, OptionLayer, SourceInfo};
+use sail_common_datafusion::datasource::{
+    DataSourceRegistry, DeleteInfo, OptionLayer, RowLevelTarget, SourceInfo,
+};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::lakesource::RowLevelOperation;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::rename::expression::expression_before_rename;
 use sail_common_datafusion::rename::schema::rename_schema;
@@ -64,20 +67,27 @@ impl PlanResolver<'_> {
             None
         };
 
+        let registry = self.ctx.extension::<DataSourceRegistry>()?;
+        let lake_source = registry.get_lake_source(&info.format)?;
         let delete_info = DeleteInfo {
-            table_name,
-            path: info.location,
+            target: RowLevelTarget {
+                table_name,
+                format: lake_source.name().to_string(),
+                location: info.location,
+                partition_by: vec![],
+                options: vec![OptionLayer::TablePropertyList {
+                    items: info.properties,
+                }],
+                lakehouse_table: info.lakehouse_table,
+            },
             condition,
-            lakehouse_table: info.lakehouse_table,
-            options: vec![OptionLayer::TablePropertyList {
-                items: info.properties,
-            }],
         };
 
-        let registry = self.ctx.extension::<DataSourceRegistry>()?;
-        registry
-            .get_lake_source(&info.format)?
-            .create_deleter(&self.ctx.state(), delete_info)
+        lake_source
+            .plan_row_level_operation(
+                &self.ctx.state(),
+                RowLevelOperation::Delete(Box::new(delete_info)),
+            )
             .await
             .map_err(PlanError::from)
     }
