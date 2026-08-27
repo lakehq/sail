@@ -14,6 +14,7 @@ use datafusion_common::{
     Constraints, DFSchema, DFSchemaRef, Result, not_impl_datafusion_err, plan_err,
 };
 use datafusion_expr::expr::Sort;
+use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{Expr, TableSource};
 
 use crate::catalog::{CatalogPartitionField, LakehouseExecutionContext};
@@ -528,7 +529,12 @@ pub fn create_sort_order(
     sort_by: Vec<Sort>,
     schema: &DFSchema,
 ) -> Result<Option<LexRequirement>> {
-    let expr = create_physical_sort_exprs(sort_by.as_slice(), schema, session.execution_props())?;
+    let expr = create_physical_sort_exprs(
+        sort_by.as_slice(),
+        schema,
+        session.execution_props(),
+        &PhysicalPlanningContext::default(),
+    )?;
     let ordering = LexOrdering::new(expr);
     if let Some(ordering) = ordering {
         Ok(LexRequirement::new(

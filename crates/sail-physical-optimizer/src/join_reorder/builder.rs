@@ -13,6 +13,7 @@ use datafusion::physical_plan::aggregates::AggregateExec;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::HashJoinExec;
 use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::{AnalysisContext, analyze};
 use log::trace;
@@ -624,7 +625,7 @@ impl GraphBuilder {
             //   base column stats as a best-effort proxy for join planning.
             let (pre_filter_plan, selectivity) =
                 self.peel_filter_chain_and_estimate_selectivity(plan.clone())?;
-            let pre_stats = Arc::unwrap_or_clone(pre_filter_plan.partition_statistics(None)?);
+            let pre_stats = overall_statistics(pre_filter_plan.as_ref())?;
             let base = match pre_stats.num_rows {
                 Precision::Exact(count) => count as f64,
                 Precision::Inexact(count) => count as f64,
@@ -645,7 +646,7 @@ impl GraphBuilder {
             while let Some(p) = cur.downcast_ref::<ProjectionExec>() {
                 cur = p.input().clone();
             }
-            let stats = Arc::unwrap_or_clone(cur.partition_statistics(None)?);
+            let stats = overall_statistics(cur.as_ref())?;
             let initial_cardinality = match stats.num_rows {
                 Precision::Exact(count) => count as f64,
                 Precision::Inexact(count) => count as f64,
@@ -653,7 +654,7 @@ impl GraphBuilder {
             };
             (stats, initial_cardinality, initial_cardinality)
         } else {
-            let stats = Arc::unwrap_or_clone(plan.partition_statistics(None)?);
+            let stats = overall_statistics(plan.as_ref())?;
             let initial_cardinality = match stats.num_rows {
                 Precision::Exact(count) => count as f64,
                 Precision::Inexact(count) => count as f64,
@@ -703,7 +704,7 @@ impl GraphBuilder {
 
         while let Some(filter) = cur.downcast_ref::<FilterExec>() {
             let input = filter.input().clone();
-            let input_stats = Arc::unwrap_or_clone(input.partition_statistics(None)?);
+            let input_stats = overall_statistics(input.as_ref())?;
             let input_schema = input.schema();
 
             let sel = self.estimate_filter_selectivity(
@@ -933,6 +934,11 @@ impl GraphBuilder {
         // For complex expressions, return None
         Ok(None)
     }
+}
+
+fn overall_statistics(plan: &dyn ExecutionPlan) -> Result<datafusion::common::Statistics> {
+    let stats = StatisticsContext::new().compute(plan, &StatisticsArgs::new())?;
+    Ok(Arc::unwrap_or_clone(stats))
 }
 
 impl Default for GraphBuilder {

@@ -53,9 +53,12 @@ impl PlanResolver<'_> {
             _ => make_pivot_struct(pivot_columns),
         };
 
-        let aggregates = self
-            .resolve_named_expressions(aggregate, &schema, state)
-            .await?;
+        let aggregates = {
+            let mut scope = state.enter_config_scope();
+            scope.state().config_mut().preserve_count_argument_columns = grouping.is_none();
+            self.resolve_named_expressions(aggregate, &schema, scope.state())
+                .await?
+        };
 
         // Spark allows aggregate expressions and pure literals, but rejects columns outside an
         // aggregate function.

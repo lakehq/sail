@@ -23,8 +23,8 @@ use sail_object_store::DynamicObjectStoreRegistry;
 pub struct RuntimeEnvFactory {
     config: Arc<AppConfig>,
     runtime: RuntimeHandle,
-    global_file_listing_cache: Option<Arc<dyn ListFilesCache>>,
-    global_file_statistics_cache: Option<Arc<dyn FileStatisticsCache>>,
+    global_file_listing_cache: Option<Arc<ListFilesCache>>,
+    global_file_statistics_cache: Option<Arc<FileStatisticsCache>>,
     global_file_metadata_cache: Option<Arc<MokaFileMetadataCache>>,
 }
 
@@ -98,7 +98,7 @@ impl RuntimeEnvFactory {
         builder
     }
 
-    fn create_file_statistics_cache(&mut self) -> Option<Arc<dyn FileStatisticsCache>> {
+    fn create_file_statistics_cache(&mut self) -> Option<Arc<FileStatisticsCache>> {
         let ttl = self.config.parquet.file_statistics_cache.ttl;
         let max_entries = self.config.parquet.file_statistics_cache.max_entries;
         match &self.config.parquet.file_statistics_cache.r#type {
@@ -112,7 +112,7 @@ impl RuntimeEnvFactory {
                     self.global_file_statistics_cache
                         .get_or_insert_with(|| {
                             Arc::new(MokaFileStatisticsCache::new(ttl, max_entries))
-                                as Arc<dyn FileStatisticsCache>
+                                as Arc<FileStatisticsCache>
                         })
                         .clone(),
                 )
@@ -124,7 +124,7 @@ impl RuntimeEnvFactory {
         }
     }
 
-    fn create_file_listing_cache(&mut self) -> Option<Arc<dyn ListFilesCache>> {
+    fn create_file_listing_cache(&mut self) -> Option<Arc<ListFilesCache>> {
         let ttl = self.config.execution.file_listing_cache.ttl;
         let max_entries = self.config.execution.file_listing_cache.max_entries;
         match &self.config.execution.file_listing_cache.r#type {
@@ -138,7 +138,7 @@ impl RuntimeEnvFactory {
                     self.global_file_listing_cache
                         .get_or_insert_with(|| {
                             Arc::new(MokaFileListingCache::new(ttl, max_entries))
-                                as Arc<dyn ListFilesCache>
+                                as Arc<ListFilesCache>
                         })
                         .clone(),
                 )
@@ -150,7 +150,7 @@ impl RuntimeEnvFactory {
         }
     }
 
-    fn create_file_metadata_cache(&mut self) -> Arc<dyn FileMetadataCache> {
+    fn create_file_metadata_cache(&mut self) -> Arc<FileMetadataCache> {
         let ttl = self.config.parquet.file_metadata_cache.ttl;
         let size_limit = self.config.parquet.file_metadata_cache.size_limit;
         match self.config.parquet.file_metadata_cache.r#type {

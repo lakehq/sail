@@ -19,8 +19,7 @@ use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{
     DataFusionError, Result, TableReference, ToDFSchema, not_impl_err, plan_err,
 };
-use datafusion::execution::SessionState;
-use datafusion::logical_expr::{LogicalPlan, TableScan, TableSource};
+use datafusion::logical_expr::{LogicalPlan, TableScanBuilder, TableSource};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, Extension, UserDefinedLogicalNodeCore};
@@ -184,13 +183,9 @@ impl LakeSource for IcebergLakeSource {
         );
         let table_source: Arc<dyn TableSource> = Arc::new(IcebergTableSource::new(provider));
         let raw_input_schema = table_source.schema().to_dfschema_ref()?;
-        let target_scan = LogicalPlan::TableScan(TableScan::try_new(
-            table_reference_from_parts(&table_name),
-            table_source,
-            None,
-            vec![],
-            None,
-        )?);
+        let target_scan = LogicalPlan::TableScan(
+            TableScanBuilder::new(table_reference_from_parts(&table_name), table_source).build()?,
+        );
 
         let write_node = sail_logical_plan::merge::RowLevelWriteNode::new_delete(
             Arc::new(target_scan),
@@ -434,7 +429,7 @@ impl UserDefinedLogicalNodeCore for IcebergWriteNode {
 }
 
 pub(crate) async fn plan_iceberg_write(
-    ctx: &SessionState,
+    ctx: &dyn Session,
     logical_input: &LogicalPlan,
     physical_input: Arc<dyn ExecutionPlan>,
     node: &IcebergWriteNode,
