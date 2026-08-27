@@ -13,7 +13,8 @@
 use std::sync::Arc;
 
 use datafusion::arrow::compute::SortOptions;
-use datafusion::common::{DataFusionError, Result, internal_err};
+use datafusion::common::{DataFusionError, Result, ScalarValue, internal_err};
+use datafusion::logical_expr::Operator;
 use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::execution_plan::reset_plan_states;
@@ -24,9 +25,12 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
-use datafusion_common::{JoinType, NullEquality, not_impl_err};
-use datafusion_physical_expr::expressions::{Column, IsNullExpr};
-use sail_common_datafusion::datasource::{PhysicalSinkMode, RowLevelCommand, RowLevelTarget};
+use datafusion_common::{JoinType, NullEquality};
+use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::expressions::{BinaryExpr, Column, IsNullExpr, Literal};
+use sail_common_datafusion::datasource::{
+    OPERATION_COLUMN, PhysicalSinkMode, RowLevelCommand, RowLevelOperationType, RowLevelTarget,
+};
 use sail_common_datafusion::logical_expr::ExprWithSource;
 
 use super::super::writer_options::DeltaWriterExecOptions;
@@ -164,30 +168,27 @@ pub(crate) async fn build_row_level_rewrite_plan(
     )
 }
 
-/// Merge-on-Read MERGE using deletion vectors for target DELETE clauses.
-///
-/// UPDATE clauses are intentionally rejected for now: they require writing changed rows
-/// while deleting the original target rows via DVs, which needs a separate "changed rows
-/// only" MERGE projection. INSERT-only and DELETE+INSERT MERGE are supported.
+/// Merge-on-Read MERGE appends inserted and updated rows while invalidating changed target rows
+/// with deletion vectors.
 pub async fn build_merge_plan_mor(
     ctx: &PlannerContext<'_>,
     merge_info: RowLevelWriteInfo,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    if merge_has_update_actions(&merge_info) {
-        return not_impl_err!(
-            "Merge-on-Read strategy for MERGE UPDATE clauses is not yet implemented for Delta Lake"
-        );
-    }
-    if merge_has_delete_actions(&merge_info) && merge_info.deletion_vector_plan.is_none() {
+    let has_update_actions = merge_has_update_actions(&merge_info);
+    if (has_update_actions || merge_has_delete_actions(&merge_info))
+        && merge_info.deletion_vector_plan.is_none()
+    {
         return internal_err!(
-            "Merge-on-Read MERGE DELETE clauses require file-local row-index metadata"
+            "Merge-on-Read MERGE UPDATE and DELETE clauses require file-local row-index metadata"
         );
     }
 
     let expanded = merge_info.expanded_input.clone().ok_or_else(|| {
         DataFusionError::Plan("pre-expanded MERGE plan missing expanded input".to_string())
     })?;
-    let writer_input = if merge_info.deletion_vector_plan.is_some() {
+    let writer_input = if has_update_actions {
+        build_merge_mor_changed_rows_input(&expanded)?
+    } else if merge_info.deletion_vector_plan.is_some() {
         build_insert_rows_input(&expanded)?
     } else {
         expanded
@@ -449,6 +450,54 @@ fn build_insert_rows_input(expanded: &Arc<dyn ExecutionPlan>) -> Result<Arc<dyn 
     ));
     Ok(Arc::new(FilterExec::try_new(
         insert_pred,
+        Arc::clone(expanded),
+    )?))
+}
+
+/// Build MERGE MoR writer input for source-only rows and replacement rows from UPDATE clauses.
+fn build_merge_mor_changed_rows_input(
+    expanded: &Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let projected_schema = expanded.schema();
+    let path_idx = projected_schema.index_of(PATH_COLUMN).map_err(|_| {
+        DataFusionError::Internal(format!(
+            "MERGE writer input is missing required column '{PATH_COLUMN}' for changed-row filtering"
+        ))
+    })?;
+    let operation_idx = projected_schema.index_of(OPERATION_COLUMN).map_err(|_| {
+        DataFusionError::Internal(format!(
+            "MERGE writer input is missing required column '{OPERATION_COLUMN}' for changed-row filtering"
+        ))
+    })?;
+
+    let source_only_row: Arc<dyn PhysicalExpr> = Arc::new(IsNullExpr::new(Arc::new(Column::new(
+        PATH_COLUMN,
+        path_idx,
+    ))));
+    let matched_update: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+        Arc::new(Column::new(OPERATION_COLUMN, operation_idx)),
+        Operator::Eq,
+        Arc::new(Literal::new(ScalarValue::Int32(Some(
+            RowLevelOperationType::MatchedUpdate.as_i32(),
+        )))),
+    ));
+    let not_matched_by_source_update: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+        Arc::new(Column::new(OPERATION_COLUMN, operation_idx)),
+        Operator::Eq,
+        Arc::new(Literal::new(ScalarValue::Int32(Some(
+            RowLevelOperationType::NotMatchedBySourceUpdate.as_i32(),
+        )))),
+    ));
+    let update_row: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+        matched_update,
+        Operator::Or,
+        not_matched_by_source_update,
+    ));
+    let changed_row: Arc<dyn PhysicalExpr> =
+        Arc::new(BinaryExpr::new(source_only_row, Operator::Or, update_row));
+
+    Ok(Arc::new(FilterExec::try_new(
+        changed_row,
         Arc::clone(expanded),
     )?))
 }

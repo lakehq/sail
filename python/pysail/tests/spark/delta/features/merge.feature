@@ -907,7 +907,7 @@ Feature: Delta Lake Merge
         | 3  | stay     | target |
         | 4  | inserted | insert |
 
-    Scenario: Matched updates fall back to copy-on-write on a deletion-vector table
+    Scenario: Matched updates append replacement rows and a deletion vector
       Given statement
         """
         MERGE INTO delta_merge_dv AS t
@@ -921,6 +921,18 @@ Feature: Delta Lake Merge
         | operation                                          | "MERGE"  |
         | operationParameters.matchedPredicates[0].actionType | "update" |
         | operationMetrics.numTargetRowsUpdated              | 1        |
+        | operationMetrics.numTargetRowsMatchedUpdated       | 1        |
+        | operationMetrics.numTargetRowsDeleted              | 0        |
+        | operationMetrics.numTargetRowsCopied               | 0        |
+        | operationMetrics.numTargetDeletionVectorsAdded     | 1        |
+      Then data files in location count is 2
+      Then file tree in location matches
+        """
+        📂 <hex-prefix>
+          📄 deletion_vector_<uuid>.bin
+        📄 part-<id>.<codec>.parquet
+        📄 part-<id>.<codec>.parquet
+        """
       When query
         """
         SELECT id, value, flag FROM delta_merge_dv ORDER BY id
@@ -930,6 +942,85 @@ Feature: Delta Lake Merge
         | 1  | keep   | target |
         | 2  | updated | target |
         | 3  | stay   | target |
+
+    Scenario: Target-only updates append replacement rows and a deletion vector
+      Given statement
+        """
+        MERGE INTO delta_merge_dv AS t
+        USING src_merge_dv AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED BY SOURCE AND t.id = 3 THEN
+          UPDATE SET value = concat(t.value, '_stale')
+        """
+      Then delta log latest commit info contains
+        | path                                                          | value    |
+        | operation                                                     | "MERGE"  |
+        | operationParameters.notMatchedBySourcePredicates[0].actionType | "update" |
+        | operationMetrics.numTargetRowsUpdated                         | 1        |
+        | operationMetrics.numTargetRowsNotMatchedBySourceUpdated       | 1        |
+        | operationMetrics.numTargetRowsDeleted                         | 0        |
+        | operationMetrics.numTargetRowsCopied                          | 0        |
+        | operationMetrics.numTargetDeletionVectorsAdded                | 1        |
+      Then data files in location count is 2
+      Then file tree in location matches
+        """
+        📂 <hex-prefix>
+          📄 deletion_vector_<uuid>.bin
+        📄 part-<id>.<codec>.parquet
+        📄 part-<id>.<codec>.parquet
+        """
+      When query
+        """
+        SELECT id, value, flag FROM delta_merge_dv ORDER BY id
+        """
+      Then query result ordered
+        | id | value      | flag   |
+        | 1  | keep       | target |
+        | 2  | remove     | target |
+        | 3  | stay_stale | target |
+
+    Scenario: Updates and deletes share a deletion vector without mixing row metrics
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW src_merge_dv_mixed AS
+        SELECT * FROM VALUES
+          (1, 'updated',  'update'),
+          (2, 'ignored',  'delete'),
+          (4, 'inserted', 'insert')
+        AS src(id, value, flag)
+        """
+      Given statement
+        """
+        MERGE INTO delta_merge_dv AS t
+        USING src_merge_dv_mixed AS s
+        ON t.id = s.id
+        WHEN MATCHED AND s.flag = 'update' THEN
+          UPDATE SET value = s.value
+        WHEN MATCHED AND s.flag = 'delete' THEN
+          DELETE
+        WHEN NOT MATCHED THEN
+          INSERT (id, value, flag) VALUES (s.id, s.value, s.flag)
+        """
+      Then delta log latest commit info contains
+        | path                                               | value    |
+        | operation                                          | "MERGE"  |
+        | operationMetrics.numTargetRowsUpdated              | 1        |
+        | operationMetrics.numTargetRowsDeleted              | 1        |
+        | operationMetrics.numTargetRowsInserted             | 1        |
+        | operationMetrics.numTargetRowsCopied               | 0        |
+        | operationMetrics.numTargetDeletionVectorsAdded     | 1        |
+        | operationParameters.matchedPredicates[0].actionType | "update" |
+        | operationParameters.matchedPredicates[1].actionType | "delete" |
+      Then data files in location count is at least 2
+      When query
+        """
+        SELECT id, value, flag FROM delta_merge_dv ORDER BY id
+        """
+      Then query result ordered
+        | id | value    | flag   |
+        | 1  | updated  | target |
+        | 3  | stay     | target |
+        | 4  | inserted | insert |
 
 
   Rule: Updates for rows not matched by source and explicit insert columns

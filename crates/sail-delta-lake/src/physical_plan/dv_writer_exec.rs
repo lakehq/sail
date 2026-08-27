@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{Array, BooleanArray, Int64Array, StringArray};
+use datafusion::arrow::array::{Array, BooleanArray, Int32Array, Int64Array, StringArray};
 use datafusion::arrow::compute::SortOptions;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_expr::{LexOrdering, OrderingRequirements, PhysicalSortExpr};
@@ -23,6 +23,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::stream::{self, StreamExt};
 use object_store::ObjectStore;
+use sail_common_datafusion::datasource::{OPERATION_COLUMN, RowLevelOperationType};
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 use url::Url;
 
@@ -268,6 +269,47 @@ struct RowLevelDvWriteStats {
     had_existing_dv: bool,
 }
 
+fn is_merge_update_invalidation(operation_column: &dyn Array, row: usize) -> Result<bool> {
+    let operation = if let Some(values) = operation_column.as_any().downcast_ref::<Int32Array>() {
+        if values.is_null(row) {
+            return Err(DataFusionError::Execution(format!(
+                "row-level DV operation column '{OPERATION_COLUMN}' must not contain nulls"
+            )));
+        }
+        i64::from(values.value(row))
+    } else if let Some(values) = operation_column.as_any().downcast_ref::<Int64Array>() {
+        if values.is_null(row) {
+            return Err(DataFusionError::Execution(format!(
+                "row-level DV operation column '{OPERATION_COLUMN}' must not contain nulls"
+            )));
+        }
+        values.value(row)
+    } else {
+        return Err(DataFusionError::Internal(format!(
+            "row-level DV operation column '{OPERATION_COLUMN}' must be Int32 or Int64, got {:?}",
+            operation_column.data_type()
+        )));
+    };
+
+    match operation {
+        value
+            if value == i64::from(RowLevelOperationType::MatchedUpdate.as_i32())
+                || value == i64::from(RowLevelOperationType::NotMatchedBySourceUpdate.as_i32()) =>
+        {
+            Ok(true)
+        }
+        value
+            if value == i64::from(RowLevelOperationType::MatchedDelete.as_i32())
+                || value == i64::from(RowLevelOperationType::NotMatchedBySourceDelete.as_i32()) =>
+        {
+            Ok(false)
+        }
+        value => Err(DataFusionError::Internal(format!(
+            "row-level MERGE DV input contains unsupported operation value {value}"
+        ))),
+    }
+}
+
 async fn write_row_level_dv_actions_for_path(
     path: String,
     bitmap: DeletionVectorBitmap,
@@ -465,6 +507,17 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
         let row_index_column = self.row_index_column.clone();
         let partition_value_columns = self.partition_value_columns.clone();
         let operation = self.operation.clone();
+        let merge_updates_target_rows = match operation.as_ref() {
+            Some(DeltaOperation::Merge {
+                matched_predicates,
+                not_matched_by_source_predicates,
+                ..
+            }) => matched_predicates
+                .iter()
+                .chain(not_matched_by_source_predicates)
+                .any(|predicate| predicate.action_type.eq_ignore_ascii_case("update")),
+            _ => false,
+        };
 
         let output_rows = MetricBuilder::new(&self.metrics).output_rows(partition);
         let elapsed_compute = MetricBuilder::new(&self.metrics).elapsed_compute(partition);
@@ -499,7 +552,8 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
             let dv_writer = DeletionVectorWriter::new(Arc::clone(&object_store), table_url.clone());
             let deletion_timestamp = current_timestamp_millis()?;
             let mut output_actions: Vec<Action> = Vec::new();
-            let mut total_deleted_rows: u64 = 0;
+            let mut total_invalidated_rows: u64 = 0;
+            let mut total_updated_rows: u64 = 0;
             let mut num_dv_added: u64 = 0;
             let mut num_dv_updated: u64 = 0;
             let mut current_path: Option<String> = None;
@@ -529,6 +583,15 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
                             "row-level DV row-index column '{row_index_column}' must be Int64"
                         ))
                     })?;
+                let operation_column = if merge_updates_target_rows {
+                    Some(batch.column_by_name(OPERATION_COLUMN).ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "row-level MERGE DV input is missing required column '{OPERATION_COLUMN}'"
+                        ))
+                    })?)
+                } else {
+                    None
+                };
                 for row in 0..batch.num_rows() {
                     if paths.is_null(row) || row_indices.is_null(row) {
                         return Err(DataFusionError::Execution(
@@ -564,7 +627,7 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
                         )
                         .await?
                         {
-                            total_deleted_rows += stats.newly_deleted_rows;
+                            total_invalidated_rows += stats.newly_deleted_rows;
                             num_dv_added += 1;
                             if stats.had_existing_dv {
                                 num_dv_updated += 1;
@@ -573,7 +636,13 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
                     } else if current_path.is_none() {
                         current_path = Some(path.to_string());
                     }
-                    current_bitmap.insert(row_index as u64);
+                    let updates_target = operation_column
+                        .map(|column| is_merge_update_invalidation(column.as_ref(), row))
+                        .transpose()?
+                        .unwrap_or(false);
+                    if current_bitmap.insert(row_index as u64) && updates_target {
+                        total_updated_rows = total_updated_rows.saturating_add(1);
+                    }
                 }
             }
 
@@ -590,7 +659,7 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
                 )
                 .await?
             {
-                total_deleted_rows += stats.newly_deleted_rows;
+                total_invalidated_rows += stats.newly_deleted_rows;
                 num_dv_added += 1;
                 if stats.had_existing_dv {
                     num_dv_updated += 1;
@@ -601,12 +670,14 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
                 return encode_actions(Vec::new(), None);
             }
 
-            output_rows.add(total_deleted_rows as usize);
+            output_rows.add(total_invalidated_rows as usize);
             log::debug!(
                 "row-level DV write partition {partition}: affected_files={num_dv_added}, \
-                 dv_updated={num_dv_updated}, deleted_rows={total_deleted_rows}"
+                 dv_updated={num_dv_updated}, invalidated_rows={total_invalidated_rows}"
             );
 
+            let target_rows_updated = total_updated_rows.min(total_invalidated_rows);
+            let target_rows_deleted = total_invalidated_rows.saturating_sub(target_rows_updated);
             let execution_time_ms = Some(exec_start.elapsed().as_millis() as u64);
             let (row_count, operation_metrics) = match operation.as_ref() {
                 Some(DeltaOperation::Update { .. }) => (
@@ -621,12 +692,12 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
                     },
                 ),
                 _ => (
-                    total_deleted_rows,
+                    target_rows_deleted,
                     OperationMetrics {
                         execution_time_ms,
                         num_removed_files: Some(num_dv_added),
                         num_added_files: Some(num_dv_added),
-                        num_target_rows_deleted: Some(total_deleted_rows),
+                        num_target_rows_deleted: Some(target_rows_deleted),
                         num_target_deletion_vectors_added: Some(num_dv_added),
                         num_target_deletion_vectors_updated: Some(num_dv_updated),
                         num_target_deletion_vectors_removed: Some(num_dv_updated),

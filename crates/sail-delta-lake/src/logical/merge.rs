@@ -22,12 +22,8 @@ use crate::logical::table_source::DeltaTableSource;
 /// Expand MERGE information into a unified row-level write node for Delta.
 pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
     validate_merge_internal_columns(&info, &[MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN])?;
-    let mode = if merge_has_update_actions(&info) {
-        RowLevelWriteMode::CopyOnWrite
-    } else {
-        select_delta_row_level_write_mode(&info.target)?
-    };
-    let row_index_column = (merge_has_delete_actions(&info)
+    let mode = select_delta_row_level_write_mode(&info.target)?;
+    let row_index_column = ((merge_has_delete_actions(&info) || merge_has_update_actions(&info))
         && matches!(mode, RowLevelWriteMode::MergeOnRead))
     .then_some(MERGE_ROW_INDEX_COLUMN);
     let mut target_plan = ensure_row_level_metadata_columns(

@@ -773,6 +773,30 @@ fn build_default_merge_expansion(
         row_index_column,
         row_delete_metadata_columns,
     )?;
+    let merge_updates_target_rows = options.matched_clauses.iter().any(|clause| {
+        matches!(
+            clause.action,
+            MergeMatchedAction::UpdateAll | MergeMatchedAction::UpdateSet(_)
+        )
+    }) || options
+        .not_matched_by_source_clauses
+        .iter()
+        .any(|clause| matches!(clause.action, MergeNotMatchedBySourceAction::UpdateSet(_)));
+    let row_index_operation_expr = if merge_updates_target_rows {
+        Some(
+            projection_exprs
+                .iter()
+                .find(|expr| matches!(expr, Expr::Alias(alias) if alias.name == OPERATION_COLUMN))
+                .cloned()
+                .ok_or_else(|| {
+                    DataFusionError::Internal(
+                        "MERGE update projection is missing its row operation column".to_string(),
+                    )
+                })?,
+        )
+    } else {
+        None
+    };
     trace!("projection exprs: {:?}", projection_exprs);
     let projected = LogicalPlanBuilder::from(filtered)
         .project(projection_exprs.clone())?
@@ -835,6 +859,7 @@ fn build_default_merge_expansion(
                 .iter()
                 .map(|column| col(*column).alias((*column).to_string())),
         );
+        delete_projection.extend(row_index_operation_expr.clone());
         Some(
             LogicalPlanBuilder::from(join.as_ref().clone())
                 .filter(row_delete_pred)?
