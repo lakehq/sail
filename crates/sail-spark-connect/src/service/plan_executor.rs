@@ -1,7 +1,12 @@
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use datafusion::arrow::compute::concat_batches;
+use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr::expressions::{CastExpr, Column};
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::prelude::SessionContext;
 use fastrace::Span;
 use fastrace::collector::SpanContext;
@@ -9,6 +14,7 @@ use fastrace::future::FutureExt;
 use futures::stream;
 use log::debug;
 use sail_common::spec;
+use sail_common_datafusion::array::record_batch::materialize_spark_view_data_type;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::job::JobService;
 use sail_plan::resolve_and_execute_plan;
@@ -110,6 +116,49 @@ impl Stream for ExecutePlanResponseStream {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SparkConnectOutputEncodingPolicy {
+    expand_views: bool,
+    use_large_var_types: bool,
+}
+
+fn apply_spark_connect_output_encoding(
+    plan: Arc<dyn ExecutionPlan>,
+    policy: SparkConnectOutputEncodingPolicy,
+) -> SparkResult<Arc<dyn ExecutionPlan>> {
+    if !policy.expand_views {
+        return Ok(plan);
+    }
+
+    let mut changed = false;
+    let input_schema = plan.schema();
+    let expressions = input_schema
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(index, field)| {
+            let column = Arc::new(Column::new(field.name(), index)) as Arc<dyn PhysicalExpr>;
+            let target_type =
+                materialize_spark_view_data_type(field.data_type(), policy.use_large_var_types);
+            let expression = if &target_type != field.data_type() {
+                changed = true;
+                let target_field = Arc::new(field.as_ref().clone().with_data_type(target_type));
+                Arc::new(CastExpr::new_with_target_field(column, target_field, None))
+                    as Arc<dyn PhysicalExpr>
+            } else {
+                column
+            };
+            (expression, field.name().to_string())
+        })
+        .collect::<Vec<_>>();
+
+    if changed {
+        Ok(Arc::new(ProjectionExec::try_new(expressions, plan)?))
+    } else {
+        Ok(plan)
+    }
+}
+
 async fn handle_execute_plan(
     ctx: &SessionContext,
     plan: spec::Plan,
@@ -120,7 +169,13 @@ async fn handle_execute_plan(
     let spark = ctx.extension::<SparkSession>()?;
     let service = ctx.extension::<JobService>()?;
     let operation_id = metadata.operation_id.clone();
-    let (plan, _) = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
+    let plan_config = spark.plan_config()?;
+    let output_policy = SparkConnectOutputEncodingPolicy {
+        expand_views: spark.options().expand_views_at_output,
+        use_large_var_types: plan_config.arrow_use_large_var_types,
+    };
+    let (plan, _) = resolve_and_execute_plan(ctx, plan_config, plan).await?;
+    let plan = apply_spark_connect_output_encoding(plan, output_policy)?;
     let stream = {
         let span = Span::enter_with_parent("JobRunner::execute", &span);
         service.runner().execute(ctx, plan).in_span(span).await?
@@ -705,4 +760,161 @@ pub(crate) async fn handle_execute_register_datasource(
         metadata.operation_id,
         Box::pin(stream::iter(output.into_iter().map(Ok))),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::array::{
+        Array, BinaryArray, BinaryViewBuilder, LargeBinaryArray, LargeStringArray, ListArray,
+        ListBuilder, StringArray, StringViewBuilder,
+    };
+    use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema};
+    use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::datasource::memory::MemorySourceConfig;
+    use datafusion::execution::TaskContext;
+    use datafusion::physical_plan::collect;
+    use datafusion::physical_plan::empty::EmptyExec;
+
+    use super::*;
+
+    fn view_plan() -> Arc<dyn ExecutionPlan> {
+        let nested = DataType::Struct(Fields::from(vec![Field::new(
+            "nested",
+            DataType::Utf8View,
+            true,
+        )]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("text", DataType::Utf8View, true),
+            Field::new("bytes", DataType::BinaryView, true),
+            Field::new("nested", nested, true),
+            Field::new("plain", DataType::Utf8, true),
+        ]));
+        Arc::new(EmptyExec::new(schema))
+    }
+
+    #[test]
+    fn output_encoding_materializes_views_recursively() -> SparkResult<()> {
+        for (use_large_var_types, expected_text, expected_bytes) in [
+            (false, DataType::Utf8, DataType::Binary),
+            (true, DataType::LargeUtf8, DataType::LargeBinary),
+        ] {
+            let input = view_plan();
+            let output = apply_spark_connect_output_encoding(
+                Arc::clone(&input),
+                SparkConnectOutputEncodingPolicy {
+                    expand_views: true,
+                    use_large_var_types,
+                },
+            )?;
+
+            let output_schema = output.schema();
+            assert!(output.downcast_ref::<ProjectionExec>().is_some());
+            assert_eq!(output_schema.field(0).data_type(), &expected_text);
+            assert_eq!(output_schema.field(1).data_type(), &expected_bytes);
+            assert_eq!(output_schema.field(3).data_type(), &DataType::Utf8);
+            let DataType::Struct(nested) = output_schema.field(2).data_type() else {
+                return Err(SparkError::internal("nested field must remain a struct"));
+            };
+            assert_eq!(nested[0].data_type(), &expected_text);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn disabled_output_encoding_preserves_the_plan() -> SparkResult<()> {
+        let input = view_plan();
+        let output = apply_spark_connect_output_encoding(
+            Arc::clone(&input),
+            SparkConnectOutputEncodingPolicy {
+                expand_views: false,
+                use_large_var_types: false,
+            },
+        )?;
+        assert!(Arc::ptr_eq(&input, &output));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn output_encoding_executes_nested_view_casts() -> SparkResult<()> {
+        let mut text = ListBuilder::new(StringViewBuilder::new());
+        text.values().append_value("alpha");
+        text.values().append_value("beta");
+        text.append(true);
+        text.append(false);
+        let text = text.finish();
+
+        let mut bytes = ListBuilder::new(BinaryViewBuilder::new());
+        bytes.values().append_value(b"one");
+        bytes.values().append_value(b"two");
+        bytes.append(true);
+        bytes.append(false);
+        let bytes = bytes.finish();
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("text", text.data_type().clone(), true),
+            Field::new("bytes", bytes.data_type().clone(), true),
+        ]));
+        let batch =
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(text), Arc::new(bytes)])?;
+
+        for use_large_var_types in [false, true] {
+            let input = MemorySourceConfig::try_new_exec(
+                &[vec![batch.clone()]],
+                Arc::clone(&schema),
+                None,
+            )?;
+            let output = apply_spark_connect_output_encoding(
+                input,
+                SparkConnectOutputEncodingPolicy {
+                    expand_views: true,
+                    use_large_var_types,
+                },
+            )?;
+            let batches = collect(output, Arc::new(TaskContext::default())).await?;
+            let Some(output) = batches.first() else {
+                return Err(SparkError::internal("expected one output batch"));
+            };
+
+            let text = output
+                .column(0)
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .ok_or_else(|| SparkError::internal("expected text list"))?;
+            let bytes = output
+                .column(1)
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .ok_or_else(|| SparkError::internal("expected binary list"))?;
+            if use_large_var_types {
+                let values = text
+                    .values()
+                    .as_any()
+                    .downcast_ref::<LargeStringArray>()
+                    .ok_or_else(|| SparkError::internal("expected large string values"))?;
+                let raw = bytes
+                    .values()
+                    .as_any()
+                    .downcast_ref::<LargeBinaryArray>()
+                    .ok_or_else(|| SparkError::internal("expected large binary values"))?;
+                assert_eq!(values.value(0), "alpha");
+                assert_eq!(raw.value(0), b"one");
+            } else {
+                let values = text
+                    .values()
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .ok_or_else(|| SparkError::internal("expected string values"))?;
+                let raw = bytes
+                    .values()
+                    .as_any()
+                    .downcast_ref::<BinaryArray>()
+                    .ok_or_else(|| SparkError::internal("expected binary values"))?;
+                assert_eq!(values.value(0), "alpha");
+                assert_eq!(raw.value(0), b"one");
+            }
+            assert!(text.is_null(1));
+            assert!(bytes.is_null(1));
+        }
+        Ok(())
+    }
 }

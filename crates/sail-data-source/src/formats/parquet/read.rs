@@ -86,25 +86,22 @@ impl ReadFormat for ParquetReadFormat {
         // Ensure deterministic ordering for stable schema inference.
         schemas.sort_unstable_by(|(location1, _), (location2, _)| location1.cmp(location2));
 
-        let schemas = schemas.into_iter().map(|(_, schema)| schema);
+        let schemas = schemas.into_iter().map(|(_, schema)| {
+            let schema = if options.global.skip_metadata {
+                clear_metadata(schema)
+            } else {
+                schema
+            };
+            normalize_parquet_file_schema(
+                schema,
+                options.global.binary_as_string,
+                options.global.schema_force_view_types,
+            )
+        });
 
-        let merged = if options.global.skip_metadata {
-            Schema::try_merge(schemas.map(clear_metadata))
-        } else {
-            Schema::try_merge(schemas)
-        }?;
-
-        let merged = if options.global.binary_as_string {
-            datafusion::datasource::file_format::parquet::transform_binary_to_string(&merged)
-        } else {
-            merged
-        };
-
-        let merged = if options.global.schema_force_view_types {
-            datafusion::datasource::file_format::parquet::transform_schema_to_view(&merged)
-        } else {
-            merged
-        };
+        // Embedded Arrow metadata can preserve view arrays. Canonicalize each file before
+        // merging so files written with view and offset encodings remain one Spark schema.
+        let merged = Schema::try_merge(schemas)?;
 
         Ok(Arc::new(merged))
     }
@@ -327,6 +324,23 @@ fn clear_metadata(schema: Schema) -> Schema {
     Schema::new(fields)
 }
 
+fn normalize_parquet_file_schema(
+    schema: Schema,
+    binary_as_string: bool,
+    force_view_types: bool,
+) -> Schema {
+    let schema = if binary_as_string {
+        datafusion::datasource::file_format::parquet::transform_binary_to_string(&schema)
+    } else {
+        schema
+    };
+    if force_view_types {
+        datafusion::datasource::file_format::parquet::transform_schema_to_view(&schema)
+    } else {
+        schema
+    }
+}
+
 /// Parses `coerce_int96` setting into an Arrow [`TimeUnit`].
 ///
 /// This is adapted from DataFusion's Parquet data source implementation.
@@ -339,5 +353,66 @@ fn parse_coerce_int96_string(setting: &str) -> Result<TimeUnit> {
         _ => Err(DataFusionError::Configuration(format!(
             "Unknown or unsupported parquet `coerce_int96` setting: {setting}. Valid values are: ns, us, ms, and s."
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parquet_view_types_are_limited_to_top_level_columns() {
+        let nested = DataType::Struct(
+            vec![
+                Field::new("text", DataType::Utf8, true),
+                Field::new("bytes", DataType::Binary, true),
+                Field::new(
+                    "items",
+                    DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
+                    true,
+                ),
+            ]
+            .into(),
+        );
+        let schema = Schema::new(vec![
+            Field::new("text", DataType::Utf8, true),
+            Field::new("bytes", DataType::LargeBinary, true),
+            Field::new("nested", nested.clone(), true),
+        ]);
+
+        let transformed = normalize_parquet_file_schema(schema, false, true);
+
+        assert_eq!(transformed.field(0).data_type(), &DataType::Utf8View);
+        assert_eq!(transformed.field(1).data_type(), &DataType::BinaryView);
+        assert_eq!(transformed.field(2).data_type(), &nested);
+    }
+
+    #[test]
+    fn parquet_view_and_offset_file_schemas_merge_after_normalization() -> Result<()> {
+        let offset = Schema::new(vec![
+            Field::new("text", DataType::Utf8, true),
+            Field::new("bytes", DataType::Binary, true),
+        ]);
+        let views = Schema::new(vec![
+            Field::new("text", DataType::Utf8View, true),
+            Field::new("bytes", DataType::BinaryView, true),
+        ]);
+
+        let schemas = [offset, views]
+            .into_iter()
+            .map(|schema| normalize_parquet_file_schema(schema, false, true));
+        let merged = Schema::try_merge(schemas)?;
+
+        assert_eq!(merged.field(0).data_type(), &DataType::Utf8View);
+        assert_eq!(merged.field(1).data_type(), &DataType::BinaryView);
+        Ok(())
+    }
+
+    #[test]
+    fn parquet_binary_as_string_precedes_view_canonicalization() {
+        let schema = Schema::new(vec![Field::new("value", DataType::BinaryView, true)]);
+        let normalized = normalize_parquet_file_schema(schema, true, true);
+
+        assert_eq!(normalized.field(0).data_type(), &DataType::Utf8View);
     }
 }

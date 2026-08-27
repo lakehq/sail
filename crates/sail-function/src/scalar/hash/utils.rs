@@ -320,11 +320,17 @@ macro_rules! create_hashes_internal {
                 DataType::LargeUtf8 => {
                     hash_array!(LargeStringArray, col, $hashes_buffer, $hash_method);
                 }
+                DataType::Utf8View => {
+                    hash_array!(StringViewArray, col, $hashes_buffer, $hash_method);
+                }
                 DataType::Binary => {
                     hash_array!(BinaryArray, col, $hashes_buffer, $hash_method);
                 }
                 DataType::LargeBinary => {
                     hash_array!(LargeBinaryArray, col, $hashes_buffer, $hash_method);
+                }
+                DataType::BinaryView => {
+                    hash_array!(BinaryViewArray, col, $hashes_buffer, $hash_method);
                 }
                 DataType::FixedSizeBinary(_) => {
                     hash_array!(FixedSizeBinaryArray, col, $hashes_buffer, $hash_method);
@@ -427,7 +433,8 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::arrow::array::{
-        Array, ArrayRef, Float32Array, Float64Array, Int8Array, Int32Array, Int64Array, StringArray,
+        Array, ArrayRef, BinaryArray, BinaryViewArray, Float32Array, Float64Array, Int8Array,
+        Int32Array, Int64Array, StringArray, StringViewArray,
     };
 
     use super::create_murmur3_hashes;
@@ -549,5 +556,36 @@ mod tests {
         ];
 
         test_murmur3_hash::<String, StringArray>(input, expected);
+    }
+
+    #[test]
+    fn view_hashes_match_offset_array_hashes() -> datafusion::error::Result<()> {
+        let strings = vec![Some("alpha"), None, Some("beta")];
+        let binaries = vec![Some(b"alpha".as_slice()), None, Some(b"beta".as_slice())];
+
+        let mut string_hashes = vec![42; strings.len()];
+        create_murmur3_hashes(
+            &[Arc::new(StringArray::from(strings.clone()))],
+            &mut string_hashes,
+        )?;
+        let mut string_view_hashes = vec![42; strings.len()];
+        create_murmur3_hashes(
+            &[Arc::new(StringViewArray::from(strings))],
+            &mut string_view_hashes,
+        )?;
+        assert_eq!(string_view_hashes, string_hashes);
+
+        let mut binary_hashes = vec![42; binaries.len()];
+        create_murmur3_hashes(
+            &[Arc::new(BinaryArray::from(binaries.clone()))],
+            &mut binary_hashes,
+        )?;
+        let mut binary_view_hashes = vec![42; binaries.len()];
+        create_murmur3_hashes(
+            &[Arc::new(BinaryViewArray::from(binaries))],
+            &mut binary_view_hashes,
+        )?;
+        assert_eq!(binary_view_hashes, binary_hashes);
+        Ok(())
     }
 }

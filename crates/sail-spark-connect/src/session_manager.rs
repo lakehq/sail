@@ -27,7 +27,7 @@ pub struct SparkSessionMutator {
 impl ServerSessionMutator for SparkSessionMutator {
     fn mutate_config(
         &self,
-        config: SessionConfig,
+        mut config: SessionConfig,
         info: &ServerSessionInfo,
     ) -> Result<SessionConfig> {
         let plan_service = PlanService::new(
@@ -41,9 +41,13 @@ impl ServerSessionMutator for SparkSessionMutator {
                 execution_heartbeat_interval: Duration::from_secs(
                     self.config.spark.execution_heartbeat_interval_secs,
                 ),
+                expand_views_at_output: self.config.optimizer.expand_views_at_output,
             },
         )
         .map_err(|e| internal_datafusion_err!("{e}"))?;
+        // Spark Connect materializes view arrays in its physical output adapter. Keeping this
+        // disabled during analysis prevents the output cast from changing partition planning.
+        config.options_mut().optimizer.expand_views_at_output = false;
         Ok(config
             .with_extension(Arc::new(plan_service))
             .with_extension(Arc::new(spark)))

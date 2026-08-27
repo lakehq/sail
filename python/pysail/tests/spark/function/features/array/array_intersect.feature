@@ -194,7 +194,6 @@ Feature: array_intersect() returns common array elements without duplicates
          |    |-- element: long (containsNull = false)
         """
 
-    @sail-bug
     Scenario: a nullable array column stays nullable
       When query
         """

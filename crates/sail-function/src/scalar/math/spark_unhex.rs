@@ -326,10 +326,37 @@ pub fn spark_unhex(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionEr
     };
 
     match val_to_unhex.data_type() {
-        DataType::Utf8 | DataType::Utf8View => {
-            spark_unhex_inner::<i32>(val_to_unhex, fail_on_error)
+        DataType::Utf8 => spark_unhex_inner::<i32>(val_to_unhex, fail_on_error),
+        DataType::Utf8View => {
+            let value = val_to_unhex.cast_to(&DataType::Utf8, None)?;
+            spark_unhex_inner::<i32>(&value, fail_on_error)
         }
         DataType::LargeUtf8 => spark_unhex_inner::<i64>(val_to_unhex, fail_on_error),
         other => exec_err!("The first argument must be a Utf8, Utf8View, or LargeUtf8: {other:?}"),
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::expect_used)]
+mod tests {
+    use datafusion::arrow::array::{Array, BinaryArray, StringViewArray};
+
+    use super::*;
+
+    #[test]
+    fn view_input_is_cast_at_the_function_boundary() -> Result<()> {
+        let input = Arc::new(StringViewArray::from(vec![Some("10"), None, Some("11")])) as _;
+        let output = spark_unhex(&[ColumnarValue::Array(input)])?;
+        let ColumnarValue::Array(output) = output else {
+            return exec_err!("expected array output");
+        };
+        let output = output
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .expect("binary output");
+        assert_eq!(output.value(0), &[0x10]);
+        assert!(output.is_null(1));
+        assert_eq!(output.value(2), &[0x11]);
+        Ok(())
     }
 }
