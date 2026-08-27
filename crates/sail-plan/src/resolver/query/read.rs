@@ -27,6 +27,28 @@ use crate::resolver::PlanResolver;
 use crate::resolver::function::PythonUdtf;
 use crate::resolver::state::PlanResolverState;
 
+fn split_iceberg_metadata_table_reference(
+    name: &spec::ObjectName,
+) -> Option<(spec::ObjectName, String)> {
+    let (metadata, table) = name.parts().split_last()?;
+    if table.len() < 3 {
+        return None;
+    }
+    let metadata = metadata.as_ref().to_ascii_lowercase();
+    if !matches!(metadata.as_str(), "snapshots" | "history") {
+        return None;
+    }
+    Some((
+        spec::ObjectName::from(
+            table
+                .iter()
+                .map(|part| part.as_ref().to_string())
+                .collect::<Vec<_>>(),
+        ),
+        metadata,
+    ))
+}
+
 impl PlanResolver<'_> {
     /// Resolves a named table or view reference into a logical plan node.
     /// Looks up the name in the catalog and produces the appropriate plan
@@ -68,7 +90,18 @@ impl PlanResolver<'_> {
             }
         }
 
-        let table_reference = self.resolve_table_reference(&name)?;
+        // Iceberg catalogs interpret a recognized final component after
+        // `<catalog>.<namespace>.<table>` as a metadata-table reference. Preserve
+        // every namespace component while leaving shorter and unknown multipart
+        // identifiers unchanged.
+        let (resolved_name, metadata_table) =
+            if let Some((table, metadata)) = split_iceberg_metadata_table_reference(&name) {
+                (table, Some(metadata))
+            } else {
+                (name.clone(), None)
+            };
+
+        let table_reference = self.resolve_table_reference(&resolved_name)?;
         if let Some(cte) = state.get_cte(&table_reference) {
             if temporal.is_some() {
                 return Err(PlanError::unsupported(
@@ -83,7 +116,7 @@ impl PlanResolver<'_> {
             };
         }
 
-        let reference: Vec<String> = name.clone().into();
+        let reference: Vec<String> = resolved_name.into();
         let status = self
             .ctx
             .extension::<CatalogManager>()?
@@ -102,6 +135,19 @@ impl PlanResolver<'_> {
                 properties,
                 is_external: _,
             } => {
+                if let Some(metadata_table) = metadata_table.as_deref() {
+                    if !format.eq_ignore_ascii_case("iceberg") {
+                        return Err(PlanError::unsupported(format!(
+                            "Iceberg metadata table '{metadata_table}' cannot be read from non-Iceberg table: {}",
+                            reference.join(".")
+                        )));
+                    }
+                    if metadata_table != "snapshots" {
+                        return Err(PlanError::unsupported(format!(
+                            "unsupported Iceberg metadata table: {metadata_table}"
+                        )));
+                    }
+                }
                 let schema = Schema::new(columns.iter().map(|x| x.field()).collect::<Vec<_>>());
                 let constraints = self.resolve_catalog_table_constraints(constraints, &schema)?;
                 let temporal_options = self
@@ -134,10 +180,14 @@ impl PlanResolver<'_> {
                     read_case_sensitive: self.config.case_sensitive,
                 };
                 let registry = self.ctx.extension::<DataSourceRegistry>()?;
-                let table_source = registry
-                    .get_data_source(&format)?
-                    .create_source(&self.ctx.state(), info)
-                    .await?;
+                let data_source = registry.get_data_source(&format)?;
+                let table_source = if let Some(metadata_table) = metadata_table.as_deref() {
+                    data_source
+                        .create_metadata_source(&self.ctx.state(), info, metadata_table)
+                        .await?
+                } else {
+                    data_source.create_source(&self.ctx.state(), info).await?
+                };
                 self.resolve_table_source_with_rename(
                     table_source,
                     table_reference,
@@ -153,6 +203,12 @@ impl PlanResolver<'_> {
                 comment: _,
                 properties: _,
             } => {
+                if let Some(metadata_table) = metadata_table.as_deref() {
+                    return Err(PlanError::unsupported(format!(
+                        "Iceberg metadata table '{metadata_table}' cannot be read from non-Iceberg view: {}",
+                        reference.join(".")
+                    )));
+                }
                 if temporal.is_some() {
                     return Err(PlanError::unsupported(
                         "SQL time travel is not supported for views",
@@ -162,6 +218,12 @@ impl PlanResolver<'_> {
                     .await?
             }
             TableKind::TemporaryView { plan, .. } | TableKind::GlobalTemporaryView { plan, .. } => {
+                if let Some(metadata_table) = metadata_table.as_deref() {
+                    return Err(PlanError::unsupported(format!(
+                        "Iceberg metadata table '{metadata_table}' cannot be read from non-Iceberg view: {}",
+                        reference.join(".")
+                    )));
+                }
                 if temporal.is_some() {
                     return Err(PlanError::unsupported(
                         "SQL time travel is not supported for temporary views",
@@ -560,5 +622,79 @@ impl PlanResolver<'_> {
         } else {
             Ok(table_scan)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sail_common::spec;
+
+    use super::split_iceberg_metadata_table_reference;
+
+    fn object_name(parts: &[&str]) -> spec::ObjectName {
+        spec::ObjectName::from(
+            parts
+                .iter()
+                .map(|part| (*part).to_string())
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    #[test]
+    fn splits_four_part_iceberg_metadata_table_references() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let (table, metadata) = split_iceberg_metadata_table_reference(&object_name(&[
+            "lake",
+            "sales",
+            "bronze_sales",
+            "SNAPSHOTS",
+        ]))
+        .ok_or("snapshots metadata table")?;
+        assert_eq!(
+            Vec::<String>::from(table),
+            ["lake", "sales", "bronze_sales"]
+        );
+        assert_eq!(metadata, "snapshots");
+        Ok(())
+    }
+
+    #[test]
+    fn splits_metadata_table_references_with_nested_namespaces()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (table, metadata) = split_iceberg_metadata_table_reference(&object_name(&[
+            "lake",
+            "region",
+            "sales",
+            "bronze_sales",
+            "snapshots",
+        ]))
+        .ok_or("nested snapshots metadata table")?;
+        assert_eq!(
+            Vec::<String>::from(table),
+            ["lake", "region", "sales", "bronze_sales"]
+        );
+        assert_eq!(metadata, "snapshots");
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_ordinary_and_unknown_table_references() {
+        assert!(
+            split_iceberg_metadata_table_reference(&object_name(&[
+                "lake",
+                "sales",
+                "bronze_sales",
+            ]))
+            .is_none()
+        );
+        assert!(
+            split_iceberg_metadata_table_reference(&object_name(&[
+                "lake",
+                "sales",
+                "bronze_sales",
+                "not_metadata",
+            ]))
+            .is_none()
+        );
     }
 }

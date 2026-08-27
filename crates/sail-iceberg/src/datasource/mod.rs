@@ -11,6 +11,7 @@
 // limitations under the License.
 
 pub mod expressions;
+pub(crate) mod metadata_table;
 pub mod provider;
 pub mod pruning;
 pub mod type_converter;

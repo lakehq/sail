@@ -19,6 +19,7 @@ use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{
     DataFusionError, Result, TableReference, ToDFSchema, not_impl_err, plan_err,
 };
+use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::{LogicalPlan, TableScanBuilder, TableSource};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_expr::expr::Sort;
@@ -45,6 +46,7 @@ use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
 use sail_data_source::options::ResolveOptions;
 use url::Url;
 
+use crate::datasource::metadata_table::snapshots_table;
 use crate::datasource::provider::IcebergTableProvider;
 use crate::datasource::type_converter::{ICEBERG_ARROW_FIELD_DOC_KEY, arrow_schema_to_iceberg};
 use crate::io::StoreContext;
@@ -94,6 +96,16 @@ impl DataSource for IcebergLakeSource {
     ) -> Result<Arc<dyn TableSource>> {
         let provider = build_iceberg_provider(ctx, info).await?;
         Ok(Arc::new(IcebergTableSource::new(provider)))
+    }
+
+    async fn create_metadata_source(
+        &self,
+        ctx: &dyn Session,
+        info: SourceInfo,
+        metadata_table: &str,
+    ) -> Result<Arc<dyn TableSource>> {
+        let provider = build_iceberg_metadata_table_provider(ctx, info, metadata_table).await?;
+        Ok(provider_as_source(provider))
     }
 
     async fn infer_schema(
@@ -795,6 +807,36 @@ async fn build_iceberg_provider(
         catalog_managed_table,
     )
     .await
+}
+
+async fn build_iceberg_metadata_table_provider(
+    ctx: &dyn Session,
+    info: SourceInfo,
+    metadata_table: &str,
+) -> Result<Arc<dyn TableProvider>> {
+    let SourceInfo {
+        paths,
+        lakehouse_table,
+        schema: _,
+        constraints: _,
+        partition_by: _,
+        bucket_by: _,
+        sort_order: _,
+        options,
+        read_case_sensitive: _,
+    } = info;
+
+    validate_iceberg_read_lakehouse_context(lakehouse_table.as_ref())?;
+    let table_url = IcebergLakeSource::parse_table_url(paths).await?;
+    let metadata_location = metadata_location_from_options(&options);
+    let catalog_managed_table = catalog_managed_iceberg_from_options(&options);
+    let metadata_location = catalog_managed_table.then_some(metadata_location).flatten();
+    let table = Table::load_with_metadata_location(ctx, table_url, metadata_location).await?;
+
+    match metadata_table {
+        "snapshots" => snapshots_table(table.metadata()),
+        name => not_impl_err!("unsupported Iceberg metadata table: {name}"),
+    }
 }
 
 fn validate_iceberg_read_lakehouse_context(

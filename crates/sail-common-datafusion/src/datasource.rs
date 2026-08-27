@@ -11,7 +11,7 @@ use datafusion::physical_expr::{
     LexOrdering, LexRequirement, PhysicalSortRequirement, create_physical_sort_exprs,
 };
 use datafusion_common::{
-    Constraints, DFSchema, DFSchemaRef, Result, not_impl_datafusion_err, plan_err,
+    Constraints, DFSchema, DFSchemaRef, Result, not_impl_datafusion_err, not_impl_err, plan_err,
 };
 use datafusion_expr::expr::Sort;
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
@@ -442,6 +442,23 @@ pub trait DataSource: Send + Sync {
         ctx: &dyn Session,
         info: SourceInfo,
     ) -> Result<Arc<dyn TableSource>>;
+
+    /// Creates a format-owned metadata table source.
+    ///
+    /// The default is fail-closed so metadata-table semantics cannot leak into
+    /// ordinary data sources.
+    async fn create_metadata_source(
+        &self,
+        ctx: &dyn Session,
+        info: SourceInfo,
+        metadata_table: &str,
+    ) -> Result<Arc<dyn TableSource>> {
+        let _ = (ctx, info);
+        not_impl_err!(
+            "metadata table '{metadata_table}' for data source '{}'",
+            self.name()
+        )
+    }
 
     /// Infers the logical schema for planning without requiring callers to construct a read source.
     async fn infer_schema(&self, ctx: &dyn Session, info: SourceInfo) -> Result<SchemaRef> {
