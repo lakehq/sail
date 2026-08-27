@@ -4,7 +4,6 @@ use std::sync::Arc;
 use datafusion::catalog::Session;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{DataFusionError, Result, internal_err, not_impl_err};
-use datafusion::execution::SessionState;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::PhysicalPlanner;
 use sail_common_datafusion::datasource::{MergeStrategy, RowLevelCommand};

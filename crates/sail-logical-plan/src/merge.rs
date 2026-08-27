@@ -1712,10 +1712,8 @@ fn build_merge_projection(
     // each writer's local plan shape.
     let insert_op = lit(RowLevelOperationType::Insert.as_i32());
     let copy_op = lit(RowLevelOperationType::Copy.as_i32());
-    let mut operation_branches = vec![(
-        Box::new(col(TARGET_PRESENT_COLUMN).is_null()),
-        Box::new(insert_op),
-    )];
+    let noop_op = lit(RowLevelOperationType::Noop.as_i32());
+    let mut operation_branches = Vec::new();
     operation_branches.extend(
         options
             .matched_clauses
@@ -1754,6 +1752,16 @@ fn build_merge_projection(
                 )
             }),
     );
+    operation_branches.extend(
+        not_matched_by_target_clause_predicates
+            .iter()
+            .map(|predicate| (Box::new(predicate.clone()), Box::new(insert_op.clone()))),
+    );
+    // Source rows that do not select an insert clause carry no write intent.
+    operation_branches.push((
+        Box::new(col(TARGET_PRESENT_COLUMN).is_null()),
+        Box::new(noop_op),
+    ));
     let op_expr = Expr::Case(Case {
         expr: None,
         when_then_expr: operation_branches,

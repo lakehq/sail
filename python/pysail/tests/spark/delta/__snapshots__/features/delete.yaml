@@ -19,7 +19,7 @@ data:
             Projection: delta_delete_explain_codegen.#0 AS id, delta_delete_explain_codegen.#1 AS name, delta_delete_explain_codegen.#2 AS age, delta_delete_explain_codegen.#3 AS department, delta_delete_explain_codegen.#4 AS salary, delta_delete_explain_codegen.#5 AS active, __sail_file_path AS __sail_file_path
               Projection: delta_delete_explain_codegen.id AS #0, delta_delete_explain_codegen.name AS #1, delta_delete_explain_codegen.age AS #2, delta_delete_explain_codegen.department AS #3, delta_delete_explain_codegen.salary AS #4, delta_delete_explain_codegen.active AS #5, delta_delete_explain_codegen.__sail_file_path AS __sail_file_path
                 TableScan: delta_delete_explain_codegen projection=[id, name, age, department, salary, active, __sail_file_path]
-  
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -101,105 +101,19 @@ data:
             Projection: delta_delete_explain_codegen.id AS #0, delta_delete_explain_codegen.name AS #1, delta_delete_explain_codegen.age AS #2, delta_delete_explain_codegen.department AS #3, delta_delete_explain_codegen.salary AS #4, delta_delete_explain_codegen.active AS #5, delta_delete_explain_codegen.__sail_file_path AS __sail_file_path
               Filter: delta_delete_explain_codegen.salary + Int32(1) > Int32(70000) AND (delta_delete_explain_codegen.department = Utf8("Engineering") OR delta_delete_explain_codegen.department = Utf8("Marketing")) AND delta_delete_explain_codegen.active IS NOT NULL
                 TableScan: delta_delete_explain_codegen projection=[id, name, age, department, salary, active, __sail_file_path], partial_filters=[delta_delete_explain_codegen.salary + Int32(1) > Int32(70000), delta_delete_explain_codegen.department = Utf8("Engineering") OR delta_delete_explain_codegen.department = Utf8("Marketing"), delta_delete_explain_codegen.active IS NOT NULL]
-  
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after eliminate_group_by_constant:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after common_sub_expression_eliminate:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after extract_leaf_expressions:
     SAME TEXT AS ABOVE
-  
-    logical_plan after optimize_projections:
-    RowLevelWrite: command=Delete, target=delta_delete_explain_codegen, format=delta, condition=salary + 1 > 70000 AND ( department = 'Engineering' OR department = 'Marketing' ) AND active IS NOT NULL
-      Projection: delta_delete_explain_codegen.#0 AS id, delta_delete_explain_codegen.#1 AS name, delta_delete_explain_codegen.#2 AS age, delta_delete_explain_codegen.#3 AS department, delta_delete_explain_codegen.#4 AS salary, delta_delete_explain_codegen.#5 AS active, __sail_file_path, CASE WHEN delta_delete_explain_codegen.#4 + Int32(1) > Int32(70000) AND (delta_delete_explain_codegen.#3 = Utf8("Engineering") OR delta_delete_explain_codegen.#3 = Utf8("Marketing")) AND delta_delete_explain_codegen.#5 IS NOT NULL THEN Int32(1) ELSE Int32(0) END AS __sail_operation_type
-        Projection: delta_delete_explain_codegen.id AS #0, delta_delete_explain_codegen.name AS #1, delta_delete_explain_codegen.age AS #2, delta_delete_explain_codegen.department AS #3, delta_delete_explain_codegen.salary AS #4, delta_delete_explain_codegen.active AS #5, delta_delete_explain_codegen.__sail_file_path AS __sail_file_path
-          TableScan: delta_delete_explain_codegen projection=[id, name, age, department, salary, active, __sail_file_path]
-      Projection: __sail_file_path AS __sail_file_path
-        Aggregate: groupBy=[[__sail_file_path]], aggr=[[]]
-          Projection: delta_delete_explain_codegen.__sail_file_path AS __sail_file_path
-            Filter: delta_delete_explain_codegen.salary + Int32(1) > Int32(70000) AND (delta_delete_explain_codegen.department = Utf8("Engineering") OR delta_delete_explain_codegen.department = Utf8("Marketing")) AND delta_delete_explain_codegen.active IS NOT NULL
-              TableScan: delta_delete_explain_codegen projection=[department, salary, active, __sail_file_path], partial_filters=[delta_delete_explain_codegen.salary + Int32(1) > Int32(70000), delta_delete_explain_codegen.department = Utf8("Engineering") OR delta_delete_explain_codegen.department = Utf8("Marketing"), delta_delete_explain_codegen.active IS NOT NULL]
-  
-    logical_plan after resolve_lambda_variables:
-    SAME TEXT AS ABOVE
-  
-    logical_plan after decorrelate_lateral_projection:
-    SAME TEXT AS ABOVE
-  
-    logical_plan after rewrite_set_comparison:
-    SAME TEXT AS ABOVE
-  
-    logical_plan after optimize_unions:
-    SAME TEXT AS ABOVE
-  
-    logical_plan after unions_to_filter:
-    SAME TEXT AS ABOVE
-  
-    logical_plan after simplify_expressions:
-    SAME TEXT AS ABOVE
-  
-    logical_plan after replace_distinct_aggregate:
-    SAME TEXT AS ABOVE
-  
-    logical_plan after eliminate_join:
-    SAME TEXT AS ABOVE
-  
-    logical_plan after decorrelate_predicate_subquery:
-    SAME TEXT AS ABOVE
-  
-    logical_plan after scalar_subquery_to_join:
-    SAME TEXT AS ABOVE
-  
-    logical_plan after decorrelate_lateral_join:
-    SAME TEXT AS ABOVE
-  
-    logical_plan after extract_equijoin_predicate:
-    SAME TEXT AS ABOVE
-  
-    logical_plan after eliminate_duplicated_expr:
-    SAME TEXT AS ABOVE
-  
-    logical_plan after eliminate_filter:
-    SAME TEXT AS ABOVE
-  
-    logical_plan after eliminate_cross_join:
-    SAME TEXT AS ABOVE
-  
-    logical_plan after eliminate_limit:
-    SAME TEXT AS ABOVE
-  
-    logical_plan after propagate_empty_relation:
-    SAME TEXT AS ABOVE
-  
-    logical_plan after filter_null_join_keys:
-    SAME TEXT AS ABOVE
-  
-    logical_plan after eliminate_outer_join:
-    SAME TEXT AS ABOVE
-  
-    logical_plan after push_down_limit:
-    SAME TEXT AS ABOVE
-  
-    logical_plan after push_down_filter:
-    SAME TEXT AS ABOVE
-  
-    logical_plan after single_distinct_aggregation_to_group_by:
-    SAME TEXT AS ABOVE
-  
-    logical_plan after eliminate_group_by_constant:
-    SAME TEXT AS ABOVE
-  
-    logical_plan after common_sub_expression_eliminate:
-    SAME TEXT AS ABOVE
-  
-    logical_plan after extract_leaf_expressions:
-    SAME TEXT AS ABOVE
-  
+
     logical_plan after optimize_projections:
     RowLevelWrite: command=Delete, target=delta_delete_explain_codegen, format=delta, condition=salary + 1 > 70000 AND ( department = 'Engineering' OR department = 'Marketing' ) AND active IS NOT NULL
       Projection: delta_delete_explain_codegen.id AS id, delta_delete_explain_codegen.name AS name, delta_delete_explain_codegen.age AS age, delta_delete_explain_codegen.department AS department, delta_delete_explain_codegen.salary AS salary, delta_delete_explain_codegen.active AS active, delta_delete_explain_codegen.__sail_file_path AS __sail_file_path, CASE WHEN delta_delete_explain_codegen.salary + Int32(1) > Int32(70000) AND (delta_delete_explain_codegen.department = Utf8("Engineering") OR delta_delete_explain_codegen.department = Utf8("Marketing")) AND delta_delete_explain_codegen.active IS NOT NULL THEN Int32(1) ELSE Int32(0) END AS __sail_operation_type
@@ -209,67 +123,67 @@ data:
           Projection: delta_delete_explain_codegen.__sail_file_path AS __sail_file_path
             Filter: delta_delete_explain_codegen.salary + Int32(1) > Int32(70000) AND (delta_delete_explain_codegen.department = Utf8("Engineering") OR delta_delete_explain_codegen.department = Utf8("Marketing")) AND delta_delete_explain_codegen.active IS NOT NULL
               TableScan: delta_delete_explain_codegen projection=[department, salary, active, __sail_file_path], partial_filters=[delta_delete_explain_codegen.salary + Int32(1) > Int32(70000), delta_delete_explain_codegen.department = Utf8("Engineering") OR delta_delete_explain_codegen.department = Utf8("Marketing"), delta_delete_explain_codegen.active IS NOT NULL]
-  
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after optimize_unions:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after unions_to_filter:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after simplify_expressions:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after replace_distinct_aggregate:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after eliminate_join:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after scalar_subquery_to_join:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after decorrelate_lateral_join:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after extract_equijoin_predicate:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after eliminate_duplicated_expr:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after eliminate_filter:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after eliminate_cross_join:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after eliminate_limit:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after propagate_empty_relation:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after filter_null_join_keys:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after push_down_limit:
     SAME TEXT AS ABOVE
-  
+
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
@@ -300,7 +214,7 @@ data:
           Projection: delta_delete_explain_codegen.__sail_file_path AS __sail_file_path
             Filter: delta_delete_explain_codegen.salary + Int32(1) > Int32(70000) AND (delta_delete_explain_codegen.department = Utf8("Engineering") OR delta_delete_explain_codegen.department = Utf8("Marketing")) AND delta_delete_explain_codegen.active IS NOT NULL
               TableScan: delta_delete_explain_codegen projection=[department, salary, active, __sail_file_path], partial_filters=[delta_delete_explain_codegen.salary + Int32(1) > Int32(70000), delta_delete_explain_codegen.department = Utf8("Engineering") OR delta_delete_explain_codegen.department = Utf8("Marketing"), delta_delete_explain_codegen.active IS NOT NULL]
-  
+
     initial_physical_plan:
     DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
       CoalescePartitionsExec
