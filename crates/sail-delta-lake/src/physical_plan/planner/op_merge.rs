@@ -40,7 +40,10 @@ use super::commit::{
 use super::context::PlannerContext;
 use super::utils::LogReplayOptions;
 use crate::datasource::PATH_COLUMN;
-use crate::physical_plan::{DeltaCommitExec, DeltaWriterExec, prepare_delta_write_context};
+use crate::physical_plan::{
+    DeletionVectorRowOperationMode, DeletionVectorRowsWriterConfig, DeltaCommitExec,
+    DeltaWriterExec, prepare_delta_write_context,
+};
 use crate::spec::DeltaOperation;
 
 /// Unified information for Delta row-level write operations (DELETE, UPDATE, MERGE).
@@ -56,6 +59,8 @@ pub struct RowLevelWriteInfo {
     pub touched_file_plan: Option<Arc<dyn ExecutionPlan>>,
     /// Physical plan that yields target file path and file-local row index rows to delete via DVs.
     pub deletion_vector_plan: Option<Arc<dyn ExecutionPlan>>,
+    /// How rows in `deletion_vector_plan` map to UPDATE and DELETE invalidations.
+    pub deletion_vector_operation_mode: Option<DeletionVectorRowOperationMode>,
     pub with_schema_evolution: bool,
     /// Commit operation metadata.
     pub operation: Option<DeltaOperation>,
@@ -225,6 +230,7 @@ pub(crate) async fn assemble_row_level_mor_plan(
 
     let operation = row_level_info.operation.clone();
     let deletion_vector_plan = row_level_info.deletion_vector_plan.clone();
+    let deletion_vector_operation_mode = row_level_info.deletion_vector_operation_mode;
     let touched_file_plan = row_level_info.touched_file_plan.clone();
     let writer_input = strip_internal_columns(writer_input)?;
     let writer_schema = writer_input.schema();
@@ -253,49 +259,58 @@ pub(crate) async fn assemble_row_level_mor_plan(
         ctx.lakehouse_table().cloned(),
     )?);
 
-    let commit_input: Arc<dyn ExecutionPlan> =
-        if let Some(deletion_vector_plan) = deletion_vector_plan {
-            let touched_file_plan = touched_file_plan.ok_or_else(|| {
-                DataFusionError::Plan(
-                    "pre-expanded row-level plan missing touched-file input for deletion vectors"
-                        .to_string(),
-                )
-            })?;
-            let touched_adds = build_adds_from_touched_files(
-                ctx,
-                &snapshot_state,
-                touched_file_plan,
-                ctx.table_url(),
-                version,
-                &partition_columns,
-                LogReplayOptions {
-                    include_extended_add_metadata: true,
-                    ..Default::default()
-                },
+    let commit_input: Arc<dyn ExecutionPlan> = if let Some(deletion_vector_plan) =
+        deletion_vector_plan
+    {
+        let deletion_vector_operation_mode = deletion_vector_operation_mode.ok_or_else(|| {
+            DataFusionError::Internal(
+                "row-level deletion-vector plan is missing its operation mode".to_string(),
             )
-            .await?;
-            let target_partitions = ctx.session().config().target_partitions().max(1);
-            let deletion_vector_plan =
-                hash_repartition_by_column(deletion_vector_plan, PATH_COLUMN, target_partitions)?;
-            let deletion_vector_plan =
-                sort_by_column_preserving_partitioning(deletion_vector_plan, PATH_COLUMN)?;
-            let touched_adds =
-                hash_repartition_by_column(touched_adds, PATH_COLUMN, target_partitions)?;
-            let dv_writer: Arc<dyn ExecutionPlan> =
-                Arc::new(crate::physical_plan::DeletionVectorRowsWriterExec::new(
-                    deletion_vector_plan,
-                    touched_adds,
-                    ctx.table_url().clone(),
+        })?;
+        let touched_file_plan = touched_file_plan.ok_or_else(|| {
+            DataFusionError::Plan(
+                "pre-expanded row-level plan missing touched-file input for deletion vectors"
+                    .to_string(),
+            )
+        })?;
+        let touched_adds = build_adds_from_touched_files(
+            ctx,
+            &snapshot_state,
+            touched_file_plan,
+            ctx.table_url(),
+            version,
+            &partition_columns,
+            LogReplayOptions {
+                include_extended_add_metadata: true,
+                ..Default::default()
+            },
+        )
+        .await?;
+        let target_partitions = ctx.session().config().target_partitions().max(1);
+        let deletion_vector_plan =
+            hash_repartition_by_column(deletion_vector_plan, PATH_COLUMN, target_partitions)?;
+        let deletion_vector_plan =
+            sort_by_column_preserving_partitioning(deletion_vector_plan, PATH_COLUMN)?;
+        let touched_adds =
+            hash_repartition_by_column(touched_adds, PATH_COLUMN, target_partitions)?;
+        let dv_writer: Arc<dyn ExecutionPlan> =
+            Arc::new(crate::physical_plan::DeletionVectorRowsWriterExec::new(
+                deletion_vector_plan,
+                touched_adds,
+                ctx.table_url().clone(),
+                DeletionVectorRowsWriterConfig::new(
                     PATH_COLUMN,
                     sail_common_datafusion::datasource::MERGE_ROW_INDEX_COLUMN,
+                    deletion_vector_operation_mode,
                     version,
                     Some(snapshot_state.physical_partition_columns()),
                     operation,
-                )?);
-            UnionExec::try_new(vec![writer, dv_writer])?
-        } else {
-            writer
-        };
+                ),
+            )?);
+        UnionExec::try_new(vec![writer, dv_writer])?
+    } else {
+        writer
+    };
 
     Ok(Arc::new(DeltaCommitExec::new(
         Arc::new(CoalescePartitionsExec::new(commit_input)),
@@ -529,33 +544,15 @@ fn strip_internal_columns(input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn Execu
 }
 
 pub(crate) fn merge_has_update_actions(info: &RowLevelWriteInfo) -> bool {
-    let Some(DeltaOperation::Merge {
-        matched_predicates,
-        not_matched_by_source_predicates,
-        ..
-    }) = info.operation.as_ref()
-    else {
-        return false;
-    };
-
-    matched_predicates
-        .iter()
-        .chain(not_matched_by_source_predicates)
-        .any(|p| p.action_type.eq_ignore_ascii_case("update"))
+    matches!(
+        info.deletion_vector_operation_mode,
+        Some(DeletionVectorRowOperationMode::Update | DeletionVectorRowOperationMode::Mixed)
+    )
 }
 
 fn merge_has_delete_actions(info: &RowLevelWriteInfo) -> bool {
-    let Some(DeltaOperation::Merge {
-        matched_predicates,
-        not_matched_by_source_predicates,
-        ..
-    }) = info.operation.as_ref()
-    else {
-        return false;
-    };
-
-    matched_predicates
-        .iter()
-        .chain(not_matched_by_source_predicates)
-        .any(|p| p.action_type.eq_ignore_ascii_case("delete"))
+    matches!(
+        info.deletion_vector_operation_mode,
+        Some(DeletionVectorRowOperationMode::Delete | DeletionVectorRowOperationMode::Mixed)
+    )
 }

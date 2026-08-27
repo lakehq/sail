@@ -1096,6 +1096,13 @@ message DeletionVectorWriterExecNode {
   optional string partition_value_columns_json = 7;
 }
 
+enum DeletionVectorRowOperationMode {
+  DELETION_VECTOR_ROW_OPERATION_MODE_UNSPECIFIED = 0;
+  DELETION_VECTOR_ROW_OPERATION_MODE_UPDATE = 1;
+  DELETION_VECTOR_ROW_OPERATION_MODE_DELETE = 2;
+  DELETION_VECTOR_ROW_OPERATION_MODE_MIXED = 3;
+}
+
 message DeletionVectorRowsWriterExecNode {
   bytes input = 1;
   string table_url = 2;
@@ -1105,6 +1112,7 @@ message DeletionVectorRowsWriterExecNode {
   optional string operation_json = 6;
   bytes adds_input = 7;
   optional string partition_value_columns_json = 8;
+  DeletionVectorRowOperationMode operation_mode = 9;
 }
 
 message PythonDataSourceInputPartition {

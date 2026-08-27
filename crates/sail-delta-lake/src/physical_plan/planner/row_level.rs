@@ -7,11 +7,13 @@ use datafusion::common::{DataFusionError, Result, internal_err};
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::{RowLevelCommand, RowLevelWriteMode};
 use sail_data_source::options::ResolveOptions;
+use sail_logical_plan::merge::{MergeMatchedAction, MergeNotMatchedBySourceAction};
 use sail_logical_plan::row_level::{RowLevelEffectPlans, RowLevelWriteNode};
 
 use crate::lake_source::{DeltaLakeSource, split_delta_write_options_and_table_properties};
 use crate::logical::table_source::DeltaTableSource;
 use crate::options::r#gen::DeltaWriteOptions;
+use crate::physical_plan::DeletionVectorRowOperationMode;
 use crate::physical_plan::planner::{
     DeltaPlannerConfig, PlannerContext, RowLevelWriteInfo, plan_delete, plan_delete_mor,
     plan_merge, plan_merge_mor, plan_update, plan_update_mor,
@@ -38,6 +40,7 @@ pub async fn create_row_level_write_physical_plan(
                 expanded_input: None,
                 touched_file_plan: None,
                 deletion_vector_plan: None,
+                deletion_vector_operation_mode: None,
                 with_schema_evolution: false,
                 operation: None,
             };
@@ -55,6 +58,7 @@ pub async fn create_row_level_write_physical_plan(
                 expanded_input: Some(expanded_input),
                 touched_file_plan: effects.touched_files,
                 deletion_vector_plan: effects.row_index_deletes,
+                deletion_vector_operation_mode: merge_deletion_vector_operation_mode(node),
                 with_schema_evolution: node.with_schema_evolution(),
                 operation: build_merge_operation(node),
             };
@@ -71,6 +75,7 @@ pub async fn create_row_level_write_physical_plan(
                 expanded_input: Some(expanded_input),
                 touched_file_plan: effects.touched_files,
                 deletion_vector_plan: effects.row_index_deletes,
+                deletion_vector_operation_mode: Some(DeletionVectorRowOperationMode::Update),
                 with_schema_evolution: false,
                 operation: Some(DeltaOperation::Update {
                     predicate: node
@@ -197,6 +202,36 @@ fn find_target_snapshot(plan: &datafusion_expr::LogicalPlan) -> Result<Arc<Delta
             "row-level target does not contain a Delta table snapshot".to_string(),
         )
     })
+}
+
+fn merge_deletion_vector_operation_mode(
+    node: &RowLevelWriteNode,
+) -> Option<DeletionVectorRowOperationMode> {
+    let options = node.merge_options()?;
+    let has_update = options.matched_clauses.iter().any(|clause| {
+        matches!(
+            clause.action,
+            MergeMatchedAction::UpdateAll | MergeMatchedAction::UpdateSet(_)
+        )
+    }) || options
+        .not_matched_by_source_clauses
+        .iter()
+        .any(|clause| matches!(clause.action, MergeNotMatchedBySourceAction::UpdateSet(_)));
+    let has_delete = options
+        .matched_clauses
+        .iter()
+        .any(|clause| matches!(clause.action, MergeMatchedAction::Delete))
+        || options
+            .not_matched_by_source_clauses
+            .iter()
+            .any(|clause| matches!(clause.action, MergeNotMatchedBySourceAction::Delete));
+
+    match (has_update, has_delete) {
+        (true, true) => Some(DeletionVectorRowOperationMode::Mixed),
+        (true, false) => Some(DeletionVectorRowOperationMode::Update),
+        (false, true) => Some(DeletionVectorRowOperationMode::Delete),
+        (false, false) => None,
+    }
 }
 
 fn build_merge_operation(node: &RowLevelWriteNode) -> Option<DeltaOperation> {

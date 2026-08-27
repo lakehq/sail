@@ -648,3 +648,147 @@ Feature: Delta Lake Update
         | id | value |
         | 1  | new   |
         | 2  | keep  |
+
+    Scenario: UPDATE merge-on-read with no matching rows is a no-op
+      Given variable location for temporary directory delta_update_dv_noop
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_update_dv_noop
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_update_dv_noop (id INT, value STRING)
+        USING DELTA LOCATION {{ location.sql }}
+        TBLPROPERTIES ('delta.enableDeletionVectors' = 'true')
+        """
+      Given statement
+        """
+        INSERT INTO delta_update_dv_noop VALUES (1, 'keep'), (2, 'stay')
+        """
+      Given statement
+        """
+        UPDATE delta_update_dv_noop SET value = 'never-written' WHERE id = 99
+        """
+      Then delta log latest commit info contains
+        | path      | value   |
+        | operation | "WRITE" |
+      Then data files in location count is 1
+      When query
+        """
+        SELECT id, value FROM delta_update_dv_noop ORDER BY id
+        """
+      Then query result ordered
+        | id | value |
+        | 1  | keep  |
+        | 2  | stay  |
+
+    Scenario: UPDATE merge-on-read writes a partition-column replacement into its new partition
+      Given variable location for temporary directory delta_update_dv_partition_move
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_update_dv_partition_move
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_update_dv_partition_move (
+          id INT,
+          value STRING,
+          bucket INT
+        )
+        USING DELTA
+        PARTITIONED BY (bucket)
+        LOCATION {{ location.sql }}
+        TBLPROPERTIES ('delta.enableDeletionVectors' = 'true')
+        """
+      Given statement
+        """
+        INSERT INTO delta_update_dv_partition_move VALUES
+          (1, 'old', 0),
+          (2, 'keep-zero', 0),
+          (3, 'keep-one', 1)
+        """
+      Given statement
+        """
+        UPDATE delta_update_dv_partition_move
+        SET value = 'moved', bucket = 2
+        WHERE id = 1
+        """
+      Then delta log latest commit info contains
+        | path                                       | value    |
+        | operation                                  | "UPDATE" |
+        | operationMetrics.numUpdatedRows            | 1        |
+        | operationMetrics.numCopiedRows             | 0        |
+        | operationMetrics.numDeletionVectorsAdded   | 1        |
+      Then data files in location count is 3
+      When query
+        """
+        SELECT id, value, bucket
+        FROM delta_update_dv_partition_move
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | value     | bucket |
+        | 1  | moved     | 2      |
+        | 2  | keep-zero | 0      |
+        | 3  | keep-one  | 1      |
+
+    Scenario: UPDATE merge-on-read applies defaults and generated columns while enforcing CHECK constraints
+      Given variable location for temporary directory delta_update_dv_invariants
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_update_dv_invariants
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_update_dv_invariants (
+          id INT,
+          event_time TIMESTAMP,
+          status STRING DEFAULT 'new',
+          event_date DATE GENERATED ALWAYS AS (CAST(event_time AS DATE))
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        TBLPROPERTIES (
+          'delta.enableDeletionVectors' = 'true',
+          'delta.constraints.positive_id' = 'id > 0'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO delta_update_dv_invariants (id, event_time, status)
+        VALUES (1, TIMESTAMP '2024-01-01 00:00:00', 'old')
+        """
+      Given statement
+        """
+        UPDATE delta_update_dv_invariants
+        SET event_time = TIMESTAMP '2024-09-01 00:00:00',
+            status = DEFAULT
+        WHERE id = 1
+        """
+      Then delta log latest commit info contains
+        | path                                       | value    |
+        | operation                                  | "UPDATE" |
+        | operationMetrics.numUpdatedRows            | 1        |
+        | operationMetrics.numDeletionVectorsAdded   | 1        |
+      When query
+        """
+        SELECT id, event_time, status, event_date
+        FROM delta_update_dv_invariants
+        """
+      Then query result
+        | id | event_time          | status | event_date |
+        | 1  | 2024-09-01 00:00:00 | new    | 2024-09-01 |
+      When query
+        """
+        INSERT INTO delta_update_dv_invariants (id, event_time)
+        VALUES (0, TIMESTAMP '2024-10-01 00:00:00')
+        """
+      Then query error DELTA_VIOLATE_CONSTRAINT_WITH_VALUES
+      Then data files in location count is 2
+      When query
+        """
+        SELECT id, event_time, status, event_date
+        FROM delta_update_dv_invariants
+        """
+      Then query result
+        | id | event_time          | status | event_date |
+        | 1  | 2024-09-01 00:00:00 | new    | 2024-09-01 |
