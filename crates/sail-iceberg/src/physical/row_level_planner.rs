@@ -10,18 +10,19 @@ use sail_common_datafusion::datasource::{PhysicalSinkMode, RowLevelCommand};
 use sail_data_source::options::ResolveOptions;
 use sail_logical_plan::merge::RowLevelWriteNode;
 
+use crate::lake_source::{
+    IcebergLakeSource, catalog_managed_iceberg_from_options, metadata_location_from_options,
+    split_iceberg_write_options_and_table_properties,
+};
 use crate::operations::SnapshotUpdateKind;
 use crate::options::r#gen::IcebergWriteOptions;
+use crate::physical_plan::equality_delete_writer_exec::validate_equality_delete_schema;
 use crate::physical_plan::merge_row_projection::IcebergMergeRowProjection;
 use crate::physical_plan::{
     IcebergCommitExec, IcebergEqualityDeleteWriterExec, IcebergWriterExec,
     IcebergWriterExecOptions, prepare_iceberg_write_context,
 };
 use crate::table::Table;
-use crate::table_format::{
-    IcebergTableFormat, catalog_managed_iceberg_from_options, metadata_location_from_options,
-    split_iceberg_write_options_and_table_properties,
-};
 
 pub(crate) async fn plan_iceberg_row_level_write(
     session_state: &SessionState,
@@ -48,7 +49,7 @@ async fn plan_iceberg_merge(
         return plan_err!("Iceberg MERGE missing touched-file plan input");
     }
     let table_url =
-        IcebergTableFormat::parse_table_url(vec![node.target_location().to_string()]).await?;
+        IcebergLakeSource::parse_table_url(vec![node.target_location().to_string()]).await?;
     let metadata_location = metadata_location_from_options(node.target_options());
     let catalog_managed_table = catalog_managed_iceberg_from_options(node.target_options());
     let metadata_location_for_load = catalog_managed_table
@@ -61,7 +62,7 @@ async fn plan_iceberg_merge(
     )
     .await?;
     ensure_current_row_level_mode(&table, RowLevelCommand::Merge)?;
-    let partition_columns = IcebergTableFormat::partition_columns_from_metadata(&table)?;
+    let partition_columns = IcebergLakeSource::partition_columns_from_metadata(&table)?;
     let writer_options = resolve_row_level_writer_options(session_state, node)?;
 
     let merge_projection = IcebergMergeRowProjection::try_new(write_plan.schema())?;
@@ -108,7 +109,7 @@ async fn plan_iceberg_delete(
     })?;
 
     let table_url =
-        IcebergTableFormat::parse_table_url(vec![node.target_location().to_string()]).await?;
+        IcebergLakeSource::parse_table_url(vec![node.target_location().to_string()]).await?;
     let metadata_location = metadata_location_from_options(node.target_options());
     let catalog_managed_table = catalog_managed_iceberg_from_options(node.target_options());
     let metadata_location_for_load = catalog_managed_table.then_some(metadata_location).flatten();
@@ -119,6 +120,10 @@ async fn plan_iceberg_delete(
     )
     .await?;
     ensure_current_row_level_mode(&table, RowLevelCommand::Delete)?;
+    let current_schema = table.metadata().current_schema().ok_or_else(|| {
+        DataFusionError::Plan("Iceberg table metadata is missing current schema".to_string())
+    })?;
+    validate_equality_delete_schema(current_schema)?;
 
     let delete_plan = LogicalPlanBuilder::from(node.raw_target().as_ref().clone())
         .filter(condition.expr.clone())?
@@ -128,10 +133,7 @@ async fn plan_iceberg_delete(
         .await?;
 
     let writer_options = resolve_row_level_writer_options(session_state, node)?;
-    let partition_columns = IcebergTableFormat::partition_columns_from_metadata(&table)?;
-    let current_schema = table.metadata().current_schema().ok_or_else(|| {
-        DataFusionError::Plan("Iceberg table metadata is missing current schema".to_string())
-    })?;
+    let partition_columns = IcebergLakeSource::partition_columns_from_metadata(&table)?;
     let current_arrow_schema =
         crate::datasource::type_converter::iceberg_schema_to_arrow(current_schema)?;
     let write_context = prepare_iceberg_write_context(

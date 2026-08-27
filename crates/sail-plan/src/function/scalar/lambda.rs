@@ -112,6 +112,14 @@ fn lambda_body_uses_param(body: &expr::Expr, param: &str) -> PlanResult<bool> {
     Ok(found)
 }
 
+pub(super) fn lambda_with_fresh_parameter(body: expr::Expr, base: &str) -> PlanResult<expr::Expr> {
+    let mut parameter = base.to_owned();
+    while lambda_body_uses_param(&body, &parameter)? {
+        parameter.push('_');
+    }
+    Ok(expr::Expr::Lambda(Lambda::new(vec![parameter], body)))
+}
+
 /// Builds a `(array, lambda)` higher-order function expression supporting Spark's
 /// optional 0-based index parameter `(x, i) -> ...`.
 ///

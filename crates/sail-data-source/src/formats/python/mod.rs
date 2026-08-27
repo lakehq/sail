@@ -21,6 +21,7 @@
 //! - `arrow_utils`: Arrow ↔ Python conversion utilities
 //! - `write_exec`: Distributed write execution plan for Python datasources
 //! - `commit_exec`: Single-partition commit/abort execution plan
+mod adapter;
 pub mod arrow_utils;
 mod commit_exec;
 mod datasource;
@@ -30,12 +31,12 @@ mod exec;
 mod executor;
 mod filter;
 mod stream;
-mod table_format;
 mod table_provider;
 mod write_exec;
 
 // Public exports - always available
 // Public exports - require python feature
+pub use adapter::{PythonDataSourceAdapter, PythonPhysicalPlanner};
 pub use commit_exec::PythonDataSourceWriteCommitExec;
 pub use datasource::PythonDataSource;
 pub use discovery::{
@@ -47,6 +48,5 @@ pub use exec::PythonDataSourceExec;
 pub use executor::{InProcessExecutor, InputPartition, PythonExecutor};
 pub use filter::{ColumnPath, FilterValue, PythonFilter, exprs_to_python_filters};
 pub use stream::{DEFAULT_BATCH_SIZE, PythonDataSourceStream, RowBatchCollector};
-pub use table_format::{PythonPhysicalPlanner, PythonTableFormat};
 pub use table_provider::PythonTableProvider;
 pub use write_exec::PythonDataSourceWriteExec;

@@ -518,22 +518,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "astral-tokio-tar"
-version = "0.5.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec179a06c1769b1e42e1e2cbe74c7dcdb3d6383c838454d063eaac5bbb7ebbe5"
-dependencies = [
- "filetime",
- "futures-core",
- "libc",
- "portable-atomic",
- "rustc-hash 2.1.3",
- "tokio",
- "tokio-stream",
- "xattr",
-]
-
-[[package]]
 name = "async-broadcast"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1239,83 +1223,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8894febbff9f758034a5b8e12d87918f56dfc64a8e1fe757d65e29041538d93"
 dependencies = [
  "generic-array",
-]
-
-[[package]]
-name = "bollard"
-version = "0.19.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "87a52479c9237eb04047ddb94788c41ca0d26eaff8b697ecfbb4c32f7fdc3b1b"
-dependencies = [
- "async-stream",
- "base64",
- "bitflags 2.13.1",
- "bollard-buildkit-proto",
- "bollard-stubs",
- "bytes",
- "chrono",
- "futures-core",
- "futures-util",
- "hex",
- "home",
- "http 1.5.0",
- "http-body-util",
- "hyper",
- "hyper-named-pipe",
- "hyper-rustls",
- "hyper-util",
- "hyperlocal",
- "log",
- "num",
- "pin-project-lite",
- "rand 0.9.5",
- "rustls",
- "rustls-native-certs",
- "rustls-pemfile",
- "rustls-pki-types",
- "serde",
- "serde_derive",
- "serde_json",
- "serde_repr",
- "serde_urlencoded",
- "thiserror 2.0.20",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "tonic",
- "tower-service",
- "url",
- "winapi",
-]
-
-[[package]]
-name = "bollard-buildkit-proto"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85a885520bf6249ab931a764ffdb87b0ceef48e6e7d807cfdb21b751e086e1ad"
-dependencies = [
- "prost",
- "prost-types",
- "tonic",
- "tonic-prost",
- "ureq",
-]
-
-[[package]]
-name = "bollard-stubs"
-version = "1.49.1-rc.28.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5731fe885755e92beff1950774068e0cae67ea6ec7587381536fca84f1779623"
-dependencies = [
- "base64",
- "bollard-buildkit-proto",
- "bytes",
- "chrono",
- "prost",
- "serde",
- "serde_json",
- "serde_repr",
- "serde_with",
 ]
 
 [[package]]
@@ -2945,17 +2852,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "docker_credential"
-version = "1.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29547a1dc60885a552306986316bc9701ba120c1a8db6769fa68691529ad373d"
-dependencies = [
- "base64",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "document-features"
 version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3087,16 +2983,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "etcetera"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de48cc4d1c1d97a20fd819def54b890cadde72ed3ad0c614822a0a433361be96"
-dependencies = [
- "cfg-if",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "event-listener"
 version = "5.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3196,17 +3082,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ferroid"
-version = "0.8.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb330bbd4cb7a5b9f559427f06f98a4f853a137c8298f3bd3f8ca57663e21986"
-dependencies = [
- "portable-atomic",
- "rand 0.9.5",
- "web-time",
-]
-
-[[package]]
 name = "figment"
 version = "0.10.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3218,16 +3093,6 @@ dependencies = [
  "toml 0.8.23",
  "uncased",
  "version_check",
-]
-
-[[package]]
-name = "filetime"
-version = "0.2.29"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c287a33c7f0a620c38e641e7f60827713987b3c0f26e8ddc9462cc69cf75759"
-dependencies = [
- "cfg-if",
- "libc",
 ]
 
 [[package]]
@@ -3869,20 +3734,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hyper-named-pipe"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fab3637d6b04a8037af8a266fdf6cf92ea957e8c53981a2bf6136572531025bf"
-dependencies = [
- "hex",
- "hyper",
- "hyper-util",
- "pin-project-lite",
- "tokio",
- "tower-service",
-]
-
-[[package]]
 name = "hyper-rustls"
 version = "0.27.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3936,21 +3787,6 @@ dependencies = [
  "tower-service",
  "tracing",
  "windows-registry",
-]
-
-[[package]]
-name = "hyperlocal"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "986c5ce3b994526b3cd75578e62554abd09f0899d6206de48b3e96ab34ccc8c7"
-dependencies = [
- "hex",
- "http-body-util",
- "hyper",
- "hyper-util",
- "pin-project-lite",
- "tokio",
- "tower-service",
 ]
 
 [[package]]
@@ -5878,31 +5714,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "parse-display"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "914a1c2265c98e2446911282c6ac86d8524f495792c38c5bd884f80499c7538a"
-dependencies = [
- "parse-display-derive",
- "regex",
- "regex-syntax 0.8.11",
-]
-
-[[package]]
-name = "parse-display-derive"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ae7800a4c974efd12df917266338e79a7a74415173caf7e70aa0a0707345281"
-dependencies = [
- "proc-macro2",
- "quote",
- "regex",
- "regex-syntax 0.8.11",
- "structmeta",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7347,15 +7158,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustls-pemfile"
-version = "2.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dce314e5fee3f39953d46bb63bb8a46d40c2f8fb7cc5a3b6cab2bde9721d6e50"
-dependencies = [
- "rustls-pki-types",
-]
-
-[[package]]
 name = "rustls-pki-types"
 version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7391,7 +7193,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "sail-build-scripts"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "lazy_static",
  "prettyplease",
@@ -7406,7 +7208,7 @@ dependencies = [
 
 [[package]]
 name = "sail-cache"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "chrono",
  "datafusion",
@@ -7422,7 +7224,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "datafusion",
@@ -7444,7 +7246,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-glue"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "arrow",
  "async-trait",
@@ -7454,13 +7256,12 @@ dependencies = [
  "aws-smithy-types",
  "sail-catalog",
  "sail-common-datafusion",
- "testcontainers",
  "tokio",
 ]
 
 [[package]]
 name = "sail-catalog-hms"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "arrow",
  "async-trait",
@@ -7482,7 +7283,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-iceberg"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "arrow",
  "async-trait",
@@ -7507,7 +7308,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-memory"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "dashmap",
@@ -7517,7 +7318,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-onelake"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "object_store",
@@ -7531,7 +7332,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-system"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "datafusion",
@@ -7539,13 +7340,14 @@ dependencies = [
  "futures",
  "sail-catalog",
  "sail-common-datafusion",
+ "sail-telemetry",
  "serde",
  "tokio",
 ]
 
 [[package]]
 name = "sail-catalog-unity"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "arrow",
  "async-trait",
@@ -7560,7 +7362,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "testcontainers",
  "thiserror 2.0.20",
  "tokio",
  "wiremock",
@@ -7568,10 +7369,13 @@ dependencies = [
 
 [[package]]
 name = "sail-celeborn"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
+ "bytes",
+ "crc32fast",
  "futures",
  "log",
+ "lz4_flex",
  "num_enum",
  "prost",
  "readonly",
@@ -7580,12 +7384,14 @@ dependencies = [
  "tokio",
  "tonic",
  "tonic-prost-build",
+ "twox-hash",
  "uuid",
+ "zstd",
 ]
 
 [[package]]
 name = "sail-cli"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "clap",
  "log",
@@ -7603,7 +7409,7 @@ dependencies = [
 
 [[package]]
 name = "sail-common"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -7633,7 +7439,7 @@ dependencies = [
 
 [[package]]
 name = "sail-common-datafusion"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "arrow-schema",
  "async-trait",
@@ -7669,7 +7475,7 @@ dependencies = [
 
 [[package]]
 name = "sail-common-hms"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "pilota",
  "volo",
@@ -7679,7 +7485,7 @@ dependencies = [
 
 [[package]]
 name = "sail-data-source"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -7687,6 +7493,7 @@ dependencies = [
  "bytes",
  "chrono",
  "chumsky 0.12.0",
+ "csv-core",
  "dashmap",
  "datafusion",
  "datafusion-common",
@@ -7699,6 +7506,7 @@ dependencies = [
  "futures",
  "glob",
  "log",
+ "memchr",
  "object_store",
  "once_cell",
  "percent-encoding",
@@ -7719,7 +7527,7 @@ dependencies = [
 
 [[package]]
 name = "sail-delta-lake"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "arrow-schema",
  "async-trait",
@@ -7765,9 +7573,10 @@ dependencies = [
 
 [[package]]
 name = "sail-execution"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "arrow-flight",
+ "bytes",
  "chrono",
  "datafusion",
  "datafusion-proto",
@@ -7801,6 +7610,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "tokio",
+ "tokio-util",
  "toml 0.8.23",
  "tonic",
  "tonic-prost",
@@ -7812,7 +7622,7 @@ dependencies = [
 
 [[package]]
 name = "sail-flight"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "arrow",
  "arrow-flight",
@@ -7841,7 +7651,7 @@ dependencies = [
 
 [[package]]
 name = "sail-function"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -7887,7 +7697,7 @@ dependencies = [
 
 [[package]]
 name = "sail-gold-test"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "clap",
  "lazy_static",
@@ -7899,7 +7709,7 @@ dependencies = [
 
 [[package]]
 name = "sail-iceberg"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "apache-avro",
  "arrow-schema",
@@ -7939,7 +7749,7 @@ dependencies = [
 
 [[package]]
 name = "sail-logical-optimizer"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "datafusion",
  "datafusion-common",
@@ -7948,7 +7758,7 @@ dependencies = [
 
 [[package]]
 name = "sail-logical-plan"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "comfy-table",
  "datafusion",
@@ -7964,7 +7774,7 @@ dependencies = [
 
 [[package]]
 name = "sail-object-store"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -7991,13 +7801,14 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "tonic",
  "url",
 ]
 
 [[package]]
 name = "sail-physical-optimizer"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "datafusion",
  "datafusion-physical-expr",
@@ -8007,7 +7818,7 @@ dependencies = [
 
 [[package]]
 name = "sail-physical-plan"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "datafusion",
  "datafusion-common",
@@ -8031,7 +7842,7 @@ dependencies = [
 
 [[package]]
 name = "sail-plan"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -8080,7 +7891,7 @@ dependencies = [
 
 [[package]]
 name = "sail-pyarrow"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "arrow-array",
  "arrow-data",
@@ -8090,16 +7901,19 @@ dependencies = [
 
 [[package]]
 name = "sail-python"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "arrow-schema",
+ "bytes",
  "fastrace",
  "futures",
  "log",
  "pyo3",
  "sail-catalog",
+ "sail-catalog-glue",
  "sail-catalog-hms",
  "sail-catalog-iceberg",
+ "sail-catalog-unity",
  "sail-celeborn",
  "sail-cli",
  "sail-common",
@@ -8112,7 +7926,7 @@ dependencies = [
 
 [[package]]
 name = "sail-python-udf"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "datafusion",
  "datafusion-common",
@@ -8132,7 +7946,7 @@ dependencies = [
 
 [[package]]
 name = "sail-session"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -8169,6 +7983,7 @@ dependencies = [
  "sail-physical-plan",
  "sail-plan",
  "sail-sql-analyzer",
+ "sail-telemetry",
  "secrecy",
  "tempfile",
  "thiserror 2.0.20",
@@ -8179,7 +7994,7 @@ dependencies = [
 
 [[package]]
 name = "sail-spark-connect"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "arrow-schema",
  "async-stream",
@@ -8210,6 +8025,7 @@ dependencies = [
  "sail-python-udf",
  "sail-session",
  "sail-sql-analyzer",
+ "sail-telemetry",
  "serde",
  "serde_json",
  "syn 2.0.119",
@@ -8224,7 +8040,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-analyzer"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "chrono",
  "chumsky 0.12.0",
@@ -8238,7 +8054,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-macro"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -8247,7 +8063,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-parser"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "chumsky 0.12.0",
  "either",
@@ -8264,8 +8080,9 @@ dependencies = [
 
 [[package]]
 name = "sail-telemetry"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
+ "chrono",
  "datafusion",
  "env_logger",
  "fastrace",
@@ -8288,10 +8105,12 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "serde",
+ "serde_json",
  "serde_yaml",
  "syn 2.0.119",
  "thiserror 2.0.20",
  "tokio",
+ "tonic",
 ]
 
 [[package]]
@@ -8540,17 +8359,6 @@ dependencies = [
  "itoa",
  "serde",
  "serde_core",
-]
-
-[[package]]
-name = "serde_repr"
-version = "0.1.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d3b1629de253c70a0508c3899572da79ca359fdab27c7920ff00406df418906"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 3.0.3",
 ]
 
 [[package]]
@@ -8832,29 +8640,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
-name = "structmeta"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e1575d8d40908d70f6fd05537266b90ae71b15dbbe7a8b7dffa2b759306d329"
-dependencies = [
- "proc-macro2",
- "quote",
- "structmeta-derive",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "structmeta-derive"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "152a0b65a590ff6c3da95cabe2353ee04e6167c896b28e3b14478c2636c922fc"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "strum"
 version = "0.27.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9014,36 +8799,6 @@ name = "termtree"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f50febec83f5ee1df3015341d8bd429f2d1cc62bcba7ea2076759d315084683"
-
-[[package]]
-name = "testcontainers"
-version = "0.26.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a81ec0158db5fbb9831e09d1813fe5ea9023a2b5e6e8e0a5fe67e2a820733629"
-dependencies = [
- "astral-tokio-tar",
- "async-trait",
- "bollard",
- "bytes",
- "docker_credential",
- "either",
- "etcetera",
- "ferroid",
- "futures",
- "itertools",
- "log",
- "memchr",
- "parse-display",
- "pin-project-lite",
- "serde",
- "serde_json",
- "serde_with",
- "thiserror 2.0.20",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "url",
-]
 
 [[package]]
 name = "thin-vec"
@@ -9244,6 +8999,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "libc",
  "pin-project-lite",
  "tokio",
@@ -9682,33 +9438,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0976c77def3f1f75c4ef892a292c31c0bbe9e3d0702c63044d7c76db298171a3"
 
 [[package]]
-name = "ureq"
-version = "3.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dea7109cdcd5864d4eeb1b58a1648dc9bf520360d7af16ec26d0a9354bafcfc0"
-dependencies = [
- "base64",
- "log",
- "percent-encoding",
- "rustls",
- "rustls-pki-types",
- "ureq-proto",
- "utf8-zero",
-]
-
-[[package]]
-name = "ureq-proto"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e994ba84b0bd1b1b0cf92878b7ef898a5c1760108fe7b6010327e274917a808c"
-dependencies = [
- "base64",
- "http 1.5.0",
- "httparse",
- "log",
-]
-
-[[package]]
 name = "url"
 version = "2.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9718,7 +9447,6 @@ dependencies = [
  "idna",
  "percent-encoding",
  "serde",
- "serde_derive",
 ]
 
 [[package]]
@@ -9738,12 +9466,6 @@ name = "utf16_iter"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8232dd3cdaed5356e0f716d285e4b40b932ac434100fe9b7e0e8e935b9e6246"
-
-[[package]]
-name = "utf8-zero"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8c0a043c9540bae7c578c88f91dda8bd82e59ae27c21baca69c8b191aaf5a6e"
 
 [[package]]
 name = "utf8_iter"
@@ -10446,16 +10168,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "05f360fc0b24296329c78fda852a1e9ae82de9cf7b27dae4b7f62f118f77b9ed"
 dependencies = [
  "tap",
-]
-
-[[package]]
-name = "xattr"
-version = "1.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
-dependencies = [
- "libc",
- "rustix 1.1.4",
 ]
 
 [[package]]

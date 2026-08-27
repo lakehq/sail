@@ -19,6 +19,7 @@ hdfs-native-object-store = { workspace = true, optional = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 tonic = { workspace = true }
 tokio-stream = { workspace = true }
 async-stream = { workspace = true }

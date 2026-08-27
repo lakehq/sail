@@ -19,10 +19,10 @@ use sail_common_datafusion::session::job::{JobRunner, JobService};
 use sail_common_datafusion::session::repartition::RepartitionBufferConfig;
 use sail_delta_lake::session_extension::DeltaTableCache;
 use sail_physical_optimizer::{PhysicalOptimizerOptions, get_physical_optimizers};
+use sail_telemetry::telemetry::global_system_event_reader;
 
 use crate::catalog::create_catalog_manager;
-use crate::formats::create_table_format_registry;
-use crate::observable::SessionManagerHandle;
+use crate::formats::create_data_source_registry;
 use crate::optimizer::{default_analyzer_rules, default_optimizer_rules};
 use crate::planner::new_query_planner;
 use crate::runtime::RuntimeEnvFactory;
@@ -109,7 +109,7 @@ impl ServerSessionFactory {
             // We do not use the DataFusion catalog and schema since we manage catalogs ourselves.
             .with_create_default_catalog_and_schema(false)
             .with_information_schema(false)
-            .with_extension(create_table_format_registry()?)
+            .with_extension(create_data_source_registry()?)
             .with_extension(Arc::new(create_catalog_manager(
                 &self.config,
                 self.runtime.clone(),
@@ -139,7 +139,7 @@ impl ServerSessionFactory {
             .runtime_env
             .create(|builder| self.mutator.mutate_runtime_env(builder, info))?;
         // We do not add default features to the session state,
-        // since we manage table formats and functions ourselves.
+        // since we manage data sources and functions ourselves.
         let builder = SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime)
@@ -154,10 +154,13 @@ impl ServerSessionFactory {
         Ok(builder.build())
     }
 
-    fn create_system_table_service(&self, info: &ServerSessionInfo) -> Result<SystemTableService> {
-        Ok(SystemTableService::new(Box::new(
-            SessionManagerHandle::new(info.session_manager.clone()),
-        )))
+    fn create_system_table_service(&self, _info: &ServerSessionInfo) -> Result<SystemTableService> {
+        let reader = global_system_event_reader().ok_or_else(|| {
+            datafusion::common::DataFusionError::Internal(
+                "system event telemetry is not initialized".to_string(),
+            )
+        })?;
+        Ok(SystemTableService::new(reader))
     }
 
     fn apply_execution_config(&mut self, config: &mut SessionConfig) {
