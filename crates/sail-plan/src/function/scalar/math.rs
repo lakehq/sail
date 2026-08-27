@@ -1178,9 +1178,9 @@ fn make_safe_divisor(
 /// Zero-divisor guard for `interval / number`, which does NOT share the numeric divide
 /// contract `make_safe_divisor` encodes. Spark raises `INTERVAL_DIVIDED_BY_ZERO`
 /// UNCONDITIONALLY — in both ANSI modes — for a zero divisor; only `try_divide` returns
-/// NULL. `IntervalUtils.divideByZeroCheck` throws with no `evalMode` branch
-/// (`opt/spark/.../catalyst/util/IntervalUtils.scala:753`, dispatched from
-/// `intervalExpressions.scala:712-720`), so the numeric rule (NULL under ANSI-off,
+/// NULL. `divideByZeroCheck` throws with no `evalMode` branch
+/// (`opt/spark/.../catalyst/expressions/intervalExpressions.scala:712-720`, called from the
+/// `DivideYMInterval`/`DivideDTInterval` eval), so the numeric rule (NULL under ANSI-off,
 /// `DIVIDE_BY_ZERO` under ANSI-on) is wrong on both axes for an interval numerator.
 fn make_interval_safe_divisor(divisor: Expr, divisor_type: &DataType) -> Expr {
     let zero = match divisor_type.is_numeric() {

@@ -2616,6 +2616,28 @@ Feature: Spark type coercion for the +, -, *, /, % operators and string operands
         | a variant modulo operand   | parse_json('1') % TIMESTAMP'2024-01-15 00:00:00'            | (?i)cannot resolve.*VARIANT"? and "?TIMESTAMP        |
         | a variant nested in array  | array(parse_json('1')) / TIMESTAMP'2024-01-15 00:00:00'     | (?i)cannot resolve.*ARRAY<VARIANT>                   |
 
+  Rule: A TIME operand is rejected in arithmetic (spark.sql.timeType.enabled)
+    # TIME (Spark 4.x, gated by spark.sql.timeType.enabled) is not a numeric type, so Spark
+    # rejects every arithmetic operator on it at analysis (DATATYPE_MISMATCH). Sail matches the
+    # decision: `/` and `%` hard-reject ("cannot resolve"), while `+`/`-`/`*` defer to DataFusion
+    # coercion ("cannot coerce") — the reject decision is identical, so the pattern pins that, not
+    # the phrasing. Measured against Spark 4.2.0 (JVM).
+    Scenario Outline: a TIME operand is rejected in arithmetic: <case>
+      Given config spark.sql.timeType.enabled = true
+      When query
+        """
+        SELECT TIME '12:00:00' <op> 2 AS r
+        """
+      Then query error (?i)cannot (resolve|coerce)
+
+      Examples:
+        | case           | op |
+        | time times 2   | *  |
+        | time divided 2 | /  |
+        | time plus 2    | +  |
+        | time minus 2   | -  |
+        | time modulo 2  | %  |
+
   Rule: An interval scaled by an integer (known gap — interval arithmetic)
     # Spark multiplies and divides year-month intervals by numerics; Sail rejects
     # every IYM x numeric pair ("Cannot get result type for temporal operation").
