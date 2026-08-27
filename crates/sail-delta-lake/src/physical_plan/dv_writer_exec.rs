@@ -1,4 +1,4 @@
-//! Physical execution node for Merge-on-Read deletion vector writing.
+//! Physical execution nodes for row-level Merge-on-Read deletion vector writing.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -32,7 +32,7 @@ use crate::physical_plan::{
     delta_action_schema, encode_actions, meta_adds,
 };
 use crate::schema::PhysicalPartitionColumn;
-use crate::spec::{Action, Add, RemoveOptions};
+use crate::spec::{Action, Add, DeltaOperation, RemoveOptions};
 use crate::transaction::OperationMetrics;
 
 /// Update an Add action's stats to reflect that the bounds are now wide (non-tight)
@@ -150,8 +150,7 @@ impl DeletionVectorWriterExec {
 
 /// Physical execution node that writes deletion vectors from file path + row-index rows.
 ///
-/// This is used by MERGE MoR, where the target/source join has already identified the
-/// exact target rows to remove.
+/// The row-level logical plan has already identified the exact target rows to invalidate.
 #[derive(Debug)]
 pub struct DeletionVectorRowsWriterExec {
     input: Arc<dyn ExecutionPlan>,
@@ -264,12 +263,12 @@ impl DisplayAs for DeletionVectorRowsWriterExec {
     }
 }
 
-struct MergeDvWriteStats {
+struct RowLevelDvWriteStats {
     newly_deleted_rows: u64,
     had_existing_dv: bool,
 }
 
-async fn write_merge_dv_actions_for_path(
+async fn write_row_level_dv_actions_for_path(
     path: String,
     bitmap: DeletionVectorBitmap,
     add_by_path: &HashMap<String, Add>,
@@ -278,10 +277,10 @@ async fn write_merge_dv_actions_for_path(
     dv_writer: &DeletionVectorWriter,
     deletion_timestamp: i64,
     output_actions: &mut Vec<Action>,
-) -> Result<Option<MergeDvWriteStats>> {
+) -> Result<Option<RowLevelDvWriteStats>> {
     let add = add_by_path.get(&path).ok_or_else(|| {
         DataFusionError::Execution(format!(
-            "MERGE DV row references file '{path}' that is not active in Delta snapshot"
+            "row-level DV references file '{path}' that is not active in Delta snapshot"
         ))
     })?;
 
@@ -354,7 +353,7 @@ async fn write_merge_dv_actions_for_path(
     };
     output_actions.push(Action::Add(new_add));
 
-    Ok(Some(MergeDvWriteStats {
+    Ok(Some(RowLevelDvWriteStats {
         newly_deleted_rows,
         had_existing_dv,
     }))
@@ -518,7 +517,7 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
                     .downcast_ref::<StringArray>()
                     .ok_or_else(|| {
                         DataFusionError::Internal(format!(
-                            "MERGE DV path column '{path_column}' must be Utf8"
+                            "row-level DV path column '{path_column}' must be Utf8"
                         ))
                     })?;
                 let row_indices = batch
@@ -527,19 +526,20 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
                     .downcast_ref::<Int64Array>()
                     .ok_or_else(|| {
                         DataFusionError::Internal(format!(
-                            "MERGE DV row-index column '{row_index_column}' must be Int64"
+                            "row-level DV row-index column '{row_index_column}' must be Int64"
                         ))
                     })?;
                 for row in 0..batch.num_rows() {
                     if paths.is_null(row) || row_indices.is_null(row) {
                         return Err(DataFusionError::Execution(
-                            "MERGE DV rows must have non-null file path and row index".to_string(),
+                            "row-level DV rows must have non-null file path and row index"
+                                .to_string(),
                         ));
                     }
                     let row_index = row_indices.value(row);
                     if row_index < 0 {
                         return Err(DataFusionError::Execution(format!(
-                            "MERGE DV row index must be non-negative, got {row_index}"
+                            "row-level DV row index must be non-negative, got {row_index}"
                         )));
                     }
                     let path = paths.value(row);
@@ -549,10 +549,10 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
                     {
                         let flushed_path =
                             current_path.replace(path.to_string()).ok_or_else(|| {
-                                DataFusionError::Internal("missing MERGE DV path".into())
+                                DataFusionError::Internal("missing row-level DV path".into())
                             })?;
                         let flushed_bitmap = std::mem::take(&mut current_bitmap);
-                        if let Some(stats) = write_merge_dv_actions_for_path(
+                        if let Some(stats) = write_row_level_dv_actions_for_path(
                             flushed_path,
                             flushed_bitmap,
                             &add_by_path,
@@ -578,7 +578,7 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
             }
 
             if let Some(path) = current_path
-                && let Some(stats) = write_merge_dv_actions_for_path(
+                && let Some(stats) = write_row_level_dv_actions_for_path(
                     path,
                     current_bitmap,
                     &add_by_path,
@@ -603,25 +603,42 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
 
             output_rows.add(total_deleted_rows as usize);
             log::debug!(
-                "MERGE DV write partition {partition}: affected_files={num_dv_added}, \
+                "row-level DV write partition {partition}: affected_files={num_dv_added}, \
                  dv_updated={num_dv_updated}, deleted_rows={total_deleted_rows}"
             );
 
-            let operation_metrics = OperationMetrics {
-                execution_time_ms: Some(exec_start.elapsed().as_millis() as u64),
-                num_removed_files: Some(num_dv_added),
-                num_added_files: Some(num_dv_added),
-                num_target_rows_deleted: Some(total_deleted_rows),
-                num_target_deletion_vectors_added: Some(num_dv_added),
-                num_target_deletion_vectors_updated: Some(num_dv_updated),
-                num_target_deletion_vectors_removed: Some(num_dv_updated),
-                ..Default::default()
+            let execution_time_ms = Some(exec_start.elapsed().as_millis() as u64);
+            let (row_count, operation_metrics) = match operation.as_ref() {
+                Some(DeltaOperation::Update { .. }) => (
+                    0,
+                    OperationMetrics {
+                        execution_time_ms,
+                        num_removed_files: Some(num_dv_added),
+                        num_deletion_vectors_added: Some(num_dv_added),
+                        num_deletion_vectors_updated: Some(num_dv_updated),
+                        num_deletion_vectors_removed: Some(num_dv_updated),
+                        ..Default::default()
+                    },
+                ),
+                _ => (
+                    total_deleted_rows,
+                    OperationMetrics {
+                        execution_time_ms,
+                        num_removed_files: Some(num_dv_added),
+                        num_added_files: Some(num_dv_added),
+                        num_target_rows_deleted: Some(total_deleted_rows),
+                        num_target_deletion_vectors_added: Some(num_dv_added),
+                        num_target_deletion_vectors_updated: Some(num_dv_updated),
+                        num_target_deletion_vectors_removed: Some(num_dv_updated),
+                        ..Default::default()
+                    },
+                ),
             };
 
             encode_actions(
                 output_actions,
                 Some(ExecCommitMeta {
-                    row_count: total_deleted_rows,
+                    row_count,
                     operation,
                     operation_metrics,
                 }),

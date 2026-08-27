@@ -460,9 +460,32 @@ Feature: Delta Lake Update
         | id | value |
         | 1  | old   |
 
-  Rule: Deletion-vector tables fall back to copy-on-write for updates
+  Rule: Merge-on-read updates on deletion-vector tables
 
-    Scenario: UPDATE rewrites a DV-enabled table without losing unaffected rows
+    Scenario: EXPLAIN UPDATE on a DV-enabled table writes changed rows and deletion vectors
+      Given variable location for temporary directory delta_update_dv_explain
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_update_dv_explain
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_update_dv_explain (id INT, value STRING)
+        USING DELTA LOCATION {{ location.sql }}
+        TBLPROPERTIES ('delta.enableDeletionVectors' = 'true')
+        """
+      Given statement
+        """
+        INSERT INTO delta_update_dv_explain VALUES (1, 'old'), (2, 'keep')
+        """
+      When query
+        """
+        EXPLAIN
+        UPDATE delta_update_dv_explain SET value = 'new' WHERE id = 1
+        """
+      Then query plan matches snapshot
+
+    Scenario: UPDATE writes a deletion vector without copying unaffected rows
       Given variable location for temporary directory delta_update_dv
       Given final statement
         """
@@ -483,11 +506,22 @@ Feature: Delta Lake Update
         UPDATE delta_update_dv SET value = 'new' WHERE id = 1
         """
       Then delta log latest commit info contains
-        | path                            | value    |
-        | operation                       | "UPDATE" |
-        | operationMetrics.numUpdatedRows | 1        |
-        | operationMetrics.numCopiedRows  | 1        |
-        | operationMetrics.numTouchedRows | 2        |
+        | path                                         | value    |
+        | operation                                    | "UPDATE" |
+        | operationMetrics.numUpdatedRows              | 1        |
+        | operationMetrics.numCopiedRows               | 0        |
+        | operationMetrics.numTouchedRows              | 1        |
+        | operationMetrics.numDeletionVectorsAdded     | 1        |
+        | operationMetrics.numDeletionVectorsRemoved   | 0        |
+        | operationMetrics.numDeletionVectorsUpdated   | 0        |
+      Then data files in location count is 2
+      Then file tree in location matches
+        """
+        📂 <hex-prefix>
+          📄 deletion_vector_<uuid>.bin
+        📄 part-<id>.<codec>.parquet
+        📄 part-<id>.<codec>.parquet
+        """
       When query
         """
         SELECT id, value FROM delta_update_dv ORDER BY id
@@ -497,7 +531,7 @@ Feature: Delta Lake Update
         | 1  | new   |
         | 2  | keep  |
 
-    Scenario: UPDATE copy-on-write consumes an existing deletion vector
+    Scenario: UPDATE merge-on-read accumulates an existing deletion vector
       Given variable location for temporary directory delta_update_existing_dv
       Given final statement
         """
@@ -523,11 +557,14 @@ Feature: Delta Lake Update
         UPDATE delta_update_existing_dv SET value = 'new' WHERE id = 1
         """
       Then delta log latest commit info contains
-        | path                            | value    |
-        | operation                       | "UPDATE" |
-        | operationMetrics.numUpdatedRows | 1        |
-        | operationMetrics.numCopiedRows  | 1        |
-        | operationMetrics.numTouchedRows | 2        |
+        | path                                         | value    |
+        | operation                                    | "UPDATE" |
+        | operationMetrics.numUpdatedRows              | 1        |
+        | operationMetrics.numCopiedRows               | 0        |
+        | operationMetrics.numTouchedRows              | 1        |
+        | operationMetrics.numDeletionVectorsAdded     | 1        |
+        | operationMetrics.numDeletionVectorsRemoved   | 1        |
+        | operationMetrics.numDeletionVectorsUpdated   | 1        |
       When query
         """
         SELECT id, value FROM delta_update_existing_dv ORDER BY id

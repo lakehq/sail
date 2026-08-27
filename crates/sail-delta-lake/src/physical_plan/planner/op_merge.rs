@@ -79,9 +79,9 @@ pub struct RowLevelWriteInfo {
     pub target: RowLevelTargetInfo,
     /// Condition for DELETE/UPDATE. `None` for MERGE.
     pub condition: Option<ExprWithSource>,
-    /// Pre-expanded physical plan for writing (MERGE, future UPDATE).
+    /// Pre-expanded physical plan carrying row intent for MERGE and UPDATE.
     pub expanded_input: Option<Arc<dyn ExecutionPlan>>,
-    /// Physical plan that yields touched file paths (MERGE targeted rewrite).
+    /// Physical plan that yields touched file paths for row-level rewrites or DV updates.
     pub touched_file_plan: Option<Arc<dyn ExecutionPlan>>,
     /// Physical plan that yields target file path and file-local row index rows to delete via DVs.
     pub deletion_vector_plan: Option<Arc<dyn ExecutionPlan>>,
@@ -96,7 +96,7 @@ pub struct RowLevelWriteInfo {
 /// can populate MERGE operationMetrics before dropping them from Parquet output.
 /// TODO: Share this internal-column boundary with future row-level writers so
 /// each sink can consume row intent before stripping Sail metadata.
-const INTERNAL_MERGE_COLUMNS: &[&str] = &[PATH_COLUMN];
+const INTERNAL_ROW_LEVEL_COLUMNS: &[&str] = &[PATH_COLUMN];
 
 /// Entry point for MERGE execution. Expects the logical MERGE to be fully
 /// expanded during Delta logical MERGE planning and passed down as pre-expanded plans.
@@ -217,6 +217,24 @@ pub async fn build_merge_plan_mor(
         );
     }
 
+    let expanded = merge_info.expanded_input.clone().ok_or_else(|| {
+        DataFusionError::Plan("pre-expanded MERGE plan missing expanded input".to_string())
+    })?;
+    let writer_input = if merge_info.deletion_vector_plan.is_some() {
+        build_insert_rows_input(&expanded)?
+    } else {
+        expanded
+    };
+
+    assemble_row_level_mor_plan(ctx, merge_info, writer_input).await
+}
+
+/// Assemble a row-level Merge-on-Read commit from changed data rows and row-index deletes.
+pub(crate) async fn assemble_row_level_mor_plan(
+    ctx: &PlannerContext<'_>,
+    row_level_info: RowLevelWriteInfo,
+    writer_input: Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>> {
     let table = ctx.open_table().await?;
     let snapshot_state = table
         .snapshot()
@@ -233,23 +251,13 @@ pub async fn build_merge_plan_mor(
     let partition_columns = snapshot_state.metadata().partition_columns().clone();
 
     let mut options = DeltaWriterExecOptions::from(ctx.options().clone());
-    if merge_info.with_schema_evolution {
+    if row_level_info.with_schema_evolution {
         options.merge_schema = true;
     }
 
-    let expanded = merge_info.expanded_input.clone().ok_or_else(|| {
-        DataFusionError::Plan("pre-expanded MERGE plan missing expanded input".to_string())
-    })?;
-    let merge_operation = build_row_level_operation(&merge_info);
-
-    let deletion_vector_plan = merge_info.deletion_vector_plan.clone();
-    let touched_plan_opt = merge_info.touched_file_plan.clone();
-
-    let writer_input = if deletion_vector_plan.is_some() {
-        build_insert_rows_input(&expanded)?
-    } else {
-        Arc::clone(&expanded)
-    };
+    let operation = build_row_level_operation(&row_level_info);
+    let deletion_vector_plan = row_level_info.deletion_vector_plan.clone();
+    let touched_file_plan = row_level_info.touched_file_plan.clone();
     let writer_input = strip_internal_columns(writer_input)?;
     let writer_schema = writer_input.schema();
     let write_context = prepare_delta_write_context(
@@ -261,7 +269,7 @@ pub async fn build_merge_plan_mor(
         &PhysicalSinkMode::Append,
         true,
         &writer_schema,
-        merge_operation.clone(),
+        operation.clone(),
     )?;
 
     let writer: Arc<dyn ExecutionPlan> = Arc::new(DeltaWriterExec::new(
@@ -279,16 +287,16 @@ pub async fn build_merge_plan_mor(
 
     let commit_input: Arc<dyn ExecutionPlan> =
         if let Some(deletion_vector_plan) = deletion_vector_plan {
-            let touched_plan = touched_plan_opt.ok_or_else(|| {
+            let touched_file_plan = touched_file_plan.ok_or_else(|| {
                 DataFusionError::Plan(
-                    "pre-expanded MERGE plan missing touched-file input for deletion vectors"
+                    "pre-expanded row-level plan missing touched-file input for deletion vectors"
                         .to_string(),
                 )
             })?;
             let touched_adds = build_adds_from_touched_files(
                 ctx,
                 &snapshot_state,
-                touched_plan,
+                touched_file_plan,
                 ctx.table_url(),
                 version,
                 &partition_columns,
@@ -314,7 +322,7 @@ pub async fn build_merge_plan_mor(
                     sail_common_datafusion::datasource::MERGE_ROW_INDEX_COLUMN,
                     version,
                     Some(snapshot_state.physical_partition_columns()),
-                    merge_operation,
+                    operation,
                 )?);
             UnionExec::try_new(vec![writer, dv_writer])?
         } else {
@@ -367,14 +375,14 @@ fn sort_by_column_preserving_partitioning(
         },
     }])
     .ok_or_else(|| {
-        DataFusionError::Internal("failed to create MERGE deletion-vector ordering".to_string())
+        DataFusionError::Internal("failed to create row-level deletion-vector ordering".to_string())
     })?;
     Ok(Arc::new(
         SortExec::new(ordering, input).with_preserve_partitioning(true),
     ))
 }
 
-/// Build targeted writer input for Copy-on-Write MERGE.
+/// Build targeted writer input for a Copy-on-Write UPDATE or MERGE.
 ///
 /// Filters the expanded plan to include only:
 /// - Insert rows (path is NULL) — new rows not in any existing file
@@ -384,14 +392,14 @@ fn build_targeted_writer_input(
     expanded: &Arc<dyn ExecutionPlan>,
     touched_plan: &Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    // Physical plans can hold runtime state after execution. MERGE branches this subtree,
+    // Physical plans can hold runtime state after execution. The operation branches this subtree,
     // so each consumer needs its own reset copy rather than sharing a multi-parent DAG.
     let projected_for_touched = reset_plan_states(Arc::clone(expanded))?;
     let touched_plan_for_writer = reset_plan_states(Arc::clone(touched_plan))?;
     let projected_schema = expanded.schema();
     if projected_schema.column_with_name(PATH_COLUMN).is_none() {
         return internal_err!(
-            "MERGE writer input is missing required column '{PATH_COLUMN}' for targeted rewrite"
+            "row-level writer input is missing required column '{PATH_COLUMN}' for targeted rewrite"
         );
     }
     if touched_plan
@@ -399,7 +407,9 @@ fn build_targeted_writer_input(
         .column_with_name(PATH_COLUMN)
         .is_none()
     {
-        return internal_err!("MERGE touched file plan is missing required column '{PATH_COLUMN}'");
+        return internal_err!(
+            "row-level touched file plan is missing required column '{PATH_COLUMN}'"
+        );
     }
 
     let path_idx = projected_schema
@@ -476,10 +486,10 @@ fn build_insert_rows_input(expanded: &Arc<dyn ExecutionPlan>) -> Result<Arc<dyn 
     )?))
 }
 
-/// Strip internal merge metadata columns already consumed by the physical planner.
+/// Strip internal row-level metadata columns already consumed by the physical planner.
 fn strip_internal_columns(input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
     let schema = input.schema();
-    let has_internal = INTERNAL_MERGE_COLUMNS
+    let has_internal = INTERNAL_ROW_LEVEL_COLUMNS
         .iter()
         .any(|col| schema.column_with_name(col).is_some());
     if has_internal {
@@ -487,7 +497,7 @@ fn strip_internal_columns(input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn Execu
             .fields()
             .iter()
             .enumerate()
-            .filter(|(_, f)| !INTERNAL_MERGE_COLUMNS.contains(&f.name().as_str()))
+            .filter(|(_, f)| !INTERNAL_ROW_LEVEL_COLUMNS.contains(&f.name().as_str()))
             .map(|(i, f)| {
                 (
                     Arc::new(Column::new(f.name(), i))

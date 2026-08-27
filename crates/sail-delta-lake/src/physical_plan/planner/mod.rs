@@ -36,7 +36,7 @@ pub use op_merge::{
     MergePredicateInfo, OperationOverride, RowLevelTargetInfo, RowLevelWriteInfo,
     build_merge_plan as plan_merge, build_merge_plan_mor as plan_merge_mor,
 };
-pub use op_update::build_update_plan as plan_update;
+pub use op_update::{build_update_plan as plan_update, build_update_plan_mor as plan_update_mor};
 pub use row_level::create_row_level_write_physical_plan;
 
 pub struct DeltaPhysicalPlanner<'a> {
