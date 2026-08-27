@@ -70,7 +70,7 @@ use crate::spec::types::values::Literal;
 use crate::spec::{
     DataFile, ManifestContentType, ManifestList, ManifestStatus, PartitionSpec, Schema, Snapshot,
 };
-use crate::utils::conversions::primitive_to_scalar_default;
+use crate::utils::conversions::{primitive_to_scalar_default, to_scalar};
 use crate::utils::get_object_store_from_session;
 
 fn iceberg_schema_evolution_adapter() -> Arc<dyn PhysicalExprAdapterFactory> {
@@ -375,14 +375,14 @@ impl IcebergTableProvider {
                     let scalar = self
                         .schema
                         .field_by_name(arrow_field.name())
-                        .and_then(|field| identity_fields.get(&field.id).copied())
-                        .and_then(|index| file.partition.get(index))
-                        .and_then(Option::as_ref)
-                        .and_then(|literal| match literal {
-                            Literal::Primitive(value) => Some(primitive_to_scalar_default(value)),
-                            _ => None,
+                        .and_then(|field| {
+                            identity_fields
+                                .get(&field.id)
+                                .copied()
+                                .and_then(|index| file.partition.get(index))
+                                .and_then(Option::as_ref)
+                                .map(|literal| to_scalar(literal, &field.field_type))
                         })
-                        .map(Ok)
                         .unwrap_or_else(|| ScalarValue::try_from(arrow_field.data_type()));
                     scalar?.to_array_of_size(1)
                 })

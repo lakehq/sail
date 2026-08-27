@@ -1,3 +1,4 @@
+from datetime import date
 from pathlib import Path
 
 import pyarrow as pa
@@ -72,6 +73,44 @@ def test_iceberg_predicate_overwrite_rewrites_only_candidate_partition(spark, tm
             (4, "B", 40),
             (5, "A", 100),
             (6, "A", 200),
+        ]
+        assert initial_live_files & _live_data_file_paths(location)
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+def test_iceberg_predicate_overwrite_supports_date_identity_partition(spark, tmp_path):
+    table_name = "iceberg_predicate_overwrite_date_partition"
+    location = tmp_path / table_name
+    escaped_location = escape_sql_string_literal(str(location))
+    spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+    spark.sql(
+        f"""
+        CREATE TABLE {table_name} (id BIGINT, event_date DATE, value BIGINT)
+        USING iceberg
+        PARTITIONED BY (event_date)
+        LOCATION '{escaped_location}'
+        """
+    )
+    try:
+        schema = "id BIGINT, event_date DATE, value BIGINT"
+        first_day = date(2026, 1, 1)
+        second_day = date(2026, 1, 2)
+        spark.createDataFrame(
+            [(1, first_day, 10), (2, second_day, 20), (3, first_day, 30)],
+            schema=schema,
+        ).writeTo(table_name).append()
+        initial_live_files = _live_data_file_paths(location)
+
+        spark.createDataFrame(
+            [(4, first_day, 100)],
+            schema=schema,
+        ).writeTo(table_name).overwrite(F.col("event_date") == first_day)
+
+        rows = spark.table(table_name).select("id", "event_date", "value").orderBy("id")
+        assert [tuple(row) for row in rows.collect()] == [
+            (2, second_day, 20),
+            (4, first_day, 100),
         ]
         assert initial_live_files & _live_data_file_paths(location)
     finally:
