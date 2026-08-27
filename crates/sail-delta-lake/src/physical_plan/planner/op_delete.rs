@@ -76,11 +76,9 @@ pub async fn build_delete_plan(
         snapshot_state,
         condition_expr.clone(),
     )?;
-    let find_files_writer: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
+    let find_files_writer: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::new(
         meta_scan_w,
         ctx.table_url().clone(),
-        None,
-        None,
         version,
         partition_columns.clone(),
         partition_only,
@@ -90,11 +88,9 @@ pub async fn build_delete_plan(
         build_log_replay_pipeline_with_options(ctx, snapshot_state, log_replay_options).await?;
     let meta_scan_r: Arc<dyn ExecutionPlan> =
         build_metadata_filter(ctx.session(), meta_scan_r, snapshot_state, condition_expr)?;
-    let find_files_remove: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
+    let find_files_remove: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::new(
         meta_scan_r,
         ctx.table_url().clone(),
-        None,
-        None,
         version,
         partition_columns.clone(),
         partition_only,
@@ -227,11 +223,9 @@ pub async fn build_delete_plan_mor(
         build_metadata_filter(ctx.session(), meta_scan, snapshot_state, condition_expr)?;
 
     // Wrap with DeltaDiscoveryExec for metadata pipeline visibility.
-    let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
+    let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::new(
         meta_scan,
         ctx.table_url().clone(),
-        None,
-        None,
         version,
         partition_columns.clone(),
         false, // not partition_only for MoR

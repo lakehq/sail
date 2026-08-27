@@ -26,6 +26,7 @@ use sail_function::scalar::math::spark_div::SparkIntervalDiv;
 use sail_function::scalar::math::spark_negative::SparkNegative;
 use sail_function::scalar::math::spark_pmod::SparkPmod;
 use sail_function::scalar::math::spark_signum::SparkSignum;
+use sail_function::scalar::math::spark_sqrt::SparkSqrt;
 use sail_function::scalar::math::spark_try_add::SparkTryAdd;
 use sail_function::scalar::math::spark_try_div::SparkTryDiv;
 use sail_function::scalar::math::spark_try_mod::SparkTryMod;
@@ -1701,6 +1702,10 @@ fn coerce_spark_remainder_operands(
     (left, right, remainder_type)
 }
 
+fn spark_sqrt(arg: Expr) -> Expr {
+    ScalarUDF::from(SparkSqrt::new()).call(vec![cast(arg, DataType::Float64)])
+}
+
 /// Modulo operation with division-by-zero handling.
 ///
 /// Modulo by zero (all numeric types, including float/double) matches Spark's `%`:
@@ -1979,7 +1984,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("signum", F::udf(SparkSignum::new())),
         ("sin", F::unary(double(expr_fn::sin))),
         ("sinh", F::unary(double(expr_fn::sinh))),
-        ("sqrt", F::unary(double(expr_fn::sqrt))),
+        ("sqrt", F::unary(spark_sqrt)),
         ("tan", F::unary(double(expr_fn::tan))),
         ("tanh", F::unary(double(expr_fn::tanh))),
         ("try_add", F::udf(SparkTryAdd::new())),

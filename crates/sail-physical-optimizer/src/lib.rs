@@ -3,9 +3,8 @@ use std::sync::Arc;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_optimizer::aggregate_statistics::AggregateStatistics;
 use datafusion::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
-use datafusion::physical_optimizer::enforce_distribution::EnforceDistribution;
-use datafusion::physical_optimizer::enforce_sorting::EnforceSorting;
 use datafusion::physical_optimizer::ensure_coop::EnsureCooperative;
+use datafusion::physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion::physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion::physical_optimizer::hash_join_buffering::HashJoinBuffering;
 use datafusion::physical_optimizer::join_selection::JoinSelection;
@@ -52,14 +51,13 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(JoinSelection::new()));
     rules.push(Arc::new(LimitedDistinctAggregation::new()));
     rules.push(Arc::new(FilterPushdown::new()));
-    rules.push(Arc::new(EnforceDistribution::new()));
-    rules.push(Arc::new(CombinePartialFinalAggregate::new()));
-    rules.push(Arc::new(EnforceSorting::new()));
-    rules.push(Arc::new(OptimizeAggregateOrder::new()));
     // WindowTopN checks DataFusion's `enable_window_topn`, which defaults to false because
     // PartitionedTopKExec can regress memory and runtime for high-cardinality partition keys.
     // Revisit the opt-in default when that trade-off is addressed.
     rules.push(Arc::new(WindowTopN::new()));
+    rules.push(Arc::new(EnsureRequirements::new()));
+    rules.push(Arc::new(CombinePartialFinalAggregate::new()));
+    rules.push(Arc::new(OptimizeAggregateOrder::new()));
     rules.push(Arc::new(LambdaSafeProjectionPushdown::new()));
     rules.push(Arc::new(OutputRequirements::new_remove_mode()));
     rules.push(Arc::new(TopKAggregation::new()));

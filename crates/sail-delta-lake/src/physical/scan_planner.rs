@@ -351,11 +351,9 @@ pub(crate) async fn plan_delta_scan(
                 meta_scan
             };
             // Static statistics stay unknown because the active Add set is discovered at runtime.
-            let find_files: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
+            let find_files: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::new(
                 meta_scan,
                 table_url.clone(),
-                None,
-                None,
                 snapshot.version(),
                 table_partition_cols.clone(),
                 false,

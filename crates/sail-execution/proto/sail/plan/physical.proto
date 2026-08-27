@@ -743,6 +743,13 @@ message PartitionedTopKExecNode {
   LexOrdering expr = 1;
   uint64 partition_prefix_len = 2;
   uint64 fetch = 3;
+  PartitionedTopKWindowFnKind window_fn_kind = 4;
+}
+
+enum PartitionedTopKWindowFnKind {
+  PARTITIONED_TOP_K_WINDOW_FN_KIND_UNSPECIFIED = 0;
+  PARTITIONED_TOP_K_WINDOW_FN_KIND_ROW_NUMBER = 1;
+  PARTITIONED_TOP_K_WINDOW_FN_KIND_RANK = 2;
 }
 
 message AppendMode {}
@@ -838,8 +845,6 @@ message DeltaScanByAddsExecNode {
 
 message DeltaDiscoveryExecNode {
   string table_url = 1;
-  optional bytes predicate = 2;
-  optional bytes table_schema = 3;
   int64 version = 4;
   optional bytes input = 5;
   repeated string input_partition_columns = 6;

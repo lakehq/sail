@@ -4,7 +4,7 @@ use datafusion::logical_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, Result, not_impl_err};
 use datafusion_expr::logical_plan::Extension;
-use datafusion_expr::{Expr, LogicalPlan, TableScan, TableSource};
+use datafusion_expr::{Expr, LogicalPlan, TableScanBuilder, TableSource};
 use log::trace;
 use sail_common_datafusion::datasource::{
     MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, MergeCapableSource, MergeInfo, MergeMatchedAction,
@@ -219,13 +219,14 @@ fn ensure_merge_metadata_columns(
                     }
                 }
 
-                let new_scan = LogicalPlan::TableScan(TableScan::try_new(
-                    scan.table_name.clone(),
-                    new_source,
-                    projection,
-                    scan.filters.clone(),
-                    scan.fetch,
-                )?);
+                let new_scan = LogicalPlan::TableScan(
+                    TableScanBuilder::new(scan.table_name.clone(), new_source)
+                        .with_projection(projection)
+                        .with_filters(scan.filters.clone())
+                        .with_fetch(scan.fetch)
+                        .with_statistics_requests(scan.statistics_requests.clone())
+                        .build()?,
+                );
                 return Ok(Transformed::yes(new_scan));
             }
 
