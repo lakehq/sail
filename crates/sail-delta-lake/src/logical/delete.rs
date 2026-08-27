@@ -7,6 +7,7 @@ use sail_logical_plan::row_level::{
 };
 
 pub fn expand_delete_node(info: DeleteInfo) -> Result<LogicalPlan> {
+    let mode = super::merge::select_delta_row_level_write_mode(&info.target_plan)?;
     validate_row_level_internal_columns(
         &info.input_schema,
         &info.resolved_target_field_names,
@@ -20,7 +21,7 @@ pub fn expand_delete_node(info: DeleteInfo) -> Result<LogicalPlan> {
         info.target_plan.schema(),
         &info.resolved_target_field_names,
     )?;
-    let node = RowLevelWriteNode::new_delete(info.target_plan, condition, info.target);
+    let node = RowLevelWriteNode::new_delete(info.target_plan, mode, condition, info.target);
     Ok(LogicalPlan::Extension(Extension {
         node: std::sync::Arc::new(node),
     }))

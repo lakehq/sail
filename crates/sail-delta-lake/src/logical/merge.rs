@@ -8,20 +8,27 @@ use datafusion_expr::{Expr, LogicalPlan, TableScanBuilder, TableSource};
 use log::trace;
 use sail_common_datafusion::datasource::{
     MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, MergeCapableSource, MergeInfo, MergeMatchedAction,
-    MergeNotMatchedBySourceAction,
+    MergeNotMatchedBySourceAction, RowLevelWriteMode,
 };
 use sail_logical_plan::merge::{
     MergePlanRequirements, expand_merge, validate_merge_internal_columns,
 };
-use sail_logical_plan::row_level::RowLevelWriteNode;
+use sail_logical_plan::row_level::{
+    RowLevelEffectPlans, RowLevelEffectRequirements, RowLevelWriteNode,
+};
 
 use crate::logical::table_source::DeltaTableSource;
 
 /// Expand MERGE information into a unified row-level write node for Delta.
 pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
     validate_merge_internal_columns(&info, &[MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN])?;
+    let mode = if merge_has_update_actions(&info) {
+        RowLevelWriteMode::CopyOnWrite
+    } else {
+        select_delta_row_level_write_mode(&info.target)?
+    };
     let row_index_column = (merge_has_delete_actions(&info)
-        && row_level_target_supports_deletion_vectors(info.target.as_ref())?)
+        && matches!(mode, RowLevelWriteMode::MergeOnRead))
     .then_some(MERGE_ROW_INDEX_COLUMN);
     let mut target_plan = ensure_row_level_metadata_columns(
         info.target.as_ref().clone(),
@@ -85,8 +92,11 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         &[],
         MergePlanRequirements {
             source_metrics: true,
-            touched_files: true,
-            row_index_deletes: true,
+            effects: RowLevelEffectRequirements {
+                // Delta resolves both COW removals and MOR DV updates from touched paths.
+                touched_files: true,
+                row_index_deletes: matches!(mode, RowLevelWriteMode::MergeOnRead),
+            },
         },
     )?;
     trace!(
@@ -99,11 +109,15 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
             .map(|f| f.name().clone())
             .collect::<Vec<_>>()
     );
-    let write_node = RowLevelWriteNode::new_merge(
-        raw_target,
-        Arc::new(expansion.write_plan),
+    let effects = RowLevelEffectPlans::new(
+        Some(Arc::new(expansion.write_plan)),
         expansion.touched_files_plan.map(Arc::new),
         expansion.row_index_delete_plan.map(Arc::new),
+    );
+    let write_node = RowLevelWriteNode::new_merge(
+        raw_target,
+        mode,
+        effects,
         expansion.options,
         expansion.output_schema,
     );
@@ -125,7 +139,20 @@ fn merge_has_delete_actions(info: &MergeInfo) -> bool {
             .any(|clause| matches!(clause.action, MergeNotMatchedBySourceAction::Delete))
 }
 
-pub(super) fn row_level_target_supports_deletion_vectors(plan: &LogicalPlan) -> Result<bool> {
+fn merge_has_update_actions(info: &MergeInfo) -> bool {
+    info.options.matched_clauses.iter().any(|clause| {
+        matches!(
+            clause.action,
+            MergeMatchedAction::UpdateAll | MergeMatchedAction::UpdateSet(_)
+        )
+    }) || info
+        .options
+        .not_matched_by_source_clauses
+        .iter()
+        .any(|clause| matches!(clause.action, MergeNotMatchedBySourceAction::UpdateSet(_)))
+}
+
+pub(super) fn select_delta_row_level_write_mode(plan: &LogicalPlan) -> Result<RowLevelWriteMode> {
     let mut supports = false;
     plan.apply(|node| {
         if let LogicalPlan::TableScan(scan) = node
@@ -136,7 +163,11 @@ pub(super) fn row_level_target_supports_deletion_vectors(plan: &LogicalPlan) -> 
         }
         Ok(TreeNodeRecursion::Continue)
     })?;
-    Ok(supports)
+    Ok(if supports {
+        RowLevelWriteMode::MergeOnRead
+    } else {
+        RowLevelWriteMode::CopyOnWrite
+    })
 }
 
 fn merge_target_partition_columns(plan: &LogicalPlan) -> Result<Option<Vec<String>>> {

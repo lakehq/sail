@@ -12,50 +12,102 @@ use educe::Educe;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::datasource::{
     DeltaCheckConstraintExpr, MergeIntoOptions, OPERATION_COLUMN, OptionLayer, RowLevelCommand,
-    RowLevelOperationType, RowLevelTarget, UpdateAssignment, UpdateInfo,
+    RowLevelOperationType, RowLevelTarget, RowLevelWriteMode, UpdateAssignment, UpdateInfo,
 };
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::check_constraints::apply_delta_check_constraint_filter;
 
-/// A logical effect produced by a row-level operation.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd)]
-pub enum RowLevelEffect {
-    WriteRows(Arc<LogicalPlan>),
-    TouchFiles(Arc<LogicalPlan>),
-    DeleteRows(Arc<LogicalPlan>),
+/// Format-selected auxiliary effects for a row-level expansion.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RowLevelEffectRequirements {
+    pub touched_files: bool,
+    pub row_index_deletes: bool,
 }
 
-impl RowLevelEffect {
-    fn plan(&self) -> &Arc<LogicalPlan> {
-        match self {
-            Self::WriteRows(plan) | Self::TouchFiles(plan) | Self::DeleteRows(plan) => plan,
+/// Sparse logical plans required to materialize a row-level write.
+///
+/// The slots are ordered for DataFusion extension planning as write rows,
+/// touched files, then row-index deletes. A missing slot means the selected
+/// write mode does not require that effect.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd)]
+pub struct RowLevelEffectPlans {
+    write_rows: Option<Arc<LogicalPlan>>,
+    touched_files: Option<Arc<LogicalPlan>>,
+    row_index_deletes: Option<Arc<LogicalPlan>>,
+}
+
+impl RowLevelEffectPlans {
+    pub fn new(
+        write_rows: Option<Arc<LogicalPlan>>,
+        touched_files: Option<Arc<LogicalPlan>>,
+        row_index_deletes: Option<Arc<LogicalPlan>>,
+    ) -> Self {
+        Self {
+            write_rows,
+            touched_files,
+            row_index_deletes,
         }
     }
 
-    fn replace_plan(&self, plan: LogicalPlan) -> Self {
-        match self {
-            Self::WriteRows(_) => Self::WriteRows(Arc::new(plan)),
-            Self::TouchFiles(_) => Self::TouchFiles(Arc::new(plan)),
-            Self::DeleteRows(_) => Self::DeleteRows(Arc::new(plan)),
-        }
+    pub fn write_rows(&self) -> Option<&Arc<LogicalPlan>> {
+        self.write_rows.as_ref()
     }
-}
 
-fn row_level_effects(
-    write_plan: Arc<LogicalPlan>,
-    touched_files_plan: Option<Arc<LogicalPlan>>,
-    row_index_delete_plan: Option<Arc<LogicalPlan>>,
-) -> Vec<RowLevelEffect> {
-    let mut effects = vec![RowLevelEffect::WriteRows(write_plan)];
-    if let Some(plan) = touched_files_plan {
-        effects.push(RowLevelEffect::TouchFiles(plan));
+    pub fn touched_files(&self) -> Option<&Arc<LogicalPlan>> {
+        self.touched_files.as_ref()
     }
-    if let Some(plan) = row_index_delete_plan {
-        effects.push(RowLevelEffect::DeleteRows(plan));
+
+    pub fn row_index_deletes(&self) -> Option<&Arc<LogicalPlan>> {
+        self.row_index_deletes.as_ref()
     }
-    effects
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn len(&self) -> usize {
+        usize::from(self.write_rows.is_some())
+            + usize::from(self.touched_files.is_some())
+            + usize::from(self.row_index_deletes.is_some())
+    }
+
+    fn plans(&self) -> impl Iterator<Item = &LogicalPlan> {
+        [
+            self.write_rows.as_deref(),
+            self.touched_files.as_deref(),
+            self.row_index_deletes.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+    }
+
+    fn replace_plans(&self, plans: Vec<LogicalPlan>) -> Result<Self> {
+        if plans.len() != self.len() {
+            return Err(DataFusionError::Internal(format!(
+                "RowLevelEffectPlans expected {} plans, got {}",
+                self.len(),
+                plans.len()
+            )));
+        }
+        let mut plans = plans.into_iter();
+        let mut replace = |present: bool| -> Result<Option<Arc<LogicalPlan>>> {
+            if !present {
+                return Ok(None);
+            }
+            plans.next().map(Arc::new).map(Some).ok_or_else(|| {
+                DataFusionError::Internal(
+                    "RowLevelEffectPlans replacement plan is missing".to_string(),
+                )
+            })
+        };
+        Ok(Self {
+            write_rows: replace(self.write_rows.is_some())?,
+            touched_files: replace(self.touched_files.is_some())?,
+            row_index_deletes: replace(self.row_index_deletes.is_some())?,
+        })
+    }
 }
 
 /// Information retained until the format-specific commit is planned.
@@ -96,7 +148,8 @@ impl RowLevelCommitInfo {
 pub struct RowLevelWriteNode {
     target: RowLevelTarget,
     raw_target: Arc<LogicalPlan>,
-    effects: Vec<RowLevelEffect>,
+    mode: RowLevelWriteMode,
+    effects: RowLevelEffectPlans,
     #[educe(PartialOrd(method(partial_cmp_by_equality), rank = 0))]
     commit: RowLevelCommitInfo,
     /// `Some` means the target scan must still match at commit time. The inner
@@ -113,16 +166,15 @@ fn partial_cmp_by_equality<T: PartialEq>(left: &T, right: &T) -> Option<Ordering
 impl RowLevelWriteNode {
     pub fn new_merge(
         raw_target: Arc<LogicalPlan>,
-        write_plan: Arc<LogicalPlan>,
-        touched_files_plan: Option<Arc<LogicalPlan>>,
-        row_index_delete_plan: Option<Arc<LogicalPlan>>,
+        mode: RowLevelWriteMode,
+        effects: RowLevelEffectPlans,
         options: MergeIntoOptions,
         schema: DFSchemaRef,
     ) -> Self {
-        let effects = row_level_effects(write_plan, touched_files_plan, row_index_delete_plan);
         Self {
             target: options.target.clone(),
             raw_target,
+            mode,
             effects,
             commit: RowLevelCommitInfo::Merge {
                 options: Box::new(options),
@@ -134,13 +186,15 @@ impl RowLevelWriteNode {
 
     pub fn new_delete(
         raw_target: Arc<LogicalPlan>,
+        mode: RowLevelWriteMode,
         condition: Option<ExprWithSource>,
         target: RowLevelTarget,
     ) -> Self {
         Self {
             target,
             raw_target,
-            effects: vec![],
+            mode,
+            effects: RowLevelEffectPlans::default(),
             commit: RowLevelCommitInfo::Delete {
                 predicate: condition,
             },
@@ -151,17 +205,16 @@ impl RowLevelWriteNode {
 
     pub fn new_update(
         raw_target: Arc<LogicalPlan>,
-        write_plan: Arc<LogicalPlan>,
-        touched_files_plan: Option<Arc<LogicalPlan>>,
-        row_index_delete_plan: Option<Arc<LogicalPlan>>,
+        mode: RowLevelWriteMode,
+        effects: RowLevelEffectPlans,
         condition: Option<ExprWithSource>,
         target: RowLevelTarget,
         schema: DFSchemaRef,
     ) -> Self {
-        let effects = row_level_effects(write_plan, touched_files_plan, row_index_delete_plan);
         Self {
             target,
             raw_target,
+            mode,
             effects,
             commit: RowLevelCommitInfo::Update {
                 predicate: condition,
@@ -184,7 +237,11 @@ impl RowLevelWriteNode {
         &self.target
     }
 
-    pub fn effects(&self) -> &[RowLevelEffect] {
+    pub fn mode(&self) -> RowLevelWriteMode {
+        self.mode
+    }
+
+    pub fn effects(&self) -> &RowLevelEffectPlans {
         &self.effects
     }
 
@@ -232,10 +289,7 @@ impl UserDefinedLogicalNodeCore for RowLevelWriteNode {
     }
 
     fn inputs(&self) -> Vec<&LogicalPlan> {
-        self.effects
-            .iter()
-            .map(|effect| effect.plan().as_ref())
-            .collect()
+        self.effects.plans().collect()
     }
 
     fn schema(&self) -> &DFSchemaRef {
@@ -255,8 +309,9 @@ impl UserDefinedLogicalNodeCore for RowLevelWriteNode {
             .unwrap_or(&self.target.location);
         write!(
             f,
-            "RowLevelWrite: command={:?}, target={}, format={}",
+            "RowLevelWrite: command={:?}, mode={:?}, target={}, format={}",
             self.command(),
+            self.mode,
             table,
             self.target.format
         )?;
@@ -281,22 +336,11 @@ impl UserDefinedLogicalNodeCore for RowLevelWriteNode {
 
     fn with_exprs_and_inputs(&self, exprs: Vec<Expr>, inputs: Vec<LogicalPlan>) -> Result<Self> {
         exprs.zero()?;
-        if inputs.len() != self.effects.len() {
-            return Err(DataFusionError::Internal(format!(
-                "RowLevelWriteNode expected {} inputs, got {}",
-                self.effects.len(),
-                inputs.len()
-            )));
-        }
-        let effects = self
-            .effects
-            .iter()
-            .zip(inputs)
-            .map(|(effect, plan)| effect.replace_plan(plan))
-            .collect();
+        let effects = self.effects.replace_plans(inputs)?;
         Ok(Self {
             target: self.target.clone(),
             raw_target: self.raw_target.clone(),
+            mode: self.mode,
             effects,
             commit: self.commit.clone(),
             expected_snapshot_id: self.expected_snapshot_id,
@@ -433,6 +477,8 @@ pub fn rewrite_row_level_target_condition(
 
 pub fn expand_update(
     info: UpdateInfo,
+    mode: RowLevelWriteMode,
+    requirements: RowLevelEffectRequirements,
     path_column: &str,
     row_index_column: Option<&str>,
 ) -> Result<RowLevelWriteNode> {
@@ -562,29 +608,39 @@ pub fn expand_update(
         Some(col(OPERATION_COLUMN).eq(lit(RowLevelOperationType::Update.as_i32()))),
     )?;
 
-    let touched_files = LogicalPlanBuilder::from(normalized.plan.clone())
-        .filter(predicate.clone())?
-        .aggregate(vec![col(path_column)], Vec::<Expr>::new())?
-        .project(vec![col(path_column).alias(path_column)])?
-        .build()?;
-    let delete_rows = row_index_column
-        .map(|row_index_column| {
+    let touched_files = requirements
+        .touched_files
+        .then(|| {
+            LogicalPlanBuilder::from(normalized.plan.clone())
+                .filter(predicate.clone())?
+                .aggregate(vec![col(path_column)], Vec::<Expr>::new())?
+                .project(vec![col(path_column).alias(path_column)])?
+                .build()
+        })
+        .transpose()?
+        .map(Arc::new);
+    let row_index_deletes = if let (true, Some(row_index_column)) =
+        (requirements.row_index_deletes, row_index_column)
+    {
+        Some(Arc::new(
             LogicalPlanBuilder::from(normalized.plan)
                 .filter(predicate)?
                 .project(vec![
                     col(path_column).alias(path_column),
                     col(row_index_column).alias(row_index_column),
                 ])?
-                .build()
-        })
-        .transpose()?
-        .map(Arc::new);
+                .build()?,
+        ))
+    } else {
+        None
+    };
+    let effects =
+        RowLevelEffectPlans::new(Some(Arc::new(write_rows)), touched_files, row_index_deletes);
 
     Ok(RowLevelWriteNode::new_update(
         target_plan,
-        Arc::new(write_rows),
-        Some(Arc::new(touched_files)),
-        delete_rows,
+        mode,
+        effects,
         condition,
         target,
         Arc::new(DFSchema::empty()),
@@ -734,6 +790,41 @@ mod tests {
 
     use super::*;
 
+    fn named_plan(name: &str) -> Result<Arc<LogicalPlan>> {
+        Ok(Arc::new(
+            LogicalPlanBuilder::empty(false)
+                .project(vec![lit(1_i32).alias(name)])?
+                .build()?,
+        ))
+    }
+
+    #[test]
+    fn sparse_effect_plans_preserve_slots_when_replaced() -> Result<()> {
+        let write_rows = named_plan("write_rows")?;
+        let row_index_deletes = named_plan("row_index_deletes")?;
+        let effects = RowLevelEffectPlans::new(Some(write_rows), None, Some(row_index_deletes));
+
+        assert_eq!(effects.len(), 2);
+        assert!(effects.write_rows().is_some());
+        assert!(effects.touched_files().is_none());
+        assert!(effects.row_index_deletes().is_some());
+
+        let replacement_write_rows = named_plan("replacement_write_rows")?;
+        let replacement_row_index_deletes = named_plan("replacement_row_index_deletes")?;
+        let replaced = effects.replace_plans(vec![
+            replacement_write_rows.as_ref().clone(),
+            replacement_row_index_deletes.as_ref().clone(),
+        ])?;
+
+        assert_eq!(replaced.write_rows(), Some(&replacement_write_rows));
+        assert!(replaced.touched_files().is_none());
+        assert_eq!(
+            replaced.row_index_deletes(),
+            Some(&replacement_row_index_deletes)
+        );
+        Ok(())
+    }
+
     #[test]
     fn delete_node_preserves_empty_snapshot_requirement() -> Result<()> {
         let plan = Arc::new(LogicalPlanBuilder::empty(false).build()?);
@@ -746,9 +837,11 @@ mod tests {
             lakehouse_table: None,
         };
         let node =
-            RowLevelWriteNode::new_delete(plan, None, target).with_expected_snapshot_id(Some(None));
+            RowLevelWriteNode::new_delete(plan, RowLevelWriteMode::MergeOnRead, None, target)
+                .with_expected_snapshot_id(Some(None));
 
         assert_eq!(node.command(), RowLevelCommand::Delete);
+        assert_eq!(node.mode(), RowLevelWriteMode::MergeOnRead);
         assert!(node.effects().is_empty());
         assert_eq!(node.expected_snapshot_id(), Some(None));
 
@@ -769,13 +862,17 @@ mod tests {
             options: vec![],
             lakehouse_table: None,
         };
-        let node = RowLevelWriteNode::new_delete(plan, None, target);
+        let node =
+            RowLevelWriteNode::new_delete(plan, RowLevelWriteMode::CopyOnWrite, None, target);
         let mut distinct_commit = node.clone();
         distinct_commit.commit = RowLevelCommitInfo::Delete {
             predicate: Some(ExprWithSource::new(lit(true), Some("true".into()))),
         };
+        let mut distinct_mode = node.clone();
+        distinct_mode.mode = RowLevelWriteMode::MergeOnRead;
 
         assert_ne!(node, distinct_commit);
+        assert_ne!(node, distinct_mode);
         assert_eq!(node.partial_cmp(&node), Some(Ordering::Equal));
         assert_ne!(node.partial_cmp(&distinct_commit), Some(Ordering::Equal));
         assert_ne!(distinct_commit.partial_cmp(&node), Some(Ordering::Equal));

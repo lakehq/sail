@@ -8,12 +8,14 @@ use datafusion_expr::{Expr, LogicalPlan, TableScanBuilder, TableSource};
 use log::trace;
 use sail_common_datafusion::datasource::{
     MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, MergeCapableSource, MergeInfo, MergeMatchedAction,
-    MergeNotMatchedBySourceAction,
+    MergeNotMatchedBySourceAction, RowLevelWriteMode,
 };
 use sail_logical_plan::merge::{
     MergePlanRequirements, expand_merge, validate_merge_internal_columns,
 };
-use sail_logical_plan::row_level::RowLevelWriteNode;
+use sail_logical_plan::row_level::{
+    RowLevelEffectPlans, RowLevelEffectRequirements, RowLevelWriteNode,
+};
 
 use crate::logical::table_source::IcebergTableSource;
 use crate::row_level_metadata::{MERGE_PARTITION_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN};
@@ -94,15 +96,14 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         &[MERGE_PARTITION_SPEC_ID_COLUMN, MERGE_PARTITION_COLUMN],
         MergePlanRequirements {
             source_metrics: false,
-            touched_files: false,
-            row_index_deletes: false,
+            effects: RowLevelEffectRequirements::default(),
         },
     )?;
+    let effects = RowLevelEffectPlans::new(Some(Arc::new(expansion.write_plan)), None, None);
     let write_node = RowLevelWriteNode::new_merge(
         raw_target,
-        Arc::new(expansion.write_plan),
-        None,
-        None,
+        RowLevelWriteMode::MergeOnRead,
+        effects,
         expansion.options,
         expansion.output_schema,
     )

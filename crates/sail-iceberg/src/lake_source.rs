@@ -225,6 +225,7 @@ impl LakeSource for IcebergLakeSource {
 
         let write_node = sail_logical_plan::row_level::RowLevelWriteNode::new_delete(
             Arc::new(target_scan),
+            sail_common_datafusion::datasource::RowLevelWriteMode::MergeOnRead,
             condition,
             target,
         )

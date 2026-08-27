@@ -28,6 +28,7 @@ use sail_function::scalar::misc::raise_error::RaiseError;
 
 use crate::check_constraints::apply_delta_check_constraint_filter;
 use crate::monotonic_id::MonotonicIdNode;
+use crate::row_level::RowLevelEffectRequirements;
 
 pub const SOURCE_PRESENT_COLUMN: &str = "__sail_merge_source_row_present";
 pub const TARGET_PRESENT_COLUMN: &str = "__sail_merge_target_row_present";
@@ -146,8 +147,7 @@ pub struct MergeExpansion {
 #[derive(Clone, Copy, Debug)]
 pub struct MergePlanRequirements {
     pub source_metrics: bool,
-    pub touched_files: bool,
-    pub row_index_deletes: bool,
+    pub effects: RowLevelEffectRequirements,
 }
 
 fn merge_name_key(name: &str, case_sensitive: bool) -> String {
@@ -808,7 +808,7 @@ fn build_default_merge_expansion(
         build_rewrite_predicates(&options, &matched_pred, &not_matched_by_source_pred);
     let rewrite_filter = combine_rewrite_preds(rewrite_matched, rewrite_not_matched_by_source);
 
-    let touched_files_plan = if requirements.touched_files {
+    let touched_files_plan = if requirements.effects.touched_files {
         rewrite_filter
             .map(|rewrite_filter| {
                 LogicalPlanBuilder::from(join.as_ref().clone())
@@ -822,7 +822,7 @@ fn build_default_merge_expansion(
         None
     };
 
-    let row_index_delete_plan = if requirements.row_index_deletes
+    let row_index_delete_plan = if requirements.effects.row_index_deletes
         && let Some(row_index_column) = row_index_column
         && let Some(row_delete_pred) = row_delete_pred
     {

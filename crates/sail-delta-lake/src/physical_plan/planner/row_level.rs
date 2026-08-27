@@ -5,14 +5,13 @@ use datafusion::catalog::Session;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{DataFusionError, Result, internal_err};
 use datafusion::physical_plan::ExecutionPlan;
-use sail_common_datafusion::datasource::{MergeStrategy, RowLevelCommand};
+use sail_common_datafusion::datasource::{RowLevelCommand, RowLevelWriteMode};
 use sail_data_source::options::ResolveOptions;
-use sail_logical_plan::row_level::{RowLevelEffect, RowLevelWriteNode};
+use sail_logical_plan::row_level::{RowLevelEffectPlans, RowLevelWriteNode};
 
 use crate::lake_source::{DeltaLakeSource, split_delta_write_options_and_table_properties};
 use crate::logical::table_source::DeltaTableSource;
 use crate::options::r#gen::DeltaWriteOptions;
-use crate::physical_plan::planner::op_merge::merge_has_update_actions;
 use crate::physical_plan::planner::{
     DeltaPlannerConfig, PlannerContext, RowLevelWriteInfo, plan_delete, plan_delete_mor,
     plan_merge, plan_merge_mor, plan_update, plan_update_mor,
@@ -42,7 +41,7 @@ pub async fn create_row_level_write_physical_plan(
                 with_schema_evolution: false,
                 operation: None,
             };
-            create_delta_row_level_writer(ctx, info, target_snapshot).await
+            create_delta_row_level_writer(ctx, node.mode(), info, target_snapshot).await
         }
         RowLevelCommand::Merge => {
             let expanded_input = effects.write_rows.ok_or_else(|| {
@@ -55,11 +54,11 @@ pub async fn create_row_level_write_physical_plan(
                 condition: None,
                 expanded_input: Some(expanded_input),
                 touched_file_plan: effects.touched_files,
-                deletion_vector_plan: effects.deleted_rows,
+                deletion_vector_plan: effects.row_index_deletes,
                 with_schema_evolution: node.with_schema_evolution(),
                 operation: build_merge_operation(node),
             };
-            create_delta_row_level_writer(ctx, info, target_snapshot).await
+            create_delta_row_level_writer(ctx, node.mode(), info, target_snapshot).await
         }
         RowLevelCommand::Update => {
             let expanded_input = effects.write_rows.ok_or_else(|| {
@@ -71,7 +70,7 @@ pub async fn create_row_level_write_physical_plan(
                 condition: node.condition().cloned(),
                 expanded_input: Some(expanded_input),
                 touched_file_plan: effects.touched_files,
-                deletion_vector_plan: effects.deleted_rows,
+                deletion_vector_plan: effects.row_index_deletes,
                 with_schema_evolution: false,
                 operation: Some(DeltaOperation::Update {
                     predicate: node
@@ -79,7 +78,7 @@ pub async fn create_row_level_write_physical_plan(
                         .and_then(|condition| condition.source.clone()),
                 }),
             };
-            create_delta_row_level_writer(ctx, info, target_snapshot).await
+            create_delta_row_level_writer(ctx, node.mode(), info, target_snapshot).await
         }
     }
 }
@@ -88,11 +87,11 @@ pub async fn create_row_level_write_physical_plan(
 struct PhysicalRowLevelEffects {
     write_rows: Option<Arc<dyn ExecutionPlan>>,
     touched_files: Option<Arc<dyn ExecutionPlan>>,
-    deleted_rows: Option<Arc<dyn ExecutionPlan>>,
+    row_index_deletes: Option<Arc<dyn ExecutionPlan>>,
 }
 
 fn collect_physical_effects(
-    logical_effects: &[RowLevelEffect],
+    logical_effects: &RowLevelEffectPlans,
     physical_inputs: &[Arc<dyn ExecutionPlan>],
 ) -> Result<PhysicalRowLevelEffects> {
     if logical_effects.len() != physical_inputs.len() {
@@ -103,32 +102,34 @@ fn collect_physical_effects(
         );
     }
 
-    let mut effects = PhysicalRowLevelEffects::default();
-    for (logical_effect, physical_input) in logical_effects.iter().zip(physical_inputs) {
-        let slot = match logical_effect {
-            RowLevelEffect::WriteRows(_) => &mut effects.write_rows,
-            RowLevelEffect::TouchFiles(_) => &mut effects.touched_files,
-            RowLevelEffect::DeleteRows(_) => &mut effects.deleted_rows,
-        };
-        if slot.replace(Arc::clone(physical_input)).is_some() {
-            return internal_err!("RowLevelWriteNode contains duplicate logical effects");
+    let mut physical_inputs = physical_inputs.iter();
+    let mut take = |present: bool| -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if !present {
+            return Ok(None);
         }
-    }
-    Ok(effects)
+        physical_inputs
+            .next()
+            .map(Arc::clone)
+            .map(Some)
+            .ok_or_else(|| {
+                DataFusionError::Internal(
+                    "RowLevelWriteNode physical effect input is missing".to_string(),
+                )
+            })
+    };
+    Ok(PhysicalRowLevelEffects {
+        write_rows: take(logical_effects.write_rows().is_some())?,
+        touched_files: take(logical_effects.touched_files().is_some())?,
+        row_index_deletes: take(logical_effects.row_index_deletes().is_some())?,
+    })
 }
 
 async fn create_delta_row_level_writer(
     ctx: &dyn Session,
+    mode: RowLevelWriteMode,
     info: RowLevelWriteInfo,
     target_snapshot: Arc<DeltaSnapshot>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let effective_strategy = if merge_has_update_actions(&info) {
-        MergeStrategy::Eager
-    } else if target_snapshot.verify_deletion_vectors().is_ok() {
-        MergeStrategy::MergeOnRead
-    } else {
-        MergeStrategy::Eager
-    };
     let (target_options, _) =
         split_delta_write_options_and_table_properties(info.target.options.clone())?;
     let table_url =
@@ -150,21 +151,25 @@ async fn create_delta_row_level_writer(
     .with_lakehouse_table(info.target.lakehouse_table.clone());
     let planner_ctx = PlannerContext::new(ctx, config);
 
-    match (effective_strategy, info.command) {
-        (MergeStrategy::MergeOnRead, RowLevelCommand::Delete) => {
+    match (mode, info.command) {
+        (RowLevelWriteMode::MergeOnRead, RowLevelCommand::Delete) => {
             plan_delete_mor(&planner_ctx, delete_condition(&info)).await
         }
-        (MergeStrategy::MergeOnRead, RowLevelCommand::Merge) => {
+        (RowLevelWriteMode::MergeOnRead, RowLevelCommand::Merge) => {
             plan_merge_mor(&planner_ctx, info).await
         }
-        (MergeStrategy::MergeOnRead, RowLevelCommand::Update) => {
+        (RowLevelWriteMode::MergeOnRead, RowLevelCommand::Update) => {
             plan_update_mor(&planner_ctx, info).await
         }
-        (MergeStrategy::Eager, RowLevelCommand::Delete) => {
+        (RowLevelWriteMode::CopyOnWrite, RowLevelCommand::Delete) => {
             plan_delete(&planner_ctx, delete_condition(&info)).await
         }
-        (MergeStrategy::Eager, RowLevelCommand::Merge) => plan_merge(&planner_ctx, info).await,
-        (MergeStrategy::Eager, RowLevelCommand::Update) => plan_update(&planner_ctx, info).await,
+        (RowLevelWriteMode::CopyOnWrite, RowLevelCommand::Merge) => {
+            plan_merge(&planner_ctx, info).await
+        }
+        (RowLevelWriteMode::CopyOnWrite, RowLevelCommand::Update) => {
+            plan_update(&planner_ctx, info).await
+        }
     }
 }
 

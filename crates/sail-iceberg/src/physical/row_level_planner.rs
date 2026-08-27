@@ -6,7 +6,7 @@ use datafusion::logical_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_planner::PhysicalPlanner;
-use sail_common_datafusion::datasource::{PhysicalSinkMode, RowLevelCommand};
+use sail_common_datafusion::datasource::{PhysicalSinkMode, RowLevelCommand, RowLevelWriteMode};
 use sail_data_source::options::ResolveOptions;
 use sail_logical_plan::row_level::RowLevelWriteNode;
 
@@ -30,10 +30,19 @@ pub(crate) async fn plan_iceberg_row_level_write(
     node: &RowLevelWriteNode,
     physical_inputs: &[Arc<dyn ExecutionPlan>],
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    match node.command() {
-        RowLevelCommand::Delete => plan_iceberg_delete(session, planner, node).await,
-        RowLevelCommand::Merge => plan_iceberg_merge(session, node, physical_inputs).await,
-        command => not_impl_err!("Iceberg row-level {command:?} operations"),
+    match (node.mode(), node.command()) {
+        (RowLevelWriteMode::MergeOnRead, RowLevelCommand::Delete) => {
+            plan_iceberg_delete(session, planner, node).await
+        }
+        (RowLevelWriteMode::MergeOnRead, RowLevelCommand::Merge) => {
+            plan_iceberg_merge(session, node, physical_inputs).await
+        }
+        (RowLevelWriteMode::MergeOnRead, command) => {
+            not_impl_err!("Iceberg row-level {command:?} operations")
+        }
+        (RowLevelWriteMode::CopyOnWrite, command) => {
+            not_impl_err!("Iceberg row-level {command:?} copy-on-write operations")
+        }
     }
 }
 

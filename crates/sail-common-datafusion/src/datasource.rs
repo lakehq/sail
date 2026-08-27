@@ -124,14 +124,14 @@ impl RowLevelOperationType {
     }
 }
 
-/// Materialization strategy for row-level modifications.
+/// Storage mode selected by a lake source for a row-level write.
 ///
-/// - `Eager`: rewrite affected files (Copy-on-Write).
-/// - `MergeOnRead`: write delete files at write time, merge at read time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum MergeStrategy {
-    #[default]
-    Eager,
+/// Metadata-only optimizations may bypass row materialization in either mode.
+/// When rows must be materialized, `CopyOnWrite` rewrites affected data files,
+/// while `MergeOnRead` writes row-level delete artifacts alongside new data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd)]
+pub enum RowLevelWriteMode {
+    CopyOnWrite,
     MergeOnRead,
 }
 
