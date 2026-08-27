@@ -26,8 +26,7 @@ use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_common::{JoinType, NullEquality, not_impl_err};
 use datafusion_physical_expr::expressions::{Column, IsNullExpr};
-use sail_common_datafusion::catalog::LakehouseExecutionContext;
-use sail_common_datafusion::datasource::{OptionLayer, PhysicalSinkMode, RowLevelCommand};
+use sail_common_datafusion::datasource::{PhysicalSinkMode, RowLevelCommand, RowLevelTarget};
 use sail_common_datafusion::logical_expr::ExprWithSource;
 
 use super::super::writer_options::DeltaWriterExecOptions;
@@ -38,45 +37,13 @@ use super::context::PlannerContext;
 use super::utils::LogReplayOptions;
 use crate::datasource::PATH_COLUMN;
 use crate::physical_plan::{DeltaCommitExec, DeltaWriterExec, prepare_delta_write_context};
-use crate::spec::{DeltaOperation, MergePredicate};
-
-/// Target table information shared by Delta row-level operations.
-#[derive(Debug, Clone)]
-pub struct RowLevelTargetInfo {
-    pub table_name: Vec<String>,
-    pub path: String,
-    pub partition_by: Vec<String>,
-    pub options: Vec<OptionLayer>,
-    pub lakehouse_table: Option<LakehouseExecutionContext>,
-}
-
-/// Operation metadata used to construct MERGE commit log `operationParameters`.
-#[derive(Debug, Clone)]
-pub struct MergePredicateInfo {
-    pub action_type: String,
-    pub predicate: Option<String>,
-}
-
-/// Override metadata for Delta row-level operation commit logs.
-#[derive(Debug, Clone)]
-pub enum OperationOverride {
-    Update {
-        predicate: Option<String>,
-    },
-    Merge {
-        predicate: Option<String>,
-        merge_predicate: Option<String>,
-        matched_predicates: Vec<MergePredicateInfo>,
-        not_matched_predicates: Vec<MergePredicateInfo>,
-        not_matched_by_source_predicates: Vec<MergePredicateInfo>,
-    },
-}
+use crate::spec::DeltaOperation;
 
 /// Unified information for Delta row-level write operations (DELETE, UPDATE, MERGE).
 #[derive(Debug, Clone)]
 pub struct RowLevelWriteInfo {
     pub command: RowLevelCommand,
-    pub target: RowLevelTargetInfo,
+    pub target: RowLevelTarget,
     /// Condition for DELETE/UPDATE. `None` for MERGE.
     pub condition: Option<ExprWithSource>,
     /// Pre-expanded physical plan carrying row intent for MERGE and UPDATE.
@@ -86,8 +53,8 @@ pub struct RowLevelWriteInfo {
     /// Physical plan that yields target file path and file-local row index rows to delete via DVs.
     pub deletion_vector_plan: Option<Arc<dyn ExecutionPlan>>,
     pub with_schema_evolution: bool,
-    /// Override for commit operation metadata.
-    pub operation_override: Option<OperationOverride>,
+    /// Commit operation metadata.
+    pub operation: Option<DeltaOperation>,
 }
 
 /// Internal metadata columns stripped before passing rows to DeltaWriterExec.
@@ -132,7 +99,7 @@ pub(crate) async fn build_row_level_rewrite_plan(
         DataFusionError::Plan("pre-expanded row-level plan missing expanded input".to_string())
     })?;
 
-    let operation = build_row_level_operation(&row_level_info);
+    let operation = row_level_info.operation.clone();
 
     let touched_plan_opt = row_level_info.touched_file_plan.clone();
 
@@ -255,7 +222,7 @@ pub(crate) async fn assemble_row_level_mor_plan(
         options.merge_schema = true;
     }
 
-    let operation = build_row_level_operation(&row_level_info);
+    let operation = row_level_info.operation.clone();
     let deletion_vector_plan = row_level_info.deletion_vector_plan.clone();
     let touched_file_plan = row_level_info.touched_file_plan.clone();
     let writer_input = strip_internal_columns(writer_input)?;
@@ -512,46 +479,12 @@ fn strip_internal_columns(input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn Execu
     }
 }
 
-fn build_row_level_operation(info: &RowLevelWriteInfo) -> Option<DeltaOperation> {
-    match info.operation_override.as_ref()? {
-        OperationOverride::Update { predicate } => Some(DeltaOperation::Update {
-            predicate: predicate.clone(),
-        }),
-        OperationOverride::Merge {
-            predicate,
-            merge_predicate,
-            matched_predicates,
-            not_matched_predicates,
-            not_matched_by_source_predicates,
-        } => {
-            let to_kernel_predicates = |predicates: &[MergePredicateInfo]| -> Vec<MergePredicate> {
-                predicates
-                    .iter()
-                    .map(|predicate| MergePredicate {
-                        action_type: predicate.action_type.clone(),
-                        predicate: predicate.predicate.clone(),
-                    })
-                    .collect()
-            };
-            Some(DeltaOperation::Merge {
-                predicate: predicate.clone(),
-                merge_predicate: merge_predicate.clone(),
-                matched_predicates: to_kernel_predicates(matched_predicates),
-                not_matched_predicates: to_kernel_predicates(not_matched_predicates),
-                not_matched_by_source_predicates: to_kernel_predicates(
-                    not_matched_by_source_predicates,
-                ),
-            })
-        }
-    }
-}
-
-fn merge_has_update_actions(info: &RowLevelWriteInfo) -> bool {
-    let Some(OperationOverride::Merge {
+pub(crate) fn merge_has_update_actions(info: &RowLevelWriteInfo) -> bool {
+    let Some(DeltaOperation::Merge {
         matched_predicates,
         not_matched_by_source_predicates,
         ..
-    }) = info.operation_override.as_ref()
+    }) = info.operation.as_ref()
     else {
         return false;
     };
@@ -563,11 +496,11 @@ fn merge_has_update_actions(info: &RowLevelWriteInfo) -> bool {
 }
 
 fn merge_has_delete_actions(info: &RowLevelWriteInfo) -> bool {
-    let Some(OperationOverride::Merge {
+    let Some(DeltaOperation::Merge {
         matched_predicates,
         not_matched_by_source_predicates,
         ..
-    }) = info.operation_override.as_ref()
+    }) = info.operation.as_ref()
     else {
         return false;
     };

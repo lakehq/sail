@@ -837,7 +837,7 @@ Feature: Delta Lake Merge
         """
         CREATE OR REPLACE TEMP VIEW src_merge_dv AS
         SELECT * FROM VALUES
-          (2, 'remove',   'delete'),
+          (2, 'updated',  'delete'),
           (4, 'inserted', 'insert')
         AS src(id, value, flag)
         """
@@ -928,7 +928,7 @@ Feature: Delta Lake Merge
       Then query result ordered
         | id | value  | flag   |
         | 1  | keep   | target |
-        | 2  | remove | target |
+        | 2  | updated | target |
         | 3  | stay   | target |
 
 

@@ -42,12 +42,9 @@ async fn plan_iceberg_merge(
     node: &RowLevelWriteNode,
     physical_inputs: &[Arc<dyn ExecutionPlan>],
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let write_plan = physical_inputs.first().cloned().ok_or_else(|| {
-        DataFusionError::Internal("Iceberg MERGE missing write plan input".to_string())
-    })?;
-    if node.touched_files_plan().is_some() && physical_inputs.len() < 2 {
-        return plan_err!("Iceberg MERGE missing touched-file plan input");
-    }
+    let [write_plan] = physical_inputs else {
+        return plan_err!("Iceberg MERGE requires exactly one write-plan input");
+    };
     let table_url =
         IcebergLakeSource::parse_table_url(vec![node.target_location().to_string()]).await?;
     let metadata_location = metadata_location_from_options(node.target_options());
@@ -73,7 +70,7 @@ async fn plan_iceberg_merge(
         data_rows_schema.as_ref(),
     )?;
     let writer: Arc<dyn ExecutionPlan> = Arc::new(IcebergWriterExec::new_merge(
-        write_plan,
+        Arc::clone(write_plan),
         table_url.clone(),
         partition_columns,
         PhysicalSinkMode::Append,

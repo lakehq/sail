@@ -10,7 +10,9 @@ use sail_common_datafusion::datasource::{
     MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, MergeCapableSource, MergeInfo, MergeMatchedAction,
     MergeNotMatchedBySourceAction,
 };
-use sail_logical_plan::merge::{expand_merge, validate_merge_internal_columns};
+use sail_logical_plan::merge::{
+    MergePlanRequirements, expand_merge, validate_merge_internal_columns,
+};
 use sail_logical_plan::row_level::RowLevelWriteNode;
 
 use crate::logical::table_source::IcebergTableSource;
@@ -85,24 +87,21 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         input_schema: info.input_schema,
     };
     let raw_target = Arc::clone(&info.target);
-    let raw_source = Arc::clone(&info.source);
-    let raw_input_schema = info.input_schema.clone();
     let expansion = expand_merge(
         info,
         MERGE_FILE_COLUMN,
         row_index_column,
         &[MERGE_PARTITION_SPEC_ID_COLUMN, MERGE_PARTITION_COLUMN],
+        MergePlanRequirements {
+            source_metrics: false,
+            touched_files: false,
+            row_index_deletes: false,
+        },
     )?;
-    // Iceberg consumes delete metadata from the write plan. RowLevelWriteNode still
-    // requires a touched-file input, so use an empty placeholder instead of planning
-    // cloned joins that would duplicate the source and target scans.
-    let placeholder_touched_plan = LogicalPlanBuilder::empty(false).build()?;
     let write_node = RowLevelWriteNode::new_merge(
         raw_target,
-        raw_source,
-        raw_input_schema,
         Arc::new(expansion.write_plan),
-        Arc::new(placeholder_touched_plan),
+        None,
         None,
         expansion.options,
         expansion.output_schema,

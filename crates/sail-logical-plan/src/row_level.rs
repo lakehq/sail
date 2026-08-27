@@ -11,8 +11,8 @@ use datafusion_expr::{
 use educe::Educe;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::datasource::{
-    DeleteInfo, DeltaCheckConstraintExpr, MergeIntoOptions, OPERATION_COLUMN, OptionLayer,
-    RowLevelCommand, RowLevelOperationType, RowLevelTarget, UpdateAssignment, UpdateInfo,
+    DeltaCheckConstraintExpr, MergeIntoOptions, OPERATION_COLUMN, OptionLayer, RowLevelCommand,
+    RowLevelOperationType, RowLevelTarget, UpdateAssignment, UpdateInfo,
 };
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -41,6 +41,21 @@ impl RowLevelEffect {
             Self::DeleteRows(_) => Self::DeleteRows(Arc::new(plan)),
         }
     }
+}
+
+fn row_level_effects(
+    write_plan: Arc<LogicalPlan>,
+    touched_files_plan: Option<Arc<LogicalPlan>>,
+    row_index_delete_plan: Option<Arc<LogicalPlan>>,
+) -> Vec<RowLevelEffect> {
+    let mut effects = vec![RowLevelEffect::WriteRows(write_plan)];
+    if let Some(plan) = touched_files_plan {
+        effects.push(RowLevelEffect::TouchFiles(plan));
+    }
+    if let Some(plan) = row_index_delete_plan {
+        effects.push(RowLevelEffect::DeleteRows(plan));
+    }
+    effects
 }
 
 /// Information retained until the format-specific commit is planned.
@@ -81,16 +96,13 @@ impl RowLevelCommitInfo {
 pub struct RowLevelWriteNode {
     target: RowLevelTarget,
     raw_target: Arc<LogicalPlan>,
-    raw_source: Option<Arc<LogicalPlan>>,
-    #[educe(PartialOrd(method(partial_cmp_by_equality), rank = 0))]
-    raw_input_schema: DFSchemaRef,
     effects: Vec<RowLevelEffect>,
-    #[educe(PartialOrd(method(partial_cmp_by_equality), rank = 1))]
+    #[educe(PartialOrd(method(partial_cmp_by_equality), rank = 0))]
     commit: RowLevelCommitInfo,
     /// `Some` means the target scan must still match at commit time. The inner
     /// value is `None` when the table had no current snapshot when it was read.
     expected_snapshot_id: Option<Option<i64>>,
-    #[educe(PartialOrd(method(partial_cmp_by_equality), rank = 2))]
+    #[educe(PartialOrd(method(partial_cmp_by_equality), rank = 1))]
     schema: DFSchemaRef,
 }
 
@@ -101,26 +113,16 @@ fn partial_cmp_by_equality<T: PartialEq>(left: &T, right: &T) -> Option<Ordering
 impl RowLevelWriteNode {
     pub fn new_merge(
         raw_target: Arc<LogicalPlan>,
-        raw_source: Arc<LogicalPlan>,
-        raw_input_schema: DFSchemaRef,
         write_plan: Arc<LogicalPlan>,
-        touched_files_plan: Arc<LogicalPlan>,
+        touched_files_plan: Option<Arc<LogicalPlan>>,
         row_index_delete_plan: Option<Arc<LogicalPlan>>,
         options: MergeIntoOptions,
         schema: DFSchemaRef,
     ) -> Self {
-        let mut effects = vec![
-            RowLevelEffect::WriteRows(write_plan),
-            RowLevelEffect::TouchFiles(touched_files_plan),
-        ];
-        if let Some(plan) = row_index_delete_plan {
-            effects.push(RowLevelEffect::DeleteRows(plan));
-        }
+        let effects = row_level_effects(write_plan, touched_files_plan, row_index_delete_plan);
         Self {
             target: options.target.clone(),
             raw_target,
-            raw_source: Some(raw_source),
-            raw_input_schema,
             effects,
             commit: RowLevelCommitInfo::Merge {
                 options: Box::new(options),
@@ -132,15 +134,12 @@ impl RowLevelWriteNode {
 
     pub fn new_delete(
         raw_target: Arc<LogicalPlan>,
-        raw_input_schema: DFSchemaRef,
         condition: Option<ExprWithSource>,
         target: RowLevelTarget,
     ) -> Self {
         Self {
             target,
             raw_target,
-            raw_source: None,
-            raw_input_schema,
             effects: vec![],
             commit: RowLevelCommitInfo::Delete {
                 predicate: condition,
@@ -150,59 +149,19 @@ impl RowLevelWriteNode {
         }
     }
 
-    pub fn new_delete_with_effects(
-        raw_target: Arc<LogicalPlan>,
-        raw_input_schema: DFSchemaRef,
-        write_plan: Arc<LogicalPlan>,
-        touched_files_plan: Arc<LogicalPlan>,
-        row_index_delete_plan: Option<Arc<LogicalPlan>>,
-        condition: Option<ExprWithSource>,
-        target: RowLevelTarget,
-        schema: DFSchemaRef,
-    ) -> Self {
-        let mut effects = vec![
-            RowLevelEffect::WriteRows(write_plan),
-            RowLevelEffect::TouchFiles(touched_files_plan),
-        ];
-        if let Some(plan) = row_index_delete_plan {
-            effects.push(RowLevelEffect::DeleteRows(plan));
-        }
-        Self {
-            target,
-            raw_target,
-            raw_source: None,
-            raw_input_schema,
-            effects,
-            commit: RowLevelCommitInfo::Delete {
-                predicate: condition,
-            },
-            expected_snapshot_id: None,
-            schema,
-        }
-    }
-
     pub fn new_update(
         raw_target: Arc<LogicalPlan>,
-        raw_input_schema: DFSchemaRef,
         write_plan: Arc<LogicalPlan>,
-        touched_files_plan: Arc<LogicalPlan>,
+        touched_files_plan: Option<Arc<LogicalPlan>>,
         row_index_delete_plan: Option<Arc<LogicalPlan>>,
         condition: Option<ExprWithSource>,
         target: RowLevelTarget,
         schema: DFSchemaRef,
     ) -> Self {
-        let mut effects = vec![
-            RowLevelEffect::WriteRows(write_plan),
-            RowLevelEffect::TouchFiles(touched_files_plan),
-        ];
-        if let Some(plan) = row_index_delete_plan {
-            effects.push(RowLevelEffect::DeleteRows(plan));
-        }
+        let effects = row_level_effects(write_plan, touched_files_plan, row_index_delete_plan);
         Self {
             target,
             raw_target,
-            raw_source: None,
-            raw_input_schema,
             effects,
             commit: RowLevelCommitInfo::Update {
                 predicate: condition,
@@ -229,45 +188,12 @@ impl RowLevelWriteNode {
         &self.effects
     }
 
-    pub fn commit(&self) -> &RowLevelCommitInfo {
-        &self.commit
-    }
-
     pub fn merge_options(&self) -> Option<&MergeIntoOptions> {
         self.commit.merge_options()
     }
 
-    pub fn write_plan(&self) -> Option<&Arc<LogicalPlan>> {
-        self.effects.iter().find_map(|effect| match effect {
-            RowLevelEffect::WriteRows(plan) => Some(plan),
-            RowLevelEffect::TouchFiles(_) | RowLevelEffect::DeleteRows(_) => None,
-        })
-    }
-
     pub fn raw_target(&self) -> &Arc<LogicalPlan> {
         &self.raw_target
-    }
-
-    pub fn raw_source(&self) -> Option<&Arc<LogicalPlan>> {
-        self.raw_source.as_ref()
-    }
-
-    pub fn raw_input_schema(&self) -> &DFSchemaRef {
-        &self.raw_input_schema
-    }
-
-    pub fn touched_files_plan(&self) -> Option<&Arc<LogicalPlan>> {
-        self.effects.iter().find_map(|effect| match effect {
-            RowLevelEffect::TouchFiles(plan) => Some(plan),
-            RowLevelEffect::WriteRows(_) | RowLevelEffect::DeleteRows(_) => None,
-        })
-    }
-
-    pub fn row_index_delete_plan(&self) -> Option<&Arc<LogicalPlan>> {
-        self.effects.iter().find_map(|effect| match effect {
-            RowLevelEffect::DeleteRows(plan) => Some(plan),
-            RowLevelEffect::WriteRows(_) | RowLevelEffect::TouchFiles(_) => None,
-        })
     }
 
     pub fn condition(&self) -> Option<&ExprWithSource> {
@@ -280,14 +206,6 @@ impl RowLevelWriteNode {
 
     pub fn target_location(&self) -> &str {
         &self.target.location
-    }
-
-    pub fn target_table_name(&self) -> &[String] {
-        &self.target.table_name
-    }
-
-    pub fn target_partition_by(&self) -> &[String] {
-        &self.target.partition_by
     }
 
     pub fn target_options(&self) -> &[OptionLayer] {
@@ -379,8 +297,6 @@ impl UserDefinedLogicalNodeCore for RowLevelWriteNode {
         Ok(Self {
             target: self.target.clone(),
             raw_target: self.raw_target.clone(),
-            raw_source: self.raw_source.clone(),
-            raw_input_schema: self.raw_input_schema.clone(),
             effects,
             commit: self.commit.clone(),
             expected_snapshot_id: self.expected_snapshot_id,
@@ -406,34 +322,12 @@ fn normalize_row_level_target(
     path_column: &str,
     row_index_column: Option<&str>,
 ) -> Result<NormalizedRowLevelTarget> {
-    if input_schema.fields().len() != resolved_field_names.len() {
-        return plan_err!(
-            "row-level target schema has {} fields but {} resolved names",
-            input_schema.fields().len(),
-            resolved_field_names.len()
-        );
-    }
-    if plan.schema().fields().len() < resolved_field_names.len() {
-        return plan_err!(
-            "row-level target plan has {} fields but {} data columns are required",
-            plan.schema().fields().len(),
-            resolved_field_names.len()
-        );
-    }
-
-    let mut rename_map = HashMap::new();
+    let rename_map =
+        row_level_target_rename_map(input_schema, plan.schema(), resolved_field_names)?;
     let mut projections = Vec::with_capacity(
         resolved_field_names.len() + 1 + usize::from(row_index_column.is_some()),
     );
-    for ((input_field, plan_field), resolved_name) in input_schema
-        .fields()
-        .iter()
-        .zip(plan.schema().fields())
-        .zip(resolved_field_names)
-    {
-        rename_map.insert(input_field.name().clone(), resolved_name.clone());
-        rename_map.insert(plan_field.name().clone(), resolved_name.clone());
-        rename_map.insert(resolved_name.clone(), resolved_name.clone());
+    for (plan_field, resolved_name) in plan.schema().fields().iter().zip(resolved_field_names) {
         projections.push(
             Expr::Column(Column::from_name(plan_field.name().clone())).alias(resolved_name.clone()),
         );
@@ -452,6 +346,40 @@ fn normalize_row_level_target(
         field_names: resolved_field_names.to_vec(),
         rename_map,
     })
+}
+
+fn row_level_target_rename_map(
+    input_schema: &DFSchemaRef,
+    plan_schema: &DFSchemaRef,
+    resolved_field_names: &[String],
+) -> Result<HashMap<String, String>> {
+    if input_schema.fields().len() != resolved_field_names.len() {
+        return plan_err!(
+            "row-level target schema has {} fields but {} resolved names",
+            input_schema.fields().len(),
+            resolved_field_names.len()
+        );
+    }
+    if plan_schema.fields().len() < resolved_field_names.len() {
+        return plan_err!(
+            "row-level target plan has {} fields but {} data columns are required",
+            plan_schema.fields().len(),
+            resolved_field_names.len()
+        );
+    }
+
+    let mut rename_map = HashMap::new();
+    for ((input_field, plan_field), resolved_name) in input_schema
+        .fields()
+        .iter()
+        .zip(plan_schema.fields())
+        .zip(resolved_field_names)
+    {
+        rename_map.insert(input_field.name().clone(), resolved_name.clone());
+        rename_map.insert(plan_field.name().clone(), resolved_name.clone());
+        rename_map.insert(resolved_name.clone(), resolved_name.clone());
+    }
+    Ok(rename_map)
 }
 
 fn append_metadata_projection(
@@ -486,93 +414,21 @@ fn rewrite_target_expr(expr: Expr, rename_map: &HashMap<String, String>) -> Resu
     .map(|transformed| transformed.data)
 }
 
-pub fn expand_delete(
-    info: DeleteInfo,
-    path_column: &str,
-    row_index_column: Option<&str>,
-) -> Result<RowLevelWriteNode> {
-    let DeleteInfo {
-        target_plan,
-        target,
-        condition,
-        input_schema,
-        resolved_target_field_names,
-        case_sensitive,
-    } = info;
-    validate_row_level_internal_columns(
-        &input_schema,
-        &resolved_target_field_names,
-        path_column,
-        row_index_column,
-        case_sensitive,
-    )?;
-    let normalized = normalize_row_level_target(
-        target_plan.as_ref().clone(),
-        &input_schema,
-        &resolved_target_field_names,
-        path_column,
-        row_index_column,
-    )?;
-    let condition = condition
-        .map(|condition| -> Result<_> {
+pub fn rewrite_row_level_target_condition(
+    condition: Option<ExprWithSource>,
+    input_schema: &DFSchemaRef,
+    plan_schema: &DFSchemaRef,
+    resolved_field_names: &[String],
+) -> Result<Option<ExprWithSource>> {
+    let rename_map = row_level_target_rename_map(input_schema, plan_schema, resolved_field_names)?;
+    condition
+        .map(|condition| {
             Ok(ExprWithSource::new(
-                rewrite_target_expr(condition.expr, &normalized.rename_map)?,
+                rewrite_target_expr(condition.expr, &rename_map)?,
                 condition.source,
             ))
         })
-        .transpose()?;
-    let predicate = condition
-        .as_ref()
-        .map(|condition| condition.expr.clone())
-        .unwrap_or_else(|| lit(true));
-
-    let mut write_projection = normalized
-        .field_names
-        .iter()
-        .map(|name| col(name).alias(name))
-        .collect::<Vec<_>>();
-    write_projection.push(col(path_column).alias(path_column));
-    write_projection.push(
-        when(
-            predicate.clone(),
-            lit(RowLevelOperationType::Delete.as_i32()),
-        )
-        .otherwise(lit(RowLevelOperationType::Copy.as_i32()))?
-        .alias(OPERATION_COLUMN),
-    );
-    let write_rows = LogicalPlanBuilder::from(normalized.plan.clone())
-        .project(write_projection)?
-        .build()?;
-
-    let touched_files = LogicalPlanBuilder::from(normalized.plan.clone())
-        .filter(predicate.clone())?
-        .aggregate(vec![col(path_column)], Vec::<Expr>::new())?
-        .project(vec![col(path_column).alias(path_column)])?
-        .build()?;
-
-    let delete_rows = row_index_column
-        .map(|row_index_column| {
-            LogicalPlanBuilder::from(normalized.plan)
-                .filter(predicate)?
-                .project(vec![
-                    col(path_column).alias(path_column),
-                    col(row_index_column).alias(row_index_column),
-                ])?
-                .build()
-        })
-        .transpose()?
-        .map(Arc::new);
-
-    Ok(RowLevelWriteNode::new_delete_with_effects(
-        target_plan,
-        input_schema,
-        Arc::new(write_rows),
-        Arc::new(touched_files),
-        delete_rows,
-        condition,
-        target,
-        Arc::new(DFSchema::empty()),
-    ))
+        .transpose()
 }
 
 pub fn expand_update(
@@ -726,9 +582,8 @@ pub fn expand_update(
 
     Ok(RowLevelWriteNode::new_update(
         target_plan,
-        input_schema,
         Arc::new(write_rows),
-        Arc::new(touched_files),
+        Some(Arc::new(touched_files)),
         delete_rows,
         condition,
         target,
@@ -890,8 +745,8 @@ mod tests {
             options: vec![],
             lakehouse_table: None,
         };
-        let node = RowLevelWriteNode::new_delete(plan, Arc::new(DFSchema::empty()), None, target)
-            .with_expected_snapshot_id(Some(None));
+        let node =
+            RowLevelWriteNode::new_delete(plan, None, target).with_expected_snapshot_id(Some(None));
 
         assert_eq!(node.command(), RowLevelCommand::Delete);
         assert!(node.effects().is_empty());
@@ -914,7 +769,7 @@ mod tests {
             options: vec![],
             lakehouse_table: None,
         };
-        let node = RowLevelWriteNode::new_delete(plan, Arc::new(DFSchema::empty()), None, target);
+        let node = RowLevelWriteNode::new_delete(plan, None, target);
         let mut distinct_commit = node.clone();
         distinct_commit.commit = RowLevelCommitInfo::Delete {
             predicate: Some(ExprWithSource::new(lit(true), Some("true".into()))),

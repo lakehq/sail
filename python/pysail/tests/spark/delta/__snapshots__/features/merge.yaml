@@ -57,7 +57,7 @@ data:
 
     == Plan Steps ==
     initial_logical_plan:
-    RowLevelWrite: command=Merge, target=delta_merge_explain_codegen, format=DELTA, matched=2, not_matched=1, not_matched_by_source=1
+    RowLevelWrite: command=Merge, target=delta_merge_explain_codegen, format=delta, matched=2, not_matched=1, not_matched_by_source=1
       Union
         Projection: CASE WHEN __sail_merge_target_row_present IS NULL AND __sail_merge_source_row_present IS NOT NULL AND Boolean(true) IS TRUE THEN CAST(__sail_src_id AS Int32) ELSE id END AS id, CASE WHEN __sail_merge_target_row_present IS NULL AND __sail_merge_source_row_present IS NOT NULL AND Boolean(true) IS TRUE THEN CAST(__sail_src_category AS Utf8) ELSE category END AS category, CASE WHEN __sail_merge_target_row_present IS NOT NULL AND __sail_merge_source_row_present IS NOT NULL AND category = Utf8("vip") IS TRUE THEN CAST(__sail_src_amount + Int32(1) AS Int32) WHEN __sail_merge_target_row_present IS NULL AND __sail_merge_source_row_present IS NOT NULL AND Boolean(true) IS TRUE THEN CAST(__sail_src_amount AS Int32) ELSE amount END AS amount, CASE WHEN __sail_merge_target_row_present IS NOT NULL AND __sail_merge_source_row_present IS NOT NULL AND category = Utf8("vip") IS TRUE THEN CAST(spark_concat(__sail_src_note, Utf8("_"), id) AS Utf8) WHEN __sail_merge_target_row_present IS NOT NULL AND __sail_merge_source_row_present IS NULL AND category = Utf8("stale") IS TRUE THEN CAST(spark_concat(note, Utf8("_orphan")) AS Utf8) WHEN __sail_merge_target_row_present IS NULL AND __sail_merge_source_row_present IS NOT NULL AND Boolean(true) IS TRUE THEN CAST(spark_concat(Utf8("insert_"), __sail_src_note) AS Utf8) ELSE note END AS note, __sail_file_path AS __sail_file_path, CASE WHEN __sail_merge_target_row_present IS NOT NULL AND __sail_merge_source_row_present IS NOT NULL AND category = Utf8("vip") IS TRUE THEN Int32(6) WHEN __sail_merge_target_row_present IS NOT NULL AND __sail_merge_source_row_present IS NOT NULL AND category = Utf8("stale") IS TRUE AND NOT __sail_merge_target_row_present IS NOT NULL AND __sail_merge_source_row_present IS NOT NULL AND category = Utf8("vip") IS TRUE THEN Int32(5) WHEN __sail_merge_target_row_present IS NOT NULL AND __sail_merge_source_row_present IS NULL AND category = Utf8("stale") IS TRUE THEN Int32(8) WHEN __sail_merge_target_row_present IS NULL AND __sail_merge_source_row_present IS NOT NULL AND Boolean(true) IS TRUE THEN Int32(3) WHEN __sail_merge_target_row_present IS NULL THEN Int32(4) ELSE Int32(0) END AS __sail_operation_type, Int64(NULL) AS __sail_merge_source_metric
           Filter: __sail_merge_target_row_present IS NOT NULL OR NOT __sail_merge_target_row_present IS NOT NULL AND __sail_merge_source_row_present IS NOT NULL
@@ -146,7 +146,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after simplify_expressions:
-    RowLevelWrite: command=Merge, target=delta_merge_explain_codegen, format=DELTA, matched=2, not_matched=1, not_matched_by_source=1
+    RowLevelWrite: command=Merge, target=delta_merge_explain_codegen, format=delta, matched=2, not_matched=1, not_matched_by_source=1
       Union
         Projection: CASE WHEN __sail_merge_target_row_present IS NULL AND __sail_merge_source_row_present IS NOT NULL IS TRUE THEN CAST(__sail_src_id AS Int32) ELSE id END AS id, CASE WHEN __sail_merge_target_row_present IS NULL AND __sail_merge_source_row_present IS NOT NULL IS TRUE THEN CAST(__sail_src_category AS Utf8) ELSE category END AS category, CASE WHEN __sail_merge_target_row_present IS NOT NULL AND __sail_merge_source_row_present IS NOT NULL AND category = Utf8("vip") IS TRUE THEN CAST(__sail_src_amount + Int32(1) AS Int32) WHEN __sail_merge_target_row_present IS NULL AND __sail_merge_source_row_present IS NOT NULL IS TRUE THEN CAST(__sail_src_amount AS Int32) ELSE amount END AS amount, CASE WHEN __sail_merge_target_row_present IS NOT NULL AND __sail_merge_source_row_present IS NOT NULL AND category = Utf8("vip") IS TRUE THEN CAST(spark_concat(__sail_src_note, Utf8("_"), id) AS Utf8) WHEN __sail_merge_target_row_present IS NOT NULL AND __sail_merge_source_row_present IS NULL AND category = Utf8("stale") IS TRUE THEN CAST(spark_concat(note, Utf8("_orphan")) AS Utf8) WHEN __sail_merge_target_row_present IS NULL AND __sail_merge_source_row_present IS NOT NULL IS TRUE THEN CAST(spark_concat(Utf8("insert_"), __sail_src_note) AS Utf8) ELSE note END AS note, __sail_file_path AS __sail_file_path, CASE WHEN __sail_merge_target_row_present IS NOT NULL AND __sail_merge_source_row_present IS NOT NULL AND category = Utf8("vip") IS TRUE THEN Int32(6) WHEN __sail_merge_target_row_present IS NOT NULL AND __sail_merge_source_row_present IS NOT NULL AND category = Utf8("stale") IS TRUE AND NOT __sail_merge_target_row_present IS NOT NULL AND __sail_merge_source_row_present IS NOT NULL AND category = Utf8("vip") IS TRUE THEN Int32(5) WHEN __sail_merge_target_row_present IS NOT NULL AND __sail_merge_source_row_present IS NULL AND category = Utf8("stale") IS TRUE THEN Int32(8) WHEN __sail_merge_target_row_present IS NULL AND __sail_merge_source_row_present IS NOT NULL IS TRUE THEN Int32(3) WHEN __sail_merge_target_row_present IS NULL THEN Int32(4) ELSE Int32(0) END AS __sail_operation_type, Int64(NULL) AS __sail_merge_source_metric
           Filter: __sail_merge_target_row_present IS NOT NULL OR __sail_merge_target_row_present IS NULL AND __sail_merge_source_row_present IS NOT NULL
@@ -253,7 +253,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
-    RowLevelWrite: command=Merge, target=delta_merge_explain_codegen, format=DELTA, matched=2, not_matched=1, not_matched_by_source=1
+    RowLevelWrite: command=Merge, target=delta_merge_explain_codegen, format=delta, matched=2, not_matched=1, not_matched_by_source=1
       Union
         Projection: CASE WHEN __sail_merge_target_row_present IS NULL AND __sail_merge_source_row_present IS NOT NULL IS TRUE THEN CAST(__sail_src_id AS Int32) ELSE id END AS id, CASE WHEN __sail_merge_target_row_present IS NULL AND __sail_merge_source_row_present IS NOT NULL IS TRUE THEN CAST(__sail_src_category AS Utf8) ELSE category END AS category, CASE WHEN __sail_merge_target_row_present IS NOT NULL AND __sail_merge_source_row_present IS NOT NULL AND category = Utf8("vip") IS TRUE THEN CAST(__sail_src_amount + Int32(1) AS Int32) WHEN __sail_merge_target_row_present IS NULL AND __sail_merge_source_row_present IS NOT NULL IS TRUE THEN CAST(__sail_src_amount AS Int32) ELSE amount END AS amount, CASE WHEN __sail_merge_target_row_present IS NOT NULL AND __sail_merge_source_row_present IS NOT NULL AND category = Utf8("vip") IS TRUE THEN CAST(spark_concat(__sail_src_note, Utf8("_"), id) AS Utf8) WHEN __sail_merge_target_row_present IS NOT NULL AND __sail_merge_source_row_present IS NULL AND category = Utf8("stale") IS TRUE THEN CAST(spark_concat(note, Utf8("_orphan")) AS Utf8) WHEN __sail_merge_target_row_present IS NULL AND __sail_merge_source_row_present IS NOT NULL IS TRUE THEN CAST(spark_concat(Utf8("insert_"), __sail_src_note) AS Utf8) ELSE note END AS note, __sail_file_path AS __sail_file_path, CASE WHEN __sail_merge_target_row_present IS NOT NULL AND __sail_merge_source_row_present IS NOT NULL AND category = Utf8("vip") IS TRUE THEN Int32(6) WHEN __sail_merge_target_row_present IS NOT NULL AND __sail_merge_source_row_present IS NOT NULL AND category = Utf8("stale") IS TRUE AND NOT __sail_merge_target_row_present IS NOT NULL AND __sail_merge_source_row_present IS NOT NULL AND category = Utf8("vip") IS TRUE THEN Int32(5) WHEN __sail_merge_target_row_present IS NOT NULL AND __sail_merge_source_row_present IS NULL AND category = Utf8("stale") IS TRUE THEN Int32(8) WHEN __sail_merge_target_row_present IS NULL AND __sail_merge_source_row_present IS NOT NULL IS TRUE THEN Int32(3) WHEN __sail_merge_target_row_present IS NULL THEN Int32(4) ELSE Int32(0) END AS __sail_operation_type, Int64(NULL) AS __sail_merge_source_metric
           Filter: __sail_merge_target_row_present IS NOT NULL OR __sail_merge_target_row_present IS NULL AND __sail_merge_source_row_present IS NOT NULL
@@ -324,7 +324,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after common_sub_expression_eliminate:
-    RowLevelWrite: command=Merge, target=delta_merge_explain_codegen, format=DELTA, matched=2, not_matched=1, not_matched_by_source=1
+    RowLevelWrite: command=Merge, target=delta_merge_explain_codegen, format=delta, matched=2, not_matched=1, not_matched_by_source=1
       Union
         Projection: CASE WHEN __common_expr_1 THEN CAST(__sail_src_id AS Int32) ELSE id END AS id, CASE WHEN __common_expr_1 THEN CAST(__sail_src_category AS Utf8) ELSE category END AS category, CASE WHEN __common_expr_2 THEN CAST(__sail_src_amount + Int32(1) AS Int32) WHEN __common_expr_1 THEN CAST(__sail_src_amount AS Int32) ELSE amount END AS amount, CASE WHEN __common_expr_2 THEN CAST(spark_concat(__sail_src_note, Utf8("_"), id) AS Utf8) WHEN __common_expr_3 AND __sail_merge_source_row_present IS NULL AND category = Utf8("stale") IS TRUE THEN CAST(spark_concat(note, Utf8("_orphan")) AS Utf8) WHEN __common_expr_1 THEN CAST(spark_concat(Utf8("insert_"), __sail_src_note) AS Utf8) ELSE note END AS note, __sail_file_path AS __sail_file_path, CASE WHEN __common_expr_2 THEN Int32(6) WHEN __common_expr_4 AND category = Utf8("stale") IS TRUE AND NOT __common_expr_2 THEN Int32(5) WHEN __common_expr_3 AND __sail_merge_source_row_present IS NULL AND category = Utf8("stale") IS TRUE THEN Int32(8) WHEN __common_expr_1 THEN Int32(3) WHEN __common_expr_5 THEN Int32(4) ELSE Int32(0) END AS __sail_operation_type, Int64(NULL) AS __sail_merge_source_metric
           Projection: __common_expr_6 AND __sail_merge_source_row_present IS NOT NULL IS TRUE AS __common_expr_1, __common_expr_7 AND category = Utf8("vip") IS TRUE AS __common_expr_2, __common_expr_8 AS __common_expr_3, __common_expr_7 AS __common_expr_4, __common_expr_6 AS __common_expr_5, id, category, amount, note, __sail_file_path, __sail_merge_target_row_id, __sail_merge_target_row_present, __sail_src_id, __sail_src_category, __sail_src_amount, __sail_src_note, __sail_merge_source_row_present
@@ -395,7 +395,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
-    RowLevelWrite: command=Merge, target=delta_merge_explain_codegen, format=DELTA, matched=2, not_matched=1, not_matched_by_source=1
+    RowLevelWrite: command=Merge, target=delta_merge_explain_codegen, format=delta, matched=2, not_matched=1, not_matched_by_source=1
       Union
         Projection: CASE WHEN __common_expr_1 THEN CAST(__sail_src_id AS Int32) ELSE id END AS id, CASE WHEN __common_expr_1 THEN CAST(__sail_src_category AS Utf8) ELSE category END AS category, CASE WHEN __common_expr_2 THEN CAST(__sail_src_amount + Int32(1) AS Int32) WHEN __common_expr_1 THEN CAST(__sail_src_amount AS Int32) ELSE amount END AS amount, CASE WHEN __common_expr_2 THEN CAST(spark_concat(__sail_src_note, Utf8("_"), id) AS Utf8) WHEN __common_expr_3 AND __sail_merge_source_row_present IS NULL AND category = Utf8("stale") IS TRUE THEN CAST(spark_concat(note, Utf8("_orphan")) AS Utf8) WHEN __common_expr_1 THEN CAST(spark_concat(Utf8("insert_"), __sail_src_note) AS Utf8) ELSE note END AS note, __sail_file_path AS __sail_file_path, CASE WHEN __common_expr_2 THEN Int32(6) WHEN __common_expr_4 AND category = Utf8("stale") IS TRUE AND NOT __common_expr_2 THEN Int32(5) WHEN __common_expr_3 AND __sail_merge_source_row_present IS NULL AND category = Utf8("stale") IS TRUE THEN Int32(8) WHEN __common_expr_1 THEN Int32(3) WHEN __common_expr_5 THEN Int32(4) ELSE Int32(0) END AS __sail_operation_type, Int64(NULL) AS __sail_merge_source_metric
           Projection: __common_expr_6 AND __sail_merge_source_row_present IS NOT NULL IS TRUE AS __common_expr_1, __common_expr_7 AND category = Utf8("vip") IS TRUE AS __common_expr_2, __common_expr_8 AS __common_expr_3, __common_expr_7 AS __common_expr_4, __common_expr_6 AS __common_expr_5, id, category, amount, note, __sail_file_path, __sail_src_id, __sail_src_category, __sail_src_amount, __sail_src_note, __sail_merge_source_row_present
@@ -513,7 +513,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
-    RowLevelWrite: command=Merge, target=delta_merge_explain_codegen, format=DELTA, matched=2, not_matched=1, not_matched_by_source=1
+    RowLevelWrite: command=Merge, target=delta_merge_explain_codegen, format=delta, matched=2, not_matched=1, not_matched_by_source=1
       Union
         Projection: CASE WHEN __common_expr_1 THEN CAST(__sail_src_id AS Int32) ELSE id END AS id, CASE WHEN __common_expr_1 THEN CAST(__sail_src_category AS Utf8) ELSE category END AS category, CASE WHEN __common_expr_2 THEN CAST(__sail_src_amount + Int32(1) AS Int32) WHEN __common_expr_1 THEN CAST(__sail_src_amount AS Int32) ELSE amount END AS amount, CASE WHEN __common_expr_2 THEN CAST(spark_concat(__sail_src_note, Utf8("_"), id) AS Utf8) WHEN __common_expr_3 AND __sail_merge_source_row_present IS NULL AND category = Utf8("stale") IS TRUE THEN CAST(spark_concat(note, Utf8("_orphan")) AS Utf8) WHEN __common_expr_1 THEN CAST(spark_concat(Utf8("insert_"), __sail_src_note) AS Utf8) ELSE note END AS note, __sail_file_path AS __sail_file_path, CASE WHEN __common_expr_2 THEN Int32(6) WHEN __common_expr_4 AND category = Utf8("stale") IS TRUE AND NOT __common_expr_2 THEN Int32(5) WHEN __common_expr_3 AND __sail_merge_source_row_present IS NULL AND category = Utf8("stale") IS TRUE THEN Int32(8) WHEN __common_expr_1 THEN Int32(3) WHEN __common_expr_5 THEN Int32(4) ELSE Int32(0) END AS __sail_operation_type, Int64(NULL) AS __sail_merge_source_metric
           Projection: __common_expr_6 AND __sail_merge_source_row_present IS NOT NULL IS TRUE AS __common_expr_1, __common_expr_7 AND category = Utf8("vip") IS TRUE AS __common_expr_2, __common_expr_8 AS __common_expr_3, __common_expr_7 AS __common_expr_4, __common_expr_6 AS __common_expr_5, id, category, amount, note, __sail_file_path, __sail_src_id, __sail_src_category, __sail_src_amount, __sail_src_note, __sail_merge_source_row_present
@@ -583,7 +583,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
-    RowLevelWrite: command=Merge, target=delta_merge_explain_codegen, format=DELTA, matched=2, not_matched=1, not_matched_by_source=1
+    RowLevelWrite: command=Merge, target=delta_merge_explain_codegen, format=delta, matched=2, not_matched=1, not_matched_by_source=1
       Union
         Projection: CASE WHEN __common_expr_1 THEN CAST(__sail_src_id AS Int32) ELSE id END AS id, CASE WHEN __common_expr_1 THEN CAST(__sail_src_category AS Utf8) ELSE category END AS category, CASE WHEN __common_expr_2 THEN CAST(__sail_src_amount + Int32(1) AS Int32) WHEN __common_expr_1 THEN CAST(__sail_src_amount AS Int32) ELSE amount END AS amount, CASE WHEN __common_expr_2 THEN CAST(spark_concat(__sail_src_note, Utf8("_"), id) AS Utf8) WHEN __common_expr_3 AND __sail_merge_source_row_present IS NULL AND category = Utf8("stale") IS TRUE THEN CAST(spark_concat(note, Utf8("_orphan")) AS Utf8) WHEN __common_expr_1 THEN CAST(spark_concat(Utf8("insert_"), __sail_src_note) AS Utf8) ELSE note END AS note, __sail_file_path AS __sail_file_path, CASE WHEN __common_expr_2 THEN Int32(6) WHEN __common_expr_4 AND category = Utf8("stale") IS TRUE AND NOT __common_expr_2 THEN Int32(5) WHEN __common_expr_3 AND __sail_merge_source_row_present IS NULL AND category = Utf8("stale") IS TRUE THEN Int32(8) WHEN __common_expr_1 THEN Int32(3) WHEN __common_expr_5 THEN Int32(4) ELSE Int32(0) END AS __sail_operation_type, Int64(NULL) AS __sail_merge_source_metric
           Projection: __common_expr_6 AND __sail_merge_source_row_present IS NOT NULL IS TRUE AS __common_expr_1, __common_expr_7 AND category = Utf8("vip") IS TRUE AS __common_expr_2, __common_expr_8 AS __common_expr_3, __common_expr_7 AS __common_expr_4, __common_expr_6 AS __common_expr_5, id, category, amount, note, __sail_file_path, __sail_src_id, __sail_src_category, __sail_src_amount, __sail_src_note, __sail_merge_source_row_present
@@ -644,7 +644,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan:
-    RowLevelWrite: command=Merge, target=delta_merge_explain_codegen, format=DELTA, matched=2, not_matched=1, not_matched_by_source=1
+    RowLevelWrite: command=Merge, target=delta_merge_explain_codegen, format=delta, matched=2, not_matched=1, not_matched_by_source=1
       Union
         Projection: CASE WHEN __common_expr_1 THEN CAST(__sail_src_id AS Int32) ELSE id END AS id, CASE WHEN __common_expr_1 THEN CAST(__sail_src_category AS Utf8) ELSE category END AS category, CASE WHEN __common_expr_2 THEN CAST(__sail_src_amount + Int32(1) AS Int32) WHEN __common_expr_1 THEN CAST(__sail_src_amount AS Int32) ELSE amount END AS amount, CASE WHEN __common_expr_2 THEN CAST(spark_concat(__sail_src_note, Utf8("_"), id) AS Utf8) WHEN __common_expr_3 AND __sail_merge_source_row_present IS NULL AND category = Utf8("stale") IS TRUE THEN CAST(spark_concat(note, Utf8("_orphan")) AS Utf8) WHEN __common_expr_1 THEN CAST(spark_concat(Utf8("insert_"), __sail_src_note) AS Utf8) ELSE note END AS note, __sail_file_path AS __sail_file_path, CASE WHEN __common_expr_2 THEN Int32(6) WHEN __common_expr_4 AND category = Utf8("stale") IS TRUE AND NOT __common_expr_2 THEN Int32(5) WHEN __common_expr_3 AND __sail_merge_source_row_present IS NULL AND category = Utf8("stale") IS TRUE THEN Int32(8) WHEN __common_expr_1 THEN Int32(3) WHEN __common_expr_5 THEN Int32(4) ELSE Int32(0) END AS __sail_operation_type, Int64(NULL) AS __sail_merge_source_metric
           Projection: __common_expr_6 AND __sail_merge_source_row_present IS NOT NULL IS TRUE AS __common_expr_1, __common_expr_7 AND category = Utf8("vip") IS TRUE AS __common_expr_2, __common_expr_8 AS __common_expr_3, __common_expr_7 AS __common_expr_4, __common_expr_6 AS __common_expr_5, id, category, amount, note, __sail_file_path, __sail_src_id, __sail_src_category, __sail_src_amount, __sail_src_note, __sail_merge_source_row_present
@@ -2337,7 +2337,7 @@ name: "test_explain_extended_does_not_include_mergecardinalitycheck_when_source_
 data:
   |-
     == Parsed Logical Plan ==
-    RowLevelWrite: command=Merge, target=delta_merge_cardinality_skip, format=DELTA, matched=1, not_matched=1, not_matched_by_source=0
+    RowLevelWrite: command=Merge, target=delta_merge_cardinality_skip, format=delta, matched=1, not_matched=1, not_matched_by_source=0
       Union
         Projection: CASE WHEN __sail_merge_target_row_present IS NULL AND __sail_merge_source_row_present IS NOT NULL AND Boolean(true) IS TRUE THEN CAST(__sail_src_id AS Int32) ELSE id END AS id, CASE WHEN __sail_merge_target_row_present IS NOT NULL AND __sail_merge_source_row_present IS NOT NULL AND Boolean(true) IS TRUE THEN CAST(__sail_src_value AS Utf8) WHEN __sail_merge_target_row_present IS NULL AND __sail_merge_source_row_present IS NOT NULL AND Boolean(true) IS TRUE THEN CAST(__sail_src_value AS Utf8) ELSE value END AS value, __sail_file_path AS __sail_file_path, CASE WHEN __sail_merge_target_row_present IS NOT NULL AND __sail_merge_source_row_present IS NOT NULL AND Boolean(true) IS TRUE THEN Int32(6) WHEN __sail_merge_target_row_present IS NULL AND __sail_merge_source_row_present IS NOT NULL AND Boolean(true) IS TRUE THEN Int32(3) WHEN __sail_merge_target_row_present IS NULL THEN Int32(4) ELSE Int32(0) END AS __sail_operation_type, Int64(NULL) AS __sail_merge_source_metric
           Filter: __sail_merge_target_row_present IS NOT NULL OR NOT __sail_merge_target_row_present IS NOT NULL AND __sail_merge_source_row_present IS NOT NULL
@@ -2396,7 +2396,7 @@ data:
 
     == Analyzed Logical Plan ==
 
-    RowLevelWrite: command=Merge, target=delta_merge_cardinality_skip, format=DELTA, matched=1, not_matched=1, not_matched_by_source=0
+    RowLevelWrite: command=Merge, target=delta_merge_cardinality_skip, format=delta, matched=1, not_matched=1, not_matched_by_source=0
       Union
         Projection: CASE WHEN __sail_merge_target_row_present IS NULL AND __sail_merge_source_row_present IS NOT NULL AND Boolean(true) IS TRUE THEN CAST(__sail_src_id AS Int32) ELSE id END AS id, CASE WHEN __sail_merge_target_row_present IS NOT NULL AND __sail_merge_source_row_present IS NOT NULL AND Boolean(true) IS TRUE THEN CAST(__sail_src_value AS Utf8) WHEN __sail_merge_target_row_present IS NULL AND __sail_merge_source_row_present IS NOT NULL AND Boolean(true) IS TRUE THEN CAST(__sail_src_value AS Utf8) ELSE value END AS value, __sail_file_path AS __sail_file_path, CASE WHEN __sail_merge_target_row_present IS NOT NULL AND __sail_merge_source_row_present IS NOT NULL AND Boolean(true) IS TRUE THEN Int32(6) WHEN __sail_merge_target_row_present IS NULL AND __sail_merge_source_row_present IS NOT NULL AND Boolean(true) IS TRUE THEN Int32(3) WHEN __sail_merge_target_row_present IS NULL THEN Int32(4) ELSE Int32(0) END AS __sail_operation_type, Int64(NULL) AS __sail_merge_source_metric
           Filter: __sail_merge_target_row_present IS NOT NULL OR NOT __sail_merge_target_row_present IS NOT NULL AND __sail_merge_source_row_present IS NOT NULL
@@ -2454,7 +2454,7 @@ data:
                                     Values: (Int32(1), Utf8("s1")), (Int32(1), Utf8("s2"))
 
     == Optimized Logical Plan ==
-    RowLevelWrite: command=Merge, target=delta_merge_cardinality_skip, format=DELTA, matched=1, not_matched=1, not_matched_by_source=0
+    RowLevelWrite: command=Merge, target=delta_merge_cardinality_skip, format=delta, matched=1, not_matched=1, not_matched_by_source=0
       Union
         Projection: CASE WHEN __common_expr_1 THEN CAST(__sail_src_id AS Int32) ELSE id END AS id, CASE WHEN __common_expr_2 THEN CAST(__sail_src_value AS Utf8) WHEN __common_expr_1 THEN CAST(__sail_src_value AS Utf8) ELSE value END AS value, __sail_file_path AS __sail_file_path, CASE WHEN __common_expr_2 THEN Int32(6) WHEN __common_expr_1 THEN Int32(3) WHEN __common_expr_3 THEN Int32(4) ELSE Int32(0) END AS __sail_operation_type, Int64(NULL) AS __sail_merge_source_metric
           Projection: __common_expr_4 AND __sail_merge_source_row_present IS NOT NULL IS TRUE AS __common_expr_1, __sail_merge_target_row_present IS NOT NULL AND __sail_merge_source_row_present IS NOT NULL IS TRUE AS __common_expr_2, __common_expr_4 AS __common_expr_3, id, value, __sail_file_path, __sail_src_id, __sail_src_value
@@ -2597,7 +2597,7 @@ name: "test_explain_extended_shows_fastappend_plan_shape_for_insertonly_merge"
 data:
   |-
     == Parsed Logical Plan ==
-    RowLevelWrite: command=Merge, target=delta_merge_insert_only, format=DELTA, matched=0, not_matched=1, not_matched_by_source=0
+    RowLevelWrite: command=Merge, target=delta_merge_insert_only, format=delta, matched=0, not_matched=1, not_matched_by_source=0
       Union
         Projection: CASE WHEN Boolean(true) THEN CAST(__sail_src_id AS Int32) ELSE NULL END AS id, CASE WHEN Boolean(true) THEN CAST(__sail_src_value AS Utf8) ELSE NULL END AS value, CASE WHEN Boolean(true) THEN Int32(3) ELSE Int32(4) END AS __sail_operation_type
           LeftAnti Join: __sail_src_id = id
@@ -2631,11 +2631,10 @@ data:
               SubqueryAlias: t
                 Projection: delta_merge_insert_only.id AS #0, delta_merge_insert_only.value AS #1, delta_merge_insert_only.__sail_file_path AS __sail_file_path
                   TableScan: delta_merge_insert_only projection=[id, value, __sail_file_path]
-      EmptyRelation: rows=0
 
     == Analyzed Logical Plan ==
 
-    RowLevelWrite: command=Merge, target=delta_merge_insert_only, format=DELTA, matched=0, not_matched=1, not_matched_by_source=0
+    RowLevelWrite: command=Merge, target=delta_merge_insert_only, format=delta, matched=0, not_matched=1, not_matched_by_source=0
       Union
         Projection: CASE WHEN Boolean(true) THEN CAST(__sail_src_id AS Int32) ELSE CAST(NULL AS Int32) END AS id, CASE WHEN Boolean(true) THEN CAST(__sail_src_value AS Utf8) ELSE CAST(NULL AS Utf8) END AS value, CASE WHEN Boolean(true) THEN Int32(3) ELSE Int32(4) END AS __sail_operation_type
           LeftAnti Join: __sail_src_id = id
@@ -2669,10 +2668,9 @@ data:
               SubqueryAlias: t
                 Projection: delta_merge_insert_only.id AS #0, delta_merge_insert_only.value AS #1, delta_merge_insert_only.__sail_file_path AS __sail_file_path
                   TableScan: delta_merge_insert_only projection=[id, value, __sail_file_path]
-      EmptyRelation: rows=0
 
     == Optimized Logical Plan ==
-    RowLevelWrite: command=Merge, target=delta_merge_insert_only, format=DELTA, matched=0, not_matched=1, not_matched_by_source=0
+    RowLevelWrite: command=Merge, target=delta_merge_insert_only, format=delta, matched=0, not_matched=1, not_matched_by_source=0
       Union
         Projection: CAST(__sail_src_id AS Int32) AS id, CAST(__sail_src_value AS Utf8) AS value, Int32(3) AS __sail_operation_type
           LeftAnti Join: __sail_src_id = id
@@ -2702,7 +2700,6 @@ data:
               SubqueryAlias: t
                 Projection: delta_merge_insert_only.id AS #0
                   TableScan: delta_merge_insert_only projection=[id]
-      EmptyRelation: rows=0
 
     == Physical Plan ==
     DeltaCommitExec(table_path=file://<tmp>/merge_insert_only/)

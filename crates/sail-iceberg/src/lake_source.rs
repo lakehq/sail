@@ -16,9 +16,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion::arrow::datatypes::{Field as ArrowField, Schema as ArrowSchema};
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::{
-    DataFusionError, Result, TableReference, ToDFSchema, not_impl_err, plan_err,
-};
+use datafusion::common::{DataFusionError, Result, TableReference, not_impl_err, plan_err};
 use datafusion::logical_expr::{LogicalPlan, TableScanBuilder, TableSource};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_expr::expr::Sort;
@@ -201,7 +199,6 @@ impl LakeSource for IcebergLakeSource {
                 .map(|snapshot| snapshot.snapshot_id()),
         );
         let table_source: Arc<dyn TableSource> = Arc::new(IcebergTableSource::new(provider));
-        let raw_input_schema = table_source.schema().to_dfschema_ref()?;
         let resolved_input_schema =
             rename_schema(input_schema.as_arrow(), &resolved_target_field_names)?;
         let input_field_names = input_schema
@@ -228,7 +225,6 @@ impl LakeSource for IcebergLakeSource {
 
         let write_node = sail_logical_plan::row_level::RowLevelWriteNode::new_delete(
             Arc::new(target_scan),
-            raw_input_schema,
             condition,
             target,
         )

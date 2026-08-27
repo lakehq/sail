@@ -107,6 +107,27 @@ Feature: Delta Lake Update
         | 2  | updated |
         | 3  | updated |
 
+    Scenario: UPDATE with no matching rows does not create a commit or rewrite data files
+      Given statement
+        """
+        UPDATE delta_update_basic
+        SET value = value + 1
+        WHERE id = 99
+        """
+      Then delta log latest commit info contains
+        | path      | value   |
+        | operation | "WRITE" |
+      Then data files in location count is 1
+      When query
+        """
+        SELECT id, value FROM delta_update_basic ORDER BY id
+        """
+      Then query result ordered
+        | id | value |
+        | 1  | 10    |
+        | 2  | 20    |
+        | 3  | 30    |
+
     Scenario: UPDATE rejects a non-deterministic predicate before writing
       When query
         """
@@ -134,6 +155,55 @@ Feature: Delta Lake Update
         WHERE id = 2
         """
       Then query plan matches snapshot
+
+  Rule: Partitioned copy-on-write updates
+
+    Scenario: UPDATE rewrites only the matching partition and preserves partition values
+      Given variable location for temporary directory delta_update_partitioned
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_update_partitioned
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_update_partitioned (
+          id INT,
+          value STRING,
+          category STRING
+        )
+        USING DELTA
+        PARTITIONED BY (category)
+        LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_update_partitioned VALUES
+          (1, 'old', 'a'),
+          (2, 'keep-a', 'a'),
+          (3, 'keep-b', 'b')
+        """
+      Given statement
+        """
+        UPDATE delta_update_partitioned
+        SET value = 'new'
+        WHERE id = 1 AND category = 'a'
+        """
+      Then delta log latest commit info contains
+        | path                            | value    |
+        | operation                       | "UPDATE" |
+        | operationMetrics.numUpdatedRows | 1        |
+        | operationMetrics.numCopiedRows  | 1        |
+      When query
+        """
+        SELECT id, value, category
+        FROM delta_update_partitioned
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | value  | category |
+        | 1  | new    | a        |
+        | 2  | keep-a | a        |
+        | 3  | keep-b | b        |
 
   Rule: Path-based update targets
     Background:
@@ -400,6 +470,7 @@ Feature: Delta Lake Update
         WHERE id = 1
         """
       Then query error DELTA_GENERATED_COLUMNS_VALUE_MISMATCH
+      Then data files in location count is 2
       When query
         """
         SELECT id, event_time, event_date
@@ -452,6 +523,10 @@ Feature: Delta Lake Update
         UPDATE delta_update_constraint SET id = 0 WHERE id = 1
         """
       Then query error DELTA_VIOLATE_CONSTRAINT_WITH_VALUES
+      Then delta log latest commit info contains
+        | path      | value   |
+        | operation | "WRITE" |
+      Then data files in location count is 1
       When query
         """
         SELECT id, value FROM delta_update_constraint

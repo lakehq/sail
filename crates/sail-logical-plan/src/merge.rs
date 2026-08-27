@@ -137,10 +137,17 @@ impl UserDefinedLogicalNodeCore for MergeCardinalityCheckNode {
 #[derive(Clone, Debug)]
 pub struct MergeExpansion {
     pub write_plan: LogicalPlan,
-    pub touched_files_plan: LogicalPlan,
+    pub touched_files_plan: Option<LogicalPlan>,
     pub row_index_delete_plan: Option<LogicalPlan>,
     pub output_schema: DFSchemaRef,
     pub options: MergeIntoOptions,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct MergePlanRequirements {
+    pub source_metrics: bool,
+    pub touched_files: bool,
+    pub row_index_deletes: bool,
 }
 
 fn merge_name_key(name: &str, case_sensitive: bool) -> String {
@@ -210,6 +217,7 @@ pub fn expand_merge(
     path_column: &str,
     row_index_column: Option<&str>,
     row_delete_metadata_columns: &[&str],
+    requirements: MergePlanRequirements,
 ) -> Result<MergeExpansion> {
     let target_plan = info.target.as_ref().clone();
     let source_plan = info.source.as_ref().clone();
@@ -622,11 +630,10 @@ pub fn expand_merge(
             Some(row_level_data_operation_expr()),
         )?;
 
-        let touched_plan = LogicalPlanBuilder::empty(false).build()?;
         let command_schema = Arc::new(DFSchema::empty());
         return Ok(MergeExpansion {
             write_plan: projected,
-            touched_files_plan: touched_plan,
+            touched_files_plan: None,
             row_index_delete_plan: None,
             output_schema: command_schema,
             options,
@@ -641,6 +648,7 @@ pub fn expand_merge(
         path_column,
         row_index_column,
         row_delete_metadata_columns,
+        requirements,
     )
 }
 
@@ -653,6 +661,7 @@ fn build_default_merge_expansion(
     path_column: &str,
     row_index_column: Option<&str>,
     row_delete_metadata_columns: &[&str],
+    requirements: MergePlanRequirements,
 ) -> Result<MergeExpansion> {
     let target_schema = target_plan.schema();
     let source_schema = source_plan.schema();
@@ -750,7 +759,6 @@ fn build_default_merge_expansion(
         }
     }
 
-    let row_delete_expr = row_delete_pred.unwrap_or_else(|| lit(false));
     let insert_expr = insert_pred.unwrap_or_else(|| lit(false));
     let active_expr = target_present.or(insert_expr);
 
@@ -774,22 +782,22 @@ fn build_default_merge_expansion(
         &options.generated_column_exprs,
         &generated_assignment_markers,
     )?;
-    // Count source rows from a metric-only branch instead of inferring them from
-    // rewritten rows. Targeted rewrite can drop matched-but-unchanged rows from
-    // untouched files, and conditional inserts can drop source-only rows. Aggregate
-    // first so only one metric row flows to the writer.
-    // TODO: Let format adapters omit source metrics and cloned side plans they do not
-    // consume without adding format-specific policy to this shared expansion layer.
-    let source_metric_projected = build_source_metric_plan(
-        source_plan.clone(),
-        target_schema,
-        path_column,
-        row_index_column,
-        row_delete_metadata_columns,
-    )?;
-    let projected = LogicalPlanBuilder::from(projected)
-        .union(source_metric_projected)?
-        .build()?;
+    // Targeted rewrites may omit matched or source-only rows from the write branch,
+    // so formats that report source-row metrics use a separate aggregate branch.
+    let projected = if requirements.source_metrics {
+        let source_metric_projected = build_source_metric_plan(
+            source_plan.clone(),
+            target_schema,
+            path_column,
+            row_index_column,
+            row_delete_metadata_columns,
+        )?;
+        LogicalPlanBuilder::from(projected)
+            .union(source_metric_projected)?
+            .build()?
+    } else {
+        projected
+    };
     let projected = apply_delta_check_constraint_filter(
         projected,
         &options.check_constraint_exprs,
@@ -800,13 +808,24 @@ fn build_default_merge_expansion(
         build_rewrite_predicates(&options, &matched_pred, &not_matched_by_source_pred);
     let rewrite_filter = combine_rewrite_preds(rewrite_matched, rewrite_not_matched_by_source);
 
-    let touched_plan = LogicalPlanBuilder::from(join.as_ref().clone())
-        .filter(rewrite_filter.unwrap_or_else(|| lit(false)))?
-        .aggregate(vec![col(path_column)], Vec::<Expr>::new())?
-        .project(vec![col(path_column).alias(path_column.to_string())])?
-        .build()?;
+    let touched_files_plan = if requirements.touched_files {
+        rewrite_filter
+            .map(|rewrite_filter| {
+                LogicalPlanBuilder::from(join.as_ref().clone())
+                    .filter(rewrite_filter)?
+                    .aggregate(vec![col(path_column)], Vec::<Expr>::new())?
+                    .project(vec![col(path_column).alias(path_column.to_string())])?
+                    .build()
+            })
+            .transpose()?
+    } else {
+        None
+    };
 
-    let row_index_delete_plan = if let Some(row_index_column) = row_index_column {
+    let row_index_delete_plan = if requirements.row_index_deletes
+        && let Some(row_index_column) = row_index_column
+        && let Some(row_delete_pred) = row_delete_pred
+    {
         let mut delete_projection = vec![
             col(path_column).alias(path_column.to_string()),
             col(row_index_column).alias(row_index_column.to_string()),
@@ -818,7 +837,7 @@ fn build_default_merge_expansion(
         );
         Some(
             LogicalPlanBuilder::from(join.as_ref().clone())
-                .filter(row_delete_expr)?
+                .filter(row_delete_pred)?
                 .project(delete_projection)?
                 .build()?,
         )
@@ -830,7 +849,7 @@ fn build_default_merge_expansion(
 
     Ok(MergeExpansion {
         write_plan: projected.clone(),
-        touched_files_plan: touched_plan,
+        touched_files_plan,
         row_index_delete_plan,
         output_schema: command_schema,
         options,

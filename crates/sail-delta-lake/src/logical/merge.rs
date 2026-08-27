@@ -10,7 +10,9 @@ use sail_common_datafusion::datasource::{
     MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, MergeCapableSource, MergeInfo, MergeMatchedAction,
     MergeNotMatchedBySourceAction,
 };
-use sail_logical_plan::merge::{expand_merge, validate_merge_internal_columns};
+use sail_logical_plan::merge::{
+    MergePlanRequirements, expand_merge, validate_merge_internal_columns,
+};
 use sail_logical_plan::row_level::RowLevelWriteNode;
 
 use crate::logical::table_source::DeltaTableSource;
@@ -76,9 +78,17 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         input_schema: info.input_schema,
     };
     let raw_target = Arc::clone(&info.target);
-    let raw_source = Arc::clone(&info.source);
-    let raw_input_schema = info.input_schema.clone();
-    let expansion = expand_merge(info, MERGE_FILE_COLUMN, row_index_column, &[])?;
+    let expansion = expand_merge(
+        info,
+        MERGE_FILE_COLUMN,
+        row_index_column,
+        &[],
+        MergePlanRequirements {
+            source_metrics: true,
+            touched_files: true,
+            row_index_deletes: true,
+        },
+    )?;
     trace!(
         "MERGE expansion write_plan schema fields: {:?}",
         expansion
@@ -91,10 +101,8 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
     );
     let write_node = RowLevelWriteNode::new_merge(
         raw_target,
-        raw_source,
-        raw_input_schema,
         Arc::new(expansion.write_plan),
-        Arc::new(expansion.touched_files_plan),
+        expansion.touched_files_plan.map(Arc::new),
         expansion.row_index_delete_plan.map(Arc::new),
         expansion.options,
         expansion.output_schema,
