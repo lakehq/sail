@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Column, DFSchemaRef, ScalarValue, plan_datafusion_err};
 use datafusion_expr::expr::FieldMetadata;
@@ -63,9 +63,21 @@ impl PlanResolver<'_> {
     pub(super) async fn resolve_expression_placeholder(
         &self,
         placeholder: String,
+        state: &PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let name = placeholder.clone();
-        let expr = expr::Expr::Placeholder(expr::Placeholder::new_with_field(placeholder, None));
+        let field = placeholder.get(1..).and_then(|key| {
+            state
+                .get_param_value(key)
+                .or_else(|| {
+                    key.parse::<usize>()
+                        .ok()
+                        .and_then(|index| index.checked_sub(1))
+                        .and_then(|index| state.get_positional_param_value(index))
+                })
+                .map(|value| Arc::new(Field::new("", value.data_type(), true)))
+        });
+        let expr = expr::Expr::Placeholder(expr::Placeholder::new_with_field(placeholder, field));
         Ok(NamedExpr::new(vec![name], expr))
     }
 

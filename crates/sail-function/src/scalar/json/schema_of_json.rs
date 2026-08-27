@@ -570,10 +570,10 @@ fn is_unquoted_name_char(c: char) -> bool {
 /// The parsed pieces of a timestamp string: nine integer segments
 /// (year, month, day, hour, minute, second, microsecond, and two spare zone
 /// segments), an optional timezone string, and whether only a time was given.
-struct ParsedTimestamp {
-    segments: [i64; 9],
-    timezone: Option<String>,
-    just_time: bool,
+pub(crate) struct ParsedTimestamp {
+    pub(crate) segments: [i64; 9],
+    pub(crate) timezone: Option<String>,
+    pub(crate) just_time: bool,
 }
 
 /// Mirrors Spark's `isValidDigits`: the year segment allows 4-6 digits, the
@@ -595,7 +595,7 @@ fn is_whitespace_or_iso_control(b: u8) -> bool {
 /// A faithful port of Spark's `SparkDateTimeUtils.parseTimestampString`. Splits
 /// the input into timestamp segments using Spark's exact delimiter rules, or
 /// returns `None` if the string is not shaped like a timestamp.
-fn parse_timestamp_string(s: &str) -> Option<ParsedTimestamp> {
+pub(crate) fn parse_timestamp_string(s: &str) -> Option<ParsedTimestamp> {
     let bytes = s.as_bytes();
     let mut segments: [i64; 9] = [1, 1, 1, 0, 0, 0, 0, 0, 0];
     let mut i: usize = 0;

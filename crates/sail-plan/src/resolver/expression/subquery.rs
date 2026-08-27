@@ -162,7 +162,24 @@ impl PlanResolver<'_> {
         let filter_expr = outer_refs
             .into_iter()
             .zip(subquery_cols)
-            .map(|(outer, inner_col)| Expr::eq(Expr::Column(inner_col), outer))
+            .map(|(outer, inner_col)| -> PlanResult<Expr> {
+                let outer_type = outer.get_type(schema.as_ref())?;
+                let (_, inner_field) = subquery_plan
+                    .schema()
+                    .qualified_field_from_column(&inner_col)?;
+                let inner_type = inner_field.data_type().clone();
+                let (outer, inner, _, _) = coerce_timestamp_in_subquery_pair(
+                    outer,
+                    &outer_type,
+                    Expr::Column(inner_col),
+                    &inner_type,
+                    &self.config.session_timezone,
+                    self.config.ansi_mode,
+                )?;
+                Ok(Expr::eq(inner, outer))
+            })
+            .collect::<PlanResult<Vec<_>>>()?
+            .into_iter()
             .reduce(Expr::and)
             .ok_or_else(|| PlanError::invalid("empty IN subquery values"))?;
         let filtered = LogicalPlan::Filter(Filter::try_new(filter_expr, Arc::new(subquery_plan))?);

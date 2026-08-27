@@ -3,7 +3,7 @@ use std::collections::hash_map::Entry;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use chrono::NaiveDateTime;
+use chrono::{Datelike, FixedOffset, NaiveDate, Utc};
 use datafusion::arrow::array::Array;
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::datatypes::{DataType, TimeUnit, TimestampMicrosecondType};
@@ -13,9 +13,9 @@ use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_sql_analyzer::parser::parse_timestamp;
 
 use crate::scalar::datetime::format::DateTimeFormat;
+use crate::scalar::json::schema_of_json::{ParsedTimestamp, parse_timestamp_string};
 
 /// Truncates a DateTime's nanoseconds to microseconds.
 /// This preserves fractional seconds when converting from nanosecond precision to microsecond precision.
@@ -41,6 +41,240 @@ enum TimestampParser {
     Ntz,
 }
 
+#[derive(Debug)]
+enum SparkZone {
+    Fixed(FixedOffset),
+    Named(Tz),
+}
+
+impl SparkZone {
+    fn parse(value: &str) -> Result<Self> {
+        let value = value.trim();
+        if value.is_empty() {
+            return exec_err!("invalid empty time zone");
+        }
+        if value == "Z" {
+            return Self::fixed(0);
+        }
+
+        if let Some(suffix) = ["UTC", "GMT", "UT"]
+            .into_iter()
+            .find_map(|prefix| value.strip_prefix(prefix))
+        {
+            if suffix.is_empty() {
+                return Self::fixed(0);
+            }
+            if suffix.starts_with(['+', '-']) {
+                let offset = parse_zone_offset(suffix)
+                    .ok_or_else(|| exec_datafusion_err!("invalid time zone: {value}"))?;
+                return Ok(Self::Fixed(offset));
+            }
+        }
+
+        let zone_id = match value {
+            "ACT" => "Australia/Darwin",
+            "AET" => "Australia/Sydney",
+            "AGT" => "America/Argentina/Buenos_Aires",
+            "ART" => "Africa/Cairo",
+            "AST" => "America/Anchorage",
+            "BET" => "America/Sao_Paulo",
+            "BST" => "Asia/Dhaka",
+            "CAT" => "Africa/Harare",
+            "CNT" => "America/St_Johns",
+            "CST" => "America/Chicago",
+            "CTT" => "Asia/Shanghai",
+            "EAT" => "Africa/Addis_Ababa",
+            "ECT" => "Europe/Paris",
+            "IET" => "America/Indiana/Indianapolis",
+            "IST" => "Asia/Kolkata",
+            "JST" => "Asia/Tokyo",
+            "MIT" => "Pacific/Apia",
+            "NET" => "Asia/Yerevan",
+            "NST" => "Pacific/Auckland",
+            "PLT" => "Asia/Karachi",
+            "PNT" => "America/Phoenix",
+            "PRT" => "America/Puerto_Rico",
+            "PST" => "America/Los_Angeles",
+            "SST" => "Pacific/Guadalcanal",
+            "VST" => "Asia/Ho_Chi_Minh",
+            "EST" => "-05:00",
+            "MST" => "-07:00",
+            "HST" => "-10:00",
+            _ => value,
+        };
+
+        if zone_id.starts_with(['+', '-']) {
+            let offset = parse_zone_offset(zone_id)
+                .ok_or_else(|| exec_datafusion_err!("invalid time zone: {value}"))?;
+            return Ok(Self::Fixed(offset));
+        }
+
+        let timezone = zone_id
+            .parse::<Tz>()
+            .map_err(|_| exec_datafusion_err!("invalid time zone: {value}"))?;
+        Ok(Self::Named(timezone))
+    }
+
+    fn fixed(seconds: i32) -> Result<Self> {
+        FixedOffset::east_opt(seconds)
+            .map(Self::Fixed)
+            .ok_or_else(|| exec_datafusion_err!("invalid time-zone offset: {seconds}"))
+    }
+
+    fn current_date(&self) -> (i64, u32, u32) {
+        let now = Utc::now();
+        let date = match self {
+            Self::Fixed(zone) => now.with_timezone(zone).date_naive(),
+            Self::Named(zone) => now.with_timezone(zone).date_naive(),
+        };
+        (i64::from(date.year()), date.month(), date.day())
+    }
+
+    #[expect(clippy::too_many_arguments)]
+    fn to_utc_micros(
+        &self,
+        year: i64,
+        month: u32,
+        day: u32,
+        hour: u32,
+        minute: u32,
+        second: u32,
+        micros: u32,
+        local_micros: i128,
+    ) -> Result<i64> {
+        let offset_micros = match self {
+            Self::Fixed(offset) => i128::from(offset.local_minus_utc()) * 1_000_000,
+            Self::Named(zone) => {
+                let representative_year = i32::try_from(year)
+                    .ok()
+                    .filter(|year| NaiveDate::from_ymd_opt(*year, month, day).is_some())
+                    .map(Ok)
+                    .unwrap_or_else(|| {
+                        let year = if year >= 0 {
+                            2400 + year.rem_euclid(400)
+                        } else {
+                            -200_000 + year.rem_euclid(400)
+                        };
+                        i32::try_from(year)
+                            .map_err(|_| exec_datafusion_err!("invalid timestamp year: {year}"))
+                    })?;
+                let date = NaiveDate::from_ymd_opt(representative_year, month, day)
+                    .ok_or_else(|| exec_datafusion_err!("invalid timestamp date"))?;
+                let datetime = date
+                    .and_hms_micro_opt(hour, minute, second, micros)
+                    .ok_or_else(|| exec_datafusion_err!("invalid timestamp time"))?;
+                let instant = localize_with_fallback(zone, &datetime)?;
+                i128::from(datetime.and_utc().timestamp_micros())
+                    - i128::from(instant.timestamp_micros())
+            }
+        };
+        i64::try_from(local_micros - offset_micros)
+            .map_err(|_| exec_datafusion_err!("timestamp is outside the microsecond range"))
+    }
+}
+
+fn parse_digits(value: &str, min: usize, max: usize) -> Option<u32> {
+    if !(min..=max).contains(&value.len()) || !value.bytes().all(|value| value.is_ascii_digit()) {
+        return None;
+    }
+    value.parse().ok()
+}
+
+fn parse_zone_offset(value: &str) -> Option<FixedOffset> {
+    let (sign, body) = match value.as_bytes().first() {
+        Some(b'+') => (1_i32, &value[1..]),
+        Some(b'-') => (-1_i32, &value[1..]),
+        _ => return None,
+    };
+    let (hours, minutes, seconds) = if body.contains(':') {
+        let parts = body.split(':').collect::<Vec<_>>();
+        match parts.as_slice() {
+            [hours, minutes] => (parse_digits(hours, 1, 2)?, parse_digits(minutes, 1, 2)?, 0),
+            [hours, minutes, seconds] => (
+                parse_digits(hours, 1, 2)?,
+                parse_digits(minutes, 2, 2)?,
+                parse_digits(seconds, 2, 2)?,
+            ),
+            _ => return None,
+        }
+    } else {
+        match body.len() {
+            1 => (parse_digits(body, 1, 1)?, 0, 0),
+            2 => (parse_digits(body, 2, 2)?, 0, 0),
+            4 => (
+                parse_digits(&body[..2], 2, 2)?,
+                parse_digits(&body[2..], 2, 2)?,
+                0,
+            ),
+            6 => (
+                parse_digits(&body[..2], 2, 2)?,
+                parse_digits(&body[2..4], 2, 2)?,
+                parse_digits(&body[4..], 2, 2)?,
+            ),
+            _ => return None,
+        }
+    };
+    if hours > 18 || minutes >= 60 || seconds >= 60 {
+        return None;
+    }
+    if hours == 18 && (minutes != 0 || seconds != 0) {
+        return None;
+    }
+    let seconds = i32::try_from(hours * 3600 + minutes * 60 + seconds).ok()?;
+    FixedOffset::east_opt(sign * seconds)
+}
+
+fn days_in_month(year: i64, month: u32) -> Option<u32> {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => Some(31),
+        4 | 6 | 9 | 11 => Some(30),
+        2 if year.rem_euclid(4) == 0
+            && (year.rem_euclid(100) != 0 || year.rem_euclid(400) == 0) =>
+        {
+            Some(29)
+        }
+        2 => Some(28),
+        _ => None,
+    }
+}
+
+fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+    let year = year - i64::from(month <= 2);
+    let era = year.div_euclid(400);
+    let year_of_era = year - era * 400;
+    let shifted_month = i64::from(month) + if month > 2 { -3 } else { 9 };
+    let day_of_year = (153 * shifted_month + 2) / 5 + i64::from(day) - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
+fn local_timestamp_micros(
+    year: i64,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+    micros: u32,
+) -> Option<i128> {
+    if day == 0
+        || day > days_in_month(year, month)?
+        || hour >= 24
+        || minute >= 60
+        || second >= 60
+        || micros >= 1_000_000
+    {
+        return None;
+    }
+    Some(
+        i128::from(days_from_civil(year, month, day)) * 86_400_000_000
+            + i128::from(hour) * 3_600_000_000
+            + i128::from(minute) * 60_000_000
+            + i128::from(second) * 1_000_000
+            + i128::from(micros),
+    )
+}
+
 enum ScalarFormat {
     Omitted,
     Null,
@@ -48,35 +282,6 @@ enum ScalarFormat {
 }
 
 impl TimestampParser {
-    /// Localize a naive datetime (with an optional timezone parsed from the input
-    /// string) into a microsecond instant, honoring the LTZ/NTZ semantics.
-    fn localize(&self, datetime: NaiveDateTime, timezone: &str, safe: bool) -> Result<Option<i64>> {
-        match self {
-            TimestampParser::Ltz { default_timezone } => {
-                let tz: Tz = if timezone.is_empty() {
-                    match default_timezone.parse() {
-                        Ok(v) => v,
-                        Err(_e) if safe => return Ok(None),
-                        Err(e) => return Err(e.into()),
-                    }
-                } else {
-                    match timezone.parse() {
-                        Ok(v) => v,
-                        Err(_e) if safe => return Ok(None),
-                        Err(e) => return Err(e.into()),
-                    }
-                };
-                match localize_with_fallback(&tz, &datetime) {
-                    Ok(v) => Ok(Some(v.timestamp_micros())),
-                    Err(_e) if safe => Ok(None),
-                    Err(e) => Err(e),
-                }
-            }
-            // NTZ ignores any timezone in the input and keeps the wall clock.
-            TimestampParser::Ntz => Ok(Some(datetime.and_utc().timestamp_micros())),
-        }
-    }
-
     fn formatted_string_to_microseconds(
         &self,
         value: &str,
@@ -119,24 +324,64 @@ impl TimestampParser {
     }
 
     fn string_to_microseconds(&self, value: &str, safe: bool) -> Result<Option<i64>> {
-        let timestamp = match parse_timestamp(value) {
-            Ok(v) => v,
-            Err(_e) if safe => return Ok(None),
-            Err(e) => return Err(exec_datafusion_err!("{e}")),
-        };
-        if timestamp.time.second == 60 {
-            return if safe {
-                Ok(None)
-            } else {
-                exec_err!("invalid timestamp: leap seconds are not supported")
-            };
+        match self.parse_unformatted(value) {
+            Ok(value) => Ok(Some(value)),
+            Err(_error) if safe => Ok(None),
+            Err(error) => Err(error),
         }
-        let (datetime, timezone) = match timestamp.into_naive() {
-            Ok(v) => v,
-            Err(_e) if safe => return Ok(None),
-            Err(e) => return Err(exec_datafusion_err!("{e}")),
+    }
+
+    fn parse_unformatted(&self, value: &str) -> Result<i64> {
+        let ParsedTimestamp {
+            segments,
+            timezone,
+            just_time,
+        } = parse_timestamp_string(value)
+            .ok_or_else(|| exec_datafusion_err!("invalid timestamp: {value}"))?;
+
+        let parsed_zone = timezone.as_deref().map(SparkZone::parse).transpose()?;
+        let session_zone = match self {
+            TimestampParser::Ltz { default_timezone } => Some(SparkZone::parse(default_timezone)?),
+            TimestampParser::Ntz => None,
         };
-        self.localize(datetime, timezone, safe)
+        let effective_zone = parsed_zone.as_ref().or(session_zone.as_ref());
+
+        let (year, month, day) = if just_time {
+            match self {
+                TimestampParser::Ltz { .. } => effective_zone
+                    .ok_or_else(|| exec_datafusion_err!("missing LTZ time zone"))?
+                    .current_date(),
+                TimestampParser::Ntz => {
+                    return exec_err!("time-only input is not a TIMESTAMP_NTZ");
+                }
+            }
+        } else {
+            (
+                segments[0],
+                u32::try_from(segments[1])
+                    .map_err(|_| exec_datafusion_err!("invalid timestamp month"))?,
+                u32::try_from(segments[2])
+                    .map_err(|_| exec_datafusion_err!("invalid timestamp day"))?,
+            )
+        };
+        let hour = u32::try_from(segments[3])
+            .map_err(|_| exec_datafusion_err!("invalid timestamp hour"))?;
+        let minute = u32::try_from(segments[4])
+            .map_err(|_| exec_datafusion_err!("invalid timestamp minute"))?;
+        let second = u32::try_from(segments[5])
+            .map_err(|_| exec_datafusion_err!("invalid timestamp second"))?;
+        let micros = u32::try_from(segments[6])
+            .map_err(|_| exec_datafusion_err!("invalid timestamp fraction"))?;
+        let local_micros = local_timestamp_micros(year, month, day, hour, minute, second, micros)
+            .ok_or_else(|| exec_datafusion_err!("invalid timestamp: {value}"))?;
+
+        match self {
+            TimestampParser::Ltz { .. } => effective_zone
+                .ok_or_else(|| exec_datafusion_err!("missing LTZ time zone"))?
+                .to_utc_micros(year, month, day, hour, minute, second, micros, local_micros),
+            TimestampParser::Ntz => i64::try_from(local_micros)
+                .map_err(|_| exec_datafusion_err!("timestamp is outside the microsecond range")),
+        }
     }
 }
 
@@ -172,7 +417,7 @@ impl SparkTimestamp {
         Ok(Self {
             timezone,
             parser,
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::variadic_any(Volatility::Stable),
             ansi_mode,
             is_try,
         })
@@ -486,6 +731,53 @@ mod tests {
                 .string_to_microseconds("2026-06-15 23:59:60", false)
                 .is_err()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn unformatted_parser_matches_spark_range_and_zone_forms() -> Result<()> {
+        let parser = TimestampParser::Ltz {
+            default_timezone: "UTC".to_string(),
+        };
+
+        assert_eq!(
+            parser.string_to_microseconds("294247-01-10T04:00:54.775807Z", false)?,
+            Some(i64::MAX)
+        );
+        assert_eq!(
+            parser.string_to_microseconds("-290308-12-21 19:59:05.224192Z", false)?,
+            Some(i64::MIN)
+        );
+        assert_eq!(
+            parser.string_to_microseconds("2024-01-01 00:00:00 PST", false)?,
+            parser.string_to_microseconds("2024-01-01 08:00:00Z", false)?
+        );
+        assert_eq!(
+            parser.string_to_microseconds("2024-01-01 01:00:00 GMT+01:00", false)?,
+            parser.string_to_microseconds("2024-01-01 00:00:00Z", false)?
+        );
+        assert_eq!(
+            parser.string_to_microseconds("  2024-05-01 12:00:00.1234567890  ", false)?,
+            parser.string_to_microseconds("2024-05-01 12:00:00.123456", false)?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unformatted_parser_rejects_non_spark_syntax() -> Result<()> {
+        let parser = TimestampParser::Ltz {
+            default_timezone: "UTC".to_string(),
+        };
+
+        for value in [
+            "-0200000-01-01 00:00:00",
+            "2024-01-01 00:00:00+23:59",
+            "2024-01-01t00:00:00",
+            "2024-01-01 00:00:00z",
+        ] {
+            assert_eq!(parser.string_to_microseconds(value, true)?, None);
+            assert!(parser.string_to_microseconds(value, false).is_err());
+        }
         Ok(())
     }
 }

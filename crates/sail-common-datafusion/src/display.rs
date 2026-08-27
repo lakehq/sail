@@ -494,21 +494,100 @@ macro_rules! primitive_display {
     };
 }
 
+/// Formats a `f64` with the notation used by Java `Double.toString` and Spark casts.
+pub fn spark_f64_to_string(value: f64) -> String {
+    if value.is_nan() {
+        return "NaN".to_string();
+    }
+    if value.is_infinite() {
+        return if value.is_sign_positive() {
+            "Infinity"
+        } else {
+            "-Infinity"
+        }
+        .to_string();
+    }
+    if value == 0.0 {
+        return if value.is_sign_negative() {
+            "-0.0"
+        } else {
+            "0.0"
+        }
+        .to_string();
+    }
+    java_float_repr(value.is_sign_negative(), &format!("{:e}", value.abs()))
+}
+
+/// Formats an `f32` with the notation used by Java `Float.toString` and Spark casts.
+pub fn spark_f32_to_string(value: f32) -> String {
+    if value.is_nan() {
+        return "NaN".to_string();
+    }
+    if value.is_infinite() {
+        return if value.is_sign_positive() {
+            "Infinity"
+        } else {
+            "-Infinity"
+        }
+        .to_string();
+    }
+    if value == 0.0 {
+        return if value.is_sign_negative() {
+            "-0.0"
+        } else {
+            "0.0"
+        }
+        .to_string();
+    }
+    java_float_repr(value.is_sign_negative(), &format!("{:e}", value.abs()))
+}
+
+fn java_float_repr(negative: bool, rust_scientific: &str) -> String {
+    let Some((mantissa, exponent)) = rust_scientific.split_once('e') else {
+        return rust_scientific.to_string();
+    };
+    let Ok(exponent) = exponent.parse::<i32>() else {
+        return rust_scientific.to_string();
+    };
+    let digits = mantissa
+        .chars()
+        .filter(|character| *character != '.')
+        .collect::<String>();
+    let sign = if negative { "-" } else { "" };
+
+    if (-3..7).contains(&exponent) {
+        let body = if exponent >= 0 {
+            let integer_length = exponent as usize + 1;
+            if integer_length >= digits.len() {
+                format!("{}{}.0", digits, "0".repeat(integer_length - digits.len()))
+            } else {
+                format!(
+                    "{}.{}",
+                    &digits[..integer_length],
+                    &digits[integer_length..]
+                )
+            }
+        } else {
+            format!("0.{}{}", "0".repeat((-exponent - 1) as usize), digits)
+        };
+        format!("{sign}{body}")
+    } else {
+        let mantissa = if digits.len() == 1 {
+            format!("{}.0", digits)
+        } else {
+            format!("{}.{}", &digits[..1], &digits[1..])
+        };
+        format!("{sign}{mantissa}E{exponent}")
+    }
+}
+
 macro_rules! primitive_display_float {
-    ($($t:ty),+) => {
+    ($($t:ty => $formatter:ident),+) => {
         $(impl<'a> DisplayIndex for &'a PrimitiveArray<$t>
         {
             fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
                 let value = self.value(idx);
-                let mut buffer = ryu::Buffer::new();
-                if value.is_infinite() {
-                    if !value.is_sign_positive() {
-                        f.write_str("-")?;
-                    }
-                    f.write_str("Infinity")?;
-                } else {
-                    f.write_str(buffer.format(value))?;
-                }
+                f.write_str(&$formatter(value))?;
                 Ok(())
             }
         })+
@@ -517,7 +596,10 @@ macro_rules! primitive_display_float {
 
 primitive_display!(Int8Type, Int16Type, Int32Type, Int64Type);
 primitive_display!(UInt8Type, UInt16Type, UInt32Type, UInt64Type);
-primitive_display_float!(Float32Type, Float64Type);
+primitive_display_float!(
+    Float32Type => spark_f32_to_string,
+    Float64Type => spark_f64_to_string
+);
 
 impl DisplayIndex for &PrimitiveArray<Float16Type> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
@@ -1026,6 +1108,15 @@ mod tests {
     #[test]
     fn test_const_options() {
         assert_eq!(TEST_CONST_OPTIONS.date_format, TimeFormat::Custom("foo"));
+    }
+
+    #[test]
+    fn test_spark_float_to_string() {
+        assert_eq!(spark_f64_to_string(1e18), "1.0E18");
+        assert_eq!(spark_f64_to_string(1e-7), "1.0E-7");
+        assert_eq!(spark_f64_to_string(-0.0), "-0.0");
+        assert_eq!(spark_f32_to_string(10_000_000.0), "1.0E7");
+        assert_eq!(spark_f32_to_string(-0.0), "-0.0");
     }
 
     #[expect(clippy::unwrap_used)]

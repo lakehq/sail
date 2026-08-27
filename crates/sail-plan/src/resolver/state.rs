@@ -78,12 +78,10 @@ pub(super) struct PlanResolverState {
     /// Unresolved subquery references from a WithRelations node, keyed by plan_id.
     subquery_references: HashMap<i64, spec::QueryPlan>,
     config: PlanResolverStateConfig,
-    /// Named parameter values available for IDENTIFIER clause evaluation.
-    /// Set when resolving a `WithParameters` query node so that IDENTIFIER expressions
-    /// can substitute placeholders before constant-folding them.
+    /// Named parameter values available while resolving a `WithParameters` query node.
+    /// These provide placeholder types and support early `IDENTIFIER` evaluation.
     param_values: HashMap<String, ScalarValue>,
-    /// Positional parameter values available for IDENTIFIER clause evaluation.
-    /// Set alongside `param_values` when resolving a `WithParameters` query node.
+    /// Positional parameter values available alongside `param_values`.
     positional_param_values: Vec<ScalarValue>,
     /// Stack of in-scope lambda parameter frames (innermost last).
     /// Each frame holds the declared parameter names of one enclosing lambda

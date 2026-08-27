@@ -1,18 +1,254 @@
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
-use datafusion::arrow::datatypes::{DataType, IntervalUnit};
+use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion_common::{DFSchemaRef, Result as DataFusionResult};
-use datafusion_expr::expr::{BinaryExpr, InList};
-use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr};
+use datafusion_expr::expr::{BinaryExpr, HigherOrderFunction, InList, Lambda, LambdaVariable};
+use datafusion_expr::{ExprSchemable, HigherOrderUDF, ScalarUDF, cast, expr, lit};
 use datafusion_expr_common::operator::Operator;
+use datafusion_functions::core::get_field;
 use sail_common::spec;
+use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
+use sail_function::scalar::update_struct_field::UpdateStructField;
 
 use crate::error::PlanResult;
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
+
+static SPARK_IN_ARRAY_TRANSFORM_UDF: LazyLock<Arc<HigherOrderUDF>> =
+    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArrayTransform::new())));
+
+enum TimestampStringInCoercion {
+    ToString,
+    ToTimestamp(Option<Arc<str>>),
+    List {
+        null_input_type: DataType,
+        element: Box<TimestampStringInCoercion>,
+    },
+    Struct {
+        null_input_type: DataType,
+        fields: Vec<Option<TimestampStringInCoercion>>,
+    },
+}
+
+fn find_timestamp_string_in_coercion(
+    data_types: &[DataType],
+    session_timezone: &Arc<str>,
+    ansi_mode: bool,
+) -> Option<TimestampStringInCoercion> {
+    let non_null_types = data_types
+        .iter()
+        .filter(|data_type| !data_type.is_null())
+        .cloned()
+        .collect::<Vec<_>>();
+    let first = non_null_types.first()?;
+
+    match first {
+        DataType::List(_) | DataType::LargeList(_) => {
+            let fields = non_null_types
+                .iter()
+                .map(|data_type| match data_type {
+                    DataType::List(field) | DataType::LargeList(field) => Some(field.as_ref()),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()?;
+            let element_types = fields
+                .iter()
+                .map(|field| field.data_type().clone())
+                .collect::<Vec<_>>();
+            let element =
+                find_timestamp_string_in_coercion(&element_types, session_timezone, ansi_mode)?;
+            return Some(TimestampStringInCoercion::List {
+                null_input_type: first.clone(),
+                element: Box::new(element),
+            });
+        }
+        DataType::Struct(first_fields) => {
+            let structs = non_null_types
+                .iter()
+                .map(|data_type| match data_type {
+                    DataType::Struct(fields) => Some(fields),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()?;
+            if structs.iter().any(|fields| {
+                fields.len() != first_fields.len()
+                    || fields
+                        .iter()
+                        .zip(first_fields.iter())
+                        .any(|(field, first)| field.name() != first.name())
+            }) {
+                return None;
+            }
+
+            let fields = first_fields
+                .iter()
+                .enumerate()
+                .map(|(index, _)| {
+                    let field_types = structs
+                        .iter()
+                        .map(|fields| fields[index].data_type().clone())
+                        .collect::<Vec<_>>();
+                    find_timestamp_string_in_coercion(&field_types, session_timezone, ansi_mode)
+                })
+                .collect::<Vec<_>>();
+            if fields.iter().all(Option::is_none) {
+                return None;
+            }
+            return Some(TimestampStringInCoercion::Struct {
+                null_input_type: first.clone(),
+                fields,
+            });
+        }
+        _ => {}
+    }
+
+    let has_timestamp = non_null_types
+        .iter()
+        .any(|data_type| matches!(data_type, DataType::Timestamp(_, _)));
+    let has_string = non_null_types.iter().any(is_string_type);
+    if !has_timestamp || !has_string {
+        return None;
+    }
+
+    if !ansi_mode {
+        return data_types
+            .iter()
+            .all(non_ansi_in_string_promotable)
+            .then_some(TimestampStringInCoercion::ToString);
+    }
+
+    if !data_types.iter().all(|data_type| {
+        data_type.is_null()
+            || data_type.is_string()
+            || matches!(
+                data_type,
+                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
+            )
+    }) {
+        return None;
+    }
+
+    let timezone = non_null_types
+        .iter()
+        .any(|data_type| matches!(data_type, DataType::Timestamp(_, Some(_))))
+        .then(|| Arc::clone(session_timezone));
+    Some(TimestampStringInCoercion::ToTimestamp(timezone))
+}
+
+fn apply_timestamp_string_in_coercion(
+    expression: expr::Expr,
+    data_type: &DataType,
+    coercion: &TimestampStringInCoercion,
+    schema: &DFSchemaRef,
+    session_timezone: &Arc<str>,
+    ansi_mode: bool,
+    list_depth: usize,
+) -> DataFusionResult<expr::Expr> {
+    match coercion {
+        TimestampStringInCoercion::ToString => {
+            if data_type.is_null() {
+                Ok(cast(expression, DataType::Utf8))
+            } else {
+                stringify_non_ansi_in_expression(expression, schema, session_timezone)
+            }
+        }
+        TimestampStringInCoercion::ToTimestamp(timezone) => {
+            let target_type = DataType::Timestamp(TimeUnit::Microsecond, timezone.clone());
+            Ok(match data_type {
+                data_type if data_type.is_string() => {
+                    ScalarUDF::from(SparkTimestamp::try_new(timezone.clone(), ansi_mode, false)?)
+                        .call(vec![expression])
+                }
+                DataType::Null => cast(expression, target_type),
+                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None)
+                    if timezone.is_some() =>
+                {
+                    let string = ScalarUDF::from(SparkToUtf8::new()).call(vec![expression]);
+                    ScalarUDF::from(SparkTimestamp::try_new(timezone.clone(), ansi_mode, false)?)
+                        .call(vec![string])
+                }
+                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => {
+                    cast(expression, target_type)
+                }
+                _ => expression,
+            })
+        }
+        TimestampStringInCoercion::List {
+            null_input_type,
+            element,
+        } => {
+            let mut expression = expression;
+            let data_type = if data_type.is_null() {
+                expression = cast(expression, null_input_type.clone());
+                null_input_type
+            } else {
+                data_type
+            };
+            let field = match data_type {
+                DataType::List(field) | DataType::LargeList(field) => Arc::clone(field),
+                _ => return Ok(expression),
+            };
+            let parameter = format!("__sail_in_element_{list_depth}");
+            let variable = expr::Expr::LambdaVariable(LambdaVariable::new(
+                parameter.clone(),
+                Some(Arc::clone(&field)),
+            ));
+            let body = apply_timestamp_string_in_coercion(
+                variable,
+                field.data_type(),
+                element,
+                schema,
+                session_timezone,
+                ansi_mode,
+                list_depth + 1,
+            )?;
+            Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
+                Arc::clone(&SPARK_IN_ARRAY_TRANSFORM_UDF),
+                vec![
+                    expression,
+                    expr::Expr::Lambda(Lambda::new(vec![parameter], body)),
+                ],
+            )))
+        }
+        TimestampStringInCoercion::Struct {
+            null_input_type,
+            fields: field_coercions,
+        } => {
+            let mut expression = expression;
+            let data_type = if data_type.is_null() {
+                expression = cast(expression, null_input_type.clone());
+                null_input_type
+            } else {
+                data_type
+            };
+            let source_fields = match data_type {
+                DataType::Struct(fields) => fields,
+                _ => return Ok(expression),
+            };
+            for (field, field_coercion) in source_fields.iter().zip(field_coercions) {
+                let Some(field_coercion) = field_coercion else {
+                    continue;
+                };
+                let value = get_field().call(vec![expression.clone(), lit(field.name().clone())]);
+                let value = apply_timestamp_string_in_coercion(
+                    value,
+                    field.data_type(),
+                    field_coercion,
+                    schema,
+                    session_timezone,
+                    ansi_mode,
+                    list_depth,
+                )?;
+                expression = ScalarUDF::from(UpdateStructField::new(vec![field.name().clone()]))
+                    .call(vec![expression, value]);
+            }
+            Ok(expression)
+        }
+    }
+}
 
 /// Applies Spark timestamp/string coercion to one predicate before DataFusion's generic
 /// coercion, preserving session-zone parsing and Spark TimestampType's microsecond precision.
@@ -33,53 +269,44 @@ pub(super) fn coerce_timestamp_string_predicate(
             list,
             negated,
         }) => {
-            let has_timestamp = std::iter::once(expr.as_ref())
-                .chain(list.iter())
-                .any(|value| timestamp_parse_timezone(value, schema, session_timezone).is_some());
-            let has_string = std::iter::once(expr.as_ref())
-                .chain(list.iter())
-                .any(|value| is_string_expression(value, schema));
-            if !has_timestamp || !has_string {
-                return Ok(expr::Expr::InList(InList::new(expr, list, negated)));
-            }
+            let expr_type = expr.get_type(schema.as_ref())?;
+            let list_types = list
+                .iter()
+                .map(|value| value.get_type(schema.as_ref()))
+                .collect::<DataFusionResult<Vec<_>>>()?;
+            let mut data_types = Vec::with_capacity(list_types.len() + 1);
+            data_types.push(expr_type.clone());
+            data_types.extend(list_types.iter().cloned());
 
-            if !ansi_mode {
-                let all_string_promotable =
-                    std::iter::once(expr.as_ref())
-                        .chain(list.iter())
-                        .all(|value| {
-                            value
-                                .get_type(schema.as_ref())
-                                .is_ok_and(|data_type| non_ansi_in_string_promotable(&data_type))
-                        });
-                if !all_string_promotable {
-                    return Ok(expr::Expr::InList(InList::new(expr, list, negated)));
-                }
-                let expr = stringify_non_ansi_in_expression(*expr, schema, session_timezone)?;
-                let list = list
-                    .into_iter()
-                    .map(|value| stringify_non_ansi_in_expression(value, schema, session_timezone))
-                    .collect::<DataFusionResult<Vec<_>>>()?;
-                return Ok(expr::Expr::InList(InList::new(
-                    Box::new(expr),
-                    list,
-                    negated,
-                )));
-            }
-
-            let Some(timezone) =
-                std::iter::once(expr.as_ref())
-                    .chain(list.iter())
-                    .find_map(|value| {
-                        timestamp_parse_timezone(value, schema, session_timezone.as_ref())
-                    })
+            let Some(coercion) =
+                find_timestamp_string_in_coercion(&data_types, session_timezone, ansi_mode)
             else {
                 return Ok(expr::Expr::InList(InList::new(expr, list, negated)));
             };
-            let expr = coerce_string_to_timestamp(*expr, schema, timezone.clone(), ansi_mode)?;
+
+            let expr = apply_timestamp_string_in_coercion(
+                *expr,
+                &expr_type,
+                &coercion,
+                schema,
+                session_timezone,
+                ansi_mode,
+                0,
+            )?;
             let list = list
                 .into_iter()
-                .map(|value| coerce_string_to_timestamp(value, schema, timezone.clone(), ansi_mode))
+                .zip(list_types)
+                .map(|(value, data_type)| {
+                    apply_timestamp_string_in_coercion(
+                        value,
+                        &data_type,
+                        &coercion,
+                        schema,
+                        session_timezone,
+                        ansi_mode,
+                        0,
+                    )
+                })
                 .collect::<DataFusionResult<Vec<_>>>()?;
             expr::Expr::InList(InList::new(Box::new(expr), list, negated))
         }
@@ -154,12 +381,6 @@ fn non_ansi_in_string_promotable(data_type: &DataType) -> bool {
         || data_type.is_string()
         || (data_type.is_temporal()
             && !matches!(data_type, DataType::Interval(IntervalUnit::MonthDayNano)))
-}
-
-fn is_string_expression(expression: &expr::Expr, schema: &DFSchemaRef) -> bool {
-    expression
-        .get_type(schema.as_ref())
-        .is_ok_and(|data_type| is_string_type(&data_type))
 }
 
 fn is_string_type(data_type: &DataType) -> bool {

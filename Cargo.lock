@@ -7460,7 +7460,6 @@ dependencies = [
  "prost",
  "quote",
  "regex",
- "ryu",
  "sail-common",
  "serde",
  "serde_arrow",
