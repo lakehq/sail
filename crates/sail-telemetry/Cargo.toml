@@ -21,6 +21,7 @@ opentelemetry-otlp = { workspace = true }
 opentelemetry-appender-log = { workspace = true }
 log = { workspace = true }
 datafusion = { workspace = true }
+datafusion-proto = { workspace = true }
 futures = { workspace = true }
 tonic = { workspace = true }
 pin-project-lite = { workspace = true }

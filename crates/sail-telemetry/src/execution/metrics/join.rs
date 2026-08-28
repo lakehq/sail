@@ -64,7 +64,9 @@ impl MetricEmitter for BuildProbeJoinMetricEmitter {
                     .emit();
                 MetricHandled::Yes
             }
-            MetricValue::Gauge { name, gauge } if name == "build_mem_used" => {
+            MetricValue::Gauge { name, gauge } | MetricValue::PeakMemoryUsage { name, gauge }
+                if name == "build_mem_used" =>
+            {
                 registry
                     .execution_join_build_side_memory_used
                     .recorder(gauge)
@@ -307,7 +309,9 @@ impl MetricEmitter for SortMergeJoinMetricEmitter {
                     .emit();
                 MetricHandled::Yes
             }
-            MetricValue::Gauge { name, gauge } if name == "peak_mem_used" => {
+            MetricValue::Gauge { name, gauge } | MetricValue::PeakMemoryUsage { name, gauge }
+                if name == "peak_mem_used" =>
+            {
                 registry
                     .execution_join_memory_used
                     .recorder(gauge)

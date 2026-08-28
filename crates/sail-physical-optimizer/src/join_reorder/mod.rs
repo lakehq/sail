@@ -8,7 +8,7 @@ use datafusion::config::ConfigOptions;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_plan::projection::ProjectionExec;
-use datafusion::physical_plan::{ExecutionPlan, displayable};
+use datafusion::physical_plan::{ExecutionPlan, displayable, replace_children_if_necessary};
 use log::{trace, warn};
 
 use crate::PhysicalOptimizerRule;
@@ -174,7 +174,7 @@ impl JoinReorder {
         let plan = if optimized_children.is_empty() {
             plan
         } else {
-            plan.with_new_children(optimized_children)?
+            replace_children_if_necessary(plan, optimized_children)?
         };
 
         // Attempt to optimize a reorderable region rooted at this node.

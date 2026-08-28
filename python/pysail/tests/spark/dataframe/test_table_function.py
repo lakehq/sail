@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
-from pyspark.sql.types import Row
+from pyspark.sql.types import ArrayType, IntegerType, Row, StringType, StructField, StructType
 
 
 @pytest.mark.parametrize(
@@ -65,6 +65,72 @@ def test_lateral_view_outer(spark):
             LATERAL VIEW explode_outer(CAST(NULL AS array<int>)) AS v
     """)
     assert df.collect() == [Row(id=0, v=None)]
+
+
+def test_explode_outer_null_empty_nonempty(spark):
+    df = spark.sql("""
+        SELECT case_id, explode_outer(items) AS item
+        FROM VALUES
+            (0, CAST(NULL AS ARRAY<INT>)),
+            (1, CAST(ARRAY() AS ARRAY<INT>)),
+            (2, ARRAY(10, 20))
+        AS t(case_id, items)
+        ORDER BY case_id, item
+    """)
+    assert df.collect() == [
+        Row(case_id=0, item=None),
+        Row(case_id=1, item=None),
+        Row(case_id=2, item=10),
+        Row(case_id=2, item=20),
+    ]
+
+
+def test_posexplode_outer_null_empty_nonempty(spark):
+    df = spark.sql("""
+        SELECT case_id, posexplode_outer(items) AS (pos, item)
+        FROM VALUES
+            (0, CAST(NULL AS ARRAY<INT>)),
+            (1, CAST(ARRAY() AS ARRAY<INT>)),
+            (2, ARRAY(10, 20))
+        AS t(case_id, items)
+        ORDER BY case_id, pos
+    """)
+    assert df.collect() == [
+        Row(case_id=0, pos=None, item=None),
+        Row(case_id=1, pos=None, item=None),
+        Row(case_id=2, pos=0, item=10),
+        Row(case_id=2, pos=1, item=20),
+    ]
+
+
+def test_inline_outer_null_empty_nonempty(spark):
+    item_type = StructType(
+        [
+            StructField("number", IntegerType(), True),
+            StructField("label", StringType(), True),
+        ]
+    )
+    schema = StructType(
+        [
+            StructField("case_id", IntegerType(), False),
+            StructField("items", ArrayType(item_type, True), True),
+        ]
+    )
+    df = spark.createDataFrame(
+        [
+            (0, None),
+            (1, []),
+            (2, [Row(number=10, label="a"), Row(number=20, label="b")]),
+        ],
+        schema,
+    )
+    df = df.selectExpr("case_id", "inline_outer(items) AS (number, label)").orderBy("case_id", "number")
+    assert df.collect() == [
+        Row(case_id=0, number=None, label=None),
+        Row(case_id=1, number=None, label=None),
+        Row(case_id=2, number=10, label="a"),
+        Row(case_id=2, number=20, label="b"),
+    ]
 
 
 def test_lateral_join(spark):

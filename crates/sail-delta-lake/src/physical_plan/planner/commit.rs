@@ -162,7 +162,7 @@ pub async fn build_adds_from_touched_files(
         .collect();
     let touched_meta: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(proj_exprs, join)?);
 
-    let touched_adds: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::from_log_scan(
+    let touched_adds: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::new(
         touched_meta,
         table_url.clone(),
         version,

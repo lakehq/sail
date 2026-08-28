@@ -1,7 +1,7 @@
 use datafusion::arrow::array::RecordBatch;
 use datafusion::common::{Result, internal_datafusion_err};
 use sail_common::actor::ActorHandle;
-use sail_common_datafusion::system::predicate::Predicate;
+use sail_common_datafusion::system::predicate::ValueFilter;
 use tokio::sync::oneshot;
 
 use crate::system_event::{SystemEventActor, SystemEventActorMessage};
@@ -19,8 +19,8 @@ impl SystemEventReader {
 
     pub async fn read_jobs(
         &self,
-        session_id: Predicate<String>,
-        job_id: Predicate<u64>,
+        session_id: ValueFilter<String>,
+        job_id: ValueFilter<u64>,
         fetch: usize,
     ) -> Result<RecordBatch> {
         let (result, receiver) = oneshot::channel();
@@ -38,14 +38,16 @@ impl SystemEventReader {
 
     pub async fn read_stages(
         &self,
-        session_id: Predicate<String>,
-        job_id: Predicate<u64>,
+        session_id: ValueFilter<String>,
+        job_id: ValueFilter<u64>,
+        stage: ValueFilter<u64>,
         fetch: usize,
     ) -> Result<RecordBatch> {
         let (result, receiver) = oneshot::channel();
         self.send(SystemEventActorMessage::ReadStages {
             session_id,
             job_id,
+            stage,
             fetch,
             result,
         })
@@ -57,14 +59,20 @@ impl SystemEventReader {
 
     pub async fn read_tasks(
         &self,
-        session_id: Predicate<String>,
-        job_id: Predicate<u64>,
+        session_id: ValueFilter<String>,
+        job_id: ValueFilter<u64>,
+        stage: ValueFilter<u64>,
+        partition: ValueFilter<u64>,
+        attempt: ValueFilter<u64>,
         fetch: usize,
     ) -> Result<RecordBatch> {
         let (result, receiver) = oneshot::channel();
         self.send(SystemEventActorMessage::ReadTasks {
             session_id,
             job_id,
+            stage,
+            partition,
+            attempt,
             fetch,
             result,
         })
@@ -74,7 +82,11 @@ impl SystemEventReader {
             .map_err(|e| internal_datafusion_err!("failed to read system event tasks: {e}"))?
     }
 
-    pub async fn read_options(&self, key: Predicate<String>, fetch: usize) -> Result<RecordBatch> {
+    pub async fn read_options(
+        &self,
+        key: ValueFilter<String>,
+        fetch: usize,
+    ) -> Result<RecordBatch> {
         let (result, receiver) = oneshot::channel();
         self.send(SystemEventActorMessage::ReadOptions { key, fetch, result })
             .await?;
@@ -85,7 +97,7 @@ impl SystemEventReader {
 
     pub async fn read_sessions(
         &self,
-        session_id: Predicate<String>,
+        session_id: ValueFilter<String>,
         fetch: usize,
     ) -> Result<RecordBatch> {
         let (result, receiver) = oneshot::channel();
@@ -102,8 +114,8 @@ impl SystemEventReader {
 
     pub async fn read_workers(
         &self,
-        session_id: Predicate<String>,
-        worker_id: Predicate<u64>,
+        session_id: ValueFilter<String>,
+        worker_id: ValueFilter<u64>,
         fetch: usize,
     ) -> Result<RecordBatch> {
         let (result, receiver) = oneshot::channel();

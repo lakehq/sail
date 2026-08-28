@@ -4,13 +4,12 @@ use std::sync::Arc;
 use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result, internal_err, not_impl_err};
 use datafusion::datasource::listing::ListingTableUrl;
-use datafusion::execution::SessionState;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::PhysicalPlanner;
 use sail_common_datafusion::datasource::{MergeStrategy, RowLevelCommand};
 use sail_data_source::options::ResolveOptions;
 use sail_data_source::resolve_listing_urls;
-use sail_logical_plan::merge::RowLevelWriteNode;
+use sail_logical_plan::row_level::RowLevelWriteNode;
 use url::Url;
 
 use crate::lake_source::{DeltaLakeSource, split_delta_write_options_and_table_properties};
@@ -23,7 +22,7 @@ use crate::table::open_table_with_object_store;
 
 /// Creates a Delta physical execution plan for a unified `RowLevelWriteNode`.
 pub async fn create_row_level_write_physical_plan(
-    ctx: &SessionState,
+    ctx: &dyn Session,
     planner: &dyn PhysicalPlanner,
     node: &RowLevelWriteNode,
 ) -> Result<Arc<dyn ExecutionPlan>> {
