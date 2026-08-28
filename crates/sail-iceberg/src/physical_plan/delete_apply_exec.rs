@@ -13,10 +13,10 @@ use datafusion::arrow::row::{OwnedRow, RowConverter, SortField};
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_plan::stream::{EmptyRecordBatchStream, RecordBatchStreamAdapter};
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
-    Partitioning, PlanProperties, SendableRecordBatchStream, apply_expression_roots,
+    PlanProperties, SendableRecordBatchStream,
 };
 use datafusion_common::{DataFusionError, Result};
 use futures::future::BoxFuture;
@@ -112,22 +112,15 @@ pub struct IcebergDeleteApplyExec {
     /// Iceberg schema used to map equality-delete `equality_ids` (field ids) to
     /// column names.
     iceberg_schema: IcebergSchema,
-    /// Output partitioning shared with clean Iceberg file scans.
-    output_partitioning: Partitioning,
-    /// The sole output partition that contains this data file's rows.
-    file_partition: usize,
     /// Cached plan properties (derived from the child's schema).
     cache: Arc<PlanProperties>,
 }
 
 impl IcebergDeleteApplyExec {
-    fn compute_properties(
-        input: &Arc<dyn ExecutionPlan>,
-        output_partitioning: Partitioning,
-    ) -> Arc<PlanProperties> {
+    fn compute_properties(input: &Arc<dyn ExecutionPlan>) -> Arc<PlanProperties> {
         Arc::new(PlanProperties::new(
             input.equivalence_properties().clone(),
-            output_partitioning,
+            input.output_partitioning().clone(),
             input.pipeline_behavior(),
             input.boundedness(),
         ))
@@ -141,18 +134,7 @@ impl IcebergDeleteApplyExec {
         table_url: String,
         iceberg_schema: IcebergSchema,
     ) -> Self {
-        let input_partitions =
-            datafusion::physical_plan::ExecutionPlanProperties::output_partitioning(&input)
-                .partition_count();
-        if input_partitions != 1 {
-            log::warn!(
-                "IcebergDeleteApplyExec: child scan has {} partitions; \
-                 positional deletes may be incorrect",
-                input_partitions
-            );
-        }
-        let output_partitioning = Partitioning::UnknownPartitioning(1);
-        let cache = Self::compute_properties(&input, output_partitioning.clone());
+        let cache = Self::compute_properties(&input);
         Self {
             input,
             data_file_path,
@@ -160,40 +142,8 @@ impl IcebergDeleteApplyExec {
             equality_deletes,
             table_url,
             iceberg_schema,
-            output_partitioning,
-            file_partition: 0,
             cache,
         }
-    }
-
-    /// Map this single-file input to one slot in a shared output partitioning.
-    /// Other output slots produce empty streams, so position deletes still see
-    /// one ordered input stream with file-local absolute row offsets.
-    pub fn try_assign_file_partition(
-        mut self,
-        output_partitioning: Partitioning,
-        file_partition: usize,
-    ) -> Result<Self> {
-        let partition_count = output_partitioning.partition_count();
-        if file_partition >= partition_count {
-            return Err(DataFusionError::Plan(format!(
-                "Iceberg data file partition {file_partition} is outside output partitioning with {partition_count} partitions"
-            )));
-        }
-        if !matches!(
-            &output_partitioning,
-            Partitioning::Hash(_, _)
-                | Partitioning::Range(_)
-                | Partitioning::UnknownPartitioning(1)
-        ) {
-            return Err(DataFusionError::Plan(format!(
-                "Iceberg data file cannot be assigned to output partitioning {output_partitioning}"
-            )));
-        }
-        self.output_partitioning = output_partitioning;
-        self.file_partition = file_partition;
-        self.cache = Self::compute_properties(&self.input, self.output_partitioning.clone());
-        Ok(self)
     }
 
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
@@ -214,12 +164,6 @@ impl IcebergDeleteApplyExec {
     pub fn iceberg_schema(&self) -> &IcebergSchema {
         &self.iceberg_schema
     }
-    pub fn declared_output_partitioning(&self) -> &Partitioning {
-        &self.output_partitioning
-    }
-    pub fn file_partition(&self) -> usize {
-        self.file_partition
-    }
 }
 
 impl DisplayAs for IcebergDeleteApplyExec {
@@ -234,17 +178,7 @@ impl DisplayAs for IcebergDeleteApplyExec {
                     self.data_file_path,
                     self.positional_deletes.len(),
                     self.equality_deletes.len()
-                )?;
-                if self.output_partitioning.partition_count() > 1 {
-                    write!(
-                        f,
-                        ", file_partition={}/{}, output_partitioning={}",
-                        self.file_partition,
-                        self.output_partitioning.partition_count(),
-                        self.output_partitioning
-                    )?;
-                }
-                Ok(())
+                )
             }
         }
     }
@@ -266,21 +200,13 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        match &self.output_partitioning {
-            Partitioning::Hash(expressions, _) => apply_expression_roots(expressions, f),
-            Partitioning::Range(range) => {
-                apply_expression_roots(range.ordering().iter().map(|sort_expr| &sort_expr.expr), f)
-            }
-            Partitioning::RoundRobinBatch(_) | Partitioning::UnknownPartitioning(_) => {
-                Ok(TreeNodeRecursion::Continue)
-            }
-        }
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::SinglePartition]
+        vec![Distribution::UnspecifiedDistribution]
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -311,7 +237,7 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
         }
         let mut cloned = (*self).clone();
         cloned.input = children[0].clone();
-        cloned.cache = Self::compute_properties(&cloned.input, cloned.output_partitioning.clone());
+        cloned.cache = Self::compute_properties(&cloned.input);
         Ok(Arc::new(cloned))
     }
 
@@ -324,18 +250,15 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let partition_count = self.output_partitioning.partition_count();
+        let partition_count = self.input.output_partitioning().partition_count();
         if partition >= partition_count {
             return Err(DataFusionError::Internal(format!(
                 "IcebergDeleteApplyExec partition {partition} is outside its {partition_count} output partitions"
             )));
         }
-        if partition != self.file_partition {
-            return Ok(Box::pin(EmptyRecordBatchStream::new(self.schema())));
-        }
 
         let output_schema = self.schema();
-        let child = self.input.execute(0, Arc::clone(&context))?;
+        let child = self.input.execute(partition, Arc::clone(&context))?;
         let data_file_path = self.data_file_path.clone();
         let positional_deletes = self.positional_deletes.clone();
         let equality_deletes = self.equality_deletes.clone();
@@ -344,6 +267,10 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
         let schema_for_adapter = output_schema.clone();
 
         let stream = try_stream! {
+            let mut stream = child;
+            let Some(first_batch) = stream.try_next().await? else {
+                return;
+            };
             let parsed_table_url = Url::parse(&table_url)
                 .map_err(|error| DataFusionError::External(Box::new(error)))?;
             let base_store = context
@@ -362,8 +289,15 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
                 load_equality_deletes(&store_ctx, &equality_deletes, &iceberg_schema).await?;
 
             let mut row_offset: u64 = 0;
-            let mut stream = child;
-            while let Some(batch) = stream.try_next().await? {
+            let mut next_batch = Some(first_batch);
+            loop {
+                let batch = match next_batch.take() {
+                    Some(batch) => batch,
+                    None => match stream.try_next().await? {
+                        Some(batch) => batch,
+                        None => break,
+                    },
+                };
                 let batch_row_count = batch.num_rows() as u64;
                 let mask = compute_delete_mask(
                     &batch,
@@ -773,10 +707,8 @@ mod tests {
     use datafusion::arrow::array::{Int64Array, RecordBatch, StringArray};
     use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
     use datafusion::arrow::row::{RowConverter, SortField};
-    use datafusion::common::ScalarValue;
-    use datafusion::physical_expr::expressions::Column;
-    use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, RangePartitioning, SplitPoint};
-    use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::physical_plan::ExecutionPlanProperties;
+    use datafusion_datasource::memory::MemorySourceConfig;
     use futures::TryStreamExt;
     use parquet::schema::parser::parse_message_type;
 
@@ -948,22 +880,16 @@ mod tests {
     }
 
     #[test]
-    fn sparse_file_partition_exposes_range_and_skips_other_slots() {
+    fn empty_input_partitions_preserve_layout_without_loading_deletes() {
         let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
             "id",
             DataType::Int64,
             true,
         )]));
-        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::new(
-            Column::new("id", 0),
-        ))])
-        .unwrap();
-        let range = RangePartitioning::try_new(
-            ordering,
-            vec![
-                SplitPoint::new(vec![ScalarValue::Int64(Some(10))]),
-                SplitPoint::new(vec![ScalarValue::Int64(Some(20))]),
-            ],
+        let input = MemorySourceConfig::try_new_exec(
+            &[Vec::new(), Vec::new(), Vec::new()],
+            Arc::clone(&arrow_schema),
+            None,
         )
         .unwrap();
         let iceberg_schema = IcebergSchema::builder()
@@ -975,26 +901,21 @@ mod tests {
             .build()
             .unwrap();
         let delete_apply = IcebergDeleteApplyExec::new(
-            Arc::new(EmptyExec::new(Arc::clone(&arrow_schema))),
+            input,
             "data.parquet".to_string(),
             vec![],
             vec![],
-            "file:///tmp/iceberg-output-partitioning".to_string(),
+            "not a table URL".to_string(),
             iceberg_schema,
-        )
-        .try_assign_file_partition(Partitioning::Range(range.clone()), 1)
-        .unwrap();
-
-        assert_eq!(delete_apply.file_partition(), 1);
-        assert_eq!(
-            delete_apply.declared_output_partitioning(),
-            &Partitioning::Range(range)
         );
-        let mut first_partition = delete_apply
-            .execute(0, Arc::new(TaskContext::default()))
+
+        let plan: &dyn ExecutionPlan = &delete_apply;
+        assert_eq!(plan.output_partitioning().partition_count(), 3);
+        let mut empty_partition = delete_apply
+            .execute(1, Arc::new(TaskContext::default()))
             .unwrap();
         assert!(
-            futures::executor::block_on(first_partition.try_next())
+            futures::executor::block_on(empty_partition.try_next())
                 .unwrap()
                 .is_none()
         );

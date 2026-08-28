@@ -1051,8 +1051,6 @@ message IcebergDeleteApplyExecNode {
   string equality_deletes_json = 4;
   string table_url = 5;
   string iceberg_schema_json = 6;
-  bytes output_partitioning = 7;
-  uint64 file_partition = 8;
 }
 
 message IcebergMergeMetadataExecNode {
