@@ -27,6 +27,15 @@ def test_query_option_matches_spark_normalization(query, expected):
     assert datasource._resolve_options()["query"] == expected  # noqa: SLF001
 
 
+def test_query_option_rejects_empty_normalized_query():
+    from pysail.spark.datasource.jdbc import JdbcDataSource
+
+    datasource = JdbcDataSource(options={"url": "jdbc:postgresql://localhost/test", "query": " ;;; \n"})
+
+    with pytest.raises(ValueError, match="Either 'dbtable' or 'query'"):
+        datasource._resolve_options()  # noqa: SLF001
+
+
 def test_schema_and_execution_use_the_normalized_query(monkeypatch):
     from pyspark.sql.datasource import GreaterThan
 
