@@ -59,10 +59,11 @@ impl PlanResolver<'_> {
                 coerce_timestamp_in_subquery_pair(
                     expr,
                     &left_type,
+                    schema,
                     Expr::Column(right_column.clone()),
                     &right_type,
-                    &self.config.session_timezone,
-                    self.config.ansi_mode,
+                    subquery.schema(),
+                    &self.config,
                 )?;
             expr = coerced_left;
             if right_changed {
@@ -171,10 +172,11 @@ impl PlanResolver<'_> {
                 let (outer, inner, _, _) = coerce_timestamp_in_subquery_pair(
                     outer,
                     &outer_type,
+                    schema,
                     Expr::Column(inner_col),
                     &inner_type,
-                    &self.config.session_timezone,
-                    self.config.ansi_mode,
+                    subquery_plan.schema(),
+                    &self.config,
                 )?;
                 Ok(Expr::eq(inner, outer))
             })

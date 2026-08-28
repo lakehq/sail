@@ -515,6 +515,14 @@ pub fn spark_f64_to_string(value: f64) -> String {
         }
         .to_string();
     }
+    if value.abs().to_bits() == 1 {
+        return if value.is_sign_negative() {
+            "-4.9E-324"
+        } else {
+            "4.9E-324"
+        }
+        .to_string();
+    }
     java_float_repr(value.is_sign_negative(), &format!("{:e}", value.abs()))
 }
 
@@ -536,6 +544,14 @@ pub fn spark_f32_to_string(value: f32) -> String {
             "-0.0"
         } else {
             "0.0"
+        }
+        .to_string();
+    }
+    if value.abs().to_bits() == 1 {
+        return if value.is_sign_negative() {
+            "-1.4E-45"
+        } else {
+            "1.4E-45"
         }
         .to_string();
     }
@@ -1114,8 +1130,12 @@ mod tests {
     fn test_spark_float_to_string() {
         assert_eq!(spark_f64_to_string(1e18), "1.0E18");
         assert_eq!(spark_f64_to_string(1e-7), "1.0E-7");
+        assert_eq!(spark_f64_to_string(f64::from_bits(1)), "4.9E-324");
+        assert_eq!(spark_f64_to_string(-f64::from_bits(1)), "-4.9E-324");
         assert_eq!(spark_f64_to_string(-0.0), "-0.0");
         assert_eq!(spark_f32_to_string(10_000_000.0), "1.0E7");
+        assert_eq!(spark_f32_to_string(f32::from_bits(1)), "1.4E-45");
+        assert_eq!(spark_f32_to_string(-f32::from_bits(1)), "-1.4E-45");
         assert_eq!(spark_f32_to_string(-0.0), "-0.0");
     }
 

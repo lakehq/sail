@@ -3,9 +3,11 @@ use std::sync::Arc;
 use datafusion::arrow::array::{
     Array, ArrayRef, GenericStringBuilder, OffsetSizeTrait, StringViewBuilder,
 };
-use datafusion::arrow::datatypes::DataType;
-use datafusion::common::Result;
-use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion::common::{Result, exec_err};
+use datafusion::logical_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_expr::ScalarFunctionArgs;
 use sail_common_datafusion::display::{ArrayFormatter, FormatOptions};
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -44,6 +46,18 @@ macro_rules! define_to_string_udf {
 
             fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
                 Ok($return_type)
+            }
+
+            fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+                let [arg] = args.arg_fields else {
+                    return exec_err!(
+                        "{} expects exactly one argument, got {}",
+                        self.name(),
+                        args.arg_fields.len()
+                    );
+                };
+                let nullable = arg.is_nullable();
+                Ok(Arc::new(Field::new(self.name(), $return_type, nullable)))
             }
 
             fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

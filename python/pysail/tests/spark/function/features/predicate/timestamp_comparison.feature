@@ -88,6 +88,74 @@ Feature: Timestamp and string predicate coercion
         | ltz_after_ntz | date_promoted | array_match | nested_array_match | struct_match |
         | true          | true          | true        | true               | true         |
 
+    Scenario: Struct IN resolves fields positionally and with the configured resolver
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = true
+      And config spark.sql.caseSensitive = false
+      When query
+        """
+        SELECT
+          named_struct('x', TIMESTAMP '2024-05-01 00:00:00', 'x', 1) IN (
+            named_struct('x', '2024-05-01 00:00:00', 'x', 2)
+          ) AS duplicate_mismatch,
+          named_struct('x', TIMESTAMP '2024-05-01 00:00:00.123456') IN (
+            named_struct('X', '2024-05-01 00:00:00.123456789')
+          ) AS case_insensitive_match
+        """
+      Then query result
+        | duplicate_mismatch | case_insensitive_match |
+        | false              | true                   |
+
+    Scenario: Array and struct IN subqueries use recursive common types
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.caseSensitive = false
+      And config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT COUNT(*) AS matched
+        FROM VALUES (ARRAY(TIMESTAMP '2024-05-01 00:00:00.123456')) AS lhs(v)
+        WHERE v IN (SELECT ARRAY('2024-05-01 00:00:00.123456789'))
+        """
+      Then query result
+        | matched |
+        | 0       |
+      When query
+        """
+        SELECT COUNT(*) AS matched
+        FROM VALUES (
+          named_struct('x', TIMESTAMP '2024-05-01 00:00:00.123456')
+        ) AS lhs(v)
+        WHERE v IN (
+          SELECT named_struct('X', '2024-05-01 00:00:00.123456789')
+        )
+        """
+      Then query result
+        | matched |
+        | 0       |
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT COUNT(*) AS matched
+        FROM VALUES (ARRAY(TIMESTAMP '2024-05-01 00:00:00.123456')) AS lhs(v)
+        WHERE v IN (SELECT ARRAY('2024-05-01 00:00:00.123456789'))
+        """
+      Then query result
+        | matched |
+        | 1       |
+      When query
+        """
+        SELECT COUNT(*) AS matched
+        FROM VALUES (
+          named_struct('x', TIMESTAMP '2024-05-01 00:00:00.123456')
+        ) AS lhs(v)
+        WHERE v IN (
+          SELECT named_struct('X', '2024-05-01 00:00:00.123456789')
+        )
+        """
+      Then query result
+        | matched |
+        | 1       |
+
     Scenario: Legacy IN promotes nested timestamp and string values to string
       Given config spark.sql.session.timeZone = Asia/Shanghai
       And config spark.sql.ansi.enabled = false
@@ -110,7 +178,7 @@ Feature: Timestamp and string predicate coercion
         | array_with_null | nested_array_match | struct_with_null |
         | NULL            | false              | NULL             |
 
-    Scenario: Legacy IN uses Java float-to-string rendering
+    Scenario: Legacy IN uses Spark-compatible string rendering
       Given config spark.sql.ansi.enabled = false
       When query
         """
@@ -126,11 +194,70 @@ Feature: Timestamp and string predicate coercion
           CAST('-0.0' AS DOUBLE) IN (
             '-0.0',
             TIMESTAMP '2000-01-01 00:00:00'
-          ) AS negative_zero
+          ) AS negative_zero,
+          CAST('4.9E-324' AS DOUBLE) IN (
+            '4.9E-324',
+            TIMESTAMP '2000-01-01 00:00:00'
+          ) AS min_double,
+          CAST('1.4E-45' AS FLOAT) IN (
+            '1.4E-45',
+            TIMESTAMP '2000-01-01 00:00:00'
+          ) AS min_float,
+          INTERVAL 1 DAY IN (
+            CONCAT('INTERVAL ', CHR(39), '1', CHR(39), ' DAY'),
+            TIMESTAMP '2000-01-01 00:00:00'
+          ) AS day_interval
         """
       Then query result
-        | large_value | small_value | negative_zero |
-        | true        | true        | true          |
+        | large_value | small_value | negative_zero | min_double | min_float | day_interval |
+        | true        | true        | true          | true       | true      | true         |
+
+    Scenario: Legacy datetime ordering honors datetimeToString configuration
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = false
+      And config spark.sql.legacy.typeCoercion.datetimeToString.enabled = false
+      When query
+        """
+        SELECT
+          (TIMESTAMP '2024-01-01 00:00:00' > '9') IS NULL
+            AS timestamp_ordering_is_null
+        """
+      Then query result
+        | timestamp_ordering_is_null |
+        | true                       |
+      Given config spark.sql.legacy.typeCoercion.datetimeToString.enabled = true
+      When query
+        """
+        SELECT
+          TIMESTAMP '2024-01-01 00:00:00' > '9' AS timestamp_ordering,
+          (TIMESTAMP '2024-01-01 00:00:00' = 'not-a-timestamp') IS NULL
+            AS equality_still_parses
+        """
+      Then query result
+        | timestamp_ordering | equality_still_parses |
+        | false              | true                  |
+
+    @function(nullability)
+    Scenario: Null-safe timestamp comparisons remain non-nullable after coercion
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT
+          TIMESTAMP '2024-01-01 00:00:00'
+            IS DISTINCT FROM '2024-01-01 00:00:00' AS distinct_value,
+          TIMESTAMP '2024-01-01 00:00:00'
+            IS NOT DISTINCT FROM '2024-01-01 00:00:00' AS not_distinct_value
+        """
+      Then query result
+        | distinct_value | not_distinct_value |
+        | false          | true               |
+      And query schema
+        """
+        root
+         |-- distinct_value: boolean (nullable = false)
+         |-- not_distinct_value: boolean (nullable = false)
+        """
 
     Scenario: Multi-column timestamp IN subquery coerces every pair
       Given config spark.sql.session.timeZone = UTC

@@ -237,12 +237,7 @@ impl PlanResolver<'_> {
                 }
             }
         };
-        let func = coerce_timestamp_string_predicate(
-            func,
-            schema,
-            &self.config.session_timezone,
-            self.config.ansi_mode,
-        )?;
+        let func = coerce_timestamp_string_predicate(func, schema, &self.config)?;
 
         // DataFusion lambda variables carry no type until resolved against the schema.
         // Sail bypasses the DataFusion SQL planner, so resolution happens here — but
