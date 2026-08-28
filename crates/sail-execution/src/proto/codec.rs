@@ -1644,6 +1644,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 equality_deletes_json,
                 table_url,
                 iceberg_schema_json,
+                output_partitioning,
+                file_partition,
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -1659,14 +1661,28 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     serde_json::from_str(&iceberg_schema_json).map_err(|e| {
                         plan_datafusion_err!("failed to decode Iceberg schema: {e}")
                     })?;
-                Ok(Arc::new(IcebergDeleteApplyExec::new(
-                    input,
-                    data_file_path,
-                    positional_deletes,
-                    equality_deletes,
-                    table_url,
-                    iceberg_schema,
-                )))
+                let output_partitioning = self.try_decode_partitioning(
+                    &output_partitioning,
+                    input.schema().as_ref(),
+                    ctx,
+                    proto_converter,
+                )?;
+                let file_partition = usize::try_from(file_partition).map_err(|error| {
+                    plan_datafusion_err!(
+                        "failed to decode Iceberg data file partition {file_partition}: {error}"
+                    )
+                })?;
+                Ok(Arc::new(
+                    IcebergDeleteApplyExec::new(
+                        input,
+                        data_file_path,
+                        positional_deletes,
+                        equality_deletes,
+                        table_url,
+                        iceberg_schema,
+                    )
+                    .try_assign_file_partition(output_partitioning, file_partition)?,
+                ))
             }
             NodeKind::IcebergMergeMetadata(r#gen::IcebergMergeMetadataExecNode {
                 input,
@@ -2758,6 +2774,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 .map_err(|e| plan_datafusion_err!("failed to encode equality delete refs: {e}"))?;
             let iceberg_schema_json = serde_json::to_string(delete_apply.iceberg_schema())
                 .map_err(|e| plan_datafusion_err!("failed to encode Iceberg schema: {e}"))?;
+            let output_partitioning = self.try_encode_partitioning(
+                delete_apply.declared_output_partitioning(),
+                proto_converter,
+            )?;
+            let file_partition = u64::try_from(delete_apply.file_partition()).map_err(|error| {
+                plan_datafusion_err!(
+                    "failed to encode Iceberg data file partition {}: {error}",
+                    delete_apply.file_partition()
+                )
+            })?;
             NodeKind::IcebergDeleteApply(r#gen::IcebergDeleteApplyExecNode {
                 input,
                 data_file_path: delete_apply.data_file_path().to_string(),
@@ -2765,6 +2791,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 equality_deletes_json,
                 table_url: delete_apply.table_url().to_string(),
                 iceberg_schema_json,
+                output_partitioning,
+                file_partition,
             })
         } else if let Some(merge_metadata) = node.downcast_ref::<IcebergMergeMetadataExec>() {
             let input = try_encode_physical_plan_with_converter(
@@ -6000,6 +6028,72 @@ mod tests {
                 None,
             ]))],
         )
+    }
+
+    #[test]
+    fn test_round_trip_iceberg_delete_apply_preserves_file_range_partition() -> Result<()> {
+        use datafusion::physical_expr::{RangePartitioning, SplitPoint};
+        use datafusion::physical_plan::empty::EmptyExec;
+        use sail_iceberg::spec::{NestedField, PrimitiveType, Schema as IcebergSchema, Type};
+
+        let arrow_schema = Arc::new(Schema::new(vec![Field::new(
+            "event_time",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        )]));
+        let transform = Arc::new(IcebergPartitionTransformExpr::new(
+            Arc::new(Column::new("event_time", 0)),
+            IcebergTransform::Day,
+        )) as Arc<dyn PhysicalExpr>;
+        let ordering = LexOrdering::new([PhysicalSortExpr::new_default(transform)])
+            .ok_or_else(|| plan_datafusion_err!("expected non-empty Iceberg range ordering"))?;
+        let expected = RangePartitioning::try_new(
+            ordering,
+            vec![SplitPoint::new(vec![ScalarValue::Int32(Some(1))])],
+        )?;
+        let iceberg_schema = IcebergSchema::builder()
+            .with_fields([Arc::new(NestedField::optional(
+                1,
+                "event_time",
+                Type::Primitive(PrimitiveType::Timestamp),
+            ))])
+            .build()
+            .map_err(|error| plan_datafusion_err!("invalid test Iceberg schema: {error}"))?;
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(
+            IcebergDeleteApplyExec::new(
+                Arc::new(EmptyExec::new(arrow_schema)),
+                "data/event-day-one.parquet".to_string(),
+                vec![],
+                vec![],
+                "file:///tmp/iceberg-output-partitioning".to_string(),
+                iceberg_schema,
+            )
+            .try_assign_file_partition(Partitioning::Range(expected.clone()), 1)?,
+        );
+
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, plan)?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let delete_apply = decoded
+            .downcast_ref::<IcebergDeleteApplyExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not IcebergDeleteApplyExec"))?;
+
+        assert_eq!(delete_apply.file_partition(), 1);
+        assert_eq!(
+            delete_apply.declared_output_partitioning(),
+            &Partitioning::Range(expected)
+        );
+        let Partitioning::Range(actual) = delete_apply.declared_output_partitioning() else {
+            return plan_err!("expected decoded Iceberg range partitioning");
+        };
+        let transform = actual.ordering()[0]
+            .expr
+            .downcast_ref::<IcebergPartitionTransformExpr>()
+            .ok_or_else(|| {
+                plan_datafusion_err!("decoded range key is not an Iceberg partition transform")
+            })?;
+        assert_eq!(transform.transform(), IcebergTransform::Day);
+        Ok(())
     }
 
     #[test]

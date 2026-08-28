@@ -11,6 +11,7 @@
 // limitations under the License.
 
 use std::borrow::Cow;
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -33,14 +34,16 @@ use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{
     BinaryExpr, Expr, LogicalPlan, Operator, TableProviderFilterPushDown,
 };
-use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::{
+    LexOrdering, PhysicalExpr, PhysicalSortExpr, RangePartitioning, SplitPoint,
+};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::GlobalLimitExec;
 use datafusion::physical_plan::projection::ProjectionExec;
-use datafusion::physical_plan::union::UnionExec;
+use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_datasource::file_scan_config::output_partitioning_from_partition_fields;
 use object_store::ObjectMeta;
@@ -53,7 +56,7 @@ use crate::datasource::expressions::simplify_expr;
 use crate::datasource::pruning::{
     prune_data_files_by_partition_values, prune_files, prune_manifests_by_partition_summaries,
 };
-use crate::datasource::type_converter::iceberg_schema_to_arrow;
+use crate::datasource::type_converter::{iceberg_schema_to_arrow, iceberg_type_to_arrow};
 use crate::io::{
     StoreContext, load_manifest as io_load_manifest, load_manifest_list as io_load_manifest_list,
 };
@@ -61,12 +64,14 @@ use crate::physical_plan::delete_apply_exec::IcebergDeleteApplyExec;
 use crate::physical_plan::discovery_exec::IcebergDiscoveryExec;
 use crate::physical_plan::manifest_scan_exec::IcebergManifestScanExec;
 use crate::physical_plan::merge_metadata_exec::IcebergMergeMetadataExec;
+use crate::physical_plan::partition_transform_expr::IcebergPartitionTransformExpr;
 use crate::row_level_metadata::{
     MERGE_PARTITION_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN, RowLevelMetadataColumns,
 };
 use crate::spec::delete_index::{DeleteFileIndex, DeleteFileRef};
 use crate::spec::transform::Transform;
 use crate::spec::types::values::Literal;
+use crate::spec::types::{PrimitiveType, Type};
 use crate::spec::{
     DataFile, ManifestContentType, ManifestList, ManifestStatus, PartitionSpec, Schema, Snapshot,
 };
@@ -77,6 +82,82 @@ fn iceberg_schema_evolution_adapter() -> Arc<dyn PhysicalExprAdapterFactory> {
     Arc::new(SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(
         StructFieldMatching::FieldId,
     ))
+}
+
+#[derive(Debug, Clone)]
+struct IcebergFilePartitionLayout {
+    range: RangePartitioning,
+    file_partitions: HashMap<String, usize>,
+}
+
+impl IcebergFilePartitionLayout {
+    fn output_partitioning(&self) -> Partitioning {
+        Partitioning::Range(self.range.clone())
+    }
+
+    fn partition_for_file(&self, file_path: &str) -> Option<usize> {
+        self.file_partitions.get(file_path).copied()
+    }
+}
+
+#[derive(Debug)]
+struct IcebergPartitionKeyField {
+    partition_field_index: usize,
+    result_type: Type,
+    sort_expr: PhysicalSortExpr,
+}
+
+fn supports_scan_partition_transform(transform: Transform, source_type: &PrimitiveType) -> bool {
+    match transform {
+        Transform::Identity => matches!(
+            source_type,
+            PrimitiveType::Boolean
+                | PrimitiveType::Int
+                | PrimitiveType::Long
+                | PrimitiveType::Decimal { .. }
+                | PrimitiveType::Date
+                | PrimitiveType::Time
+                | PrimitiveType::Timestamp
+                | PrimitiveType::Timestamptz
+                | PrimitiveType::TimestampNs
+                | PrimitiveType::TimestamptzNs
+                | PrimitiveType::String
+        ),
+        Transform::Bucket(count) if count > 0 && count <= i32::MAX as u32 => matches!(
+            source_type,
+            PrimitiveType::Int
+                | PrimitiveType::Long
+                | PrimitiveType::Date
+                | PrimitiveType::Time
+                | PrimitiveType::Timestamp
+                | PrimitiveType::Timestamptz
+                | PrimitiveType::String
+                | PrimitiveType::Binary
+        ),
+        Transform::Truncate(width) if width > 0 => match source_type {
+            PrimitiveType::Int => width <= i32::MAX as u32,
+            PrimitiveType::Long | PrimitiveType::String => true,
+            _ => false,
+        },
+        Transform::Year | Transform::Month | Transform::Day => matches!(
+            source_type,
+            PrimitiveType::Date
+                | PrimitiveType::Timestamp
+                | PrimitiveType::Timestamptz
+                | PrimitiveType::TimestampNs
+                | PrimitiveType::TimestamptzNs
+        ),
+        Transform::Hour => matches!(
+            source_type,
+            PrimitiveType::Timestamp
+                | PrimitiveType::Timestamptz
+                | PrimitiveType::TimestampNs
+                | PrimitiveType::TimestamptzNs
+        ),
+        Transform::Void | Transform::Unknown | Transform::Bucket(_) | Transform::Truncate(_) => {
+            false
+        }
+    }
 }
 
 /// Iceberg table provider for DataFusion
@@ -687,6 +768,246 @@ impl IcebergTableProvider {
         file_groups.into_values().map(FileGroup::from).collect()
     }
 
+    fn scan_partition_key_fields(
+        &self,
+        partition_spec: &PartitionSpec,
+    ) -> Result<Option<Vec<IcebergPartitionKeyField>>> {
+        if partition_spec.is_unpartitioned() {
+            return Ok(None);
+        }
+
+        let mut key_fields = Vec::with_capacity(partition_spec.fields().len());
+        for (partition_field_index, partition_field) in partition_spec.fields().iter().enumerate() {
+            if partition_field.transform == Transform::Void {
+                continue;
+            }
+            let Ok(source_id) = partition_field.source_id() else {
+                return Ok(None);
+            };
+            // A physical Column cannot address a nested Iceberg source field directly.
+            let Some(source_field) = self
+                .schema
+                .fields()
+                .iter()
+                .find(|field| field.id == source_id)
+            else {
+                return Ok(None);
+            };
+            let Type::Primitive(source_type) = source_field.field_type.as_ref() else {
+                return Ok(None);
+            };
+            if !supports_scan_partition_transform(partition_field.transform, source_type) {
+                return Ok(None);
+            }
+
+            let Ok(column_index) = self.arrow_schema.index_of(source_field.name.as_str()) else {
+                return Ok(None);
+            };
+            let source_arrow_type = iceberg_type_to_arrow(source_field.field_type.as_ref())?;
+            if self.arrow_schema.field(column_index).data_type() != &source_arrow_type {
+                return Ok(None);
+            }
+            let result_type = partition_field
+                .transform
+                .result_type(source_field.field_type.as_ref())
+                .map_err(datafusion::common::DataFusionError::Plan)?;
+            let column: Arc<dyn PhysicalExpr> =
+                Arc::new(Column::new(source_field.name.as_str(), column_index));
+            let partition_expr: Arc<dyn PhysicalExpr> = match partition_field.transform {
+                Transform::Identity => column,
+                transform => Arc::new(IcebergPartitionTransformExpr::new(column, transform)),
+            };
+            key_fields.push(IcebergPartitionKeyField {
+                partition_field_index,
+                result_type,
+                sort_expr: PhysicalSortExpr::new_default(partition_expr),
+            });
+        }
+
+        if key_fields.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(key_fields))
+        }
+    }
+
+    fn create_file_partition_layout(
+        &self,
+        data_files: &[DataFile],
+        target_partitions: usize,
+    ) -> Result<Option<IcebergFilePartitionLayout>> {
+        let Some(first_file) = data_files.first() else {
+            return Ok(None);
+        };
+        let partition_specs = self
+            .partition_specs
+            .iter()
+            .map(|spec| (spec.spec_id(), spec))
+            .collect::<HashMap<_, _>>();
+        let Some(reference_spec) = partition_specs.get(&first_file.partition_spec_id).copied()
+        else {
+            return Ok(None);
+        };
+
+        for data_file in data_files {
+            let Some(file_spec) = partition_specs.get(&data_file.partition_spec_id).copied() else {
+                return Ok(None);
+            };
+            if !reference_spec.is_compatible_with(file_spec)
+                || data_file.partition().len() != file_spec.fields().len()
+            {
+                return Ok(None);
+            }
+        }
+
+        let Some(key_fields) = self.scan_partition_key_fields(reference_spec)? else {
+            return Ok(None);
+        };
+        let Some(ordering) = LexOrdering::new(
+            key_fields
+                .iter()
+                .map(|field| field.sort_expr.clone())
+                .collect::<Vec<_>>(),
+        ) else {
+            return Ok(None);
+        };
+        if ordering.len() != key_fields.len() {
+            return Ok(None);
+        }
+
+        let mut files_by_partition_values: HashMap<Vec<ScalarValue>, Vec<String>> = HashMap::new();
+        for data_file in data_files {
+            let mut partition_values = Vec::with_capacity(key_fields.len());
+            for key_field in &key_fields {
+                let result_arrow_type = iceberg_type_to_arrow(&key_field.result_type)?;
+                let partition_value = match data_file
+                    .partition()
+                    .get(key_field.partition_field_index)
+                    .and_then(Option::as_ref)
+                {
+                    Some(literal) => match to_scalar(literal, &key_field.result_type) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            log::debug!(
+                                "Cannot expose Iceberg scan partitioning for {}: {error}",
+                                data_file.file_path
+                            );
+                            return Ok(None);
+                        }
+                    },
+                    None => ScalarValue::try_new_null(&result_arrow_type)?,
+                };
+                if partition_value.data_type() != result_arrow_type {
+                    return Ok(None);
+                }
+                partition_values.push(partition_value);
+            }
+            files_by_partition_values
+                .entry(partition_values)
+                .or_default()
+                .push(data_file.file_path.clone());
+        }
+
+        let mut distinct_partition_values = files_by_partition_values
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        let sort_options = ordering
+            .iter()
+            .map(|sort_expr| sort_expr.options)
+            .collect::<Vec<_>>();
+        let mut comparison_error = None;
+        distinct_partition_values.sort_by(|left, right| {
+            if comparison_error.is_some() {
+                return Ordering::Equal;
+            }
+            match datafusion::common::utils::compare_rows(left, right, &sort_options) {
+                Ok(ordering) => ordering,
+                Err(error) => {
+                    comparison_error = Some(error);
+                    Ordering::Equal
+                }
+            }
+        });
+        if let Some(error) = comparison_error {
+            log::debug!("Cannot order Iceberg partition values for scan partitioning: {error}");
+            return Ok(None);
+        }
+
+        let distinct_count = distinct_partition_values.len();
+        if distinct_count == 0 {
+            return Ok(None);
+        }
+        let partition_count = distinct_count.min(target_partitions.max(1));
+        let mut partition_by_values = HashMap::with_capacity(distinct_count);
+        let mut split_points = Vec::with_capacity(partition_count.saturating_sub(1));
+        let mut previous_partition = 0;
+        for (value_index, partition_values) in distinct_partition_values.iter().enumerate() {
+            let partition = value_index.saturating_mul(partition_count) / distinct_count;
+            if partition > previous_partition {
+                if partition != previous_partition + 1 {
+                    return Ok(None);
+                }
+                split_points.push(SplitPoint::new(partition_values.clone()));
+                previous_partition = partition;
+            }
+            partition_by_values.insert(partition_values.clone(), partition);
+        }
+        if split_points.len() + 1 != partition_count {
+            return Ok(None);
+        }
+
+        let range = RangePartitioning::try_new(ordering, split_points)?;
+        let mut file_partitions = HashMap::with_capacity(data_files.len());
+        for (partition_values, file_paths) in files_by_partition_values {
+            let Some(partition) = partition_by_values.get(&partition_values).copied() else {
+                return Ok(None);
+            };
+            for file_path in file_paths {
+                if let Some(previous) = file_partitions.insert(file_path, partition)
+                    && previous != partition
+                {
+                    return Ok(None);
+                }
+            }
+        }
+
+        Ok(Some(IcebergFilePartitionLayout {
+            range,
+            file_partitions,
+        }))
+    }
+
+    fn create_file_groups_for_layout(
+        &self,
+        store_ctx: &StoreContext,
+        data_files: Vec<DataFile>,
+        layout: &IcebergFilePartitionLayout,
+    ) -> Result<Vec<FileGroup>> {
+        let file_paths = data_files
+            .iter()
+            .map(|data_file| data_file.file_path.clone())
+            .collect::<Vec<_>>();
+        let partitioned_files = self.create_partitioned_files(store_ctx, data_files)?;
+        let mut file_groups = (0..layout.range.partition_count())
+            .map(|_| Vec::new())
+            .collect::<Vec<Vec<PartitionedFile>>>();
+        for (file_path, partitioned_file) in file_paths.into_iter().zip(partitioned_files) {
+            let partition = layout.partition_for_file(&file_path).ok_or_else(|| {
+                datafusion::common::DataFusionError::Internal(format!(
+                    "Iceberg file {file_path} is missing from its scan partition layout"
+                ))
+            })?;
+            let group = file_groups.get_mut(partition).ok_or_else(|| {
+                datafusion::common::DataFusionError::Internal(format!(
+                    "Iceberg file {file_path} maps to invalid scan partition {partition}"
+                ))
+            })?;
+            group.push(partitioned_file);
+        }
+        Ok(file_groups.into_iter().map(FileGroup::from).collect())
+    }
+
     /// Compute the object-store URL for this table, to be passed to
     /// `FileScanConfigBuilder`.
     fn object_store_url(&self) -> Result<ObjectStoreUrl> {
@@ -1004,6 +1325,15 @@ impl TableProvider for IcebergTableProvider {
             );
         }
 
+        // Derive one stable layout from all live files before separating files by
+        // delete applicability. File-group indexes are part of the Range contract.
+        let all_data_files = data_files_with_seq
+            .iter()
+            .map(|(data_file, _)| data_file.clone())
+            .collect::<Vec<_>>();
+        let file_partition_layout = self
+            .create_file_partition_layout(&all_data_files, session.config().target_partitions())?;
+
         // Build the delete-file index for this snapshot. Rejects v3 deletion vectors.
         log::trace!("Building delete file index...");
         let delete_index = self
@@ -1030,20 +1360,24 @@ impl TableProvider for IcebergTableProvider {
         );
 
         // Aggregate stats over ALL files (before split) for the planner.
-        let all_data_files: Vec<DataFile> = data_files_with_seq
-            .iter()
-            .map(|(df, _)| df.clone())
-            .collect();
         let table_stats = self.aggregate_statistics(&all_data_files);
 
         // Object-store URL shared by all branches.
         let object_store_url = self.object_store_url()?;
 
         if dirty_units.is_empty() {
-            // Fast path: no deletes apply. Emit the single-DataSourceExec plan that
-            // is identical to the pre-delete-integration behavior.
-            let partitioned_files = self.create_partitioned_files(&store_ctx, all_data_files)?;
-            let file_groups = self.create_file_groups(partitioned_files);
+            // Fast path: no deletes apply, so one DataSourceExec can scan every file.
+            let (file_groups, output_partitioning) = match &file_partition_layout {
+                Some(layout) => (
+                    self.create_file_groups_for_layout(&store_ctx, all_data_files, layout)?,
+                    Some(layout.output_partitioning()),
+                ),
+                None => {
+                    let partitioned_files =
+                        self.create_partitioned_files(&store_ctx, all_data_files)?;
+                    (self.create_file_groups(partitioned_files), None)
+                }
+            };
             let parquet_source = self.build_parquet_source(
                 session,
                 projection,
@@ -1058,6 +1392,7 @@ impl TableProvider for IcebergTableProvider {
                 } else {
                     file_groups
                 })
+                .with_output_partitioning(output_partitioning)
                 .with_statistics(table_stats)
                 .with_projection_indices(expanded_projection)?
                 .with_limit(limit)
@@ -1067,7 +1402,7 @@ impl TableProvider for IcebergTableProvider {
         }
 
         // Delete-aware path: build clean + per-dirty-file branches. We apply
-        // predicates, projection, and limit ABOVE the Union so that positional
+        // predicates, projection, and limit above the combined branches so positional
         // row offsets inside `IcebergDeleteApplyExec` remain aligned with the
         // unfiltered Parquet read of each dirty file.
 
@@ -1077,8 +1412,17 @@ impl TableProvider for IcebergTableProvider {
         // predicate is pushed down at this level because the upper layers will apply
         // them uniformly across branches.
         if !clean_files.is_empty() {
-            let partitioned_files = self.create_partitioned_files(&store_ctx, clean_files)?;
-            let file_groups = self.create_file_groups(partitioned_files);
+            let (file_groups, output_partitioning) = match &file_partition_layout {
+                Some(layout) => (
+                    self.create_file_groups_for_layout(&store_ctx, clean_files, layout)?,
+                    Some(layout.output_partitioning()),
+                ),
+                None => {
+                    let partitioned_files =
+                        self.create_partitioned_files(&store_ctx, clean_files)?;
+                    (self.create_file_groups(partitioned_files), None)
+                }
+            };
             let parquet_source = self.build_parquet_source(
                 session,
                 projection,
@@ -1089,6 +1433,7 @@ impl TableProvider for IcebergTableProvider {
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(file_groups)
+                    .with_output_partitioning(output_partitioning)
                     .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                     .build();
             branches.push(DataSourceExec::from_data_source(file_scan_config));
@@ -1111,25 +1456,38 @@ impl TableProvider for IcebergTableProvider {
                 DataSourceExec::from_data_source(file_scan_config);
             let data_file_raw_path = df.file_path().to_string();
             // Wrap with DeleteApply.
-            let apply: Arc<dyn ExecutionPlan> = Arc::new(IcebergDeleteApplyExec::new(
+            let mut apply = IcebergDeleteApplyExec::new(
                 data_scan,
                 data_file_raw_path,
                 pos_deletes,
                 eq_deletes,
                 self.table_uri.clone(),
                 self.schema.clone(),
-            ));
-            branches.push(apply);
+            );
+            if let Some(layout) = &file_partition_layout {
+                let file_partition =
+                    layout.partition_for_file(df.file_path()).ok_or_else(|| {
+                        datafusion::common::DataFusionError::Internal(format!(
+                            "Iceberg dirty file {} is missing from its scan partition layout",
+                            df.file_path()
+                        ))
+                    })?;
+                apply = apply
+                    .try_assign_file_partition(layout.output_partitioning(), file_partition)?;
+            }
+            branches.push(Arc::new(apply));
         }
 
-        // Union the branches.
-        let unioned: Arc<dyn ExecutionPlan> = if branches.len() == 1 {
+        // Preserve the shared file-partition layout whenever it was safe to derive.
+        let combined_branches: Arc<dyn ExecutionPlan> = if branches.len() == 1 {
             // SAFETY: length was just checked above.
             branches.into_iter().next().ok_or_else(|| {
                 datafusion::common::DataFusionError::Internal(
                     "unreachable: branches.len() == 1 but next() returned None".to_string(),
                 )
             })?
+        } else if file_partition_layout.is_some() {
+            Arc::new(InterleaveExec::try_new(branches)?)
         } else {
             UnionExec::try_new(branches)?
         };
@@ -1143,9 +1501,9 @@ impl TableProvider for IcebergTableProvider {
                 )
             })?;
             let simplified = simplify_expr(session, &df_schema, pushdown_expr)?;
-            Arc::new(FilterExec::try_new(simplified, unioned)?)
+            Arc::new(FilterExec::try_new(simplified, combined_branches)?)
         } else {
-            unioned
+            combined_branches
         };
 
         // Apply projection above.

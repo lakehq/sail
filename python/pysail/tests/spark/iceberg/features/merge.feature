@@ -410,6 +410,11 @@ Feature: Iceberg MERGE
       Then iceberg snapshot count is 2
       When query
         """
+        EXPLAIN SELECT id, event_time, value FROM merge_partitioned_plan_table
+        """
+      Then query plan matches snapshot
+      When query
+        """
         SELECT id, value FROM merge_partitioned_plan_table ORDER BY id
         """
       Then query result ordered

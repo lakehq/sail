@@ -136,8 +136,9 @@ def normalize_plan_text(plan_text: str) -> str:
         text,
     )
 
-    # Normalize file_groups ordering: group ordering is not guaranteed (e.g. parallel listing / async head).
-    # TODO: consider sorting the file groups during planner.
+    # Normalize file_groups ordering when it is not part of a declared range
+    # partitioning. Range partition indexes identify specific key intervals, so
+    # reordering those groups would make the snapshot describe a false contract.
 
     # Normalize IcebergManifestScanExec metadata:
     # - table_url with temp paths
@@ -197,9 +198,13 @@ def normalize_plan_text(plan_text: str) -> str:
         if not groups:
             return block
 
+        line_suffix = text[match.end() :].split("\n", maxsplit=1)[0]
+        preserve_group_order = "output_partitioning=Range" in line_suffix
+        ordered_groups = groups if preserve_group_order else sorted(groups)
+
         normalized_groups: list[str] = []
         next_seq = 0
-        for group in sorted(groups):
+        for group in ordered_groups:
             inner = group[1:-1].strip()
             if not inner:
                 normalized_groups.append(group)
