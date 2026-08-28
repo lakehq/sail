@@ -7,6 +7,7 @@ use sail_common_datafusion::system::catalog::{
 use crate::system_event::common::{
     is_job_stopped, is_session_deleted, is_stage_stopped, is_task_stopped, is_worker_stopped,
 };
+use crate::system_event::metric::MetricStore;
 use crate::system_event::{
     JobPrimaryKey, OptionPrimaryKey, SessionPrimaryKey, StagePrimaryKey, SystemEvent,
     TaskPrimaryKey, WorkerPrimaryKey,
@@ -20,6 +21,7 @@ pub(super) struct SystemEventStore {
     pub(super) stages: BTreeMap<StagePrimaryKey, StageRow>,
     pub(super) tasks: BTreeMap<TaskPrimaryKey, TaskRow>,
     pub(super) workers: BTreeMap<WorkerPrimaryKey, WorkerRow>,
+    pub(super) metrics: MetricStore,
 }
 
 impl SystemEventStore {

@@ -8,7 +8,8 @@ use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
 use sail_common::config::{AppConfig, SAIL_ENV_VAR_PREFIX};
 use sail_common::runtime::RuntimeManager;
-use sail_telemetry::telemetry::{ResourceOptions, init_telemetry};
+use sail_telemetry::telemetry::init_telemetry;
+use sail_telemetry::{ResourceKind, ResourceOptions};
 
 static GLOBALS: PyOnceLock<GlobalState> = PyOnceLock::new();
 
@@ -126,7 +127,9 @@ impl GlobalState {
             .handle()
             .primary()
             .block_on(async {
-                let resource = ResourceOptions { kind: "server" };
+                let resource = ResourceOptions {
+                    kind: ResourceKind::Server,
+                };
                 init_telemetry(&config.telemetry, resource)
             })
             .map_err(|e| {

@@ -18,6 +18,10 @@ impl Actor for SystemEventActor {
     fn receive(&mut self, _: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
         match message {
             SystemEventActorMessage::Apply(event) => self.store.apply(event),
+            SystemEventActorMessage::ApplyMetrics { metrics, result } => {
+                self.store.metrics.apply(metrics);
+                let _ = result.send(Ok(()));
+            }
             SystemEventActorMessage::ReadJobs {
                 session_id,
                 job_id,
@@ -25,6 +29,15 @@ impl Actor for SystemEventActor {
                 result,
             } => {
                 let _ = result.send(self.read_jobs(session_id, job_id, fetch));
+            }
+            SystemEventActorMessage::ReadMetrics {
+                timestamp,
+                name,
+                attributes,
+                fetch,
+                result,
+            } => {
+                let _ = result.send(self.read_metrics(timestamp, name, attributes, fetch));
             }
             SystemEventActorMessage::ReadStages {
                 session_id,

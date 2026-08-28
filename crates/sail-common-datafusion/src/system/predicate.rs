@@ -4,6 +4,9 @@ use std::sync::Arc;
 
 use datafusion_common::Result;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct TimestampMicros(pub i64);
+
 /// A predicate function.
 pub type Predicate<T> = Arc<dyn Fn(&T) -> Result<bool> + Send + Sync>;
 
@@ -179,6 +182,23 @@ impl<T: Clone + Ord> ValueDomain<T> {
 pub struct ValueFilter<T> {
     pub domain: ValueDomain<T>,
     pub predicate: Predicate<T>,
+}
+
+/// A filter over the value associated with a specific map key.
+pub struct MapValueFilter<K, V> {
+    pub key: K,
+    pub domain: ValueDomain<V>,
+    pub predicate: Predicate<V>,
+}
+
+impl<K, V> MapValueFilter<K, V> {
+    pub fn new(key: K, domain: ValueDomain<V>, predicate: Predicate<V>) -> Self {
+        Self {
+            key,
+            domain,
+            predicate,
+        }
+    }
 }
 
 impl<T> ValueFilter<T> {
