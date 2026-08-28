@@ -502,7 +502,7 @@ mod tests {
     -> datafusion::common::Result<()> {
         let metrics = ResourceMetrics {
             resource: Some(Resource {
-                attributes: vec![string_attribute("service.name", "sail.worker")],
+                attributes: vec![string_attribute("service.name", "sail-worker")],
                 ..Default::default()
             }),
             scope_metrics: vec![ScopeMetrics {
@@ -541,7 +541,7 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].timestamp.timestamp_micros(), 1);
         assert_eq!(rows[1].timestamp.timestamp_micros(), 2);
-        assert_eq!(rows[0].attributes["service.name"], "sail.worker");
+        assert_eq!(rows[0].attributes["service.name"], "sail-worker");
         assert_eq!(rows[0].attributes["job"], "example");
         assert_eq!(rows[0].value, MetricValue::Gauge(MetricNumber::Integer(1)));
         assert_eq!(rows[1].value, MetricValue::Gauge(MetricNumber::Integer(2)));

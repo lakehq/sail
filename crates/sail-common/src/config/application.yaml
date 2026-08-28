@@ -914,9 +914,7 @@
 - key: telemetry.export_metrics
   type: boolean
   default: "false"
-  description: |
-    Whether to export metrics to the system telemetry table
-    and to a configured OpenTelemetry collector.
+  description: Whether to export metrics to an OpenTelemetry collector.
   experimental: true
 
 - key: telemetry.export_logs
@@ -945,6 +943,12 @@
   type: number
   default: "10"
   description: The timeout in seconds for OTLP telemetry data export.
+  experimental: true
+
+- key: telemetry.exporter.system.mode
+  type: string
+  default: "off"
+  description: The system metrics exporter mode. Valid values are "off" and "memory".
   experimental: true
 
 - key: telemetry.traces_export_interval_secs

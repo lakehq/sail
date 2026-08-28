@@ -17,7 +17,7 @@ use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::logs::{BatchConfigBuilder, BatchLogProcessor, SdkLoggerProvider};
 use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider, Temporality};
 use sail_common::actor::ActorSystem;
-use sail_common::config::{OtlpProtocol, TelemetryConfig};
+use sail_common::config::{OtlpProtocol, TelemetryConfig, TelemetrySystemExporterMode};
 
 use crate::error::{TelemetryError, TelemetryResult};
 use crate::execution::join_set::DefaultJoinSetTracer;
@@ -29,6 +29,7 @@ use crate::metrics::{
 use crate::system_event::{
     SystemEventLogProcessor, SystemEventReader, SystemEventReporter, SystemMetricReporter,
 };
+use crate::{ResourceKind, ResourceOptions, SCOPE_NAME};
 
 enum TelemetryStatus {
     Uninitialized,
@@ -51,10 +52,6 @@ struct TelemetryState {
 }
 
 static TELEMETRY_STATUS: Mutex<TelemetryStatus> = Mutex::new(TelemetryStatus::Uninitialized);
-
-pub struct ResourceOptions {
-    pub kind: &'static str,
-}
 
 pub fn init_telemetry(config: &TelemetryConfig, resource: ResourceOptions) -> TelemetryResult<()> {
     let mut status = TELEMETRY_STATUS
@@ -129,19 +126,20 @@ fn init_metrics(
     resource: &ResourceOptions,
 ) -> TelemetryResult<()> {
     if config.export_metrics {
-        let target = if resource.kind == "worker" {
-            SystemMetricExporterTarget::Remote
-        } else {
-            SystemMetricExporterTarget::Local(state.system_metric_reporter.clone().ok_or_else(
-                || TelemetryError::internal("system event telemetry is not initialized"),
-            )?)
-        };
-        let system_reader = PeriodicReader::builder(SystemMetricExporter::new(target))
-            .with_interval(Duration::from_secs(config.metrics_export_interval_secs))
-            .build();
-        let mut provider = SdkMeterProvider::builder()
-            .with_reader(system_reader)
-            .with_resource(get_resource(resource));
+        let mut provider = SdkMeterProvider::builder().with_resource(get_resource(resource));
+        if config.exporter.system.mode != TelemetrySystemExporterMode::Off {
+            let target = if resource.kind == ResourceKind::Worker {
+                SystemMetricExporterTarget::Remote
+            } else {
+                SystemMetricExporterTarget::Local(state.system_metric_reporter.clone().ok_or_else(
+                    || TelemetryError::internal("system event telemetry is not initialized"),
+                )?)
+            };
+            let system_reader = PeriodicReader::builder(SystemMetricExporter::new(target))
+                .with_interval(Duration::from_secs(config.metrics_export_interval_secs))
+                .build();
+            provider = provider.with_reader(system_reader);
+        }
         if let Some(endpoint) = &config.exporter.otlp.endpoint {
             let exporter = opentelemetry_otlp::MetricExporter::builder()
                 .with_tonic()
@@ -339,12 +337,12 @@ fn get_otlp_protocol(protocol: &OtlpProtocol) -> Protocol {
 
 fn get_resource(resource: &ResourceOptions) -> Resource {
     Resource::builder()
-        .with_service_name(format!("sail.{}", resource.kind))
+        .with_service_name(format!("sail-{}", resource.kind.as_str()))
         .build()
 }
 
 fn get_instrumentation_scope() -> InstrumentationScope {
-    InstrumentationScope::builder("sail")
+    InstrumentationScope::builder(SCOPE_NAME)
         .with_version(env!("CARGO_PKG_VERSION"))
         .build()
 }

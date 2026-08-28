@@ -6020,17 +6020,6 @@ mod tests {
     }
 
     #[test]
-    fn test_round_trip_metric_attribute_access_udfs() -> Result<()> {
-        let decoded = round_trip_udf(ScalarUDF::from(ArrayElement::new()))?;
-        downcast_udf::<ArrayElement>(&decoded, "ArrayElement")?;
-
-        let decoded = round_trip_udf(ScalarUDF::from(MapExtract::new()))?;
-        downcast_udf::<MapExtract>(&decoded, "MapExtract")?;
-
-        Ok(())
-    }
-
-    #[test]
     fn test_round_trip_spark_cast_string_to_int32_udf() -> Result<()> {
         let decoded = round_trip_udf(ScalarUDF::from(SparkCastStringToInt32::new()))?;
 

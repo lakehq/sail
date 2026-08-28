@@ -5,6 +5,7 @@ use opentelemetry_sdk::logs::SdkLogger;
 use sail_common::actor::ActorHandle;
 use tokio::sync::oneshot;
 
+use crate::SCOPE_NAME;
 use crate::error::{TelemetryError, TelemetryResult};
 use crate::system_event::{
     SYSTEM_EVENT_NAME, SystemEvent, SystemEventActor, SystemEventActorMessage,
@@ -44,6 +45,18 @@ impl SystemMetricReporter {
     }
 
     pub async fn report(&self, metrics: Vec<ResourceMetrics>) -> TelemetryResult<()> {
+        let metrics = metrics
+            .into_iter()
+            .filter_map(|mut resource_metrics| {
+                resource_metrics.scope_metrics.retain(|scope_metrics| {
+                    scope_metrics
+                        .scope
+                        .as_ref()
+                        .is_some_and(|scope| scope.name == SCOPE_NAME)
+                });
+                (!resource_metrics.scope_metrics.is_empty()).then_some(resource_metrics)
+            })
+            .collect();
         let (result, receiver) = oneshot::channel::<DataFusionResult<()>>();
         self.actor
             .send(SystemEventActorMessage::ApplyMetrics { metrics, result })
