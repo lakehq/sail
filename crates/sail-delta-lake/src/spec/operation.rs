@@ -278,7 +278,10 @@ impl DeltaOperation {
 
     pub fn read_whole_table(&self) -> bool {
         match self {
-            // Predicate is none -> Merge operation had to join full source and target
+            // UPDATE predicates are not yet evaluated against concurrent file additions, so
+            // conservatively retain the full read set until predicate conflict checks are wired.
+            Self::Update { .. } => true,
+            Self::Delete { predicate } if predicate.is_none() => true,
             Self::Merge { predicate, .. } if predicate.is_none() => true,
             _ => false,
         }

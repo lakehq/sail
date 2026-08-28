@@ -72,6 +72,30 @@ Feature: Delta Lake Update
         | 2  | 20    | 200            | change |
         | 3  | 30    | 300            | change |
 
+    Scenario: UPDATE validates catalog and table qualifiers on assignment targets
+      Given statement
+        """
+        UPDATE default.delta_update_basic
+        SET default.delta_update_basic.value = 11
+        WHERE id = 1
+        """
+      When query
+        """
+        UPDATE delta_update_basic
+        SET bogus.value = 99
+        WHERE id = 1
+        """
+      Then query error Cannot resolve UPDATE target column `bogus.value`
+      When query
+        """
+        SELECT id, value FROM delta_update_basic ORDER BY id
+        """
+      Then query result ordered
+        | id | value |
+        | 1  | 11    |
+        | 2  | 20    |
+        | 3  | 30    |
+
     Scenario: UPDATE without a predicate changes every row
       Given statement
         """
@@ -272,6 +296,19 @@ Feature: Delta Lake Update
       Then query result
         | id | a  | b    |
         | 1  | 11 | keep |
+      Given statement
+        """
+        UPDATE delta_update_nested
+        SET payload = named_struct('b', 'reordered', 'a', 12)
+        WHERE id = 1
+        """
+      When query
+        """
+        SELECT id, payload.a, payload.b FROM delta_update_nested
+        """
+      Then query result
+        | id | a  | b         |
+        | 1  | 12 | reordered |
 
     Scenario: UPDATE rejects incompatible assignment types before writing
       Given variable location for temporary directory delta_update_type_check

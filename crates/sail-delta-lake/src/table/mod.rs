@@ -23,7 +23,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
-use datafusion::arrow::datatypes::{Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::{DataFusionError, Result};
@@ -810,14 +810,69 @@ async fn load_delta_read_state(
 fn refresh_catalog_delta_schema(catalog_schema: Schema, snapshot_schema: &Schema) -> Schema {
     let mut fields = catalog_schema.fields().iter().cloned().collect::<Vec<_>>();
     for snapshot_field in snapshot_schema.fields() {
-        if !fields
+        if let Some(index) = fields
             .iter()
-            .any(|field| field.name().eq_ignore_ascii_case(snapshot_field.name()))
+            .position(|field| field.name().eq_ignore_ascii_case(snapshot_field.name()))
         {
+            fields[index] = Arc::new(refresh_catalog_delta_field(
+                fields[index].as_ref(),
+                snapshot_field.as_ref(),
+            ));
+        } else {
             fields.push(snapshot_field.clone());
         }
     }
     Schema::new_with_metadata(fields, catalog_schema.metadata().clone())
+}
+
+fn refresh_catalog_delta_field(catalog_field: &Field, snapshot_field: &Field) -> Field {
+    let data_type = match (catalog_field.data_type(), snapshot_field.data_type()) {
+        (DataType::Struct(catalog_fields), DataType::Struct(snapshot_fields)) => {
+            let mut fields = catalog_fields.iter().cloned().collect::<Vec<_>>();
+            for snapshot_child in snapshot_fields {
+                if let Some(index) = fields.iter().position(|catalog_child| {
+                    catalog_child
+                        .name()
+                        .eq_ignore_ascii_case(snapshot_child.name())
+                }) {
+                    fields[index] = Arc::new(refresh_catalog_delta_field(
+                        fields[index].as_ref(),
+                        snapshot_child.as_ref(),
+                    ));
+                } else {
+                    fields.push(snapshot_child.clone());
+                }
+            }
+            DataType::Struct(fields.into())
+        }
+        (DataType::List(catalog_child), DataType::List(snapshot_child)) => DataType::List(
+            Arc::new(refresh_catalog_delta_field(catalog_child, snapshot_child)),
+        ),
+        (DataType::LargeList(catalog_child), DataType::LargeList(snapshot_child)) => {
+            DataType::LargeList(Arc::new(refresh_catalog_delta_field(
+                catalog_child,
+                snapshot_child,
+            )))
+        }
+        (
+            DataType::FixedSizeList(catalog_child, catalog_size),
+            DataType::FixedSizeList(snapshot_child, _),
+        ) => DataType::FixedSizeList(
+            Arc::new(refresh_catalog_delta_field(catalog_child, snapshot_child)),
+            *catalog_size,
+        ),
+        (DataType::Map(catalog_entries, sorted), DataType::Map(snapshot_entries, _)) => {
+            DataType::Map(
+                Arc::new(refresh_catalog_delta_field(
+                    catalog_entries,
+                    snapshot_entries,
+                )),
+                *sorted,
+            )
+        }
+        _ => catalog_field.data_type().clone(),
+    };
+    catalog_field.clone().with_data_type(data_type)
 }
 
 /// Helper function to load a DeltaTable based on version or timestamp options.
@@ -970,6 +1025,42 @@ mod tests {
         assert_eq!(refreshed.fields().len(), 2);
         assert_eq!(refreshed.field(0).data_type(), &catalog_timestamp);
         assert_eq!(refreshed.field(1).name(), "extra");
+    }
+
+    #[test]
+    fn catalog_schema_refresh_appends_nested_snapshot_fields() {
+        let catalog_timestamp = DataType::Timestamp(TimeUnit::Microsecond, None);
+        let snapshot_timestamp = DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()));
+        let catalog_schema = Schema::new(vec![Field::new(
+            "payload",
+            DataType::Struct(
+                vec![Field::new("event_time", catalog_timestamp.clone(), true)].into(),
+            ),
+            true,
+        )]);
+        let snapshot_schema = Schema::new(vec![Field::new(
+            "payload",
+            DataType::Struct(
+                vec![
+                    Field::new("event_time", snapshot_timestamp, true),
+                    Field::new("extra", DataType::Int32, true),
+                ]
+                .into(),
+            ),
+            true,
+        )]);
+
+        let refreshed = refresh_catalog_delta_schema(catalog_schema, &snapshot_schema);
+        assert_eq!(
+            refreshed.field(0).data_type(),
+            &DataType::Struct(
+                vec![
+                    Field::new("event_time", catalog_timestamp, true),
+                    Field::new("extra", DataType::Int32, true),
+                ]
+                .into()
+            )
+        );
     }
 
     #[test]

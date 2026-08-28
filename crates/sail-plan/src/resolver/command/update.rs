@@ -10,6 +10,7 @@ use sail_common_datafusion::datasource::{DataSourceRegistry, UpdateAssignment, U
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakesource::RowLevelOperation;
 use sail_common_datafusion::logical_expr::ExprWithSource;
+use sail_logical_plan::row_level::{StructFieldAlignment, align_row_level_value};
 
 use crate::config::StoreAssignmentPolicy;
 use crate::error::{PlanError, PlanResult};
@@ -31,6 +32,11 @@ impl PlanResolver<'_> {
                     .to_string(),
             ));
         }
+        let target_identifier = table
+            .parts()
+            .iter()
+            .map(|part| part.as_ref().to_string())
+            .collect::<Vec<_>>();
         let target = self.resolve_row_level_target(&table).await?;
         let target_format = target.format.clone();
         let mut target_plan = self.resolve_row_level_table_plan(table, state).await?;
@@ -44,6 +50,7 @@ impl PlanResolver<'_> {
         let assignments = self.normalize_update_assignment_targets(
             assignments,
             target_alias.as_deref(),
+            &target_identifier,
             &input_schema,
             &resolved_target_field_names,
         )?;
@@ -132,6 +139,13 @@ impl PlanResolver<'_> {
             }
             let write_type = value.get_type(&input_schema)?;
             self.validate_store_assignment_type(&write_type, target_field.data_type(), &column)?;
+            value = align_row_level_value(
+                value,
+                &write_type,
+                target_field.data_type(),
+                self.config.case_sensitive,
+                StructFieldAlignment::Exact,
+            )?;
             resolved_assignments.push(UpdateAssignment { column, value });
         }
 
@@ -187,6 +201,7 @@ impl PlanResolver<'_> {
         &self,
         assignments: Vec<(spec::ObjectName, spec::Expr)>,
         target_alias: Option<&str>,
+        target_identifier: &[String],
         input_schema: &DFSchemaRef,
         resolved_target_field_names: &[String],
     ) -> PlanResult<Vec<(spec::ObjectName, spec::Expr)>> {
@@ -206,16 +221,26 @@ impl PlanResolver<'_> {
                 .iter()
                 .map(|part| part.as_ref().to_string())
                 .collect::<Vec<_>>();
-            let has_target_qualifier = parts.len() > 1
-                && (target_alias.is_some_and(|alias| names_equal(alias, &parts[0]))
-                    || (!resolved_target_field_names
-                        .iter()
-                        .any(|name| names_equal(name, &parts[0]))
-                        && resolved_target_field_names
-                            .iter()
-                            .any(|name| names_equal(name, &parts[1]))));
-            if has_target_qualifier {
+            let has_alias_qualifier =
+                parts.len() > 1 && target_alias.is_some_and(|alias| names_equal(alias, &parts[0]));
+            if has_alias_qualifier {
                 parts.remove(0);
+            } else if let Some(root_position) = parts.iter().position(|part| {
+                resolved_target_field_names
+                    .iter()
+                    .any(|name| names_equal(name, part))
+            }) && root_position > 0
+            {
+                let qualifier = &parts[..root_position];
+                let compared_parts = qualifier.len().min(target_identifier.len());
+                let qualifier_matches_target = compared_parts > 0
+                    && qualifier[qualifier.len() - compared_parts..]
+                        .iter()
+                        .zip(&target_identifier[target_identifier.len() - compared_parts..])
+                        .all(|(left, right)| names_equal(left, right));
+                if qualifier_matches_target {
+                    parts.drain(..root_position);
+                }
             }
             let Some(root_index) = parts.first().and_then(|root| {
                 resolved_target_field_names

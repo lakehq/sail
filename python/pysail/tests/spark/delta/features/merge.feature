@@ -107,6 +107,42 @@ Feature: Delta Lake Merge
         | __sail_src_id | value |
         | 1             | new   |
 
+    Scenario: Schema evolution rejects case-insensitive internal column collisions
+      Given variable location for temporary directory delta_merge_evolved_internal_column
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_evolved_internal_column
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_evolved_internal_column (id INT)
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_evolved_internal_column VALUES (1)
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW delta_merge_evolved_internal_source AS
+        SELECT 1 AS id, 10 AS `__SAIL_OPERATION_TYPE`
+        """
+      When query
+        """
+        MERGE WITH SCHEMA EVOLUTION INTO delta_merge_evolved_internal_column AS t
+        USING delta_merge_evolved_internal_source AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET *
+        """
+      Then query error MERGE schema evolution cannot add reserved internal column
+      When query
+        """
+        SELECT id FROM delta_merge_evolved_internal_column
+        """
+      Then query result
+        | id |
+        | 1  |
+
   Rule: MERGE assignments follow target schema semantics
 
     Scenario: Star actions reject source columns missing from the target schema
@@ -179,6 +215,54 @@ Feature: Delta Lake Merge
         | 1  | new    | 10    |
         | 2  | keep   | NULL  |
         | 3  | insert | 30    |
+
+    Scenario: WITH SCHEMA EVOLUTION appends source-only nested struct fields
+      Given variable location for temporary directory delta_merge_nested_schema_evolution
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_nested_schema_evolution
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_nested_schema_evolution (
+          id INT,
+          payload STRUCT<a: INT>
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_nested_schema_evolution VALUES
+          (1, named_struct('a', 10)),
+          (2, named_struct('a', 20))
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW delta_merge_nested_schema_source AS
+        SELECT * FROM VALUES
+          (1, named_struct('a', 11, 'b', 'updated')),
+          (3, named_struct('a', 30, 'b', 'inserted'))
+        AS source(id, payload)
+        """
+      Given statement
+        """
+        MERGE WITH SCHEMA EVOLUTION INTO delta_merge_nested_schema_evolution AS t
+        USING delta_merge_nested_schema_source AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET *
+        WHEN NOT MATCHED THEN INSERT *
+        """
+      When query
+        """
+        SELECT id, payload.a, payload.b
+        FROM delta_merge_nested_schema_evolution
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | a  | b       |
+        | 1  | 11 | updated |
+        | 2  | 20 | NULL    |
+        | 3  | 30 | inserted |
 
     Scenario: Assignments cast to target types and reject overflow
       Given config spark.sql.ansi.enabled = true

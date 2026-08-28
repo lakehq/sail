@@ -17,6 +17,9 @@ use sail_logical_plan::merge::{
     MergeNotMatchedBySourceAction, MergeNotMatchedBySourceClause, MergeNotMatchedByTargetAction,
     MergeNotMatchedByTargetClause,
 };
+use sail_logical_plan::row_level::{
+    StructFieldAlignment, align_row_level_value, evolve_row_level_field,
+};
 
 use crate::config::StoreAssignmentPolicy;
 use crate::error::{PlanError, PlanResult};
@@ -162,10 +165,10 @@ impl PlanResolver<'_> {
             &resolved_source_field_names,
             with_schema_evolution,
         )?;
-        self.validate_explicit_merge_assignment_types(
-            &matched_clauses,
-            &not_matched_by_source,
-            &not_matched_by_target,
+        self.validate_and_align_explicit_merge_assignment_types(
+            &mut matched_clauses,
+            &mut not_matched_by_source,
+            &mut not_matched_by_target,
             &merge_schema,
             target_schema,
             source_schema,
@@ -616,9 +619,16 @@ impl PlanResolver<'_> {
                     "MERGE source schema is missing field `{target_name}`"
                 ))
             })?;
+            let evolved_target = with_schema_evolution.then(|| {
+                evolve_row_level_field(target_field, source_field, self.config.case_sensitive)
+            });
+            let target_type = evolved_target
+                .as_ref()
+                .map(Field::data_type)
+                .unwrap_or_else(|| target_field.data_type());
             self.validate_store_assignment_type(
                 source_field.data_type(),
-                target_field.data_type(),
+                target_type,
                 target_name,
             )?;
         }
@@ -755,19 +765,19 @@ impl PlanResolver<'_> {
         Ok(Some(lit(ScalarValue::try_from(target_field.data_type())?)))
     }
 
-    fn validate_explicit_merge_assignment_types(
+    fn validate_and_align_explicit_merge_assignment_types(
         &self,
-        matched_clauses: &[MergeMatchedClause],
-        not_matched_by_source_clauses: &[MergeNotMatchedBySourceClause],
-        not_matched_by_target_clauses: &[MergeNotMatchedByTargetClause],
+        matched_clauses: &mut [MergeMatchedClause],
+        not_matched_by_source_clauses: &mut [MergeNotMatchedBySourceClause],
+        not_matched_by_target_clauses: &mut [MergeNotMatchedByTargetClause],
         merge_schema: &datafusion_common::DFSchemaRef,
         target_schema: &datafusion_common::DFSchemaRef,
         source_schema: &datafusion_common::DFSchemaRef,
         target_names: &[String],
     ) -> PlanResult<()> {
         for clause in matched_clauses {
-            if let MergeMatchedAction::UpdateSet(assignments) = &clause.action {
-                self.validate_merge_assignments(
+            if let MergeMatchedAction::UpdateSet(assignments) = &mut clause.action {
+                self.validate_and_align_merge_assignments(
                     assignments,
                     merge_schema,
                     target_schema,
@@ -776,8 +786,8 @@ impl PlanResolver<'_> {
             }
         }
         for clause in not_matched_by_source_clauses {
-            if let MergeNotMatchedBySourceAction::UpdateSet(assignments) = &clause.action {
-                self.validate_merge_assignments(
+            if let MergeNotMatchedBySourceAction::UpdateSet(assignments) = &mut clause.action {
+                self.validate_and_align_merge_assignments(
                     assignments,
                     target_schema,
                     target_schema,
@@ -786,11 +796,12 @@ impl PlanResolver<'_> {
             }
         }
         for clause in not_matched_by_target_clauses {
-            if let MergeNotMatchedByTargetAction::InsertColumns { columns, values } = &clause.action
+            if let MergeNotMatchedByTargetAction::InsertColumns { columns, values } =
+                &mut clause.action
             {
-                for (column, value) in columns.iter().zip(values) {
+                for (column, value) in columns.iter().zip(values.iter_mut()) {
                     let target_index = Self::merge_target_field_index(target_schema, column)?;
-                    self.validate_merge_value(
+                    self.validate_and_align_merge_value(
                         value,
                         source_schema,
                         target_index,
@@ -803,17 +814,17 @@ impl PlanResolver<'_> {
         Ok(())
     }
 
-    fn validate_merge_assignments(
+    fn validate_and_align_merge_assignments(
         &self,
-        assignments: &[MergeAssignment],
+        assignments: &mut [MergeAssignment],
         value_schema: &datafusion_common::DFSchemaRef,
         target_schema: &datafusion_common::DFSchemaRef,
         target_names: &[String],
     ) -> PlanResult<()> {
         for assignment in assignments {
             let target_index = Self::merge_target_field_index(target_schema, &assignment.column)?;
-            self.validate_merge_value(
-                &assignment.value,
+            self.validate_and_align_merge_value(
+                &mut assignment.value,
                 value_schema,
                 target_index,
                 target_schema,
@@ -823,9 +834,9 @@ impl PlanResolver<'_> {
         Ok(())
     }
 
-    fn validate_merge_value(
+    fn validate_and_align_merge_value(
         &self,
-        value: &Expr,
+        value: &mut Expr,
         value_schema: &datafusion_common::DFSchemaRef,
         target_index: usize,
         target_schema: &datafusion_common::DFSchemaRef,
@@ -838,7 +849,15 @@ impl PlanResolver<'_> {
         let target_name = target_names.get(target_index).ok_or_else(|| {
             PlanError::invalid("MERGE target field name is missing during assignment validation")
         })?;
-        self.validate_store_assignment_type(&write_type, target_field.data_type(), target_name)
+        self.validate_store_assignment_type(&write_type, target_field.data_type(), target_name)?;
+        *value = align_row_level_value(
+            value.clone(),
+            &write_type,
+            target_field.data_type(),
+            self.config.case_sensitive,
+            StructFieldAlignment::Exact,
+        )?;
+        Ok(())
     }
 
     pub(super) fn validate_store_assignment_type(
@@ -957,27 +976,26 @@ fn store_assignment_compatible(
         (write_type, target_type)
     {
         return write_fields.len() == target_fields.len()
-            && write_fields
-                .iter()
-                .zip(target_fields)
-                .all(|(write_field, target_field)| {
-                    let names_match = if case_sensitive {
+            && target_fields.iter().all(|target_field| {
+                let mut matching_fields = write_fields.iter().filter(|write_field| {
+                    if case_sensitive {
                         write_field.name() == target_field.name()
                     } else {
                         write_field.name().eq_ignore_ascii_case(target_field.name())
-                    };
-                    names_match
-                        && resolvable_nullability(
-                            write_field.is_nullable(),
-                            target_field.is_nullable(),
-                        )
-                        && store_assignment_compatible(
-                            write_field.data_type(),
-                            target_field.data_type(),
-                            policy,
-                            case_sensitive,
-                        )
+                    }
                 });
+                let Some(write_field) = matching_fields.next() else {
+                    return false;
+                };
+                matching_fields.next().is_none()
+                    && resolvable_nullability(write_field.is_nullable(), target_field.is_nullable())
+                    && store_assignment_compatible(
+                        write_field.data_type(),
+                        target_field.data_type(),
+                        policy,
+                        case_sensitive,
+                    )
+            });
     }
 
     if is_nested_type(write_type) || is_nested_type(target_type) {

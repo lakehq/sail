@@ -17,8 +17,8 @@ use datafusion_expr::logical_plan::{
 };
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
-    BinaryExpr, Expr, Join, JoinConstraint, JoinType, LogicalPlan, Operator, ScalarUDF,
-    UserDefinedLogicalNodeCore, cast, col, lit, when,
+    BinaryExpr, Expr, ExprSchemable, Join, JoinConstraint, JoinType, LogicalPlan, Operator,
+    ScalarUDF, UserDefinedLogicalNodeCore, cast, col, lit, when,
 };
 use educe::Educe;
 use log::trace;
@@ -28,7 +28,9 @@ use sail_function::scalar::misc::raise_error::RaiseError;
 
 use crate::check_constraints::apply_delta_check_constraint_filter;
 use crate::monotonic_id::MonotonicIdNode;
-use crate::row_level::RowLevelEffectRequirements;
+use crate::row_level::{
+    RowLevelEffectRequirements, StructFieldAlignment, align_row_level_value, evolve_row_level_field,
+};
 
 pub const SOURCE_PRESENT_COLUMN: &str = "__sail_merge_source_row_present";
 pub const TARGET_PRESENT_COLUMN: &str = "__sail_merge_target_row_present";
@@ -302,18 +304,55 @@ pub fn expand_merge(
         target_scan_fields
     );
 
-    let mut target_proj_exprs: Vec<Expr> = target_plan
+    let evolves_star_columns = options.with_schema_evolution && merge_has_star_action(&options);
+    let mut target_proj_exprs = target_plan
         .schema()
         .fields()
         .iter()
         .zip(desired_target_names.iter())
-        .map(|(field, desired)| {
+        .enumerate()
+        .map(|(index, (field, desired))| -> Result<Expr> {
+            let target_field = options
+                .resolved_target_schema
+                .fields()
+                .get(index)
+                .ok_or_else(|| {
+                    DataFusionError::Internal(
+                        "MERGE target field is missing during schema evolution".to_string(),
+                    )
+                })?;
+            let evolved_target = if evolves_star_columns {
+                desired_source_names
+                    .iter()
+                    .position(|source_name| {
+                        merge_names_equal(source_name, desired, options.case_sensitive)
+                    })
+                    .and_then(|source_index| {
+                        options.resolved_source_schema.fields().get(source_index)
+                    })
+                    .map(|source_field| {
+                        evolve_row_level_field(target_field, source_field, options.case_sensitive)
+                    })
+            } else {
+                None
+            };
+            let target_type = evolved_target
+                .as_ref()
+                .map(|field| field.data_type())
+                .unwrap_or_else(|| field.data_type());
             // Use unqualified column to avoid alias-mismatch when upstream qualifiers differ.
-            Expr::Column(Column::from_name(field.name().clone())).alias(desired.clone())
+            Ok(align_row_level_value(
+                Expr::Column(Column::from_name(field.name().clone())),
+                field.data_type(),
+                target_type,
+                options.case_sensitive,
+                StructFieldAlignment::FillMissingWithNull,
+            )?
+            .alias(desired.clone()))
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
 
-    if options.with_schema_evolution && merge_has_star_action(&options) {
+    if evolves_star_columns {
         for (source_field, source_name) in options
             .resolved_source_schema
             .fields()
@@ -330,6 +369,7 @@ pub fn expand_merge(
                 path_column,
                 row_index_column,
                 row_delete_metadata_columns,
+                options.case_sensitive,
             ) {
                 return plan_err!(
                     "MERGE schema evolution cannot add reserved internal column '{source_name}'"
@@ -578,6 +618,7 @@ pub fn expand_merge(
             false,
         )?;
         let insert_rows = LogicalPlan::Join(insert_rows);
+        let insert_value_schema = insert_rows.schema().clone();
         let insert_operation = when(
             insert_only_insert_filter(&options),
             lit(RowLevelOperationType::Insert.as_i32()),
@@ -587,6 +628,7 @@ pub fn expand_merge(
         let insert_projection_exprs = build_insert_only_projection(
             &options,
             target_schema,
+            &insert_value_schema,
             path_column,
             row_index_column,
             row_delete_metadata_columns,
@@ -765,10 +807,12 @@ fn build_default_merge_expansion(
     let filtered = LogicalPlanBuilder::from(join.as_ref().clone())
         .filter(active_expr)?
         .build()?;
+    let value_schema = filtered.schema().clone();
 
     let (projection_exprs, generated_assignment_markers) = build_merge_projection(
         &options,
         target_schema,
+        &value_schema,
         path_column,
         row_index_column,
         row_delete_metadata_columns,
@@ -1102,20 +1146,20 @@ fn is_reserved_merge_column(
     path_column: &str,
     row_index_column: Option<&str>,
     row_delete_metadata_columns: &[&str],
+    case_sensitive: bool,
 ) -> bool {
-    is_merge_metadata_column(
-        name,
+    [
         path_column,
-        row_index_column,
-        row_delete_metadata_columns,
-    ) || matches!(
-        name,
-        TARGET_PRESENT_COLUMN
-            | SOURCE_PRESENT_COLUMN
-            | TARGET_ROW_ID_COLUMN
-            | OPERATION_COLUMN
-            | MERGE_SOURCE_METRIC_COLUMN
-    )
+        TARGET_PRESENT_COLUMN,
+        SOURCE_PRESENT_COLUMN,
+        TARGET_ROW_ID_COLUMN,
+        OPERATION_COLUMN,
+        MERGE_SOURCE_METRIC_COLUMN,
+    ]
+    .into_iter()
+    .chain(row_index_column)
+    .chain(row_delete_metadata_columns.iter().copied())
+    .any(|reserved| merge_names_equal(name, reserved, case_sensitive))
 }
 
 fn merge_source_expr(options: &MergeIntoOptions, target_name: &str) -> Option<Expr> {
@@ -1145,13 +1189,26 @@ fn merge_insert_value(options: &MergeIntoOptions, target_name: &str) -> Expr {
 fn align_merge_value(
     value: Expr,
     target_field: &datafusion_common::arrow::datatypes::Field,
-) -> Expr {
-    cast(value, target_field.data_type().clone())
+    value_schema: &DFSchemaRef,
+    case_sensitive: bool,
+) -> Result<Expr> {
+    let source_type = value.get_type(value_schema)?;
+    if &source_type == target_field.data_type() {
+        return Ok(cast(value, target_field.data_type().clone()));
+    }
+    align_row_level_value(
+        value,
+        &source_type,
+        target_field.data_type(),
+        case_sensitive,
+        StructFieldAlignment::FillMissingWithNull,
+    )
 }
 
 fn build_insert_only_projection(
     options: &MergeIntoOptions,
     target_schema: &DFSchemaRef,
+    value_schema: &DFSchemaRef,
     path_column: &str,
     row_index_column: Option<&str>,
     row_delete_metadata_columns: &[&str],
@@ -1193,7 +1250,10 @@ fn build_insert_only_projection(
                     out
                 }
             };
-            branches.push((pred, align_merge_value(value, field)));
+            branches.push((
+                pred,
+                align_merge_value(value, field, value_schema, options.case_sensitive)?,
+            ));
         }
 
         let when_then_expr = branches
@@ -1548,6 +1608,7 @@ fn first_matching_clause_predicates<'a>(
 fn build_merge_projection(
     options: &MergeIntoOptions,
     target_schema: &DFSchemaRef,
+    value_schema: &DFSchemaRef,
     path_column: &str,
     row_index_column: Option<&str>,
     row_delete_metadata_columns: &[&str],
@@ -1616,7 +1677,10 @@ fn build_merge_projection(
                         .or_else(|| target_exprs_by_name.get(field.name()).cloned())
                         .unwrap_or_else(|| lit(ScalarValue::Null));
                     if let Some(v) = cases.get_mut(field.name()) {
-                        v.push((pred.clone(), align_merge_value(value, field)));
+                        v.push((
+                            pred.clone(),
+                            align_merge_value(value, field, value_schema, options.case_sensitive)?,
+                        ));
                     }
                 }
             }
@@ -1631,7 +1695,12 @@ fn build_merge_projection(
                         let field = merge_target_field(target_schema, &resolved)?;
                         v.push((
                             pred.clone(),
-                            align_merge_value(assignment.value.clone(), field),
+                            align_merge_value(
+                                assignment.value.clone(),
+                                field,
+                                value_schema,
+                                options.case_sensitive,
+                            )?,
                         ));
                     }
                 }
@@ -1657,7 +1726,12 @@ fn build_merge_projection(
                         let field = merge_target_field(target_schema, &resolved)?;
                         v.push((
                             pred.clone(),
-                            align_merge_value(assignment.value.clone(), field),
+                            align_merge_value(
+                                assignment.value.clone(),
+                                field,
+                                value_schema,
+                                options.case_sensitive,
+                            )?,
                         ));
                     }
                 }
@@ -1676,7 +1750,10 @@ fn build_merge_projection(
                     let value = merge_source_expr(options, field.name())
                         .unwrap_or_else(|| merge_insert_value(options, field.name()));
                     if let Some(v) = cases.get_mut(field.name()) {
-                        v.push((pred.clone(), align_merge_value(value, field)));
+                        v.push((
+                            pred.clone(),
+                            align_merge_value(value, field, value_schema, options.case_sensitive)?,
+                        ));
                     }
                 }
             }
@@ -1691,7 +1768,10 @@ fn build_merge_projection(
                             })
                             .map(|(_, value)| value.clone())
                             .unwrap_or_else(|| merge_insert_value(options, field.name()));
-                        v.push((pred.clone(), align_merge_value(value, field)));
+                        v.push((
+                            pred.clone(),
+                            align_merge_value(value, field, value_schema, options.case_sensitive)?,
+                        ));
                     }
                 }
             }

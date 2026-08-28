@@ -3,10 +3,15 @@ use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
+use datafusion::functions::core::expr_ext::FieldAccessor;
+use datafusion_common::arrow::datatypes::{DataType, Field};
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{Column, DFSchema, DFSchemaRef, DataFusionError, Result, plan_err};
+use datafusion_common::{
+    Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, plan_err,
+};
 use datafusion_expr::{
-    Expr, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNodeCore, cast, col, lit, when,
+    Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF, UserDefinedLogicalNodeCore, cast, col, lit,
+    when,
 };
 use educe::Educe;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
@@ -16,6 +21,7 @@ use sail_common_datafusion::datasource::{
 };
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::struct_function::StructFunction;
 
 use crate::check_constraints::apply_delta_check_constraint_filter;
 
@@ -24,6 +30,132 @@ use crate::check_constraints::apply_delta_check_constraint_filter;
 pub struct RowLevelEffectRequirements {
     pub touched_files: bool,
     pub row_index_deletes: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StructFieldAlignment {
+    Exact,
+    FillMissingWithNull,
+}
+
+pub fn align_row_level_value(
+    value: Expr,
+    source_type: &DataType,
+    target_type: &DataType,
+    case_sensitive: bool,
+    alignment: StructFieldAlignment,
+) -> Result<Expr> {
+    if source_type == target_type {
+        return Ok(value);
+    }
+
+    let (DataType::Struct(source_fields), DataType::Struct(target_fields)) =
+        (source_type, target_type)
+    else {
+        return Ok(cast(value, target_type.clone()));
+    };
+
+    let names_equal = |left: &str, right: &str| {
+        if case_sensitive {
+            left == right
+        } else {
+            left.eq_ignore_ascii_case(right)
+        }
+    };
+    let mut child_values = Vec::with_capacity(target_fields.len());
+    for target_field in target_fields {
+        let mut matching_fields = source_fields
+            .iter()
+            .filter(|source_field| names_equal(source_field.name(), target_field.name()));
+        let source_field = matching_fields.next();
+        if matching_fields.next().is_some() {
+            return plan_err!(
+                "ambiguous source struct field '{}' during row-level assignment",
+                target_field.name()
+            );
+        }
+        let child_value = match source_field {
+            Some(source_field) => align_row_level_value(
+                value.clone().field(source_field.name().clone()),
+                source_field.data_type(),
+                target_field.data_type(),
+                case_sensitive,
+                alignment,
+            )?,
+            None if alignment == StructFieldAlignment::FillMissingWithNull => {
+                lit(ScalarValue::try_new_null(target_field.data_type())?)
+            }
+            None => {
+                return plan_err!(
+                    "source struct is missing target field '{}' during row-level assignment",
+                    target_field.name()
+                );
+            }
+        };
+        child_values.push(child_value);
+    }
+
+    let field_names = target_fields
+        .iter()
+        .map(|field| field.name().clone())
+        .collect();
+    let rebuilt = ScalarUDF::from(StructFunction::new(field_names)).call(child_values);
+    let rebuilt = cast(rebuilt, target_type.clone());
+    when(
+        value.is_null(),
+        lit(ScalarValue::try_new_null(target_type)?),
+    )
+    .otherwise(rebuilt)
+}
+
+pub fn evolve_row_level_field(
+    target_field: &Field,
+    source_field: &Field,
+    case_sensitive: bool,
+) -> Field {
+    fn evolve_data_type(
+        target_type: &DataType,
+        source_type: &DataType,
+        case_sensitive: bool,
+    ) -> DataType {
+        let (DataType::Struct(target_fields), DataType::Struct(source_fields)) =
+            (target_type, source_type)
+        else {
+            return target_type.clone();
+        };
+        let names_equal = |left: &str, right: &str| {
+            if case_sensitive {
+                left == right
+            } else {
+                left.eq_ignore_ascii_case(right)
+            }
+        };
+        let mut evolved_fields = target_fields
+            .iter()
+            .map(|field| field.as_ref().clone())
+            .collect::<Vec<_>>();
+        for source_child in source_fields {
+            if let Some(index) = evolved_fields
+                .iter()
+                .position(|target_child| names_equal(target_child.name(), source_child.name()))
+            {
+                evolved_fields[index] = evolve_row_level_field(
+                    &evolved_fields[index],
+                    source_child.as_ref(),
+                    case_sensitive,
+                );
+            } else {
+                evolved_fields.push(source_child.as_ref().clone().with_nullable(true));
+            }
+        }
+        DataType::Struct(evolved_fields.into())
+    }
+
+    target_field.clone().with_data_type(evolve_data_type(
+        target_field.data_type(),
+        source_field.data_type(),
+        case_sensitive,
+    ))
 }
 
 /// Sparse logical plans required to materialize a row-level write.
