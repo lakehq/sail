@@ -572,26 +572,22 @@ pub(crate) fn spark_type_name(data_type: &DataType) -> String {
             format!("TIME({precision})")
         }
         DataType::Interval(IntervalUnit::YearMonth) => "INTERVAL YEAR TO MONTH".to_string(),
-        // Spark's legacy CalendarIntervalType, which `operand_role` also keeps apart from the
-        // ANSI day-time interval. `CalendarIntervalType.typeName` is plain `interval`
-        // (`CalendarIntervalType.scala:40`), so naming it `INTERVAL DAY TO SECOND` would make the
-        // two tables this change adds disagree about the one type it exists to distinguish.
-        DataType::Interval(_) => "INTERVAL".to_string(),
-        DataType::Duration(_) => "INTERVAL DAY TO SECOND".to_string(),
+        // Spark's legacy CalendarIntervalType, which Arrow stores as `Interval(MonthDayNano)`.
+        // `CalendarIntervalType.typeName` is plain `interval` (`CalendarIntervalType.scala:40`),
+        // so naming it `INTERVAL DAY TO SECOND` would make this table disagree with
+        // `operand_role`, which keeps the calendar interval apart from the day-time one.
+        DataType::Interval(IntervalUnit::MonthDayNano) => "INTERVAL".to_string(),
+        // The other two spellings of Spark's day-time interval. `Interval(DayTime)` maps to
+        // `DayTimeInterval` on the way out (`data_type_arrow.rs:200`) and the plan formatter
+        // already renders it `interval day to second` (`formatter.rs:81`).
+        DataType::Duration(_) | DataType::Interval(IntervalUnit::DayTime) => {
+            "INTERVAL DAY TO SECOND".to_string()
+        }
         DataType::Null => "VOID".to_string(),
-        // The container types reach this function through the `/` and `%` operand rejects,
-        // which decide on the peer's type and so can surface any type at all. Without these
-        // arms the fallback below leaks Arrow's `Debug` for the whole nested type
-        // (`Struct([Field { name: "a", data_type: Int32, nullable: true, .. }])`). Spark spells
-        // them `STRUCT<a: INT NOT NULL>`, `ARRAY<INT>` and `MAP<STRING, INT>`.
-        //
-        // This deliberately duplicates the shape of `SparkPlanFormatter::data_type_to_simple_string`
-        // (formatter.rs), which is NOT reused here because it answers a different question: it
-        // renders Spark's lowercase `simpleString` for plan/catalog output, while an operand
-        // error needs Spark's uppercase `DATATYPE_MISMATCH` spelling, the ` NOT NULL` field
-        // suffix, a VARIANT arm, and `Decimal32`/`Decimal64` (which the formatter rejects with
-        // `not_impl_err!`). It is also infallible, which the reject path needs. Keep the two
-        // tables in sync when adding a type to either.
+        // Not reusing `SparkPlanFormatter::data_type_to_simple_string` (formatter.rs): that one
+        // renders Spark's lowercase `simpleString` for plan output, while a `DATATYPE_MISMATCH`
+        // operand needs the uppercase spelling, the ` NOT NULL` field suffix, a VARIANT arm and
+        // `Decimal32`/`Decimal64`, and must be infallible. Keep the two tables in sync.
         DataType::List(field)
         | DataType::LargeList(field)
         | DataType::ListView(field)
@@ -633,11 +629,9 @@ pub(crate) fn spark_type_name(data_type: &DataType) -> String {
         // detail Spark has no name for.
         DataType::Dictionary(_, value_type) => spark_type_name(value_type),
         DataType::RunEndEncoded(_, values) => spark_type_name(values.data_type()),
-        // Spark has no union type, so there is no Spark spelling to borrow; `UNION` at least keeps
-        // the message in SQL vocabulary instead of leaking Arrow's `Debug` (`Union(UnionFields([..
-        // ]), Sparse)`), which is the leak this function exists to remove. A union operand is never
-        // rejected on its own account (`operand_role` defers it), but it reaches this function as
-        // the PEER of a rejected operand.
+        // Spark has no union type, so there is no spelling to borrow. Named rather than left to
+        // a wildcard so the match stays exhaustive: a new Arrow variant becomes a compile error
+        // instead of an Arrow `Debug` leak.
         DataType::Union(_, _) => "UNION".to_string(),
     }
 }

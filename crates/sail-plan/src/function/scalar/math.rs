@@ -189,13 +189,10 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             return Err(arithmetic_operand_error("-", left_type, right_type));
         }
         Ok(match (left_type, right_type) {
-            // Spark's `SubtractTimes` returns `DayTimeIntervalType(HOUR, SECOND)`
-            // (`timeExpressions.scala:626-638`). DataFusion instead coerces a `Time64` pair to
-            // `Interval(MonthDayNano)`, i.e. the CALENDAR interval, which is a different Spark
-            // type: it declares `interval` where Spark declares `interval hour to second`, and it
-            // makes the result unusable in further interval arithmetic, because a calendar
-            // interval does not combine with a day-time one in either engine. Cast to `Duration`
-            // so the result carries the day-time class Spark gives it.
+            // `SubtractTimes` returns a day-time interval (`timeExpressions.scala:632`), but
+            // DataFusion coerces a `Time64` pair to `Interval(MonthDayNano)` -- the CALENDAR
+            // interval, which combines with nothing day-time. Cast to `Duration` to restore the
+            // class Spark gives it.
             (
                 Ok(DataType::Time32(_) | DataType::Time64(_)),
                 Ok(DataType::Time32(_) | DataType::Time64(_)),
@@ -375,14 +372,10 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let ansi_mode = function_context.plan_config.ansi_mode;
     let dividend_type = dividend.get_type(function_context.schema);
     let divisor_type = divisor.get_type(function_context.schema);
-    // Spark's `/` (`inputType = TypeCollection(DoubleType, DecimalType)`) rejects a
-    // non-numeric operand at analysis with DATATYPE_MISMATCH; DataFusion would instead
-    // reinterpret it (a boolean as 0/1, a date as its raw integer, an interval as its raw
-    // nanos) and compute a meaningless number.
-    // A string paired only with another string or an untyped NULL is also rejected under ANSI
-    // on: `Divide.inputType` is `TypeCollection(DoubleType, DecimalType)` and, with no numeric
-    // operand to anchor the implicit cast, the pair stays a string arithmetic and fails
-    // analysis. Under ANSI off both sides coerce to DOUBLE and it resolves.
+    // `Divide.inputType = TypeCollection(DoubleType, DecimalType)` (`arithmetic.scala:812`).
+    // Left to DataFusion a non-numeric operand is reinterpreted as its raw integer and yields a
+    // meaningless number. A string pair with no numeric operand to anchor the cast is rejected
+    // under ANSI on only; under ANSI off both sides coerce to DOUBLE.
     if let (Ok(dividend_type), Ok(divisor_type)) = (&dividend_type, &divisor_type)
         && (rejects_as_divide_dividend(dividend_type)
             || rejects_as_divide_divisor(divisor_type)
@@ -913,11 +906,17 @@ fn operand_role(data_type: &DataType) -> OperandRole {
         // Spark rejects at analysis.
         DataType::Time32(_) | DataType::Time64(_) => Time,
         DataType::Interval(IntervalUnit::YearMonth) => IntervalYm,
-        DataType::Duration(_) => IntervalDt,
-        // Spark's legacy CalendarInterval (`make_interval`), which Arrow stores as an
-        // `Interval` rather than a `Duration`. It is NOT an `AnsiIntervalType`: Spark pairs it
-        // with a date, timestamp, string or another calendar interval, and rejects it against a
-        // day-time interval or a TIME, so it cannot share the day-time role.
+        // Arrow has two spellings of Spark's day-time interval: `Duration`, which the resolver
+        // produces (`resolver/data_type.rs:145`, chosen for microsecond precision), and
+        // `Interval(DayTime)`, which Sail maps to Spark's `DayTimeInterval` on the way out
+        // (`data_type_arrow.rs:200`) and renders as `interval day to second`
+        // (`formatter.rs:81`). Both must share the role, or the guard would judge one of Spark's
+        // day-time intervals by the calendar rules.
+        DataType::Duration(_) | DataType::Interval(IntervalUnit::DayTime) => IntervalDt,
+        // Spark's legacy CalendarInterval (`make_interval`), which Arrow stores as
+        // `Interval(MonthDayNano)`. It is NOT an `AnsiIntervalType`: Spark pairs it with a date,
+        // timestamp, string or another calendar interval, and rejects it against a day-time
+        // interval or a TIME, so it cannot share the day-time role.
         DataType::Interval(_) => IntervalCalendar,
         DataType::Boolean | DataType::Binary | DataType::LargeBinary | DataType::BinaryView => {
             Unsupported

@@ -1,31 +1,20 @@
 Feature: arithmetic operand pairs Spark resolves (+ - * / %) vs Spark 4.2.0
 
   # The companion of `arithmetic_operand_rejection.feature`, and the reason it exists: a
-  # rejection matrix on its own cannot catch OVER-rejection, because a guard that rejected
-  # everything would keep all of its rows green. Here every pair Spark 4.2.0 RESOLVES must keep
-  # resolving, so narrowing a guard too far turns a row red.
+  # rejection matrix alone cannot catch OVER-rejection, since a guard that rejected
+  # everything would keep all its rows green. Every pair here resolves in Spark 4.2.0, so
+  # narrowing a guard too far turns a row red.
   #
-  # This file asserts RESOLUTION ONLY -- that the pair plans at all -- and deliberately does not
-  # pin the resulting type. The result type is the arithmetic COERCION contract, a separate
-  # concern with its own branch; pinning it here would drag type divergences that this change
-  # neither causes nor fixes into a rejection-only matrix. Nullability is likewise out of scope.
+  # It asserts RESOLUTION ONLY and does not pin the result type: that is the coercion
+  # contract, a separate concern with its own branch. Nullability is likewise out of scope.
   #
-  # Same 28-token alphabet and same full cartesian product as the rejection file. GEOGRAPHY is
-  # outside the alphabet: it shares GEOMETRY's Arrow representation, and its naming case is
-  # pinned in the rejection file instead.
-  #
-  # Two kinds of row, and only ONE of them is the over-rejection detector:
-  #
-  #   * the 1377 untagged rows -- pairs BOTH engines resolve today. These are the guard rail:
-  #     narrow a guard too far and one of them turns red.
-  #   * the 413 `@sail-bug` rows -- pairs Spark resolves and Sail does not. They cannot detect
-  #     over-rejection (a pair Sail already rejects cannot become over-rejected); they are an
-  #     inventory of Spark functions Sail has not implemented, measured against the JVM, that
-  #     announces itself the day someone implements one. Verified cell by cell: none is
-  #     rejected by a plan-time guard -- all 413 fail inside DataFusion, so none is a
-  #     regression this change introduces. By cause: string promotion 177 | year-month
-  #     interval * and / 162 | calendar interval * and / 38 | untyped NULL with a datetime 18
-  #     | TIME +- interval 18.
+  # Same 28-token alphabet as the rejection file. The 413 `@sail-bug` rows are pairs Spark
+  # resolves and Sail does not; they cannot detect over-rejection (a pair Sail already
+  # rejects cannot become over-rejected) but they inventory the Spark functions Sail has
+  # not implemented, and announce themselves the day one lands. Verified cell by cell:
+  # none is rejected by a plan-time guard, so none is a regression this change introduces.
+  # By cause: string promotion 177 | year-month interval * and / 162 | calendar interval
+  # * and / 38 | untyped NULL with a datetime 18 | TIME +- interval 18.
 
   Rule: `+` operand pairs that resolve (ANSI off)
 

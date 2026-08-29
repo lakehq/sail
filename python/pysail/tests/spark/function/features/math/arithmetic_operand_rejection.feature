@@ -1,24 +1,20 @@
 Feature: arithmetic operand-type REJECTION matrix (+ - * / %) vs Spark 4.2.0
 
-  # Every operand pair Spark 4.2.0 REJECTS at analysis, for all five arithmetic operators under
-  # both ANSI modes: the FULL cartesian product of Spark's type system, 28 operand tokens, one
-  # row per cell — no equivalence-class collapsing, so a divergence cannot hide behind a
-  # representative. Every cell was measured against Spark JVM 4.2.0 and against Sail.
-  # The pairs Spark RESOLVES live in `arithmetic_operand_resolution.feature`; together the two
-  # files cover all 7840 cells of the product, with none in both and none in neither.
+  # Every operand pair Spark 4.2.0 REJECTS at analysis, for all five operators under both ANSI
+  # modes: the full cartesian product of its type system, 28 tokens, one row per cell, each
+  # measured against the JVM. The pairs Spark RESOLVES live in
+  # `arithmetic_operand_resolution.feature`; together the two cover all 7840 cells.
   #
-  # The alphabet follows Spark's BRANCHING, not its type list: `ival_d` (DAY), `ival_dt` (HOUR)
-  # and `ival_ds` (DAY TO SECOND) are distinct because the datetime resolver branches on the
-  # field range (`BinaryArithmeticWithDatetimeResolver.scala:68-69`), and `calendar`
-  # (CalendarInterval, `make_interval`) is distinct from the ANSI intervals because Spark pairs
-  # it with different operands. `char`/`varchar` are absent: both engines report them as
-  # `string`, so they would only duplicate the `str` rows.
+  # The alphabet follows Spark's BRANCHING, not its type list: `ival_d` (DAY), `ival_dt`
+  # (HOUR) and `ival_ds` (DAY TO SECOND) are distinct because the datetime resolver branches
+  # on the field range (`BinaryArithmeticWithDatetimeResolver.scala:68-69`), and `calendar`
+  # is distinct from the ANSI intervals. `char`/`varchar` are absent: both engines report
+  # them as `string`.
   #
-  # The assertion is `cannot resolve` and nothing wider. That is deliberate and load-bearing:
-  # DataFusion's own coercion failures read `Cannot coerce ...` / `Cannot get result type ...`,
-  # so a row that passed through the fallback instead of the plan-time guard would FAIL here.
-  # Spark's own message is `Cannot resolve "<expr>" due to data type mismatch`, so the same
-  # assertion holds on both engines.
+  # The assertion is `cannot resolve` and nothing wider, which is what makes it
+  # discriminating: DataFusion's own failures read `Cannot coerce` / `Cannot get result
+  # type`, so a row reaching the fallback instead of the guard FAILS here. Spark says
+  # `Cannot resolve <expr> due to data type mismatch`, so it holds on both engines.
 
   Rule: `+` operand-type rejection (ANSI off)
 
