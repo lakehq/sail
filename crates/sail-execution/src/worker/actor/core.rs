@@ -120,7 +120,11 @@ impl Actor for WorkerActor {
             .await;
     }
 
-    fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
+    async fn receive(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        message: Self::Message,
+    ) -> ActorAction {
         match message {
             WorkerMessage::ServerReady { port, signal } => {
                 self.handle_server_ready(ctx, port, signal)

@@ -58,7 +58,11 @@ impl Actor for LifecycleManagerActor {
         }
     }
 
-    fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
+    async fn receive(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        message: Self::Message,
+    ) -> ActorAction {
         match message {
             LifecycleManagerMessage::GetShuffleId {
                 job_id,

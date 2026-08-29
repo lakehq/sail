@@ -123,7 +123,11 @@ impl Actor for DriverActor {
         ));
     }
 
-    fn receive(&mut self, ctx: &mut ActorContext<Self>, message: DriverMessage) -> ActorAction {
+    async fn receive(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        message: DriverMessage,
+    ) -> ActorAction {
         match message {
             DriverMessage::Activate => self.handle_activate(ctx),
             DriverMessage::RegisterWorker {
