@@ -20,7 +20,6 @@ use crate::task_runner::{
 use crate::worker::peer_tracker::{PeerTracker, PeerTrackerOptions};
 use crate::worker::{WorkerActor, WorkerMessage, WorkerOptions};
 
-#[tonic::async_trait]
 impl Actor for WorkerActor {
     type Message = WorkerMessage;
     type Options = WorkerOptions;

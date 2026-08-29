@@ -22,7 +22,6 @@ use crate::task_runner::{
     TaskRunnerPlacement,
 };
 
-#[tonic::async_trait]
 impl Actor for DriverActor {
     type Message = DriverMessage;
     type Options = (DriverOptions, DriverComponents);

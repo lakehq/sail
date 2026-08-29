@@ -62,7 +62,6 @@ impl<M: Send + 'static> Mailbox<M> for UnboundedMailbox {
     }
 }
 
-#[tonic::async_trait]
 pub trait Actor<Q = BoundedMailbox>: Sized + Send + 'static
 where
     Q: Mailbox<MessageEnvelope<Self::Message>>,
@@ -73,8 +72,9 @@ where
     fn name() -> &'static str;
     fn new(options: Self::Options) -> Self;
 
-    #[expect(unused_variables)]
-    async fn start(&mut self, ctx: &mut ActorContext<Self, Q>) {}
+    fn start(&mut self, _: &mut ActorContext<Self, Q>) -> impl Future<Output = ()> + Send {
+        std::future::ready(())
+    }
 
     /// Process one message and return the next action.
     ///
@@ -84,14 +84,15 @@ where
     /// blocking operation should be designed carefully to avoid blocking the actor for too long.
     /// If the actor needs to perform async operations that do not need to happen sequentially,
     /// it should spawn tasks via [ActorContext::spawn].
-    async fn receive(
+    fn receive(
         &mut self,
         ctx: &mut ActorContext<Self, Q>,
         message: Self::Message,
-    ) -> ActorAction;
+    ) -> impl Future<Output = ActorAction> + Send;
 
-    #[expect(unused_variables)]
-    async fn stop(self, ctx: &mut ActorContext<Self, Q>) {}
+    fn stop(self, _: &mut ActorContext<Self, Q>) -> impl Future<Output = ()> + Send {
+        std::future::ready(())
+    }
 }
 
 pub enum ActorAction {
@@ -511,7 +512,6 @@ mod tests {
         }
     }
 
-    #[tonic::async_trait]
     impl Actor for TestActor {
         type Message = TestMessage;
         type Options = ();
@@ -539,7 +539,6 @@ mod tests {
         }
     }
 
-    #[tonic::async_trait]
     impl Actor<UnboundedMailbox> for UnboundedTestActor {
         type Message = TestMessage;
         type Options = ();
@@ -567,7 +566,6 @@ mod tests {
         }
     }
 
-    #[tonic::async_trait]
     impl Actor for ParentActor {
         type Message = ParentMessage;
         type Options = oneshot::Sender<ActorHandle<TestActor>>;

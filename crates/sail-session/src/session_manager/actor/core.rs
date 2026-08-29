@@ -31,7 +31,6 @@ impl DriverRegistryAccessor for SessionDriverRegistry {
     }
 }
 
-#[tonic::async_trait]
 impl Actor for SessionManagerActor {
     type Message = SessionManagerMessage;
     type Options = (SessionManagerOptions, SessionManagerComponents);
