@@ -38,7 +38,7 @@ use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+use crate::function::common::{ScalarFunction, ScalarFunctionInput, spark_type_name};
 
 fn add_day_time_interval_to_string(
     string: Expr,
@@ -93,6 +93,15 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             left.get_type(function_context.schema),
             right.get_type(function_context.schema),
         );
+        if let (Ok(left_type), Ok(right_type)) = (&left_type, &right_type)
+            && rejects_add(
+                left_type,
+                right_type,
+                function_context.plan_config.ansi_mode,
+            )
+        {
+            return Err(arithmetic_operand_error("+", left_type, right_type));
+        }
         Ok(match (left_type, right_type) {
             (
                 Ok(string_type @ (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)),
@@ -170,7 +179,27 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             left.get_type(function_context.schema),
             right.get_type(function_context.schema),
         );
+        if let (Ok(left_type), Ok(right_type)) = (&left_type, &right_type)
+            && rejects_subtract(
+                left_type,
+                right_type,
+                function_context.plan_config.ansi_mode,
+            )
+        {
+            return Err(arithmetic_operand_error("-", left_type, right_type));
+        }
         Ok(match (left_type, right_type) {
+            // Spark's `SubtractTimes` returns `DayTimeIntervalType(HOUR, SECOND)`
+            // (`timeExpressions.scala:626-638`). DataFusion instead coerces a `Time64` pair to
+            // `Interval(MonthDayNano)`, i.e. the CALENDAR interval, which is a different Spark
+            // type: it declares `interval` where Spark declares `interval hour to second`, and it
+            // makes the result unusable in further interval arithmetic, because a calendar
+            // interval does not combine with a day-time one in either engine. Cast to `Duration`
+            // so the result carries the day-time class Spark gives it.
+            (
+                Ok(DataType::Time32(_) | DataType::Time64(_)),
+                Ok(DataType::Time32(_) | DataType::Time64(_)),
+            ) => cast(left - right, DataType::Duration(TimeUnit::Microsecond)),
             (Ok(DataType::Date32), Ok(DataType::Duration(TimeUnit::Microsecond))) => {
                 left - cast(right, DataType::Interval(IntervalUnit::MonthDayNano))
             }
@@ -210,6 +239,15 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
         left.get_type(function_context.schema),
         right.get_type(function_context.schema),
     );
+    if let (Ok(left_type), Ok(right_type)) = (&left_type, &right_type)
+        && rejects_multiply(
+            left_type,
+            right_type,
+            function_context.plan_config.ansi_mode,
+        )
+    {
+        return Err(arithmetic_operand_error("*", left_type, right_type));
+    }
     Ok(match (left_type, right_type) {
         // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
         //  Seems to be a bug in DataFusion.
@@ -334,6 +372,28 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
     let (dividend, divisor) = arguments.two()?;
 
+    let ansi_mode = function_context.plan_config.ansi_mode;
+    let dividend_type = dividend.get_type(function_context.schema);
+    let divisor_type = divisor.get_type(function_context.schema);
+    // Spark's `/` (`inputType = TypeCollection(DoubleType, DecimalType)`) rejects a
+    // non-numeric operand at analysis with DATATYPE_MISMATCH; DataFusion would instead
+    // reinterpret it (a boolean as 0/1, a date as its raw integer, an interval as its raw
+    // nanos) and compute a meaningless number.
+    // A string paired only with another string or an untyped NULL is also rejected under ANSI
+    // on: `Divide.inputType` is `TypeCollection(DoubleType, DecimalType)` and, with no numeric
+    // operand to anchor the implicit cast, the pair stays a string arithmetic and fails
+    // analysis. Under ANSI off both sides coerce to DOUBLE and it resolves.
+    if let (Ok(dividend_type), Ok(divisor_type)) = (&dividend_type, &divisor_type)
+        && (rejects_as_divide_dividend(dividend_type)
+            || rejects_as_divide_divisor(divisor_type)
+            || rejects_unanchored_string_pair(
+                operand_role(dividend_type),
+                operand_role(divisor_type),
+                ansi_mode,
+            ))
+    {
+        return Err(arithmetic_operand_error("/", dividend_type, divisor_type));
+    }
     // Plan-time check for literal zero divisors (fast path, better error UX).
     if is_zero_literal(&divisor) {
         if function_context.plan_config.ansi_mode {
@@ -342,10 +402,6 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
             return Ok(Expr::Literal(ScalarValue::Null, None));
         }
     }
-
-    let ansi_mode = function_context.plan_config.ansi_mode;
-    let dividend_type = dividend.get_type(function_context.schema);
-    let divisor_type = divisor.get_type(function_context.schema);
 
     // Apply runtime zero-divisor guard to the divisor before building the division expression.
     let effective_divisor_type = divisor_type.as_ref().cloned().unwrap_or(DataType::Int32);
@@ -597,6 +653,22 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
     let (dividend, divisor) = arguments.two()?;
 
+    let ansi_mode = function_context.plan_config.ansi_mode;
+    let divisor_type = divisor.get_type(function_context.schema);
+    // Spark's `%` rejects a non-numeric operand at analysis, and an unanchored string pair
+    // only under ANSI on. Left to DataFusion, the rejected pairs reinterpret an operand as a
+    // raw integer and compute a meaningless remainder.
+    if let (Ok(dividend_type), Ok(divisor_type)) =
+        (dividend.get_type(function_context.schema), &divisor_type)
+        && (rejects_unanchored_string_pair(
+            operand_role(&dividend_type),
+            operand_role(divisor_type),
+            ansi_mode,
+        ) || rejects_as_divide_divisor(&dividend_type)
+            || rejects_as_divide_divisor(divisor_type))
+    {
+        return Err(arithmetic_operand_error("%", &dividend_type, divisor_type));
+    }
     // Plan-time check for literal zero divisors.
     if is_zero_literal(&divisor) {
         if function_context.plan_config.ansi_mode {
@@ -607,9 +679,6 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
             return Ok(Expr::Literal(ScalarValue::Null, None));
         }
     }
-
-    let ansi_mode = function_context.plan_config.ansi_mode;
-    let divisor_type = divisor.get_type(function_context.schema);
 
     // Apply runtime zero-divisor guard to the divisor before building the modulo expression.
     let effective_divisor_type = divisor_type.unwrap_or(DataType::Int32);
@@ -788,4 +857,355 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("uniform", F::udf(SparkUniform::new())),
         ("width_bucket", F::quaternary(math_fn::width_bucket)),
     ]
+}
+
+/// The Spark arithmetic operand class of a type. `+`, `-` and `*` decide accept/reject by these
+/// classes, so the plan-time guards below are written against them. The per-operator accept sets
+/// were validated cell-by-cell against Spark JVM 4.2.0 when this table was built, and both sides
+/// are asserted in the suite: `math/arithmetic_operand_rejection.feature` pins every pair Spark
+/// rejects, and `math/arithmetic_operand_resolution.feature` pins every pair both engines
+/// resolve — so narrowing a guard too far turns a row of the latter red. The latter asserts
+/// resolution only, never the result type: that is the coercion contract, not this one.
+/// `Unsupported` is a type Spark never accepts in arithmetic that would otherwise compute a
+/// garbage value (boolean, binary). Note it lists `Binary`/`LargeBinary`/`BinaryView` but NOT
+/// `FixedSizeBinary`, which falls into `Other` and is deferred to DataFusion: Sail has no SQL
+/// syntax that produces a fixed-width binary column (it arrives only from an Arrow or Parquet
+/// source), so the pair is unreachable from a BDD scenario and is left unmeasured rather than
+/// rejected on an assumption. `spark_type_name` does name it BINARY, so the message is right
+/// if some other guard rejects it first. `Other` is any type outside the validated matrix
+/// (fixed-size binary, dictionary, run-end-encoded, union -- struct, list and map are
+/// `Unsupported`, and time has its own role): the guards leave those to DataFusion rather than
+/// hard-reject a
+/// pair whose behavior was never measured.
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum OperandRole {
+    Numeric,
+    Str,
+    UntypedNull,
+    Date,
+    Timestamp,
+    Time,
+    IntervalDt,
+    IntervalCalendar,
+    IntervalYm,
+    Unsupported,
+    Other,
+}
+
+fn operand_role(data_type: &DataType) -> OperandRole {
+    use OperandRole::*;
+    if data_type.is_numeric() {
+        return Numeric;
+    }
+    if data_type.is_string() {
+        return Str;
+    }
+    match data_type {
+        DataType::Null => UntypedNull,
+        DataType::Date32 | DataType::Date64 => Date,
+        DataType::Timestamp(_, _) => Timestamp,
+        // Spark's TIME (`spark.sql.timeType.enabled`) is an `AnyTimeType`, not a numeric, so
+        // `Add`/`Subtract` (`inputType = NumericAndInterval`, `arithmetic.scala:417,508`) and
+        // `Multiply` (`inputType = NumericType`, `:591`) reject every pair the datetime resolver
+        // does not rewrite -- an interval survives `*` only via that rewrite, never via
+        // `inputType`. Classified rather than left to the `Other` role,
+        // which defers to DataFusion and lets `date + time` resolve to a TIMESTAMP_NTZ that
+        // Spark rejects at analysis.
+        DataType::Time32(_) | DataType::Time64(_) => Time,
+        DataType::Interval(IntervalUnit::YearMonth) => IntervalYm,
+        DataType::Duration(_) => IntervalDt,
+        // Spark's legacy CalendarInterval (`make_interval`), which Arrow stores as an
+        // `Interval` rather than a `Duration`. It is NOT an `AnsiIntervalType`: Spark pairs it
+        // with a date, timestamp, string or another calendar interval, and rejects it against a
+        // day-time interval or a TIME, so it cannot share the day-time role.
+        DataType::Interval(_) => IntervalCalendar,
+        DataType::Boolean | DataType::Binary | DataType::LargeBinary | DataType::BinaryView => {
+            Unsupported
+        }
+        // Containers (VARIANT included — Sail stores it as a struct). Spark rejects them for
+        // every arithmetic operator against every operand: measured across all 2080 cells of the
+        // cartesian product, it accepts none. They are `Unsupported` rather than `Other` so the
+        // additive and multiplicative guards reject at plan time and name the Spark type, as `/`
+        // and `%` already do, instead of deferring to DataFusion — which multiplies a list by a
+        // duration and leaks `List(non-null Int32)` into the message.
+        DataType::Struct(_)
+        | DataType::List(_)
+        | DataType::LargeList(_)
+        | DataType::ListView(_)
+        | DataType::LargeListView(_)
+        | DataType::FixedSizeList(_, _)
+        | DataType::Map(_, _) => Unsupported,
+        _ => Other,
+    }
+}
+
+/// The verdict every `+`/`-`/`*` guard shares before its per-operator rules: an `Unsupported`
+/// operand (boolean, binary) is always rejected, and an `Other` operand (a type outside the
+/// validated matrix — fixed-size binary, dictionary, run-end-encoded, union) is deferred to
+/// DataFusion rather than hard-rejected.
+/// `None` means neither applies, so the caller runs its own accept/reject logic.
+fn framing_verdict(a: OperandRole, b: OperandRole) -> Option<bool> {
+    use OperandRole::*;
+    if a == Unsupported || b == Unsupported {
+        return Some(true);
+    }
+    if a == Other || b == Other {
+        return Some(false);
+    }
+    None
+}
+
+/// A string paired with another string or an untyped `NULL`, with no numeric operand to anchor the
+/// implicit cast. Spark accepts such a pair only under ANSI off (both coerce to DOUBLE); under ANSI
+/// on it stays a string arithmetic and fails analysis. `NULL` paired with `NULL` is not included.
+fn unanchored_string_pair(a: OperandRole, b: OperandRole) -> bool {
+    use OperandRole::*;
+    matches!((a, b), (Str, Str) | (Str, UntypedNull) | (UntypedNull, Str))
+}
+
+/// [`unanchored_string_pair`] as Spark rejects it: only under ANSI on.
+fn rejects_unanchored_string_pair(a: OperandRole, b: OperandRole, ansi_mode: bool) -> bool {
+    ansi_mode && unanchored_string_pair(a, b)
+}
+
+/// The numeric offset Spark accepts for a `DATE` in `+`/`-`: `DateAdd`/`DateSub` take an
+/// `INT` (`IntegerType | ShortType | ByteType`), so only integrals that fit losslessly in an
+/// `INT` qualify. A `BIGINT`, `FLOAT`, `DOUBLE` or `DECIMAL` offset is rejected at analysis
+/// (Sail would otherwise silently truncate it). Spark has no unsigned types, but Arrow-native
+/// sources can, so `UInt8`/`UInt16` (both within `INT` range) are accepted too.
+fn is_date_offset_numeric(data_type: &DataType) -> bool {
+    // `DateAdd`/`DateSub` take `TypeCollection(IntegerType, ShortType, ByteType)`
+    // (`datetimeExpressions.scala:331,371`) and are `ExpectsInputTypes`, not
+    // `ImplicitCastInputTypes`, so nothing widens a BIGINT/FLOAT/DOUBLE/DECIMAL offset into range.
+    // The unsigned widths are included by the Spark type they are REPORTED as, not by their Arrow
+    // name: `crates/sail-spark-connect/src/proto/data_type_arrow.rs` maps `UInt8 -> BYTE`,
+    // `UInt16 -> SHORT` and `UInt32 -> INT`, all three of which `DateAdd` accepts, so rejecting
+    // `UInt32` would refuse an offset the client sees as a plain INT. `UInt64` maps to BIGINT and
+    // is correctly absent.
+    matches!(
+        data_type,
+        DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+    )
+}
+
+/// Whether Spark rejects this operand pair for `*` (`Multiply`) at analysis. `*` accepts only
+/// numeric×numeric and interval×numeric (either order, with string→numeric coercion); a
+/// datetime, boolean, binary, or interval×interval pair is rejected. Left to DataFusion, several
+/// of these reinterpret an operand as raw integer and compute a meaningless product.
+fn rejects_multiply(left: &DataType, right: &DataType, ansi_mode: bool) -> bool {
+    use OperandRole::*;
+    let (a, b) = (operand_role(left), operand_role(right));
+    if let Some(verdict) = framing_verdict(a, b) {
+        return verdict;
+    }
+    if matches!(a, Date | Timestamp | Time) || matches!(b, Date | Timestamp | Time) {
+        return true;
+    }
+    let is_interval = |r: OperandRole| matches!(r, IntervalDt | IntervalYm | IntervalCalendar);
+    if is_interval(a) && is_interval(b) {
+        return true;
+    }
+    // Exactly one operand is an interval. `framing_verdict` already removed `Unsupported` and
+    // `Other`, the datetime roles were rejected above, and the both-interval case was handled, so
+    // the peer can only be `Numeric`, `Str` or `UntypedNull` -- every one of which Spark accepts,
+    // because the resolver rewrites `interval * number` to `Multiply*Interval`
+    // (`BinaryArithmeticWithDatetimeResolver.scala:149-154`). Nothing left to reject.
+    if is_interval(a) || is_interval(b) {
+        return false;
+    }
+    rejects_unanchored_string_pair(a, b, ansi_mode)
+}
+
+/// Whether Spark rejects this operand pair for `+` (`Add`) at analysis. `Add` is commutative, so
+/// the accept rule is symmetric: numeric×numeric, date/timestamp ± interval, date + INT offset,
+/// same-class interval±interval, and the datetime/string forms Spark's datetime resolver allows.
+fn rejects_add(left: &DataType, right: &DataType, ansi_mode: bool) -> bool {
+    use OperandRole::*;
+    let (a, b) = (operand_role(left), operand_role(right));
+    if let Some(verdict) = framing_verdict(a, b) {
+        return verdict;
+    }
+    let numlike = |r: OperandRole| matches!(r, Numeric | Str | UntypedNull);
+    if numlike(a) && numlike(b) {
+        return rejects_unanchored_string_pair(a, b, ansi_mode);
+    }
+    // A DATE takes an interval, an untyped NULL, or an INT-width numeric offset (`DateAdd`, whose
+    // `days` input is `IntegerType | ShortType | ByteType`); a wider integral, a string, another
+    // date or a timestamp is rejected.
+    if a == Date || b == Date {
+        let (other, other_type) = if a == Date { (b, right) } else { (a, left) };
+        return match other {
+            UntypedNull | IntervalDt | IntervalYm | IntervalCalendar => false,
+            Numeric => !is_date_offset_numeric(other_type),
+            _ => true,
+        };
+    }
+    // A TIMESTAMP takes only an interval or an untyped NULL (no numeric offset).
+    if a == Timestamp || b == Timestamp {
+        let other = if a == Timestamp { b } else { a };
+        return !matches!(
+            other,
+            IntervalDt | IntervalYm | UntypedNull | IntervalCalendar
+        );
+    }
+    // A TIME takes only a day-time interval (`TimeAddInterval`, whose `inputTypes` are
+    // `(AnyTimeType, DayTimeIntervalType)`) or an untyped NULL, which the datetime resolver casts
+    // to the default day-time interval (`TimeType` is a `DatetimeType`, so it reaches that arm).
+    // Another TIME, a year-month interval, a numeric or a string leaves `Add` with its own
+    // `inputType` (`NumericAndInterval`), which rejects them.
+    if a == Time || b == Time {
+        let other = if a == Time { b } else { a };
+        return !matches!(other, IntervalDt | UntypedNull);
+    }
+    // Both operands are intervals (date/timestamp handled above): same class only, except a
+    // day-time interval also accepts a string or untyped NULL peer (Spark's day-time resolver).
+    match (a, b) {
+        (IntervalDt, IntervalDt)
+        | (IntervalYm, IntervalYm)
+        | (IntervalCalendar, IntervalCalendar) => false,
+        (
+            IntervalDt | IntervalYm | IntervalCalendar,
+            IntervalDt | IntervalYm | IntervalCalendar,
+        ) => true,
+        _ => {
+            let (interval, other) = if matches!(a, IntervalDt | IntervalYm | IntervalCalendar) {
+                (a, b)
+            } else {
+                (b, a)
+            };
+            match other {
+                UntypedNull => false,
+                Str => !matches!(interval, IntervalDt | IntervalCalendar),
+                _ => true,
+            }
+        }
+    }
+}
+
+/// Whether Spark rejects this operand pair for `-` (`Subtract`) at analysis. Unlike `+`,
+/// subtraction is NOT commutative — `date - date` yields an interval but `numeric - date` never
+/// resolves, `str - date` is accepted while `date - str` needs ANSI — so the accept set is an
+/// ordered table validated cell-by-cell against Spark 4.2.0. Left to DataFusion, the rejected
+/// pairs reinterpret an operand as raw integer and compute a meaningless difference.
+fn rejects_subtract(left: &DataType, right: &DataType, ansi_mode: bool) -> bool {
+    use OperandRole::*;
+    let (a, b) = (operand_role(left), operand_role(right));
+    if let Some(verdict) = framing_verdict(a, b) {
+        return verdict;
+    }
+    // `date - <INT offset>` (`DateSub`); `<numeric> - date` never resolves and falls through.
+    if a == Date && b == Numeric {
+        return !is_date_offset_numeric(right);
+    }
+    let accepted = matches!(
+        (a, b),
+        (Date, Date)
+            | (Date, IntervalDt)
+            | (Date, IntervalYm)
+            | (Date, Timestamp)
+            | (Date, UntypedNull)
+            | (IntervalDt, IntervalDt)
+            | (IntervalDt, UntypedNull)
+            | (IntervalYm, IntervalYm)
+            | (IntervalYm, UntypedNull)
+            | (Numeric, Numeric)
+            | (Numeric, Str)
+            | (Numeric, UntypedNull)
+            | (Str, Date)
+            | (Str, IntervalDt)
+            | (Str, Numeric)
+            | (Timestamp, Date)
+            | (Timestamp, IntervalDt)
+            | (Timestamp, IntervalYm)
+            | (Timestamp, Timestamp)
+            | (Timestamp, UntypedNull)
+            | (UntypedNull, Date)
+            | (UntypedNull, IntervalDt)
+            | (UntypedNull, IntervalYm)
+            | (UntypedNull, Numeric)
+            | (UntypedNull, Timestamp)
+            | (UntypedNull, UntypedNull)
+            // `TimeAddInterval` with a negated interval, `SubtractTimes` (`interval hour to
+            // second`), and the untyped-NULL arms of the datetime resolver. `interval - time` is
+            // absent on purpose: subtraction is not commutative and Spark has no such arm.
+            | (Time, IntervalDt)
+            | (Time, Time)
+            // The calendar interval mirrors the day-time pairs except against a TIME, which
+            // `TimeAddInterval` (`(AnyTimeType, DayTimeIntervalType)`) does not accept.
+            | (Date, IntervalCalendar)
+            | (IntervalCalendar, IntervalCalendar)
+            | (IntervalCalendar, UntypedNull)
+            | (Str, IntervalCalendar)
+            | (Timestamp, IntervalCalendar)
+            | (UntypedNull, IntervalCalendar)
+            | (Time, UntypedNull)
+            | (UntypedNull, Time)
+    ) || (!ansi_mode && unanchored_string_pair(a, b))
+        || (ansi_mode
+            && matches!(
+                (a, b),
+                (Date, Str) | (Str, Timestamp) | (Timestamp, Str) | (Str, Time) | (Time, Str)
+            ));
+    !accepted
+}
+
+/// A `/` dividend Spark rejects: not numeric and not an interval it could scale
+/// (booleans, dates, times, timestamps and binary are reinterpreted as raw integers by
+/// DataFusion, producing a meaningless quotient — or, for `time`, an unsupported-kernel
+/// error at execution where Spark rejects at analysis).
+fn rejects_as_divide_dividend(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Boolean
+            | DataType::Date32
+            | DataType::Date64
+            | DataType::Time32(_)
+            | DataType::Time64(_)
+            | DataType::Timestamp(_, _)
+            | DataType::Binary
+            | DataType::LargeBinary
+            | DataType::BinaryView
+            // Container types (and VARIANT, which is stored as a struct). Spark rejects them
+            // at ANALYSIS with DATATYPE_MISMATCH for every arithmetic operator, while `/`
+            // otherwise lets them fall through to a `Float64` cast that fails in the EXECUTOR
+            // — a runtime error where Spark has an analysis one, so a never-evaluated row
+            // changes the outcome. `Dictionary` and `RunEndEncoded` are deliberately absent:
+            // they wrap a value type that may well be numeric.
+            | DataType::Struct(_)
+            | DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::ListView(_)
+            | DataType::LargeListView(_)
+            | DataType::FixedSizeList(_, _)
+            | DataType::Map(_, _)
+    )
+}
+
+/// A `/` divisor Spark rejects: everything a dividend rejects, plus intervals/durations —
+/// Spark has no "number / interval", so DataFusion dividing by the interval's raw nanos is
+/// a silent wrong value.
+fn rejects_as_divide_divisor(data_type: &DataType) -> bool {
+    rejects_as_divide_dividend(data_type)
+        || matches!(data_type, DataType::Interval(_) | DataType::Duration(_))
+}
+
+/// The plan-time rejection Spark raises at analysis for an arithmetic operand pair it cannot
+/// resolve. Spark emits `[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE]` with SQLSTATE `42K09`
+/// (`ExpectsInputTypes.scala:55-64` → `error-conditions.json`); these rejects carry neither, and
+/// the `cannot resolve` substring they share with Spark's `Cannot resolve …` text is what the
+/// `.feature` reject scenarios assert. Sail has no error-class framework, but hand-written
+/// class-prefixed messages do exist (`spark_parse_json.rs` emits the full
+/// `[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] …` string), so closing this is a matter of doing it
+/// across all the arithmetic rejects at once rather than a missing capability.
+fn arithmetic_operand_error(op: &str, left: &DataType, right: &DataType) -> PlanError {
+    PlanError::analysis(format!(
+        "cannot resolve arithmetic '{op}' with operand types {} and {}",
+        spark_type_name(left),
+        spark_type_name(right)
+    ))
 }
