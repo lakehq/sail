@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use arrow_schema::FieldRef;
-use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::datasource::listing::helpers::expr_applicable_for_cols;
 use datafusion::execution::cache::TableScopedPath;
 use datafusion::execution::cache::cache_manager::CachedFileList;
@@ -20,17 +20,29 @@ use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use crate::listing::source::ListingFileSample;
 use crate::url::PathGlobFilter;
 
-pub fn rewrite_utf8view_fields(schema: Arc<Schema>) -> Arc<Schema> {
-    // TODO: Spark doesn't support Utf8View
+/// Rewrites inferred field types that have no Spark counterpart.
+///
+/// Spark's type system is narrower than Arrow's, and the Arrow-to-Spark conversion rejects
+/// what it cannot represent. Coercing the inferred schema here, rather than letting the
+/// conversion fail later, keeps files readable that DataFusion can already read: the listing
+/// table casts each file to this schema as it scans.
+pub fn rewrite_unsupported_fields(schema: Arc<Schema>) -> Arc<Schema> {
     let new_fields: Vec<Field> = schema
         .fields()
         .iter()
-        .map(|field| {
-            if matches!(field.data_type(), &DataType::Utf8View) {
-                field.as_ref().clone().with_data_type(DataType::Utf8)
-            } else {
-                field.as_ref().clone()
-            }
+        .map(|field| match field.data_type() {
+            // TODO: Spark doesn't support Utf8View
+            DataType::Utf8View => field.as_ref().clone().with_data_type(DataType::Utf8),
+            // Spark timestamps are microseconds, so second and millisecond timestamps are
+            // widened here; the conversion would otherwise reject them even though the
+            // widening is lossless. Nanoseconds are left alone so that they are still
+            // reported rather than silently truncated, which matches Spark: its Parquet
+            // reader accepts `MILLIS` and `MICROS` but not `NANOS` (SPARK-40819).
+            DataType::Timestamp(TimeUnit::Second | TimeUnit::Millisecond, tz) => field
+                .as_ref()
+                .clone()
+                .with_data_type(DataType::Timestamp(TimeUnit::Microsecond, tz.clone())),
+            _ => field.as_ref().clone(),
         })
         .collect();
 
@@ -273,6 +285,8 @@ pub fn can_be_evaluated_for_partition_pruning(
 #[expect(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
 
     #[test]
@@ -317,5 +331,62 @@ mod tests {
             &file,
             &Path::from("data/_data.json")
         ));
+    }
+
+    #[test]
+    fn test_rewrite_unsupported_fields() {
+        let utc = Some("UTC".into());
+        let metadata = HashMap::from([("k".to_string(), "v".to_string())]);
+        let schema = Arc::new(
+            Schema::new(vec![
+                Field::new("view", DataType::Utf8View, true),
+                Field::new(
+                    "ms",
+                    DataType::Timestamp(TimeUnit::Millisecond, None),
+                    false,
+                )
+                .with_metadata(metadata.clone()),
+                Field::new(
+                    "ms_tz",
+                    DataType::Timestamp(TimeUnit::Millisecond, utc.clone()),
+                    true,
+                ),
+                Field::new("s", DataType::Timestamp(TimeUnit::Second, None), true),
+                Field::new("us", DataType::Timestamp(TimeUnit::Microsecond, None), true),
+                Field::new("ns", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+                Field::new("other", DataType::Int64, true),
+            ])
+            .with_metadata(metadata.clone()),
+        );
+        let schema = rewrite_unsupported_fields(schema);
+        let field = |name: &str| schema.field_with_name(name).unwrap().clone();
+
+        // Spark has no `Utf8View` type.
+        assert_eq!(field("view").data_type(), &DataType::Utf8);
+
+        // Second and millisecond timestamps widen to microseconds, keeping the time zone.
+        let us = DataType::Timestamp(TimeUnit::Microsecond, None);
+        assert_eq!(field("ms").data_type(), &us);
+        assert_eq!(field("s").data_type(), &us);
+        assert_eq!(
+            field("ms_tz").data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, utc)
+        );
+
+        // Microsecond timestamps and unrelated types are left alone.
+        assert_eq!(field("us").data_type(), &us);
+        assert_eq!(field("other").data_type(), &DataType::Int64);
+
+        // Nanoseconds are still reported rather than silently truncated.
+        assert_eq!(
+            field("ns").data_type(),
+            &DataType::Timestamp(TimeUnit::Nanosecond, None)
+        );
+
+        // Rewriting a field preserves its nullability and metadata, and the schema keeps
+        // its own metadata.
+        assert!(!field("ms").is_nullable());
+        assert_eq!(field("ms").metadata(), &metadata);
+        assert_eq!(schema.metadata(), &metadata);
     }
 }
