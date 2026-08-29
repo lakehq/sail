@@ -2,7 +2,6 @@ use sail_common::actor::{Actor, ActorAction, ActorContext};
 
 use super::{SystemEventActor, SystemEventActorMessage};
 
-#[tonic::async_trait]
 impl Actor for SystemEventActor {
     type Message = SystemEventActorMessage;
     type Options = ();

@@ -5,7 +5,6 @@ use crate::lifecycle::actor::{ApplicationRegistration, LifecycleManagerActor};
 use crate::lifecycle::{LifecycleManagerMessage, LifecycleManagerOptions};
 use crate::master::MasterClient;
 
-#[tonic::async_trait]
 impl Actor for LifecycleManagerActor {
     type Message = LifecycleManagerMessage;
     type Options = LifecycleManagerOptions;
