@@ -2,8 +2,9 @@ use std::sync::PoisonError;
 
 use datafusion::common::DataFusionError;
 use prost::{DecodeError, EncodeError, UnknownEnumValue};
+use sail_common::actor::ActorSendError;
 use thiserror::Error;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 use tokio::task::JoinError;
 
 pub type ExecutionResult<T> = Result<T, ExecutionError>;
@@ -40,14 +41,14 @@ impl<T> From<PoisonError<T>> for ExecutionError {
     }
 }
 
-impl<T> From<mpsc::error::SendError<T>> for ExecutionError {
-    fn from(error: mpsc::error::SendError<T>) -> Self {
+impl<T> From<ActorSendError<T>> for ExecutionError {
+    fn from(error: ActorSendError<T>) -> Self {
         ExecutionError::InternalError(error.to_string())
     }
 }
 
-impl<T> From<Box<mpsc::error::SendError<T>>> for ExecutionError {
-    fn from(error: Box<mpsc::error::SendError<T>>) -> Self {
+impl<T> From<Box<ActorSendError<T>>> for ExecutionError {
+    fn from(error: Box<ActorSendError<T>>) -> Self {
         ExecutionError::InternalError(error.to_string())
     }
 }

@@ -78,7 +78,11 @@ impl Actor for SessionManagerActor {
         info!("driver server is ready on port {}", driver_gateway.port());
     }
 
-    fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
+    async fn receive(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        message: Self::Message,
+    ) -> ActorAction {
         match message {
             SessionManagerMessage::GetOrCreateSession {
                 session_id,

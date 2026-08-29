@@ -25,7 +25,11 @@ impl Actor for TaskRunnerActor {
         }
     }
 
-    fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
+    async fn receive(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        message: Self::Message,
+    ) -> ActorAction {
         match message {
             TaskRunnerMessage::RunTask {
                 key,
