@@ -2,7 +2,6 @@ use sail_common::actor::{Actor, ActorAction, ActorContext};
 
 use super::{SystemEventActor, SystemEventActorMessage};
 
-#[tonic::async_trait]
 impl Actor for SystemEventActor {
     type Message = SystemEventActorMessage;
     type Options = ();
@@ -15,9 +14,13 @@ impl Actor for SystemEventActor {
         Self::default()
     }
 
-    fn receive(&mut self, _: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
+    async fn receive(&mut self, _: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
         match message {
             SystemEventActorMessage::Apply(event) => self.store.apply(event),
+            SystemEventActorMessage::ApplyMetrics { metrics, result } => {
+                self.store.metrics.apply(metrics);
+                let _ = result.send(Ok(()));
+            }
             SystemEventActorMessage::ReadJobs {
                 session_id,
                 job_id,
@@ -26,21 +29,35 @@ impl Actor for SystemEventActor {
             } => {
                 let _ = result.send(self.read_jobs(session_id, job_id, fetch));
             }
-            SystemEventActorMessage::ReadStages {
-                session_id,
-                job_id,
+            SystemEventActorMessage::ReadMetrics {
+                timestamp,
+                name,
+                attributes,
                 fetch,
                 result,
             } => {
-                let _ = result.send(self.read_stages(session_id, job_id, fetch));
+                let _ = result.send(self.read_metrics(timestamp, name, attributes, fetch));
+            }
+            SystemEventActorMessage::ReadStages {
+                session_id,
+                job_id,
+                stage,
+                fetch,
+                result,
+            } => {
+                let _ = result.send(self.read_stages(session_id, job_id, stage, fetch));
             }
             SystemEventActorMessage::ReadTasks {
                 session_id,
                 job_id,
+                stage,
+                partition,
+                attempt,
                 fetch,
                 result,
             } => {
-                let _ = result.send(self.read_tasks(session_id, job_id, fetch));
+                let _ = result
+                    .send(self.read_tasks(session_id, job_id, stage, partition, attempt, fetch));
             }
             SystemEventActorMessage::ReadOptions { key, fetch, result } => {
                 let _ = result.send(self.read_options(key, fetch));

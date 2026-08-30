@@ -1,5 +1,6 @@
 mod actor;
 mod common;
+mod metric;
 mod processor;
 mod reader;
 mod reporter;
@@ -12,4 +13,4 @@ pub use common::{
 };
 pub use processor::SystemEventLogProcessor;
 pub use reader::SystemEventReader;
-pub use reporter::SystemEventReporter;
+pub use reporter::{SystemEventReporter, SystemMetricReporter};

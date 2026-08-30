@@ -19,8 +19,7 @@ use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{
     DataFusionError, Result, TableReference, ToDFSchema, not_impl_err, plan_err,
 };
-use datafusion::execution::SessionState;
-use datafusion::logical_expr::{LogicalPlan, TableScan, TableSource};
+use datafusion::logical_expr::{LogicalPlan, TableScanBuilder, TableSource};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, Extension, UserDefinedLogicalNodeCore};
@@ -43,7 +42,7 @@ use sail_common_datafusion::lakerelation::{
 };
 use sail_common_datafusion::lakesource::{
     LakeSource, LakeSourceAlterTableOperation, LakeSourceCapabilities, LakeSourceCreateTableColumn,
-    LakeSourceCreateTableInfo, LakeSourceCreateTableResult, LakeSourceMetadata,
+    LakeSourceCreateTableInfo, LakeSourceCreateTableResult, LakeSourceMetadata, RowLevelOperation,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
@@ -65,7 +64,7 @@ use crate::physical_plan::write_context::{
     input_schema_with_logical_metadata, prepare_iceberg_write_context,
 };
 use crate::schema_evolution::SchemaEvolver;
-use crate::spec::{MetadataLog, PartitionSpec, Schema, Snapshot, TableMetadata};
+use crate::spec::{FormatVersion, MetadataLog, PartitionSpec, Schema, Snapshot, TableMetadata};
 use crate::table::metadata_loader::{
     encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
     metadata_file_version_from_path, metadata_location_to_object_path_string,
@@ -207,14 +206,24 @@ impl LakeSource for IcebergLakeSource {
         })
     }
 
-    async fn create_deleter(&self, ctx: &dyn Session, info: DeleteInfo) -> Result<LogicalPlan> {
-        let DeleteInfo {
-            table_name,
-            path,
-            condition,
-            lakehouse_table,
-            options,
-        } = info;
+    async fn plan_row_level_operation(
+        &self,
+        ctx: &dyn Session,
+        operation: RowLevelOperation,
+    ) -> Result<LogicalPlan> {
+        let DeleteInfo { target, condition } = match operation {
+            RowLevelOperation::Delete(info) => *info,
+            RowLevelOperation::Update(_) => {
+                return not_impl_err!("UPDATE is not yet implemented for Iceberg");
+            }
+            RowLevelOperation::Merge(info) => {
+                return crate::logical::merge::expand_merge_node(*info);
+            }
+        };
+        let table_name = target.table_name.clone();
+        let path = target.location.clone();
+        let options = target.options.clone();
+        let lakehouse_table = target.lakehouse_table.clone();
 
         let read_lakehouse_table = lakehouse_table
             .as_ref()
@@ -228,7 +237,7 @@ impl LakeSource for IcebergLakeSource {
             bucket_by: None,
             sort_order: vec![],
             options: options.clone(),
-            // TODO: Thread resolver session case-sensitivity into LakeSource::create_deleter.
+            // TODO: Thread resolver session case-sensitivity into row-level planning.
             read_case_sensitive: true,
         };
         let provider = build_iceberg_provider(ctx, source_info).await?;
@@ -239,37 +248,21 @@ impl LakeSource for IcebergLakeSource {
         );
         let table_source: Arc<dyn TableSource> = Arc::new(IcebergTableSource::new(provider));
         let raw_input_schema = table_source.schema().to_dfschema_ref()?;
-        let target_scan = LogicalPlan::TableScan(TableScan::try_new(
-            table_reference_from_parts(&table_name),
-            table_source,
-            None,
-            vec![],
-            None,
-        )?);
+        let target_scan = LogicalPlan::TableScan(
+            TableScanBuilder::new(table_reference_from_parts(&table_name), table_source).build()?,
+        );
 
-        let write_node = sail_logical_plan::merge::RowLevelWriteNode::new_delete(
+        let write_node = sail_logical_plan::row_level::RowLevelWriteNode::new_delete(
             Arc::new(target_scan),
             raw_input_schema,
             condition,
-            self.name().to_string(),
-            path,
-            table_name,
-            options,
-            lakehouse_table,
+            target,
         )
         .with_expected_snapshot_id(expected_snapshot_id);
 
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(write_node),
         }))
-    }
-
-    async fn create_merger(
-        &self,
-        _ctx: &dyn Session,
-        info: sail_common_datafusion::datasource::MergeInfo,
-    ) -> Result<LogicalPlan> {
-        crate::logical::merge::expand_merge_node(info)
     }
 
     async fn create_table_metadata(
@@ -488,8 +481,15 @@ impl UserDefinedLogicalNodeCore for IcebergWriteNode {
     }
 }
 
+fn validate_scoped_overwrite_table(mode: &PhysicalSinkMode, table_exists: bool) -> Result<()> {
+    if matches!(mode, PhysicalSinkMode::OverwritePartitions) && !table_exists {
+        return plan_err!("Iceberg dynamic partition overwrite requires an existing table");
+    }
+    Ok(())
+}
+
 pub(crate) async fn plan_iceberg_write(
-    ctx: &SessionState,
+    ctx: &dyn Session,
     logical_input: &LogicalPlan,
     physical_input: Arc<dyn ExecutionPlan>,
     node: &IcebergWriteNode,
@@ -511,9 +511,11 @@ pub(crate) async fn plan_iceberg_write(
         SinkMode::IgnoreIfExists => PhysicalSinkMode::IgnoreIfExists,
         SinkMode::Append => PhysicalSinkMode::Append,
         SinkMode::Overwrite => PhysicalSinkMode::Overwrite,
-        SinkMode::OverwriteIf { .. } | SinkMode::OverwritePartitions => {
-            return not_impl_err!("predicate or partition overwrite for Iceberg");
-        }
+        SinkMode::OverwriteIf { condition } => PhysicalSinkMode::OverwriteIf {
+            source: condition.source.clone(),
+            condition: Some(condition),
+        },
+        SinkMode::OverwritePartitions => PhysicalSinkMode::OverwritePartitions,
     };
     validate_iceberg_lakehouse_storage_access(lakehouse_table.as_ref())?;
     let metadata_location = metadata_location_from_options(&options);
@@ -556,9 +558,6 @@ pub(crate) async fn plan_iceberg_write(
         PhysicalSinkMode::IgnoreIfExists if table_exists => {
             return Ok(Arc::new(EmptyExec::new(physical_input.schema())));
         }
-        PhysicalSinkMode::OverwriteIf { .. } | PhysicalSinkMode::OverwritePartitions => {
-            return not_impl_err!("predicate or partition overwrite for Iceberg");
-        }
         _ => {}
     }
 
@@ -574,6 +573,36 @@ pub(crate) async fn plan_iceberg_write(
         .as_ref()
         .map(IcebergLakeSource::partition_columns_from_metadata)
         .transpose()?;
+    let expected_snapshot_id = table.as_ref().map(|table| {
+        table
+            .metadata()
+            .current_snapshot()
+            .map(Snapshot::snapshot_id)
+    });
+    validate_scoped_overwrite_table(&mode, table.is_some())?;
+    let removed_data_file_paths = if let PhysicalSinkMode::OverwriteIf {
+        condition: Some(condition),
+        ..
+    } = &mode
+    {
+        let table = table.as_ref().ok_or_else(|| {
+            DataFusionError::Plan(
+                "Iceberg predicate overwrite requires an existing table".to_string(),
+            )
+        })?;
+        if matches!(table.metadata().format_version, FormatVersion::V3) {
+            return not_impl_err!(
+                "Iceberg v3 predicate overwrite is not supported until row lineage is preserved"
+            );
+        }
+        let read_options = IcebergReadOptions::resolve(ctx, vec![])?;
+        table
+            .to_provider(&read_options)?
+            .predicate_overwrite_paths(ctx, &condition.expr)
+            .await?
+    } else {
+        Vec::new()
+    };
 
     if let Some(existing_partitions) = &existing_partition_columns
         && !partition_by.is_empty()
@@ -629,7 +658,22 @@ pub(crate) async fn plan_iceberg_write(
         write_context,
     };
 
-    let builder = IcebergPlanBuilder::new(physical_input, table_config, mode, physical_sort, ctx);
+    let mut builder = IcebergPlanBuilder::new(
+        physical_input,
+        table_config,
+        mode.clone(),
+        physical_sort,
+        ctx,
+    );
+    if matches!(mode, PhysicalSinkMode::OverwriteIf { .. }) {
+        builder = builder
+            .with_expected_snapshot_id(expected_snapshot_id)
+            .with_removed_data_file_paths(removed_data_file_paths);
+    } else if matches!(mode, PhysicalSinkMode::OverwritePartitions) {
+        builder = builder
+            .with_expected_snapshot_id(expected_snapshot_id)
+            .with_dynamic_partition_overwrite(true);
+    }
     builder.build().await
 }
 
@@ -1208,6 +1252,17 @@ mod tests {
             relation_provider.resolve_relation("unknown_relation"),
             LakeRelationResolution::Unrecognized
         );
+        Ok(())
+    }
+
+    #[test]
+    fn dynamic_partition_overwrite_missing_table_is_a_plan_error() -> Result<()> {
+        let Err(error) =
+            validate_scoped_overwrite_table(&PhysicalSinkMode::OverwritePartitions, false)
+        else {
+            return plan_err!("missing target must fail");
+        };
+        assert!(matches!(error, DataFusionError::Plan(_)));
         Ok(())
     }
 

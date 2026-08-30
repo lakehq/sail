@@ -14,6 +14,7 @@ use datafusion_common::{
     Constraints, DFSchema, DFSchemaRef, Result, not_impl_datafusion_err, plan_err,
 };
 use datafusion_expr::expr::Sort;
+use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{Expr, TableSource};
 
 use crate::catalog::{CatalogPartitionField, LakehouseExecutionContext};
@@ -245,13 +246,27 @@ impl SinkInfo {
 /// Information required to create a logical DELETE plan for a lake source.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd)]
 pub struct DeleteInfo {
-    pub table_name: Vec<String>,
-    pub path: String,
+    pub target: RowLevelTarget,
     pub condition: Option<ExprWithSource>,
-    pub lakehouse_table: Option<LakehouseExecutionContext>,
-    /// The layers of options for the delete operation.
-    /// A later layer can override earlier ones.
-    pub options: Vec<OptionLayer>,
+}
+
+/// Information required to create a logical UPDATE plan for a lake source.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct UpdateInfo {
+    pub target_plan: Arc<LogicalPlan>,
+    pub target: RowLevelTarget,
+    pub condition: Option<ExprWithSource>,
+    pub assignments: Vec<UpdateAssignment>,
+    pub input_schema: DFSchemaRef,
+    pub resolved_target_field_names: Vec<String>,
+    pub generated_column_exprs: Vec<(String, Expr)>,
+    pub check_constraint_exprs: Vec<DeltaCheckConstraintExpr>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct UpdateAssignment {
+    pub column: String,
+    pub value: Expr,
 }
 
 /// Information required to create a logical MERGE plan for a lake source.
@@ -267,7 +282,7 @@ pub struct MergeInfo {
 pub struct MergeIntoOptions {
     pub target_alias: Option<String>,
     pub source_alias: Option<String>,
-    pub target: MergeTargetInfo,
+    pub target: RowLevelTarget,
     pub with_schema_evolution: bool,
     pub case_sensitive: bool,
     /// Resolved logical schemas from analysis time (before any rewrites)
@@ -302,7 +317,7 @@ pub struct MergeIntoOptions {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
-pub struct MergeTargetInfo {
+pub struct RowLevelTarget {
     pub table_name: Vec<String>,
     pub format: String,
     pub location: String,
@@ -575,7 +590,12 @@ pub fn create_sort_order(
     sort_by: Vec<Sort>,
     schema: &DFSchema,
 ) -> Result<Option<LexRequirement>> {
-    let expr = create_physical_sort_exprs(sort_by.as_slice(), schema, session.execution_props())?;
+    let expr = create_physical_sort_exprs(
+        sort_by.as_slice(),
+        schema,
+        session.execution_props(),
+        &PhysicalPlanningContext::default(),
+    )?;
     let ordering = LexOrdering::new(expr);
     if let Some(ordering) = ordering {
         Ok(LexRequirement::new(
@@ -630,12 +650,11 @@ mod tests {
     use datafusion::arrow::array::RecordBatch;
     use datafusion::execution::TaskContext;
 
+    use super::*;
     use crate::lakeprocedure::{
         LakeProcedure, LakeProcedureAccess, LakeProcedureInvocation, LakeProcedureProvider,
     };
     use crate::lakesource::LakeSourceCapabilities;
-
-    use super::*;
 
     struct TestDataSource;
 

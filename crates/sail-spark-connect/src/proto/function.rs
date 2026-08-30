@@ -16,7 +16,8 @@ mod tests {
     use sail_common_datafusion::extension::SessionExtensionAccessor;
     use sail_common_datafusion::session::job::JobService;
     use sail_plan::resolve_and_execute_plan;
-    use sail_telemetry::telemetry::{ResourceOptions, init_telemetry};
+    use sail_telemetry::telemetry::init_telemetry;
+    use sail_telemetry::{ResourceKind, ResourceOptions};
     use serde::{Deserialize, Serialize};
 
     use crate::error::{SparkError, SparkResult};
@@ -64,7 +65,12 @@ mod tests {
         let runtime = RuntimeManager::try_new(&config.runtime)?;
         let handle = runtime.handle();
         handle.primary().block_on(async {
-            init_telemetry(&config.telemetry, ResourceOptions { kind: "server" })
+            init_telemetry(
+                &config.telemetry,
+                ResourceOptions {
+                    kind: ResourceKind::Server,
+                },
+            )
         })?;
         let mut system = ActorSystem::new();
         // The driver gateway is initialized before the session manager in cluster mode, so the

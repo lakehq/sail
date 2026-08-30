@@ -232,9 +232,9 @@ data:
     initial_physical_plan_with_stats:
     ProjectionExec: expr=[count(Int64(1))@0 as #3], statistics=[Rows=Exact(1), Bytes=Exact(<bytes>), [(Col[0]:)]]
       AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))], statistics=[Rows=Exact(1), Bytes=Inexact(<bytes>), [(Col[0]:)]]
-        AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:)]]
+        AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))], statistics=[Rows=Exact(1), Bytes=Inexact(<bytes>), [(Col[0]:)]]
           ProjectionExec: expr=[], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), []]
-            FilterExec: value@0 > 100, statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int32(101)) Max=Inexact(Int32(300)) Null=Inexact(0))]]
+            FilterExec: value@0 > 100, statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int32(101)) Max=Inexact(Int32(300)) Null=Exact(0))]]
               ProjectionExec: expr=[value@0 as value], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int32(100)) Max=Inexact(Int32(300)) Null=Inexact(0))]]
                 DeltaScanByAddsExec(table_path=file://<tmp>/dv_explain/, version=1, projection=Some([2]), limit=None, pushdown=true), statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int32(100)) Max=Inexact(Int32(300)) Null=Inexact(0))]]
                   DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(1), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
@@ -245,9 +245,9 @@ data:
       AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))], schema=[count(Int64(1)):Int64]
         AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))], schema=[count(Int64(1))[count]:Int64]
           ProjectionExec: expr=[], schema=[]
-            FilterExec: value@0 > 100, schema=[value:Int32;N]
-              ProjectionExec: expr=[value@0 as value], schema=[value:Int32;N]
-                DeltaScanByAddsExec(table_path=file://<tmp>/dv_explain/, version=1, projection=Some([2]), limit=None, pushdown=true), schema=[value:Int32;N]
+            FilterExec: value@0 > 100, schema=[value:Int32]
+              ProjectionExec: expr=[value@0 as value], schema=[value:Int32]
+                DeltaScanByAddsExec(table_path=file://<tmp>/dv_explain/, version=1, projection=Some([2]), limit=None, pushdown=true), schema=[value:Int32]
                   DataSourceExec: partitions=1, partition_sizes=[1], schema=[action:Union(Dense, 0: ("add": non-null Struct("path": non-null Utf8, "partitionValues": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "size": non-null Int64, "modificationTime": non-null Int64, "dataChange": non-null Boolean, "stats": Utf8, "tags": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "deletionVector": Struct("storageType": non-null Utf8, "pathOrInlineDv": non-null Utf8, "offset": Int32, "sizeInBytes": non-null Int32, "cardinality": non-null Int64), "baseRowId": Int64, "defaultRowCommitVersion": Int64, "clusteringProvider": Utf8)), 1: ("remove": non-null Struct("path": non-null Utf8, "dataChange": non-null Boolean, "deletionTimestamp": Int64, "extendedFileMetadata": Boolean, "partitionValues": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "size": Int64, "stats": Utf8, "tags": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "deletionVector": Struct("storageType": non-null Utf8, "pathOrInlineDv": non-null Utf8, "offset": Int32, "sizeInBytes": non-null Int32, "cardinality": non-null Int64), "baseRowId": Int64, "defaultRowCommitVersion": Int64)), 2: ("protocol": non-null Struct("minReaderVersion": non-null Int32, "minWriterVersion": non-null Int32, "readerFeatures": List(Utf8, field: 'element'), "writerFeatures": List(Utf8, field: 'element'))), 3: ("metadata": non-null Struct("id": non-null Utf8, "name": Utf8, "description": Utf8, "format": non-null Struct("provider": non-null Utf8, "options": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted)), "schemaString": non-null Utf8, "partitionColumns": non-null List(Utf8, field: 'element'), "createdTime": Int64, "configuration": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted))), 4: ("commit_meta": non-null Struct("commit_row_count": non-null UInt64, "operation_json": Utf8, "operation_metrics_json": Utf8)))]
 
 
@@ -275,7 +275,10 @@ data:
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
 
-    physical_plan after EnforceDistribution:
+    physical_plan after WindowTopN:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[count(Int64(1))@0 as #3]
         AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
@@ -292,13 +295,7 @@ data:
     physical_plan after CombinePartialFinalAggregate:
     SAME TEXT AS ABOVE
 
-    physical_plan after EnforceSorting:
-    SAME TEXT AS ABOVE
-
     physical_plan after OptimizeAggregateOrder:
-    SAME TEXT AS ABOVE
-
-    physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
     physical_plan after ProjectionPushdown:
@@ -447,7 +444,7 @@ data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#3@0 as id, #4@1 as name, #5@2 as value]
-      SortExec: expr=[#3@0 ASC], preserve_partitioning=[false]
-        ProjectionExec: expr=[id@0 as #3, name@1 as #4, value@2 as #5]
+      ProjectionExec: expr=[id@0 as #3, name@1 as #4, value@2 as #5]
+        SortExec: expr=[id@0 ASC], preserve_partitioning=[false]
           DeltaScanByAddsExec(table_path=file://<tmp>/dv_explain/, version=1, projection=Some([0, 1, 2]), limit=None, pushdown=false)
             DataSourceExec: partitions=1, partition_sizes=[1]

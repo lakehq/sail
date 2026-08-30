@@ -1,27 +1,27 @@
 use std::fmt;
-use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::io::{BufReader, Read};
 use std::sync::Arc;
-use std::task::Poll;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::csv;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::arrow::error::ArrowError;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::datasource::file_format::csv::CsvDecoder;
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::projection::ProjectionExprs;
-use datafusion::physical_plan::DisplayFormatType;
 use datafusion::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
+use datafusion::physical_plan::{DisplayFormatType, apply_expression_roots};
 use datafusion_common::config::CsvOptions;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, exec_datafusion_err};
+use datafusion_datasource::boundary_stream::AlignedBoundaryStream;
 use datafusion_datasource::decoder::{DecoderDeserializer, deserialize_stream};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
-use datafusion_datasource::{
-    FileRange, PartitionedFile, RangeCalculation, TableSchema, calculate_range,
-};
+use datafusion_datasource::{FileRange, PartitionedFile, TableSchema};
 use futures::{StreamExt, TryStreamExt};
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
 
@@ -208,6 +208,13 @@ impl FileSource for CsvSource {
         Some(&self.projection.source)
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        apply_expression_roots(self.projection.source.iter(), f)
+    }
+
     fn file_type(&self) -> &str {
         "csv"
     }
@@ -258,36 +265,46 @@ impl FileOpener for CsvOpener {
         let baseline_metrics = BaselineMetrics::new(&self.config.metrics, self.partition);
 
         Ok(Box::pin(async move {
-            let calculated_range =
-                calculate_range(&partitioned_file, &object_store, terminator).await?;
-            let range = match calculated_range {
-                RangeCalculation::Range(None) => None,
-                RangeCalculation::Range(Some(range)) => Some(range.into()),
-                RangeCalculation::TerminateEarly => {
-                    return Ok(futures::stream::poll_fn(move |_| Poll::Ready(None)).boxed());
-                }
-            };
-            let result = object_store
-                .get_opts(
-                    &partitioned_file.object_meta.location,
-                    GetOptions {
-                        range,
-                        ..Default::default()
-                    },
+            let file_size = partitioned_file.object_meta.size;
+            let location = partitioned_file.object_meta.location;
+
+            if let Some(file_range) = partitioned_file.range.as_ref() {
+                let raw_start: u64 = file_range.start.try_into().map_err(|_| {
+                    exec_datafusion_err!(
+                        "Expected start range to fit in u64, got {}",
+                        file_range.start
+                    )
+                })?;
+                let raw_end: u64 = file_range.end.try_into().map_err(|_| {
+                    exec_datafusion_err!("Expected end range to fit in u64, got {}", file_range.end)
+                })?;
+
+                let aligned_stream = AlignedBoundaryStream::new(
+                    Arc::clone(&object_store),
+                    location.clone(),
+                    raw_start,
+                    raw_end,
+                    file_size,
+                    terminator.unwrap_or(b'\n'),
                 )
+                .await?
+                .map_err(DataFusionError::from);
+                let decoder = config.builder()?.build_decoder();
+                let input = file_compression_type.convert_stream(aligned_stream.boxed())?;
+                let input = decode_utf8_lossy_stream(input).fuse();
+                let stream =
+                    deserialize_stream(input, DecoderDeserializer::new(CsvDecoder::new(decoder)));
+                return Ok(stream.map_err(DataFusionError::from).boxed());
+            }
+
+            let result = object_store
+                .get_opts(&location, GetOptions::default())
                 .await?;
 
             match result.payload {
                 #[cfg(not(target_arch = "wasm32"))]
-                GetResultPayload::File(mut file, _) => {
-                    let decompressed = if partitioned_file.range.is_none() {
-                        file_compression_type.convert_read(file)?
-                    } else {
-                        file.seek(SeekFrom::Start(result.range.start as _))?;
-                        file_compression_type.convert_read(
-                            file.take((result.range.end - result.range.start) as u64),
-                        )?
-                    };
+                GetResultPayload::File(file, _) => {
+                    let decompressed = file_compression_type.convert_read(file)?;
                     let mut reader = config.open(LossyUtf8Reader::new(decompressed))?;
                     let iterator = std::iter::from_fn(move || {
                         let mut timer = baseline_metrics.elapsed_compute().timer();

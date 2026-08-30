@@ -5,10 +5,12 @@ use std::task::{Context, Poll};
 use datafusion::arrow::array::{RecordBatch, StringArray};
 use datafusion::arrow::compute::concat_batches;
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion::physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion::physical_plan::{
-    DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    ChildrenPropertiesMode, DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    ReplaceChildrenOptions,
 };
 use datafusion_common::{DataFusionError, Result, exec_err, internal_datafusion_err};
 use futures::{Stream, StreamExt};
@@ -27,6 +29,9 @@ impl SchemaPivotExec {
         let partitioning = match input.output_partitioning() {
             Partitioning::RoundRobinBatch(size) => Partitioning::RoundRobinBatch(*size),
             Partitioning::Hash(_phy_exprs, size) => Partitioning::UnknownPartitioning(*size),
+            Partitioning::Range(range) => {
+                Partitioning::UnknownPartitioning(range.partition_count())
+            }
             Partitioning::UnknownPartitioning(size) => Partitioning::UnknownPartitioning(*size),
         };
         let properties = Arc::new(PlanProperties::new(
@@ -83,17 +88,42 @@ impl ExecutionPlan for SchemaPivotExec {
         vec![&self.input]
     }
 
-    fn with_new_children(
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input = children
             .one()
             .map_err(|_| internal_datafusion_err!("SchemaPivotExec should have one child"))?;
-        Ok(Arc::new(Self {
-            input,
-            ..self.as_ref().clone()
-        }))
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
+                input,
+                ..self.as_ref().clone()
+            })),
+            ChildrenPropertiesMode::Recompute => Ok(Arc::new(Self::new(
+                input,
+                self.names.clone(),
+                self.schema.clone(),
+            ))),
+        }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(

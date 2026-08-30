@@ -4,7 +4,8 @@ use std::sync::Arc;
 use log::info;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeManager;
-use sail_telemetry::telemetry::{ResourceOptions, init_telemetry, shutdown_telemetry};
+use sail_telemetry::telemetry::{init_telemetry, shutdown_telemetry};
+use sail_telemetry::{ResourceKind, ResourceOptions};
 use tokio::net::TcpListener;
 
 async fn shutdown() {
@@ -16,7 +17,7 @@ pub fn run_flight_server(ip: IpAddr, port: u16) -> Result<(), Box<dyn std::error
     let config = Arc::new(AppConfig::load()?);
 
     let resource = ResourceOptions {
-        kind: "flight-server",
+        kind: ResourceKind::FlightServer,
     };
 
     let runtime_manager = RuntimeManager::try_new(&config.runtime)?;

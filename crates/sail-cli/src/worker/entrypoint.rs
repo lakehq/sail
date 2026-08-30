@@ -3,14 +3,17 @@ use std::sync::Arc;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeManager;
 use sail_session::session_factory::{SessionFactory, WorkerSessionFactory};
-use sail_telemetry::telemetry::{ResourceOptions, init_telemetry, shutdown_telemetry};
+use sail_telemetry::telemetry::{init_telemetry, shutdown_telemetry};
+use sail_telemetry::{ResourceKind, ResourceOptions};
 
 pub fn run_worker() -> Result<(), Box<dyn std::error::Error>> {
     let config = Arc::new(AppConfig::load()?);
     let runtime = RuntimeManager::try_new(&config.runtime)?;
 
     runtime.handle().primary().block_on(async {
-        let resource = ResourceOptions { kind: "worker" };
+        let resource = ResourceOptions {
+            kind: ResourceKind::Worker,
+        };
         init_telemetry(&config.telemetry, resource)
     })?;
 

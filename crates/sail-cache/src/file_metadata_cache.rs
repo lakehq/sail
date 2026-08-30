@@ -1,10 +1,8 @@
-use std::collections::HashMap;
 use std::time::Duration;
 
-use datafusion::execution::cache::CacheAccessor;
-use datafusion::execution::cache::cache_manager::{
-    CachedFileMetadataEntry, FileMetadataCache, FileMetadataCacheEntry,
-};
+use datafusion::common::{HashMap, Result, TableReference};
+use datafusion::execution::cache::cache_manager::CachedFileMetadataEntry;
+use datafusion::execution::cache::{Cache as DataFusionCache, CacheEntryInfo, CacheValue};
 use log::debug;
 use moka::policy::EvictionPolicy;
 use moka::sync::Cache;
@@ -12,6 +10,7 @@ use object_store::path::Path;
 
 pub struct MokaFileMetadataCache {
     size_limit: Option<u64>,
+    ttl: Option<Duration>,
     metadata: Cache<Path, CachedFileMetadataEntry>,
 }
 
@@ -21,8 +20,8 @@ impl MokaFileMetadataCache {
     pub fn new(ttl: Option<u64>, size_limit: Option<u64>) -> Self {
         let mut builder = Cache::builder().eviction_policy(EvictionPolicy::lru());
 
+        let ttl = ttl.map(Duration::from_secs);
         if let Some(ttl) = ttl {
-            let ttl = Duration::from_secs(ttl);
             debug!("Setting TTL for {} to {ttl:?}", Self::NAME);
             builder = builder.time_to_live(ttl);
         }
@@ -42,57 +41,29 @@ impl MokaFileMetadataCache {
 
         Self {
             size_limit,
+            ttl,
             metadata: builder.build(),
         }
     }
 }
 
-impl FileMetadataCache for MokaFileMetadataCache {
-    fn cache_limit(&self) -> usize {
-        self.size_limit
-            .map(|size| size as usize)
-            .unwrap_or(usize::MAX)
-    }
-
-    fn update_cache_limit(&self, _limit: usize) {
-        // TODO: support dynamic update of cache limit
-    }
-
-    fn list_entries(&self) -> HashMap<Path, FileMetadataCacheEntry> {
-        self.metadata
-            .iter()
-            .map(|(path, entry)| {
-                (
-                    path.as_ref().clone(),
-                    FileMetadataCacheEntry {
-                        object_meta: entry.meta.clone(),
-                        size_bytes: entry.file_metadata.memory_size(),
-                        // TODO: get hits from the cache
-                        hits: 0,
-                        extra: entry.file_metadata.extra_info(),
-                    },
-                )
-            })
-            .collect()
-    }
-}
-
-impl CacheAccessor<Path, CachedFileMetadataEntry> for MokaFileMetadataCache {
-    fn get(&self, k: &Path) -> Option<CachedFileMetadataEntry> {
-        self.metadata.get(k)
+impl DataFusionCache<Path, CachedFileMetadataEntry> for MokaFileMetadataCache {
+    fn get(&self, key: &Path) -> Option<CachedFileMetadataEntry> {
+        self.metadata.get(key)
     }
 
     fn put(&self, key: &Path, value: CachedFileMetadataEntry) -> Option<CachedFileMetadataEntry> {
+        let previous = self.metadata.get(key);
         self.metadata.insert(key.clone(), value);
-        None
+        previous
     }
 
-    fn remove(&self, k: &Path) -> Option<CachedFileMetadataEntry> {
-        self.metadata.remove(k)
+    fn remove(&self, key: &Path) -> Option<CachedFileMetadataEntry> {
+        self.metadata.remove(key)
     }
 
-    fn contains_key(&self, k: &Path) -> bool {
-        self.metadata.contains_key(k)
+    fn contains_key(&self, key: &Path) -> bool {
+        self.metadata.contains_key(key)
     }
 
     fn len(&self) -> usize {
@@ -105,6 +76,45 @@ impl CacheAccessor<Path, CachedFileMetadataEntry> for MokaFileMetadataCache {
 
     fn name(&self) -> String {
         Self::NAME.to_string()
+    }
+
+    fn cache_limit(&self) -> usize {
+        self.size_limit
+            .map(|size| size as usize)
+            .unwrap_or(usize::MAX)
+    }
+
+    fn update_cache_limit(&self, _limit: usize) {
+        // TODO: support dynamic update of cache limit
+    }
+
+    fn cache_ttl(&self) -> Option<Duration> {
+        self.ttl
+    }
+
+    fn update_cache_ttl(&self, _ttl: Option<Duration>) {
+        // TODO: support dynamic update of cache ttl
+    }
+
+    fn drop_table_entries(&self, _table_ref: &TableReference) -> Result<()> {
+        Ok(())
+    }
+
+    fn list_entries(&self) -> HashMap<Path, CacheEntryInfo<CachedFileMetadataEntry>> {
+        self.metadata
+            .iter()
+            .map(|(path, entry)| {
+                (
+                    path.as_ref().clone(),
+                    CacheEntryInfo {
+                        size_bytes: entry.size(),
+                        value: entry,
+                        hits: 0,
+                        expires: None,
+                    },
+                )
+            })
+            .collect()
     }
 }
 

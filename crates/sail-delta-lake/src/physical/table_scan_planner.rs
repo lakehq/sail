@@ -1,12 +1,14 @@
 use std::sync::Arc;
 
+use datafusion::catalog::Session;
 use datafusion::common::Result;
-use datafusion::execution::SessionState;
 use datafusion::logical_expr::expr_rewriter::unnormalize_cols;
+use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::logical_expr::{LogicalPlan, TableScan, UserDefinedLogicalNode};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
-use sail_logical_plan::merge::{MergeCardinalityCheckNode, RowLevelWriteNode};
+use sail_logical_plan::merge::MergeCardinalityCheckNode;
+use sail_logical_plan::row_level::RowLevelWriteNode;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 
 use crate::lake_source::{DeltaWriteNode, plan_delta_write};
@@ -26,7 +28,8 @@ impl ExtensionPlanner for DeltaPhysicalPlanner {
         node: &dyn UserDefinedLogicalNode,
         logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
-        session_state: &SessionState,
+        session: &dyn Session,
+        _planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         if let Some(node) = node.as_any().downcast_ref::<DeltaWriteNode>() {
             let [logical_input] = logical_inputs else {
@@ -39,7 +42,7 @@ impl ExtensionPlanner for DeltaPhysicalPlanner {
                     "DeltaWriteNode requires exactly one physical input"
                 );
             };
-            return plan_delta_write(session_state, logical_input, physical_input.clone(), node)
+            return plan_delta_write(session, logical_input, physical_input.clone(), node)
                 .await
                 .map(Some);
         }
@@ -49,7 +52,7 @@ impl ExtensionPlanner for DeltaPhysicalPlanner {
                 return Ok(None);
             }
 
-            let plan = create_row_level_write_physical_plan(session_state, planner, node).await?;
+            let plan = create_row_level_write_physical_plan(session, planner, node).await?;
             return Ok(Some(plan));
         }
 
@@ -75,7 +78,8 @@ impl ExtensionPlanner for DeltaPhysicalPlanner {
         &self,
         _planner: &dyn PhysicalPlanner,
         scan: &TableScan,
-        session_state: &SessionState,
+        session: &dyn Session,
+        _planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         let Some(source) = scan.source.downcast_ref::<DeltaTableSource>() else {
             return Ok(None);
@@ -112,7 +116,7 @@ impl ExtensionPlanner for DeltaPhysicalPlanner {
             }
         };
         let plan = plan_delta_scan(
-            session_state,
+            session,
             snapshot,
             log_store,
             config,

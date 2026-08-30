@@ -5,7 +5,9 @@ use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::catalog::TableFunctionArgs;
 use datafusion::datasource::{TableProvider, provider_as_source, source_as_provider};
 use datafusion_common::{DFSchema, ScalarValue, TableReference};
-use datafusion_expr::{Expr, LogicalPlan, SubqueryAlias, TableScan, TableSource, UNNAMED_TABLE};
+use datafusion_expr::{
+    Expr, LogicalPlan, SubqueryAlias, TableScanBuilder, TableSource, UNNAMED_TABLE,
+};
 use rand::{RngExt, rng};
 use sail_catalog::error::CatalogError;
 use sail_catalog::lakehouse::TableAccessPurpose;
@@ -621,13 +623,13 @@ impl PlanResolver<'_> {
             table_source
         };
 
-        let table_scan = LogicalPlan::TableScan(TableScan::try_new(
-            table_reference,
-            table_source,
-            projection,
-            filters,
-            fetch,
-        )?);
+        let table_scan = LogicalPlan::TableScan(
+            TableScanBuilder::new(table_reference, table_source)
+                .with_projection(projection)
+                .with_filters(filters)
+                .with_fetch(fetch)
+                .build()?,
+        );
 
         if !has_duplicates {
             let names = state.register_fields(table_scan.schema().fields());

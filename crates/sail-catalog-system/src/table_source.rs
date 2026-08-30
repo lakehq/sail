@@ -3,7 +3,7 @@ use datafusion::common::Result;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableSource};
 use sail_common_datafusion::system::catalog::SystemTable;
 
-use crate::predicate::is_column_logical_predicate;
+use crate::predicate::{is_column_logical_predicate, is_map_value_logical_predicate};
 
 pub struct SystemTableSource {
     schema: SchemaRef,
@@ -31,9 +31,10 @@ impl TableSource for SystemTableSource {
         filters: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
         let columns: &[&str] = match self.table {
-            SystemTable::Jobs | SystemTable::Stages | SystemTable::Tasks => {
-                &["session_id", "job_id"]
-            }
+            SystemTable::Jobs => &["session_id", "job_id"],
+            SystemTable::Metrics => &["timestamp", "name"],
+            SystemTable::Stages => &["session_id", "job_id", "stage"],
+            SystemTable::Tasks => &["session_id", "job_id", "stage", "partition", "attempt"],
             SystemTable::Options => &["key"],
             SystemTable::Sessions => &["session_id"],
             SystemTable::Workers => &["session_id", "worker_id"],
@@ -41,6 +42,11 @@ impl TableSource for SystemTableSource {
         filters
             .iter()
             .map(|filter| {
+                if self.table == SystemTable::Metrics
+                    && is_map_value_logical_predicate(filter, "attributes")?
+                {
+                    return Ok(TableProviderFilterPushDown::Exact);
+                }
                 for col in columns {
                     if is_column_logical_predicate(filter, col)? {
                         return Ok(TableProviderFilterPushDown::Exact);
