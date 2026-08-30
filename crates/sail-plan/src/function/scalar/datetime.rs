@@ -1066,7 +1066,11 @@ fn parse_window_spec(args: &[Expr]) -> PlanResult<WindowSpec> {
             "The `abs(start_time)`({start_time}L) must be < the `slide_duration`({slide_duration}L)."
         )));
     }
-    let overlapping = (window_duration + slide_duration - 1) / slide_duration;
+    // Not `(a + b - 1) / b`: a gap past half of `i64` microseconds overflows
+    // the addition, and with release wrapping the negative ceiling passed this
+    // check and the query answered empty. Both operands are checked positive,
+    // so this form is the same ceiling with no addition to overflow.
+    let overlapping = (window_duration - 1) / slide_duration + 1;
     if overlapping > MAX_OVERLAPPING_WINDOWS {
         return Err(PlanError::invalid(format!(
             "window: ceil(windowDuration / slideDuration) = {overlapping} exceeds the limit of {MAX_OVERLAPPING_WINDOWS}"
@@ -1503,4 +1507,21 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("year", F::udf(SparkYear::new())),
         ("years", F::unary(years)),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A gap past half of `i64` microseconds used to overflow the overlap
+    /// ceiling; Spark answers such a window.
+    #[test]
+    fn window_spec_takes_a_huge_gap() -> PlanResult<()> {
+        let time = Expr::Literal(ScalarValue::TimestampMicrosecond(Some(0), None), None);
+        let gap = Expr::Literal(ScalarValue::Utf8(Some("106751991 day".to_string())), None);
+        let spec = parse_window_spec(&[time, gap])?;
+        assert_eq!(spec.window_duration, 106_751_991 * 86_400_000_000);
+        assert_eq!(spec.slide_duration, spec.window_duration);
+        Ok(())
+    }
 }
