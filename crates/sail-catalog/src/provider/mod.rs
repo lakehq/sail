@@ -79,11 +79,6 @@ pub trait CatalogProvider: Send + Sync {
         Vec::new()
     }
 
-    /// Lake sources whose format-owned procedures are exposed through this catalog.
-    fn lake_procedure_sources(&self) -> Vec<String> {
-        Vec::new()
-    }
-
     async fn resolve_lakehouse_table(
         &self,
         database: &Namespace,

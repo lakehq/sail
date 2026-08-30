@@ -71,6 +71,7 @@ message ExtendedPhysicalPlanNode {
     IcebergMergeMetadataExecNode iceberg_merge_metadata = 56;
     IcebergEqualityDeleteWriterExecNode iceberg_equality_delete_writer = 57;
     PartitionedTopKExecNode partitioned_top_k = 58;
+    LakeProcedureExecNode lake_procedure = 59;
   }
 }
 
@@ -1149,6 +1150,13 @@ message CatalogCommandExecNode {
   bytes schema = 1;
   // JSON-encoded CatalogCommand.
   string command = 2;
+}
+
+message LakeProcedureExecNode {
+  // Schema for the procedure output.
+  bytes schema = 1;
+  // JSON-encoded LakeProcedureCall.
+  string call = 2;
 }
 
 message BarrierExecNode {

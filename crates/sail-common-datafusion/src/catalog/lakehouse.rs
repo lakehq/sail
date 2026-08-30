@@ -26,6 +26,14 @@ impl LakehouseFormat {
             Self::Other(format.to_string())
         }
     }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Delta => "delta",
+            Self::Iceberg => "iceberg",
+            Self::Other(format) => format,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize, Default)]
@@ -233,6 +241,51 @@ pub struct LakehouseExecutionContext {
     pub capability_fingerprint: CapabilityFingerprint,
 }
 
+/// Stable catalog/table binding captured in a logical plan.
+///
+/// Operation-scoped access and REST sessions are intentionally excluded and
+/// must be reacquired immediately before execution.
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+pub struct LakehouseTableBinding {
+    pub catalog_provider_id: CatalogProviderId,
+    pub catalog_table: Vec<String>,
+    pub table_identity: CatalogTableIdentity,
+    pub operation: LakehouseOperation,
+    pub format: LakehouseFormat,
+    pub authority: LakehouseAuthority,
+    pub pointer: MetadataPointerAuthority,
+    pub commit: CommitAuthority,
+    pub scan: ScanAuthority,
+    pub versioned_catalog: Option<VersionedCatalogContext>,
+    pub cross_format: Option<CrossFormatMetadata>,
+    pub governance: Option<GovernanceContext>,
+    pub capability_fingerprint: CapabilityFingerprint,
+}
+
+impl LakehouseTableBinding {
+    pub fn from_execution(context: &LakehouseExecutionContext) -> Self {
+        Self {
+            catalog_provider_id: context.catalog_provider_id.clone(),
+            catalog_table: context.catalog_table.clone(),
+            table_identity: context.table_identity.clone(),
+            operation: context.operation,
+            format: context.format.clone(),
+            authority: context.authority.clone(),
+            pointer: context.pointer,
+            commit: context.commit,
+            scan: context.scan,
+            versioned_catalog: context.versioned_catalog.clone(),
+            cross_format: context.cross_format.clone(),
+            governance: context.governance.clone(),
+            capability_fingerprint: context.capability_fingerprint.clone(),
+        }
+    }
+
+    pub fn matches_execution(&self, context: &LakehouseExecutionContext) -> bool {
+        self == &Self::from_execution(context)
+    }
+}
+
 impl LakehouseExecutionContext {
     pub fn catalog_table_context(
         catalog_provider_id: CatalogProviderId,
@@ -311,6 +364,45 @@ pub struct AccessSessionKey(pub String);
 #[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stable_binding_excludes_operation_scoped_sessions() {
+        let mut context = LakehouseExecutionContext::catalog_table_context(
+            CatalogProviderId("catalog".to_string()),
+            vec![
+                "catalog".to_string(),
+                "default".to_string(),
+                "items".to_string(),
+            ],
+            CatalogTableIdentity {
+                table_id: Some("items-id".to_string()),
+                table_uri: Some("s3://bucket/items".to_string()),
+            },
+            LakehouseOperation::Maintenance,
+            LakehouseFormat::Iceberg,
+            LakehouseAuthority::CatalogAuthoritative {
+                lifecycle: TableLifecycle::External,
+                pointer: MetadataPointerAuthority::IcebergRest,
+                commit: CommitAuthority::IcebergRestCommit,
+            },
+            ScanAuthority::ClientLakeSource,
+        );
+        let binding = LakehouseTableBinding::from_execution(&context);
+
+        context.access_session = Some(TableAccessSessionRef {
+            fingerprint: "access".to_string(),
+        });
+        context.rest_session = Some(IcebergRestTableSessionRef {
+            fingerprint: "rest".to_string(),
+            scan_planning_mode: Some("client".to_string()),
+            storage_credential_count: 1,
+            remote_signing_enabled: false,
+        });
+        assert!(binding.matches_execution(&context));
+
+        context.capability_fingerprint = CapabilityFingerprint("changed".to_string());
+        assert!(!binding.matches_execution(&context));
+    }
 
     #[test]
     fn iceberg_rest_session_ref_decodes_legacy_fingerprint_only_json() {

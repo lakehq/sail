@@ -16,6 +16,7 @@ use sail_common::spec;
 use sail_common_datafusion::catalog::{LakehouseOperation, TableColumnStatus, TableKind};
 use sail_common_datafusion::datasource::{DataSourceRegistry, OptionLayer, SourceInfo};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::lakeformat::LakeFormatRegistry;
 use sail_common_datafusion::lakerelation::{
     LakeRelationAccess, LakeRelationResolution, LakeRelationTimeTravel,
 };
@@ -93,6 +94,7 @@ impl PlanResolver<'_> {
         let reference: Vec<String> = name.clone().into();
         let manager = self.ctx.extension::<CatalogManager>()?;
         let data_source_registry = self.ctx.extension::<DataSourceRegistry>()?;
+        let lake_format_registry = self.ctx.extension::<LakeFormatRegistry>()?;
         let (status, catalog_reference, lake_relation) =
             match manager.get_table_or_view(&reference).await {
                 Ok(status) => (status, reference.clone(), None),
@@ -111,13 +113,10 @@ impl PlanResolver<'_> {
                     let TableKind::Table { format, .. } = &base_status.kind else {
                         return Err(error.into());
                     };
-                    let Some(lake_source) =
-                        data_source_registry.get_lake_source_if_supported(format)?
-                    else {
+                    let Some(plugin) = lake_format_registry.get_if_registered(format)? else {
                         return Err(error.into());
                     };
-                    let Some(relation_provider) = lake_source.capabilities().relation_provider
-                    else {
+                    let Some(relation_provider) = plugin.relation_provider() else {
                         return Err(error.into());
                     };
                     match relation_provider.resolve_relation(candidate_name) {

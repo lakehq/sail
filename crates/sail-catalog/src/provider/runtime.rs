@@ -113,10 +113,6 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
         self.inner.lakehouse_capabilities()
     }
 
-    fn lake_procedure_sources(&self) -> Vec<String> {
-        self.inner.lake_procedure_sources()
-    }
-
     async fn resolve_lakehouse_table(
         &self,
         database: &Namespace,

@@ -31,13 +31,14 @@ use sail_iceberg::physical_plan::IcebergCommitExec;
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::coalesce::CoalesceExec;
+use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::remote_checkpoint::RemoteCheckpointCommitExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::job_graph::{
     InputMode, JobGraph, JobGraphOptions, OutputDistribution, OutputMode, Stage, StageInput,
-    TaskPlacement,
+    TaskPlacement, TaskRetryPolicy,
 };
 use crate::plan::{ShuffleConsumption, StageInputExec};
 use crate::shuffle::ShuffleBackendKind;
@@ -56,6 +57,7 @@ impl JobGraph {
         };
         let last = build_job_graph(plan, PartitionUsage::Once, &mut graph)?.plan;
         let (last, inputs) = rewrite_inputs(last)?;
+        let retry_policy = task_retry_policy(&last);
         graph.stages.push(Stage {
             inputs,
             plan: last,
@@ -63,6 +65,7 @@ impl JobGraph {
             mode: OutputMode::Pipelined,
             distribution: OutputDistribution::RoundRobinBatch { channels: 1 },
             placement: TaskPlacement::Worker,
+            retry_policy,
         });
         Ok(graph)
     }
@@ -465,6 +468,7 @@ fn plan_job_graph_stages(
         PlannedSubtree::without_pending_scalar_subquery_expr(plan)
     } else if subtree.plan.is::<SystemTableExec>()
         || subtree.plan.is::<CatalogCommandExec>()
+        || subtree.plan.is::<LakeProcedureExec>()
         || subtree.plan.is::<FileDeleteExec>()
         || subtree.plan.is::<DeltaCommitExec>()
         || subtree.plan.is::<IcebergCommitExec>()
@@ -616,6 +620,7 @@ fn is_driver_stage_plan(plan: &Arc<dyn ExecutionPlan>) -> bool {
 
     plan.is::<SystemTableExec>()
         || plan.is::<CatalogCommandExec>()
+        || plan.is::<LakeProcedureExec>()
         || plan.is::<FileDeleteExec>()
         || plan.is::<DeltaCommitExec>()
         || plan.is::<IcebergCommitExec>()
@@ -922,6 +927,7 @@ fn push_stage(
     mode: OutputMode,
 ) -> ExecutionResult<usize> {
     let (plan, inputs) = rewrite_inputs(plan)?;
+    let retry_policy = task_retry_policy(&plan);
     let stage = Stage {
         inputs,
         plan,
@@ -929,6 +935,7 @@ fn push_stage(
         mode,
         distribution,
         placement,
+        retry_policy,
     };
     let index = graph.stages.len();
     graph.stages.push(stage);
@@ -963,15 +970,40 @@ fn create_driver_stage(
     scalar_context: Option<ScalarSubqueryContext<'_>>,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
     let plan = wrap_pending_scalar_subqueries(plan, scalar_context);
+    let mode = if matches!(task_retry_policy(&plan), TaskRetryPolicy::Never) {
+        OutputMode::Blocking
+    } else {
+        OutputMode::Pipelined
+    };
     let stage = push_stage(
         plan,
         graph,
         OutputDistribution::RoundRobinBatch { channels: 1 },
         TaskPlacement::Driver,
-        OutputMode::Pipelined,
+        mode,
     )?;
     let properties = graph.stages[stage].plan.properties().clone();
     Ok(stage_input_exec(stage, InputMode::Forward, properties))
+}
+
+fn task_retry_policy(plan: &Arc<dyn ExecutionPlan>) -> TaskRetryPolicy {
+    if let Some(procedure) = plan.downcast_ref::<LakeProcedureExec>()
+        && matches!(
+            procedure.call().invocation.procedure.retry_policy,
+            sail_common_datafusion::lakeprocedure::LakeProcedureRetryPolicy::Forbidden
+        )
+    {
+        return TaskRetryPolicy::Never;
+    }
+    if plan
+        .children()
+        .into_iter()
+        .any(|child| matches!(task_retry_policy(child), TaskRetryPolicy::Never))
+    {
+        TaskRetryPolicy::Never
+    } else {
+        TaskRetryPolicy::Default
+    }
 }
 
 #[cfg(test)]
@@ -1003,14 +1035,22 @@ mod tests {
     use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties, displayable};
     use sail_catalog::command::CatalogCommand;
     use sail_celeborn::common::PartitionSplitMode;
+    use sail_common_datafusion::lakeformat::LakeFormatId;
+    use sail_common_datafusion::lakeprocedure::{
+        LakeProcedure, LakeProcedureAccess, LakeProcedureCall, LakeProcedureInvocation,
+        LakeProcedureInvocationId, LakeProcedureRetryPolicy, LakeProcedureTarget,
+    };
     use sail_physical_plan::barrier::BarrierExec;
     use sail_physical_plan::catalog_command::CatalogCommandExec;
     use sail_physical_plan::coalesce::CoalesceExec;
+    use sail_physical_plan::lake_procedure::LakeProcedureExec;
     use sail_physical_plan::remote_checkpoint::RemoteCheckpointCommitExec;
     use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
     use super::{JobGraph, JobGraphOptions, create_scalar_subquery_input};
-    use crate::job_graph::{InputMode, OutputDistribution, OutputMode, StageInput, TaskPlacement};
+    use crate::job_graph::{
+        InputMode, OutputDistribution, OutputMode, StageInput, TaskPlacement, TaskRetryPolicy,
+    };
     use crate::plan::StageInputExec;
     use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
 
@@ -1020,6 +1060,29 @@ mod tests {
 
     fn empty_plan() -> Arc<dyn ExecutionPlan> {
         Arc::new(EmptyExec::new(schema()))
+    }
+
+    fn mutating_procedure_plan() -> Arc<dyn ExecutionPlan> {
+        let procedure = LakeProcedure {
+            name: "mutate".to_string(),
+            parameters: vec![],
+            output: vec![],
+            access: LakeProcedureAccess::MetadataCommit,
+            target: LakeProcedureTarget::Catalog,
+            retry_policy: LakeProcedureRetryPolicy::Forbidden,
+        };
+        let call = LakeProcedureCall {
+            invocation_id: LakeProcedureInvocationId("invocation-1".to_string()),
+            catalog: "test".to_string(),
+            namespace: vec!["system".to_string()],
+            format_id: LakeFormatId::try_new("test").unwrap(),
+            target: None,
+            invocation: LakeProcedureInvocation {
+                procedure: procedure.clone(),
+                arguments: vec![],
+            },
+        };
+        Arc::new(LakeProcedureExec::new(call, procedure.schema()))
     }
 
     fn flight_shuffle_options() -> JobGraphOptions {
@@ -1261,6 +1324,24 @@ mod tests {
         assert_eq!(graph.stages().len(), 2);
         assert_eq!(graph.stages()[0].placement, TaskPlacement::Driver);
         assert!(graph.stages()[0].plan.is::<RemoteCheckpointCommitExec>());
+        assert!(matches!(
+            graph.stages()[1].inputs.as_slice(),
+            [StageInput {
+                stage: 0,
+                mode: InputMode::Forward,
+            }]
+        ));
+    }
+
+    #[test]
+    fn mutating_procedure_isolated_in_non_retryable_driver_stage() {
+        let graph = JobGraph::try_new(mutating_procedure_plan(), flight_shuffle_options()).unwrap();
+
+        assert_eq!(graph.stages().len(), 2);
+        assert_eq!(graph.stages()[0].placement, TaskPlacement::Driver);
+        assert_eq!(graph.stages()[0].retry_policy, TaskRetryPolicy::Never);
+        assert!(matches!(graph.stages()[0].mode, OutputMode::Blocking));
+        assert!(graph.stages()[0].plan.is::<LakeProcedureExec>());
         assert!(matches!(
             graph.stages()[1].inputs.as_slice(),
             [StageInput {

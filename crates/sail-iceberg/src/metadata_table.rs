@@ -1,14 +1,17 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use datafusion::arrow::array::builder::{MapBuilder, MapFieldNames, StringBuilder};
 use datafusion::arrow::array::{
-    Array, BooleanArray, Int32Array, Int64Array, RecordBatch, StringArray,
-    TimestampMicrosecondArray,
+    BooleanArray, Int32Array, Int64Array, RecordBatch, StringArray, TimestampMicrosecondArray,
 };
 use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema, TimeUnit};
-use datafusion::catalog::{MemTable, TableProvider};
+use datafusion::catalog::{MemTable, Session, TableProvider};
 use datafusion::common::{DataFusionError, Result};
+use datafusion::logical_expr::{Expr, TableType};
+use datafusion::physical_plan::ExecutionPlan;
+use url::Url;
 
 use crate::spec::{SnapshotRetention, TableMetadata};
 use crate::table::Table;
@@ -104,15 +107,125 @@ impl IcebergMetadataTableType {
             )),
         }
     }
+
+    fn schema(self) -> Arc<ArrowSchema> {
+        match self {
+            Self::History => Arc::new(ArrowSchema::new(vec![
+                timestamp_field("made_current_at"),
+                Field::new("snapshot_id", DataType::Int64, false),
+                Field::new("parent_id", DataType::Int64, true),
+                Field::new("is_current_ancestor", DataType::Boolean, false),
+            ])),
+            Self::MetadataLogEntries => Arc::new(ArrowSchema::new(vec![
+                timestamp_field("timestamp"),
+                Field::new("file", DataType::Utf8, false),
+                Field::new("latest_snapshot_id", DataType::Int64, true),
+                Field::new("latest_schema_id", DataType::Int32, true),
+                Field::new("latest_sequence_number", DataType::Int64, true),
+            ])),
+            Self::Snapshots => Arc::new(ArrowSchema::new(vec![
+                timestamp_field("committed_at"),
+                Field::new("snapshot_id", DataType::Int64, false),
+                Field::new("parent_id", DataType::Int64, true),
+                Field::new("operation", DataType::Utf8, true),
+                Field::new("manifest_list", DataType::Utf8, true),
+                Field::new("summary", snapshot_summary_data_type(), true),
+            ])),
+            Self::Refs => Arc::new(ArrowSchema::new(vec![
+                Field::new("name", DataType::Utf8, false),
+                Field::new("type", DataType::Utf8, false),
+                Field::new("snapshot_id", DataType::Int64, false),
+                Field::new("max_reference_age_in_ms", DataType::Int64, true),
+                Field::new("min_snapshots_to_keep", DataType::Int32, true),
+                Field::new("max_snapshot_age_in_ms", DataType::Int64, true),
+            ])),
+            unsupported => Arc::new(ArrowSchema::new_with_metadata(
+                Vec::<Field>::new(),
+                HashMap::from([("unsupported".to_string(), unsupported.name().to_string())]),
+            )),
+        }
+    }
 }
 
 pub(crate) fn metadata_table_provider(
-    table: &Table,
+    table_url: Url,
+    metadata_location: Option<String>,
     table_type: IcebergMetadataTableType,
 ) -> Result<Arc<dyn TableProvider>> {
-    let batch = table_type.record_batch(table)?;
-    let schema = batch.schema();
-    Ok(Arc::new(MemTable::try_new(schema, vec![vec![batch]])?))
+    if !table_type.is_supported() {
+        return Err(DataFusionError::NotImplemented(
+            table_type.unsupported_reason(),
+        ));
+    }
+    Ok(Arc::new(IcebergMetadataTableProvider {
+        table_url,
+        metadata_location,
+        table_type,
+        schema: table_type.schema(),
+    }))
+}
+
+struct IcebergMetadataTableProvider {
+    table_url: Url,
+    metadata_location: Option<String>,
+    table_type: IcebergMetadataTableType,
+    schema: Arc<ArrowSchema>,
+}
+
+impl std::fmt::Debug for IcebergMetadataTableProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IcebergMetadataTableProvider")
+            .field("table_url", &self.table_url)
+            .field("metadata_location", &self.metadata_location)
+            .field("table_type", &self.table_type)
+            .finish()
+    }
+}
+
+#[async_trait]
+impl TableProvider for IcebergMetadataTableProvider {
+    fn schema(&self) -> Arc<ArrowSchema> {
+        Arc::clone(&self.schema)
+    }
+
+    fn table_type(&self) -> TableType {
+        TableType::Base
+    }
+
+    async fn scan(
+        &self,
+        session: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let table = Table::load_with_metadata_location(
+            session,
+            self.table_url.clone(),
+            self.metadata_location.clone(),
+        )
+        .await?;
+        let batch = self.table_type.record_batch(&table)?;
+        let table = MemTable::try_new(Arc::clone(&self.schema), vec![vec![batch]])?;
+        table.scan(session, projection, filters, limit).await
+    }
+}
+
+fn snapshot_summary_data_type() -> DataType {
+    DataType::Map(
+        Arc::new(Field::new(
+            "entries",
+            DataType::Struct(
+                vec![
+                    Arc::new(Field::new("key", DataType::Utf8, false)),
+                    Arc::new(Field::new("value", DataType::Utf8, false)),
+                ]
+                .into(),
+            ),
+            false,
+        )),
+        false,
+    )
 }
 
 fn timestamp_micros(timestamp_ms: i64) -> Result<i64> {
@@ -187,14 +300,7 @@ fn snapshots_batch(metadata: &TableMetadata) -> Result<RecordBatch> {
         summary_builder.append(true)?;
     }
     let summary = summary_builder.finish();
-    let schema = Arc::new(ArrowSchema::new(vec![
-        timestamp_field("committed_at"),
-        Field::new("snapshot_id", DataType::Int64, false),
-        Field::new("parent_id", DataType::Int64, true),
-        Field::new("operation", DataType::Utf8, true),
-        Field::new("manifest_list", DataType::Utf8, true),
-        Field::new("summary", summary.data_type().clone(), true),
-    ]));
+    let schema = IcebergMetadataTableType::Snapshots.schema();
     RecordBatch::try_new(
         schema,
         vec![
@@ -261,12 +367,7 @@ fn history_batch(metadata: &TableMetadata) -> Result<RecordBatch> {
         .iter()
         .map(|entry| ancestors.contains(&entry.snapshot_id))
         .collect::<Vec<_>>();
-    let schema = Arc::new(ArrowSchema::new(vec![
-        timestamp_field("made_current_at"),
-        Field::new("snapshot_id", DataType::Int64, false),
-        Field::new("parent_id", DataType::Int64, true),
-        Field::new("is_current_ancestor", DataType::Boolean, false),
-    ]));
+    let schema = IcebergMetadataTableType::History.schema();
     RecordBatch::try_new(
         schema,
         vec![
@@ -311,14 +412,7 @@ fn refs_batch(metadata: &TableMetadata) -> Result<RecordBatch> {
             }
         }
     }
-    let schema = Arc::new(ArrowSchema::new(vec![
-        Field::new("name", DataType::Utf8, false),
-        Field::new("type", DataType::Utf8, false),
-        Field::new("snapshot_id", DataType::Int64, false),
-        Field::new("max_reference_age_in_ms", DataType::Int64, true),
-        Field::new("min_snapshots_to_keep", DataType::Int32, true),
-        Field::new("max_snapshot_age_in_ms", DataType::Int64, true),
-    ]));
+    let schema = IcebergMetadataTableType::Refs.schema();
     RecordBatch::try_new(
         schema,
         vec![
@@ -383,13 +477,7 @@ fn metadata_log_entries_batch(
                 .map(|snapshot| snapshot.sequence_number())
         })
         .collect::<Vec<_>>();
-    let schema = Arc::new(ArrowSchema::new(vec![
-        timestamp_field("timestamp"),
-        Field::new("file", DataType::Utf8, false),
-        Field::new("latest_snapshot_id", DataType::Int64, true),
-        Field::new("latest_schema_id", DataType::Int32, true),
-        Field::new("latest_sequence_number", DataType::Int64, true),
-    ]));
+    let schema = IcebergMetadataTableType::MetadataLogEntries.schema();
     RecordBatch::try_new(
         schema,
         vec![

@@ -231,13 +231,6 @@ impl CatalogProvider for OneLakeCatalogProvider {
         &self.name
     }
 
-    fn lake_procedure_sources(&self) -> Vec<String> {
-        match self.config.api {
-            OneLakeApiKind::Delta => Vec::new(),
-            OneLakeApiKind::Iceberg => vec!["iceberg".to_string()],
-        }
-    }
-
     async fn create_database(
         &self,
         database: &Namespace,

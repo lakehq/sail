@@ -8,19 +8,7 @@ use datafusion::logical_expr::LogicalPlan;
 use datafusion_common::{Result, not_impl_err};
 
 use crate::catalog::{CatalogPartitionField, LakehouseExecutionContext};
-use crate::datasource::{DataSource, DeleteInfo, MergeInfo, SourceInfo, UpdateInfo};
-use crate::lakeprocedure::LakeProcedureProvider;
-use crate::lakerelation::LakeRelationProvider;
-
-/// Optional format-owned capability providers exposed by a lake source.
-///
-/// New lakehouse surfaces can be added here without extending the generic
-/// [`DataSource`] contract or adding format-specific operations to it.
-#[derive(Clone, Default)]
-pub struct LakeSourceCapabilities {
-    pub relation_provider: Option<Arc<dyn LakeRelationProvider>>,
-    pub procedure_provider: Option<Arc<dyn LakeProcedureProvider>>,
-}
+use crate::datasource::{DeleteInfo, MergeInfo, SourceInfo, UpdateInfo};
 
 /// Metadata about an existing lake source needed during logical planning.
 #[derive(Debug, Clone)]
@@ -104,25 +92,22 @@ pub enum LakeSourceAlterTableOperation {
     AddCheckConstraint { name: String, expression: String },
 }
 
-/// A lakehouse data source with table metadata, DML, and DDL semantics.
+/// Format semantics for a lakehouse table.
+///
+/// This contract is intentionally independent from the generic `DataSource`
+/// front door. A built-in format can implement both traits on one concrete
+/// type, while the engine registers and authorizes the two roles separately.
 #[async_trait]
-pub trait LakeSource: DataSource {
-    /// Returns the optional capability providers implemented by this lake source.
-    fn capabilities(self: Arc<Self>) -> LakeSourceCapabilities {
-        LakeSourceCapabilities::default()
-    }
+pub trait LakeTableFormat: Send + Sync {
+    /// Stable format name used for catalog-table dispatch.
+    fn format_name(&self) -> &str;
 
     /// Infers table metadata for planning without requiring callers to construct a read source.
     async fn infer_metadata(
         &self,
         ctx: &dyn Session,
         info: SourceInfo,
-    ) -> Result<LakeSourceMetadata> {
-        Ok(LakeSourceMetadata {
-            schema: self.infer_schema(ctx, info).await?,
-            properties: vec![],
-        })
-    }
+    ) -> Result<LakeSourceMetadata>;
 
     /// Creates storage metadata for a plain catalog `CREATE TABLE` before the
     /// catalog object is registered. Lake sources that do not need storage metadata
@@ -146,15 +131,15 @@ pub trait LakeSource: DataSource {
         match operation {
             RowLevelOperation::Delete(_) => not_impl_err!(
                 "DELETE is not yet implemented for lake source '{}'",
-                self.name()
+                self.format_name()
             ),
             RowLevelOperation::Update(_) => not_impl_err!(
                 "UPDATE is not yet implemented for lake source '{}'",
-                self.name()
+                self.format_name()
             ),
             RowLevelOperation::Merge(_) => not_impl_err!(
                 "MERGE is not yet implemented for lake source '{}'",
-                self.name()
+                self.format_name()
             ),
         }
     }
@@ -190,7 +175,7 @@ pub trait LakeSource: DataSource {
             LakeSourceAlterTableOperation::AddCheckConstraint { .. } => {
                 not_impl_err!(
                     "CHECK constraint alteration not supported for lake source '{}'",
-                    self.name()
+                    self.format_name()
                 )
             }
         }
@@ -213,7 +198,7 @@ pub trait LakeSource: DataSource {
         let _ = (runtime_env, path, changes, if_exists);
         not_impl_err!(
             "Table properties alteration not supported for lake source '{}'",
-            self.name()
+            self.format_name()
         )
     }
 
@@ -228,7 +213,7 @@ pub trait LakeSource: DataSource {
         let _ = (runtime_env, path, column_path, data_type);
         not_impl_err!(
             "Column type alteration not supported for lake source '{}'",
-            self.name()
+            self.format_name()
         )
     }
 
@@ -243,7 +228,7 @@ pub trait LakeSource: DataSource {
         let _ = (runtime_env, path, column_path, default);
         not_impl_err!(
             "Column default alteration not supported for lake source '{}'",
-            self.name()
+            self.format_name()
         )
     }
 }

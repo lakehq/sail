@@ -62,6 +62,7 @@ use sail_logical_plan::streaming::source_adapter::StreamSourceAdapterNode;
 use sail_logical_plan::streaming::source_wrapper::StreamSourceWrapperNode;
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
+use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::range::RangeExec;
@@ -78,6 +79,7 @@ use sail_physical_plan::streaming::filter::StreamFilterExec;
 use sail_physical_plan::streaming::limit::StreamLimitExec;
 use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
 use sail_plan::catalog::CatalogCommandNode;
+use sail_plan::procedure::LakeProcedureNode;
 
 #[derive(Debug)]
 pub struct ExtensionQueryPlanner {}
@@ -524,6 +526,9 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
         } else if let Some(node) = node.as_any().downcast_ref::<CatalogCommandNode>() {
             let schema = node.schema().inner().clone();
             Arc::new(CatalogCommandExec::new(node.command().clone(), schema))
+        } else if let Some(node) = node.as_any().downcast_ref::<LakeProcedureNode>() {
+            let schema = node.schema().inner().clone();
+            Arc::new(LakeProcedureExec::new(node.call().clone(), schema))
         } else if let Some(_node) = node.as_any().downcast_ref::<BarrierNode>() {
             let (plan, preconditions) = physical_inputs.split_last().ok_or_else(|| {
                 datafusion_common::DataFusionError::Internal(format!(

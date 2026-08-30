@@ -39,7 +39,10 @@ use crate::catalog_support::commit::{
     IcebergCatalogCommitMode, catalog_requirements, table_metadata_location,
 };
 use crate::io::{StoreContext, load_manifest, load_manifest_list};
-use crate::lake_source::metadata_location_from_properties;
+use crate::lake_source::{
+    catalog_managed_iceberg_from_properties, metadata_location_from_properties,
+    resolve_iceberg_metadata_location,
+};
 use crate::operations::bootstrap::{
     NewTableMetadataStyle, PersistStrategy, bootstrap_first_snapshot,
     bootstrap_new_table_with_style, prepare_bootstrap_snapshot,
@@ -753,20 +756,22 @@ impl ExecutionPlan for IcebergCommitExec {
                 commit_info.lakehouse_table.as_ref(),
                 &catalog_table_info,
                 &commit_info.table_properties,
-            );
+            )?;
             let table_property_metadata_location =
                 metadata_location_from_properties(&commit_info.table_properties);
             let catalog_recorded_metadata_location = table_property_metadata_location
                 .clone()
                 .or(catalog_table_info.metadata_location.clone());
-            let catalog_metadata_location = catalog_commit_mode
-                .uses_catalog_metadata()
-                .then(|| catalog_recorded_metadata_location.clone())
-                .flatten();
+            let catalog_metadata_location = resolve_iceberg_metadata_location(
+                commit_info.lakehouse_table.as_ref(),
+                catalog_recorded_metadata_location.clone(),
+                catalog_table_info.is_catalog_managed_iceberg_table
+                    || catalog_managed_iceberg_from_properties(&commit_info.table_properties),
+            )?;
 
             // Managed external catalogs use the authoritative metadata-location.
             // Path tables may record metadata-location in the session catalog for display, but
-            // their current state is discovered from the metadata directory and version hint.
+            // their current state is discovered from the authoritative metadata directory listing.
             let latest_meta_res = match catalog_metadata_location.as_deref() {
                 Some(location) => Ok(metadata_location_to_object_path_string(location)?),
                 None => crate::table::find_latest_metadata_file(&object_store, &table_url).await,
@@ -1838,7 +1843,7 @@ mod tests {
     }
 
     #[test]
-    fn metadata_conflict_cleans_attempt_artifacts_and_uncommitted_task_file() {
+    fn metadata_conflict_refreshes_listing_and_commits_the_next_version() {
         futures::executor::block_on(async {
             let table_url = Url::parse("file:///tmp/commit-conflict/").expect("table URL");
             let memory = Arc::new(object_store::memory::InMemory::new());
@@ -1981,13 +1986,13 @@ mod tests {
             let mut output = commit
                 .execute(0, context.task_ctx())
                 .expect("commit stream");
-            let error = output
+            let batch = output
                 .next()
                 .await
                 .expect("commit result")
-                .expect_err("injected metadata conflict must exhaust retries");
+                .expect("commit must retry from the authoritative metadata listing");
 
-            assert!(error.to_string().contains("after 5 retries"));
+            assert_eq!(batch.num_rows(), 1);
             assert!(conflict_store.conflict_injected.load(Ordering::SeqCst));
             let metadata_prefix = Path::from("tmp/commit-conflict/metadata");
             let metadata_objects = memory
@@ -2007,12 +2012,13 @@ mod tests {
             assert!(
                 metadata_paths
                     .iter()
-                    .all(|path| !path.contains("/manifest-") && !path.contains("/snap-"))
+                    .any(|path| path.ends_with("metadata/v3.metadata.json"))
             );
-            assert!(matches!(
-                store_ctx.prefixed.head(&task_file_path).await,
-                Err(object_store::Error::NotFound { .. })
-            ));
+            store_ctx
+                .prefixed
+                .head(&task_file_path)
+                .await
+                .expect("successfully committed task file");
         });
     }
 }

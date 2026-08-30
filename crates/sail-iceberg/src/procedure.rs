@@ -9,9 +9,9 @@ use datafusion::execution::TaskContext;
 use object_store::ObjectStoreExt;
 use sail_common_datafusion::datasource::{OptionLayer, SourceInfo};
 use sail_common_datafusion::lakeprocedure::{
-    LakeProcedure, LakeProcedureAccess, LakeProcedureDataType, LakeProcedureField,
-    LakeProcedureInvocation, LakeProcedureParameter, LakeProcedureProvider,
-    LakeProcedureResolution, LakeProcedureValue,
+    LakeProcedure, LakeProcedureAccess, LakeProcedureDataType, LakeProcedureExecutionTarget,
+    LakeProcedureField, LakeProcedureInvocation, LakeProcedureParameter, LakeProcedureProvider,
+    LakeProcedureResolution, LakeProcedureRetryPolicy, LakeProcedureTarget, LakeProcedureValue,
 };
 
 use crate::catalog_support::commit::{
@@ -20,7 +20,8 @@ use crate::catalog_support::commit::{
 };
 use crate::io::StoreContext;
 use crate::lake_source::{
-    IcebergLakeSource, metadata_location_from_properties, validate_iceberg_lakehouse_storage_access,
+    IcebergLakeSource, catalog_managed_iceberg_from_properties, metadata_location_from_properties,
+    resolve_iceberg_metadata_location, validate_iceberg_lakehouse_storage_access,
 };
 use crate::spec::metadata::table_metadata::{MetadataLog, SnapshotLog};
 use crate::spec::snapshots::{MAIN_BRANCH, SnapshotReference, SnapshotRetention};
@@ -82,14 +83,17 @@ impl LakeProcedureProvider for IcebergLakeSource {
     async fn execute_procedure(
         &self,
         ctx: &TaskContext,
-        info: SourceInfo,
+        target: LakeProcedureExecutionTarget,
         invocation: LakeProcedureInvocation,
     ) -> Result<RecordBatch> {
+        let LakeProcedureExecutionTarget::Table(info) = target else {
+            return plan_err!("Iceberg system procedures require a table target");
+        };
         let ProcedureTable {
             table_url,
             table_properties,
             lakehouse_table,
-        } = ProcedureTable::from_source_info(info).await?;
+        } = ProcedureTable::from_source_info(*info).await?;
         match invocation.procedure.name.as_str() {
             "ancestors_of" => {
                 let metadata = load_current_metadata(
@@ -226,6 +230,11 @@ fn supported_procedure(name: &str) -> Option<LakeProcedure> {
         parameters,
         output,
         access,
+        target: LakeProcedureTarget::table("table"),
+        retry_policy: match access {
+            LakeProcedureAccess::MetadataRead => LakeProcedureRetryPolicy::Safe,
+            LakeProcedureAccess::MetadataCommit => LakeProcedureRetryPolicy::Forbidden,
+        },
     })
 }
 
@@ -284,14 +293,15 @@ async fn load_current_metadata(
         Some(table) => IcebergCatalogCommitCoordinator::load_table_info(ctx, table).await?,
         None => CatalogTableInfo::default(),
     };
-    let mode = IcebergCatalogCommitMode::resolve(lakehouse_table, &catalog_info, table_properties);
-    let metadata_location = if mode.uses_catalog_metadata() {
-        catalog_info
-            .metadata_location
-            .or_else(|| metadata_location_from_properties(table_properties))
-    } else {
-        None
-    };
+    let recorded_metadata_location = catalog_info
+        .metadata_location
+        .or_else(|| metadata_location_from_properties(table_properties));
+    let metadata_location = resolve_iceberg_metadata_location(
+        lakehouse_table,
+        recorded_metadata_location,
+        catalog_info.is_catalog_managed_iceberg_table
+            || catalog_managed_iceberg_from_properties(table_properties),
+    )?;
     let metadata_file = match metadata_location {
         Some(location) => metadata_location_to_object_path_string(&location)?,
         None => crate::table::find_latest_metadata_file(&object_store, table_url).await?,
@@ -471,15 +481,17 @@ async fn commit_snapshot_operation(
             None => CatalogTableInfo::default(),
         };
         let commit_mode =
-            IcebergCatalogCommitMode::resolve(lakehouse_table, &catalog_info, table_properties);
+            IcebergCatalogCommitMode::resolve(lakehouse_table, &catalog_info, table_properties)?;
         let recorded_metadata_location = catalog_info
             .metadata_location
             .clone()
             .or_else(|| metadata_location_from_properties(table_properties));
-        let metadata_location = commit_mode
-            .uses_catalog_metadata()
-            .then(|| recorded_metadata_location.clone())
-            .flatten();
+        let metadata_location = resolve_iceberg_metadata_location(
+            lakehouse_table,
+            recorded_metadata_location.clone(),
+            catalog_info.is_catalog_managed_iceberg_table
+                || catalog_managed_iceberg_from_properties(table_properties),
+        )?;
         let metadata_file = match metadata_location.as_deref() {
             Some(location) => metadata_location_to_object_path_string(location)?,
             None => crate::table::find_latest_metadata_file(&object_store, table_url).await?,

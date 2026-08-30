@@ -69,7 +69,7 @@ impl PythonDataSourceAdapter {
     /// `discover_data_sources()`.
     pub fn register_all(registry: &DataSourceRegistry) -> Result<()> {
         for name in DATA_SOURCE_REGISTRY.list() {
-            if registry.get_lake_source_if_supported(&name)?.is_some() {
+            if registry.is_protected(&name)? {
                 continue;
             }
             registry.register_data_source(Arc::new(Self::new(name)))?;

@@ -251,7 +251,11 @@ impl JobScheduler {
                 let attempts = &job.stages[t.stage].tasks[t.partition].attempts;
                 if let Some(attempt) = attempts.last()
                     && matches!(attempt.state, TaskState::Failed | TaskState::Canceled)
-                    && attempts.len() >= options.task_max_attempts
+                    && attempts.len()
+                        >= task_max_attempts(
+                            job.graph.stages()[t.stage].retry_policy,
+                            options.task_max_attempts,
+                        )
                 {
                     return true;
                 }
@@ -1041,4 +1045,26 @@ struct StageGroupKey {
 struct StageGroup {
     stages: IndexSet<usize>,
     buckets: Vec<Vec<TaskSetEntry>>,
+}
+
+fn task_max_attempts(
+    policy: crate::job_graph::TaskRetryPolicy,
+    configured_max_attempts: usize,
+) -> usize {
+    match policy {
+        crate::job_graph::TaskRetryPolicy::Default => configured_max_attempts,
+        crate::job_graph::TaskRetryPolicy::Never => 1,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::task_max_attempts;
+    use crate::job_graph::TaskRetryPolicy;
+
+    #[test]
+    fn never_retry_policy_allows_only_the_initial_attempt() {
+        assert_eq!(task_max_attempts(TaskRetryPolicy::Never, 5), 1);
+        assert_eq!(task_max_attempts(TaskRetryPolicy::Default, 5), 5);
+    }
 }

@@ -10,17 +10,13 @@ use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_expr::{
     LexOrdering, LexRequirement, PhysicalSortRequirement, create_physical_sort_exprs,
 };
-use datafusion_common::{
-    Constraints, DFSchema, DFSchemaRef, Result, not_impl_datafusion_err, plan_err,
-};
+use datafusion_common::{Constraints, DFSchema, DFSchemaRef, Result, plan_err};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{Expr, TableSource};
 
 use crate::catalog::{CatalogPartitionField, LakehouseExecutionContext};
 use crate::extension::SessionExtension;
-use crate::lakeprocedure::{LakeProcedureCatalogResolution, LakeProcedureResolution};
-use crate::lakesource::LakeSource;
 use crate::logical_expr::ExprWithSource;
 
 /// File path metadata column for row-level modifications (MERGE, UPDATE, DELETE).
@@ -429,14 +425,6 @@ pub trait DataSource: Send + Sync {
     /// Returns the name of the data source.
     fn name(&self) -> &str;
 
-    /// Returns this data source's lake capability, if supported.
-    ///
-    /// The owned receiver keeps the source alive while callers use the
-    /// capability across asynchronous operations.
-    fn as_lake_source(self: Arc<Self>) -> Option<Arc<dyn LakeSource>> {
-        None
-    }
-
     /// Creates a logical [`TableSource`] for read.
     async fn create_source(
         &self,
@@ -453,112 +441,75 @@ pub trait DataSource: Send + Sync {
     async fn create_writer(&self, ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan>;
 }
 
-/// Thread-safe registry of named data and lake sources.
+/// Mutable registry for user-facing named data-source front doors.
 #[derive(Default)]
 pub struct DataSourceRegistry {
-    sources: RwLock<HashMap<String, Arc<dyn DataSource>>>,
+    state: RwLock<DataSourceRegistryState>,
+}
+
+#[derive(Default)]
+struct DataSourceRegistryState {
+    sources: HashMap<String, Arc<dyn DataSource>>,
+    protected_names: std::collections::HashSet<String>,
 }
 
 impl DataSourceRegistry {
     pub fn new() -> Self {
         Self {
-            sources: RwLock::new(HashMap::new()),
+            state: RwLock::new(DataSourceRegistryState::default()),
         }
     }
 
     pub fn register_data_source(&self, source: Arc<dyn DataSource>) -> Result<()> {
-        let mut sources = self
-            .sources
+        let mut state = self
+            .state
             .write()
             .map_err(|_| plan_datafusion_err!("data source registry poisoned"))?;
         let name = source.name().to_lowercase();
-        sources.insert(name, source);
+        if state.protected_names.contains(&name) {
+            return Err(plan_datafusion_err!(
+                "data source '{name}' is reserved by a built-in lake format"
+            ));
+        }
+        state.sources.insert(name, source);
         Ok(())
     }
 
-    pub fn get_data_source(&self, name: &str) -> Result<Arc<dyn DataSource>> {
-        let sources = self
-            .sources
+    /// Registers a built-in front door that user registration cannot replace.
+    pub fn register_protected_data_source(&self, source: Arc<dyn DataSource>) -> Result<()> {
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| plan_datafusion_err!("data source registry poisoned"))?;
+        let name = source.name().to_lowercase();
+        if state.sources.contains_key(&name) {
+            return Err(plan_datafusion_err!(
+                "data source is already registered: {name}"
+            ));
+        }
+        state.protected_names.insert(name.clone());
+        state.sources.insert(name, source);
+        Ok(())
+    }
+
+    pub fn is_protected(&self, name: &str) -> Result<bool> {
+        let state = self
+            .state
             .read()
             .map_err(|_| plan_datafusion_err!("data source registry poisoned"))?;
-        sources
+        Ok(state.protected_names.contains(&name.to_lowercase()))
+    }
+
+    pub fn get_data_source(&self, name: &str) -> Result<Arc<dyn DataSource>> {
+        let state = self
+            .state
+            .read()
+            .map_err(|_| plan_datafusion_err!("data source registry poisoned"))?;
+        state
+            .sources
             .get(&name.to_lowercase())
             .cloned()
             .ok_or_else(|| missing_data_source_error(name))
-    }
-
-    pub fn get_lake_source(&self, name: &str) -> Result<Arc<dyn LakeSource>> {
-        let source = {
-            let sources = self
-                .sources
-                .read()
-                .map_err(|_| plan_datafusion_err!("data source registry poisoned"))?;
-            sources
-                .get(&name.to_lowercase())
-                .cloned()
-                .ok_or_else(|| missing_lake_source_error(name))?
-        };
-        source.as_lake_source().ok_or_else(|| {
-            not_impl_datafusion_err!("Data source '{name}' does not support lake operations")
-        })
-    }
-
-    /// Returns the optional lakehouse capability for a registered data source.
-    pub fn get_lake_source_if_supported(&self, name: &str) -> Result<Option<Arc<dyn LakeSource>>> {
-        let sources = self
-            .sources
-            .read()
-            .map_err(|_| plan_datafusion_err!("data source registry poisoned"))?;
-        Ok(sources
-            .get(&name.to_lowercase())
-            .cloned()
-            .and_then(|source| source.as_lake_source()))
-    }
-
-    /// Resolves a procedure only among the lake sources exposed by a catalog.
-    pub fn resolve_lake_procedure(
-        &self,
-        lake_sources: &[String],
-        namespace: &[String],
-        name: &str,
-    ) -> Result<LakeProcedureCatalogResolution> {
-        let mut lake_sources = lake_sources.to_vec();
-        lake_sources.sort_unstable();
-        lake_sources.dedup();
-
-        let mut resolutions = Vec::new();
-        for lake_source in lake_sources {
-            let source = self.get_lake_source(&lake_source)?;
-            let Some(provider) = source.capabilities().procedure_provider else {
-                continue;
-            };
-            match provider.resolve_procedure(namespace, name) {
-                LakeProcedureResolution::Unrecognized => {}
-                resolution => resolutions.push((lake_source, resolution)),
-            }
-        }
-
-        match resolutions.as_slice() {
-            [] => Ok(LakeProcedureCatalogResolution::Unrecognized),
-            [(lake_source, LakeProcedureResolution::Supported(procedure))] => {
-                Ok(LakeProcedureCatalogResolution::Supported {
-                    lake_source: lake_source.clone(),
-                    procedure: procedure.clone(),
-                })
-            }
-            [(lake_source, LakeProcedureResolution::Unsupported { reason })] => {
-                Ok(LakeProcedureCatalogResolution::Unsupported {
-                    lake_source: lake_source.clone(),
-                    reason: reason.clone(),
-                })
-            }
-            resolutions => Ok(LakeProcedureCatalogResolution::Ambiguous {
-                lake_sources: resolutions
-                    .iter()
-                    .map(|(lake_source, _)| lake_source.clone())
-                    .collect(),
-            }),
-        }
     }
 }
 
@@ -573,10 +524,6 @@ fn missing_data_source_error(name: &str) -> datafusion::common::DataFusionError 
     } else {
         plan_datafusion_err!("No data source found for: {name}")
     }
-}
-
-fn missing_lake_source_error(name: &str) -> datafusion::common::DataFusionError {
-    plan_datafusion_err!("No lake source found for: {name}")
 }
 
 impl SessionExtension for DataSourceRegistry {
@@ -647,14 +594,8 @@ pub fn get_partition_columns_and_file_schema(
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
-    use datafusion::arrow::array::RecordBatch;
-    use datafusion::execution::TaskContext;
 
     use super::*;
-    use crate::lakeprocedure::{
-        LakeProcedure, LakeProcedureAccess, LakeProcedureInvocation, LakeProcedureProvider,
-    };
-    use crate::lakesource::LakeSourceCapabilities;
 
     struct TestDataSource;
 
@@ -677,133 +618,17 @@ mod tests {
         }
     }
 
-    struct TestLakeSource;
-
-    #[async_trait]
-    impl DataSource for TestLakeSource {
-        fn name(&self) -> &str {
-            "test"
-        }
-
-        fn as_lake_source(self: Arc<Self>) -> Option<Arc<dyn LakeSource>> {
-            Some(self)
-        }
-
-        async fn create_source(
-            &self,
-            _ctx: &dyn Session,
-            _info: SourceInfo,
-        ) -> Result<Arc<dyn TableSource>> {
-            plan_err!("test source does not create tables")
-        }
-
-        async fn create_writer(&self, _ctx: &dyn Session, _info: SinkInfo) -> Result<LogicalPlan> {
-            plan_err!("test source does not create writers")
-        }
-    }
-
-    impl LakeSource for TestLakeSource {
-        fn capabilities(self: Arc<Self>) -> LakeSourceCapabilities {
-            LakeSourceCapabilities {
-                relation_provider: None,
-                procedure_provider: Some(self),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl LakeProcedureProvider for TestLakeSource {
-        fn resolve_procedure(&self, namespace: &[String], name: &str) -> LakeProcedureResolution {
-            if namespace == ["system"] && name.eq_ignore_ascii_case("known") {
-                LakeProcedureResolution::Supported(LakeProcedure {
-                    name: "known".to_string(),
-                    parameters: vec![],
-                    output: vec![],
-                    access: LakeProcedureAccess::MetadataRead,
-                })
-            } else {
-                LakeProcedureResolution::Unrecognized
-            }
-        }
-
-        async fn execute_procedure(
-            &self,
-            _ctx: &TaskContext,
-            _info: SourceInfo,
-            _invocation: LakeProcedureInvocation,
-        ) -> Result<RecordBatch> {
-            Err(not_impl_datafusion_err!("test procedure is not executable"))
-        }
-    }
-
     #[test]
-    fn lake_source_registration_replaces_an_ordinary_source() -> Result<()> {
+    fn protected_data_source_cannot_be_replaced() -> Result<()> {
         let registry = DataSourceRegistry::new();
 
-        registry.register_data_source(Arc::new(TestDataSource))?;
+        registry.register_protected_data_source(Arc::new(TestDataSource))?;
+        assert!(registry.is_protected("TEST")?);
         assert!(registry.get_data_source("test").is_ok());
-        assert!(registry.get_lake_source("test").is_err());
-
-        registry.register_data_source(Arc::new(TestLakeSource))?;
-        assert!(registry.get_data_source("test").is_ok());
-        assert!(registry.get_lake_source("test").is_ok());
-        Ok(())
-    }
-
-    #[test]
-    fn ordinary_data_source_registration_replaces_a_lake_source() -> Result<()> {
-        let registry = DataSourceRegistry::new();
-        registry.register_data_source(Arc::new(TestLakeSource))?;
-        assert!(registry.get_lake_source("test").is_ok());
-
-        registry.register_data_source(Arc::new(TestDataSource))?;
-        assert!(registry.get_data_source("test").is_ok());
-        assert!(registry.get_lake_source("test").is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn ordinary_data_source_has_no_lake_capability() -> Result<()> {
-        let registry = DataSourceRegistry::new();
-        registry.register_data_source(Arc::new(TestDataSource))?;
-
-        assert!(registry.get_data_source("test").is_ok());
-        assert!(registry.get_lake_source_if_supported("test")?.is_none());
-        assert!(matches!(
-            registry.get_lake_source("test"),
-            Err(datafusion_common::DataFusionError::NotImplemented(_))
-        ));
-        Ok(())
-    }
-
-    #[test]
-    fn procedure_resolution_is_scoped_by_catalog_sources_and_namespace() -> Result<()> {
-        let registry = DataSourceRegistry::new();
-        registry.register_data_source(Arc::new(TestLakeSource))?;
-
-        let supported = registry.resolve_lake_procedure(
-            &["test".to_string()],
-            &["system".to_string()],
-            "known",
-        )?;
-        assert!(matches!(
-            supported,
-            LakeProcedureCatalogResolution::Supported {
-                lake_source,
-                procedure,
-            } if lake_source == "test" && procedure.name == "known"
-        ));
-        assert_eq!(
-            registry.resolve_lake_procedure(
-                &["test".to_string()],
-                &["maintenance".to_string()],
-                "known",
-            )?,
-            LakeProcedureCatalogResolution::Unrecognized
-        );
-        assert_eq!(
-            registry.resolve_lake_procedure(&[], &["system".to_string()], "known")?,
-            LakeProcedureCatalogResolution::Unrecognized
+        assert!(
+            registry
+                .register_data_source(Arc::new(TestDataSource))
+                .is_err()
         );
         Ok(())
     }
@@ -834,21 +659,6 @@ mod tests {
         assert_eq!(
             error,
             "Error during planning: No data source found for: unknown"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn missing_lake_source_error_stays_generic() -> std::result::Result<(), String> {
-        let registry = DataSourceRegistry::new();
-        let error = match registry.get_lake_source("unknown") {
-            Ok(_) => return Err("expected missing unknown lake source error".to_string()),
-            Err(error) => error.to_string(),
-        };
-
-        assert_eq!(
-            error,
-            "Error during planning: No lake source found for: unknown"
         );
         Ok(())
     }

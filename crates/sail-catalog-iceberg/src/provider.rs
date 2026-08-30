@@ -828,10 +828,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         &self.name
     }
 
-    fn lake_procedure_sources(&self) -> Vec<String> {
-        vec!["iceberg".to_string()]
-    }
-
     fn lakehouse_capabilities(&self) -> Vec<LakehouseCapability> {
         vec![
             LakehouseCapability::TableAccessSessions,

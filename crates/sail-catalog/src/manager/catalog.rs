@@ -34,22 +34,13 @@ impl CatalogManager {
             .collect::<Vec<_>>())
     }
 
-    /// Resolves the catalog that owns a procedure name and returns the lake sources it exposes.
-    pub fn resolve_procedure_catalog(
-        &self,
-        catalog: Option<&str>,
-    ) -> CatalogResult<(Arc<str>, Vec<String>)> {
+    /// Resolves an explicit or default catalog name and verifies that it exists.
+    pub fn resolve_catalog_reference(&self, catalog: Option<&str>) -> CatalogResult<Arc<str>> {
         let state = self.state()?;
         let catalog = catalog
             .map(Arc::<str>::from)
             .unwrap_or_else(|| state.default_catalog.clone());
-        let provider = state.get_catalog(&catalog)?;
-        let lake_sources = provider.lake_procedure_sources();
-        if lake_sources.is_empty() {
-            return Err(CatalogError::UnsupportedCapability(format!(
-                "catalog '{catalog}' does not support procedures"
-            )));
-        }
-        Ok((catalog, lake_sources))
+        state.get_catalog(&catalog)?;
+        Ok(catalog)
     }
 }

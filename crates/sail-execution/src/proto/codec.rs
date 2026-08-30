@@ -276,6 +276,7 @@ use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::coalesce::CoalesceExec;
 use sail_physical_plan::data_source::RemoteDataSourceExec;
+use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
@@ -1802,6 +1803,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map_err(|e| plan_datafusion_err!("failed to decode CatalogCommand: {e}"))?;
                 Ok(Arc::new(CatalogCommandExec::new(command, schema)))
             }
+            NodeKind::LakeProcedure(r#gen::LakeProcedureExecNode { schema, call }) => {
+                let schema = Arc::new(try_decode_schema(&schema)?);
+                let call: sail_common_datafusion::lakeprocedure::LakeProcedureCall =
+                    serde_json::from_str(&call).map_err(|e| {
+                        plan_datafusion_err!("failed to decode LakeProcedureCall: {e}")
+                    })?;
+                let procedure = LakeProcedureExec::new(call, schema);
+                procedure.validate()?;
+                Ok(Arc::new(procedure))
+            }
             NodeKind::Barrier(r#gen::BarrierExecNode {
                 preconditions,
                 plan,
@@ -2862,6 +2873,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let command = serde_json::to_string(catalog_command_exec.command())
                 .map_err(|e| plan_datafusion_err!("failed to encode CatalogCommand: {e}"))?;
             NodeKind::CatalogCommand(r#gen::CatalogCommandExecNode { schema, command })
+        } else if let Some(procedure_exec) = node.downcast_ref::<LakeProcedureExec>() {
+            procedure_exec.validate()?;
+            let schema = try_encode_schema(procedure_exec.schema_ref().as_ref())?;
+            let call = serde_json::to_string(procedure_exec.call())
+                .map_err(|e| plan_datafusion_err!("failed to encode LakeProcedureCall: {e}"))?;
+            NodeKind::LakeProcedure(r#gen::LakeProcedureExecNode { schema, call })
         } else if let Some(file_delete_exec) = node.downcast_ref::<FileDeleteExec>() {
             NodeKind::FileDelete(r#gen::FileDeleteExecNode {
                 object_store_url: file_delete_exec.object_store_url().as_str().to_string(),
@@ -5417,6 +5434,48 @@ mod tests {
         let mut buf = vec![];
         codec.try_encode_udwf(udwf.as_ref(), &mut buf)?;
         codec.try_decode_udwf(&name, &buf)
+    }
+
+    #[test]
+    fn test_round_trip_lake_procedure_preserves_bound_call() -> Result<()> {
+        use sail_common_datafusion::lakeformat::LakeFormatId;
+        use sail_common_datafusion::lakeprocedure::{
+            LakeProcedure, LakeProcedureAccess, LakeProcedureCall, LakeProcedureInvocation,
+            LakeProcedureInvocationId, LakeProcedureRetryPolicy, LakeProcedureTarget,
+        };
+
+        let procedure = LakeProcedure {
+            name: "mutate".to_string(),
+            parameters: vec![],
+            output: vec![],
+            access: LakeProcedureAccess::MetadataCommit,
+            target: LakeProcedureTarget::Catalog,
+            retry_policy: LakeProcedureRetryPolicy::Forbidden,
+        };
+        let call = LakeProcedureCall {
+            invocation_id: LakeProcedureInvocationId("invocation-1".to_string()),
+            catalog: "test".to_string(),
+            namespace: vec!["system".to_string()],
+            format_id: LakeFormatId::try_new("iceberg")?,
+            target: None,
+            invocation: LakeProcedureInvocation {
+                procedure: procedure.clone(),
+                arguments: vec![],
+            },
+        };
+        let plan: Arc<dyn ExecutionPlan> =
+            Arc::new(LakeProcedureExec::new(call.clone(), procedure.schema()));
+
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, plan)?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<LakeProcedureExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not a LakeProcedureExec"))?;
+
+        assert_eq!(decoded.call(), &call);
+        assert_eq!(decoded.schema(), procedure.schema());
+        Ok(())
     }
 
     #[test]

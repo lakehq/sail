@@ -23,7 +23,7 @@ use sail_physical_optimizer::{PhysicalOptimizerOptions, get_physical_optimizers}
 use sail_telemetry::telemetry::global_system_event_reader;
 
 use crate::catalog::create_catalog_manager;
-use crate::formats::create_data_source_registry;
+use crate::formats::{create_data_source_registry, create_lake_format_registry};
 use crate::optimizer::{default_analyzer_rules, default_optimizer_rules};
 use crate::planner::new_query_planner;
 use crate::runtime::RuntimeEnvFactory;
@@ -111,6 +111,7 @@ impl ServerSessionFactory {
             .with_create_default_catalog_and_schema(false)
             .with_information_schema(false)
             .with_extension(create_data_source_registry()?)
+            .with_extension(create_lake_format_registry()?)
             .with_extension(Arc::new(create_catalog_manager(
                 &self.config,
                 self.runtime.clone(),

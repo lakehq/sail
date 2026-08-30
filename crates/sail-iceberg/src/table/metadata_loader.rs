@@ -229,27 +229,6 @@ pub async fn find_latest_metadata_file(
 
     log::trace!("Finding latest metadata file");
     let base_path = crate::utils::url_to_object_path(table_url)?;
-    let version_hint_path = base_path.clone().join("metadata").join("version-hint.text");
-    let mut hinted_version: Option<i32> = None;
-    let mut hinted_filename: Option<String> = None;
-    if let Ok(version_hint_data) = object_store.get(&version_hint_path).await
-        && let Ok(version_hint_bytes) = version_hint_data.bytes().await
-        && let Ok(version_hint) = String::from_utf8(version_hint_bytes.to_vec())
-    {
-        let content = version_hint.trim();
-        if let Ok(version) = content.parse::<i32>() {
-            log::trace!("Using numeric version hint: {}", version);
-            hinted_version = Some(version);
-        } else {
-            let fname = if parse_metadata_file_name(content).is_some() {
-                content.to_string()
-            } else {
-                format!("{}.metadata.json", content)
-            };
-            log::trace!("Using filename version hint: {}", fname);
-            hinted_filename = Some(fname);
-        }
-    }
 
     log::trace!("Listing metadata directory");
     let metadata_prefix = base_path.join("metadata");
@@ -279,27 +258,6 @@ pub async fn find_latest_metadata_file(
                     .then_with(|| left.1.cmp(&right.1))
             });
 
-            if let Some(fname) = hinted_filename
-                && let Some((version, path, _)) =
-                    files.iter().rev().find(|(_, p, _)| p.ends_with(&fname))
-            {
-                log::trace!(
-                    "find_latest_metadata_file: selected by filename hint version {} path={}",
-                    version,
-                    path
-                );
-                return Ok(path.clone());
-            } else if let Some(hint) = hinted_version
-                && let Some((version, path, _)) = files.iter().rev().find(|(v, _, _)| *v == hint)
-            {
-                log::trace!(
-                    "find_latest_metadata_file: selected by numeric hint version {} path={}",
-                    version,
-                    path
-                );
-                return Ok(path.clone());
-            }
-
             if let Some((version, latest_file, _)) = files.last() {
                 log::trace!(
                     "find_latest_metadata_file: selected version {} path={}",
@@ -321,16 +279,21 @@ pub async fn find_latest_metadata_file(
 mod tests {
     use std::collections::HashMap;
     use std::io::{self, Write};
+    use std::sync::Arc;
 
+    use bytes::Bytes;
     use datafusion::common::{DataFusionError, Result};
     use flate2::Compression;
     use flate2::write::GzEncoder;
+    use object_store::memory::InMemory;
+    use object_store::path::Path as ObjectPath;
+    use object_store::{ObjectStore, ObjectStoreExt};
     use url::Url;
 
     use super::{
         MetadataFileCodec, MetadataFileName, decode_metadata_file, encode_metadata_file,
-        metadata_file_extension_from_properties, metadata_location_to_object_path,
-        parse_metadata_file_name, table_metadata_location,
+        find_latest_metadata_file, metadata_file_extension_from_properties,
+        metadata_location_to_object_path, parse_metadata_file_name, table_metadata_location,
     };
 
     #[test]
@@ -484,5 +447,33 @@ mod tests {
             "zstd".to_string(),
         );
         assert!(metadata_file_extension_from_properties(&properties).is_err());
+    }
+
+    #[test]
+    fn stale_version_hint_does_not_select_stale_metadata() -> Result<()> {
+        futures::executor::block_on(async {
+            let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+            for (path, value) in [
+                ("table/metadata/v1.metadata.json", b"v1".as_slice()),
+                ("table/metadata/v2.metadata.json", b"v2".as_slice()),
+                ("table/metadata/version-hint.text", b"1".as_slice()),
+            ] {
+                store
+                    .put(
+                        &ObjectPath::from(path),
+                        object_store::PutPayload::from(Bytes::copy_from_slice(value)),
+                    )
+                    .await
+                    .map_err(|error| DataFusionError::External(Box::new(error)))?;
+            }
+            let table_url = Url::parse("memory:///table/")
+                .map_err(|error| DataFusionError::External(Box::new(error)))?;
+
+            assert_eq!(
+                find_latest_metadata_file(&store, &table_url).await?,
+                "table/metadata/v2.metadata.json"
+            );
+            Ok(())
+        })
     }
 }
