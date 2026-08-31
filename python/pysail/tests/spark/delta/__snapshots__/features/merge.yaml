@@ -2063,6 +2063,7 @@ data:
     partitions=1
     distribution=Hash(keys=[__sail_src_id@0], channels=1)
     placement=Worker
+    retry=Default
     ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
       FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
         DataSourceExec: partitions=1, partition_sizes=[1]
@@ -2073,6 +2074,7 @@ data:
     partitions=1
     distribution=Hash(keys=[id@0], channels=1)
     placement=Worker
+    retry=Default
     ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
       MonotonicIdExec: col=__sail_merge_target_row_id
         DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
@@ -2083,6 +2085,7 @@ data:
     partitions=1
     distribution=Hash(keys=[__sail_merge_target_row_id@5], channels=4)
     placement=Worker
+    retry=Default
     HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL, projection=[id@5, category@6, amount@7, note@8, __sail_file_path@9, __sail_merge_target_row_id@10, __sail_merge_target_row_present@11, __sail_src_id@0, __sail_src_category@1, __sail_src_amount@2, __sail_src_note@3, __sail_merge_source_row_present@4]
       StageInputExec: input=0, partitioning=Hash([__sail_src_id@0], 1)
       StageInputExec: input=1, partitioning=Hash([id@0], 1)
@@ -2093,6 +2096,7 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=4)
     placement=Worker
+    retry=Default
     FilterExec: column3@1 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4), projection=[]
       DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -2102,6 +2106,7 @@ data:
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
+    retry=Default
     AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_merge_source_metric]
       StageInputExec: input=0, partitioning=RoundRobinBatch(4)
 
@@ -2111,6 +2116,7 @@ data:
     partitions=1
     distribution=Hash(keys=[__sail_src_id@0], channels=1)
     placement=Worker
+    retry=Default
     ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
       FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
         DataSourceExec: partitions=1, partition_sizes=[1]
@@ -2121,6 +2127,7 @@ data:
     partitions=1
     distribution=Hash(keys=[id@0], channels=1)
     placement=Worker
+    retry=Default
     ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
       MonotonicIdExec: col=__sail_merge_target_row_id
         DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
@@ -2131,6 +2138,7 @@ data:
     partitions=1
     distribution=Hash(keys=[__sail_merge_target_row_id@5], channels=4)
     placement=Worker
+    retry=Default
     HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL, projection=[id@5, category@6, amount@7, note@8, __sail_file_path@9, __sail_merge_target_row_id@10, __sail_merge_target_row_present@11, __sail_src_id@0, __sail_src_category@1, __sail_src_amount@2, __sail_src_note@3, __sail_merge_source_row_present@4]
       StageInputExec: input=0, partitioning=Hash([__sail_src_id@0], 1)
       StageInputExec: input=1, partitioning=Hash([id@0], 1)
@@ -2141,6 +2149,7 @@ data:
     partitions=4
     distribution=Hash(keys=[__sail_file_path@0], channels=4)
     placement=Worker
+    retry=Default
     AggregateExec: mode=Partial, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
       FilterExec: __sail_merge_target_row_present@3 IS NOT NULL AND (__sail_merge_source_row_present@5 IS NOT NULL AND id@0 = __sail_src_id@4 AND category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR __sail_merge_source_row_present@5 IS NULL AND category@1 = stale), projection=[__sail_file_path@2]
         ProjectionExec: expr=[id@0 as id, category@1 as category, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_present@6 as __sail_merge_target_row_present, __sail_src_id@7 as __sail_src_id, __sail_merge_source_row_present@11 as __sail_merge_source_row_present]
@@ -2153,6 +2162,7 @@ data:
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
+    retry=Default
     AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
       StageInputExec: input=0, partitioning=Hash([__sail_file_path@0], 4)
 
@@ -2162,6 +2172,7 @@ data:
     partitions=1
     distribution=Hash(keys=[__sail_src_id@0], channels=1)
     placement=Worker
+    retry=Default
     ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
       FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
         DataSourceExec: partitions=1, partition_sizes=[1]
@@ -2172,6 +2183,7 @@ data:
     partitions=1
     distribution=Hash(keys=[id@0], channels=1)
     placement=Worker
+    retry=Default
     ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
       MonotonicIdExec: col=__sail_merge_target_row_id
         DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
@@ -2182,6 +2194,7 @@ data:
     partitions=1
     distribution=Hash(keys=[__sail_merge_target_row_id@5], channels=4)
     placement=Worker
+    retry=Default
     HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL, projection=[id@5, category@6, amount@7, note@8, __sail_file_path@9, __sail_merge_target_row_id@10, __sail_merge_target_row_present@11, __sail_src_id@0, __sail_src_category@1, __sail_src_amount@2, __sail_src_note@3, __sail_merge_source_row_present@4]
       StageInputExec: input=0, partitioning=Hash([__sail_src_id@0], 1)
       StageInputExec: input=1, partitioning=Hash([id@0], 1)
@@ -2192,6 +2205,7 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=4)
     placement=Worker
+    retry=Default
     FilterExec: column3@1 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4), projection=[]
       DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -2201,6 +2215,7 @@ data:
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
+    retry=Default
     AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_merge_source_metric]
       StageInputExec: input=0, partitioning=RoundRobinBatch(4)
 
@@ -2210,6 +2225,7 @@ data:
     partitions=1
     distribution=Hash(keys=[__sail_src_id@0], channels=1)
     placement=Worker
+    retry=Default
     ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note, true as __sail_merge_source_row_present]
       FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
         DataSourceExec: partitions=1, partition_sizes=[1]
@@ -2220,6 +2236,7 @@ data:
     partitions=1
     distribution=Hash(keys=[id@0], channels=1)
     placement=Worker
+    retry=Default
     ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
       MonotonicIdExec: col=__sail_merge_target_row_id
         DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
@@ -2230,6 +2247,7 @@ data:
     partitions=1
     distribution=Hash(keys=[__sail_merge_target_row_id@5], channels=4)
     placement=Worker
+    retry=Default
     HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL, projection=[id@5, category@6, amount@7, note@8, __sail_file_path@9, __sail_merge_target_row_id@10, __sail_merge_target_row_present@11, __sail_src_id@0, __sail_src_category@1, __sail_src_amount@2, __sail_src_note@3, __sail_merge_source_row_present@4]
       StageInputExec: input=0, partitioning=Hash([__sail_src_id@0], 1)
       StageInputExec: input=1, partitioning=Hash([id@0], 1)
@@ -2240,6 +2258,7 @@ data:
     partitions=4
     distribution=Hash(keys=[__sail_file_path@0], channels=4)
     placement=Worker
+    retry=Default
     AggregateExec: mode=Partial, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
       FilterExec: __sail_merge_target_row_present@3 IS NOT NULL AND (__sail_merge_source_row_present@5 IS NOT NULL AND id@0 = __sail_src_id@4 AND category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR __sail_merge_source_row_present@5 IS NULL AND category@1 = stale), projection=[__sail_file_path@2]
         ProjectionExec: expr=[id@0 as id, category@1 as category, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_present@6 as __sail_merge_target_row_present, __sail_src_id@7 as __sail_src_id, __sail_merge_source_row_present@11 as __sail_merge_source_row_present]
@@ -2252,6 +2271,7 @@ data:
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
+    retry=Default
     AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
       StageInputExec: input=0, partitioning=Hash([__sail_file_path@0], 4)
 
@@ -2261,6 +2281,7 @@ data:
     partitions=2
     distribution=Hash(keys=[CASE WHEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END ELSE CASE WHEN remove@1 IS NOT NULL THEN concat(CAST(octet_length(get_field(remove@1, path)) AS Utf8), :, get_field(remove@1, path), :, CASE WHEN remove@1 IS NOT NULL AND get_field(remove@1, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(remove@1, deletionVector, storageType), get_field(remove@1, deletionVector, pathOrInlineDv), CASE WHEN get_field(remove@1, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(remove@1, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END END], channels=4)
     placement=Worker
+    retry=Default
     DataSourceExec: file_groups={2 groups: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.json], [<tmp>/merge_explain_codegen/_delta_log/00000000000000000001.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
 
     === stage 21 ===
@@ -2269,6 +2290,7 @@ data:
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
+    retry=Default
     DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
       HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, deletionVector@7]
         StageInputExec: input=0, partitioning=UnknownPartitioning(1)
@@ -2283,6 +2305,7 @@ data:
     partitions=11
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
+    retry=Default
     UnionExec
       DeltaWriterExec(table_path=file://<tmp>/merge_explain_codegen/)
         UnionExec
@@ -2322,6 +2345,7 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Driver
+    retry=Default
     DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
       StageInputExec: input=0, partitioning=UnknownPartitioning(1)
 
@@ -2331,6 +2355,7 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
+    retry=Default
     StageInputExec: input=0, partitioning=UnknownPartitioning(1)
 ---
 name: "test_explain_extended_does_not_include_mergecardinalitycheck_when_source_is_grouped_by_join_keys"

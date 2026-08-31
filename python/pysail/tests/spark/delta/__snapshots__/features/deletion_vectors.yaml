@@ -391,6 +391,7 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=4)
     placement=Worker
+    retry=Default
     DeltaScanByAddsExec(table_path=file://<tmp>/dv_explain/, version=1, projection=Some([2]), limit=None, pushdown=true)
       DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -400,6 +401,7 @@ data:
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
+    retry=Default
     AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
       FilterExec: value@0 > 100, projection=[]
         StageInputExec: input=0, partitioning=RoundRobinBatch(4)
@@ -410,6 +412,7 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
+    retry=Default
     ProjectionExec: expr=[#3@0 as cnt]
       ProjectionExec: expr=[count(Int64(1))@0 as #3]
         AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]

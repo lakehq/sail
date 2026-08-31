@@ -101,6 +101,9 @@ impl PlanResolver<'_> {
                     let Some((candidate_name, base_reference)) = reference.split_last() else {
                         return Err(error.into());
                     };
+                    if base_reference.is_empty() {
+                        return Err(error.into());
+                    }
                     let base_status = match manager.get_table_or_view(base_reference).await {
                         Ok(status) => status,
                         Err(CatalogError::NotFound(_, _) | CatalogError::NotSupported(_)) => {

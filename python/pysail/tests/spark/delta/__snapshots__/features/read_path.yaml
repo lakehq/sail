@@ -388,6 +388,7 @@ data:
     partitions=1
     distribution=Hash(keys=[CASE WHEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END ELSE CASE WHEN remove@1 IS NOT NULL THEN concat(CAST(octet_length(get_field(remove@1, path)) AS Utf8), :, get_field(remove@1, path), :, CASE WHEN remove@1 IS NOT NULL AND get_field(remove@1, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(remove@1, deletionVector, storageType), get_field(remove@1, deletionVector, pathOrInlineDv), CASE WHEN get_field(remove@1, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(remove@1, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END END], channels=4)
     placement=Worker
+    retry=Default
     DataSourceExec: file_groups={1 group: [[<tmp>/delta_read_metadata/_delta_log/00000000000000000000.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
 
     === stage 1 ===
@@ -396,6 +397,7 @@ data:
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
+    retry=Default
     ProjectionExec: expr=[#3@0 as id, #4@1 as name, #5@2 as value]
       ProjectionExec: expr=[id@0 as #3, name@1 as #4, value@2 as #5]
         DeltaScanByAddsExec(table_path=file://<tmp>/delta_read_metadata/, version=0, projection=Some([0, 1, 2]), limit=None, pushdown=false)

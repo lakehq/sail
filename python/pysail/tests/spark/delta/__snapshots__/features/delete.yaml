@@ -411,6 +411,7 @@ data:
     partitions=2
     distribution=Hash(keys=[CASE WHEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END ELSE CASE WHEN remove@1 IS NOT NULL THEN concat(CAST(octet_length(get_field(remove@1, path)) AS Utf8), :, get_field(remove@1, path), :, CASE WHEN remove@1 IS NOT NULL AND get_field(remove@1, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(remove@1, deletionVector, storageType), get_field(remove@1, deletionVector, pathOrInlineDv), CASE WHEN get_field(remove@1, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(remove@1, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END END], channels=4)
     placement=Worker
+    retry=Default
     DataSourceExec: file_groups={2 groups: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.json], [<tmp>/delete_explain_codegen/_delta_log/00000000000000000001.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
 
     === stage 1 ===
@@ -419,6 +420,7 @@ data:
     partitions=2
     distribution=Hash(keys=[CASE WHEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END ELSE CASE WHEN remove@1 IS NOT NULL THEN concat(CAST(octet_length(get_field(remove@1, path)) AS Utf8), :, get_field(remove@1, path), :, CASE WHEN remove@1 IS NOT NULL AND get_field(remove@1, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(remove@1, deletionVector, storageType), get_field(remove@1, deletionVector, pathOrInlineDv), CASE WHEN get_field(remove@1, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(remove@1, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END END], channels=4)
     placement=Worker
+    retry=Default
     DataSourceExec: file_groups={2 groups: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.json], [<tmp>/delete_explain_codegen/_delta_log/00000000000000000001.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
 
     === stage 2 ===
@@ -427,6 +429,7 @@ data:
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
+    retry=Default
     DeltaDiscoveryExec(table_path=file://<tmp>/delete_explain_codegen/)
       FilterExec: (get_field(stats_parsed@7, minValues, department) IS NULL OR get_field(stats_parsed@7, maxValues, department) IS NULL OR get_field(stats_parsed@7, minValues, department) <= Engineering AND get_field(stats_parsed@7, maxValues, department) >= Engineering OR get_field(stats_parsed@7, minValues, department) IS NULL OR get_field(stats_parsed@7, maxValues, department) IS NULL OR get_field(stats_parsed@7, minValues, department) <= Marketing AND get_field(stats_parsed@7, maxValues, department) >= Marketing) AND (get_field(stats_parsed@7, nullCount, active) IS NULL OR get_field(stats_parsed@7, numRecords) IS NULL OR get_field(stats_parsed@7, nullCount, active) < get_field(stats_parsed@7, numRecords))
         DeltaMetadataStatsExec(output=stats_parsed, columns=[department, salary])
@@ -441,6 +444,7 @@ data:
     partitions=5
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
+    retry=Default
     UnionExec
       DeltaWriterExec(table_path=file://<tmp>/delete_explain_codegen/)
         FilterExec: (salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL) IS DISTINCT FROM true
@@ -461,6 +465,7 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Driver
+    retry=Default
     DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
       StageInputExec: input=0, partitioning=UnknownPartitioning(1)
 
@@ -470,6 +475,7 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
+    retry=Default
     StageInputExec: input=0, partitioning=UnknownPartitioning(1)
 ---
 name: "test_explain_includes_json_delta_log_commits_when_present"
