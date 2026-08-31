@@ -5,7 +5,6 @@ use crate::lifecycle::actor::{ApplicationRegistration, LifecycleManagerActor};
 use crate::lifecycle::{LifecycleManagerMessage, LifecycleManagerOptions};
 use crate::master::MasterClient;
 
-#[tonic::async_trait]
 impl Actor for LifecycleManagerActor {
     type Message = LifecycleManagerMessage;
     type Options = LifecycleManagerOptions;
@@ -19,6 +18,7 @@ impl Actor for LifecycleManagerActor {
         Self {
             options,
             client,
+            worker_clients: Default::default(),
             excluded_workers: Default::default(),
             registered_shuffles: Default::default(),
             reservations: Default::default(),
@@ -30,10 +30,12 @@ impl Actor for LifecycleManagerActor {
             shuffle_ids: Default::default(),
             next_shuffle_id: 0,
             application_registration: ApplicationRegistration::Pending,
+            application_metrics: Default::default(),
+            heartbeat_metrics: None,
         }
     }
 
-    async fn start(&mut self, _ctx: &mut ActorContext<Self>) {
+    async fn start(&mut self, ctx: &mut ActorContext<Self>) {
         self.application_registration = match self
             .client
             .register_application(self.options.application_id.clone(), self.user_identifier())
@@ -46,9 +48,20 @@ impl Actor for LifecycleManagerActor {
                 ApplicationRegistration::Failed { reason }
             }
         };
+        if matches!(
+            self.application_registration,
+            ApplicationRegistration::Succeeded
+        ) {
+            self.application_metrics.application_count = 1;
+            ctx.send(LifecycleManagerMessage::Heartbeat);
+        }
     }
 
-    fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
+    async fn receive(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        message: Self::Message,
+    ) -> ActorAction {
         match message {
             LifecycleManagerMessage::GetShuffleId {
                 job_id,
@@ -103,6 +116,13 @@ impl Actor for LifecycleManagerActor {
                 result,
                 reply,
             } => self.handle_unregister_shuffle_complete(shuffle_id, result, reply),
+            LifecycleManagerMessage::ReportMetrics { metrics, result } => {
+                self.handle_report_metrics(metrics, result)
+            }
+            LifecycleManagerMessage::Heartbeat => self.handle_heartbeat(ctx),
+            LifecycleManagerMessage::HeartbeatComplete { result } => {
+                self.handle_heartbeat_complete(result)
+            }
             LifecycleManagerMessage::Stop { result } => self.handle_stop(ctx, result),
             LifecycleManagerMessage::StopComplete { result } => {
                 let _ = result.send(());

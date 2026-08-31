@@ -61,7 +61,8 @@ impl ReadFormat for ParquetReadFormat {
 
         let metadata_cache = ctx.runtime_env().cache_manager.get_file_metadata_cache();
         let metadata_size_hint = options.global.metadata_size_hint;
-        let metadata_fetch_concurrency = ctx.config_options().execution.meta_fetch_concurrency;
+        let metadata_fetch_concurrency: usize =
+            ctx.config_options().execution.meta_fetch_concurrency.into();
 
         let objects = files
             .iter()
@@ -161,7 +162,7 @@ impl ReadFormat for ParquetReadFormat {
             .with_limit(input.limit)
             .with_output_ordering(input.output_ordering)
             .with_preserve_order(input.preserve_order)
-            .with_partitioned_by_file_group(input.partitioned_by_file_group)
+            .with_output_partitioning(input.output_partitioning)
             .build();
 
         Ok(config)

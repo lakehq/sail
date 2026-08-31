@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import pandas as pd
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
@@ -37,6 +39,65 @@ def test_basic_query_execution(spark):
     assert result[0]["result"] == 2  # noqa: PLR2004
 
 
+@pytest.mark.timeout(30)
+@pytest.mark.parametrize(
+    ("with_replacement", "expected"),
+    [
+        (False, [2, 3]),
+        pytest.param(
+            True,
+            [0, 2, 3, 4],
+            marks=pytest.mark.xfail(
+                reason="Replacement sampling RNG differs from Spark",
+                strict=True,
+            ),
+        ),
+    ],
+)
+def test_seeded_sample_in_cluster_mode(spark, with_replacement, expected):
+    sampled = spark.range(5, numPartitions=1).sample(with_replacement, 0.5, 1)
+    assert [row.id for row in sampled.collect()] == expected
+
+
+@pytest.mark.timeout(30)
+def test_sequence_with_column_bound_in_cluster_mode(spark):
+    assert spark.sql("SELECT sequence(1, 3) AS s").collect()[0]["s"] == [1, 2, 3]
+
+    df = spark.createDataFrame([(1,), (3,), (12,)], ["n"])
+    rows = df.withColumn("s", F.expr("sequence(1, n)")).collect()
+    assert {row.n: row.s for row in rows} == {
+        1: [1],
+        3: [1, 2, 3],
+        12: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+    }
+
+
+@pytest.mark.timeout(30)
+def test_temporal_sequence_in_cluster_mode(spark):
+    start = datetime(2018, 1, 1)  # noqa: DTZ001
+    noon = datetime(2018, 1, 1, 12)  # noqa: DTZ001
+    stop = datetime(2018, 1, 2)  # noqa: DTZ001
+    df = spark.createDataFrame(
+        [(start, stop)],
+        "start TIMESTAMP_NTZ, stop TIMESTAMP_NTZ",
+    )
+
+    row = df.select(
+        F.expr("sequence(start, stop)").alias("default_step"),
+        F.expr("sequence(start, stop, INTERVAL 12 HOURS)").alias("explicit_step"),
+    ).collect()[0]
+
+    assert row.default_step == [
+        start,
+        stop,
+    ]
+    assert row.explicit_step == [
+        start,
+        noon,
+        stop,
+    ]
+
+
 def test_dataframe_operations(spark):
     """Test DataFrame operations in local-cluster mode."""
     df = spark.createDataFrame([Row(a=1, b="hello"), Row(a=2, b="world"), Row(a=3, b="test")])
@@ -45,6 +106,32 @@ def test_dataframe_operations(spark):
     expected = pd.DataFrame({"a": [2, 3], "b": ["world", "test"]}).astype({"a": "int64"})  # Spark Connect uses int64
 
     assert_frame_equal(result, expected)
+
+
+@pytest.mark.timeout(30)
+def test_top_k_dynamic_filter_pushdown_is_enabled_in_cluster_mode(spark, tmp_path):
+    path = str(tmp_path / "dynamic_filter_top_k")
+    spark.range(100, numPartitions=4).write.parquet(path)
+
+    query = spark.read.parquet(path).filter(F.col("id") >= 10).orderBy(F.col("id").desc()).limit(5)  # noqa: PLR2004
+    assert "DynamicFilter" in query._explain_string()  # noqa: SLF001
+    assert [row.id for row in query.collect()] == [99, 98, 97, 96, 95]
+
+
+@pytest.mark.timeout(30)
+def test_join_dynamic_filter_is_disabled_in_cluster_mode(spark, tmp_path):
+    build_path = str(tmp_path / "dynamic_filter_build")
+    probe_path = str(tmp_path / "dynamic_filter_probe")
+    spark.createDataFrame([(1, "one"), (3, "three")], "id LONG, label STRING").coalesce(1).write.parquet(build_path)
+    spark.range(100, numPartitions=4).write.parquet(probe_path)
+
+    build = spark.read.parquet(build_path)
+    probe = spark.read.parquet(probe_path).withColumnRenamed("id", "probe_id")
+    query = build.join(probe, build.id == probe.probe_id).select("id", "label").orderBy("id")
+    plan = query._explain_string()  # noqa: SLF001
+    assert "HashJoinExec" in plan
+    assert "DynamicFilter" not in plan
+    assert [(row.id, row.label) for row in query.collect()] == [(1, "one"), (3, "three")]
 
 
 def test_aggregation_with_groupby(large_dataset):

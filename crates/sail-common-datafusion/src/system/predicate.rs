@@ -1,13 +1,215 @@
-use std::collections::VecDeque;
-use std::future::Future;
-use std::pin::Pin;
+use std::collections::BTreeSet;
+use std::ops::Bound;
 use std::sync::Arc;
 
 use datafusion_common::Result;
-use futures::FutureExt;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct TimestampMicros(pub i64);
 
 /// A predicate function.
 pub type Predicate<T> = Arc<dyn Fn(&T) -> Result<bool> + Send + Sync>;
+
+/// A range of values accepted by a filter.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ValueRange<T> {
+    pub lower: Bound<T>,
+    pub upper: Bound<T>,
+}
+
+/// A normalized union of ranges accepted by a filter.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ValueDomain<T> {
+    ranges: Vec<ValueRange<T>>,
+}
+
+impl<T> ValueDomain<T> {
+    pub fn all() -> Self {
+        Self {
+            ranges: vec![ValueRange {
+                lower: Bound::Unbounded,
+                upper: Bound::Unbounded,
+            }],
+        }
+    }
+
+    pub fn empty() -> Self {
+        Self { ranges: vec![] }
+    }
+
+    pub fn ranges(&self) -> &[ValueRange<T>] {
+        &self.ranges
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ranges.is_empty()
+    }
+
+    pub fn is_all(&self) -> bool {
+        matches!(
+            self.ranges.as_slice(),
+            [ValueRange {
+                lower: Bound::Unbounded,
+                upper: Bound::Unbounded,
+            }]
+        )
+    }
+}
+
+impl<T: Clone + Ord> ValueDomain<T> {
+    pub fn point(value: T) -> Self {
+        Self::from_points([value])
+    }
+
+    pub fn from_points(values: impl IntoIterator<Item = T>) -> Self {
+        Self {
+            ranges: values
+                .into_iter()
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .map(|value| ValueRange {
+                    lower: Bound::Included(value.clone()),
+                    upper: Bound::Included(value),
+                })
+                .collect(),
+        }
+    }
+
+    /// Returns the values when every range is a point, or `None` otherwise.
+    pub fn points(&self) -> Option<Vec<T>> {
+        self.ranges
+            .iter()
+            .map(|range| match (&range.lower, &range.upper) {
+                (Bound::Included(lower), Bound::Included(upper)) if lower == upper => {
+                    Some(lower.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn range(lower: Bound<T>, upper: Bound<T>) -> Self {
+        let range = ValueRange { lower, upper };
+        if Self::is_non_empty_range(&range) {
+            Self {
+                ranges: vec![range],
+            }
+        } else {
+            Self::empty()
+        }
+    }
+
+    pub fn intersect(&self, other: &Self) -> Self {
+        let mut ranges = vec![];
+        for left in &self.ranges {
+            for right in &other.ranges {
+                let range = ValueRange {
+                    lower: Self::max_lower(&left.lower, &right.lower),
+                    upper: Self::min_upper(&left.upper, &right.upper),
+                };
+                if Self::is_non_empty_range(&range) {
+                    ranges.push(range);
+                }
+            }
+        }
+        Self { ranges }
+    }
+
+    fn max_lower(left: &Bound<T>, right: &Bound<T>) -> Bound<T> {
+        match (left, right) {
+            (Bound::Unbounded, bound) | (bound, Bound::Unbounded) => bound.clone(),
+            (Bound::Included(left), Bound::Included(right)) => match left.cmp(right) {
+                std::cmp::Ordering::Less => Bound::Included(right.clone()),
+                std::cmp::Ordering::Greater => Bound::Included(left.clone()),
+                std::cmp::Ordering::Equal => Bound::Included(left.clone()),
+            },
+            (Bound::Included(left), Bound::Excluded(right)) => match left.cmp(right) {
+                std::cmp::Ordering::Less => Bound::Excluded(right.clone()),
+                std::cmp::Ordering::Greater => Bound::Included(left.clone()),
+                std::cmp::Ordering::Equal => Bound::Excluded(left.clone()),
+            },
+            (Bound::Excluded(left), Bound::Included(right)) => match left.cmp(right) {
+                std::cmp::Ordering::Less => Bound::Included(right.clone()),
+                std::cmp::Ordering::Greater => Bound::Excluded(left.clone()),
+                std::cmp::Ordering::Equal => Bound::Excluded(left.clone()),
+            },
+            (Bound::Excluded(left), Bound::Excluded(right)) => match left.cmp(right) {
+                std::cmp::Ordering::Less => Bound::Excluded(right.clone()),
+                std::cmp::Ordering::Greater => Bound::Excluded(left.clone()),
+                std::cmp::Ordering::Equal => Bound::Excluded(left.clone()),
+            },
+        }
+    }
+
+    fn min_upper(left: &Bound<T>, right: &Bound<T>) -> Bound<T> {
+        match (left, right) {
+            (Bound::Unbounded, bound) | (bound, Bound::Unbounded) => bound.clone(),
+            (Bound::Included(left), Bound::Included(right)) => match left.cmp(right) {
+                std::cmp::Ordering::Less => Bound::Included(left.clone()),
+                std::cmp::Ordering::Greater => Bound::Included(right.clone()),
+                std::cmp::Ordering::Equal => Bound::Included(left.clone()),
+            },
+            (Bound::Included(left), Bound::Excluded(right)) => match left.cmp(right) {
+                std::cmp::Ordering::Less => Bound::Included(left.clone()),
+                std::cmp::Ordering::Greater => Bound::Excluded(right.clone()),
+                std::cmp::Ordering::Equal => Bound::Excluded(left.clone()),
+            },
+            (Bound::Excluded(left), Bound::Included(right)) => match left.cmp(right) {
+                std::cmp::Ordering::Less => Bound::Excluded(left.clone()),
+                std::cmp::Ordering::Greater => Bound::Included(right.clone()),
+                std::cmp::Ordering::Equal => Bound::Excluded(left.clone()),
+            },
+            (Bound::Excluded(left), Bound::Excluded(right)) => match left.cmp(right) {
+                std::cmp::Ordering::Less => Bound::Excluded(left.clone()),
+                std::cmp::Ordering::Greater => Bound::Excluded(right.clone()),
+                std::cmp::Ordering::Equal => Bound::Excluded(left.clone()),
+            },
+        }
+    }
+
+    fn is_non_empty_range(range: &ValueRange<T>) -> bool {
+        match (&range.lower, &range.upper) {
+            (Bound::Included(lower), Bound::Included(upper)) => lower <= upper,
+            (Bound::Included(lower), Bound::Excluded(upper))
+            | (Bound::Excluded(lower), Bound::Included(upper))
+            | (Bound::Excluded(lower), Bound::Excluded(upper)) => lower < upper,
+            _ => true,
+        }
+    }
+}
+
+/// A filter that carries both a value domain for access planning and an exact predicate.
+pub struct ValueFilter<T> {
+    pub domain: ValueDomain<T>,
+    pub predicate: Predicate<T>,
+}
+
+/// A filter over the value associated with a specific map key.
+pub struct MapValueFilter<K, V> {
+    pub key: K,
+    pub domain: ValueDomain<V>,
+    pub predicate: Predicate<V>,
+}
+
+impl<K, V> MapValueFilter<K, V> {
+    pub fn new(key: K, domain: ValueDomain<V>, predicate: Predicate<V>) -> Self {
+        Self {
+            key,
+            domain,
+            predicate,
+        }
+    }
+}
+
+impl<T> ValueFilter<T> {
+    pub fn new(domain: ValueDomain<T>, predicate: Predicate<T>) -> Self {
+        Self { domain, predicate }
+    }
+
+    pub fn all(predicate: Predicate<T>) -> Self {
+        Self::new(ValueDomain::all(), predicate)
+    }
+}
 
 /// A collection of common predicate helpers.
 pub struct Predicates;
@@ -20,351 +222,17 @@ impl Predicates {
     pub fn always_false<T>() -> Predicate<T> {
         Arc::new(|_| Ok(false))
     }
-
-    pub fn transform<T, U, F>(predicate: Predicate<T>, mapper: F) -> Predicate<U>
-    where
-        T: 'static,
-        F: Fn(&U) -> T + Send + Sync + 'static,
-    {
-        Arc::new(move |u: &U| {
-            let t = mapper(u);
-            predicate(&t)
-        })
-    }
-}
-
-/// An extension trait for iterators to support predicate-based filtering and mapping.
-pub trait PredicateExt: Sized {
-    type Item;
-
-    fn predicate_filter_map<T, U, K, V>(
-        self,
-        predicate: Predicate<T>,
-        key: K,
-        value: V,
-    ) -> PredicateFilterMap<Self, T, K, V>
-    where
-        K: Fn(&Self::Item) -> &T,
-        V: Fn(Self::Item) -> U,
-    {
-        PredicateFilterMap {
-            input: self,
-            predicate,
-            key,
-            value,
-            fetch: usize::MAX,
-        }
-    }
-
-    fn predicate_filter_flat_map<T, U, K, V, S>(
-        self,
-        predicate: Predicate<T>,
-        key: K,
-        value: V,
-    ) -> PredicateFilterFlatMap<Self, T, K, V, S::IntoIter>
-    where
-        K: Fn(&Self::Item) -> &T,
-        V: Fn(Self::Item) -> S,
-        S: IntoIterator<Item = U>,
-    {
-        PredicateFilterFlatMap {
-            input: self,
-            predicate,
-            key,
-            value,
-            fetch: usize::MAX,
-            current: None,
-        }
-    }
-
-    fn predicate_filter_async_flat_map<T, U, K, V>(
-        self,
-        predicate: Predicate<T>,
-        key: K,
-        value: V,
-    ) -> PredicateFilterAsyncFlatMap<Self, T, K, V>
-    where
-        K: Fn(&Self::Item) -> &T,
-        V: Fn(Self::Item) -> Pin<Box<dyn Future<Output = Result<Vec<U>>> + Send>>,
-    {
-        PredicateFilterAsyncFlatMap {
-            input: self,
-            predicate,
-            key,
-            value,
-        }
-    }
-}
-
-impl<I> PredicateExt for I
-where
-    I: Iterator,
-{
-    type Item = I::Item;
-}
-
-pub struct PredicateFilterMap<I, T, K, V> {
-    input: I,
-    predicate: Predicate<T>,
-    key: K,
-    value: V,
-    fetch: usize,
-}
-
-impl<I, T, K, V> PredicateFilterMap<I, T, K, V> {
-    pub fn fetch(mut self, fetch: usize) -> Self {
-        self.fetch = fetch;
-        self
-    }
-}
-
-impl<I, T, K, V, U> Iterator for PredicateFilterMap<I, T, K, V>
-where
-    I: Iterator,
-    K: Fn(&I::Item) -> &T,
-    V: Fn(I::Item) -> U,
-{
-    type Item = Result<U>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.fetch == 0 {
-            return None;
-        }
-        for item in self.input.by_ref() {
-            match (self.predicate)((self.key)(&item)) {
-                Ok(true) => {
-                    self.fetch -= 1;
-                    return Some(Ok((self.value)(item)));
-                }
-                Ok(false) => continue,
-                Err(e) => return Some(Err(e)),
-            }
-        }
-        None
-    }
-}
-
-pub struct PredicateFilterFlatMap<I, T, K, V, C> {
-    input: I,
-    predicate: Predicate<T>,
-    key: K,
-    value: V,
-    fetch: usize,
-    current: Option<C>,
-}
-
-impl<I, T, K, V, C> PredicateFilterFlatMap<I, T, K, V, C> {
-    pub fn fetch(mut self, fetch: usize) -> Self {
-        self.fetch = fetch;
-        self
-    }
-}
-
-impl<I, T, K, V, U, S> Iterator for PredicateFilterFlatMap<I, T, K, V, S::IntoIter>
-where
-    I: Iterator,
-    K: Fn(&I::Item) -> &T,
-    V: Fn(I::Item) -> S,
-    S: IntoIterator<Item = U>,
-{
-    type Item = Result<U>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.fetch == 0 {
-            return None;
-        }
-        if let Some(current) = &mut self.current {
-            match current.next() {
-                Some(item) => {
-                    self.fetch -= 1;
-                    return Some(Ok(item));
-                }
-                _ => {
-                    self.current = None;
-                }
-            }
-        }
-        for item in self.input.by_ref() {
-            match (self.predicate)((self.key)(&item)) {
-                Ok(true) => {
-                    let mut iter = (self.value)(item).into_iter();
-                    if let Some(v) = iter.next() {
-                        self.fetch -= 1;
-                        self.current = Some(iter);
-                        return Some(Ok(v));
-                    }
-                }
-                Ok(false) => continue,
-                Err(e) => return Some(Err(e)),
-            }
-        }
-        None
-    }
-}
-
-pub struct PredicateFilterAsyncFlatMap<I, T, K, V> {
-    input: I,
-    predicate: Predicate<T>,
-    key: K,
-    value: V,
-}
-
-impl<I, T, K, V, U> PredicateFilterAsyncFlatMap<I, T, K, V>
-where
-    I: Iterator,
-    K: Fn(&I::Item) -> &T,
-    V: Fn(I::Item) -> Pin<Box<dyn Future<Output = Result<Vec<U>>> + Send>>,
-{
-    pub fn into_task(self) -> PredicateFilterAsyncFlatMapTask<U> {
-        let mut tasks = VecDeque::new();
-
-        for item in self.input {
-            match (self.predicate)((self.key)(&item)) {
-                Ok(true) => {
-                    let fut = (self.value)(item);
-                    tasks.push_back(fut);
-                }
-                Ok(false) => continue,
-                Err(e) => {
-                    let fut = async move { Err(e) }.boxed();
-                    tasks.push_back(fut);
-                }
-            }
-        }
-
-        PredicateFilterAsyncFlatMapTask {
-            tasks,
-            fetch: usize::MAX,
-        }
-    }
-}
-
-pub struct PredicateFilterAsyncFlatMapTask<U> {
-    #[expect(clippy::type_complexity)]
-    tasks: VecDeque<Pin<Box<dyn Future<Output = Result<Vec<U>>> + Send>>>,
-    fetch: usize,
-}
-
-impl<U> PredicateFilterAsyncFlatMapTask<U> {
-    pub fn fetch(mut self, fetch: usize) -> Self {
-        self.fetch = fetch;
-        self
-    }
-
-    pub async fn collect(mut self) -> Result<Vec<U>> {
-        let mut items = vec![];
-
-        while let Some(task) = self.tasks.pop_front() {
-            let mut v = task.await?;
-            if v.len() > self.fetch {
-                v.truncate(self.fetch);
-            }
-            self.fetch -= v.len();
-            items.extend(v);
-            if self.fetch == 0 {
-                break;
-            }
-        }
-        Ok(items)
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use datafusion_common::{Result, internal_err};
-
-    use super::{Predicate, PredicateExt};
-
-    fn is_even() -> Predicate<i32> {
-        Arc::new(|x: &i32| Ok(x % 2 == 0))
-    }
-
-    fn error_on_three() -> Predicate<i32> {
-        Arc::new(|x: &i32| {
-            if *x == 3 {
-                internal_err!("error: {x}")
-            } else {
-                Ok(true)
-            }
-        })
-    }
+    use super::{Bound, ValueDomain};
 
     #[test]
-    fn test_predicate_filter_map() {
-        let data = [1, 2, 3, 4, 5];
+    fn value_domain_intersects_points_and_ranges() {
+        let points = ValueDomain::from_points([1_u64, 3, 5]);
+        let range = ValueDomain::range(Bound::Excluded(1), Bound::Included(4));
 
-        let filter_map = |predicate| {
-            data.iter()
-                .predicate_filter_map(predicate, |&x| x, |x| x * 10)
-        };
-
-        let result = filter_map(is_even()).fetch(2).collect::<Result<Vec<_>>>();
-        assert_eq!(result.ok(), Some(vec![20, 40]));
-
-        let result = filter_map(error_on_three())
-            .fetch(3)
-            .collect::<Result<Vec<_>>>();
-        assert!(result.is_err());
-
-        let result = filter_map(error_on_three())
-            .fetch(1)
-            .collect::<Result<Vec<_>>>();
-        assert_eq!(result.ok(), Some(vec![10]));
-    }
-
-    #[test]
-    fn test_predicate_filter_flat_map() {
-        let data = [1, 2, 3, 4, 5];
-
-        let filter_flat_map = |predicate| {
-            data.iter()
-                .predicate_filter_flat_map(predicate, |&x| x, |x| vec![*x; *x as usize])
-        };
-
-        let result = filter_flat_map(is_even())
-            .fetch(5)
-            .collect::<Result<Vec<_>>>();
-        assert_eq!(result.ok(), Some(vec![2, 2, 4, 4, 4]));
-
-        let result = filter_flat_map(error_on_three())
-            .fetch(4)
-            .collect::<Result<Vec<_>>>();
-        assert!(result.is_err());
-
-        let result = filter_flat_map(error_on_three())
-            .fetch(3)
-            .collect::<Result<Vec<_>>>();
-        assert_eq!(result.ok(), Some(vec![1, 2, 2]));
-    }
-
-    #[tokio::test]
-    async fn test_predicate_filter_async_flat_map() {
-        let data = [1, 2, 3, 4, 5];
-
-        let task = |predicate| {
-            data.iter()
-                .predicate_filter_async_flat_map(
-                    predicate,
-                    |&x| x,
-                    |x| {
-                        Box::pin({
-                            let x = *x;
-                            async move { Ok(vec![x; x as usize]) }
-                        })
-                    },
-                )
-                .into_task()
-        };
-
-        let result = task(is_even()).fetch(5).collect().await;
-        assert_eq!(result.ok(), Some(vec![2, 2, 4, 4, 4]));
-
-        let result = task(error_on_three()).fetch(4).collect().await;
-        assert!(result.is_err());
-
-        let result = task(error_on_three()).fetch(3).collect().await;
-        assert_eq!(result.ok(), Some(vec![1, 2, 2]));
+        assert_eq!(points.intersect(&range).points(), Some(vec![3]));
     }
 }

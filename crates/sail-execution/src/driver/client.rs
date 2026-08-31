@@ -6,10 +6,11 @@ use crate::driver::r#gen::driver_service_client::DriverServiceClient;
 use crate::driver::r#gen::{
     CelebornGetJobShuffleIdsRequest, CelebornGetShuffleIdRequest, CelebornMapperEndRequest,
     CelebornPartitionLocation, CelebornRegisterShuffleRequest, CelebornRegisterShuffleResponse,
-    CelebornReviveRequest, CelebornReviveResponse, CelebornUnregisterShuffleRequest,
-    RegisterWorkerRequest, RegisterWorkerResponse, ReportTaskStatusRequest,
-    ReportTaskStatusResponse, ReportWorkerHeartbeatRequest, ReportWorkerHeartbeatResponse,
-    ReportWorkerKnownPeersRequest, ReportWorkerKnownPeersResponse,
+    CelebornReportMetricsRequest, CelebornReviveRequest, CelebornReviveResponse,
+    CelebornUnregisterShuffleRequest, RegisterWorkerRequest, RegisterWorkerResponse,
+    ReportMetricsRequest, ReportMetricsResponse, ReportTaskStatusRequest, ReportTaskStatusResponse,
+    ReportWorkerHeartbeatRequest, ReportWorkerHeartbeatResponse, ReportWorkerKnownPeersRequest,
+    ReportWorkerKnownPeersResponse,
 };
 use crate::driver::{TaskStatus, r#gen};
 use crate::error::{ExecutionError, ExecutionResult};
@@ -160,6 +161,19 @@ impl CelebornLifecycleManagerClient {
             .await?;
         Ok(())
     }
+
+    pub async fn report_metrics(&self, total_written: i64, file_count: i64) -> ExecutionResult<()> {
+        self.inner
+            .get()
+            .await?
+            .report_metrics(Request::new(CelebornReportMetricsRequest {
+                driver_id: self.driver_id.into(),
+                total_written,
+                file_count,
+            }))
+            .await?;
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
@@ -256,6 +270,20 @@ impl DriverClient {
         });
         let response = self.inner.get().await?.report_task_status(request).await?;
         let ReportTaskStatusResponse {} = response.into_inner();
+        Ok(())
+    }
+
+    pub async fn report_metrics(&self, metrics: Vec<Vec<u8>>) -> ExecutionResult<()> {
+        let response = self
+            .inner
+            .get()
+            .await?
+            .report_metrics(Request::new(ReportMetricsRequest {
+                driver_id: self.driver_id.into(),
+                metrics,
+            }))
+            .await?;
+        let ReportMetricsResponse {} = response.into_inner();
         Ok(())
     }
 }

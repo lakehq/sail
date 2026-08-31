@@ -2,12 +2,13 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema;
 use datafusion::execution::TaskContext;
+use datafusion::physical_expr::Partitioning;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskStreamKey, WorkerId};
 use crate::plan::ShufflePartitioning;
-use crate::proto::decode_remote_physical_expr;
+use crate::proto::{decode_remote_partitioning, decode_remote_physical_expr};
 use crate::task::r#gen;
 
 #[derive(Debug, Clone)]
@@ -68,6 +69,10 @@ pub struct TaskOutput {
 pub enum TaskOutputDistribution {
     Hash {
         keys: Vec<Arc<[u8]>>,
+        channels: usize,
+    },
+    Range {
+        partitioning: Arc<[u8]>,
         channels: usize,
     },
     RoundRobinBatch {
@@ -432,6 +437,13 @@ impl From<TaskOutputDistribution> for r#gen::TaskOutputDistribution {
                     channels: channels as u64,
                 })
             }
+            TaskOutputDistribution::Range {
+                partitioning,
+                channels,
+            } => r#gen::task_output_distribution::Kind::Range(r#gen::TaskOutputRangeDistribution {
+                partitioning: partitioning.to_vec(),
+                channels: channels as u64,
+            }),
             TaskOutputDistribution::RoundRobinBatch { channels } => {
                 r#gen::task_output_distribution::Kind::RoundRobin(
                     r#gen::TaskOutputRoundRobinDistribution {
@@ -460,6 +472,15 @@ impl TryFrom<r#gen::TaskOutputDistribution> for TaskOutputDistribution {
                 r#gen::TaskOutputHashDistribution { keys, channels },
             )) => Ok(TaskOutputDistribution::Hash {
                 keys: keys.into_iter().map(Arc::from).collect(),
+                channels: channels as usize,
+            }),
+            Some(r#gen::task_output_distribution::Kind::Range(
+                r#gen::TaskOutputRangeDistribution {
+                    partitioning,
+                    channels,
+                },
+            )) => Ok(TaskOutputDistribution::Range {
+                partitioning: Arc::from(partitioning),
                 channels: channels as usize,
             }),
             Some(r#gen::task_output_distribution::Kind::RoundRobin(
@@ -517,6 +538,7 @@ impl TaskOutput {
     pub fn channels(&self) -> usize {
         match self.distribution {
             TaskOutputDistribution::Hash { channels, .. } => channels,
+            TaskOutputDistribution::Range { channels, .. } => channels,
             TaskOutputDistribution::RoundRobinBatch { channels, .. } => channels,
             TaskOutputDistribution::RoundRobinRow { channels, .. } => channels,
         }
@@ -538,6 +560,29 @@ impl TaskOutput {
                     })
                     .collect::<ExecutionResult<Vec<_>>>()?;
                 Ok(ShufflePartitioning::Hash(keys, *channels))
+            }
+            TaskOutputDistribution::Range {
+                partitioning,
+                channels,
+            } => {
+                let partitioning =
+                    match decode_remote_partitioning(ctx, codec, partitioning.as_ref(), schema)
+                        .map_err(ExecutionError::from)?
+                    {
+                        Partitioning::Range(partitioning) => partitioning,
+                        partitioning => {
+                            return Err(ExecutionError::InvalidArgument(format!(
+                                "expected range partitioning, got {partitioning}"
+                            )));
+                        }
+                    };
+                if partitioning.partition_count() != *channels {
+                    return Err(ExecutionError::InvalidArgument(format!(
+                        "range partition count {} does not match task output channel count {channels}",
+                        partitioning.partition_count()
+                    )));
+                }
+                Ok(ShufflePartitioning::Range(partitioning))
             }
             TaskOutputDistribution::RoundRobinBatch { channels } => {
                 Ok(ShufflePartitioning::RoundRobinBatch(*channels))

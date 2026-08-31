@@ -101,8 +101,6 @@ Feature: try_avg
          |-- avg_x: double (nullable = true)
         """
 
-    # A GROUP BY key over an inline-table column stays non-nullable in Spark; Sail widens it.
-    @sail-bug
     @function(nullability)
     Scenario: try_avg doctest #13 (schema)
       When query

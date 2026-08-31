@@ -28,7 +28,8 @@ async fn shutdown() {
 
 pub(super) mod telemetry {
     use sail_common::config::AppConfig;
-    use sail_telemetry::telemetry::{ResourceOptions, init_telemetry, shutdown_telemetry};
+    use sail_telemetry::telemetry::{init_telemetry, shutdown_telemetry};
+    use sail_telemetry::{ResourceKind, ResourceOptions};
 
     pub struct TelemetryGuard {
         /// A marker to prevent struct creation without calling [`TelemetryGuard::try_new()`].
@@ -37,7 +38,9 @@ pub(super) mod telemetry {
 
     impl TelemetryGuard {
         pub fn try_new(config: &AppConfig) -> Result<Self, Box<dyn std::error::Error>> {
-            let resource = ResourceOptions { kind: "server" };
+            let resource = ResourceOptions {
+                kind: ResourceKind::Server,
+            };
             init_telemetry(&config.telemetry, resource)?;
             Ok(Self { _marker: () })
         }

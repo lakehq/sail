@@ -80,7 +80,8 @@ impl ScalarUDFImpl for StructFunction {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         datafusion_common::internal_err!(
-            "StructFunction: return_type() is not used; return_field_from_args() is implemented"
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
         )
     }
 

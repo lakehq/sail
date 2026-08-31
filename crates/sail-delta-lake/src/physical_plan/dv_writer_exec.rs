@@ -15,8 +15,9 @@ use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder,
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
-    PlanProperties, SendableRecordBatchStream,
+    PlanProperties, SendableRecordBatchStream, apply_expression_roots,
 };
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
@@ -30,6 +31,7 @@ use crate::physical_plan::{
     COL_ACTION, ExecCommitMeta, current_timestamp_millis, decode_adds_from_batch,
     delta_action_schema, encode_actions, meta_adds,
 };
+use crate::schema::PhysicalPartitionColumn;
 use crate::spec::{Action, Add, RemoveOptions};
 use crate::transaction::OperationMetrics;
 
@@ -77,7 +79,7 @@ pub struct DeletionVectorWriterExec {
     /// Table version.
     version: i64,
     /// Mapping from replay output partition column names to Delta log partition value keys.
-    partition_value_columns: Option<Vec<(String, String)>>,
+    partition_value_columns: Option<Vec<PhysicalPartitionColumn>>,
     /// The delta operation to record in the commit log.
     operation: Option<crate::spec::DeltaOperation>,
     /// Metrics set.
@@ -93,7 +95,7 @@ impl DeletionVectorWriterExec {
         condition: Arc<dyn PhysicalExpr>,
         table_schema: datafusion::arrow::datatypes::SchemaRef,
         version: i64,
-        partition_value_columns: Option<Vec<(String, String)>>,
+        partition_value_columns: Option<Vec<PhysicalPartitionColumn>>,
         operation: Option<crate::spec::DeltaOperation>,
     ) -> Result<Self> {
         let schema = delta_action_schema()?;
@@ -137,7 +139,7 @@ impl DeletionVectorWriterExec {
         self.version
     }
 
-    pub fn partition_value_columns(&self) -> Option<&[(String, String)]> {
+    pub fn partition_value_columns(&self) -> Option<&[PhysicalPartitionColumn]> {
         self.partition_value_columns.as_deref()
     }
 
@@ -158,7 +160,7 @@ pub struct DeletionVectorRowsWriterExec {
     path_column: String,
     row_index_column: String,
     version: i64,
-    partition_value_columns: Option<Vec<(String, String)>>,
+    partition_value_columns: Option<Vec<PhysicalPartitionColumn>>,
     operation: Option<crate::spec::DeltaOperation>,
     metrics: ExecutionPlanMetricsSet,
     cache: Arc<PlanProperties>,
@@ -172,7 +174,7 @@ impl DeletionVectorRowsWriterExec {
         path_column: impl Into<String>,
         row_index_column: impl Into<String>,
         version: i64,
-        partition_value_columns: Option<Vec<(String, String)>>,
+        partition_value_columns: Option<Vec<PhysicalPartitionColumn>>,
         operation: Option<crate::spec::DeltaOperation>,
     ) -> Result<Self> {
         let path_column = path_column.into();
@@ -236,7 +238,7 @@ impl DeletionVectorRowsWriterExec {
         self.version
     }
 
-    pub fn partition_value_columns(&self) -> Option<&[(String, String)]> {
+    pub fn partition_value_columns(&self) -> Option<&[PhysicalPartitionColumn]> {
         self.partition_value_columns.as_deref()
     }
 
@@ -376,6 +378,22 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
         vec![&self.input, &self.adds_input]
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    #[expect(deprecated)]
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: datafusion::physical_plan::ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.with_new_children(children)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -402,7 +420,7 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
                 Err(_) => return Distribution::SinglePartition,
             };
             let expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new(&self.path_column, idx));
-            Distribution::HashPartitioned(vec![expr])
+            Distribution::KeyPartitioned(vec![expr])
         };
         vec![dist_for(&self.input), dist_for(&self.adds_input)]
     }
@@ -647,6 +665,22 @@ impl ExecutionPlan for DeletionVectorWriterExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        apply_expression_roots([&self.condition], f)
+    }
+
+    #[expect(deprecated)]
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: datafusion::physical_plan::ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.with_new_children(children)
     }
 
     fn with_new_children(

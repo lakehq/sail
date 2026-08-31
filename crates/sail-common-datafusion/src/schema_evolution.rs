@@ -11,7 +11,7 @@ use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::{DataFusionError, Result, ScalarValue, exec_err};
 use datafusion::functions::core::getfield::GetFieldFunc;
 use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
-use datafusion::physical_expr::expressions::{self, Column, Literal};
+use datafusion::physical_expr::expressions::{self, CastExpr, Column, Literal};
 use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use datafusion::physical_expr_adapter::{PhysicalExprAdapter, PhysicalExprAdapterFactory};
 use datafusion::physical_plan::ColumnarValue;
@@ -362,6 +362,18 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
             );
         }
 
+        // TODO: Expose a pruning target for PhysicalName and FieldId casts so Delta and Iceberg
+        // can prune nested Parquet leaves without weakening their field-identity semantics.
+        if self.matching == StructFieldMatching::Name
+            && is_pure_name_structural_narrowing(physical_field, logical_field)
+        {
+            return Ok(Transformed::yes(Arc::new(CastExpr::new_with_target_field(
+                column_expr,
+                Arc::new(logical_field.clone()),
+                None,
+            ))));
+        }
+
         let input_field = Arc::new(physical_field.clone());
         let target_field = Arc::new(logical_field.clone());
         let cast = match self.timezone_mode {
@@ -385,6 +397,40 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
             }
         };
         Ok(Transformed::yes(Arc::new(cast)))
+    }
+}
+
+/// Returns whether DataFusion's name-based nested cast is equivalent to Sail's cast.
+/// Keeping the native cast for these shapes lets Parquet derive a leaf-level projection.
+fn is_pure_name_structural_narrowing(source: &Field, target: &Field) -> bool {
+    if is_variant_arrow_field(source)
+        || is_variant_arrow_field(target)
+        || is_variant_storage_type(source.data_type())
+        || is_variant_storage_type(target.data_type())
+    {
+        return false;
+    }
+
+    match (source.data_type(), target.data_type()) {
+        (DataType::Struct(source_fields), DataType::Struct(target_fields)) => {
+            target_fields.iter().all(|target_field| {
+                source_fields
+                    .iter()
+                    .find(|source_field| source_field.name() == target_field.name())
+                    .is_some_and(|source_field| {
+                        is_pure_name_structural_narrowing(source_field, target_field)
+                    })
+            })
+        }
+        (DataType::List(source_item), DataType::List(target_item))
+        | (DataType::LargeList(source_item), DataType::LargeList(target_item)) => {
+            is_pure_name_structural_narrowing(source_item, target_item)
+        }
+        _ => {
+            source.data_type() == target.data_type()
+                && !source.data_type().is_nested()
+                && !target.data_type().is_nested()
+        }
     }
 }
 

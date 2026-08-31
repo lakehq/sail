@@ -1,26 +1,22 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::common::{Result, internal_datafusion_err};
+use datafusion::common::Result;
 use datafusion::physical_expr::PhysicalExpr;
-use sail_common_datafusion::array::serde::ArrowSerializer;
 use sail_common_datafusion::extension::SessionExtension;
 use sail_common_datafusion::system::catalog::SystemTable;
-use sail_common_datafusion::system::observable::{SessionManagerObserver, StateObservable};
-use sail_common_datafusion::system::predicate::Predicates;
-use serde::{Deserialize, Serialize};
-use tokio::sync::oneshot;
+use sail_common_datafusion::system::predicate::{Predicates, ValueFilter};
+use sail_telemetry::system_event::SystemEventReader;
 
 use crate::predicate::PredicateExtractor;
 
 pub struct SystemTableService {
-    system_manager: Box<dyn StateObservable<SessionManagerObserver>>,
+    event_reader: SystemEventReader,
 }
 
 impl SystemTableService {
-    pub fn new(system_manager: Box<dyn StateObservable<SessionManagerObserver>>) -> Self {
-        Self { system_manager }
+    pub fn new(event_reader: SystemEventReader) -> Self {
+        Self { event_reader }
     }
 
     pub async fn read(
@@ -30,115 +26,95 @@ impl SystemTableService {
         filters: Vec<Arc<dyn PhysicalExpr>>,
         fetch: Option<usize>,
     ) -> Result<RecordBatch> {
-        let schema = table.schema();
         let fetch = fetch.unwrap_or(usize::MAX);
         let mut filters = PredicateExtractor::new(filters);
         let batch = match table {
             SystemTable::Jobs => {
                 let session_id = filters
                     .extract("session_id")?
-                    .unwrap_or_else(Predicates::always_true);
+                    .unwrap_or_else(|| ValueFilter::all(Predicates::always_true()));
                 let job_id = filters
                     .extract("job_id")?
-                    .unwrap_or_else(Predicates::always_true);
+                    .unwrap_or_else(|| ValueFilter::all(Predicates::always_true()));
                 filters.finalize()?;
-                self.observe_system_manager(
-                    |tx| SessionManagerObserver::Jobs {
-                        session_id,
-                        job_id,
-                        fetch,
-                        result: tx,
-                    },
-                    schema,
-                )
-                .await?
+                self.event_reader
+                    .read_jobs(session_id, job_id, fetch)
+                    .await?
+            }
+            SystemTable::Metrics => {
+                let timestamp = filters
+                    .extract("timestamp")?
+                    .unwrap_or_else(|| ValueFilter::all(Predicates::always_true()));
+                let name = filters
+                    .extract("name")?
+                    .unwrap_or_else(|| ValueFilter::all(Predicates::always_true()));
+                let attributes = filters.extract_map_values("attributes")?;
+                filters.finalize()?;
+                self.event_reader
+                    .read_metrics(timestamp, name, attributes, fetch)
+                    .await?
             }
             SystemTable::Stages => {
                 let session_id = filters
                     .extract("session_id")?
-                    .unwrap_or_else(Predicates::always_true);
+                    .unwrap_or_else(|| ValueFilter::all(Predicates::always_true()));
                 let job_id = filters
                     .extract("job_id")?
-                    .unwrap_or_else(Predicates::always_true);
+                    .unwrap_or_else(|| ValueFilter::all(Predicates::always_true()));
+                let stage = filters
+                    .extract("stage")?
+                    .unwrap_or_else(|| ValueFilter::all(Predicates::always_true()));
                 filters.finalize()?;
-                self.observe_system_manager(
-                    |tx| SessionManagerObserver::Stages {
-                        session_id,
-                        job_id,
-                        fetch,
-                        result: tx,
-                    },
-                    schema,
-                )
-                .await?
+                self.event_reader
+                    .read_stages(session_id, job_id, stage, fetch)
+                    .await?
             }
             SystemTable::Tasks => {
                 let session_id = filters
                     .extract("session_id")?
-                    .unwrap_or_else(Predicates::always_true);
+                    .unwrap_or_else(|| ValueFilter::all(Predicates::always_true()));
                 let job_id = filters
                     .extract("job_id")?
-                    .unwrap_or_else(Predicates::always_true);
+                    .unwrap_or_else(|| ValueFilter::all(Predicates::always_true()));
+                let stage = filters
+                    .extract("stage")?
+                    .unwrap_or_else(|| ValueFilter::all(Predicates::always_true()));
+                let partition = filters
+                    .extract("partition")?
+                    .unwrap_or_else(|| ValueFilter::all(Predicates::always_true()));
+                let attempt = filters
+                    .extract("attempt")?
+                    .unwrap_or_else(|| ValueFilter::all(Predicates::always_true()));
                 filters.finalize()?;
-                self.observe_system_manager(
-                    |tx| SessionManagerObserver::Tasks {
-                        session_id,
-                        job_id,
-                        fetch,
-                        result: tx,
-                    },
-                    schema,
-                )
-                .await?
+                self.event_reader
+                    .read_tasks(session_id, job_id, stage, partition, attempt, fetch)
+                    .await?
             }
             SystemTable::Options => {
                 let key = filters
                     .extract("key")?
-                    .unwrap_or_else(Predicates::always_true);
+                    .unwrap_or_else(|| ValueFilter::all(Predicates::always_true()));
                 filters.finalize()?;
-                self.observe_system_manager(
-                    |tx| SessionManagerObserver::Options {
-                        key,
-                        fetch,
-                        result: tx,
-                    },
-                    schema,
-                )
-                .await?
+                self.event_reader.read_options(key, fetch).await?
             }
             SystemTable::Sessions => {
                 let session_id = filters
                     .extract("session_id")?
-                    .unwrap_or_else(Predicates::always_true);
+                    .unwrap_or_else(|| ValueFilter::all(Predicates::always_true()));
                 filters.finalize()?;
-                self.observe_system_manager(
-                    |tx| SessionManagerObserver::Sessions {
-                        session_id,
-                        fetch,
-                        result: tx,
-                    },
-                    schema,
-                )
-                .await?
+                self.event_reader.read_sessions(session_id, fetch).await?
             }
             SystemTable::Workers => {
                 let session_id = filters
                     .extract("session_id")?
-                    .unwrap_or_else(Predicates::always_true);
+                    .unwrap_or_else(|| ValueFilter::all(Predicates::always_true()));
                 let worker_id = filters
                     .extract("worker_id")?
-                    .unwrap_or_else(Predicates::always_true);
+                    .unwrap_or_else(|| ValueFilter::all(Predicates::always_true()));
                 filters.finalize()?;
-                self.observe_system_manager(
-                    |tx| SessionManagerObserver::Workers {
-                        session_id,
-                        worker_id,
-                        fetch,
-                        result: tx,
-                    },
-                    schema,
-                )
-                .await?
+                self.event_reader
+                    .read_workers(session_id, worker_id, fetch)
+                    .await?
             }
         };
         if let Some(projection) = projection {
@@ -146,24 +122,6 @@ impl SystemTableService {
         } else {
             Ok(batch)
         }
-    }
-
-    async fn observe_system_manager<T, F>(
-        &self,
-        observer: F,
-        schema: SchemaRef,
-    ) -> Result<RecordBatch>
-    where
-        T: Serialize + for<'de> Deserialize<'de>,
-        F: FnOnce(oneshot::Sender<Result<Vec<T>>>) -> SessionManagerObserver,
-    {
-        let (tx, rx) = oneshot::channel();
-        let observer = observer(tx);
-        self.system_manager.observe(observer).await;
-        let items = rx
-            .await
-            .map_err(|_| internal_datafusion_err!("failed to observe system manager"))??;
-        ArrowSerializer::build_record_batch_with_schema(&items, schema)
     }
 }
 

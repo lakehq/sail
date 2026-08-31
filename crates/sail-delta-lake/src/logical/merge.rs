@@ -4,13 +4,14 @@ use datafusion::logical_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, Result};
 use datafusion_expr::logical_plan::Extension;
-use datafusion_expr::{Expr, LogicalPlan, TableScan, TableSource};
+use datafusion_expr::{Expr, LogicalPlan, TableScanBuilder, TableSource};
 use log::trace;
 use sail_common_datafusion::datasource::{
     MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, MergeCapableSource, MergeInfo, MergeMatchedAction,
     MergeNotMatchedBySourceAction,
 };
-use sail_logical_plan::merge::{RowLevelWriteNode, expand_merge, validate_merge_internal_columns};
+use sail_logical_plan::merge::{expand_merge, validate_merge_internal_columns};
+use sail_logical_plan::row_level::RowLevelWriteNode;
 
 use crate::logical::table_source::DeltaTableSource;
 
@@ -64,10 +65,14 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         );
     }
 
+    let mut options = info.options;
+    if let Some(partition_columns) = merge_target_partition_columns(&target_plan)? {
+        options.target.partition_by = partition_columns;
+    }
     let info = MergeInfo {
         target: Arc::new(target_plan),
         source: info.source,
-        options: info.options,
+        options,
         input_schema: info.input_schema,
     };
     let raw_target = Arc::clone(&info.target);
@@ -124,6 +129,26 @@ fn merge_target_supports_deletion_vectors(plan: &LogicalPlan) -> Result<bool> {
         Ok(TreeNodeRecursion::Continue)
     })?;
     Ok(supports)
+}
+
+fn merge_target_partition_columns(plan: &LogicalPlan) -> Result<Option<Vec<String>>> {
+    let mut partition_columns = None;
+    plan.apply(|node| {
+        if let LogicalPlan::TableScan(scan) = node
+            && let Some(delta_source) = scan.source.downcast_ref::<DeltaTableSource>()
+        {
+            partition_columns = Some(
+                delta_source
+                    .snapshot()
+                    .metadata()
+                    .partition_columns()
+                    .clone(),
+            );
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(partition_columns)
 }
 
 /// Attempts to enable MERGE metadata columns on a Delta table source.
@@ -199,13 +224,14 @@ fn ensure_merge_metadata_columns(
                         }
                     }
 
-                    let new_scan = LogicalPlan::TableScan(TableScan::try_new(
-                        scan.table_name.clone(),
-                        new_source,
-                        projection,
-                        scan.filters.clone(),
-                        scan.fetch,
-                    )?);
+                    let new_scan = LogicalPlan::TableScan(
+                        TableScanBuilder::new(scan.table_name.clone(), new_source)
+                            .with_projection(projection)
+                            .with_filters(scan.filters.clone())
+                            .with_fetch(scan.fetch)
+                            .with_statistics_requests(scan.statistics_requests.clone())
+                            .build()?,
+                    );
                     trace!(
                         "ensure_merge_metadata_columns (scan) after - schema_fields: {:?}",
                         new_scan

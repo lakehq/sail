@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use sail_common::runtime::RuntimeHandle;
 use sail_execution::driver::DriverGateway;
+use sail_telemetry::system_event::SystemEventReporter;
 
 use crate::session_factory::{ServerSessionInfo, SessionFactory, SessionJobRunnerFactory};
 
@@ -18,6 +19,7 @@ pub struct SessionManagerComponents {
     pub session_factory: Box<dyn SessionFactory<ServerSessionInfo>>,
     pub job_runner_factory: Box<dyn SessionJobRunnerFactory>,
     pub driver_gateway: Option<DriverGateway>,
+    pub event_reporter: SystemEventReporter,
 }
 
 impl SessionManagerOptions {

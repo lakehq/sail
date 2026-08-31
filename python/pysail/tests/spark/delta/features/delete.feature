@@ -324,6 +324,22 @@ Feature: Delta Lake Delete
         | 3  | NULL  | Marketing   |
         | 4  | Diana | Sales       |
 
+    Scenario: Comparison predicate preserves rows where the result is unknown
+      Given statement
+        """
+        DELETE FROM delta_delete_null WHERE department = 'Engineering'
+        """
+      When query
+        """
+        SELECT id, name, department FROM delta_delete_null ORDER BY id
+        """
+      Then query result ordered
+        | id | name  | department |
+        | 2  | Bob   | NULL       |
+        | 3  | NULL  | Marketing  |
+        | 4  | Diana | Sales      |
+        | 5  | NULL  | NULL       |
+
   Rule: EXPLAIN CODEGEN shows stepwise optimization for DELETE
     Background:
       Given variable location for temporary directory delete_explain_codegen

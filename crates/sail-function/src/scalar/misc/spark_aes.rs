@@ -1,4 +1,5 @@
 use std::fmt;
+use std::sync::Arc;
 
 use aes::cipher::block_padding::Pkcs7;
 use aes::cipher::consts::U12;
@@ -12,9 +13,13 @@ use datafusion::arrow::array::{
     BinaryArray, BinaryViewArray, FixedSizeBinaryArray, LargeBinaryArray, LargeStringArray,
     StringArray, StringViewArray,
 };
-use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::{
+    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, internal_err,
+};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 pub type Aes192Gcm = AesGcm<Aes192, U12>;
 
@@ -116,14 +121,23 @@ impl ScalarUDFImpl for SparkAESEncrypt {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() < 2 || arg_types.len() > 6 {
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `AesEncrypt` is `RuntimeReplaceable` over a `StaticInvoke` that leaves
+    /// `returnNullable` at its `true` default, so `nullable = true` whatever the arguments.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/objects/objects.scala#L334>
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        if args.arg_fields.len() < 2 || args.arg_fields.len() > 6 {
             return exec_err!(
                 "Spark `aes_encrypt` function requires 2 to 6 arguments, got {}",
-                arg_types.len()
+                args.arg_fields.len()
             );
         }
-        Ok(DataType::Binary)
+        Ok(Arc::new(Field::new(self.name(), DataType::Binary, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -618,14 +632,23 @@ impl ScalarUDFImpl for SparkAESDecrypt {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() < 2 || arg_types.len() > 5 {
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `AesDecrypt` is `RuntimeReplaceable` over a `StaticInvoke` that leaves
+    /// `returnNullable` at its `true` default, so `nullable = true` whatever the arguments.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/objects/objects.scala#L334>
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        if args.arg_fields.len() < 2 || args.arg_fields.len() > 5 {
             return exec_err!(
                 "Spark `aes_decrypt` function requires 2 to 5 arguments, got {}",
-                arg_types.len()
+                args.arg_fields.len()
             );
         }
-        Ok(DataType::Binary)
+        Ok(Arc::new(Field::new(self.name(), DataType::Binary, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -1044,7 +1067,16 @@ impl ScalarUDFImpl for SparkTryAESEncrypt {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Binary)
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `TryEval.nullable = true`, unconditional; `try_aes_encrypt` has no expression of
+    /// its own and follows its `TryAesDecrypt` sibling, which wraps the strict call in `TryEval`.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/TryEval.scala#L50>
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Binary, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -1085,7 +1117,16 @@ impl ScalarUDFImpl for SparkTryAESDecrypt {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Binary)
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `TryAesDecrypt` is `RuntimeReplaceable` over `TryEval(AesDecrypt(...))`, whose
+    /// `nullable = true` is unconditional.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/TryEval.scala#L50>
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Binary, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

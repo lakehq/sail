@@ -4,11 +4,14 @@ use datafusion::arrow::array::{Array, ArrayRef, AsArray};
 use datafusion::arrow::compute::{CastOptions, cast_with_options};
 use datafusion::arrow::datatypes::IntervalUnit::{MonthDayNano, YearMonth};
 use datafusion::arrow::datatypes::{
-    DataType, Int32Type, Int64Type, IntervalMonthDayNanoType, IntervalYearMonthType,
+    DataType, Field, FieldRef, Int32Type, Int64Type, IntervalMonthDayNanoType,
+    IntervalYearMonthType,
 };
-use datafusion_common::Result;
 use datafusion_common::utils::take_function_args;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::{Result, internal_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_functions::utils::make_scalar_function;
 
 use crate::error::unsupported_data_types_exec_err;
@@ -45,12 +48,26 @@ impl ScalarUDFImpl for SparkTryMult {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match arg_types {
-            [DataType::Int32, DataType::Int32] => Ok(DataType::Int32),
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `TryMultiply` is `RuntimeReplaceable`; both replacement branches declare `true`.
+    /// numeric  <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L236>
+    /// fallback <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/TryEval.scala#L50>
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|f| f.data_type().clone())
+            .collect::<Vec<_>>();
+        let data_type = match arg_types.as_slice() {
+            [DataType::Int32, DataType::Int32] => DataType::Int32,
             [DataType::Int64, DataType::Int64]
             | [DataType::Int32, DataType::Int64]
-            | [DataType::Int64, DataType::Int32] => Ok(DataType::Int64),
+            | [DataType::Int64, DataType::Int32] => DataType::Int64,
             [
                 DataType::Interval(YearMonth),
                 DataType::Int32 | DataType::Int64,
@@ -58,7 +75,7 @@ impl ScalarUDFImpl for SparkTryMult {
             | [
                 DataType::Int32 | DataType::Int64,
                 DataType::Interval(YearMonth),
-            ] => Ok(DataType::Interval(YearMonth)),
+            ] => DataType::Interval(YearMonth),
             [
                 DataType::Interval(MonthDayNano),
                 DataType::Int32 | DataType::Int64,
@@ -66,14 +83,16 @@ impl ScalarUDFImpl for SparkTryMult {
             | [
                 DataType::Int32 | DataType::Int64,
                 DataType::Interval(MonthDayNano),
-            ] => Ok(DataType::Interval(MonthDayNano)),
-
-            _ => Err(unsupported_data_types_exec_err(
-                "try_multiply",
-                "Int32, Int64, Interval(YearMonth), Interval(MonthDayNano)",
-                arg_types,
-            )),
-        }
+            ] => DataType::Interval(MonthDayNano),
+            _ => {
+                return Err(unsupported_data_types_exec_err(
+                    "try_multiply",
+                    "Int32, Int64, Interval(YearMonth), Interval(MonthDayNano)",
+                    &arg_types,
+                ));
+            }
+        };
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn coerce_types(&self, types: &[DataType]) -> Result<Vec<DataType>> {

@@ -120,7 +120,7 @@ async fn build_full_overwrite_plan(
         )
         .await?;
 
-        let all_adds: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::from_log_scan(
+        let all_adds: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::new(
             meta_scan,
             ctx.table_url().clone(),
             version,
@@ -255,11 +255,9 @@ async fn build_overwrite_if_plan(
         condition_expr.clone(),
     )?;
 
-    let find_files_plan: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
+    let find_files_plan: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::new(
         meta_scan,
         ctx.table_url().clone(),
-        None,
-        None,
         version,
         partition_columns.clone(),
         partition_only,
@@ -309,11 +307,9 @@ async fn build_old_data_plan(
         condition_expr.clone(),
     )?;
 
-    let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
+    let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::new(
         meta_scan,
         ctx.table_url().clone(),
-        None,
-        None,
         version,
         ctx.partition_columns().to_vec(),
         partition_only,

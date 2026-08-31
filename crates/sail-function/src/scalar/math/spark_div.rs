@@ -1,10 +1,14 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, Int64Array};
-use datafusion::arrow::datatypes::{DataType, Int64Type, IntervalUnit, IntervalYearMonthType};
+use datafusion::arrow::datatypes::{
+    DataType, Field, FieldRef, Int64Type, IntervalUnit, IntervalYearMonthType,
+};
 use datafusion::arrow::error::ArrowError;
-use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::{DataFusionError, Result, internal_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::error::{
     invalid_arg_count_exec_err, unsupported_data_type_exec_err, unsupported_data_types_exec_err,
@@ -77,7 +81,16 @@ impl ScalarUDFImpl for SparkIntervalDiv {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Int64)
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `div` on intervals is `IntegralDivide`, which extends `DivModLike`:
+    /// `nullable = true`, unconditional (ANSI does not narrow it).
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L658>
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Int64, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

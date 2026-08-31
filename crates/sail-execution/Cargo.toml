@@ -24,12 +24,14 @@ sail-celeborn = { path = "../sail-celeborn" }
 
 thiserror = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 tonic = { workspace = true }
 tonic-types = { workspace = true }
 tonic-prost = { workspace = true }
 fastrace = { workspace = true }
 tower = { workspace = true }
 prost = { workspace = true }
+opentelemetry-proto = { workspace = true }
 datafusion = { workspace = true }
 datafusion-proto = { workspace = true }
 datafusion-spark = { workspace = true }
@@ -47,6 +49,7 @@ url = { workspace = true }
 readonly = { workspace = true }
 indexmap = { workspace = true }
 chrono = { workspace = true }
+bytes = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }

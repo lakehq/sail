@@ -4,13 +4,13 @@ use async_stream::try_stream;
 use async_trait::async_trait;
 use datafusion::arrow::array::{Array, ArrayRef, Int32Array, Int64Array, RecordBatch, StringArray};
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::context::TaskContext;
-use datafusion::physical_expr::EquivalenceProperties;
-use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
-    Partitioning, PlanProperties, SendableRecordBatchStream,
+    PlanProperties, SendableRecordBatchStream,
 };
 use datafusion_common::{DataFusionError, Result};
 use futures::stream::TryStreamExt;
@@ -96,12 +96,12 @@ impl IcebergMergeMetadataExec {
             metadata_columns
         };
         let output_schema = Arc::new(metadata_columns.append_to_schema(input.schema().as_ref())?);
-        let partition_count = input.output_partitioning().partition_count().max(1);
         let cache = Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(output_schema.clone()),
-            Partitioning::UnknownPartitioning(partition_count),
-            EmissionType::Incremental,
-            Boundedness::Bounded,
+            EquivalenceProperties::new(output_schema.clone())
+                .extend(input.equivalence_properties().clone())?,
+            input.output_partitioning().clone(),
+            input.pipeline_behavior(),
+            input.boundedness(),
         ));
         Ok(Self {
             input,
@@ -168,6 +168,22 @@ impl ExecutionPlan for IcebergMergeMetadataExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    #[expect(deprecated)]
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: datafusion::physical_plan::ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.with_new_children(children)
     }
 
     fn with_new_children(

@@ -3,15 +3,19 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::common::{Result, plan_err};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::expressions::UnKnownColumn;
-use datafusion::physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
+use datafusion::physical_expr::{
+    EquivalenceProperties, Partitioning, PhysicalExpr, RangePartitioning,
+};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::repartition::BatchPartitioner;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
+    PlanProperties, ReplaceChildrenOptions, apply_expression_roots,
 };
 use futures::StreamExt;
 use sail_physical_plan::repartition::RowRoundRobinPartitioner;
@@ -30,6 +34,7 @@ enum ShufflePartitioner {
 #[derive(Debug, Clone)]
 pub(crate) enum ShufflePartitioning {
     Hash(Vec<Arc<dyn PhysicalExpr>>, usize),
+    Range(RangePartitioning),
     RoundRobinBatch(usize),
     RoundRobinRow(usize),
 }
@@ -58,9 +63,9 @@ impl ShufflePartitioning {
 
     fn partition_count(&self) -> usize {
         match self {
-            Self::Hash(_, partitions)
-            | Self::RoundRobinBatch(partitions)
-            | Self::RoundRobinRow(partitions) => *partitions,
+            Self::Hash(_, partitions) => *partitions,
+            Self::Range(partitioning) => partitioning.partition_count(),
+            Self::RoundRobinBatch(partitions) | Self::RoundRobinRow(partitions) => *partitions,
         }
     }
 }
@@ -75,6 +80,7 @@ impl Display for ShufflePartitioning {
                     Partitioning::Hash(expressions.clone(), *partitions)
                 )
             }
+            Self::Range(partitioning) => write!(f, "{partitioning}"),
             Self::RoundRobinBatch(partitions) => {
                 write!(f, "{}", Partitioning::RoundRobinBatch(*partitions))
             }
@@ -154,18 +160,51 @@ impl ExecutionPlan for ShuffleWriteExec {
         vec![&self.plan]
     }
 
-    fn with_new_children(
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        match &self.partitioning {
+            ShufflePartitioning::Hash(expressions, _) => apply_expression_roots(expressions, f),
+            ShufflePartitioning::Range(range) => {
+                apply_expression_roots(range.ordering().iter().map(|sort_expr| &sort_expr.expr), f)
+            }
+            ShufflePartitioning::RoundRobinBatch(_) | ShufflePartitioning::RoundRobinRow(_) => {
+                Ok(TreeNodeRecursion::Continue)
+            }
+        }
+    }
+
+    fn replace_children(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let child = children.pop();
-        match (child, children.is_empty()) {
-            (Some(plan), true) => Ok(Arc::new(Self {
+        if children.len() != 1 {
+            return plan_err!("ShuffleWriteExec should have one child");
+        }
+        let plan = Arc::clone(&children[0]);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
                 plan,
                 ..self.as_ref().clone()
             })),
-            _ => plan_err!("ShuffleWriteExec should have one child"),
+            ChildrenPropertiesMode::Recompute => Ok(Arc::new(Self::new(
+                plan,
+                Arc::clone(&self.writer),
+                self.partitioning.clone(),
+            ))),
         }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -185,6 +224,14 @@ impl ExecutionPlan for ShuffleWriteExec {
             ShufflePartitioning::Hash(expressions, partitions) => {
                 ShufflePartitioner::Batch(BatchPartitioner::try_new(
                     Partitioning::Hash(expressions.clone(), *partitions),
+                    Default::default(),
+                    partition,
+                    num_input_partitions,
+                )?)
+            }
+            ShufflePartitioning::Range(partitioning) => {
+                ShufflePartitioner::Batch(BatchPartitioner::try_new(
+                    Partitioning::Range(partitioning.clone()),
                     Default::default(),
                     partition,
                     num_input_partitions,

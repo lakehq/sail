@@ -21,7 +21,7 @@ use datafusion::common::pruning::PruningStatistics;
 use datafusion::common::{Column, Result, ToDFSchema};
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{BinaryExpr, Expr, Operator};
-use datafusion::physical_optimizer::pruning::PruningPredicate;
+use datafusion::physical_optimizer::pruning::PruningPredicateBuilder;
 
 use crate::spec::partition::PartitionSpec;
 use crate::spec::transform::Transform;
@@ -218,7 +218,9 @@ pub fn prune_files(
     let files_to_keep = if let Some(predicate) = &filter_expr {
         let df_schema = logical_schema.clone().to_dfschema()?;
         let physical_predicate = session.create_physical_expr(predicate.clone(), &df_schema)?;
-        let pruning_predicate = PruningPredicate::try_new(physical_predicate, logical_schema)?;
+        let pruning_predicate = PruningPredicateBuilder::new()
+            .with_file_schema(logical_schema)
+            .try_build(physical_predicate)?;
         pruning_predicate.prune(&stats)?
     } else {
         vec![true; stats.num_containers()]

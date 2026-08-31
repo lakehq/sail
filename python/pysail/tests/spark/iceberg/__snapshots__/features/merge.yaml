@@ -25,8 +25,8 @@ data:
                                     MonotonicIdExec: col=__sail_merge_target_row_id
                                       ProjectionExec: expr=[id@0 as id, value@1 as value, flag@2 as flag, __sail_file_path@3 as __sail_file_path, __sail_file_row_index@6 as __sail_file_row_index, __sail_iceberg_partition_spec_id@4 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@5 as __sail_iceberg_partition]
                                         IcebergMergeMetadataExec: data_file_column=__sail_file_path
-                                          DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_merge_plan/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, value, flag, __sail_file_path, __sail_iceberg_partition_spec_id, __sail_iceberg_partition], file_type=parquet
-              ProjectionExec: expr=[NULL as id, NULL as value, NULL as flag, NULL as __sail_file_path, NULL as __sail_file_row_index, NULL as __sail_iceberg_partition_spec_id, NULL as __sail_iceberg_partition, 9 as __sail_operation_type, 3 as __sail_merge_source_metric]
+                                          DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_merge_plan/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, value, flag, __sail_file_path, __sail_iceberg_partition_spec_id, __sail_iceberg_partition], output_partitioning=Hash([__sail_file_path@3, __sail_iceberg_partition_spec_id@4, __sail_iceberg_partition@5], 1), file_type=parquet
+              ProjectionExec: expr=[NULL as id, NULL as value, NULL as flag, NULL as __sail_file_path, NULL as __sail_file_row_index, NULL as __sail_iceberg_partition_spec_id, NULL as __sail_iceberg_partition, 9 as __sail_operation_type, CAST(3 AS Int64) as __sail_merge_source_metric]
                 PlaceholderRowExec
 ---
 name: "test_explain_hashes_partitioned_merge_intents_by_iceberg_transforms"
@@ -53,8 +53,8 @@ data:
                                   MonotonicIdExec: col=__sail_merge_target_row_id
                                     ProjectionExec: expr=[id@0 as id, event_time@1 as event_time, value@2 as value, __sail_file_path@3 as __sail_file_path, __sail_file_row_index@6 as __sail_file_row_index, __sail_iceberg_partition_spec_id@4 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@5 as __sail_iceberg_partition]
                                       IcebergMergeMetadataExec: data_file_column=__sail_file_path
-                                        DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_merge_partitioned_plan/data/event_time_day=2024-01-01/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, event_time, value, __sail_file_path, __sail_iceberg_partition_spec_id, __sail_iceberg_partition], file_type=parquet
-              ProjectionExec: expr=[NULL as id, NULL as event_time, NULL as value, NULL as __sail_file_path, NULL as __sail_file_row_index, NULL as __sail_iceberg_partition_spec_id, NULL as __sail_iceberg_partition, 9 as __sail_operation_type, 2 as __sail_merge_source_metric]
+                                        DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_merge_partitioned_plan/data/event_time_day=2024-01-01/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, event_time, value, __sail_file_path, __sail_iceberg_partition_spec_id, __sail_iceberg_partition], output_partitioning=Hash([__sail_file_path@3, __sail_iceberg_partition_spec_id@4, __sail_iceberg_partition@5], 1), file_type=parquet
+              ProjectionExec: expr=[NULL as id, NULL as event_time, NULL as value, NULL as __sail_file_path, NULL as __sail_file_row_index, NULL as __sail_iceberg_partition_spec_id, NULL as __sail_iceberg_partition, 9 as __sail_operation_type, CAST(2 AS Int64) as __sail_merge_source_metric]
                 PlaceholderRowExec
 ---
 name: "test_explain_hashes_partitioned_merge_intents_by_iceberg_transforms.1"
@@ -143,8 +143,8 @@ data:
                                 MonotonicIdExec: col=__sail_merge_target_row_id
                                   ProjectionExec: expr=[value@0 as value, id@1 as id, __sail_file_path@2 as __sail_file_path, __sail_file_row_index@5 as __sail_file_row_index, __sail_iceberg_partition_spec_id@3 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@4 as __sail_iceberg_partition]
                                     IcebergMergeMetadataExec: data_file_column=__sail_file_path
-                                      DataSourceExec: file_groups={3 groups: [[<tmp>/iceberg_merge_many_files_plan/data/id=1/part-<uuid>-00000000000000000000.parquet], [<tmp>/iceberg_merge_many_files_plan/data/id=2/part-<uuid>-00000000000000000001.parquet], [<tmp>/iceberg_merge_many_files_plan/data/id=3/part-<uuid>-00000000000000000002.parquet]]}, projection=[value, id, __sail_file_path, __sail_iceberg_partition_spec_id, __sail_iceberg_partition], file_type=parquet
-              ProjectionExec: expr=[NULL as value, NULL as id, NULL as __sail_file_path, NULL as __sail_file_row_index, NULL as __sail_iceberg_partition_spec_id, NULL as __sail_iceberg_partition, 9 as __sail_operation_type, 3 as __sail_merge_source_metric]
+                                      DataSourceExec: file_groups={3 groups: [[<tmp>/iceberg_merge_many_files_plan/data/id=1/part-<uuid>-00000000000000000000.parquet], [<tmp>/iceberg_merge_many_files_plan/data/id=2/part-<uuid>-00000000000000000001.parquet], [<tmp>/iceberg_merge_many_files_plan/data/id=3/part-<uuid>-00000000000000000002.parquet]]}, projection=[value, id, __sail_file_path, __sail_iceberg_partition_spec_id, __sail_iceberg_partition], output_partitioning=Hash([__sail_file_path@2, __sail_iceberg_partition_spec_id@3, __sail_iceberg_partition@4], 3), file_type=parquet
+              ProjectionExec: expr=[NULL as value, CAST(NULL AS Int32) as id, NULL as __sail_file_path, NULL as __sail_file_row_index, NULL as __sail_iceberg_partition_spec_id, NULL as __sail_iceberg_partition, 9 as __sail_operation_type, CAST(3 AS Int64) as __sail_merge_source_metric]
                 PlaceholderRowExec
 ---
 name: "test_explain_keeps_merge_metadata_scans_constant_across_target_files.1"

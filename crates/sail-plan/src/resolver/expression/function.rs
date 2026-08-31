@@ -217,6 +217,9 @@ impl PlanResolver<'_> {
                                     ignore_nulls,
                                     filter,
                                     order_by,
+                                    preserve_count_argument_columns: state
+                                        .config()
+                                        .preserve_count_argument_columns,
                                     function_context: FunctionContextInput {
                                         argument_display_names: &argument_display_names,
                                         plan_config: &self.config,

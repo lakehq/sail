@@ -56,6 +56,10 @@ impl ScalarUDFImpl for SparkAbs {
         &self.signature
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if arg_types[0].is_numeric()
             || arg_types[0].is_null()

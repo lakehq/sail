@@ -435,10 +435,11 @@ class JdbcDataSource(DataSource):
         dbtable = resolved["dbtable"]
         query = resolved["query"]
 
-        if query is not None:
-            schema_query = f"SELECT * FROM ({query}) AS _cx_schema_q LIMIT 0"  # noqa: S608
+        source = f"({query}) AS _cx_schema_q" if query is not None else dbtable
+        if conn_str.startswith("mssql://"):
+            schema_query = f"SELECT TOP 0 * FROM {source}"  # noqa: S608
         else:
-            schema_query = f"SELECT * FROM {dbtable} LIMIT 0"  # noqa: S608
+            schema_query = f"SELECT * FROM {source} LIMIT 0"  # noqa: S608
 
         try:
             table: pa.Table = cx.read_sql(conn_str, schema_query, return_type="arrow")

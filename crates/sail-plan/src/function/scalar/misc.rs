@@ -281,6 +281,8 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
             "input_file_block_start",
             F::unknown("input_file_block_start"),
         ),
+        // TODO: Map this to DataFusion's file-name UDF after preserving Spark's empty-string
+        // behavior for non-file inputs and covering driver-to-worker file scans.
         ("input_file_name", F::unknown("input_file_name")),
         ("java_method", F::unknown("java_method")),
         (

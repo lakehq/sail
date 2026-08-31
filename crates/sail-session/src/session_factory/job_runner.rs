@@ -4,13 +4,14 @@ use datafusion::common::{Result, internal_err};
 use sail_common::actor::ActorSystem;
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
-use sail_common_datafusion::session::job::{JobRunner, JobRunnerHistoryReporter};
+use sail_common_datafusion::session::job::JobRunner;
 use sail_execution::DriverId;
 use sail_execution::driver::{DriverComponents, DriverHandle, DriverOptions};
 use sail_execution::job_runner::{ClusterJobRunner, LocalJobRunner};
 use sail_execution::worker_manager::{
     KubernetesWorkerManager, KubernetesWorkerManagerOptions, LocalWorkerManager,
 };
+use sail_telemetry::system_event::SystemEventReporter;
 
 use crate::session_factory::{SessionFactory, WorkerSessionFactory};
 
@@ -44,7 +45,7 @@ pub struct SessionJobRunnerInfo {
     pub session_id: String,
     pub driver_id: DriverId,
     pub driver_server_port: Option<u16>,
-    pub history_reporter: Box<dyn JobRunnerHistoryReporter>,
+    pub event_reporter: SystemEventReporter,
 }
 
 pub trait SessionJobRunnerFactory: Send {
@@ -83,7 +84,7 @@ impl ServerSessionJobRunnerFactory {
         );
         let components = DriverComponents {
             worker_manager,
-            history_reporter: info.history_reporter,
+            event_reporter: info.event_reporter,
         };
         Ok(SessionJobRunner::cluster(ClusterJobRunner::new(
             system, options, components,
@@ -98,9 +99,7 @@ impl SessionJobRunnerFactory for ServerSessionJobRunnerFactory {
         info: SessionJobRunnerInfo,
     ) -> Result<SessionJobRunner> {
         match self.config.mode {
-            ExecutionMode::Local => Ok(SessionJobRunner::local(LocalJobRunner::new(
-                info.history_reporter,
-            ))),
+            ExecutionMode::Local => Ok(SessionJobRunner::local(LocalJobRunner::new())),
             ExecutionMode::LocalCluster => {
                 let worker_session =
                     WorkerSessionFactory::new(self.config.clone(), self.runtime.clone())

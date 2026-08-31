@@ -6,8 +6,6 @@ import contextlib
 from typing import TYPE_CHECKING
 
 import pytest
-from testcontainers.core.container import DockerContainer
-from testcontainers.core.waiting_utils import wait_for_logs
 
 from pysail.testing.spark.session import spark_connect_server
 
@@ -15,25 +13,6 @@ if TYPE_CHECKING:
     from collections.abc import Generator
 
     from pyspark.sql import SparkSession
-
-
-@pytest.fixture(scope="module")
-def moto_container() -> Generator[DockerContainer, None, None]:
-    """Start a Moto container for mocking AWS Glue."""
-    container = DockerContainer("motoserver/moto:5.1.22")
-    container.with_exposed_ports(5000)
-    container.start()
-    wait_for_logs(container, "Running on", timeout=120)
-    yield container
-    container.stop()
-
-
-@pytest.fixture(scope="module")
-def moto_endpoint(moto_container: DockerContainer) -> str:
-    """Get the Moto endpoint URL."""
-    host = moto_container.get_container_host_ip()
-    port = moto_container.get_exposed_port(5000)
-    return f"http://{host}:{port}"
 
 
 @pytest.fixture(scope="module")

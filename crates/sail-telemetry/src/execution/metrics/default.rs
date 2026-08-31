@@ -84,7 +84,7 @@ impl MetricEmitter for DefaultMetricEmitter {
                     )
                     .emit();
             }
-            MetricValue::CurrentMemoryUsage(gauge) => {
+            MetricValue::CurrentMemoryUsage(gauge) | MetricValue::PeakMemoryUsage { gauge, .. } => {
                 registry
                     .execution_memory_used
                     .recorder(gauge)

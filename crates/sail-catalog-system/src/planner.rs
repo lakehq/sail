@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
+use datafusion::catalog::Session;
 use datafusion::common::{DFSchema, Result};
-use datafusion::execution::SessionState;
+use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::logical_expr::{LogicalPlan, TableScan, UserDefinedLogicalNode};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
@@ -19,7 +20,8 @@ impl ExtensionPlanner for SystemTablePhysicalPlanner {
         _node: &dyn UserDefinedLogicalNode,
         _logical_inputs: &[&LogicalPlan],
         _physical_inputs: &[Arc<dyn ExecutionPlan>],
-        _session_state: &SessionState,
+        _session: &dyn Session,
+        _planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         Ok(None)
     }
@@ -28,7 +30,8 @@ impl ExtensionPlanner for SystemTablePhysicalPlanner {
         &self,
         planner: &dyn PhysicalPlanner,
         scan: &TableScan,
-        session_state: &SessionState,
+        session: &dyn Session,
+        planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         let Some(source) = scan.source.downcast_ref::<SystemTableSource>() else {
             return Ok(None);
@@ -41,7 +44,7 @@ impl ExtensionPlanner for SystemTablePhysicalPlanner {
         let filters = scan
             .filters
             .iter()
-            .map(|e| planner.create_physical_expr(e, &schema, session_state))
+            .map(|e| planner.create_physical_expr(e, &schema, session, planning_ctx))
             .collect::<Result<Vec<_>>>()?;
         Ok(Some(Arc::new(SystemTableExec::try_new(
             table,

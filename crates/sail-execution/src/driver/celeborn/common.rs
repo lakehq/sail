@@ -1,5 +1,5 @@
+use sail_celeborn::common::PartitionLocation;
 use sail_celeborn::error::CelebornError;
-use sail_celeborn::master::PartitionLocation;
 
 use crate::driver::r#gen::CelebornPartitionLocation;
 

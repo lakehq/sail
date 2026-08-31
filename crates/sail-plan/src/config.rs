@@ -60,6 +60,9 @@ pub struct PlanConfig {
     /// (`spark.sql.tvf.allowMultipleTableArguments.enabled`, default false). Multiple table
     /// arguments produce the cartesian product of their rows.
     pub tvf_allow_multiple_table_arguments: bool,
+    /// Whether `COUNT()` is accepted with no arguments. Spark's legacy behavior returns zero;
+    /// it does not interpret the call as `COUNT(*)`.
+    pub legacy_allow_parameterless_count: bool,
 }
 
 impl PlanConfig {
@@ -89,6 +92,7 @@ impl Default for PlanConfig {
             case_sensitive: false,
             pivot_max_values: 10000,
             tvf_allow_multiple_table_arguments: false,
+            legacy_allow_parameterless_count: false,
         }
     }
 }

@@ -79,6 +79,29 @@ impl ManifestWriter {
         self.entries.push(Arc::new(entry));
     }
 
+    pub fn add_existing_entry(&mut self, mut entry: ManifestEntry) -> Result<(), String> {
+        if entry.sequence_number.is_none() || entry.file_sequence_number.is_none() {
+            return Err(
+                "existing manifest entries require data and file sequence numbers".to_string(),
+            );
+        }
+        entry.status = ManifestStatus::Existing;
+        self.entries.push(Arc::new(entry));
+        Ok(())
+    }
+
+    pub fn add_deleted_entry(&mut self, mut entry: ManifestEntry) -> Result<(), String> {
+        if entry.sequence_number.is_none() || entry.file_sequence_number.is_none() {
+            return Err(
+                "deleted manifest entries require data and file sequence numbers".to_string(),
+            );
+        }
+        entry.status = ManifestStatus::Deleted;
+        entry.snapshot_id = self.snapshot_id;
+        self.entries.push(Arc::new(entry));
+        Ok(())
+    }
+
     pub fn finish(self) -> Manifest {
         Manifest::new(
             self.metadata,

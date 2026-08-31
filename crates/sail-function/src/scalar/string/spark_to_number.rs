@@ -69,12 +69,19 @@ impl ScalarUDFImpl for SparkToNumber {
         &self.signature
     }
 
-    /// The base return type is unknown until arguments are provided
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        // We cannot know the final DataType result without knowing the format input args
-        Ok(DataType::Struct(Fields::empty()))
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
+    /// Spark: `TryToNumber.nullable = true`, unconditional. `ToNumber` declares none and
+    /// inherits `BinaryExpression`'s `left.nullable || right.nullable`, so the strict spelling
+    /// is `nullable = false` over non-null arguments; the `@sail-bug` scenarios in
+    /// `to_number.feature` track that gap.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/numberFormatExpressions.scala#L183>
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/numberFormatExpressions.scala#L145>
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/Expression.scala#L720>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let ReturnFieldArgs {
             scalar_arguments, ..

@@ -725,6 +725,107 @@ def test_python_filter_pushdown_equality(spark):
     assert filtered_rows[0].id == 3  # noqa: PLR2004
 
 
+def test_python_filter_pushdown_reader_without_push_filters(spark):
+    """A reader that does not implement pushFilters must still filter correctly.
+
+    `DataSourceReader.pushFilters` was added in PySpark 4.1, so on 4.0 no reader
+    has one and calling it unconditionally fails every filtered scan. The reader
+    below omits the method entirely to stand in for that, which also covers any
+    duck-typed reader that is not a `DataSourceReader` subclass.
+
+    Filters are reported to DataFusion as `Inexact`, so the predicate stays in
+    the plan and is applied above the scan; the rows must come back filtered
+    even though nothing was pushed.
+    """
+    import pyarrow as pa
+    from pyspark.sql.datasource import DataSource, InputPartition
+
+    table_schema = pa.schema([("id", pa.int64()), ("value", pa.string())])
+
+    class NoPushFiltersReader:
+        """Deliberately not a DataSourceReader, so it has no pushFilters."""
+
+        def partitions(self):
+            return [InputPartition(0)]
+
+        def read(self, partition):  # noqa: ARG002
+            yield pa.RecordBatch.from_pydict(
+                {"id": [1, 2, 3, 4, 5], "value": ["a", "b", "c", "d", "e"]}, schema=table_schema
+            )
+
+    class NoPushFiltersDataSource(DataSource):
+        @classmethod
+        def name(cls) -> str:
+            return "no_push_filters_test"
+
+        def schema(self):
+            return table_schema
+
+        def reader(self, schema):  # noqa: ARG002
+            return NoPushFiltersReader()
+
+    assert not hasattr(NoPushFiltersReader, "pushFilters")
+
+    spark.dataSource.register(NoPushFiltersDataSource)
+    df = spark.read.format("no_push_filters_test").load()
+
+    expected_all_rows = 5
+    assert len(df.collect()) == expected_all_rows
+
+    filtered_rows = df.filter("id = 3").collect()
+    assert len(filtered_rows) == 1
+    assert filtered_rows[0].id == 3  # noqa: PLR2004
+
+
+def test_python_filter_pushdown_reader_with_non_callable_push_filters(spark):
+    """A non-callable `pushFilters` attribute must not break a filtered scan.
+
+    `hasattr` alone would report the attribute as present and then fail at the
+    call site, reintroducing the very failure this guard prevents. Treat a
+    non-callable the same as an absent one and filter above the scan.
+    """
+    import pyarrow as pa
+    from pyspark.sql.datasource import DataSource, InputPartition
+
+    table_schema = pa.schema([("id", pa.int64()), ("value", pa.string())])
+
+    class NonCallablePushFiltersReader:
+        # Present, but not a method — e.g. a stub someone left behind.
+        pushFilters = None  # noqa: N815
+
+        def partitions(self):
+            return [InputPartition(0)]
+
+        def read(self, partition):  # noqa: ARG002
+            yield pa.RecordBatch.from_pydict(
+                {"id": [1, 2, 3, 4, 5], "value": ["a", "b", "c", "d", "e"]}, schema=table_schema
+            )
+
+    class NonCallablePushFiltersDataSource(DataSource):
+        @classmethod
+        def name(cls) -> str:
+            return "non_callable_push_filters_test"
+
+        def schema(self):
+            return table_schema
+
+        def reader(self, schema):  # noqa: ARG002
+            return NonCallablePushFiltersReader()
+
+    assert hasattr(NonCallablePushFiltersReader, "pushFilters")
+    assert not callable(NonCallablePushFiltersReader.pushFilters)
+
+    spark.dataSource.register(NonCallablePushFiltersDataSource)
+    df = spark.read.format("non_callable_push_filters_test").load()
+
+    expected_all_rows = 5
+    assert len(df.collect()) == expected_all_rows
+
+    filtered_rows = df.filter("id = 3").collect()
+    assert len(filtered_rows) == 1
+    assert filtered_rows[0].id == 3  # noqa: PLR2004
+
+
 def test_python_ddl_schema_fallback(spark):
     """Test that DDL string schema is correctly parsed and used."""
     spark.dataSource.register(RangeDataSource)

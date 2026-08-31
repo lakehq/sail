@@ -1,3 +1,4 @@
+mod exporter;
 mod instruments;
 
 mod r#gen {
@@ -9,6 +10,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
+pub use exporter::{SystemMetricExporter, SystemMetricExporterTarget, set_metric_sender};
 pub use r#gen::{MetricAttribute, MetricRegistry};
 pub use instruments::*;
 

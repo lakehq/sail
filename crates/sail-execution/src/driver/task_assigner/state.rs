@@ -81,7 +81,7 @@ impl DriverResource {
         let count = self.external_streams.len();
         self.external_streams
             .retain(|(stream_job_id, stream_stage)| {
-                *stream_job_id != job_id || !stage.is_none_or(|stage| stage == *stream_stage)
+                *stream_job_id != job_id || stage.is_some_and(|stage| stage != *stream_stage)
             });
         count != self.external_streams.len()
     }

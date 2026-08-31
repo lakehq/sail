@@ -102,7 +102,6 @@ def test_save_as_table(spark, tmp_path):
     df.write.saveAsTable("t2", path=location)
     actual = spark.sql("SELECT * FROM t2").toPandas()
     assert_frame_equal(actual, expected(1))
-
     if not is_jvm_spark():
         # The "ignore" mode seems broken in Spark Connect.
         df.write.saveAsTable("t2", mode="ignore", path=location)
@@ -133,6 +132,24 @@ def test_save_as_table(spark, tmp_path):
     df.write.saveAsTable("t2", mode="overwrite", path=location)
     actual = spark.sql("SELECT * FROM t2").toPandas()
     assert_frame_equal(actual, expected(1))
+
+
+def test_insert_into_parquet_table_with_schema_inferred_from_files(spark, tmp_path):
+    location = str(tmp_path / "parquet_schema_inference")
+    source = spark.createDataFrame([(1, "Alice")], schema="id LONG, name STRING")
+    source.write.parquet(location)
+
+    spark.sql(f"""
+        CREATE TABLE parquet_schema_inference
+        USING PARQUET
+        LOCATION '{escape_sql_string_literal(location)}'
+    """)
+    spark.sql("INSERT INTO parquet_schema_inference VALUES (2, 'Bob')")
+
+    assert spark.sql("SELECT id, name FROM parquet_schema_inference ORDER BY id").collect() == [
+        (1, "Alice"),
+        (2, "Bob"),
+    ]
 
 
 @pytest.mark.integration
