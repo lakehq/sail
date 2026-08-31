@@ -54,7 +54,7 @@ use crate::datasource::provider::IcebergTableProvider;
 use crate::datasource::type_converter::{ICEBERG_ARROW_FIELD_DOC_KEY, arrow_schema_to_iceberg};
 use crate::io::StoreContext;
 use crate::logical::IcebergTableSource;
-use crate::metadata_table::{IcebergMetadataTableType, metadata_table_provider};
+use crate::metadata_relation::{IcebergMetadataRelationType, metadata_relation_provider};
 use crate::operations::bootstrap::{
     NewTableMetadataStyle, bootstrap_empty_table_metadata, replace_empty_table_metadata,
 };
@@ -148,18 +148,18 @@ impl DataSource for IcebergLakeSource {
 #[async_trait]
 impl LakeRelationProvider for IcebergLakeSource {
     fn resolve_relation(&self, name: &str) -> LakeRelationResolution {
-        let Some(table_type) = IcebergMetadataTableType::parse(name) else {
+        let Some(relation_type) = IcebergMetadataRelationType::parse(name) else {
             return LakeRelationResolution::Unrecognized;
         };
-        if table_type.is_supported() {
+        if relation_type.is_supported() {
             LakeRelationResolution::Supported(LakeRelation::new(
-                table_type.name(),
+                relation_type.name(),
                 LakeRelationAccess::MetadataRead,
                 LakeRelationTimeTravel::Unsupported,
             ))
         } else {
             LakeRelationResolution::Unsupported {
-                reason: table_type.unsupported_reason(),
+                reason: relation_type.unsupported_reason(),
             }
         }
     }
@@ -170,18 +170,19 @@ impl LakeRelationProvider for IcebergLakeSource {
         info: SourceInfo,
         relation: LakeRelation,
     ) -> Result<Arc<dyn TableSource>> {
-        let table_type = IcebergMetadataTableType::parse(relation.name()).ok_or_else(|| {
-            DataFusionError::Plan(format!(
-                "Unknown Iceberg metadata table: {}",
-                relation.name()
-            ))
-        })?;
-        if !table_type.is_supported() {
-            return not_impl_err!("{}", table_type.unsupported_reason());
+        let relation_type =
+            IcebergMetadataRelationType::parse(relation.name()).ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "Unknown Iceberg metadata table: {}",
+                    relation.name()
+                ))
+            })?;
+        if !relation_type.is_supported() {
+            return not_impl_err!("{}", relation_type.unsupported_reason());
         }
         let read = resolve_iceberg_read(ctx, info, IcebergReadPurpose::MetadataRelation).await?;
         Ok(datafusion::datasource::provider_as_source(
-            metadata_table_provider(read.table_url, read.metadata_location, table_type)?,
+            metadata_relation_provider(read.table_url, read.metadata_location, relation_type)?,
         ))
     }
 }
