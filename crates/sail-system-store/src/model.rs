@@ -20,23 +20,23 @@ primary_key!(OptionPrimaryKey { key: String });
 primary_key!(SessionPrimaryKey { session_id: String });
 primary_key!(JobPrimaryKey {
     session_id: String,
-    job_id: u64
+    job_id: u64,
 });
 primary_key!(StagePrimaryKey {
     session_id: String,
     job_id: u64,
-    stage: u64
+    stage: u64,
 });
 primary_key!(TaskPrimaryKey {
     session_id: String,
     job_id: u64,
     stage: u64,
     partition: u64,
-    attempt: u64
+    attempt: u64,
 });
 primary_key!(WorkerPrimaryKey {
     session_id: String,
-    worker_id: u64
+    worker_id: u64,
 });
 
 /// Stable identifier for a metric series.

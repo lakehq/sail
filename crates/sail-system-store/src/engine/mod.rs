@@ -53,6 +53,10 @@ where
         &mut self,
         query: SystemStoreQuery,
     ) -> SystemStoreResult<Option<Box<dyn FnOnce() + Send>>> {
+        // The direct storage engine executes the query immediately
+        // and does not return a deferred read closure to be executed later.
+        // This is because the direct storage engine does not support snapshots or transactions,
+        // so the read operation must finish before subsequent writes.
         query.execute(&self.backend.read());
         Ok(None)
     }
@@ -99,6 +103,9 @@ where
         &mut self,
         query: SystemStoreQuery,
     ) -> SystemStoreResult<Option<Box<dyn FnOnce() + Send>>> {
+        // The transactional storage engine acquires a snapshot of the store and returns
+        // a closure that executes the query against that snapshot.
+        // This allows multiple concurrent reads without blocking writes.
         let snapshot = tokio::task::spawn_blocking({
             let store = self.backend.clone();
             move || store.snapshot().map_err(SystemStoreError::from)

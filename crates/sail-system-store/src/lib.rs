@@ -12,7 +12,7 @@ mod reader;
 
 pub use engine::MetricSample;
 pub(crate) use engine::SystemStoreQuery;
-pub use error::{Result as SystemStoreResult, SystemStoreError};
+pub use error::{SystemStoreError, SystemStoreResult};
 pub use event::SystemEvent;
 pub use handle::SystemStoreHandle;
 pub use reader::SystemStoreReader;

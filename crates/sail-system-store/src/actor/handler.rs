@@ -45,7 +45,7 @@ where
                 Ok(None) => {}
                 Ok(Some(read)) => {
                     ctx.spawn(async move {
-                        // Aborting this task cancels the caller's reply. Tokio cannot interrupt a
+                        // Aborting this task cancels the reply. Tokio cannot interrupt a
                         // blocking scan that has already started, but it will release its snapshot
                         // when it completes.
                         if let Err(error) = tokio::task::spawn_blocking(read).await {
@@ -55,9 +55,6 @@ where
                 }
                 Err(error) => {
                     self.fail(&error);
-                    // The disk implementation only performs infallible snapshot construction.
-                    // Keep this branch for future backends; they must reply from `read` before
-                    // returning an acquisition error.
                     log::error!("failed to acquire system store read snapshot: {error}");
                 }
             },

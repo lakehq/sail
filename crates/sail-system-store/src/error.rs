@@ -40,4 +40,4 @@ impl SystemStoreError {
 }
 
 /// Result returned by system store operations.
-pub type Result<T> = std::result::Result<T, SystemStoreError>;
+pub type SystemStoreResult<T> = Result<T, SystemStoreError>;

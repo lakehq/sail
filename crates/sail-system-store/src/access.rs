@@ -203,6 +203,7 @@ pub trait StoreReader:
     + SeriesReader<MetricPointSeries, Self::Error>
 {
     type Error: Into<SystemStoreError>;
+
     fn table<T: StoreTable>(&self) -> Table<'_, T, Self, Self::Error>
     where
         Self: Sized + TableReader<T, Self::Error>,
@@ -212,6 +213,7 @@ pub trait StoreReader:
             marker: PhantomData,
         }
     }
+
     fn index<T: StoreIndex>(&self) -> Index<'_, T, Self, Self::Error>
     where
         Self: Sized + IndexReader<T, Self::Error>,
@@ -221,6 +223,7 @@ pub trait StoreReader:
             marker: PhantomData,
         }
     }
+
     fn series<T: StoreSeries>(&self) -> Series<'_, T, Self, Self::Error>
     where
         Self: Sized + SeriesReader<T, Self::Error>,
@@ -258,6 +261,7 @@ pub trait StoreWriter:
             marker: PhantomData,
         }
     }
+
     fn index_mut<T: StoreIndex>(&mut self) -> IndexMut<'_, T, Self, Self::Error>
     where
         Self: Sized + IndexWriter<T, <Self as StoreReader>::Error>,
@@ -267,6 +271,7 @@ pub trait StoreWriter:
             marker: PhantomData,
         }
     }
+
     fn series_mut<T: StoreSeries>(&mut self) -> SeriesMut<'_, T, Self, Self::Error>
     where
         Self: Sized + SeriesWriter<T, <Self as StoreReader>::Error>,
