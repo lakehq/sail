@@ -19,6 +19,7 @@ opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 opentelemetry-otlp = { workspace = true }
 opentelemetry-appender-log = { workspace = true }
+opentelemetry-proto = { workspace = true }
 log = { workspace = true }
 datafusion = { workspace = true }
 datafusion-proto = { workspace = true }
@@ -33,6 +34,9 @@ lazy_static = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
+prost = { workspace = true }
+parquet-variant-compute = { workspace = true }
+parquet-variant-json = { workspace = true }
 
 [build-dependencies]
 serde = { workspace = true }

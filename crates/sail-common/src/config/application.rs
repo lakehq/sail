@@ -872,12 +872,26 @@ pub struct TelemetryConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TelemetryExporterConfig {
-    pub otlp: OtlpConfig,
+    pub otlp: TelemetryOtlpExporterConfig,
+    pub system: TelemetrySystemExporterConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct OtlpConfig {
+pub struct TelemetrySystemExporterConfig {
+    pub mode: TelemetrySystemExporterMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TelemetrySystemExporterMode {
+    Off,
+    Memory,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetryOtlpExporterConfig {
     #[serde(
         serialize_with = "serialize_non_empty_string",
         deserialize_with = "deserialize_non_empty_string"

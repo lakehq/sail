@@ -31,6 +31,7 @@ tonic-prost = { workspace = true }
 fastrace = { workspace = true }
 tower = { workspace = true }
 prost = { workspace = true }
+opentelemetry-proto = { workspace = true }
 datafusion = { workspace = true }
 datafusion-proto = { workspace = true }
 datafusion-spark = { workspace = true }

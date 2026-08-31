@@ -15,7 +15,12 @@ pub mod catalog {
 
     impl SystemTableColumn {
         pub fn field(&self) -> Field {
-            Field::new(self.name, self.arrow_type.clone(), self.nullable)
+            let field = Field::new(self.name, self.arrow_type.clone(), self.nullable);
+            if self.sql_type == "VARIANT" {
+                field.with_metadata(crate::system::types::variant_field_metadata())
+            } else {
+                field
+            }
         }
     }
 
