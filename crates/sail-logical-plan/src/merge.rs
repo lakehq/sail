@@ -1906,11 +1906,22 @@ fn build_merge_projection(
             .iter()
             .zip(&matched_clause_predicates)
         {
-            if let MergeMatchedAction::UpdateSet(assignments) = &clause.action
-                && assignments.iter().any(|assignment| {
-                    merge_names_equal(&assignment.column, generated_column, options.case_sensitive)
-                })
-            {
+            let explicitly_assigned = match &clause.action {
+                MergeMatchedAction::UpdateAll => {
+                    merge_source_expr(options, generated_column).is_some()
+                }
+                MergeMatchedAction::UpdateSet(assignments) => {
+                    assignments.iter().any(|assignment| {
+                        merge_names_equal(
+                            &assignment.column,
+                            generated_column,
+                            options.case_sensitive,
+                        )
+                    })
+                }
+                MergeMatchedAction::Delete => false,
+            };
+            if explicitly_assigned {
                 branches.push((Box::new(predicate.clone()), Box::new(lit(true))));
             }
         }

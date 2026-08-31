@@ -79,6 +79,18 @@ Feature: Delta Lake Update
         SET default.delta_update_basic.value = 11
         WHERE id = 1
         """
+      Given statement
+        """
+        UPDATE delta_update_basic
+        SET default.delta_update_basic.value = 12
+        WHERE id = 1
+        """
+      Given statement
+        """
+        UPDATE default.delta_update_basic
+        SET sail.default.delta_update_basic.value = 13
+        WHERE id = 1
+        """
       When query
         """
         UPDATE delta_update_basic
@@ -88,11 +100,18 @@ Feature: Delta Lake Update
       Then query error Cannot resolve UPDATE target column `bogus.value`
       When query
         """
+        UPDATE default.delta_update_basic
+        SET bogus.default.delta_update_basic.value = 99
+        WHERE id = 1
+        """
+      Then query error Cannot resolve UPDATE target column `bogus.default.delta_update_basic.value`
+      When query
+        """
         SELECT id, value FROM delta_update_basic ORDER BY id
         """
       Then query result ordered
         | id | value |
-        | 1  | 11    |
+        | 1  | 13    |
         | 2  | 20    |
         | 3  | 30    |
 
@@ -623,6 +642,8 @@ Feature: Delta Lake Update
         | operationMetrics.numUpdatedRows              | 1        |
         | operationMetrics.numCopiedRows               | 0        |
         | operationMetrics.numTouchedRows              | 1        |
+        | operationMetrics.numAddedFiles               | 1        |
+        | operationMetrics.numRemovedFiles             | 1        |
         | operationMetrics.numDeletionVectorsAdded     | 1        |
         | operationMetrics.numDeletionVectorsRemoved   | 0        |
         | operationMetrics.numDeletionVectorsUpdated   | 0        |

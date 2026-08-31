@@ -4,6 +4,7 @@ use std::sync::Arc;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::{DFSchema, DFSchemaRef, ScalarValue};
 use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, lit};
+use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::column_features::ColumnFeatures;
 use sail_common_datafusion::datasource::{DataSourceRegistry, UpdateAssignment, UpdateInfo};
@@ -32,12 +33,19 @@ impl PlanResolver<'_> {
                     .to_string(),
             ));
         }
-        let target_identifier = table
+        let parsed_target_identifier = table
             .parts()
             .iter()
             .map(|part| part.as_ref().to_string())
             .collect::<Vec<_>>();
         let target = self.resolve_row_level_target(&table).await?;
+        let target_identifier = if target.lakehouse_table.is_some() {
+            self.ctx
+                .extension::<CatalogManager>()?
+                .resolve_fully_qualified_object_name(table.parts())?
+        } else {
+            parsed_target_identifier
+        };
         let target_format = target.format.clone();
         let mut target_plan = self.resolve_row_level_table_plan(table, state).await?;
         let target_alias = table_alias.as_ref().map(|alias| alias.as_ref().to_string());
@@ -232,11 +240,10 @@ impl PlanResolver<'_> {
             }) && root_position > 0
             {
                 let qualifier = &parts[..root_position];
-                let compared_parts = qualifier.len().min(target_identifier.len());
-                let qualifier_matches_target = compared_parts > 0
-                    && qualifier[qualifier.len() - compared_parts..]
+                let qualifier_matches_target = qualifier.len() <= target_identifier.len()
+                    && qualifier
                         .iter()
-                        .zip(&target_identifier[target_identifier.len() - compared_parts..])
+                        .zip(&target_identifier[target_identifier.len() - qualifier.len()..])
                         .all(|(left, right)| names_equal(left, right));
                 if qualifier_matches_target {
                     parts.drain(..root_position);
