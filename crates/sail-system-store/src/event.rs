@@ -1,4 +1,4 @@
-//! Durable system table events emitted by the driver.
+//! Durable system events emitted by the driver.
 
 use chrono::{DateTime, Utc};
 use sail_common_datafusion::system::types::StageInput;

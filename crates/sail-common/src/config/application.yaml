@@ -908,13 +908,13 @@
 - key: catalog.system.store
   type: string
   default: "memory"
-  description: The system-table store backend. Valid values are `memory` and `disk`.
+  description: The system catalog store backend. Valid values are `memory` and `disk`.
   experimental: true
 
 - key: catalog.system.disk.path
   type: string
   default: ""
-  description: The existing directory used by the disk-backed system-table store.
+  description: The existing directory used by the disk-backed system catalog store.
   experimental: true
 
 - key: telemetry.export_traces
@@ -960,7 +960,7 @@
 - key: telemetry.exporter.system.enabled
   type: boolean
   default: "false"
-  description: Whether metrics are written to the system-table store.
+  description: Whether metrics are written to the system catalog store.
   experimental: true
 
 - key: telemetry.traces_export_interval_secs

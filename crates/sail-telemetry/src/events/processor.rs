@@ -31,8 +31,8 @@ impl LogProcessor for SystemEventLogProcessor {
         let Ok(event) = serde_json::from_str::<SystemEvent>(body.as_ref()) else {
             return;
         };
-        // Log processors run synchronously. An unbounded channel lets event reporting remain
-        // non-blocking while the forwarder waits for the actor's bounded mailbox.
+        // Log processors run synchronously.
+        // The unbounded actor mailbox of the system store keeps event reporting non-blocking.
         let _ = self.store.write_event(event);
     }
 

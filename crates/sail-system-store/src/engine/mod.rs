@@ -19,14 +19,17 @@ pub(crate) trait StoreEngine: Send + 'static {
         &mut self,
         event: SystemEvent,
     ) -> impl Future<Output = SystemStoreResult<()>> + Send;
+
     fn write_metrics(
         &mut self,
         samples: Vec<MetricSample>,
     ) -> impl Future<Output = SystemStoreResult<()>> + Send;
+
     fn read(
         &mut self,
         query: SystemStoreQuery,
     ) -> impl Future<Output = SystemStoreResult<Option<Box<dyn FnOnce() + Send>>>> + Send;
+
     fn flush(&mut self) -> impl Future<Output = SystemStoreResult<()>> + Send;
 }
 

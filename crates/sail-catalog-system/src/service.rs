@@ -29,7 +29,7 @@ impl SystemTableService {
     ) -> Result<RecordBatch> {
         let fetch = fetch.unwrap_or(usize::MAX);
         let mut filters = PredicateExtractor::new(filters);
-        let batch = (match table {
+        let batch = match table {
             SystemTable::Jobs => {
                 let session_id = filters
                     .extract("session_id")?
@@ -43,7 +43,7 @@ impl SystemTableService {
                     self.store_reader
                         .read_jobs(session_id, job_id, fetch)
                         .await?,
-                )
+                )?
             }
             SystemTable::Metrics => {
                 let timestamp = filters
@@ -60,7 +60,7 @@ impl SystemTableService {
                     self.store_reader
                         .read_metrics(timestamp, name, attributes, fetch)
                         .await?,
-                )
+                )?
             }
             SystemTable::Stages => {
                 let session_id = filters
@@ -78,7 +78,7 @@ impl SystemTableService {
                     self.store_reader
                         .read_stages(session_id, job_id, stage, fetch)
                         .await?,
-                )
+                )?
             }
             SystemTable::Tasks => {
                 let session_id = filters
@@ -102,7 +102,7 @@ impl SystemTableService {
                     self.store_reader
                         .read_tasks(session_id, job_id, stage, partition, attempt, fetch)
                         .await?,
-                )
+                )?
             }
             SystemTable::Options => {
                 let key = filters
@@ -112,7 +112,7 @@ impl SystemTableService {
                 build_rows(
                     SystemTable::Options,
                     self.store_reader.read_options(key, fetch).await?,
-                )
+                )?
             }
             SystemTable::Sessions => {
                 let session_id = filters
@@ -122,7 +122,7 @@ impl SystemTableService {
                 build_rows(
                     SystemTable::Sessions,
                     self.store_reader.read_sessions(session_id, fetch).await?,
-                )
+                )?
             }
             SystemTable::Workers => {
                 let session_id = filters
@@ -137,9 +137,9 @@ impl SystemTableService {
                     self.store_reader
                         .read_workers(session_id, worker_id, fetch)
                         .await?,
-                )
+                )?
             }
-        })?;
+        };
         if let Some(projection) = projection {
             Ok(batch.project(&projection)?)
         } else {

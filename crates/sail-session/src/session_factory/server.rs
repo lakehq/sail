@@ -158,7 +158,7 @@ impl ServerSessionFactory {
     fn create_system_table_service(&self, _info: &ServerSessionInfo) -> Result<SystemTableService> {
         let reader = global_system_store_reader().ok_or_else(|| {
             datafusion::common::DataFusionError::Internal(
-                "system event telemetry is not initialized".to_string(),
+                "telemetry is not initialized for system store".to_string(),
             )
         })?;
         Ok(SystemTableService::new(reader))

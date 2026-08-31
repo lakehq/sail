@@ -721,7 +721,7 @@ pub struct CatalogConfig {
     pub system: SystemCatalogConfig,
 }
 
-/// Configuration for the local materialized system table store.
+/// Configuration for the local materialized system catalog store.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(
     into = "system_catalog::SystemCatalog",

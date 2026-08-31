@@ -11,9 +11,9 @@ pub enum SystemStoreError {
     InvalidValue(String),
     #[error("internal system store error: {0}")]
     Internal(String),
-    #[error("datafusion error: {0}")]
+    #[error("DataFusion error: {0}")]
     DataFusion(#[from] DataFusionError),
-    #[error("fjall error: {0}")]
+    #[error("Fjall error: {0}")]
     Fjall(#[from] fjall::Error),
 }
 
