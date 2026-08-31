@@ -24,6 +24,7 @@ use datafusion::physical_plan::{
     ExecutionPlan, ExecutionPlanProperties, PlanProperties, replace_children_if_necessary,
 };
 use sail_catalog_system::physical_plan::SystemTableExec;
+use sail_common_datafusion::lakeprocedure::LakeProcedureRootPlacement;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_data_source::listing::delete::FileDeleteExec;
 use sail_delta_lake::physical_plan::DeltaCommitExec;
@@ -468,7 +469,7 @@ fn plan_job_graph_stages(
         PlannedSubtree::without_pending_scalar_subquery_expr(plan)
     } else if subtree.plan.is::<SystemTableExec>()
         || subtree.plan.is::<CatalogCommandExec>()
-        || subtree.plan.is::<LakeProcedureExec>()
+        || is_coordinator_lake_procedure(&subtree.plan)
         || subtree.plan.is::<FileDeleteExec>()
         || subtree.plan.is::<DeltaCommitExec>()
         || subtree.plan.is::<IcebergCommitExec>()
@@ -620,11 +621,21 @@ fn is_driver_stage_plan(plan: &Arc<dyn ExecutionPlan>) -> bool {
 
     plan.is::<SystemTableExec>()
         || plan.is::<CatalogCommandExec>()
-        || plan.is::<LakeProcedureExec>()
+        || is_coordinator_lake_procedure(plan)
         || plan.is::<FileDeleteExec>()
         || plan.is::<DeltaCommitExec>()
         || plan.is::<IcebergCommitExec>()
         || plan.is::<RemoteCheckpointCommitExec>()
+}
+
+fn is_coordinator_lake_procedure(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.downcast_ref::<LakeProcedureExec>()
+        .is_some_and(|procedure| {
+            matches!(
+                procedure.root_placement(),
+                LakeProcedureRootPlacement::Coordinator
+            )
+        })
 }
 
 fn wrap_pending_scalar_subqueries(
@@ -1037,7 +1048,8 @@ mod tests {
     use sail_celeborn::common::PartitionSplitMode;
     use sail_common_datafusion::lakeprocedure::{
         LakeProcedure, LakeProcedureAccess, LakeProcedureCall, LakeProcedureInvocation,
-        LakeProcedureInvocationId, LakeProcedureRetryPolicy, LakeProcedureTarget,
+        LakeProcedureInvocationId, LakeProcedureRetryPolicy, LakeProcedureRootPlacement,
+        LakeProcedureTarget,
     };
     use sail_physical_plan::barrier::BarrierExec;
     use sail_physical_plan::catalog_command::CatalogCommandExec;
@@ -1061,14 +1073,18 @@ mod tests {
         Arc::new(EmptyExec::new(schema()))
     }
 
-    fn mutating_procedure_plan() -> Arc<dyn ExecutionPlan> {
+    fn procedure_plan(
+        root_placement: LakeProcedureRootPlacement,
+        retry_policy: LakeProcedureRetryPolicy,
+        input: Arc<dyn ExecutionPlan>,
+    ) -> Arc<dyn ExecutionPlan> {
         let procedure = LakeProcedure {
             name: "mutate".to_string(),
             parameters: vec![],
             output: vec![],
             access: LakeProcedureAccess::MetadataCommit,
             target: LakeProcedureTarget::Catalog,
-            retry_policy: LakeProcedureRetryPolicy::Forbidden,
+            retry_policy,
         };
         let call = LakeProcedureCall {
             invocation_id: LakeProcedureInvocationId("invocation-1".to_string()),
@@ -1081,7 +1097,15 @@ mod tests {
                 arguments: vec![],
             },
         };
-        Arc::new(LakeProcedureExec::new(call, procedure.schema()))
+        Arc::new(LakeProcedureExec::new(call, input, root_placement))
+    }
+
+    fn mutating_procedure_plan() -> Arc<dyn ExecutionPlan> {
+        procedure_plan(
+            LakeProcedureRootPlacement::Coordinator,
+            LakeProcedureRetryPolicy::Forbidden,
+            Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
+        )
     }
 
     fn flight_shuffle_options() -> JobGraphOptions {
@@ -1348,6 +1372,64 @@ mod tests {
                 mode: InputMode::Forward,
             }]
         ));
+    }
+
+    #[test]
+    fn coordinator_procedure_keeps_distributed_input_on_workers() {
+        let input = Arc::new(
+            RepartitionExec::try_new(
+                Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
+                Partitioning::RoundRobinBatch(4),
+            )
+            .unwrap(),
+        );
+        let graph = JobGraph::try_new(
+            procedure_plan(
+                LakeProcedureRootPlacement::Coordinator,
+                LakeProcedureRetryPolicy::Forbidden,
+                input,
+            ),
+            flight_shuffle_options(),
+        )
+        .unwrap();
+
+        assert_eq!(graph.stages().len(), 3);
+        assert_eq!(graph.stages()[0].placement, TaskPlacement::Worker);
+        assert_eq!(graph.stages()[0].retry_policy, TaskRetryPolicy::Default);
+        assert_eq!(graph.stages()[1].placement, TaskPlacement::Driver);
+        assert_eq!(graph.stages()[1].retry_policy, TaskRetryPolicy::Never);
+        assert!(graph.stages()[1].plan.is::<LakeProcedureExec>());
+        assert_eq!(graph.stages()[2].placement, TaskPlacement::Worker);
+    }
+
+    #[test]
+    fn distributed_procedure_root_stays_on_workers() {
+        let input = Arc::new(
+            RepartitionExec::try_new(
+                Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
+                Partitioning::RoundRobinBatch(4),
+            )
+            .unwrap(),
+        );
+        let graph = JobGraph::try_new(
+            procedure_plan(
+                LakeProcedureRootPlacement::Distributed,
+                LakeProcedureRetryPolicy::Safe,
+                input,
+            ),
+            flight_shuffle_options(),
+        )
+        .unwrap();
+
+        assert_eq!(graph.stages().len(), 2);
+        assert!(
+            graph
+                .stages()
+                .iter()
+                .all(|stage| stage.placement == TaskPlacement::Worker)
+        );
+        assert!(graph.stages()[1].plan.is::<LakeProcedureExec>());
+        assert_eq!(graph.stages()[1].retry_policy, TaskRetryPolicy::Default);
     }
 
     #[test]

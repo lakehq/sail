@@ -72,6 +72,7 @@ message ExtendedPhysicalPlanNode {
     IcebergEqualityDeleteWriterExecNode iceberg_equality_delete_writer = 57;
     PartitionedTopKExecNode partitioned_top_k = 58;
     LakeProcedureExecNode lake_procedure = 59;
+    IcebergProcedureExecNode iceberg_procedure = 60;
   }
 }
 
@@ -1157,6 +1158,15 @@ message LakeProcedureExecNode {
   bytes schema = 1;
   // JSON-encoded LakeProcedureCall.
   string call = 2;
+  // Provider-planned procedure implementation.
+  bytes input = 3;
+  // 0 = coordinator, 1 = distributed.
+  uint32 root_placement = 4;
+}
+
+message IcebergProcedureExecNode {
+  // JSON-encoded LakeProcedureCall used to revalidate and bind the target at execution time.
+  string call = 1;
 }
 
 message BarrierExecNode {

@@ -93,6 +93,7 @@ use sail_common_datafusion::catalog::{
     CatalogPartitionField, LakehouseExecutionContext, PartitionTransform,
 };
 use sail_common_datafusion::datasource::PhysicalSinkMode;
+use sail_common_datafusion::lakeprocedure::LakeProcedureRootPlacement;
 use sail_common_datafusion::schema_evolution::{
     SchemaEvolutionCastColumnExpr, SchemaEvolutionPhysicalExprAdapterFactoryWithMatching,
     SchemaEvolutionTimezoneMode, StructFieldMatching,
@@ -266,7 +267,8 @@ use sail_function::window::{SparkFirstLastValue, SparkFirstLastValueKind, SparkN
 use sail_iceberg::physical_plan::{
     IcebergCommitExec, IcebergDeleteApplyExec, IcebergDiscoveryExec,
     IcebergEqualityDeleteWriterExec, IcebergManifestScanExec, IcebergMergeMetadataExec,
-    IcebergPartitionTransformExpr, IcebergScanByDataFilesExec, IcebergWriterExec,
+    IcebergPartitionTransformExpr, IcebergProcedureExec, IcebergScanByDataFilesExec,
+    IcebergWriterExec,
 };
 use sail_iceberg::spec::Transform as IcebergTransform;
 use sail_iceberg::{IcebergWriteContext, IcebergWriterExecOptions, SnapshotUpdateKind};
@@ -1803,13 +1805,41 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map_err(|e| plan_datafusion_err!("failed to decode CatalogCommand: {e}"))?;
                 Ok(Arc::new(CatalogCommandExec::new(command, schema)))
             }
-            NodeKind::LakeProcedure(r#gen::LakeProcedureExecNode { schema, call }) => {
+            NodeKind::LakeProcedure(r#gen::LakeProcedureExecNode {
+                schema,
+                call,
+                input,
+                root_placement,
+            }) => {
                 let schema = Arc::new(try_decode_schema(&schema)?);
                 let call: sail_common_datafusion::lakeprocedure::LakeProcedureCall =
                     serde_json::from_str(&call).map_err(|e| {
                         plan_datafusion_err!("failed to decode LakeProcedureCall: {e}")
                     })?;
-                let procedure = LakeProcedureExec::new(call, schema);
+                let input =
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
+                let root_placement = match root_placement {
+                    0 => LakeProcedureRootPlacement::Coordinator,
+                    1 => LakeProcedureRootPlacement::Distributed,
+                    value => {
+                        return plan_err!("invalid lake procedure root placement: {value}");
+                    }
+                };
+                let procedure = LakeProcedureExec::new(call, input, root_placement);
+                procedure.validate()?;
+                if procedure.schema_ref().as_ref() != schema.as_ref() {
+                    return plan_err!(
+                        "decoded lake procedure schema does not match its descriptor"
+                    );
+                }
+                Ok(Arc::new(procedure))
+            }
+            NodeKind::IcebergProcedure(r#gen::IcebergProcedureExecNode { call }) => {
+                let call: sail_common_datafusion::lakeprocedure::LakeProcedureCall =
+                    serde_json::from_str(&call).map_err(|e| {
+                        plan_datafusion_err!("failed to decode Iceberg LakeProcedureCall: {e}")
+                    })?;
+                let procedure = IcebergProcedureExec::new(call);
                 procedure.validate()?;
                 Ok(Arc::new(procedure))
             }
@@ -2878,7 +2908,27 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let schema = try_encode_schema(procedure_exec.schema_ref().as_ref())?;
             let call = serde_json::to_string(procedure_exec.call())
                 .map_err(|e| plan_datafusion_err!("failed to encode LakeProcedureCall: {e}"))?;
-            NodeKind::LakeProcedure(r#gen::LakeProcedureExecNode { schema, call })
+            let input = try_encode_physical_plan_with_converter(
+                self,
+                proto_converter,
+                procedure_exec.input().clone(),
+            )?;
+            let root_placement = match procedure_exec.root_placement() {
+                LakeProcedureRootPlacement::Coordinator => 0,
+                LakeProcedureRootPlacement::Distributed => 1,
+            };
+            NodeKind::LakeProcedure(r#gen::LakeProcedureExecNode {
+                schema,
+                call,
+                input,
+                root_placement,
+            })
+        } else if let Some(procedure_exec) = node.downcast_ref::<IcebergProcedureExec>() {
+            procedure_exec.validate()?;
+            let call = serde_json::to_string(procedure_exec.call()).map_err(|e| {
+                plan_datafusion_err!("failed to encode Iceberg LakeProcedureCall: {e}")
+            })?;
+            NodeKind::IcebergProcedure(r#gen::IcebergProcedureExecNode { call })
         } else if let Some(file_delete_exec) = node.downcast_ref::<FileDeleteExec>() {
             NodeKind::FileDelete(r#gen::FileDeleteExecNode {
                 object_store_url: file_delete_exec.object_store_url().as_str().to_string(),
@@ -5440,8 +5490,10 @@ mod tests {
     fn test_round_trip_lake_procedure_preserves_bound_call() -> Result<()> {
         use sail_common_datafusion::lakeprocedure::{
             LakeProcedure, LakeProcedureAccess, LakeProcedureCall, LakeProcedureInvocation,
-            LakeProcedureInvocationId, LakeProcedureRetryPolicy, LakeProcedureTarget,
+            LakeProcedureInvocationId, LakeProcedureRetryPolicy, LakeProcedureRootPlacement,
+            LakeProcedureTarget,
         };
+        use sail_iceberg::physical_plan::IcebergProcedureExec;
 
         let procedure = LakeProcedure {
             name: "mutate".to_string(),
@@ -5462,8 +5514,13 @@ mod tests {
                 arguments: vec![],
             },
         };
-        let plan: Arc<dyn ExecutionPlan> =
-            Arc::new(LakeProcedureExec::new(call.clone(), procedure.schema()));
+        let implementation: Arc<dyn ExecutionPlan> =
+            Arc::new(IcebergProcedureExec::new(call.clone()));
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(LakeProcedureExec::new(
+            call.clone(),
+            implementation,
+            LakeProcedureRootPlacement::Distributed,
+        ));
 
         let codec = RemoteExecutionCodec;
         let bytes = try_encode_physical_plan(&codec, plan)?;
@@ -5474,6 +5531,11 @@ mod tests {
 
         assert_eq!(decoded.call(), &call);
         assert_eq!(decoded.schema(), procedure.schema());
+        assert!(decoded.input().is::<IcebergProcedureExec>());
+        assert_eq!(
+            decoded.root_placement(),
+            LakeProcedureRootPlacement::Distributed
+        );
         Ok(())
     }
 

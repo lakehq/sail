@@ -527,8 +527,13 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
             let schema = node.schema().inner().clone();
             Arc::new(CatalogCommandExec::new(node.command().clone(), schema))
         } else if let Some(node) = node.as_any().downcast_ref::<LakeProcedureNode>() {
-            let schema = node.schema().inner().clone();
-            Arc::new(LakeProcedureExec::new(node.call().clone(), schema))
+            let [input] = physical_inputs else {
+                return internal_err!("LakeProcedure requires exactly one physical input");
+            };
+            let procedure =
+                LakeProcedureExec::new(node.call().clone(), input.clone(), node.root_placement());
+            procedure.validate()?;
+            Arc::new(procedure)
         } else if let Some(_node) = node.as_any().downcast_ref::<BarrierNode>() {
             let (plan, preconditions) = physical_inputs.split_last().ok_or_else(|| {
                 datafusion_common::DataFusionError::Internal(format!(

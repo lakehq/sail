@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
+use datafusion::catalog::Session;
 use datafusion::common::Result;
-use datafusion::execution::TaskContext;
 use datafusion_common::plan_datafusion_err;
+use datafusion_expr::LogicalPlan;
 use serde::{Deserialize, Serialize};
 
 use crate::catalog::LakehouseTableBinding;
@@ -191,7 +191,51 @@ impl LakeProcedureCall {
     }
 }
 
-/// Runtime object handed to a format-owned procedure implementation.
+/// Catalog object prepared for a format-owned procedure during logical planning.
+///
+/// A table target contains the access context and source metadata needed to build scans, writes,
+/// exchanges, and commits. It is intentionally separate from [`LakeProcedureCall`], which only
+/// carries a stable serializable binding into physical execution.
+#[derive(Debug, Clone)]
+pub enum LakeProcedurePlanningTarget {
+    Catalog { catalog: String },
+    Table(Box<SourceInfo>),
+}
+
+/// Where the root stage of a planned procedure runs.
+///
+/// This does not constrain the provider-owned implementation. A coordinator root can still have
+/// distributed worker stages separated by exchanges before its final coordinator stage.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Ord)]
+pub enum LakeProcedureRootPlacement {
+    Coordinator,
+    Distributed,
+}
+
+/// Provider-owned implementation plan plus engine scheduling requirements for one invocation.
+#[derive(Debug, Clone)]
+pub struct LakeProcedurePlan {
+    pub implementation: LogicalPlan,
+    pub root_placement: LakeProcedureRootPlacement,
+}
+
+impl LakeProcedurePlan {
+    pub fn coordinator(implementation: LogicalPlan) -> Self {
+        Self {
+            implementation,
+            root_placement: LakeProcedureRootPlacement::Coordinator,
+        }
+    }
+
+    pub fn distributed(implementation: LogicalPlan) -> Self {
+        Self {
+            implementation,
+            root_placement: LakeProcedureRootPlacement::Distributed,
+        }
+    }
+}
+
+/// Runtime object freshly rebound for a format-owned local procedure implementation.
 #[derive(Debug, Clone)]
 pub enum LakeProcedureExecutionTarget {
     Catalog { catalog: String },
@@ -219,10 +263,16 @@ pub enum LakeProcedureResolution {
 pub trait LakeProcedureProvider: Send + Sync {
     fn resolve_procedure(&self, namespace: &[String], name: &str) -> LakeProcedureResolution;
 
-    async fn execute_procedure(
+    /// Plans the format-owned implementation of a fully bound procedure call.
+    ///
+    /// The returned implementation becomes the input of the engine-owned procedure boundary. It
+    /// may be a local command, a distributed relational plan, or a distributed plan followed by a
+    /// coordinator commit. The plan also selects root placement for this invocation. Every
+    /// physical extension produced from it must be supported by the remote physical-plan codec.
+    async fn plan_procedure(
         &self,
-        ctx: &TaskContext,
-        target: LakeProcedureExecutionTarget,
-        invocation: LakeProcedureInvocation,
-    ) -> Result<RecordBatch>;
+        session: &dyn Session,
+        target: LakeProcedurePlanningTarget,
+        call: &LakeProcedureCall,
+    ) -> Result<LakeProcedurePlan>;
 }

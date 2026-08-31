@@ -1,16 +1,21 @@
 use std::collections::HashSet;
+use std::fmt::Formatter;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion::arrow::array::{Int64Array, RecordBatch, StringArray};
-use datafusion::common::{DataFusionError, Result, not_impl_err, plan_err};
+use datafusion::catalog::Session;
+use datafusion::common::{DFSchema, DFSchemaRef, DataFusionError, Result, not_impl_err, plan_err};
 use datafusion::execution::TaskContext;
+use datafusion_expr::{Expr, Extension, LogicalPlan, UserDefinedLogicalNodeCore};
+use educe::Educe;
 use object_store::ObjectStoreExt;
 use sail_common_datafusion::datasource::{OptionLayer, SourceInfo};
 use sail_common_datafusion::lakeprocedure::{
-    LakeProcedure, LakeProcedureAccess, LakeProcedureDataType, LakeProcedureExecutionTarget,
-    LakeProcedureField, LakeProcedureInvocation, LakeProcedureParameter, LakeProcedureProvider,
+    LakeProcedure, LakeProcedureAccess, LakeProcedureCall, LakeProcedureDataType,
+    LakeProcedureExecutionTarget, LakeProcedureField, LakeProcedureInvocation,
+    LakeProcedureParameter, LakeProcedurePlan, LakeProcedurePlanningTarget, LakeProcedureProvider,
     LakeProcedureResolution, LakeProcedureRetryPolicy, LakeProcedureTarget, LakeProcedureValue,
 };
 
@@ -57,6 +62,60 @@ const ICEBERG_PROCEDURES: &[&str] = &[
     "rewrite_table_path",
 ];
 
+/// Iceberg-owned logical implementation selected by [`LakeProcedureProvider::plan_procedure`].
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
+#[educe(PartialOrd)]
+pub(crate) struct IcebergProcedureNode {
+    call: LakeProcedureCall,
+    #[educe(PartialOrd(ignore))]
+    schema: DFSchemaRef,
+}
+
+impl IcebergProcedureNode {
+    fn try_new(call: LakeProcedureCall) -> Result<Self> {
+        call.validate()?;
+        let schema = DFSchemaRef::new(DFSchema::try_from(call.invocation.procedure.schema())?);
+        Ok(Self { call, schema })
+    }
+
+    pub(crate) fn call(&self) -> &LakeProcedureCall {
+        &self.call
+    }
+}
+
+impl UserDefinedLogicalNodeCore for IcebergProcedureNode {
+    fn name(&self) -> &str {
+        "IcebergProcedure"
+    }
+
+    fn inputs(&self) -> Vec<&LogicalPlan> {
+        vec![]
+    }
+
+    fn schema(&self) -> &DFSchemaRef {
+        &self.schema
+    }
+
+    fn expressions(&self) -> Vec<Expr> {
+        vec![]
+    }
+
+    fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "IcebergProcedure: procedure={}, invocation_id={}",
+            self.call.invocation.procedure.name, self.call.invocation_id.0
+        )
+    }
+
+    fn with_exprs_and_inputs(&self, exprs: Vec<Expr>, inputs: Vec<LogicalPlan>) -> Result<Self> {
+        if !exprs.is_empty() || !inputs.is_empty() {
+            return plan_err!("IcebergProcedure does not accept expressions or inputs");
+        }
+        Ok(self.clone())
+    }
+}
+
 #[async_trait]
 impl LakeProcedureProvider for IcebergLakeSource {
     fn resolve_procedure(&self, namespace: &[String], name: &str) -> LakeProcedureResolution {
@@ -80,91 +139,99 @@ impl LakeProcedureProvider for IcebergLakeSource {
         LakeProcedureResolution::Unrecognized
     }
 
-    async fn execute_procedure(
+    async fn plan_procedure(
         &self,
-        ctx: &TaskContext,
-        target: LakeProcedureExecutionTarget,
-        invocation: LakeProcedureInvocation,
-    ) -> Result<RecordBatch> {
-        let LakeProcedureExecutionTarget::Table(info) = target else {
-            return plan_err!("Iceberg system procedures require a table target");
-        };
-        let ProcedureTable {
-            table_url,
-            table_properties,
-            lakehouse_table,
-        } = ProcedureTable::from_source_info(*info).await?;
-        match invocation.procedure.name.as_str() {
-            "ancestors_of" => {
-                let metadata = load_current_metadata(
-                    ctx,
-                    &table_url,
-                    &table_properties,
-                    lakehouse_table.as_ref(),
-                )
-                .await?;
-                ancestors_output(&metadata, &invocation)
-            }
-            "rollback_to_snapshot" => {
-                let snapshot_id = required_i64(&invocation, "snapshot_id")?;
-                commit_snapshot_operation(
-                    ctx,
-                    &table_url,
-                    &table_properties,
-                    lakehouse_table.as_ref(),
-                    SnapshotOperation::RollbackToSnapshot(snapshot_id),
-                    invocation.procedure.schema(),
-                )
-                .await
-            }
-            "rollback_to_timestamp" => {
-                let timestamp_micros = required_timestamp_micros(&invocation, "timestamp")?;
-                commit_snapshot_operation(
-                    ctx,
-                    &table_url,
-                    &table_properties,
-                    lakehouse_table.as_ref(),
-                    SnapshotOperation::RollbackToTimestamp(timestamp_micros.div_euclid(1_000)),
-                    invocation.procedure.schema(),
-                )
-                .await
-            }
-            "set_current_snapshot" => {
-                let snapshot_id = optional_i64(&invocation, "snapshot_id")?;
-                let reference = optional_string(&invocation, "ref")?;
-                if snapshot_id.is_some() == reference.is_some() {
-                    return plan_err!(
-                        "Exactly one of snapshot_id or ref must be provided to set_current_snapshot"
-                    );
-                }
-                commit_snapshot_operation(
-                    ctx,
-                    &table_url,
-                    &table_properties,
-                    lakehouse_table.as_ref(),
-                    SnapshotOperation::SetCurrentSnapshot {
-                        snapshot_id,
-                        reference,
-                    },
-                    invocation.procedure.schema(),
-                )
-                .await
-            }
-            "fast_forward" => {
-                let branch = required_string(&invocation, "branch")?;
-                let to = required_string(&invocation, "to")?;
-                commit_snapshot_operation(
-                    ctx,
-                    &table_url,
-                    &table_properties,
-                    lakehouse_table.as_ref(),
-                    SnapshotOperation::FastForward { branch, to },
-                    invocation.procedure.schema(),
-                )
-                .await
-            }
-            name => not_impl_err!("Iceberg system procedure '{name}' is not implemented"),
+        _session: &dyn Session,
+        _target: LakeProcedurePlanningTarget,
+        call: &LakeProcedureCall,
+    ) -> Result<LakeProcedurePlan> {
+        Ok(LakeProcedurePlan::coordinator(LogicalPlan::Extension(
+            Extension {
+                node: Arc::new(IcebergProcedureNode::try_new(call.clone())?),
+            },
+        )))
+    }
+}
+
+pub(crate) async fn execute_iceberg_procedure(
+    ctx: &TaskContext,
+    target: LakeProcedureExecutionTarget,
+    invocation: LakeProcedureInvocation,
+) -> Result<RecordBatch> {
+    let LakeProcedureExecutionTarget::Table(info) = target else {
+        return plan_err!("Iceberg system procedures require a table target");
+    };
+    let ProcedureTable {
+        table_url,
+        table_properties,
+        lakehouse_table,
+    } = ProcedureTable::from_source_info(*info).await?;
+    match invocation.procedure.name.as_str() {
+        "ancestors_of" => {
+            let metadata =
+                load_current_metadata(ctx, &table_url, &table_properties, lakehouse_table.as_ref())
+                    .await?;
+            ancestors_output(&metadata, &invocation)
         }
+        "rollback_to_snapshot" => {
+            let snapshot_id = required_i64(&invocation, "snapshot_id")?;
+            commit_snapshot_operation(
+                ctx,
+                &table_url,
+                &table_properties,
+                lakehouse_table.as_ref(),
+                SnapshotOperation::RollbackToSnapshot(snapshot_id),
+                invocation.procedure.schema(),
+            )
+            .await
+        }
+        "rollback_to_timestamp" => {
+            let timestamp_micros = required_timestamp_micros(&invocation, "timestamp")?;
+            commit_snapshot_operation(
+                ctx,
+                &table_url,
+                &table_properties,
+                lakehouse_table.as_ref(),
+                SnapshotOperation::RollbackToTimestamp(timestamp_micros.div_euclid(1_000)),
+                invocation.procedure.schema(),
+            )
+            .await
+        }
+        "set_current_snapshot" => {
+            let snapshot_id = optional_i64(&invocation, "snapshot_id")?;
+            let reference = optional_string(&invocation, "ref")?;
+            if snapshot_id.is_some() == reference.is_some() {
+                return plan_err!(
+                    "Exactly one of snapshot_id or ref must be provided to set_current_snapshot"
+                );
+            }
+            commit_snapshot_operation(
+                ctx,
+                &table_url,
+                &table_properties,
+                lakehouse_table.as_ref(),
+                SnapshotOperation::SetCurrentSnapshot {
+                    snapshot_id,
+                    reference,
+                },
+                invocation.procedure.schema(),
+            )
+            .await
+        }
+        "fast_forward" => {
+            let branch = required_string(&invocation, "branch")?;
+            let to = required_string(&invocation, "to")?;
+            commit_snapshot_operation(
+                ctx,
+                &table_url,
+                &table_properties,
+                lakehouse_table.as_ref(),
+                SnapshotOperation::FastForward { branch, to },
+                invocation.procedure.schema(),
+            )
+            .await
+        }
+        name => not_impl_err!("Iceberg system procedure '{name}' is not implemented"),
     }
 }
 

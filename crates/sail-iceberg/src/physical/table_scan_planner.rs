@@ -16,6 +16,8 @@ use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use crate::lake_source::{IcebergWriteNode, plan_iceberg_write};
 use crate::logical::IcebergTableSource;
 use crate::physical::row_level_planner::plan_iceberg_row_level_write;
+use crate::physical_plan::IcebergProcedureExec;
+use crate::procedure::IcebergProcedureNode;
 
 pub struct IcebergPhysicalPlanner;
 
@@ -30,6 +32,12 @@ impl ExtensionPlanner for IcebergPhysicalPlanner {
         session: &dyn Session,
         _planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if let Some(node) = node.as_any().downcast_ref::<IcebergProcedureNode>() {
+            return Ok(Some(Arc::new(IcebergProcedureExec::new(
+                node.call().clone(),
+            ))));
+        }
+
         if let Some(node) = node.as_any().downcast_ref::<IcebergWriteNode>() {
             let [logical_input] = logical_inputs else {
                 return datafusion_common::internal_err!(

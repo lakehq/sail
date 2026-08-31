@@ -3,11 +3,9 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
-use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
-use datafusion_common::{DataFusionError, Result, exec_err, internal_err};
+use datafusion_common::{DataFusionError, Result, internal_err};
 use sail_catalog::error::{CatalogError, CatalogObject};
 use sail_catalog::lakehouse::{
     BeginTableAccessRequest, ResolveLakehouseTableRequest, TableAccessPurpose,
@@ -18,27 +16,32 @@ use sail_common_datafusion::datasource::{DataSourceRegistry, OptionLayer, Source
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakeprocedure::{
     LakeProcedureAccess, LakeProcedureCall, LakeProcedureExecutionTarget, LakeProcedureResolution,
-    LakeProcedureTarget,
+    LakeProcedureRootPlacement, LakeProcedureTarget,
 };
+use sail_common_datafusion::utils::items::ItemTaker;
 
-/// Driver-side physical command for a fully bound lakehouse procedure call.
+/// Engine-owned physical boundary around a provider-planned procedure implementation.
 #[derive(Debug, Clone)]
 pub struct LakeProcedureExec {
     call: LakeProcedureCall,
+    input: Arc<dyn ExecutionPlan>,
+    root_placement: LakeProcedureRootPlacement,
     schema: SchemaRef,
     properties: Arc<PlanProperties>,
 }
 
 impl LakeProcedureExec {
-    pub fn new(call: LakeProcedureCall, schema: SchemaRef) -> Self {
-        let properties = Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(schema.clone()),
-            Partitioning::UnknownPartitioning(1),
-            EmissionType::Final,
-            Boundedness::Bounded,
-        ));
+    pub fn new(
+        call: LakeProcedureCall,
+        input: Arc<dyn ExecutionPlan>,
+        root_placement: LakeProcedureRootPlacement,
+    ) -> Self {
+        let schema = call.invocation.procedure.schema();
+        let properties = input.properties().clone();
         Self {
             call,
+            input,
+            root_placement,
             schema,
             properties,
         }
@@ -52,10 +55,20 @@ impl LakeProcedureExec {
         &self.schema
     }
 
+    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.input
+    }
+
+    pub fn root_placement(&self) -> LakeProcedureRootPlacement {
+        self.root_placement
+    }
+
     pub fn validate(&self) -> Result<()> {
         self.call.validate()?;
-        if self.schema.as_ref() != self.call.invocation.procedure.schema().as_ref() {
-            return internal_err!("lake procedure output schema does not match its descriptor");
+        if self.schema.as_ref() != self.input.schema().as_ref() {
+            return internal_err!(
+                "lake procedure implementation schema does not match its descriptor"
+            );
         }
         Ok(())
     }
@@ -81,7 +94,12 @@ impl ExecutionPlan for LakeProcedureExec {
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![]
+        vec![&self.input]
+    }
+
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        // The provider implementation owns the procedure's distribution shape.
+        vec![false]
     }
 
     fn apply_expressions(
@@ -104,10 +122,10 @@ impl ExecutionPlan for LakeProcedureExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if !children.is_empty() {
-            return internal_err!("{} should not have children", self.name());
-        }
-        Ok(self)
+        let input = children.one()?;
+        let procedure = Self::new(self.call.clone(), input, self.root_placement);
+        procedure.validate()?;
+        Ok(Arc::new(procedure))
     }
 
     fn execute(
@@ -116,27 +134,16 @@ impl ExecutionPlan for LakeProcedureExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         self.validate()?;
-        if partition != 0 {
-            return exec_err!(
-                "{} expects only partition 0 but got {}",
-                self.name(),
-                partition
-            );
-        }
-        let call = self.call.clone();
-        let schema = self.schema.clone();
-        let stream = futures::stream::once(async move {
-            let batch = execute_lake_procedure(context.as_ref(), call).await?;
-            Ok(batch)
-        });
-        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+        self.input.execute(partition, context)
     }
 }
 
-async fn execute_lake_procedure(
+/// Revalidates a bound call and reacquires any table access session immediately before execution.
+pub async fn prepare_lake_procedure_execution(
     context: &TaskContext,
-    call: LakeProcedureCall,
-) -> Result<datafusion::arrow::array::RecordBatch> {
+    call: &LakeProcedureCall,
+) -> Result<LakeProcedureExecutionTarget> {
+    call.validate()?;
     let manager = context.extension::<CatalogManager>()?;
     let registry = context.extension::<DataSourceRegistry>()?;
     let lake_source = registry.get_lake_source(&call.lake_source)?;
@@ -166,7 +173,7 @@ async fn execute_lake_procedure(
         }
     }
 
-    let execution_target = match (&call.invocation.procedure.target, &call.target) {
+    Ok(match (&call.invocation.procedure.target, &call.target) {
         (LakeProcedureTarget::Catalog, None) => LakeProcedureExecutionTarget::Catalog {
             catalog: call.catalog.clone(),
         },
@@ -186,11 +193,7 @@ async fn execute_lake_procedure(
                 call.invocation_id.0
             ))));
         }
-    };
-
-    provider
-        .execute_procedure(context, execution_target, call.invocation)
-        .await
+    })
 }
 
 async fn prepare_table_target(

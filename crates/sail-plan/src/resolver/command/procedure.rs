@@ -13,12 +13,12 @@ use sail_common_datafusion::catalog::{
     LakehouseExecutionContext, LakehouseFormat, LakehouseOperation, LakehouseTableBinding,
     TableKind,
 };
-use sail_common_datafusion::datasource::DataSourceRegistry;
+use sail_common_datafusion::datasource::{DataSourceRegistry, OptionLayer, SourceInfo};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakeprocedure::{
     LakeProcedure, LakeProcedureAccess, LakeProcedureCall, LakeProcedureDataType,
-    LakeProcedureInvocation, LakeProcedureInvocationId, LakeProcedureResolution,
-    LakeProcedureTableTarget, LakeProcedureTarget, LakeProcedureValue,
+    LakeProcedureInvocation, LakeProcedureInvocationId, LakeProcedurePlanningTarget,
+    LakeProcedureResolution, LakeProcedureTableTarget, LakeProcedureTarget, LakeProcedureValue,
 };
 use sail_common_datafusion::literal::LiteralEvaluator;
 use uuid::Uuid;
@@ -65,7 +65,7 @@ impl PlanResolver<'_> {
             };
             match provider.resolve_procedure(&procedure_namespace, procedure_leaf) {
                 LakeProcedureResolution::Supported(procedure) => {
-                    resolved_procedure = Some((lake_source_name, procedure));
+                    resolved_procedure = Some((lake_source_name, provider, procedure));
                     break;
                 }
                 LakeProcedureResolution::Unsupported { reason } => {
@@ -74,7 +74,7 @@ impl PlanResolver<'_> {
                 LakeProcedureResolution::Unrecognized => {}
             }
         }
-        let Some((lake_source_name, procedure)) = resolved_procedure else {
+        let Some((lake_source_name, provider, procedure)) = resolved_procedure else {
             return Err(PlanError::analysis(format!(
                 "Procedure not found: {}",
                 procedure_parts.join(".")
@@ -97,8 +97,13 @@ impl PlanResolver<'_> {
             arguments: bind_procedure_arguments(&procedure, positional_values, named_values)?,
             procedure,
         };
-        let target = match &invocation.procedure.target {
-            LakeProcedureTarget::Catalog => None,
+        let (target, planning_target) = match &invocation.procedure.target {
+            LakeProcedureTarget::Catalog => (
+                None,
+                LakeProcedurePlanningTarget::Catalog {
+                    catalog: procedure_catalog.to_string(),
+                },
+            ),
             LakeProcedureTarget::Table { parameter } => {
                 let Some(LakeProcedureValue::Utf8(table_name)) = invocation.argument(parameter)
                 else {
@@ -124,7 +129,13 @@ impl PlanResolver<'_> {
                     )));
                 }
                 let table_status = manager.get_table_by_reference(&resolved_table).await?;
-                let TableKind::Table { format, .. } = &table_status.kind else {
+                let TableKind::Table {
+                    location,
+                    format,
+                    properties,
+                    ..
+                } = &table_status.kind
+                else {
                     return Err(PlanError::invalid(format!(
                         "Lakehouse procedure target is not a table: {}",
                         table_name_for_display(&table_status)
@@ -140,16 +151,31 @@ impl PlanResolver<'_> {
                 let mut canonical_table = vec![resolved_table.catalog().to_string()];
                 canonical_table.extend(table_status.database.iter().cloned());
                 canonical_table.push(table_status.name.clone());
-                let planned_context = resolve_procedure_table_binding(
+                let planning = resolve_procedure_table_planning(
                     manager.as_ref(),
                     &canonical_table,
                     format,
                     invocation.procedure.access,
                 )
                 .await?;
-                Some(LakeProcedureTableTarget {
-                    binding: LakehouseTableBinding::from_execution(&planned_context),
-                })
+                (
+                    Some(LakeProcedureTableTarget {
+                        binding: LakehouseTableBinding::from_execution(&planning.binding),
+                    }),
+                    LakeProcedurePlanningTarget::Table(Box::new(SourceInfo {
+                        paths: location.iter().cloned().collect(),
+                        lakehouse_table: Some(planning.access),
+                        schema: None,
+                        constraints: Default::default(),
+                        partition_by: vec![],
+                        bucket_by: None,
+                        sort_order: vec![],
+                        options: vec![OptionLayer::TablePropertyList {
+                            items: properties.clone(),
+                        }],
+                        read_case_sensitive: true,
+                    })),
+                )
             }
         };
         let call = LakeProcedureCall {
@@ -160,8 +186,16 @@ impl PlanResolver<'_> {
             target,
             invocation,
         };
+        let session = self.ctx.state();
+        let plan = provider
+            .plan_procedure(&session, planning_target, &call)
+            .await?;
         Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(LakeProcedureNode::try_new(call)?),
+            node: Arc::new(LakeProcedureNode::try_new(
+                call,
+                plan.implementation,
+                plan.root_placement,
+            )?),
         }))
     }
 
@@ -182,12 +216,17 @@ impl PlanResolver<'_> {
     }
 }
 
-async fn resolve_procedure_table_binding(
+struct ProcedureTablePlanning {
+    binding: LakehouseExecutionContext,
+    access: LakehouseExecutionContext,
+}
+
+async fn resolve_procedure_table_planning(
     manager: &CatalogManager,
     table: &[String],
     format: &str,
     access: LakeProcedureAccess,
-) -> PlanResult<LakehouseExecutionContext> {
+) -> PlanResult<ProcedureTablePlanning> {
     let resolved = manager
         .resolve_lakehouse_table(
             table,
@@ -200,7 +239,7 @@ async fn resolve_procedure_table_binding(
         )
         .await?;
     let binding = resolved.execution;
-    match manager
+    let access = match manager
         .begin_table_access(
             table,
             BeginTableAccessRequest {
@@ -210,11 +249,13 @@ async fn resolve_procedure_table_binding(
         )
         .await
     {
-        Ok(_) | Err(CatalogError::NotSupported(_) | CatalogError::UnsupportedCapability(_)) => {
-            Ok(binding)
+        Ok(session) => session.context,
+        Err(CatalogError::NotSupported(_) | CatalogError::UnsupportedCapability(_)) => {
+            binding.clone()
         }
-        Err(error) => Err(error.into()),
-    }
+        Err(error) => return Err(error.into()),
+    };
+    Ok(ProcedureTablePlanning { binding, access })
 }
 
 fn procedure_access_purpose(access: LakeProcedureAccess) -> TableAccessPurpose {
