@@ -18,6 +18,7 @@ sail-function = { path = "../sail-function" }
 sail-logical-plan = { path = "../sail-logical-plan" }
 sail-physical-plan = { path = "../sail-physical-plan" }
 sail-telemetry = { path = "../sail-telemetry" }
+sail-system-store = { path = "../sail-system-store" }
 sail-catalog-system = { path = "../sail-catalog-system" }
 sail-object-store = { path = "../sail-object-store" }
 sail-celeborn = { path = "../sail-celeborn" }

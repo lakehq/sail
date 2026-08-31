@@ -62,13 +62,10 @@ pub struct CandidateRange<K, B> {
 
 /// Candidate entries to inspect in an ordered map.
 pub enum CandidateSet<K, B> {
-    Empty,
-    All,
     Points(BTreeSet<K>),
     Ranges(Vec<CandidateRange<K, B>>),
 }
 
-#[macro_export]
 macro_rules! candidate_key_bound {
     (
         $key:ident => $bound:ident {
@@ -77,20 +74,19 @@ macro_rules! candidate_key_bound {
     ) => {
         #[derive(Clone, Debug)]
         struct $bound {
-            $( $field: $crate::system::candidate::ValuePosition<$field_type>, )+
+            $( $field: $crate::engine::candidate::ValuePosition<$field_type>, )+
         }
 
-        impl $crate::system::candidate::ValueOrd<$key> for $bound {
+        impl $crate::engine::candidate::ValueOrd<$key> for $bound {
             fn cmp(&self, other: &$key) -> std::cmp::Ordering {
                 let $key { $( $field, )+ } = other;
                 std::cmp::Ordering::Equal
-                    $(.then_with(|| $crate::system::candidate::ValueOrd::cmp(&self.$field, $field)))+
+                    $(.then_with(|| $crate::engine::candidate::ValueOrd::cmp(&self.$field, $field)))+
             }
         }
     };
 }
 
-#[macro_export]
 macro_rules! candidate_set {
     (
         $key:ident => $bound:ident {
@@ -98,12 +94,12 @@ macro_rules! candidate_set {
         }
     ) => {{
         if $( $domain.is_empty() )||+ {
-            $crate::system::candidate::CandidateSet::Empty
+            $crate::engine::candidate::CandidateSet::Points(std::collections::BTreeSet::new())
         } else {
             let mut prefixes = vec![($key {
-                $( $field: <$field_type as $crate::system::candidate::ValueMinimum>::minimum(), )+
+                $( $field: <$field_type as $crate::engine::candidate::ValueMinimum>::minimum(), )+
             }, $bound {
-                $( $field: $crate::system::candidate::ValuePosition::BeforeAll, )+
+                $( $field: $crate::engine::candidate::ValuePosition::BeforeAll, )+
             }, None)];
             let mut candidates = None;
 
@@ -117,9 +113,9 @@ macro_rules! candidate_set {
                                 let mut key = prefix.clone();
                                 key.$field = value.clone();
                                 let mut at = at.clone();
-                                at.$field = $crate::system::candidate::ValuePosition::At(value.clone());
+                                at.$field = $crate::engine::candidate::ValuePosition::At(value.clone());
                                 let mut after = at.clone();
-                                after.$field = $crate::system::candidate::ValuePosition::After(value.clone());
+                                after.$field = $crate::engine::candidate::ValuePosition::After(value.clone());
                                 expanded.push((key, at, Some(after)));
                             }
                         }
@@ -134,33 +130,33 @@ macro_rules! candidate_set {
                                     std::ops::Bound::Included(value)
                                     | std::ops::Bound::Excluded(value) => value.clone(),
                                     std::ops::Bound::Unbounded => {
-                                        <$field_type as $crate::system::candidate::ValueMinimum>::minimum()
+                                        <$field_type as $crate::engine::candidate::ValueMinimum>::minimum()
                                     }
                                 };
                                 let end = match &range.upper {
                                     std::ops::Bound::Included(value) => {
                                         let mut end = at.clone();
-                                        end.$field = $crate::system::candidate::ValuePosition::After(value.clone());
+                                        end.$field = $crate::engine::candidate::ValuePosition::After(value.clone());
                                         Some(end)
                                     }
                                     std::ops::Bound::Excluded(value) => {
                                         let mut end = at.clone();
-                                        end.$field = $crate::system::candidate::ValuePosition::At(value.clone());
+                                        end.$field = $crate::engine::candidate::ValuePosition::At(value.clone());
                                         Some(end)
                                     }
                                     std::ops::Bound::Unbounded => after.clone(),
                                 };
-                                ranges.push($crate::system::candidate::CandidateRange { start, end });
+                                ranges.push($crate::engine::candidate::CandidateRange { start, end });
                             }
                         }
-                        candidates = Some($crate::system::candidate::CandidateSet::Ranges(ranges));
+                        candidates = Some($crate::engine::candidate::CandidateSet::Ranges(ranges));
                         break 'plan;
                     }
                 )+
             }
 
             candidates.unwrap_or_else(|| {
-                $crate::system::candidate::CandidateSet::Points(
+                $crate::engine::candidate::CandidateSet::Points(
                     prefixes.into_iter().map(|(key, _, _)| key).collect(),
                 )
             })
@@ -168,16 +164,18 @@ macro_rules! candidate_set {
     }};
 }
 
+pub(crate) use candidate_key_bound;
+pub(crate) use candidate_set;
+
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::cmp::Ordering;
+    use std::collections::BTreeSet;
     use std::ops::Bound;
 
-    use datafusion_common::Result;
+    use sail_common_datafusion::system::predicate::ValueDomain;
 
-    use super::CandidateSet;
-    use crate::system::predicate::ValueDomain;
-    use crate::system::reader::read_ordered_map;
+    use super::{CandidateSet, ValueOrd};
 
     #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
     struct TestKey {
@@ -195,7 +193,7 @@ mod tests {
     }
 
     #[test]
-    fn candidate_set_uses_an_exclusive_composite_end_bound() -> Result<()> {
+    fn candidate_set_uses_an_exclusive_composite_end_bound() {
         let session_id = ValueDomain::point("session".to_string());
         let job_id = ValueDomain::range(Bound::Excluded(7_u64), Bound::Unbounded);
         let label = ValueDomain::<String>::all();
@@ -207,42 +205,44 @@ mod tests {
             }
         };
 
-        assert!(matches!(&candidates, CandidateSet::Ranges(_)));
-
-        let map = BTreeMap::from([
-            (
-                TestKey {
-                    session_id: "session".to_string(),
-                    job_id: 7,
-                    label: "a".to_string(),
-                },
-                7_u64,
-            ),
-            (
-                TestKey {
-                    session_id: "session".to_string(),
-                    job_id: 8,
-                    label: "z".to_string(),
-                },
-                8,
-            ),
-            (
-                TestKey {
-                    session_id: "other".to_string(),
-                    job_id: 0,
-                    label: "a".to_string(),
-                },
-                0,
-            ),
-        ]);
-        let values = read_ordered_map(&map, candidates, |value| Ok(*value > 7), 10)?;
-
-        assert_eq!(values, vec![8]);
-        Ok(())
+        assert!(matches!(candidates, CandidateSet::Ranges(_)));
+        let CandidateSet::Ranges(ranges) = candidates else {
+            return;
+        };
+        assert_eq!(ranges.len(), 1);
+        let range = &ranges[0];
+        assert_eq!(
+            range.start,
+            TestKey {
+                session_id: "session".to_string(),
+                job_id: 7,
+                label: String::new(),
+            }
+        );
+        assert!(range.end.is_some());
+        let Some(end) = range.end.as_ref() else {
+            return;
+        };
+        assert_eq!(
+            end.cmp(&TestKey {
+                session_id: "session".to_string(),
+                job_id: u64::MAX,
+                label: "z".to_string(),
+            }),
+            Ordering::Greater
+        );
+        assert_eq!(
+            end.cmp(&TestKey {
+                session_id: "z".to_string(),
+                job_id: 0,
+                label: String::new(),
+            }),
+            Ordering::Less
+        );
     }
 
     #[test]
-    fn candidate_set_expands_point_prefixes() -> Result<()> {
+    fn candidate_set_expands_point_prefixes() {
         let session_id = ValueDomain::from_points(["one".to_string(), "two".to_string()]);
         let job_id = ValueDomain::from_points([1_u64, 2]);
         let label = ValueDomain::point("label".to_string());
@@ -254,19 +254,50 @@ mod tests {
             }
         };
 
-        assert!(matches!(&candidates, CandidateSet::Points(points) if points.len() == 4));
+        assert!(matches!(candidates, CandidateSet::Points(_)));
+        let CandidateSet::Points(points) = candidates else {
+            return;
+        };
+        assert_eq!(
+            points,
+            BTreeSet::from([
+                TestKey {
+                    session_id: "one".to_string(),
+                    job_id: 1,
+                    label: "label".to_string(),
+                },
+                TestKey {
+                    session_id: "one".to_string(),
+                    job_id: 2,
+                    label: "label".to_string(),
+                },
+                TestKey {
+                    session_id: "two".to_string(),
+                    job_id: 1,
+                    label: "label".to_string(),
+                },
+                TestKey {
+                    session_id: "two".to_string(),
+                    job_id: 2,
+                    label: "label".to_string(),
+                },
+            ])
+        );
+    }
 
-        let map = BTreeMap::from([(
-            TestKey {
-                session_id: "two".to_string(),
-                job_id: 2,
-                label: "label".to_string(),
-            },
-            22_u64,
-        )]);
-        let values = read_ordered_map(&map, candidates, |_| Ok(true), 10)?;
+    #[test]
+    fn candidate_set_represents_an_empty_domain_as_empty_points() {
+        let session_id = ValueDomain::<String>::empty();
+        let job_id = ValueDomain::<u64>::all();
+        let label = ValueDomain::<String>::all();
+        let candidates = candidate_set! {
+            TestKey => TestKeyBound {
+                session_id: String => &session_id,
+                job_id: u64 => &job_id,
+                label: String => &label,
+            }
+        };
 
-        assert_eq!(values, vec![22]);
-        Ok(())
+        assert!(matches!(candidates, CandidateSet::Points(points) if points.is_empty()));
     }
 }

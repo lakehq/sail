@@ -718,6 +718,76 @@ pub struct CatalogConfig {
     pub default_database: Vec<String>,
     pub global_temporary_database: Vec<String>,
     pub list: Vec<CatalogType>,
+    pub system: SystemCatalogConfig,
+}
+
+/// Configuration for the local materialized system table store.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(
+    into = "system_catalog::SystemCatalog",
+    from = "system_catalog::SystemCatalog"
+)]
+pub struct SystemCatalogConfig {
+    pub store: SystemCatalogStore,
+}
+
+#[derive(Debug, Clone)]
+pub enum SystemCatalogStore {
+    Memory,
+    Disk { path: String },
+}
+
+mod system_catalog {
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum Store {
+        Memory,
+        Disk,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct Disk {
+        pub path: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct SystemCatalog {
+        pub store: Store,
+        pub disk: Disk,
+    }
+
+    impl From<SystemCatalog> for super::SystemCatalogConfig {
+        fn from(value: SystemCatalog) -> Self {
+            let store = match value.store {
+                Store::Memory => super::SystemCatalogStore::Memory,
+                Store::Disk => super::SystemCatalogStore::Disk {
+                    path: value.disk.path,
+                },
+            };
+            Self { store }
+        }
+    }
+
+    impl From<super::SystemCatalogConfig> for SystemCatalog {
+        fn from(value: super::SystemCatalogConfig) -> Self {
+            match value.store {
+                super::SystemCatalogStore::Memory => Self {
+                    store: Store::Memory,
+                    disk: Disk {
+                        path: String::new(),
+                    },
+                },
+                super::SystemCatalogStore::Disk { path } => Self {
+                    store: Store::Disk,
+                    disk: Disk { path },
+                },
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -879,14 +949,7 @@ pub struct TelemetryExporterConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TelemetrySystemExporterConfig {
-    pub mode: TelemetrySystemExporterMode,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TelemetrySystemExporterMode {
-    Off,
-    Memory,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

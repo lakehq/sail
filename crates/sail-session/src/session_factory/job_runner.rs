@@ -11,7 +11,7 @@ use sail_execution::job_runner::{ClusterJobRunner, LocalJobRunner};
 use sail_execution::worker_manager::{
     KubernetesWorkerManager, KubernetesWorkerManagerOptions, LocalWorkerManager,
 };
-use sail_telemetry::system_event::SystemEventReporter;
+use sail_telemetry::events::SystemEventReporter;
 
 use crate::session_factory::{SessionFactory, WorkerSessionFactory};
 

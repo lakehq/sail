@@ -1,8 +1,8 @@
 pub mod error;
+pub mod events;
 mod execution;
 mod loggers;
 pub mod metrics;
-pub mod system_event;
 pub mod telemetry;
 
 pub const SCOPE_NAME: &str = "sail";
