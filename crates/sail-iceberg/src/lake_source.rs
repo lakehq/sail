@@ -36,12 +36,13 @@ use sail_common_datafusion::datasource::{
     BucketBy, DataSource, DeleteInfo, OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode,
     SourceInfo, create_sort_order, find_path_in_options,
 };
+use sail_common_datafusion::lakeprocedure::LakeProcedureProvider;
 use sail_common_datafusion::lakerelation::{
     LakeRelation, LakeRelationAccess, LakeRelationProvider, LakeRelationResolution,
     LakeRelationTimeTravel,
 };
 use sail_common_datafusion::lakesource::{
-    LakeSource, LakeSourceAlterTableOperation, LakeSourceCapabilities, LakeSourceCreateTableColumn,
+    LakeSource, LakeSourceAlterTableOperation, LakeSourceCreateTableColumn,
     LakeSourceCreateTableInfo, LakeSourceCreateTableResult, LakeSourceMetadata, RowLevelOperation,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -187,11 +188,14 @@ impl LakeRelationProvider for IcebergLakeSource {
 
 #[async_trait]
 impl LakeSource for IcebergLakeSource {
-    fn capabilities(self: Arc<Self>) -> LakeSourceCapabilities {
-        LakeSourceCapabilities::default()
-            .with_relation_provider(self.clone())
-            .with_procedure_provider(self)
+    fn relation_provider(self: Arc<Self>) -> Option<Arc<dyn LakeRelationProvider>> {
+        Some(self)
     }
+
+    fn procedure_provider(self: Arc<Self>) -> Option<Arc<dyn LakeProcedureProvider>> {
+        Some(self)
+    }
+
     async fn infer_metadata(
         &self,
         ctx: &dyn Session,

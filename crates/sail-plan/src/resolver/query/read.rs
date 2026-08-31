@@ -116,8 +116,7 @@ impl PlanResolver<'_> {
                     else {
                         return Err(error.into());
                     };
-                    let Some(relation_provider) = lake_source.capabilities().relation_provider
-                    else {
+                    let Some(relation_provider) = lake_source.relation_provider() else {
                         return Err(error.into());
                     };
                     match relation_provider.resolve_relation(candidate_name) {

@@ -140,15 +140,12 @@ async fn execute_lake_procedure(
     let manager = context.extension::<CatalogManager>()?;
     let registry = context.extension::<DataSourceRegistry>()?;
     let lake_source = registry.get_lake_source(&call.lake_source)?;
-    let provider = lake_source
-        .capabilities()
-        .procedure_provider
-        .ok_or_else(|| {
-            catalog_error(CatalogError::NotSupported(format!(
-                "lake source '{}' does not provide procedures",
-                call.lake_source
-            )))
-        })?;
+    let provider = lake_source.procedure_provider().ok_or_else(|| {
+        catalog_error(CatalogError::NotSupported(format!(
+            "lake source '{}' does not provide procedures",
+            call.lake_source
+        )))
+    })?;
     match provider.resolve_procedure(&call.namespace, &call.invocation.procedure.name) {
         LakeProcedureResolution::Supported(procedure) if procedure == call.invocation.procedure => {
         }

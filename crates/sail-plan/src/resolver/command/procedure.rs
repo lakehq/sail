@@ -60,7 +60,7 @@ impl PlanResolver<'_> {
         let registry = self.ctx.extension::<DataSourceRegistry>()?;
         let mut resolved_procedure = None;
         for (lake_source_name, lake_source) in registry.lake_sources()? {
-            let Some(provider) = lake_source.capabilities().procedure_provider else {
+            let Some(provider) = lake_source.procedure_provider() else {
                 continue;
             };
             match provider.resolve_procedure(&procedure_namespace, procedure_leaf) {

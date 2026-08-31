@@ -12,25 +12,6 @@ use crate::datasource::{DataSource, DeleteInfo, MergeInfo, SourceInfo, UpdateInf
 use crate::lakeprocedure::LakeProcedureProvider;
 use crate::lakerelation::LakeRelationProvider;
 
-/// Optional format-owned capabilities exposed by a lake source.
-#[derive(Clone, Default)]
-pub struct LakeSourceCapabilities {
-    pub relation_provider: Option<Arc<dyn LakeRelationProvider>>,
-    pub procedure_provider: Option<Arc<dyn LakeProcedureProvider>>,
-}
-
-impl LakeSourceCapabilities {
-    pub fn with_relation_provider(mut self, provider: Arc<dyn LakeRelationProvider>) -> Self {
-        self.relation_provider = Some(provider);
-        self
-    }
-
-    pub fn with_procedure_provider(mut self, provider: Arc<dyn LakeProcedureProvider>) -> Self {
-        self.procedure_provider = Some(provider);
-        self
-    }
-}
-
 /// Metadata about an existing lake source needed during logical planning.
 #[derive(Debug, Clone)]
 pub struct LakeSourceMetadata {
@@ -117,8 +98,12 @@ pub enum LakeSourceAlterTableOperation {
 /// relation/procedure capabilities.
 #[async_trait]
 pub trait LakeSource: DataSource {
-    fn capabilities(self: Arc<Self>) -> LakeSourceCapabilities {
-        LakeSourceCapabilities::default()
+    fn relation_provider(self: Arc<Self>) -> Option<Arc<dyn LakeRelationProvider>> {
+        None
+    }
+
+    fn procedure_provider(self: Arc<Self>) -> Option<Arc<dyn LakeProcedureProvider>> {
+        None
     }
 
     /// Infers table metadata for planning without requiring callers to construct a read source.
