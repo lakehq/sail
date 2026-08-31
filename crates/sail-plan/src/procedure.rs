@@ -23,7 +23,7 @@ impl LakeProcedureNode {
         Ok(Self {
             name: format!(
                 "LakeProcedure: {}.{}",
-                call.format_id, call.invocation.procedure.name
+                call.lake_source, call.invocation.procedure.name
             ),
             schema,
             call,

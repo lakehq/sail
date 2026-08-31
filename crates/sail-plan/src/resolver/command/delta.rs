@@ -13,9 +13,10 @@ use sail_catalog::provider::AlterTableOptions;
 use sail_common::spec;
 use sail_common_datafusion::catalog::{TableColumnStatus, TableKind};
 use sail_common_datafusion::column_features::ColumnFeatures;
-use sail_common_datafusion::datasource::{OptionLayer, SinkInfo, SourceInfo, find_path_in_options};
+use sail_common_datafusion::datasource::{
+    DataSourceRegistry, OptionLayer, SinkInfo, SourceInfo, find_path_in_options,
+};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::lakeformat::LakeFormatRegistry;
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_logical_plan::barrier::BarrierNode;
 use sail_logical_plan::check_constraints::{
@@ -107,20 +108,17 @@ impl PlanResolver<'_> {
             return Ok(input);
         };
 
-        let registry = self.ctx.extension::<LakeFormatRegistry>().map_err(|e| {
+        let registry = self.ctx.extension::<DataSourceRegistry>().map_err(|e| {
             PlanError::invalid(format!(
                 "failed to access lake source registry for Delta path `{path}`: {e}",
             ))
         })?;
-        let table_format = registry
-            .get_by_name(format)
-            .map_err(|e| {
-                PlanError::invalid(format!(
-                    "failed to resolve lake source `{}` for Delta path `{path}`: {e}",
-                    format
-                ))
-            })?
-            .table_format();
+        let lake_source = registry.get_lake_source(format).map_err(|e| {
+            PlanError::invalid(format!(
+                "failed to resolve lake source `{}` for Delta path `{path}`: {e}",
+                format
+            ))
+        })?;
         let source_info = SourceInfo {
             paths: vec![path.clone()],
             lakehouse_table: None,
@@ -132,7 +130,7 @@ impl PlanResolver<'_> {
             options: vec![],
             read_case_sensitive: self.config.case_sensitive,
         };
-        let metadata = match table_format
+        let metadata = match lake_source
             .infer_metadata(&self.ctx.state(), source_info)
             .await
         {
@@ -523,20 +521,17 @@ impl PlanResolver<'_> {
         let Some(location) = info.location.as_ref() else {
             return Ok(None);
         };
-        let registry = self.ctx.extension::<LakeFormatRegistry>().map_err(|e| {
+        let registry = self.ctx.extension::<DataSourceRegistry>().map_err(|e| {
             PlanError::invalid(format!(
                 "failed to access lake source registry for Delta table `{location}`: {e}"
             ))
         })?;
-        let table_format = registry
-            .get_by_name(&info.format)
-            .map_err(|e| {
-                PlanError::invalid(format!(
-                    "failed to resolve lake source `{}` for Delta table `{location}`: {e}",
-                    info.format
-                ))
-            })?
-            .table_format();
+        let lake_source = registry.get_lake_source(&info.format).map_err(|e| {
+            PlanError::invalid(format!(
+                "failed to resolve lake source `{}` for Delta table `{location}`: {e}",
+                info.format
+            ))
+        })?;
         let source = SourceInfo {
             paths: vec![location.clone()],
             lakehouse_table: info.lakehouse_table.clone(),
@@ -550,7 +545,7 @@ impl PlanResolver<'_> {
             }],
             read_case_sensitive: self.config.case_sensitive,
         };
-        match table_format.infer_metadata(&self.ctx.state(), source).await {
+        match lake_source.infer_metadata(&self.ctx.state(), source).await {
             Ok(metadata) => Ok(Some(metadata)),
             Err(e) => {
                 log::debug!(

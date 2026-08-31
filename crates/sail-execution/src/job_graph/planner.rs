@@ -1035,7 +1035,6 @@ mod tests {
     use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties, displayable};
     use sail_catalog::command::CatalogCommand;
     use sail_celeborn::common::PartitionSplitMode;
-    use sail_common_datafusion::lakeformat::LakeFormatId;
     use sail_common_datafusion::lakeprocedure::{
         LakeProcedure, LakeProcedureAccess, LakeProcedureCall, LakeProcedureInvocation,
         LakeProcedureInvocationId, LakeProcedureRetryPolicy, LakeProcedureTarget,
@@ -1075,7 +1074,7 @@ mod tests {
             invocation_id: LakeProcedureInvocationId("invocation-1".to_string()),
             catalog: "test".to_string(),
             namespace: vec!["system".to_string()],
-            format_id: LakeFormatId::try_new("test").unwrap(),
+            lake_source: "test".to_string(),
             target: None,
             invocation: LakeProcedureInvocation {
                 procedure: procedure.clone(),

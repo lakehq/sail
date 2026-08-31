@@ -5438,7 +5438,6 @@ mod tests {
 
     #[test]
     fn test_round_trip_lake_procedure_preserves_bound_call() -> Result<()> {
-        use sail_common_datafusion::lakeformat::LakeFormatId;
         use sail_common_datafusion::lakeprocedure::{
             LakeProcedure, LakeProcedureAccess, LakeProcedureCall, LakeProcedureInvocation,
             LakeProcedureInvocationId, LakeProcedureRetryPolicy, LakeProcedureTarget,
@@ -5456,7 +5455,7 @@ mod tests {
             invocation_id: LakeProcedureInvocationId("invocation-1".to_string()),
             catalog: "test".to_string(),
             namespace: vec!["system".to_string()],
-            format_id: LakeFormatId::try_new("iceberg")?,
+            lake_source: "iceberg".to_string(),
             target: None,
             invocation: LakeProcedureInvocation {
                 procedure: procedure.clone(),

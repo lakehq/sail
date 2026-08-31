@@ -2,9 +2,8 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use sail_common_datafusion::array::serde::ArrowSerializer;
 use sail_common_datafusion::catalog::{FunctionStatus, LakehouseOperation};
-use sail_common_datafusion::datasource::is_lakehouse_format;
+use sail_common_datafusion::datasource::{DataSourceRegistry, is_lakehouse_format};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::lakeformat::LakeFormatRegistry;
 use sail_common_datafusion::lakesource::{
     LakeSourceAlterTableOperation, LakeSourceCreateTableColumn, LakeSourceCreateTableInfo,
     LakeSourceCreateTableResult,
@@ -481,19 +480,16 @@ impl CatalogCommand {
                         manager.alter_table(&table, options).await?;
                         return Ok(display.bools().to_record_batch(vec![true])?);
                     }
-                    let registry = ctx.extension::<LakeFormatRegistry>().map_err(|e| {
+                    let registry = ctx.extension::<DataSourceRegistry>().map_err(|e| {
                         CatalogError::External(format!(
-                            "missing LakeFormatRegistry for storage-backed ALTER TABLE on format '{format}': {e}"
+                            "missing DataSourceRegistry for storage-backed ALTER TABLE on format '{format}': {e}"
                         ))
                     })?;
-                    let table_format = registry
-                        .get_by_name(&format)
-                        .map_err(|e| {
-                            CatalogError::External(format!(
-                                "unknown lake format '{format}' for storage-backed ALTER TABLE: {e}"
-                            ))
-                        })?
-                        .table_format();
+                    let lake_source = registry.get_lake_source(&format).map_err(|e| {
+                        CatalogError::External(format!(
+                            "unknown lake source '{format}' for storage-backed ALTER TABLE: {e}"
+                        ))
+                    })?;
                     let runtime = ctx.runtime_env();
                     let storage_operation = lake_source_alter_operation(&options);
                     let lakehouse_table = manager
@@ -504,7 +500,7 @@ impl CatalogCommand {
                         )
                         .await?
                         .execution;
-                    table_format
+                    lake_source
                         .alter_table(runtime, &location, storage_operation, Some(lakehouse_table))
                         .await
                         .map_err(|e| CatalogError::External(e.to_string()))?;
@@ -873,20 +869,17 @@ async fn materialize_lake_source_create_metadata<C: SessionExtensionAccessor>(
     replace: bool,
     lakehouse_table: Option<sail_common_datafusion::catalog::LakehouseExecutionContext>,
 ) -> CatalogResult<LakeSourceCreateTableResult> {
-    let registry = ctx.extension::<LakeFormatRegistry>().map_err(|e| {
+    let registry = ctx.extension::<DataSourceRegistry>().map_err(|e| {
         CatalogError::External(format!(
-            "missing LakeFormatRegistry for CREATE TABLE on format '{format}': {e}"
+            "missing DataSourceRegistry for CREATE TABLE on format '{format}': {e}"
         ))
     })?;
-    let table_format = registry
-        .get_by_name(format)
-        .map_err(|e| {
-            CatalogError::External(format!(
-                "unknown lake format '{format}' for CREATE TABLE: {e}"
-            ))
-        })?
-        .table_format();
-    table_format
+    let lake_source = registry.get_lake_source(format).map_err(|e| {
+        CatalogError::External(format!(
+            "unknown lake source '{format}' for CREATE TABLE: {e}"
+        ))
+    })?;
+    lake_source
         .create_table_metadata(
             ctx.runtime_env(),
             LakeSourceCreateTableInfo {
@@ -1092,13 +1085,13 @@ mod tests {
     use datafusion::execution::context::SessionConfig;
     use datafusion::prelude::SessionContext;
     use datafusion_common::not_impl_err;
+    use datafusion_expr::{LogicalPlan, TableSource};
     use sail_common_datafusion::catalog::display::{CatalogObjectDisplay, DefaultCatalogDisplay};
     use sail_common_datafusion::catalog::{
         DatabaseStatus, FunctionStatus, TableColumnStatus, TableKind, TableStatus,
     };
-    use sail_common_datafusion::datasource::SourceInfo;
-    use sail_common_datafusion::lakeformat::{LakeFormatPlugin, LakeFormatRegistryBuilder};
-    use sail_common_datafusion::lakesource::{LakeSourceMetadata, LakeTableFormat};
+    use sail_common_datafusion::datasource::{DataSource, SinkInfo, SourceInfo};
+    use sail_common_datafusion::lakesource::LakeSource;
     use sail_common_datafusion::session::plan::{PlanFormatter, PlanService};
     use serde::{Deserialize, Serialize};
 
@@ -1313,19 +1306,34 @@ mod tests {
     struct TestLakeSource;
 
     #[async_trait]
-    impl LakeTableFormat for TestLakeSource {
-        fn format_name(&self) -> &str {
+    impl DataSource for TestLakeSource {
+        fn name(&self) -> &str {
             "delta"
         }
 
-        async fn infer_metadata(
+        fn as_lake_source(self: Arc<Self>) -> Option<Arc<dyn LakeSource>> {
+            Some(self)
+        }
+
+        async fn create_source(
             &self,
             _ctx: &dyn Session,
             _info: SourceInfo,
-        ) -> datafusion_common::Result<LakeSourceMetadata> {
+        ) -> datafusion_common::Result<Arc<dyn TableSource>> {
             not_impl_err!("unused in test")
         }
 
+        async fn create_writer(
+            &self,
+            _ctx: &dyn Session,
+            _info: SinkInfo,
+        ) -> datafusion_common::Result<LogicalPlan> {
+            not_impl_err!("unused in test")
+        }
+    }
+
+    #[async_trait]
+    impl LakeSource for TestLakeSource {
         async fn alter_table(
             &self,
             _runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
@@ -1338,9 +1346,8 @@ mod tests {
     }
 
     fn test_session_context() -> SessionContext {
-        let mut builder = LakeFormatRegistryBuilder::new();
-        let register_result = LakeFormatPlugin::try_new(Arc::new(TestLakeSource))
-            .and_then(|plugin| builder.register(plugin));
+        let registry = Arc::new(DataSourceRegistry::new());
+        let register_result = registry.register_data_source(Arc::new(TestLakeSource));
         assert!(
             register_result.is_ok(),
             "failed to register test lake source: {register_result:?}"
@@ -1350,7 +1357,7 @@ mod tests {
             Box::new(TestPlanFormatter),
         ));
         let config = SessionConfig::new()
-            .with_extension(Arc::new(builder.build()))
+            .with_extension(registry)
             .with_extension(plan_service);
         SessionContext::new_with_config(config)
     }

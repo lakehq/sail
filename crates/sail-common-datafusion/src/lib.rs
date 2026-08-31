@@ -6,7 +6,6 @@ pub mod display;
 pub mod error;
 pub mod extension;
 pub mod formatter;
-pub mod lakeformat;
 pub mod lakeprocedure;
 pub mod lakerelation;
 pub mod lakesource;

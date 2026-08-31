@@ -17,6 +17,7 @@ use datafusion_expr::{Expr, TableSource};
 
 use crate::catalog::{CatalogPartitionField, LakehouseExecutionContext};
 use crate::extension::SessionExtension;
+use crate::lakesource::LakeSource;
 use crate::logical_expr::ExprWithSource;
 
 /// File path metadata column for row-level modifications (MERGE, UPDATE, DELETE).
@@ -425,6 +426,10 @@ pub trait DataSource: Send + Sync {
     /// Returns the name of the data source.
     fn name(&self) -> &str;
 
+    fn as_lake_source(self: Arc<Self>) -> Option<Arc<dyn LakeSource>> {
+        None
+    }
+
     /// Creates a logical [`TableSource`] for read.
     async fn create_source(
         &self,
@@ -441,75 +446,74 @@ pub trait DataSource: Send + Sync {
     async fn create_writer(&self, ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan>;
 }
 
-/// Mutable registry for user-facing named data-source front doors.
+/// Thread-safe registry of named data and lake sources.
 #[derive(Default)]
 pub struct DataSourceRegistry {
-    state: RwLock<DataSourceRegistryState>,
-}
-
-#[derive(Default)]
-struct DataSourceRegistryState {
-    sources: HashMap<String, Arc<dyn DataSource>>,
-    protected_names: std::collections::HashSet<String>,
+    sources: RwLock<HashMap<String, Arc<dyn DataSource>>>,
 }
 
 impl DataSourceRegistry {
     pub fn new() -> Self {
         Self {
-            state: RwLock::new(DataSourceRegistryState::default()),
+            sources: RwLock::new(HashMap::new()),
         }
     }
 
     pub fn register_data_source(&self, source: Arc<dyn DataSource>) -> Result<()> {
-        let mut state = self
-            .state
+        let mut sources = self
+            .sources
             .write()
             .map_err(|_| plan_datafusion_err!("data source registry poisoned"))?;
-        let name = source.name().to_lowercase();
-        if state.protected_names.contains(&name) {
-            return Err(plan_datafusion_err!(
-                "data source '{name}' is reserved by a built-in lake format"
-            ));
-        }
-        state.sources.insert(name, source);
+        sources.insert(source.name().to_lowercase(), source);
         Ok(())
-    }
-
-    /// Registers a built-in front door that user registration cannot replace.
-    pub fn register_protected_data_source(&self, source: Arc<dyn DataSource>) -> Result<()> {
-        let mut state = self
-            .state
-            .write()
-            .map_err(|_| plan_datafusion_err!("data source registry poisoned"))?;
-        let name = source.name().to_lowercase();
-        if state.sources.contains_key(&name) {
-            return Err(plan_datafusion_err!(
-                "data source is already registered: {name}"
-            ));
-        }
-        state.protected_names.insert(name.clone());
-        state.sources.insert(name, source);
-        Ok(())
-    }
-
-    pub fn is_protected(&self, name: &str) -> Result<bool> {
-        let state = self
-            .state
-            .read()
-            .map_err(|_| plan_datafusion_err!("data source registry poisoned"))?;
-        Ok(state.protected_names.contains(&name.to_lowercase()))
     }
 
     pub fn get_data_source(&self, name: &str) -> Result<Arc<dyn DataSource>> {
-        let state = self
-            .state
+        let sources = self
+            .sources
             .read()
             .map_err(|_| plan_datafusion_err!("data source registry poisoned"))?;
-        state
-            .sources
+        sources
             .get(&name.to_lowercase())
             .cloned()
             .ok_or_else(|| missing_data_source_error(name))
+    }
+
+    pub fn get_lake_source(&self, name: &str) -> Result<Arc<dyn LakeSource>> {
+        self.get_data_source(name)?.as_lake_source().ok_or_else(|| {
+            datafusion_common::not_impl_datafusion_err!(
+                "Data source '{name}' does not support lake operations"
+            )
+        })
+    }
+
+    pub fn get_lake_source_if_supported(&self, name: &str) -> Result<Option<Arc<dyn LakeSource>>> {
+        let sources = self
+            .sources
+            .read()
+            .map_err(|_| plan_datafusion_err!("data source registry poisoned"))?;
+        Ok(sources
+            .get(&name.to_lowercase())
+            .cloned()
+            .and_then(|source| source.as_lake_source()))
+    }
+
+    pub fn lake_sources(&self) -> Result<Vec<(String, Arc<dyn LakeSource>)>> {
+        let sources = self
+            .sources
+            .read()
+            .map_err(|_| plan_datafusion_err!("data source registry poisoned"))?;
+        let mut lake_sources = sources
+            .iter()
+            .filter_map(|(name, source)| {
+                source
+                    .clone()
+                    .as_lake_source()
+                    .map(|source| (name.clone(), source))
+            })
+            .collect::<Vec<_>>();
+        lake_sources.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+        Ok(lake_sources)
     }
 }
 
@@ -619,17 +623,12 @@ mod tests {
     }
 
     #[test]
-    fn protected_data_source_cannot_be_replaced() -> Result<()> {
+    fn registration_replaces_an_existing_source() -> Result<()> {
         let registry = DataSourceRegistry::new();
 
-        registry.register_protected_data_source(Arc::new(TestDataSource))?;
-        assert!(registry.is_protected("TEST")?);
-        assert!(registry.get_data_source("test").is_ok());
-        assert!(
-            registry
-                .register_data_source(Arc::new(TestDataSource))
-                .is_err()
-        );
+        registry.register_data_source(Arc::new(TestDataSource))?;
+        registry.register_data_source(Arc::new(TestDataSource))?;
+        assert!(registry.get_data_source("TEST").is_ok());
         Ok(())
     }
 

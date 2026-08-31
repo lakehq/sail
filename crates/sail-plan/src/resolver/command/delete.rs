@@ -11,7 +11,6 @@ use sail_common_datafusion::datasource::{
     DataSourceRegistry, DeleteInfo, OptionLayer, RowLevelTarget, SourceInfo,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::lakeformat::LakeFormatRegistry;
 use sail_common_datafusion::lakesource::RowLevelOperation;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::rename::expression::expression_before_rename;
@@ -68,12 +67,12 @@ impl PlanResolver<'_> {
             None
         };
 
-        let registry = self.ctx.extension::<LakeFormatRegistry>()?;
-        let table_format = registry.get_by_name(&info.format)?.table_format();
+        let registry = self.ctx.extension::<DataSourceRegistry>()?;
+        let lake_source = registry.get_lake_source(&info.format)?;
         let delete_info = DeleteInfo {
             target: RowLevelTarget {
                 table_name,
-                format: table_format.format_name().to_string(),
+                format: lake_source.name().to_string(),
                 location: info.location,
                 partition_by: vec![],
                 options: vec![OptionLayer::TablePropertyList {
@@ -84,7 +83,7 @@ impl PlanResolver<'_> {
             condition,
         };
 
-        table_format
+        lake_source
             .plan_row_level_operation(
                 &self.ctx.state(),
                 RowLevelOperation::Delete(Box::new(delete_info)),

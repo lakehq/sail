@@ -24,7 +24,6 @@ mod tests {
     use sail_catalog_system::{SYSTEM_CATALOG_NAME, SystemCatalogProvider};
     use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
     use sail_common_datafusion::datasource::DataSourceRegistry;
-    use sail_common_datafusion::lakeformat::LakeFormatRegistryBuilder;
     use sail_common_datafusion::session::plan::PlanService;
     use sail_common_datafusion::system::catalog::SystemCatalog;
     use sail_plan::catalog::SparkCatalogObjectDisplay;
@@ -67,9 +66,6 @@ mod tests {
         state
             .config_mut()
             .set_extension(Arc::new(DataSourceRegistry::new()));
-        state
-            .config_mut()
-            .set_extension(Arc::new(LakeFormatRegistryBuilder::new().build()));
         Ok(SessionContext::new_with_state(state))
     }
 

@@ -10,9 +10,8 @@ use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::{LakehouseOperation, TableKind};
 use sail_common_datafusion::column_features::ColumnFeatures;
-use sail_common_datafusion::datasource::{MergeInfo, OptionLayer, SourceInfo};
+use sail_common_datafusion::datasource::{DataSourceRegistry, MergeInfo, OptionLayer, SourceInfo};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::lakeformat::LakeFormatRegistry;
 use sail_common_datafusion::lakesource::RowLevelOperation;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_logical_plan::merge::{
@@ -205,10 +204,10 @@ impl PlanResolver<'_> {
             check_constraint_exprs,
         };
 
-        let registry = self.ctx.extension::<LakeFormatRegistry>()?;
-        let table_format = registry.get_by_name(&target_format)?.table_format();
+        let registry = self.ctx.extension::<DataSourceRegistry>()?;
+        let lake_source = registry.get_lake_source(&target_format)?;
         let session_state = self.ctx.state();
-        Ok(table_format
+        Ok(lake_source
             .plan_row_level_operation(
                 &session_state,
                 RowLevelOperation::Merge(Box::new(MergeInfo {
@@ -905,11 +904,10 @@ impl PlanResolver<'_> {
         // where the first part is a registered lake source name.
         if let [format, path] = table.parts() {
             let format = format.as_ref().to_ascii_lowercase();
-            let registry = self.ctx.extension::<LakeFormatRegistry>()?;
-            if let Ok(plugin) = registry.get_by_name(&format) {
-                let table_format = plugin.table_format();
+            let registry = self.ctx.extension::<DataSourceRegistry>()?;
+            if let Ok(lake_source) = registry.get_lake_source(&format) {
                 let location = path.as_ref().to_string();
-                let metadata = table_format
+                let metadata = lake_source
                     .infer_metadata(
                         &self.ctx.state(),
                         SourceInfo {

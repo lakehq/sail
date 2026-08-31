@@ -13,8 +13,8 @@ use sail_common_datafusion::catalog::{
     LakehouseExecutionContext, LakehouseFormat, LakehouseOperation, LakehouseTableBinding,
     TableKind,
 };
+use sail_common_datafusion::datasource::DataSourceRegistry;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::lakeformat::{LakeFormatId, LakeFormatRegistry};
 use sail_common_datafusion::lakeprocedure::{
     LakeProcedure, LakeProcedureAccess, LakeProcedureCall, LakeProcedureDataType,
     LakeProcedureInvocation, LakeProcedureInvocationId, LakeProcedureResolution,
@@ -57,36 +57,29 @@ impl PlanResolver<'_> {
         let manager = self.ctx.extension::<CatalogManager>()?;
         let procedure_catalog = manager.resolve_catalog_reference(procedure_catalog)?;
         let procedure_namespace = vec![procedure_namespace.to_string()];
-        let registry = self.ctx.extension::<LakeFormatRegistry>()?;
-        let resolutions = registry.resolve_procedures(&procedure_namespace, procedure_leaf);
-        let mut supported = Vec::new();
-        let mut unsupported = Vec::new();
-        for (format_id, resolution) in resolutions {
-            match resolution {
+        let registry = self.ctx.extension::<DataSourceRegistry>()?;
+        let mut resolved_procedure = None;
+        for (lake_source_name, lake_source) in registry.lake_sources()? {
+            let Some(provider) = lake_source.capabilities().procedure_provider else {
+                continue;
+            };
+            match provider.resolve_procedure(&procedure_namespace, procedure_leaf) {
                 LakeProcedureResolution::Supported(procedure) => {
-                    supported.push((format_id, procedure));
+                    resolved_procedure = Some((lake_source_name, procedure));
+                    break;
                 }
                 LakeProcedureResolution::Unsupported { reason } => {
-                    unsupported.push((format_id, reason));
+                    return Err(PlanError::unsupported(reason));
                 }
                 LakeProcedureResolution::Unrecognized => {}
             }
         }
-        if supported.is_empty() {
-            if !unsupported.is_empty() {
-                return Err(PlanError::unsupported(
-                    unsupported
-                        .into_iter()
-                        .map(|(format_id, reason)| format!("{format_id}: {reason}"))
-                        .collect::<Vec<_>>()
-                        .join("; "),
-                ));
-            }
+        let Some((lake_source_name, procedure)) = resolved_procedure else {
             return Err(PlanError::analysis(format!(
                 "Procedure not found: {}",
                 procedure_parts.join(".")
             )));
-        }
+        };
 
         let mut positional_values = Vec::with_capacity(arguments.len());
         for argument in arguments {
@@ -100,114 +93,76 @@ impl PlanResolver<'_> {
             ));
         }
 
-        let mut calls = Vec::new();
-        let mut binding_errors = Vec::new();
-        let mut target_formats = Vec::new();
-        for (format_id, procedure) in supported {
-            let bound_arguments = match bind_procedure_arguments(
-                &procedure,
-                positional_values.clone(),
-                named_values.clone(),
-            ) {
-                Ok(arguments) => arguments,
-                Err(error) => {
-                    binding_errors.push(format!("{format_id}: {error}"));
-                    continue;
+        let invocation = LakeProcedureInvocation {
+            arguments: bind_procedure_arguments(&procedure, positional_values, named_values)?,
+            procedure,
+        };
+        let target = match &invocation.procedure.target {
+            LakeProcedureTarget::Catalog => None,
+            LakeProcedureTarget::Table { parameter } => {
+                let Some(LakeProcedureValue::Utf8(table_name)) = invocation.argument(parameter)
+                else {
+                    return Err(PlanError::invalid(format!(
+                        "Procedure target argument '{parameter}' must be a non-null string"
+                    )));
+                };
+                let table_ast = sail_sql_analyzer::parser::parse_object_name(table_name)?;
+                let table_name = sail_sql_analyzer::expression::from_ast_object_name(table_ast)?;
+                let table_reference: Vec<String> = table_name.into();
+                let resolved_table = manager.resolve_table_reference_with_default_catalog(
+                    &procedure_catalog,
+                    &table_reference,
+                )?;
+                if !resolved_table
+                    .catalog()
+                    .eq_ignore_ascii_case(&procedure_catalog)
+                {
+                    return Err(PlanError::invalid(format!(
+                        "Cannot run procedure from catalog '{procedure_catalog}' against table '{}' in catalog '{}'",
+                        table_reference.join("."),
+                        resolved_table.catalog()
+                    )));
                 }
-            };
-            let invocation = LakeProcedureInvocation {
-                procedure,
-                arguments: bound_arguments,
-            };
-            let target = match &invocation.procedure.target {
-                LakeProcedureTarget::Catalog => None,
-                LakeProcedureTarget::Table { parameter } => {
-                    let Some(LakeProcedureValue::Utf8(table_name)) = invocation.argument(parameter)
-                    else {
-                        binding_errors.push(format!(
-                            "{format_id}: procedure target argument '{parameter}' must be a non-null string"
-                        ));
-                        continue;
-                    };
-                    let table_ast = sail_sql_analyzer::parser::parse_object_name(table_name)?;
-                    let table_name =
-                        sail_sql_analyzer::expression::from_ast_object_name(table_ast)?;
-                    let table_reference: Vec<String> = table_name.into();
-                    let resolved_table = manager.resolve_table_reference_with_default_catalog(
-                        &procedure_catalog,
-                        &table_reference,
-                    )?;
-                    if !resolved_table
-                        .catalog()
-                        .eq_ignore_ascii_case(&procedure_catalog)
-                    {
-                        return Err(PlanError::invalid(format!(
-                            "Cannot run procedure from catalog '{procedure_catalog}' against table '{}' in catalog '{}'",
-                            table_reference.join("."),
-                            resolved_table.catalog()
-                        )));
-                    }
-                    let table_status = manager.get_table_by_reference(&resolved_table).await?;
-                    let TableKind::Table { format, .. } = &table_status.kind else {
-                        return Err(PlanError::invalid(format!(
-                            "Lakehouse procedure target is not a table: {}",
-                            table_name_for_display(&table_status)
-                        )));
-                    };
-                    let table_format = LakeFormatId::try_new(format)?;
-                    target_formats.push(table_format.clone());
-                    if table_format != format_id {
-                        continue;
-                    }
-                    let mut canonical_table = vec![resolved_table.catalog().to_string()];
-                    canonical_table.extend(table_status.database.iter().cloned());
-                    canonical_table.push(table_status.name.clone());
-                    let planned_context = resolve_procedure_table_binding(
-                        manager.as_ref(),
-                        &canonical_table,
-                        format,
-                        invocation.procedure.access,
-                    )
-                    .await?;
-                    Some(LakeProcedureTableTarget {
-                        binding: LakehouseTableBinding::from_execution(&planned_context),
-                    })
+                let table_status = manager.get_table_by_reference(&resolved_table).await?;
+                let TableKind::Table { format, .. } = &table_status.kind else {
+                    return Err(PlanError::invalid(format!(
+                        "Lakehouse procedure target is not a table: {}",
+                        table_name_for_display(&table_status)
+                    )));
+                };
+                if !format.eq_ignore_ascii_case(&lake_source_name) {
+                    return Err(PlanError::invalid(format!(
+                        "Procedure '{}' is provided by lake source '{lake_source_name}' and cannot target table '{}' with format '{format}'",
+                        invocation.procedure.name,
+                        table_name_for_display(&table_status)
+                    )));
                 }
-            };
-            calls.push(LakeProcedureCall {
-                invocation_id: LakeProcedureInvocationId(Uuid::new_v4().to_string()),
-                catalog: procedure_catalog.to_string(),
-                namespace: procedure_namespace.clone(),
-                format_id,
-                target,
-                invocation,
-            });
-        }
-
-        match calls.as_slice() {
-            [call] => Ok(LogicalPlan::Extension(Extension {
-                node: Arc::new(LakeProcedureNode::try_new(call.clone())?),
-            })),
-            [] if !binding_errors.is_empty() => Err(PlanError::invalid(binding_errors.join("; "))),
-            [] => Err(PlanError::invalid(format!(
-                "Procedure '{}' does not support target table format(s) [{}]",
-                procedure_parts.join("."),
-                target_formats
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ))),
-            calls => Err(PlanError::analysis(format!(
-                "Procedure is ambiguous across lake formats [{}]: {}",
-                calls
-                    .iter()
-                    .map(|call| call.format_id.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                procedure_parts.join(".")
-            ))),
-        }
+                let mut canonical_table = vec![resolved_table.catalog().to_string()];
+                canonical_table.extend(table_status.database.iter().cloned());
+                canonical_table.push(table_status.name.clone());
+                let planned_context = resolve_procedure_table_binding(
+                    manager.as_ref(),
+                    &canonical_table,
+                    format,
+                    invocation.procedure.access,
+                )
+                .await?;
+                Some(LakeProcedureTableTarget {
+                    binding: LakehouseTableBinding::from_execution(&planned_context),
+                })
+            }
+        };
+        let call = LakeProcedureCall {
+            invocation_id: LakeProcedureInvocationId(Uuid::new_v4().to_string()),
+            catalog: procedure_catalog.to_string(),
+            namespace: procedure_namespace,
+            lake_source: lake_source_name,
+            target,
+            invocation,
+        };
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(LakeProcedureNode::try_new(call)?),
+        }))
     }
 
     async fn evaluate_procedure_argument(

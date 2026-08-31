@@ -8,7 +8,28 @@ use datafusion::logical_expr::LogicalPlan;
 use datafusion_common::{Result, not_impl_err};
 
 use crate::catalog::{CatalogPartitionField, LakehouseExecutionContext};
-use crate::datasource::{DeleteInfo, MergeInfo, SourceInfo, UpdateInfo};
+use crate::datasource::{DataSource, DeleteInfo, MergeInfo, SourceInfo, UpdateInfo};
+use crate::lakeprocedure::LakeProcedureProvider;
+use crate::lakerelation::LakeRelationProvider;
+
+/// Optional format-owned capabilities exposed by a lake source.
+#[derive(Clone, Default)]
+pub struct LakeSourceCapabilities {
+    pub relation_provider: Option<Arc<dyn LakeRelationProvider>>,
+    pub procedure_provider: Option<Arc<dyn LakeProcedureProvider>>,
+}
+
+impl LakeSourceCapabilities {
+    pub fn with_relation_provider(mut self, provider: Arc<dyn LakeRelationProvider>) -> Self {
+        self.relation_provider = Some(provider);
+        self
+    }
+
+    pub fn with_procedure_provider(mut self, provider: Arc<dyn LakeProcedureProvider>) -> Self {
+        self.procedure_provider = Some(provider);
+        self
+    }
+}
 
 /// Metadata about an existing lake source needed during logical planning.
 #[derive(Debug, Clone)]
@@ -92,22 +113,25 @@ pub enum LakeSourceAlterTableOperation {
     AddCheckConstraint { name: String, expression: String },
 }
 
-/// Format semantics for a lakehouse table.
-///
-/// This contract is intentionally independent from the generic `DataSource`
-/// front door. A built-in format can implement both traits on one concrete
-/// type, while the engine registers and authorizes the two roles separately.
+/// A lakehouse data source with table metadata, DML, DDL, and optional
+/// relation/procedure capabilities.
 #[async_trait]
-pub trait LakeTableFormat: Send + Sync {
-    /// Stable format name used for catalog-table dispatch.
-    fn format_name(&self) -> &str;
+pub trait LakeSource: DataSource {
+    fn capabilities(self: Arc<Self>) -> LakeSourceCapabilities {
+        LakeSourceCapabilities::default()
+    }
 
     /// Infers table metadata for planning without requiring callers to construct a read source.
     async fn infer_metadata(
         &self,
         ctx: &dyn Session,
         info: SourceInfo,
-    ) -> Result<LakeSourceMetadata>;
+    ) -> Result<LakeSourceMetadata> {
+        Ok(LakeSourceMetadata {
+            schema: self.infer_schema(ctx, info).await?,
+            properties: vec![],
+        })
+    }
 
     /// Creates storage metadata for a plain catalog `CREATE TABLE` before the
     /// catalog object is registered. Lake sources that do not need storage metadata
@@ -131,15 +155,15 @@ pub trait LakeTableFormat: Send + Sync {
         match operation {
             RowLevelOperation::Delete(_) => not_impl_err!(
                 "DELETE is not yet implemented for lake source '{}'",
-                self.format_name()
+                self.name()
             ),
             RowLevelOperation::Update(_) => not_impl_err!(
                 "UPDATE is not yet implemented for lake source '{}'",
-                self.format_name()
+                self.name()
             ),
             RowLevelOperation::Merge(_) => not_impl_err!(
                 "MERGE is not yet implemented for lake source '{}'",
-                self.format_name()
+                self.name()
             ),
         }
     }
@@ -175,7 +199,7 @@ pub trait LakeTableFormat: Send + Sync {
             LakeSourceAlterTableOperation::AddCheckConstraint { .. } => {
                 not_impl_err!(
                     "CHECK constraint alteration not supported for lake source '{}'",
-                    self.format_name()
+                    self.name()
                 )
             }
         }
@@ -198,7 +222,7 @@ pub trait LakeTableFormat: Send + Sync {
         let _ = (runtime_env, path, changes, if_exists);
         not_impl_err!(
             "Table properties alteration not supported for lake source '{}'",
-            self.format_name()
+            self.name()
         )
     }
 
@@ -213,7 +237,7 @@ pub trait LakeTableFormat: Send + Sync {
         let _ = (runtime_env, path, column_path, data_type);
         not_impl_err!(
             "Column type alteration not supported for lake source '{}'",
-            self.format_name()
+            self.name()
         )
     }
 
@@ -228,7 +252,7 @@ pub trait LakeTableFormat: Send + Sync {
         let _ = (runtime_env, path, column_path, default);
         not_impl_err!(
             "Column default alteration not supported for lake source '{}'",
-            self.format_name()
+            self.name()
         )
     }
 }

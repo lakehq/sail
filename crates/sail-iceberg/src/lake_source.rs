@@ -41,8 +41,8 @@ use sail_common_datafusion::lakerelation::{
     LakeRelationTimeTravel,
 };
 use sail_common_datafusion::lakesource::{
-    LakeSourceAlterTableOperation, LakeSourceCreateTableColumn, LakeSourceCreateTableInfo,
-    LakeSourceCreateTableResult, LakeSourceMetadata, LakeTableFormat, RowLevelOperation,
+    LakeSource, LakeSourceAlterTableOperation, LakeSourceCapabilities, LakeSourceCreateTableColumn,
+    LakeSourceCreateTableInfo, LakeSourceCreateTableResult, LakeSourceMetadata, RowLevelOperation,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
@@ -79,7 +79,7 @@ use crate::utils::partition_transform::{
 
 const MAX_ALTER_TABLE_PROPERTIES_COMMIT_RETRIES: usize = 5;
 
-/// Iceberg data-source front door and [`LakeTableFormat`] implementation.
+/// Iceberg implementation of [`LakeSource`].
 #[derive(Debug, Default)]
 pub struct IcebergLakeSource;
 
@@ -87,6 +87,10 @@ pub struct IcebergLakeSource;
 impl DataSource for IcebergLakeSource {
     fn name(&self) -> &str {
         "iceberg"
+    }
+
+    fn as_lake_source(self: Arc<Self>) -> Option<Arc<dyn LakeSource>> {
+        Some(self)
     }
 
     async fn create_source(
@@ -182,11 +186,12 @@ impl LakeRelationProvider for IcebergLakeSource {
 }
 
 #[async_trait]
-impl LakeTableFormat for IcebergLakeSource {
-    fn format_name(&self) -> &str {
-        "iceberg"
+impl LakeSource for IcebergLakeSource {
+    fn capabilities(self: Arc<Self>) -> LakeSourceCapabilities {
+        LakeSourceCapabilities::default()
+            .with_relation_provider(self.clone())
+            .with_procedure_provider(self)
     }
-
     async fn infer_metadata(
         &self,
         ctx: &dyn Session,

@@ -28,8 +28,8 @@ use sail_common_datafusion::datasource::{
     SinkInfo, SinkMode, SourceInfo, create_sort_order, find_path_in_options,
 };
 use sail_common_datafusion::lakesource::{
-    LakeSourceAlterTableOperation, LakeSourceCreateTableColumn, LakeSourceCreateTableInfo,
-    LakeSourceCreateTableResult, LakeSourceMetadata, LakeTableFormat, RowLevelOperation,
+    LakeSource, LakeSourceAlterTableOperation, LakeSourceCreateTableColumn,
+    LakeSourceCreateTableInfo, LakeSourceCreateTableResult, LakeSourceMetadata, RowLevelOperation,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -67,7 +67,7 @@ use crate::table::{
 use crate::transaction::CommitBuilder;
 use crate::{DeltaTableError, create_delta_source};
 
-/// Delta data-source front door and [`LakeTableFormat`] implementation.
+/// Delta Lake implementation of [`LakeSource`].
 #[derive(Debug)]
 pub struct DeltaLakeSource;
 
@@ -75,6 +75,10 @@ pub struct DeltaLakeSource;
 impl DataSource for DeltaLakeSource {
     fn name(&self) -> &str {
         "delta"
+    }
+
+    fn as_lake_source(self: Arc<Self>) -> Option<Arc<dyn LakeSource>> {
+        Some(self)
     }
 
     async fn create_source(
@@ -152,11 +156,7 @@ impl DataSource for DeltaLakeSource {
 }
 
 #[async_trait]
-impl LakeTableFormat for DeltaLakeSource {
-    fn format_name(&self) -> &str {
-        "delta"
-    }
-
+impl LakeSource for DeltaLakeSource {
     async fn infer_metadata(
         &self,
         ctx: &dyn Session,

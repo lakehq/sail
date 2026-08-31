@@ -2,9 +2,6 @@ use std::sync::Arc;
 
 use datafusion::common::Result;
 use sail_common_datafusion::datasource::DataSourceRegistry;
-use sail_common_datafusion::lakeformat::{
-    LakeFormatPlugin, LakeFormatRegistry, LakeFormatRegistryBuilder,
-};
 use sail_data_source::formats::arrow::ArrowDataSource;
 use sail_data_source::formats::avro::AvroDataSource;
 use sail_data_source::formats::binary::BinaryDataSource;
@@ -27,19 +24,6 @@ pub(crate) fn create_data_source_registry() -> Result<Arc<DataSourceRegistry>> {
     Ok(registry)
 }
 
-pub(crate) fn create_lake_format_registry() -> Result<Arc<LakeFormatRegistry>> {
-    let mut builder = LakeFormatRegistryBuilder::new();
-    let delta = Arc::new(DeltaLakeSource);
-    builder.register(LakeFormatPlugin::try_new(delta)?)?;
-    let iceberg = Arc::new(IcebergLakeSource);
-    builder.register(
-        LakeFormatPlugin::try_new(iceberg.clone())?
-            .with_relation_provider(iceberg.clone())
-            .with_procedure_provider(iceberg),
-    )?;
-    Ok(Arc::new(builder.build()))
-}
-
 fn register_builtin_data_sources(registry: &DataSourceRegistry) -> Result<()> {
     registry.register_data_source(Arc::new(ArrowDataSource::default()))?;
     registry.register_data_source(Arc::new(AvroDataSource::default()))?;
@@ -52,8 +36,8 @@ fn register_builtin_data_sources(registry: &DataSourceRegistry) -> Result<()> {
     registry.register_data_source(Arc::new(RateDataSource))?;
     registry.register_data_source(Arc::new(ConsoleDataSource))?;
     registry.register_data_source(Arc::new(NoopDataSource))?;
-    registry.register_protected_data_source(Arc::new(DeltaLakeSource))?;
-    registry.register_protected_data_source(Arc::new(IcebergLakeSource))?;
+    registry.register_data_source(Arc::new(DeltaLakeSource))?;
+    registry.register_data_source(Arc::new(IcebergLakeSource))?;
     Ok(())
 }
 
@@ -72,19 +56,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn separates_data_source_front_doors_from_lake_format_plugins() -> Result<()> {
+    fn separates_data_sources_from_lake_sources() -> Result<()> {
         let registry = DataSourceRegistry::new();
         register_builtin_data_sources(&registry)?;
-        let formats = create_lake_format_registry()?;
 
         for name in ["parquet", "rate", "console"] {
             assert!(registry.get_data_source(name).is_ok());
-            assert!(!formats.contains(name));
+            assert!(registry.get_lake_source(name).is_err());
         }
         for name in ["delta", "iceberg"] {
             assert!(registry.get_data_source(name).is_ok());
-            assert!(registry.is_protected(name)?);
-            assert!(formats.contains(name));
+            assert!(registry.get_lake_source(name).is_ok());
         }
         Ok(())
     }

@@ -14,9 +14,8 @@ use sail_catalog::lakehouse::{
 };
 use sail_catalog::manager::CatalogManager;
 use sail_common_datafusion::catalog::{LakehouseFormat, LakehouseOperation, TableKind};
-use sail_common_datafusion::datasource::{OptionLayer, SourceInfo};
+use sail_common_datafusion::datasource::{DataSourceRegistry, OptionLayer, SourceInfo};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::lakeformat::{LakeFormatId, LakeFormatRegistry};
 use sail_common_datafusion::lakeprocedure::{
     LakeProcedureAccess, LakeProcedureCall, LakeProcedureExecutionTarget, LakeProcedureResolution,
     LakeProcedureTarget,
@@ -66,8 +65,8 @@ impl DisplayAs for LakeProcedureExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
             f,
-            "LakeProcedureExec: format={}, procedure={}, invocation_id={}",
-            self.call.format_id, self.call.invocation.procedure.name, self.call.invocation_id.0
+            "LakeProcedureExec: lake_source={}, procedure={}, invocation_id={}",
+            self.call.lake_source, self.call.invocation.procedure.name, self.call.invocation_id.0
         )
     }
 }
@@ -139,14 +138,17 @@ async fn execute_lake_procedure(
     call: LakeProcedureCall,
 ) -> Result<datafusion::arrow::array::RecordBatch> {
     let manager = context.extension::<CatalogManager>()?;
-    let registry = context.extension::<LakeFormatRegistry>()?;
-    let plugin = registry.get(&call.format_id)?;
-    let provider = plugin.procedure_provider().ok_or_else(|| {
-        catalog_error(CatalogError::NotSupported(format!(
-            "lake format '{}' does not provide procedures",
-            call.format_id
-        )))
-    })?;
+    let registry = context.extension::<DataSourceRegistry>()?;
+    let lake_source = registry.get_lake_source(&call.lake_source)?;
+    let provider = lake_source
+        .capabilities()
+        .procedure_provider
+        .ok_or_else(|| {
+            catalog_error(CatalogError::NotSupported(format!(
+                "lake source '{}' does not provide procedures",
+                call.lake_source
+            )))
+        })?;
     match provider.resolve_procedure(&call.namespace, &call.invocation.procedure.name) {
         LakeProcedureResolution::Supported(procedure) if procedure == call.invocation.procedure => {
         }
@@ -175,7 +177,7 @@ async fn execute_lake_procedure(
             prepare_table_target(
                 manager.as_ref(),
                 &call.catalog,
-                &call.format_id,
+                &call.lake_source,
                 call.invocation.procedure.access,
                 target,
             )
@@ -197,7 +199,7 @@ async fn execute_lake_procedure(
 async fn prepare_table_target(
     manager: &CatalogManager,
     catalog: &str,
-    format_id: &LakeFormatId,
+    lake_source: &str,
     access: LakeProcedureAccess,
     target: &sail_common_datafusion::lakeprocedure::LakeProcedureTableTarget,
 ) -> Result<LakeProcedureExecutionTarget> {
@@ -224,10 +226,9 @@ async fn prepare_table_target(
             table.join(".")
         ))));
     };
-    let current_format = LakeFormatId::try_new(&format)?;
-    if &current_format != format_id {
+    if !format.eq_ignore_ascii_case(lake_source) {
         return Err(catalog_error(CatalogError::Conflict(format!(
-            "procedure was bound to format '{format_id}', but table '{}' now has format '{format}'",
+            "procedure was bound to lake source '{lake_source}', but table '{}' now has format '{format}'",
             table.join(".")
         ))));
     }
