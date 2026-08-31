@@ -2,7 +2,6 @@ use sail_common::actor::{Actor, ActorAction, ActorContext};
 
 use super::{SystemEventActor, SystemEventActorMessage};
 
-#[tonic::async_trait]
 impl Actor for SystemEventActor {
     type Message = SystemEventActorMessage;
     type Options = ();
@@ -15,7 +14,7 @@ impl Actor for SystemEventActor {
         Self::default()
     }
 
-    fn receive(&mut self, _: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
+    async fn receive(&mut self, _: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
         match message {
             SystemEventActorMessage::Apply(event) => self.store.apply(event),
             SystemEventActorMessage::ApplyMetrics { metrics, result } => {
