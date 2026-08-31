@@ -14,7 +14,7 @@ use datafusion_datasource_json::utils::JsonArrayToNdjsonReader;
 use object_store::{GetResultPayload, ObjectStoreExt};
 
 use crate::listing::source::{ListingFileSample, ListingScanInput, ReadFormat};
-use crate::listing::utils::infer_listing_compression;
+use crate::listing::utils::{infer_listing_compression, try_merge_normalized};
 use crate::options::r#gen::JsonReadOptions;
 
 #[derive(Debug, Clone)]
@@ -88,7 +88,7 @@ impl ReadFormat for JsonReadFormat {
             }
         }
 
-        Ok(Arc::new(Schema::try_merge(schemas)?))
+        Ok(Arc::new(try_merge_normalized(schemas)?))
     }
 
     async fn scan(&self, _ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {

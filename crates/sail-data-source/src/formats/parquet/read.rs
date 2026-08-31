@@ -16,6 +16,7 @@ use object_store::{ObjectMeta, ObjectStore};
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 
 use crate::listing::source::{ListingFileMeta, ListingFileSample, ListingScanInput, ReadFormat};
+use crate::listing::utils::try_merge_normalized;
 use crate::options::r#gen::ParquetReadOptions;
 
 #[derive(Debug, Clone)]
@@ -90,9 +91,9 @@ impl ReadFormat for ParquetReadFormat {
         let schemas = schemas.into_iter().map(|(_, schema)| schema);
 
         let merged = if options.global.skip_metadata {
-            Schema::try_merge(schemas.map(clear_metadata))
+            try_merge_normalized(schemas.map(clear_metadata))
         } else {
-            Schema::try_merge(schemas)
+            try_merge_normalized(schemas)
         }?;
 
         let merged = if options.global.binary_as_string {

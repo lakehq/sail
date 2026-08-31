@@ -1,7 +1,7 @@
 use std::io::{Seek, SeekFrom};
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{Schema, SchemaRef};
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::error::ArrowError;
 use datafusion::arrow::ipc::convert::fb_to_schema;
 use datafusion::arrow::ipc::reader::{FileReader, StreamReader};
@@ -17,6 +17,7 @@ use object_store::path::Path;
 use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore, ObjectStoreExt};
 
 use crate::listing::source::{ListingFileSample, ListingScanInput, ReadFormat};
+use crate::listing::utils::try_merge_normalized;
 
 #[derive(Debug, Default, Clone)]
 pub struct ArrowReadFormat;
@@ -86,7 +87,7 @@ impl ReadFormat for ArrowReadFormat {
                 schemas.push(schema.as_ref().clone());
             }
         }
-        Ok(Arc::new(Schema::try_merge(schemas)?))
+        Ok(Arc::new(try_merge_normalized(schemas)?))
     }
 
     async fn scan(&self, ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {

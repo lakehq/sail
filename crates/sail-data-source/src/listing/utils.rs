@@ -27,6 +27,25 @@ use crate::url::PathGlobFilter;
 /// conversion fail later, keeps files readable that DataFusion can already read: the listing
 /// table casts each file to this schema as it scans.
 pub fn rewrite_unsupported_fields(schema: Arc<Schema>) -> Arc<Schema> {
+    Arc::new(normalize_unsupported_fields(&schema))
+}
+
+/// Merges per-file inferred schemas, normalizing each one before the merge.
+///
+/// [`Schema::try_merge`] rejects fields whose data types differ, so the normalization has to
+/// happen before the merge rather than after it. A directory holding the same column as
+/// `timestamp[ms]` in one file and `timestamp[us]` in another would otherwise fail to merge,
+/// even though Spark represents both as a single timestamp type, and that failure would occur
+/// before [`rewrite_unsupported_fields`] ever ran.
+pub fn try_merge_normalized(schemas: impl IntoIterator<Item = Schema>) -> Result<Schema> {
+    Ok(Schema::try_merge(
+        schemas
+            .into_iter()
+            .map(|schema| normalize_unsupported_fields(&schema)),
+    )?)
+}
+
+fn normalize_unsupported_fields(schema: &Schema) -> Schema {
     let new_fields: Vec<Field> = schema
         .fields()
         .iter()
@@ -46,10 +65,7 @@ pub fn rewrite_unsupported_fields(schema: Arc<Schema>) -> Arc<Schema> {
         })
         .collect();
 
-    Arc::new(Schema::new_with_metadata(
-        new_fields,
-        schema.metadata().clone(),
-    ))
+    Schema::new_with_metadata(new_fields, schema.metadata().clone())
 }
 
 fn ends_with_ignore_ascii_case(s: &str, suffix: &str) -> bool {
@@ -388,5 +404,40 @@ mod tests {
         assert!(!field("ms").is_nullable());
         assert_eq!(field("ms").metadata(), &metadata);
         assert_eq!(schema.metadata(), &metadata);
+    }
+
+    #[test]
+    fn test_try_merge_normalized_mixed_timestamp_units() {
+        let ts = |unit| {
+            Schema::new(vec![Field::new(
+                "ts",
+                DataType::Timestamp(unit, None),
+                true,
+            )])
+        };
+
+        // Files that disagree only on timestamp unit merge into a single microsecond field.
+        let merged =
+            try_merge_normalized([ts(TimeUnit::Millisecond), ts(TimeUnit::Microsecond)]).unwrap();
+        assert_eq!(
+            merged.field(0).data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, None)
+        );
+
+        // Without normalizing first, that same merge fails - which is what this guards against.
+        assert!(Schema::try_merge([ts(TimeUnit::Millisecond), ts(TimeUnit::Microsecond)]).is_err());
+
+        // `Utf8View` and `Utf8` reconcile the same way.
+        let merged = try_merge_normalized([
+            Schema::new(vec![Field::new("s", DataType::Utf8View, true)]),
+            Schema::new(vec![Field::new("s", DataType::Utf8, true)]),
+        ])
+        .unwrap();
+        assert_eq!(merged.field(0).data_type(), &DataType::Utf8);
+
+        // Nanoseconds are deliberately left alone, so they still conflict.
+        assert!(
+            try_merge_normalized([ts(TimeUnit::Nanosecond), ts(TimeUnit::Microsecond)]).is_err()
+        );
     }
 }
