@@ -5725,7 +5725,7 @@ mod tests {
     fn test_round_trip_iceberg_commit_preserves_scoped_overwrite_fields() -> Result<()> {
         use datafusion::physical_plan::empty::EmptyExec;
 
-        for expected_snapshot_id in [Some(None), Some(Some(42))] {
+        for expected_snapshot_id in [None, Some(None), Some(Some(42))] {
             let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
             let plan: Arc<dyn ExecutionPlan> = Arc::new(
                 IcebergCommitExec::new(

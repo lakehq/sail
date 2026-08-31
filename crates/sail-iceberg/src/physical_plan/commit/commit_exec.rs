@@ -134,6 +134,16 @@ fn expected_snapshot_requirement(
     })
 }
 
+fn initializes_catalog_metadata_pointer(
+    expected_snapshot_id: Option<Option<i64>>,
+    commit_mode: IcebergCatalogCommitMode,
+    catalog_metadata_location: Option<&str>,
+) -> bool {
+    expected_snapshot_id.is_none()
+        && catalog_metadata_location.is_none()
+        && commit_mode.uses_metadata_location_update()
+}
+
 fn validate_scoped_overwrite_format(
     snapshot_update_kind: SnapshotUpdateKind,
     format_version: FormatVersion,
@@ -762,19 +772,36 @@ impl ExecutionPlan for IcebergCommitExec {
             let catalog_recorded_metadata_location = table_property_metadata_location
                 .clone()
                 .or(catalog_table_info.metadata_location.clone());
-            let catalog_metadata_location = resolve_iceberg_metadata_location(
-                commit_info.lakehouse_table.as_ref(),
-                catalog_recorded_metadata_location.clone(),
-                catalog_table_info.is_catalog_managed_iceberg_table
-                    || catalog_managed_iceberg_from_properties(&commit_info.table_properties),
-            )?;
+            // A catalog entry can precede the first metadata commit for a write planned without
+            // a base table. Only that plan may initialize the catalog pointer with a CAS update.
+            let initializes_catalog_metadata_pointer = initializes_catalog_metadata_pointer(
+                expected_snapshot_id,
+                catalog_commit_mode,
+                catalog_recorded_metadata_location.as_deref(),
+            );
+            let catalog_metadata_location = if initializes_catalog_metadata_pointer {
+                None
+            } else {
+                resolve_iceberg_metadata_location(
+                    commit_info.lakehouse_table.as_ref(),
+                    catalog_recorded_metadata_location.clone(),
+                    catalog_table_info.is_catalog_managed_iceberg_table
+                        || catalog_managed_iceberg_from_properties(&commit_info.table_properties),
+                )?
+            };
 
             // Managed external catalogs use the authoritative metadata-location.
             // Path tables may record metadata-location in the session catalog for display, but
             // their current state is discovered from the authoritative metadata directory listing.
-            let latest_meta_res = match catalog_metadata_location.as_deref() {
-                Some(location) => Ok(metadata_location_to_object_path_string(location)?),
-                None => crate::table::find_latest_metadata_file(&object_store, &table_url).await,
+            let latest_meta_res = if initializes_catalog_metadata_pointer {
+                None
+            } else {
+                Some(match catalog_metadata_location.as_deref() {
+                    Some(location) => Ok(metadata_location_to_object_path_string(location)?),
+                    None => {
+                        crate::table::find_latest_metadata_file(&object_store, &table_url).await
+                    }
+                })
             };
             let catalog_metadata_table = catalog_table
                 .as_ref()
@@ -795,7 +822,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 catalog_commit_mode
             );
 
-            if latest_meta_res.is_err() {
+            if latest_meta_res.as_ref().is_none_or(Result::is_err) {
                 Self::validate_requirements(None, &commit_info.requirements)?;
                 if let Some(catalog_table) = catalog_metadata_update_table {
                     let bootstrap_result = bootstrap_new_table_with_style(
@@ -849,7 +876,12 @@ impl ExecutionPlan for IcebergCommitExec {
                 return commit_count_batch(schema, commit_info.row_count);
             }
 
-            let initial_latest_meta = latest_meta_res?;
+            let initial_latest_meta = latest_meta_res.ok_or_else(|| {
+                DataFusionError::Internal(
+                    "missing resolved Iceberg metadata after catalog pointer initialization"
+                        .to_string(),
+                )
+            })??;
 
             let mut attempt = 0;
             loop {
@@ -1468,6 +1500,46 @@ mod tests {
         DataContentType, DataFileFormat, FormatVersion, Operation, SnapshotBuilder,
         SnapshotReference, SnapshotRetention,
     };
+
+    #[test]
+    fn catalog_pointer_initialization_requires_a_planned_new_table_and_cas_commit() {
+        for commit_mode in [
+            IcebergCatalogCommitMode::MetadataLocationCas,
+            IcebergCatalogCommitMode::CompatibilityCatalogCommit,
+        ] {
+            assert!(initializes_catalog_metadata_pointer(
+                None,
+                commit_mode,
+                None
+            ));
+            assert!(!initializes_catalog_metadata_pointer(
+                Some(None),
+                commit_mode,
+                None
+            ));
+            assert!(!initializes_catalog_metadata_pointer(
+                Some(Some(42)),
+                commit_mode,
+                None
+            ));
+            assert!(!initializes_catalog_metadata_pointer(
+                None,
+                commit_mode,
+                Some("s3://bucket/table/metadata/00000.metadata.json")
+            ));
+        }
+
+        assert!(!initializes_catalog_metadata_pointer(
+            None,
+            IcebergCatalogCommitMode::Filesystem,
+            None
+        ));
+        assert!(!initializes_catalog_metadata_pointer(
+            None,
+            IcebergCatalogCommitMode::CatalogCommit,
+            None
+        ));
+    }
 
     #[test]
     fn scoped_overwrite_rejects_effective_v3_after_schema_evolution() {
