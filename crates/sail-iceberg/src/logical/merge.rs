@@ -95,6 +95,7 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         row_index_column,
         &[MERGE_PARTITION_SPEC_ID_COLUMN, MERGE_PARTITION_COLUMN],
         MergePlanRequirements {
+            preserve_unmodified_target_rows: false,
             source_metrics: false,
             effects: RowLevelEffectRequirements::default(),
         },
