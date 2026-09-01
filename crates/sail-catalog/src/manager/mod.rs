@@ -126,6 +126,18 @@ impl CatalogManager {
         Ok((state.get_catalog(&catalog)?, database, table))
     }
 
+    pub fn resolve_fully_qualified_object_name<T: AsRef<str>>(
+        &self,
+        object: &[T],
+    ) -> CatalogResult<Vec<String>> {
+        let state = self.state()?;
+        let (catalog, database, name) = state.resolve_object_reference(object)?;
+        let mut parts = vec![catalog.to_string()];
+        parts.extend(Vec::<String>::from(database));
+        parts.push(name.to_string());
+        Ok(parts)
+    }
+
     pub fn track_function(&self, udf: ScalarUDF) -> CatalogResult<CatalogFunctionId> {
         self.tracker.track_function(udf)
     }

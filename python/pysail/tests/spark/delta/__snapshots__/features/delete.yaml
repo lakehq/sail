@@ -8,7 +8,7 @@ data:
 
     == Plan Steps ==
     initial_logical_plan:
-    RowLevelWrite: command=Delete, target=delta_delete_explain_codegen, format=delta, condition=salary + 1 > 70000 AND ( department = 'Engineering' OR department = 'Marketing' ) AND active IS NOT NULL
+    RowLevelWrite: command=Delete, mode=CopyOnWrite, target=delta_delete_explain_codegen, format=delta, condition=salary + 1 > 70000 AND ( department = 'Engineering' OR department = 'Marketing' ) AND active IS NOT NULL
 
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
@@ -101,7 +101,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan:
-    RowLevelWrite: command=Delete, target=delta_delete_explain_codegen, format=delta, condition=salary + 1 > 70000 AND ( department = 'Engineering' OR department = 'Marketing' ) AND active IS NOT NULL
+    RowLevelWrite: command=Delete, mode=CopyOnWrite, target=delta_delete_explain_codegen, format=delta, condition=salary + 1 > 70000 AND ( department = 'Engineering' OR department = 'Marketing' ) AND active IS NOT NULL
 
     initial_physical_plan:
     DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)

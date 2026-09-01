@@ -991,7 +991,10 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                         equals: _,
                         value,
                     } = x;
-                    Ok((from_ast_object_name(target)?, from_ast_expression(value)?))
+                    Ok((
+                        from_ast_object_name(target)?,
+                        expr_with_default_column_values(from_ast_expression(value)?),
+                    ))
                 })
                 .collect::<SqlResult<_>>()?;
             let condition = r#where
@@ -1000,7 +1003,11 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                         r#where: _,
                         condition,
                     } = x;
-                    from_ast_expression(condition)
+                    let source = condition.text();
+                    Ok::<_, SqlError>(spec::ExprWithSource {
+                        expr: expr_with_default_column_values(from_ast_expression(condition)?),
+                        source: Some(source),
+                    })
                 })
                 .transpose()?;
             let node = spec::CommandNode::Update {

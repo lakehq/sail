@@ -1,12 +1,13 @@
-use std::collections::{BTreeSet, HashSet};
-
 use arrow::array::{Array, ArrayRef, AsArray};
 use arrow::datatypes::{
     DataType, Float32Type, Float64Type, Int32Type, Int64Type, UInt32Type, UInt64Type,
 };
 use datafusion_common::{DataFusionError, Result, exec_err};
-use datasketches::hash_value::{canonical_float, raw_bytes};
-use datasketches::theta::{CompactThetaSketch, ThetaSketch};
+use datasketches::hash::value::{canonical_float, raw_bytes};
+use datasketches::theta::{
+    CompactThetaSketch, ThetaANotB, ThetaIntersection, ThetaSketch, ThetaSketchBuilder,
+    ThetaUnionBuilder,
+};
 
 pub(crate) const MIN_LG_NOM_ENTRIES: i32 = 4;
 pub(crate) const MAX_LG_NOM_ENTRIES: i32 = 26;
@@ -31,11 +32,13 @@ pub(crate) fn validate_lg_nom_entries(value: i32, function_name: &str) -> Result
 }
 
 pub(crate) fn new_update_sketch(lg_nom_entries: u8) -> ThetaSketch {
-    ThetaSketch::builder().lg_k(lg_nom_entries.max(5)).build()
+    ThetaSketchBuilder::default()
+        .lg_k(lg_nom_entries.max(5))
+        .build()
 }
 
 pub(crate) fn default_seed_hash() -> u16 {
-    ThetaSketch::builder().build().seed_hash()
+    ThetaSketchBuilder::default().build().seed_hash()
 }
 
 pub(crate) fn empty_compact_sketch_bytes() -> Result<Vec<u8>> {
@@ -50,7 +53,7 @@ pub(crate) fn estimate_sketch(bytes: &[u8], function_name: &str) -> Result<i64> 
 pub(crate) fn normalize_sketch_bytes(bytes: &[u8], function_name: &str) -> Result<Vec<u8>> {
     let sketch = deserialize_sketch(bytes, function_name)?;
     serialize_compact_sketch(
-        sketch.iter().collect(),
+        sketch.iter().map(|entry| entry.hash()).collect(),
         sketch.theta64(),
         sketch.seed_hash(),
         sketch.is_empty(),
@@ -144,7 +147,7 @@ pub(crate) fn compact_update_sketch_bytes(
     lg_nom_entries: u8,
 ) -> Result<Vec<u8>> {
     let compact = sketch.compact(true);
-    let mut entries: Vec<u64> = compact.iter().collect();
+    let mut entries: Vec<u64> = compact.iter().map(|entry| entry.hash()).collect();
     let mut theta = compact.theta64();
     trim_entries(&mut entries, &mut theta, lg_nom_entries);
     serialize_compact_sketch(entries, theta, compact.seed_hash(), compact.is_empty())
@@ -167,51 +170,23 @@ pub(crate) fn union_sketches<'a, I>(
 where
     I: IntoIterator<Item = &'a [u8]>,
 {
-    let nominal_entries = 1usize << lg_nom_entries;
-    let max_retained_entries = nominal_entries + 1;
-    let mut entries = BTreeSet::new();
-    let mut theta = MAX_THETA;
-    let mut seed_hash = None;
-    let mut saw_non_empty = false;
-
+    let mut union = ThetaUnionBuilder::default()
+        .lg_k(lg_nom_entries.max(5))
+        .build();
     for bytes in sketches {
         let sketch = deserialize_sketch(bytes, function_name)?;
-        update_seed_hash(&mut seed_hash, &sketch, function_name)?;
-        saw_non_empty |= !sketch.is_empty();
-        let next_theta = theta.min(sketch.theta64());
-        if next_theta < theta {
-            let _ = entries.split_off(&next_theta);
-            theta = next_theta;
-        }
-        for hash in sketch.iter() {
-            if hash == 0 || hash >= theta {
-                continue;
-            }
-            if entries.len() >= max_retained_entries
-                && entries.last().is_some_and(|largest| hash >= *largest)
-            {
-                continue;
-            }
-            entries.insert(hash);
-            if entries.len() > max_retained_entries {
-                entries.pop_last();
-            }
-        }
+        union.update(&sketch).map_err(|error| {
+            DataFusionError::Execution(format!(
+                "{function_name} could not union theta sketches: {error}"
+            ))
+        })?;
     }
 
-    if entries.len() > nominal_entries
-        && let Some(next_theta) = entries.pop_last()
-    {
-        theta = theta.min(next_theta);
-    }
-    let entries: Vec<u64> = entries.into_iter().collect();
-    let empty = !saw_non_empty && entries.is_empty() && theta == MAX_THETA;
-    serialize_compact_sketch(
-        entries,
-        theta,
-        seed_hash.unwrap_or_else(default_seed_hash),
-        empty,
-    )
+    let sketch = union.to_sketch(true);
+    let mut entries: Vec<u64> = sketch.iter().map(|entry| entry.hash()).collect();
+    let mut theta = sketch.theta64();
+    trim_entries(&mut entries, &mut theta, lg_nom_entries);
+    serialize_compact_sketch(entries, theta, sketch.seed_hash(), sketch.is_empty())
 }
 
 pub(crate) fn intersect_sketch_bytes(
@@ -221,17 +196,18 @@ pub(crate) fn intersect_sketch_bytes(
 ) -> Result<Vec<u8>> {
     let left = deserialize_sketch(left, function_name)?;
     let right = deserialize_sketch(right, function_name)?;
-    check_seed_hashes(&left, &right, function_name)?;
-
-    let theta = left.theta64().min(right.theta64());
-    let right_entries: HashSet<u64> = right.iter().filter(|hash| *hash < theta).collect();
-    let entries: Vec<u64> = left
-        .iter()
-        .filter(|hash| *hash < theta && right_entries.contains(hash))
-        .collect();
-    let empty = left.is_empty() || right.is_empty() || (theta == MAX_THETA && entries.is_empty());
-
-    serialize_compact_sketch(entries, theta, output_seed_hash(&left, &right), empty)
+    let mut intersection = ThetaIntersection::default();
+    intersection.update(&left).map_err(|error| {
+        DataFusionError::Execution(format!(
+            "{function_name} could not intersect theta sketches: {error}"
+        ))
+    })?;
+    intersection.update(&right).map_err(|error| {
+        DataFusionError::Execution(format!(
+            "{function_name} could not intersect theta sketches: {error}"
+        ))
+    })?;
+    Ok(intersection.to_sketch(true).serialize_compressed())
 }
 
 pub(crate) fn difference_sketch_bytes(
@@ -241,17 +217,14 @@ pub(crate) fn difference_sketch_bytes(
 ) -> Result<Vec<u8>> {
     let left = deserialize_sketch(left, function_name)?;
     let right = deserialize_sketch(right, function_name)?;
-    check_seed_hashes(&left, &right, function_name)?;
-
-    let theta = left.theta64().min(right.theta64());
-    let right_entries: HashSet<u64> = right.iter().filter(|hash| *hash < theta).collect();
-    let entries: Vec<u64> = left
-        .iter()
-        .filter(|hash| *hash < theta && !right_entries.contains(hash))
-        .collect();
-    let empty = left.is_empty() || (theta == MAX_THETA && entries.is_empty());
-
-    serialize_compact_sketch(entries, theta, output_seed_hash(&left, &right), empty)
+    let difference = ThetaANotB::default()
+        .compute(&left, &right, true)
+        .map_err(|error| {
+            DataFusionError::Execution(format!(
+                "{function_name} could not subtract theta sketches: {error}"
+            ))
+        })?;
+    Ok(difference.serialize_compressed())
 }
 
 fn update_sketch_from_list(
@@ -310,54 +283,6 @@ fn deserialize_sketch(bytes: &[u8], function_name: &str) -> Result<CompactThetaS
     })
 }
 
-fn update_seed_hash(
-    seed_hash: &mut Option<u16>,
-    sketch: &CompactThetaSketch,
-    function_name: &str,
-) -> Result<()> {
-    if sketch.is_empty() {
-        return Ok(());
-    }
-    match seed_hash {
-        Some(expected) if *expected != sketch.seed_hash() => exec_err!(
-            "{function_name} received theta sketches with different seed hashes: expected {}, got {}",
-            *expected,
-            sketch.seed_hash()
-        ),
-        Some(_) => Ok(()),
-        None => {
-            *seed_hash = Some(sketch.seed_hash());
-            Ok(())
-        }
-    }
-}
-
-fn check_seed_hashes(
-    left: &CompactThetaSketch,
-    right: &CompactThetaSketch,
-    function_name: &str,
-) -> Result<()> {
-    if !left.is_empty() && !right.is_empty() && left.seed_hash() != right.seed_hash() {
-        exec_err!(
-            "{function_name} received theta sketches with different seed hashes: expected {}, got {}",
-            left.seed_hash(),
-            right.seed_hash()
-        )
-    } else {
-        Ok(())
-    }
-}
-
-fn output_seed_hash(left: &CompactThetaSketch, right: &CompactThetaSketch) -> u16 {
-    if !left.is_empty() {
-        left.seed_hash()
-    } else if !right.is_empty() {
-        right.seed_hash()
-    } else {
-        default_seed_hash()
-    }
-}
-
 fn trim_entries(entries: &mut Vec<u64>, theta: &mut u64, lg_nom_entries: u8) {
     entries.retain(|hash| *hash != 0 && *hash < *theta);
     entries.sort_unstable();
@@ -412,9 +337,7 @@ fn serialize_compact_sketch(
     for hash in entries {
         bytes.extend_from_slice(&hash.to_le_bytes());
     }
-    // The crate exposes Spark-compatible compressed serialization only on
-    // CompactThetaSketch, but does not expose a public constructor from raw
-    // retained hashes.
+    // The crate builders require lg_k >= 5, while Spark accepts lgNomEntries = 4.
     let sketch = CompactThetaSketch::deserialize(&bytes).map_err(|error| {
         DataFusionError::Internal(format!("generated invalid theta sketch: {error}"))
     })?;

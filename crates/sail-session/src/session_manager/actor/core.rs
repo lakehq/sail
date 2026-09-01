@@ -6,6 +6,7 @@ use sail_common::actor::{Actor, ActorAction, ActorContext, ActorHandle};
 use sail_execution::driver::{DriverHandle, DriverRegistryAccessor};
 use sail_execution::error::{ExecutionError, ExecutionResult};
 use sail_execution::{DriverId, IdGenerator};
+use sail_system_store::SystemEvent;
 
 use crate::session_manager::actor::SessionManagerActor;
 use crate::session_manager::{
@@ -62,11 +63,10 @@ impl Actor for SessionManagerActor {
 
     async fn start(&mut self, ctx: &mut ActorContext<Self>) {
         for (key, value) in &self.options.options {
-            self.event_reporter
-                .report(sail_telemetry::system_event::SystemEvent::OptionCreated {
-                    key: key.clone(),
-                    value: value.clone(),
-                });
+            self.event_reporter.report(SystemEvent::OptionCreated {
+                key: key.clone(),
+                value: value.clone(),
+            });
         }
         let Some(driver_gateway) = &mut self.driver_gateway else {
             return;

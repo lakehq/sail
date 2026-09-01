@@ -3,7 +3,7 @@ use std::time::Duration;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
 use sail_common::utils::retry::RetryStrategy;
-use sail_telemetry::system_event::SystemEventReporter;
+use sail_telemetry::events::SystemEventReporter;
 
 use crate::id::DriverId;
 use crate::shuffle::ShuffleBackendKind;

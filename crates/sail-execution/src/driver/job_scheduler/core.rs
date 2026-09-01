@@ -12,7 +12,8 @@ use log::{debug, warn};
 use sail_common::actor::ActorContext;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
-use sail_telemetry::system_event::SystemEvent;
+use sail_system_store::SystemEvent;
+use sail_telemetry::events::SystemEventReporter;
 
 use crate::driver::DriverActor;
 use crate::driver::job_scheduler::state::{
@@ -282,7 +283,7 @@ impl JobScheduler {
     fn cascade_cancel_task_attempts(
         job_id: JobId,
         job: &mut JobDescriptor,
-        event_reporter: &sail_telemetry::system_event::SystemEventReporter,
+        event_reporter: &SystemEventReporter,
         session_id: &str,
     ) -> Vec<JobAction> {
         let mut actions = vec![];
@@ -335,7 +336,7 @@ impl JobScheduler {
     fn clean_up_job_by_stage(
         job_id: JobId,
         job: &mut JobDescriptor,
-        event_reporter: &sail_telemetry::system_event::SystemEventReporter,
+        event_reporter: &SystemEventReporter,
         session_id: &str,
     ) -> Vec<JobAction> {
         let mut actions = vec![];
@@ -380,7 +381,7 @@ impl JobScheduler {
     fn schedule_task_regions(
         job_id: JobId,
         job: &mut JobDescriptor,
-        event_reporter: &sail_telemetry::system_event::SystemEventReporter,
+        event_reporter: &SystemEventReporter,
         session_id: &str,
     ) -> Vec<JobAction> {
         let mut actions = vec![];
