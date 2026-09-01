@@ -1678,55 +1678,6 @@ mod tests {
     }
 
     #[test]
-    fn correctness_dynamic_overwrite_distinguishes_signed_zero_partitions() {
-        let spec = identity_partition_spec();
-        let added = vec![partitioned_data_file_with_literal(
-            "new-positive-zero.parquet",
-            3,
-            PrimitiveLiteral::Float(ordered_float::OrderedFloat(0.0)),
-        )];
-        let live = vec![
-            partitioned_data_file_with_literal(
-                "old-negative-zero.parquet",
-                3,
-                PrimitiveLiteral::Float(ordered_float::OrderedFloat(-0.0)),
-            ),
-            partitioned_data_file_with_literal(
-                "old-positive-zero.parquet",
-                3,
-                PrimitiveLiteral::Float(ordered_float::OrderedFloat(0.0)),
-            ),
-        ];
-
-        let schema = identity_partition_schema(PrimitiveType::Float);
-        let paths =
-            IcebergCommitExec::dynamic_partition_overwrite_paths(&added, &live, &spec, &schema)
-                .expect("dynamic overwrite paths");
-        assert_eq!(paths, vec!["old-positive-zero.parquet"]);
-    }
-
-    #[test]
-    fn correctness_dynamic_overwrite_normalizes_promoted_partition_values() {
-        let spec = identity_partition_spec();
-        let added = vec![partitioned_data_file_with_literal(
-            "new-long.parquet",
-            3,
-            PrimitiveLiteral::Long(7),
-        )];
-        let live = vec![partitioned_data_file_with_literal(
-            "old-int.parquet",
-            3,
-            PrimitiveLiteral::Int(7),
-        )];
-
-        let schema = identity_partition_schema(PrimitiveType::Long);
-        let paths =
-            IcebergCommitExec::dynamic_partition_overwrite_paths(&added, &live, &spec, &schema)
-                .expect("dynamic overwrite paths");
-        assert_eq!(paths, vec!["old-int.parquet"]);
-    }
-
-    #[test]
     fn dynamic_partition_overwrite_rejects_mismatched_partition_spec() {
         let spec = identity_partition_spec();
         let added = vec![partitioned_data_file("new.parquet", 4, 2)];

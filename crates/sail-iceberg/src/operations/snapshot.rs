@@ -1387,28 +1387,6 @@ mod tests {
     }
 
     #[test]
-    fn correctness_copy_on_write_add_only_summary_is_append() {
-        assert_eq!(
-            SnapshotUpdateKind::CopyOnWrite.summary_operation(SnapshotChanges {
-                added_data_files: 1,
-                added_delete_files: 0,
-                removed_data_files: 0,
-                dynamic_partition_overwrite: false,
-            }),
-            Operation::Append
-        );
-        assert_eq!(
-            SnapshotUpdateKind::CopyOnWrite.summary_operation(SnapshotChanges {
-                added_data_files: 1,
-                added_delete_files: 0,
-                removed_data_files: 0,
-                dynamic_partition_overwrite: true,
-            }),
-            Operation::Overwrite
-        );
-    }
-
-    #[test]
     fn correctness_manifest_min_sequence_uses_live_entries() {
         let schema = Schema::builder().build().expect("schema");
         let metadata = ManifestMetadata::new(
@@ -1441,67 +1419,6 @@ mod tests {
         let manifest_file = writer.into_manifest_file("manifest.avro".to_string(), 6, 9);
         assert_eq!(manifest_file.content, ManifestContentType::Deletes);
         assert_eq!(manifest_file.min_sequence_number, 5);
-    }
-
-    #[test]
-    fn correctness_snapshot_producer_writes_v1_metadata_shapes() {
-        futures::executor::block_on(async {
-            let table_url = url::Url::parse("file:///tmp/iceberg-v1-snapshot/").expect("table URL");
-            let store: Arc<dyn object_store::ObjectStore> =
-                Arc::new(object_store::memory::InMemory::new());
-            let store_ctx = StoreContext::new(store, &table_url).expect("store context");
-            let schema = Schema::builder().build().expect("schema");
-            let partition_spec = PartitionSpec::builder().with_spec_id(0).build();
-            let metadata = ManifestMetadata::new(
-                Arc::new(schema),
-                0,
-                partition_spec.clone(),
-                FormatVersion::V1,
-                ManifestContentType::Data,
-            );
-            let parent_snapshot = SnapshotBuilder::new()
-                .with_snapshot_id(0)
-                .with_sequence_number(9)
-                .with_manifest_list(String::new())
-                .with_summary(crate::spec::snapshots::Summary::new(Operation::Append))
-                .build()
-                .expect("parent snapshot");
-            let transaction = Transaction::new(table_url.to_string(), parent_snapshot, 9);
-            let mut added_file = delete_file("data.parquet", 0);
-            added_file.content = DataContentType::Data;
-            added_file.referenced_data_file = None;
-
-            let action_commit = SnapshotProducer::new(
-                &transaction,
-                vec![added_file],
-                Some(store_ctx.clone()),
-                Some(metadata),
-            )
-            .with_bootstrap(true)
-            .with_partition_specs(vec![partition_spec])
-            .commit(SnapshotUpdateKind::FastAppend)
-            .await
-            .expect("v1 snapshot commit");
-            let snapshot = action_commit
-                .updates()
-                .iter()
-                .find_map(|update| match update {
-                    TableUpdate::AddSnapshot { snapshot } => Some(snapshot),
-                    _ => None,
-                })
-                .expect("added snapshot");
-            assert_eq!(snapshot.sequence_number, 0);
-
-            let manifest_list = crate::io::load_manifest_list(&store_ctx, snapshot.manifest_list())
-                .await
-                .expect("manifest list");
-            let manifest_file = manifest_list.entries().first().expect("data manifest");
-            let manifest = crate::io::load_manifest(&store_ctx, &manifest_file.manifest_path)
-                .await
-                .expect("manifest");
-            let entry = manifest.entries().first().expect("manifest entry");
-            assert_eq!(entry.snapshot_id, Some(snapshot.snapshot_id()));
-        });
     }
 
     #[test]

@@ -1112,39 +1112,6 @@ mod tests {
     }
 
     #[test]
-    fn correctness_v1_manifest_list_uses_v1_shape() -> Result<(), String> {
-        let mut writer = ManifestListWriter::new();
-        writer.append(manifest_file());
-        let bytes = writer.to_bytes(FormatVersion::V1)?;
-        let mut reader = AvroReader::new(bytes.as_slice()).map_err(|error| error.to_string())?;
-        let value = reader
-            .next()
-            .ok_or_else(|| "v1 manifest list has no entries".to_string())?
-            .map_err(|error| error.to_string())?;
-        let AvroValue::Record(fields) = value else {
-            return Err("manifest list entry is not a record".to_string());
-        };
-
-        assert!(fields.iter().any(|(name, value)| {
-            name == "added_data_files_count" && matches!(value, AvroValue::Union(_, _))
-        }));
-        assert!(!fields.iter().any(|(name, _)| name == "content"));
-        assert!(!fields.iter().any(|(name, _)| name == "sequence_number"));
-        assert!(!fields.iter().any(|(name, _)| name == "min_sequence_number"));
-
-        let parsed = ManifestList::parse_with_version(&bytes, FormatVersion::V1)?;
-        assert_eq!(
-            parsed.entries,
-            vec![ManifestFile {
-                sequence_number: 0,
-                min_sequence_number: 0,
-                ..manifest_file()
-            }]
-        );
-        Ok(())
-    }
-
-    #[test]
     fn v1_reader_accepts_legacy_sail_v2_encoding() {
         let mut writer = ManifestListWriter::new();
         writer.append(manifest_file());

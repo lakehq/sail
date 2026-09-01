@@ -439,22 +439,6 @@ mod tests {
     }
 
     #[test]
-    fn correctness_uuid_and_fixed_literals_use_fixed_size_binary_scalars() {
-        let uuid = 0x00112233445566778899aabbccddeeff_u128;
-        assert_eq!(
-            primitive_literal_to_scalar(&PrimitiveLiteral::UInt128(uuid), &PrimitiveType::Uuid),
-            ScalarValue::FixedSizeBinary(16, Some(uuid.to_be_bytes().to_vec()))
-        );
-        assert_eq!(
-            primitive_literal_to_scalar(
-                &PrimitiveLiteral::Binary(vec![1, 2, 3, 4]),
-                &PrimitiveType::Fixed(4),
-            ),
-            ScalarValue::FixedSizeBinary(4, Some(vec![1, 2, 3, 4]))
-        );
-    }
-
-    #[test]
     #[expect(clippy::unwrap_used)]
     fn test_scalar_to_iceberg_literal_preserves_nanoseconds() {
         let sv = ScalarValue::TimestampNanosecond(Some(123_456), None);

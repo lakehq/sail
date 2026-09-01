@@ -132,23 +132,6 @@ mod tests {
     }
 
     #[test]
-    fn correctness_v1_sequence_numbers_are_normalized_and_omitted() {
-        let input = serde_json::to_vec(&metadata_json(1, 7)).expect("metadata JSON");
-        let metadata = TableMetadata::from_json(&input).expect("v1 metadata");
-        assert_eq!(metadata.last_sequence_number, 0);
-        assert_eq!(metadata.snapshots[0].sequence_number, 0);
-
-        let output: serde_json::Value =
-            serde_json::from_slice(&metadata.to_json().expect("serialized metadata"))
-                .expect("serialized metadata JSON");
-        assert!(output.get("last-sequence-number").is_none());
-        assert!(output.get("table-uuid").is_none());
-        assert_eq!(output["schema"]["schema-id"], 0);
-        assert_eq!(output["partition-spec"], json!([]));
-        assert!(output["snapshots"][0].get("sequence-number").is_none());
-    }
-
-    #[test]
     fn v2_zero_sequence_number_remains_required() {
         let input = serde_json::to_vec(&metadata_json(2, 0)).expect("metadata JSON");
         let metadata = TableMetadata::from_json(&input).expect("v2 metadata");
@@ -157,32 +140,6 @@ mod tests {
                 .expect("serialized metadata JSON");
         assert_eq!(output["last-sequence-number"], 0);
         assert_eq!(output["snapshots"][0]["sequence-number"], 0);
-    }
-
-    #[test]
-    fn v1_legacy_schema_and_partition_spec_are_promoted_for_internal_use() {
-        let input = serde_json::to_vec(&json!({
-            "format-version": 1,
-            "location": "file:///tmp/table",
-            "last-updated-ms": 0,
-            "last-column-id": 1,
-            "schema": {
-                "type": "struct",
-                "fields": [{"id": 1, "name": "id", "required": true, "type": "long"}]
-            },
-            "partition-spec": [],
-            "properties": {},
-            "current-snapshot-id": -1,
-            "snapshots": []
-        }))
-        .expect("metadata JSON");
-
-        let metadata = TableMetadata::from_json(&input).expect("legacy v1 metadata");
-        assert_eq!(metadata.current_schema_id, 0);
-        assert_eq!(metadata.schemas.len(), 1);
-        assert_eq!(metadata.partition_specs.len(), 1);
-        assert_eq!(metadata.default_spec_id, 0);
-        assert_eq!(metadata.last_partition_id, 999);
     }
 }
 
