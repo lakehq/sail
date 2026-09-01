@@ -7911,6 +7911,7 @@ dependencies = [
  "serde",
  "serde_arrow",
  "serde_json",
+ "tokio",
  "url",
  "uuid",
 ]

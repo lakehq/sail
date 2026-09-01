@@ -1,3 +1,4 @@
+import json
 from datetime import date
 from pathlib import Path
 
@@ -231,5 +232,42 @@ def test_iceberg_dynamic_partition_overwrite_preserves_untouched_partitions(spar
         metadata_files_before = _metadata_file_count(location)
         spark.createDataFrame([], schema=schema).writeTo(table_name).overwritePartitions()
         assert _metadata_file_count(location) == metadata_files_before
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+def test_iceberg_v1_dynamic_overwrite_writes_v1_metadata_shapes(spark, tmp_path):
+    table_name = "iceberg_v1_dynamic_partition_overwrite"
+    location = tmp_path / table_name
+    escaped_location = escape_sql_string_literal(str(location))
+    spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+    spark.sql(
+        f"""
+        CREATE TABLE {table_name} (id BIGINT, category STRING, value BIGINT)
+        USING iceberg
+        PARTITIONED BY (category)
+        LOCATION '{escaped_location}'
+        TBLPROPERTIES ('format-version' = '1')
+        """
+    )
+    try:
+        schema = "id BIGINT, category STRING, value BIGINT"
+        spark.createDataFrame(
+            [(1, "A", 10), (2, "B", 20), (3, "A", 30)],
+            schema=schema,
+        ).writeTo(table_name).append()
+        spark.createDataFrame([(4, "A", 40)], schema=schema).writeTo(table_name).overwritePartitions()
+
+        assert _rows(spark, table_name) == [(2, "B", 20), (4, "A", 40)]
+        assert len(_live_data_file_paths(location)) == 2
+
+        metadata_dir = location / "metadata"
+        version = int((metadata_dir / "version-hint.text").read_text(encoding="utf-8"))
+        metadata = json.loads((metadata_dir / f"v{version}.metadata.json").read_text(encoding="utf-8"))
+        assert metadata["format-version"] == 1
+        assert "last-sequence-number" not in metadata
+        assert "refs" not in metadata
+        assert all("sequence-number" not in snapshot for snapshot in metadata["snapshots"])
+        assert metadata["snapshots"][-1]["summary"]["operation"] == "overwrite"
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")

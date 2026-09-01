@@ -148,10 +148,10 @@ impl PruningStatistics for IcebergPruningStats {
         if let Some(arr) = self.nulls_cache.borrow().get(&field_id) {
             return Some(arr.clone());
         }
-        let counts: Vec<u64> = self
+        let counts: Vec<Option<u64>> = self
             .files
             .iter()
-            .map(|f| f.null_value_counts().get(&field_id).copied().unwrap_or(0))
+            .map(|f| f.null_value_counts().get(&field_id).copied())
             .collect();
         let arr: ArrayRef = Arc::new(UInt64Array::from(counts));
         self.nulls_cache.borrow_mut().insert(field_id, arr.clone());
@@ -809,4 +809,74 @@ fn collect_source_range_filters(
         visit_expr(&mut result, schema, expr);
     }
     result
+}
+
+#[cfg(test)]
+#[expect(clippy::expect_used)]
+mod tests {
+    use datafusion::arrow::array::Array;
+
+    use super::*;
+    use crate::datasource::type_converter::iceberg_schema_to_arrow;
+    use crate::spec::{DataContentType, DataFileFormat, NestedField};
+
+    fn data_file(path: &str, null_count: Option<u64>) -> DataFile {
+        DataFile {
+            content: DataContentType::Data,
+            file_path: path.to_string(),
+            file_format: DataFileFormat::Parquet,
+            partition: Vec::new(),
+            record_count: 1,
+            file_size_in_bytes: 1,
+            column_sizes: HashMap::new(),
+            value_counts: HashMap::new(),
+            null_value_counts: null_count
+                .map(|count| HashMap::from([(1, count)]))
+                .unwrap_or_default(),
+            nan_value_counts: HashMap::new(),
+            lower_bounds: HashMap::new(),
+            upper_bounds: HashMap::new(),
+            block_size_in_bytes: None,
+            key_metadata: None,
+            split_offsets: Vec::new(),
+            equality_ids: Vec::new(),
+            sort_order_id: None,
+            first_row_id: None,
+            partition_spec_id: 0,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
+        }
+    }
+
+    #[test]
+    fn correctness_missing_null_count_remains_unknown() {
+        let schema = Schema::builder()
+            .with_fields([Arc::new(NestedField::optional(
+                1,
+                "id",
+                Type::Primitive(PrimitiveType::Int),
+            ))])
+            .build()
+            .expect("schema");
+        let arrow_schema = Arc::new(iceberg_schema_to_arrow(&schema).expect("Arrow schema"));
+        let stats = IcebergPruningStats::new(
+            vec![
+                data_file("unknown.parquet", None),
+                data_file("zero.parquet", Some(0)),
+            ],
+            arrow_schema,
+            &schema,
+        );
+
+        let counts = stats
+            .null_counts(&Column::from_name("id"))
+            .expect("null counts");
+        let counts = counts
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .expect("UInt64 null counts");
+        assert!(counts.is_null(0));
+        assert_eq!(counts.value(1), 0);
+    }
 }

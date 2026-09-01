@@ -53,6 +53,13 @@ enum OptionalVecSerde<T> {
     Other(IgnoredAny),
 }
 
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum OptionalI64Serde {
+    Some(i64),
+    Optional(Option<i64>),
+}
+
 fn deserialize_optional_raw_literal<'de, D>(deserializer: D) -> Result<Option<RawLiteral>, D::Error>
 where
     D: Deserializer<'de>,
@@ -72,6 +79,16 @@ where
         OptionalVecSerde::Some(value) => Some(value),
         OptionalVecSerde::Optional(value) => value,
         OptionalVecSerde::Other(_) => None,
+    })
+}
+
+fn deserialize_optional_i64<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    OptionalI64Serde::deserialize(deserializer).map(|value| match value {
+        OptionalI64Serde::Some(value) => Some(value),
+        OptionalI64Serde::Optional(value) => value,
     })
 }
 
@@ -105,6 +122,12 @@ pub(super) struct DataFileSerde {
     pub partition: Option<RawLiteral>,
     pub record_count: i64,
     pub file_size_in_bytes: i64,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_i64"
+    )]
+    pub block_size_in_bytes: Option<i64>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -320,21 +343,46 @@ fn bytes_map_into(
         .collect()
 }
 
-#[expect(dead_code)]
 impl ManifestEntryV1 {
     pub fn from_entry(
         entry: super::ManifestEntry,
         partition_type: &StructType,
     ) -> Result<Self, String> {
+        let snapshot_id = entry
+            .snapshot_id
+            .ok_or_else(|| "Iceberg v1 manifest entry requires snapshot_id".to_string())?;
+        let mut data_file = DataFileSerde::from_data_file(entry.data_file, partition_type)?;
+        data_file.block_size_in_bytes = Some(data_file.block_size_in_bytes.unwrap_or(67_108_864));
         Ok(Self {
             status: match entry.status {
                 super::ManifestStatus::Added => 1,
                 super::ManifestStatus::Deleted => 2,
                 super::ManifestStatus::Existing => 0,
             },
-            snapshot_id: entry.snapshot_id.unwrap_or_default(),
-            data_file: DataFileSerde::from_data_file(entry.data_file, partition_type)?,
+            snapshot_id,
+            data_file,
         })
+    }
+
+    pub fn into_entry(
+        self,
+        partition_spec_id: i32,
+        partition_type: &StructType,
+        schema: Option<&Schema>,
+    ) -> Result<super::ManifestEntry, String> {
+        let status = match self.status {
+            1 => super::ManifestStatus::Added,
+            2 => super::ManifestStatus::Deleted,
+            _ => super::ManifestStatus::Existing,
+        };
+        Ok(super::ManifestEntry::new(
+            status,
+            Some(self.snapshot_id),
+            None,
+            None,
+            self.data_file
+                .into_data_file(partition_spec_id, partition_type, schema)?,
+        ))
     }
 }
 
@@ -362,6 +410,7 @@ impl DataFileSerde {
             )?),
             record_count: df.record_count as i64,
             file_size_in_bytes: df.file_size_in_bytes as i64,
+            block_size_in_bytes: df.block_size_in_bytes,
             column_sizes: int_long_map_from(df.column_sizes),
             value_counts: int_long_map_from(df.value_counts),
             null_value_counts: int_long_map_from(df.null_value_counts),
@@ -422,7 +471,7 @@ impl DataFileSerde {
             nan_value_counts: int_long_map_into("nan_value_counts", self.nan_value_counts)?,
             lower_bounds: bytes_map_into(self.lower_bounds, schema),
             upper_bounds: bytes_map_into(self.upper_bounds, schema),
-            block_size_in_bytes: None,
+            block_size_in_bytes: self.block_size_in_bytes,
             key_metadata: self.key_metadata,
             split_offsets: self.split_offsets.unwrap_or_default(),
             equality_ids: self.equality_ids.unwrap_or_default(),
@@ -433,5 +482,63 @@ impl DataFileSerde {
             content_offset: self.content_offset,
             content_size_in_bytes: self.content_size_in_bytes,
         })
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::expect_used)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::spec::types::{NestedField, PrimitiveType, Type};
+
+    #[test]
+    fn correctness_manifest_bounds_decode_decimal_and_uuid() {
+        let decimal = PrimitiveType::Decimal {
+            precision: 9,
+            scale: 2,
+        };
+        let uuid = 0x00112233445566778899aabbccddeeff_u128;
+        let schema = Schema::builder()
+            .with_fields([
+                Arc::new(NestedField::required(
+                    1,
+                    "amount",
+                    Type::Primitive(decimal.clone()),
+                )),
+                Arc::new(NestedField::required(
+                    2,
+                    "identifier",
+                    Type::Primitive(PrimitiveType::Uuid),
+                )),
+            ])
+            .build()
+            .expect("schema");
+        let bounds = bytes_map_into(
+            Some(vec![
+                IntBytesMapEntry {
+                    key: 1,
+                    value: vec![0xfb, 0x2e],
+                },
+                IntBytesMapEntry {
+                    key: 2,
+                    value: uuid.to_be_bytes().to_vec(),
+                },
+            ]),
+            Some(&schema),
+        );
+
+        assert_eq!(
+            bounds.get(&1),
+            Some(&Datum::new(decimal, PrimitiveLiteral::Int128(-1234)))
+        );
+        assert_eq!(
+            bounds.get(&2),
+            Some(&Datum::new(
+                PrimitiveType::Uuid,
+                PrimitiveLiteral::UInt128(uuid),
+            ))
+        );
     }
 }

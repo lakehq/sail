@@ -37,6 +37,7 @@ pub struct TableMetadata {
     /// Integer Version for the format
     pub format_version: FormatVersion,
     /// A UUID that identifies the table
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub table_uuid: Option<Uuid>,
     /// Location tables base location
     pub location: String,
@@ -97,6 +98,94 @@ pub struct TableMetadata {
     pub partition_statistics: Vec<PartitionStatisticsFile>,
 }
 
+#[cfg(test)]
+#[expect(clippy::expect_used)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn metadata_json(format_version: u8, sequence_number: i64) -> serde_json::Value {
+        json!({
+            "format-version": format_version,
+            "location": "file:///tmp/table",
+            "last-sequence-number": sequence_number,
+            "last-updated-ms": 0,
+            "last-column-id": 0,
+            "schemas": [{"type": "struct", "schema-id": 0, "fields": []}],
+            "current-schema-id": 0,
+            "partition-specs": [{"spec-id": 0, "fields": []}],
+            "default-spec-id": 0,
+            "last-partition-id": 0,
+            "properties": {},
+            "current-snapshot-id": 1,
+            "snapshots": [{
+                "snapshot-id": 1,
+                "sequence-number": sequence_number,
+                "timestamp-ms": 0,
+                "manifest-list": "metadata/snap.avro",
+                "summary": {"operation": "append"}
+            }],
+            "snapshot-log": [],
+            "metadata-log": []
+        })
+    }
+
+    #[test]
+    fn correctness_v1_sequence_numbers_are_normalized_and_omitted() {
+        let input = serde_json::to_vec(&metadata_json(1, 7)).expect("metadata JSON");
+        let metadata = TableMetadata::from_json(&input).expect("v1 metadata");
+        assert_eq!(metadata.last_sequence_number, 0);
+        assert_eq!(metadata.snapshots[0].sequence_number, 0);
+
+        let output: serde_json::Value =
+            serde_json::from_slice(&metadata.to_json().expect("serialized metadata"))
+                .expect("serialized metadata JSON");
+        assert!(output.get("last-sequence-number").is_none());
+        assert!(output.get("table-uuid").is_none());
+        assert_eq!(output["schema"]["schema-id"], 0);
+        assert_eq!(output["partition-spec"], json!([]));
+        assert!(output["snapshots"][0].get("sequence-number").is_none());
+    }
+
+    #[test]
+    fn v2_zero_sequence_number_remains_required() {
+        let input = serde_json::to_vec(&metadata_json(2, 0)).expect("metadata JSON");
+        let metadata = TableMetadata::from_json(&input).expect("v2 metadata");
+        let output: serde_json::Value =
+            serde_json::from_slice(&metadata.to_json().expect("serialized metadata"))
+                .expect("serialized metadata JSON");
+        assert_eq!(output["last-sequence-number"], 0);
+        assert_eq!(output["snapshots"][0]["sequence-number"], 0);
+    }
+
+    #[test]
+    fn v1_legacy_schema_and_partition_spec_are_promoted_for_internal_use() {
+        let input = serde_json::to_vec(&json!({
+            "format-version": 1,
+            "location": "file:///tmp/table",
+            "last-updated-ms": 0,
+            "last-column-id": 1,
+            "schema": {
+                "type": "struct",
+                "fields": [{"id": 1, "name": "id", "required": true, "type": "long"}]
+            },
+            "partition-spec": [],
+            "properties": {},
+            "current-snapshot-id": -1,
+            "snapshots": []
+        }))
+        .expect("metadata JSON");
+
+        let metadata = TableMetadata::from_json(&input).expect("legacy v1 metadata");
+        assert_eq!(metadata.current_schema_id, 0);
+        assert_eq!(metadata.schemas.len(), 1);
+        assert_eq!(metadata.partition_specs.len(), 1);
+        assert_eq!(metadata.default_spec_id, 0);
+        assert_eq!(metadata.last_partition_id, 999);
+    }
+}
+
 /// Snapshot log entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -123,6 +212,104 @@ enum TableMetadataEnum {
     V1(TableMetadata),
     V2(TableMetadata),
     V3(TableMetadata),
+}
+
+fn normalize_v1_compatibility_fields(value: &mut serde_json::Value) {
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    if object
+        .get("format-version")
+        .and_then(serde_json::Value::as_u64)
+        != Some(1)
+    {
+        return;
+    }
+
+    let mut current_schema = object.get("schema").cloned().or_else(|| {
+        object
+            .get("schemas")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|schemas| schemas.first())
+            .cloned()
+    });
+    let current_schema_id = object
+        .get("current-schema-id")
+        .and_then(serde_json::Value::as_i64)
+        .or_else(|| {
+            current_schema
+                .as_ref()
+                .and_then(serde_json::Value::as_object)
+                .and_then(|schema| schema.get("schema-id"))
+                .and_then(serde_json::Value::as_i64)
+        })
+        .unwrap_or(0);
+    if let Some(schema) = current_schema
+        .as_mut()
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        schema
+            .entry("schema-id".to_string())
+            .or_insert_with(|| serde_json::Value::from(current_schema_id));
+    }
+    if !object.contains_key("schemas")
+        && let Some(schema) = current_schema
+    {
+        object.insert(
+            "schemas".to_string(),
+            serde_json::Value::Array(vec![schema]),
+        );
+    }
+    object
+        .entry("current-schema-id".to_string())
+        .or_insert_with(|| serde_json::Value::from(current_schema_id));
+
+    let default_spec_id = object
+        .get("default-spec-id")
+        .and_then(serde_json::Value::as_i64)
+        .or_else(|| {
+            object
+                .get("partition-specs")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|specs| specs.first())
+                .and_then(serde_json::Value::as_object)
+                .and_then(|spec| spec.get("spec-id"))
+                .and_then(serde_json::Value::as_i64)
+        })
+        .unwrap_or(0);
+    if !object.contains_key("partition-specs") {
+        let fields = object
+            .get("partition-spec")
+            .cloned()
+            .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
+        object.insert(
+            "partition-specs".to_string(),
+            serde_json::json!([{"spec-id": default_spec_id, "fields": fields}]),
+        );
+    }
+    object
+        .entry("default-spec-id".to_string())
+        .or_insert_with(|| serde_json::Value::from(default_spec_id));
+    if !object.contains_key("last-partition-id") {
+        let last_partition_id = object
+            .get("partition-specs")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_object)
+            .filter_map(|spec| spec.get("fields"))
+            .filter_map(serde_json::Value::as_array)
+            .flatten()
+            .filter_map(serde_json::Value::as_object)
+            .filter_map(|field| field.get("field-id"))
+            .filter_map(serde_json::Value::as_i64)
+            .max()
+            .unwrap_or(999);
+        object.insert(
+            "last-partition-id".to_string(),
+            serde_json::Value::from(last_partition_id),
+        );
+    }
 }
 
 impl TableMetadata {
@@ -169,7 +356,8 @@ impl TableMetadata {
         log::trace!("Attempting to parse table metadata JSON");
 
         match serde_json::from_slice::<serde_json::Value>(data) {
-            Ok(json_value) => {
+            Ok(mut json_value) => {
+                normalize_v1_compatibility_fields(&mut json_value);
                 if let Some(obj) = json_value.as_object() {
                     log::trace!("JSON fields present: {:?}", obj.keys().collect::<Vec<_>>());
 
@@ -198,6 +386,10 @@ impl TableMetadata {
                         | TableMetadataEnum::V2(t)
                         | TableMetadataEnum::V3(t) => t,
                     })
+                    .map(|mut metadata| {
+                        metadata.normalize_versioned_sequence_numbers();
+                        metadata
+                    })
             }
             Err(e) => {
                 log::trace!("Failed to parse as JSON: {:?}", e);
@@ -207,6 +399,7 @@ impl TableMetadata {
     }
 
     pub fn ensure_required_format_fields(&mut self) {
+        self.normalize_versioned_sequence_numbers();
         if self.format_version >= FormatVersion::V2 {
             if self.table_uuid.is_none() {
                 self.table_uuid = Some(Uuid::new_v4());
@@ -252,6 +445,49 @@ impl TableMetadata {
     pub fn to_json(&self) -> Result<Vec<u8>, serde_json::Error> {
         let mut metadata = self.clone();
         metadata.ensure_required_format_fields();
-        serde_json::to_vec(&metadata)
+        let mut value = serde_json::to_value(&metadata)?;
+        if metadata.format_version == FormatVersion::V1
+            && let Some(object) = value.as_object_mut()
+        {
+            object.remove("last-sequence-number");
+            object.remove("refs");
+            if object
+                .get("table-uuid")
+                .is_some_and(serde_json::Value::is_null)
+            {
+                object.remove("table-uuid");
+            }
+            if let Some(schema) = metadata.current_schema() {
+                object.insert("schema".to_string(), serde_json::to_value(schema)?);
+            }
+            let partition_spec = metadata
+                .default_partition_spec()
+                .cloned()
+                .unwrap_or_else(PartitionSpec::unpartitioned_spec);
+            object.insert(
+                "partition-spec".to_string(),
+                serde_json::to_value(partition_spec.fields())?,
+            );
+            if let Some(snapshots) = object
+                .get_mut("snapshots")
+                .and_then(serde_json::Value::as_array_mut)
+            {
+                for snapshot in snapshots {
+                    if let Some(snapshot) = snapshot.as_object_mut() {
+                        snapshot.remove("sequence-number");
+                    }
+                }
+            }
+        }
+        serde_json::to_vec(&value)
+    }
+
+    fn normalize_versioned_sequence_numbers(&mut self) {
+        if self.format_version == FormatVersion::V1 {
+            self.last_sequence_number = 0;
+            for snapshot in &mut self.snapshots {
+                snapshot.sequence_number = 0;
+            }
+        }
     }
 }
