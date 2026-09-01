@@ -148,6 +148,8 @@ pub struct MergeExpansion {
 
 #[derive(Clone, Copy, Debug)]
 pub struct MergePlanRequirements {
+    /// Whether the write branch must retain unchanged target rows for file rewrites.
+    pub preserve_unmodified_target_rows: bool,
     pub source_metrics: bool,
     pub effects: RowLevelEffectRequirements,
 }
@@ -694,7 +696,7 @@ pub fn expand_merge(
     )
 }
 
-/// Default MERGE expansion: full outer join + presence columns + touched files.
+/// Default MERGE expansion: clause-aware join + presence columns + touched files.
 fn build_default_merge_expansion(
     options: MergeIntoOptions,
     target_plan: LogicalPlan,
@@ -726,13 +728,19 @@ fn build_default_merge_expansion(
 
     let join_on = options.join_key_pairs.clone();
     let residual_filter = combine_conjunction(&options.residual_predicates);
+    let join_type = select_merge_join_type(
+        &options.matched_clauses,
+        &options.not_matched_by_source_clauses,
+        &options.not_matched_by_target_clauses,
+        requirements.preserve_unmodified_target_rows,
+    );
 
     let join = Join::try_new(
         Arc::new(augmented_target),
         Arc::new(augmented_source),
         join_on,
         residual_filter,
-        JoinType::Full,
+        join_type,
         JoinConstraint::On,
         NullEquality::NullEqualsNothing,
         false,
@@ -923,6 +931,36 @@ fn build_default_merge_expansion(
         output_schema: command_schema,
         options,
     })
+}
+
+fn select_merge_join_type(
+    matched_clauses: &[MergeMatchedClause],
+    not_matched_by_source_clauses: &[MergeNotMatchedBySourceClause],
+    not_matched_by_target_clauses: &[MergeNotMatchedByTargetClause],
+    preserve_unmodified_target_rows: bool,
+) -> JoinType {
+    let matched_only = !matched_clauses.is_empty()
+        && not_matched_by_source_clauses.is_empty()
+        && not_matched_by_target_clauses.is_empty();
+
+    if preserve_unmodified_target_rows {
+        // The target is the left input, so retaining its unmatched rows requires a left join.
+        return if matched_only {
+            JoinType::Left
+        } else {
+            JoinType::Full
+        };
+    }
+
+    if matched_only {
+        JoinType::Inner
+    } else if not_matched_by_source_clauses.is_empty() {
+        JoinType::Right
+    } else if not_matched_by_target_clauses.is_empty() {
+        JoinType::Left
+    } else {
+        JoinType::Full
+    }
 }
 
 fn append_presence_projection(
@@ -2160,4 +2198,121 @@ fn all_placeholder_schema(schema: &DFSchemaRef, path_column: &str) -> bool {
         .filter(|name| *name != path_column)
         .collect();
     !non_path.is_empty() && non_path.iter().all(|name| name.starts_with('#'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merge_join_type_matches_write_modes_and_clause_categories() {
+        let matched_clauses = [MergeMatchedClause {
+            condition: None,
+            action: MergeMatchedAction::Delete,
+        }];
+        let not_matched_by_source_clauses = [MergeNotMatchedBySourceClause {
+            condition: None,
+            action: MergeNotMatchedBySourceAction::Delete,
+        }];
+        let not_matched_by_target_clauses = [MergeNotMatchedByTargetClause {
+            condition: None,
+            action: MergeNotMatchedByTargetAction::InsertAll,
+        }];
+
+        let cases = [
+            (
+                "copy-on-write matched only",
+                true,
+                true,
+                false,
+                false,
+                JoinType::Left,
+            ),
+            (
+                "copy-on-write with inserts",
+                true,
+                true,
+                false,
+                true,
+                JoinType::Full,
+            ),
+            (
+                "copy-on-write with target-only clauses",
+                true,
+                true,
+                true,
+                false,
+                JoinType::Full,
+            ),
+            (
+                "modified rows matched only",
+                false,
+                true,
+                false,
+                false,
+                JoinType::Inner,
+            ),
+            (
+                "modified rows with inserts",
+                false,
+                true,
+                false,
+                true,
+                JoinType::Right,
+            ),
+            (
+                "modified rows with target-only clauses",
+                false,
+                true,
+                true,
+                false,
+                JoinType::Left,
+            ),
+            (
+                "modified rows with both unmatched categories",
+                false,
+                true,
+                true,
+                true,
+                JoinType::Full,
+            ),
+        ];
+
+        for (
+            name,
+            preserve_unmodified_target_rows,
+            has_matched,
+            has_not_matched_by_source,
+            has_not_matched_by_target,
+            expected,
+        ) in cases
+        {
+            let matched = if has_matched {
+                &matched_clauses[..]
+            } else {
+                &[]
+            };
+            let not_matched_by_source = if has_not_matched_by_source {
+                &not_matched_by_source_clauses[..]
+            } else {
+                &[]
+            };
+            let not_matched_by_target = if has_not_matched_by_target {
+                &not_matched_by_target_clauses[..]
+            } else {
+                &[]
+            };
+
+            assert_eq!(
+                select_merge_join_type(
+                    matched,
+                    not_matched_by_source,
+                    not_matched_by_target,
+                    preserve_unmodified_target_rows,
+                ),
+                expected,
+                "{name}"
+            );
+        }
+    }
 }
