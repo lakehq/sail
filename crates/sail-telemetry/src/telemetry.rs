@@ -17,17 +17,17 @@ use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::logs::{BatchConfigBuilder, BatchLogProcessor, SdkLoggerProvider};
 use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider, Temporality};
 use sail_common::actor::ActorSystem;
-use sail_common::config::{OtlpProtocol, TelemetryConfig, TelemetrySystemExporterMode};
+use sail_common::config::{OtlpProtocol, SystemCatalogConfig, SystemCatalogStore, TelemetryConfig};
+use sail_system_store::{SystemStoreHandle, SystemStoreReader};
 
 use crate::error::{TelemetryError, TelemetryResult};
+use crate::events::{SystemEventLogProcessor, SystemEventReporter};
 use crate::execution::join_set::DefaultJoinSetTracer;
 use crate::loggers::composite::CompositeLogger;
 use crate::loggers::span::SpanEventLogger;
 use crate::metrics::{
     MetricManager, MetricRegistry, SystemMetricExporter, SystemMetricExporterTarget,
-};
-use crate::system_event::{
-    SystemEventLogProcessor, SystemEventReader, SystemEventReporter, SystemMetricReporter,
+    SystemMetricReporter,
 };
 use crate::{ResourceKind, ResourceOptions, SCOPE_NAME};
 
@@ -46,14 +46,19 @@ struct TelemetryState {
     logger_provider: Option<SdkLoggerProvider>,
     runtime: Option<tokio::runtime::Handle>,
     actor_system: Option<ActorSystem>,
-    system_event_reader: Option<SystemEventReader>,
+    system_store: Option<SystemStoreHandle>,
+    system_store_reader: Option<SystemStoreReader>,
     system_event_reporter: Option<SystemEventReporter>,
     system_metric_reporter: Option<SystemMetricReporter>,
 }
 
 static TELEMETRY_STATUS: Mutex<TelemetryStatus> = Mutex::new(TelemetryStatus::Uninitialized);
 
-pub fn init_telemetry(config: &TelemetryConfig, resource: ResourceOptions) -> TelemetryResult<()> {
+pub fn init_telemetry(
+    config: &TelemetryConfig,
+    system_config: &SystemCatalogConfig,
+    resource: ResourceOptions,
+) -> TelemetryResult<()> {
     let mut status = TELEMETRY_STATUS
         .lock()
         .map_err(|e| TelemetryError::internal(e.to_string()))?;
@@ -62,6 +67,7 @@ pub fn init_telemetry(config: &TelemetryConfig, resource: ResourceOptions) -> Te
         TelemetryStatus::Uninitialized => {
             let mut state = TelemetryState::default();
             match init_traces(config, &mut state, &resource)
+                .and_then(|()| init_system_store(system_config, &mut state, &resource))
                 .and_then(|()| init_logs(config, &mut state, &resource))
                 .and_then(|()| init_metrics(config, &mut state, &resource))
                 .and_then(|()| init_datafusion_telemetry())
@@ -87,6 +93,30 @@ pub fn init_telemetry(config: &TelemetryConfig, resource: ResourceOptions) -> Te
             "telemetry has been finalized and cannot be re-initialized",
         )),
     }
+}
+
+fn init_system_store(
+    config: &SystemCatalogConfig,
+    state: &mut TelemetryState,
+    resource: &ResourceOptions,
+) -> TelemetryResult<()> {
+    // The system catalog is owned by server processes. Workers report telemetry to the driver
+    // and must not open the configured store path themselves.
+    if resource.kind == ResourceKind::Worker {
+        return Ok(());
+    }
+    let mut actor_system = ActorSystem::new();
+    let handle = match &config.store {
+        SystemCatalogStore::Memory => Ok(SystemStoreHandle::memory(&mut actor_system)),
+        SystemCatalogStore::Disk { path } => SystemStoreHandle::fjall(&mut actor_system, path),
+    }
+    .map_err(|error| {
+        TelemetryError::internal(format!("failed to initialize system store: {error}"))
+    })?;
+    state.system_store_reader = Some(handle.reader());
+    state.system_store = Some(handle);
+    state.actor_system = Some(actor_system);
+    Ok(())
 }
 
 fn init_traces(
@@ -127,12 +157,12 @@ fn init_metrics(
 ) -> TelemetryResult<()> {
     if config.export_metrics {
         let mut provider = SdkMeterProvider::builder().with_resource(get_resource(resource));
-        if config.exporter.system.mode != TelemetrySystemExporterMode::Off {
+        if config.exporter.system.enabled {
             let target = if resource.kind == ResourceKind::Worker {
                 SystemMetricExporterTarget::Remote
             } else {
                 SystemMetricExporterTarget::Local(state.system_metric_reporter.clone().ok_or_else(
-                    || TelemetryError::internal("system event telemetry is not initialized"),
+                    || TelemetryError::internal("system store telemetry is not initialized"),
                 )?)
             };
             let system_reader = PeriodicReader::builder(SystemMetricExporter::new(target))
@@ -188,18 +218,15 @@ fn init_logs(
     let max_level = primary.filter();
 
     let mut secondary: Vec<Box<dyn Log>> = vec![];
-    let mut actor_system = ActorSystem::new();
-    let system_event_actor = actor_system.spawn(());
-    let system_event_reader = SystemEventReader::new(system_event_actor.clone());
-    let system_metric_reporter = SystemMetricReporter::new(system_event_actor.clone());
-    let runtime = tokio::runtime::Handle::try_current()
-        .map_err(|e| TelemetryError::internal(format!("failed to get runtime handle: {e}")))?;
-    let mut provider = SdkLoggerProvider::builder()
-        .with_log_processor(SystemEventLogProcessor::new(
-            system_event_actor,
-            runtime.clone(),
-        ))
-        .with_resource(get_resource(resource));
+    let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
+        TelemetryError::internal(format!("failed to get runtime handle: {error}"))
+    })?;
+    let system_store = state.system_store.clone();
+    let system_metric_reporter = system_store.clone().map(SystemMetricReporter::new);
+    let mut provider = SdkLoggerProvider::builder().with_resource(get_resource(resource));
+    if let Some(store) = system_store {
+        provider = provider.with_log_processor(SystemEventLogProcessor::new(store));
+    }
 
     if config.export_logs
         && let Some(endpoint) = &config.exporter.otlp.endpoint
@@ -233,10 +260,8 @@ fn init_logs(
     state.system_event_reporter = Some(SystemEventReporter::new(
         provider.logger_with_scope(get_instrumentation_scope()),
     ));
+    state.system_metric_reporter = system_metric_reporter;
     state.runtime = Some(runtime);
-    state.actor_system = Some(actor_system);
-    state.system_event_reader = Some(system_event_reader);
-    state.system_metric_reporter = Some(system_metric_reporter);
     state.logger_provider = Some(provider);
     if config.export_traces && config.exporter.otlp.endpoint.is_some() {
         secondary.push(Box::new(SpanEventLogger));
@@ -274,6 +299,12 @@ pub fn shutdown_telemetry() {
         if let Some(provider) = state.logger_provider {
             let _ = provider.shutdown();
         }
+        if let (Some(runtime), Some(store)) = (state.runtime.clone(), state.system_store) {
+            runtime.block_on(async {
+                let _ = store.flush().await;
+                let _ = store.shutdown().await;
+            });
+        }
         if let (Some(runtime), Some(mut actor_system)) = (state.runtime, state.actor_system) {
             runtime.block_on(actor_system.join());
         }
@@ -290,12 +321,12 @@ pub fn global_metrics() -> Option<MetricManager> {
         })
 }
 
-pub fn global_system_event_reader() -> Option<SystemEventReader> {
+pub fn global_system_store_reader() -> Option<SystemStoreReader> {
     TELEMETRY_STATUS
         .lock()
         .ok()
         .and_then(|status| match &*status {
-            TelemetryStatus::Initialized(state) => state.system_event_reader.clone(),
+            TelemetryStatus::Initialized(state) => state.system_store_reader.clone(),
             _ => None,
         })
 }

@@ -3,8 +3,9 @@ use std::ops::Bound;
 use std::sync::Arc;
 
 use datafusion_common::Result;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct TimestampMicros(pub i64);
 
 /// A predicate function.

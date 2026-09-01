@@ -1,7 +1,7 @@
 use arrow::array::{Array, ArrayRef, AsArray};
 use arrow::datatypes::{DataType, Int32Type, Int64Type};
 use datafusion_common::{DataFusionError, Result, exec_err};
-use datasketches::hash_value::{raw_bytes, sign_extend};
+use datasketches::hash::value::{raw_bytes, sign_extend};
 use datasketches::hll::{HllSketch, HllType, HllUnion};
 
 pub(crate) const MIN_LG_CONFIG_K: i32 = 4;

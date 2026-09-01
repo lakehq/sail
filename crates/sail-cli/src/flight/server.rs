@@ -25,7 +25,7 @@ pub fn run_flight_server(ip: IpAddr, port: u16) -> Result<(), Box<dyn std::error
     runtime_manager
         .handle()
         .primary()
-        .block_on(async { init_telemetry(&config.telemetry, resource) })?;
+        .block_on(async { init_telemetry(&config.telemetry, &config.catalog.system, resource) })?;
 
     runtime_manager.handle().primary().block_on(async {
         let address = SocketAddr::new(ip, port);
