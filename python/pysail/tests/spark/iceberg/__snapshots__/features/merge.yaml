@@ -228,6 +228,24 @@ data:
   total-position-deletes: '3'
   total-records: '6'
 ---
+name: "test_explain_targetonly_merge_uses_a_targetpreserving_join"
+data:
+  |-
+    == Physical Plan ==
+    IcebergCommitExec(table_path=file://<tmp>/iceberg_merge_target_only_plan/)
+      CoalescePartitionsExec
+        IcebergWriterExec(table_path=file://<tmp>/iceberg_merge_target_only_plan/, merge_row_intents=true)
+          RepartitionExec: partitioning=Hash([__sail_iceberg_partition_spec_id@4, __sail_iceberg_partition@5, __sail_file_path@2], 4), input_partitions=4
+            ProjectionExec: expr=[id@1 as id, CASE WHEN __common_expr_1@0 THEN expired ELSE value@2 END as value, __sail_file_path@3 as __sail_file_path, __sail_file_row_index@4 as __sail_file_row_index, __sail_iceberg_partition_spec_id@5 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@6 as __sail_iceberg_partition, CASE WHEN __common_expr_1@0 THEN 8 ELSE 0 END as __sail_operation_type, NULL as __sail_merge_source_metric]
+              ProjectionExec: expr=[(__sail_merge_source_row_present@0 IS NULL AND id@1 = 2) IS NOT DISTINCT FROM true as __common_expr_1, id@1 as id, value@2 as value, __sail_file_path@3 as __sail_file_path, __sail_file_row_index@4 as __sail_file_row_index, __sail_iceberg_partition_spec_id@5 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@6 as __sail_iceberg_partition]
+                HashJoinExec: mode=CollectLeft, join_type=Right, on=[(__sail_src_id@0, id@0)], projection=[__sail_merge_source_row_present@1, id@2, value@3, __sail_file_path@4, __sail_file_row_index@5, __sail_iceberg_partition_spec_id@6, __sail_iceberg_partition@7]
+                  ProjectionExec: expr=[1 as __sail_src_id, true as __sail_merge_source_row_present]
+                    PlaceholderRowExec
+                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                    ProjectionExec: expr=[id@0 as id, value@1 as value, __sail_file_path@2 as __sail_file_path, __sail_file_row_index@5 as __sail_file_row_index, __sail_iceberg_partition_spec_id@3 as __sail_iceberg_partition_spec_id, __sail_iceberg_partition@4 as __sail_iceberg_partition]
+                      IcebergMergeMetadataExec: data_file_column=__sail_file_path
+                        DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_merge_target_only_plan/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[id, value, __sail_file_path, __sail_iceberg_partition_spec_id, __sail_iceberg_partition], output_partitioning=Hash([__sail_file_path@2, __sail_iceberg_partition_spec_id@3, __sail_iceberg_partition@4], 1), file_type=parquet
+---
 name: "test_merge_writes_overwrite_metadata_with_data_and_positiondelete_manifests"
 data:
   current-schema-id: 0
