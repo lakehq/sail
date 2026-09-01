@@ -584,11 +584,11 @@ fn query_metrics<R: StoreReader>(
                     metric_point_upper_bound(&range.upper),
                     &mut |point, value| match (timestamp.predicate)(&point.timestamp) {
                         Ok(true) => {
-                            if let Some(row_timestamp) =
+                            if let Some(timestamp) =
                                 DateTime::from_timestamp_micros(point.timestamp.0)
                             {
                                 out.push(MetricRow {
-                                    timestamp: row_timestamp,
+                                    timestamp,
                                     name: series.name.clone(),
                                     attributes: series.attributes.clone(),
                                     value,

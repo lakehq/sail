@@ -35,7 +35,7 @@ pub(crate) struct MemoryBackendState {
     next_metric_series_id: BTreeMap<(), MetricSeriesId>,
     metric_series: BTreeMap<MetricSeriesId, MetricSeriesMetadata>,
     metric_point_ordinals: BTreeMap<MetricPointOrdinalKey, u64>,
-    metric_series_identity: BTreeMap<MetricSeriesKey, BTreeSet<MetricSeriesId>>,
+    metric_series_identities: BTreeMap<MetricSeriesKey, BTreeSet<MetricSeriesId>>,
     metric_names: BTreeMap<String, BTreeSet<MetricSeriesId>>,
     metric_attributes: BTreeMap<MetricAttributeKey, BTreeSet<MetricSeriesId>>,
     metric_points: BTreeMap<MetricSeriesId, BTreeMap<MetricPointKey, MetricValue>>,
@@ -58,6 +58,7 @@ pub(crate) struct MemoryBackend {
 impl DirectStoreBackend for MemoryBackend {
     type Reader<'a> = MemoryReader<'a>;
     type Writer<'a> = MemoryWriter<'a>;
+
     fn read(&self) -> Self::Reader<'_> {
         MemoryAccessor { state: &self.state }
     }
@@ -185,7 +186,7 @@ macro_rules! index {
 index!(
     MetricSeriesIdentityIndex,
     MetricSeriesKey,
-    metric_series_identity
+    metric_series_identities
 );
 index!(MetricNameIndex, String, metric_names);
 index!(MetricAttributeIndex, MetricAttributeKey, metric_attributes);

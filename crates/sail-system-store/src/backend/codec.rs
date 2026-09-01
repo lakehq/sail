@@ -8,12 +8,34 @@ use std::collections::BTreeMap;
 use sail_common_datafusion::system::predicate::TimestampMicros;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use thiserror::Error;
 
 use crate::model::{
     JobPrimaryKey, MetricAttributeKey, MetricPointKey, MetricPointOrdinalKey, MetricSeriesKey,
     OptionPrimaryKey, SessionPrimaryKey, StagePrimaryKey, TaskPrimaryKey, WorkerPrimaryKey,
 };
-use crate::{SystemStoreError, SystemStoreResult};
+
+#[derive(Debug, Error)]
+#[error("{message}")]
+pub struct CodecError {
+    message: String,
+}
+
+impl CodecError {
+    fn invalid_key() -> Self {
+        Self {
+            message: "invalid system store key".to_string(),
+        }
+    }
+
+    fn invalid_value(message: String) -> Self {
+        Self {
+            message: format!("invalid system store value: {message}"),
+        }
+    }
+}
+
+pub type CodecResult<T> = Result<T, CodecError>;
 
 /// The fixed durable key for the next metric series ID metadata entry.
 pub(crate) const NEXT_METRIC_SERIES_ID_KEY: &[u8] = b"next_metric_series_id";
@@ -21,7 +43,7 @@ pub(crate) const NEXT_METRIC_SERIES_ID_KEY: &[u8] = b"next_metric_series_id";
 /// Codec for keys whose byte ordering must preserve their Rust ordering.
 pub trait OrderedKeyCodec: Sized {
     fn encode_key(&self, output: &mut Vec<u8>);
-    fn decode_key(input: &[u8]) -> SystemStoreResult<Self>;
+    fn decode_key(input: &[u8]) -> CodecResult<Self>;
 }
 
 /// Convenience methods for [`OrderedKeyCodec`].
@@ -37,22 +59,24 @@ impl<T: OrderedKeyCodec> OrderedKeyCodecExt for T {}
 
 /// Codec for values stored in on-disk KV backends.
 pub trait ValueCodec: Sized {
-    fn encode_value(&self) -> SystemStoreResult<Vec<u8>>;
-    fn decode_value(input: &[u8]) -> SystemStoreResult<Self>;
+    fn encode_value(&self) -> CodecResult<Vec<u8>>;
+    fn decode_value(input: &[u8]) -> CodecResult<Self>;
 }
 
 impl<T> ValueCodec for T
 where
     T: DeserializeOwned + Serialize,
 {
-    fn encode_value(&self) -> SystemStoreResult<Vec<u8>> {
-        serde_json::to_vec(self)
-            .map_err(|error| invalid_value(format!("failed to encode system store value: {error}")))
+    fn encode_value(&self) -> CodecResult<Vec<u8>> {
+        serde_json::to_vec(self).map_err(|error| {
+            CodecError::invalid_value(format!("failed to encode system store value: {error}"))
+        })
     }
 
-    fn decode_value(input: &[u8]) -> SystemStoreResult<Self> {
-        serde_json::from_slice(input)
-            .map_err(|error| invalid_value(format!("failed to decode system store value: {error}")))
+    fn decode_value(input: &[u8]) -> CodecResult<Self> {
+        serde_json::from_slice(input).map_err(|error| {
+            CodecError::invalid_value(format!("failed to decode system store value: {error}"))
+        })
     }
 }
 
@@ -68,7 +92,7 @@ impl OrderedKeyCodec for String {
         output.extend_from_slice(&[0, 0]);
     }
 
-    fn decode_key(input: &[u8]) -> SystemStoreResult<Self> {
+    fn decode_key(input: &[u8]) -> CodecResult<Self> {
         let mut decoder = KeyDecoder::new(input);
         let value = decoder.string()?;
         decoder.finish()?;
@@ -81,7 +105,7 @@ impl OrderedKeyCodec for u64 {
         output.extend_from_slice(&self.to_be_bytes());
     }
 
-    fn decode_key(input: &[u8]) -> SystemStoreResult<Self> {
+    fn decode_key(input: &[u8]) -> CodecResult<Self> {
         let mut decoder = KeyDecoder::new(input);
         let value = decoder.u64()?;
         decoder.finish()?;
@@ -95,7 +119,7 @@ impl OrderedKeyCodec for (String, u64) {
         self.1.encode_key(output);
     }
 
-    fn decode_key(input: &[u8]) -> SystemStoreResult<Self> {
+    fn decode_key(input: &[u8]) -> CodecResult<Self> {
         let mut decoder = KeyDecoder::new(input);
         let first = decoder.string()?;
         let second = decoder.u64()?;
@@ -110,7 +134,7 @@ impl OrderedKeyCodec for (MetricAttributeKey, u64) {
         self.1.encode_key(output);
     }
 
-    fn decode_key(input: &[u8]) -> SystemStoreResult<Self> {
+    fn decode_key(input: &[u8]) -> CodecResult<Self> {
         let mut decoder = KeyDecoder::new(input);
         let key = MetricAttributeKey {
             key: decoder.string()?,
@@ -128,7 +152,7 @@ impl OrderedKeyCodec for (u64, MetricPointKey) {
         self.1.encode_key(output);
     }
 
-    fn decode_key(input: &[u8]) -> SystemStoreResult<Self> {
+    fn decode_key(input: &[u8]) -> CodecResult<Self> {
         let mut decoder = KeyDecoder::new(input);
         let series = decoder.u64()?;
         let timestamp = decoder.u64()? ^ (1_u64 << 63);
@@ -148,9 +172,9 @@ macro_rules! ordered_key {
                 $encode(self, output)
             }
 
-            fn decode_key(input: &[u8]) -> SystemStoreResult<Self> {
+            fn decode_key(input: &[u8]) -> CodecResult<Self> {
                 let mut decoder = KeyDecoder::new(input);
-                let decode: fn(&mut KeyDecoder<'_>) -> SystemStoreResult<$type> = $decode;
+                let decode: fn(&mut KeyDecoder<'_>) -> CodecResult<$type> = $decode;
                 let value = decode(&mut decoder)?;
                 decoder.finish()?;
                 Ok(value)
@@ -296,50 +320,51 @@ impl<'a> KeyDecoder<'a> {
         Self { input, position: 0 }
     }
 
-    fn u64(&mut self) -> SystemStoreResult<u64> {
-        let bytes: [u8; 8] = self.take(8)?.try_into().map_err(|_| invalid_key())?;
+    fn u64(&mut self) -> CodecResult<u64> {
+        let bytes: [u8; 8] = self
+            .take(8)?
+            .try_into()
+            .map_err(|_| CodecError::invalid_key())?;
         Ok(u64::from_be_bytes(bytes))
     }
 
-    fn string(&mut self) -> SystemStoreResult<String> {
+    fn string(&mut self) -> CodecResult<String> {
         let mut output = Vec::new();
         loop {
-            let byte = *self.take(1)?.first().ok_or_else(invalid_key)?;
+            let byte = *self.take(1)?.first().ok_or_else(CodecError::invalid_key)?;
             if byte != 0 {
                 output.push(byte);
                 continue;
             }
-            match *self.take(1)?.first().ok_or_else(invalid_key)? {
+            match *self.take(1)?.first().ok_or_else(CodecError::invalid_key)? {
                 0 => break,
                 0xff => output.push(0),
-                _ => return Err(invalid_key()),
+                _ => return Err(CodecError::invalid_key()),
             }
         }
-        String::from_utf8(output).map_err(|_| invalid_key())
+        String::from_utf8(output).map_err(|_| CodecError::invalid_key())
     }
 
-    fn take(&mut self, length: usize) -> SystemStoreResult<&'a [u8]> {
-        let end = self.position.checked_add(length).ok_or_else(invalid_key)?;
-        let bytes = self.input.get(self.position..end).ok_or_else(invalid_key)?;
+    fn take(&mut self, length: usize) -> CodecResult<&'a [u8]> {
+        let end = self
+            .position
+            .checked_add(length)
+            .ok_or_else(CodecError::invalid_key)?;
+        let bytes = self
+            .input
+            .get(self.position..end)
+            .ok_or_else(CodecError::invalid_key)?;
         self.position = end;
         Ok(bytes)
     }
 
-    fn finish(&self) -> SystemStoreResult<()> {
+    fn finish(&self) -> CodecResult<()> {
         if self.position == self.input.len() {
             Ok(())
         } else {
-            Err(invalid_key())
+            Err(CodecError::invalid_key())
         }
     }
-}
-
-fn invalid_key() -> SystemStoreError {
-    SystemStoreError::InvalidKey
-}
-
-fn invalid_value(message: String) -> SystemStoreError {
-    SystemStoreError::invalid_value(message)
 }
 
 #[cfg(test)]
@@ -349,14 +374,13 @@ mod tests {
 
     use sail_common_datafusion::system::predicate::TimestampMicros;
 
-    use super::{OrderedKeyCodec, OrderedKeyCodecExt, ValueCodec};
-    use crate::SystemStoreResult;
+    use super::{CodecResult, OrderedKeyCodec, OrderedKeyCodecExt, ValueCodec};
     use crate::model::{
         JobPrimaryKey, MetricAttributeKey, MetricPointKey, MetricSeriesKey, MetricSeriesMetadata,
         OptionPrimaryKey,
     };
 
-    fn assert_round_trip<T>(value: T) -> SystemStoreResult<()>
+    fn assert_round_trip<T>(value: T) -> CodecResult<()>
     where
         T: Debug + Eq + OrderedKeyCodec,
     {
@@ -365,7 +389,7 @@ mod tests {
     }
 
     #[test]
-    fn ordered_keys_round_trip_and_preserve_component_order() -> SystemStoreResult<()> {
+    fn ordered_keys_round_trip_and_preserve_component_order() -> CodecResult<()> {
         let option = OptionPrimaryKey {
             key: "key\0value".to_string(),
         };
@@ -398,7 +422,7 @@ mod tests {
     }
 
     #[test]
-    fn metric_point_storage_key_round_trips() -> SystemStoreResult<()> {
+    fn metric_point_storage_key_round_trips() -> CodecResult<()> {
         let key = (
             5_u64,
             MetricPointKey {
@@ -413,15 +437,12 @@ mod tests {
                 0, 7,
             ]
         );
-        assert_eq!(
-            <(u64, MetricPointKey)>::decode_key(&key.encoded_key())?,
-            key
-        );
+        assert_round_trip(key)?;
         Ok(())
     }
 
     #[test]
-    fn serialized_values_round_trip() -> SystemStoreResult<()> {
+    fn serialized_values_round_trip() -> CodecResult<()> {
         let value = MetricSeriesMetadata {
             id: 3,
             name: "metric".to_string(),

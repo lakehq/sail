@@ -146,7 +146,7 @@ macro_rules! index {
 
 index!(
     MetricSeriesIdentityIndex,
-    "metric_series_identity",
+    "metric_series_identities",
     MetricSeriesKey,
     MetricSeriesId
 );
