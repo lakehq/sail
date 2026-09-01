@@ -421,6 +421,147 @@ Feature: Delta Lake Generated Columns
         | id | event_time          | event_date |
         | 1  | 2024-09-01 00:00:00 | 2024-09-01 |
 
+    Scenario: MERGE matched update validates an explicitly assigned generated column
+      Given statement template
+        """
+        CREATE TABLE delta_gen_col_merge (
+          id INT,
+          event_time TIMESTAMP,
+          event_date DATE GENERATED ALWAYS AS (CAST(event_time AS DATE))
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW delta_gen_col_merge_explicit_update_src AS
+        SELECT 1 AS id,
+               TIMESTAMP '2024-02-01 00:00:00' AS event_time,
+               DATE '2024-02-01' AS event_date
+        """
+      Given statement
+        """
+        INSERT INTO delta_gen_col_merge (id, event_time)
+        VALUES (1, TIMESTAMP '2024-01-01 00:00:00')
+        """
+      Given statement
+        """
+        MERGE INTO delta_gen_col_merge AS t
+        USING delta_gen_col_merge_explicit_update_src AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET
+          t.event_time = s.event_time,
+          t.event_date = s.event_date
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW delta_gen_col_merge_explicit_update_src AS
+        SELECT 1 AS id,
+               TIMESTAMP '2024-03-01 00:00:00' AS event_time,
+               DATE '2024-03-02' AS event_date
+        """
+      When query
+        """
+        MERGE INTO delta_gen_col_merge AS t
+        USING delta_gen_col_merge_explicit_update_src AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET
+          t.event_time = s.event_time,
+          t.event_date = s.event_date
+        """
+      Then query error DELTA_GENERATED_COLUMNS_VALUE_MISMATCH
+      When query
+        """
+        SELECT id, event_time, event_date FROM delta_gen_col_merge
+        """
+      Then query result
+        | id | event_time          | event_date |
+        | 1  | 2024-02-01 00:00:00 | 2024-02-01 |
+
+    Scenario: MERGE matched star update recomputes a generated column absent from the source
+      Given statement template
+        """
+        CREATE TABLE delta_gen_col_merge (
+          id INT,
+          event_time TIMESTAMP,
+          event_date DATE GENERATED ALWAYS AS (CAST(event_time AS DATE))
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_gen_col_merge_src (
+          id INT,
+          event_time TIMESTAMP
+        )
+        USING DELTA
+        LOCATION {{ location2.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_gen_col_merge (id, event_time)
+        VALUES (1, TIMESTAMP '2024-01-01 00:00:00')
+        """
+      Given statement
+        """
+        INSERT INTO delta_gen_col_merge_src
+        VALUES (1, TIMESTAMP '2024-09-01 00:00:00')
+        """
+      Given statement
+        """
+        MERGE INTO delta_gen_col_merge AS t
+        USING delta_gen_col_merge_src AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET *
+        """
+      When query
+        """
+        SELECT id, event_time, event_date FROM delta_gen_col_merge
+        """
+      Then query result
+        | id | event_time          | event_date |
+        | 1  | 2024-09-01 00:00:00 | 2024-09-01 |
+
+    Scenario: MERGE matched star update validates a generated column present in the source
+      Given statement template
+        """
+        CREATE TABLE delta_gen_col_merge (
+          id INT,
+          event_time TIMESTAMP,
+          event_date DATE GENERATED ALWAYS AS (CAST(event_time AS DATE))
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW delta_gen_col_merge_star_src AS
+        SELECT 1 AS id,
+               TIMESTAMP '2024-03-01 00:00:00' AS event_time,
+               DATE '2024-03-02' AS event_date
+        """
+      Given statement
+        """
+        INSERT INTO delta_gen_col_merge (id, event_time)
+        VALUES (1, TIMESTAMP '2024-01-01 00:00:00')
+        """
+      When query
+        """
+        MERGE INTO delta_gen_col_merge AS t
+        USING delta_gen_col_merge_star_src AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET *
+        """
+      Then query error DELTA_GENERATED_COLUMNS_VALUE_MISMATCH
+      When query
+        """
+        SELECT id, event_time, event_date FROM delta_gen_col_merge
+        """
+      Then query result
+        | id | event_time          | event_date |
+        | 1  | 2024-01-01 00:00:00 | 2024-01-01 |
+
     Scenario: MERGE not-matched insert computes generated column
       Given statement template
         """

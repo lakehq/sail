@@ -87,6 +87,7 @@ struct MergeRowMetrics {
     not_matched_by_source_deleted: u64,
     saw_detailed_merge_op: bool,
     uses_source_metric: bool,
+    uses_operation: bool,
 }
 
 enum SourceMetricColumn<'a> {
@@ -231,6 +232,7 @@ impl MergeRowMetrics {
         let Some((index, _)) = batch.schema().column_with_name(OPERATION_COLUMN) else {
             return Ok(());
         };
+        self.uses_operation = true;
         let column = batch.column(index);
         match column.data_type() {
             DataType::Int32 => {
@@ -896,6 +898,16 @@ impl DeltaWriterExec {
                 {
                     operation_metrics.num_source_rows = Some(source_rows);
                 }
+            } else if matches!(operation.as_ref(), Some(DeltaOperation::Update { .. }))
+                && merge_row_metrics.uses_operation
+            {
+                operation_metrics.num_updated_rows = Some(merge_row_metrics.updated);
+                operation_metrics.num_copied_rows = Some(merge_row_metrics.copied);
+            } else if matches!(operation.as_ref(), Some(DeltaOperation::Delete { .. }))
+                && merge_row_metrics.uses_operation
+            {
+                operation_metrics.num_deleted_rows = Some(merge_row_metrics.deleted);
+                operation_metrics.num_copied_rows = Some(merge_row_metrics.copied);
             }
 
             output_rows.add(usize::try_from(total_rows).unwrap_or(usize::MAX));

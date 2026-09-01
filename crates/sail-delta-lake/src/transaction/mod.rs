@@ -364,6 +364,24 @@ impl OperationMetrics {
                     self.num_deletion_vectors_removed = self.num_deletion_vectors_updated;
                 }
             }
+            DeltaOperation::Update { .. } => {
+                if self.num_copied_rows.is_none() {
+                    self.num_copied_rows = self.num_output_rows;
+                }
+                if self.num_updated_rows.is_none()
+                    && let (Some(touched), Some(copied)) =
+                        (self.num_touched_rows, self.num_copied_rows)
+                {
+                    self.num_updated_rows = Some(touched.saturating_sub(copied));
+                }
+                if let (Some(updated), Some(copied)) = (self.num_updated_rows, self.num_copied_rows)
+                {
+                    self.num_touched_rows = Some(updated.saturating_add(copied));
+                }
+                if self.rewrite_time_ms.is_none() {
+                    self.rewrite_time_ms = self.write_time_ms;
+                }
+            }
             DeltaOperation::Merge { .. } => {
                 if self.num_target_files_added.is_none() {
                     self.num_target_files_added = self.num_added_files;
@@ -434,8 +452,6 @@ impl OperationMetrics {
             | DeltaOperation::AddConstraint { .. }
             | DeltaOperation::UnsetTableProperties { .. }
             | DeltaOperation::AlterColumn { .. } => {} // TODO: When the following operations are implemented, extend this match:
-                                                       //   - UPDATE: numAddedFiles, numRemovedFiles, numUpdatedRows, numCopiedRows,
-                                                       //     executionTimeMs, scanTimeMs, rewriteTimeMs
                                                        //   - OPTIMIZE / ZORDER: numAdded/Removed files+bytes histograms,
                                                        //     partitionsOptimized, numBatches, filesAdded/filesRemoved quantiles
                                                        //   - VACUUM START/END: numFilesToDelete, sizeOfDataToDelete,
@@ -657,7 +673,7 @@ impl CommitData {
         self.commit_info().and_then(|info| info.in_commit_timestamp)
     }
 
-    fn is_blind_append(actions: &[CommitAction], operation: &DeltaOperation) -> bool {
+    pub(crate) fn is_blind_append(actions: &[CommitAction], operation: &DeltaOperation) -> bool {
         match operation {
             DeltaOperation::Write { predicate, .. } if predicate.is_none() => {
                 actions.iter().all(|action| {
@@ -2347,6 +2363,24 @@ mod tests {
             data_change,
             deletion_vector: add.deletion_vector.clone(),
             ..Default::default()
+        }
+    }
+
+    #[test]
+    fn update_metrics_use_logical_touched_rows() {
+        let operation = DeltaOperation::Update { predicate: None };
+        for (physical_touched, updated, copied, expected_touched) in [
+            (Some(3), Some(1), Some(1), Some(2)),
+            (None, Some(2), Some(1), Some(3)),
+        ] {
+            let mut metrics = OperationMetrics {
+                num_touched_rows: physical_touched,
+                num_updated_rows: updated,
+                num_copied_rows: copied,
+                ..Default::default()
+            };
+            metrics.finalize_for(&operation);
+            assert_eq!(metrics.num_touched_rows, expected_touched);
         }
     }
 

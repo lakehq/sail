@@ -114,10 +114,10 @@ use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
 use sail_data_source::listing::delete::FileDeleteExec;
 use sail_data_source::options::r#gen::RateReadOptions;
 use sail_delta_lake::physical_plan::{
-    DeletionVectorRowsWriterExec, DeletionVectorWriterExec, DeltaCommitContext, DeltaCommitExec,
-    DeltaDiscoveryExec, DeltaLogReplayExec, DeltaLogReplayMode, DeltaMetadataStatsExec,
-    DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaSnapshotContext, DeltaWriteContext,
-    DeltaWriterExec,
+    DeletionVectorRowOperationMode, DeletionVectorRowsWriterConfig, DeletionVectorRowsWriterExec,
+    DeletionVectorWriterExec, DeltaCommitContext, DeltaCommitExec, DeltaDiscoveryExec,
+    DeltaLogReplayExec, DeltaLogReplayMode, DeltaMetadataStatsExec, DeltaRemoveActionsExec,
+    DeltaScanByAddsExec, DeltaSnapshotContext, DeltaWriteContext, DeltaWriterExec,
 };
 use sail_delta_lake::schema::PhysicalPartitionColumn;
 use sail_delta_lake::spec::{
@@ -1471,6 +1471,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 version,
                 operation_json,
                 partition_value_columns_json,
+                operation_mode,
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -1495,15 +1496,20 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map(serde_json::from_str::<Vec<PhysicalPartitionColumn>>)
                     .transpose()
                     .map_err(|e| plan_datafusion_err!("{e}"))?;
+                let operation_mode =
+                    Self::try_decode_deletion_vector_row_operation_mode(operation_mode)?;
                 Ok(Arc::new(DeletionVectorRowsWriterExec::new(
                     input,
                     adds_input,
                     table_url,
-                    path_column,
-                    row_index_column,
-                    version,
-                    partition_value_columns,
-                    operation,
+                    DeletionVectorRowsWriterConfig::new(
+                        path_column,
+                        row_index_column,
+                        operation_mode,
+                        version,
+                        partition_value_columns,
+                        operation,
+                    ),
                 )?))
             }
             NodeKind::IcebergWriter(r#gen::IcebergWriterExecNode {
@@ -2665,6 +2671,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map(serde_json::to_string)
                     .transpose()
                     .map_err(|e| plan_datafusion_err!("{e}"))?,
+                operation_mode: Self::try_encode_deletion_vector_row_operation_mode(
+                    dv_rows_writer_exec.operation_mode(),
+                ),
             })
         } else if let Some(iceberg_writer_exec) = node.downcast_ref::<IcebergWriterExec>() {
             let input = try_encode_physical_plan_with_converter(
@@ -4396,6 +4405,39 @@ impl RemoteExecutionCodec {
         Ok(r#gen::PhysicalSinkMode { mode: Some(mode) })
     }
 
+    fn try_decode_deletion_vector_row_operation_mode(
+        operation_mode: i32,
+    ) -> Result<DeletionVectorRowOperationMode> {
+        match r#gen::DeletionVectorRowOperationMode::try_from(operation_mode).map_err(|_| {
+            plan_datafusion_err!(
+                "invalid deletion-vector row operation mode value: {operation_mode}"
+            )
+        })? {
+            r#gen::DeletionVectorRowOperationMode::Unspecified => {
+                plan_err!("deletion-vector row operation mode is unspecified")
+            }
+            r#gen::DeletionVectorRowOperationMode::Update => {
+                Ok(DeletionVectorRowOperationMode::Update)
+            }
+            r#gen::DeletionVectorRowOperationMode::Delete => {
+                Ok(DeletionVectorRowOperationMode::Delete)
+            }
+            r#gen::DeletionVectorRowOperationMode::Mixed => {
+                Ok(DeletionVectorRowOperationMode::Mixed)
+            }
+        }
+    }
+
+    fn try_encode_deletion_vector_row_operation_mode(
+        operation_mode: DeletionVectorRowOperationMode,
+    ) -> i32 {
+        (match operation_mode {
+            DeletionVectorRowOperationMode::Update => r#gen::DeletionVectorRowOperationMode::Update,
+            DeletionVectorRowOperationMode::Delete => r#gen::DeletionVectorRowOperationMode::Delete,
+            DeletionVectorRowOperationMode::Mixed => r#gen::DeletionVectorRowOperationMode::Mixed,
+        }) as i32
+    }
+
     fn try_decode_delta_snapshot_context(
         &self,
         context: &r#gen::DeltaSnapshotContext,
@@ -5449,6 +5491,61 @@ mod tests {
         assert_eq!(discovery.schema(), expected_schema);
         assert!(discovery.input().downcast_ref::<EmptyExec>().is_some());
         Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_deletion_vector_rows_writer_preserves_operation_mode() -> Result<()> {
+        use datafusion::physical_plan::empty::EmptyExec;
+        use sail_common_datafusion::datasource::OPERATION_COLUMN;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("path", DataType::Utf8, false),
+            Field::new("row_index", DataType::Int64, false),
+            Field::new(OPERATION_COLUMN, DataType::Int32, false),
+        ]));
+        let table_url = Url::parse("file:///tmp/delta-table")
+            .map_err(|e| plan_datafusion_err!("invalid test table URL: {e}"))?;
+        let codec = RemoteExecutionCodec;
+
+        for operation_mode in [
+            DeletionVectorRowOperationMode::Update,
+            DeletionVectorRowOperationMode::Delete,
+            DeletionVectorRowOperationMode::Mixed,
+        ] {
+            let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+            let adds_input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+            let plan = Arc::new(DeletionVectorRowsWriterExec::new(
+                input,
+                adds_input,
+                table_url.clone(),
+                DeletionVectorRowsWriterConfig::new(
+                    "path",
+                    "row_index",
+                    operation_mode,
+                    42,
+                    None,
+                    None,
+                ),
+            )?);
+
+            let bytes = try_encode_physical_plan(&codec, plan)?;
+            let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+            let writer = decoded
+                .downcast_ref::<DeletionVectorRowsWriterExec>()
+                .ok_or_else(|| {
+                    plan_datafusion_err!("decoded plan is not DeletionVectorRowsWriterExec")
+                })?;
+            assert_eq!(writer.operation_mode(), operation_mode);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_decode_deletion_vector_rows_writer_rejects_missing_operation_mode() {
+        assert!(RemoteExecutionCodec::try_decode_deletion_vector_row_operation_mode(0).is_err());
+        assert!(
+            RemoteExecutionCodec::try_decode_deletion_vector_row_operation_mode(i32::MAX).is_err()
+        );
     }
 
     #[test]
