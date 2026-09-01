@@ -336,7 +336,7 @@ Feature: div (integer division)
           (CAST(-9223372036854775808 AS BIGINT), CAST(-1 AS BIGINT))
         AS t(a, b)
         """
-      Then query error .*
+      Then query error ^\[ARITHMETIC_OVERFLOW\] Overflow in integral divide
 
   Rule: Mixed numeric types
 
@@ -515,21 +515,21 @@ Feature: div (integer division)
         """
         SELECT div('10', '3') AS result
         """
-      Then query error .*
+      Then query error due to data type mismatch
 
     Scenario: div BOOLEAN errors
       When query
         """
         SELECT div(true, true) AS result
         """
-      Then query error .*
+      Then query error due to data type mismatch
 
     Scenario: div DATE errors
       When query
         """
         SELECT div(DATE '2024-01-15', DATE '2024-01-01') AS result
         """
-      Then query error .*
+      Then query error due to data type mismatch
 
     Scenario: div INTERVAL DAY by INT errors
       When query
@@ -550,21 +550,21 @@ Feature: div (integer division)
         """
         SELECT div(CAST(1.0 AS FLOAT), CAST(1.0 AS FLOAT)) AS result
         """
-      Then query error .*
+      Then query error due to data type mismatch
 
     Scenario: div DOUBLE/DOUBLE errors
       When query
         """
         SELECT div(CAST(1.0 AS DOUBLE), CAST(1.0 AS DOUBLE)) AS result
         """
-      Then query error .*
+      Then query error due to data type mismatch
 
     Scenario: div INT/DOUBLE errors
       When query
         """
         SELECT div(10, CAST(3.0 AS DOUBLE)) AS result
         """
-      Then query error .*
+      Then query error due to data type mismatch
 
   Rule: Workarounds for FLOAT and DOUBLE operands
     # Spark rejects FLOAT/DOUBLE in div by design (IntegralDivide requires
@@ -769,7 +769,7 @@ Feature: div (integer division)
         """
         SELECT div(CAST(1.0 AS DOUBLE), 0) AS result
         """
-      Then query error .*
+      Then query error due to data type mismatch
 
     Scenario: div DOUBLE by literal zero DOUBLE is rejected under ANSI false
       Given config spark.sql.ansi.enabled = false
@@ -777,7 +777,7 @@ Feature: div (integer division)
         """
         SELECT div(CAST(1.0 AS DOUBLE), CAST(0.0 AS DOUBLE)) AS result
         """
-      Then query error .*
+      Then query error due to data type mismatch
 
     Scenario: div BOOLEAN by literal zero is rejected under ANSI false
       Given config spark.sql.ansi.enabled = false
@@ -785,7 +785,7 @@ Feature: div (integer division)
         """
         SELECT div(true, 0) AS result
         """
-      Then query error .*
+      Then query error due to data type mismatch
 
     Scenario: div DATE by literal zero is rejected under ANSI false
       Given config spark.sql.ansi.enabled = false
@@ -793,7 +793,7 @@ Feature: div (integer division)
         """
         SELECT div(DATE '2024-01-15', 0) AS result
         """
-      Then query error .*
+      Then query error due to data type mismatch
 
   # Spark evaluates the divisor first, but a NULL dividend still wins over a zero
   # divisor: the result is NULL, not an error, even under ANSI. The non-NULL dividend
@@ -848,14 +848,14 @@ Feature: div (integer division)
         """
         SELECT div(make_interval(1, 0, 0, 2, 0, 0, 0), make_interval(1, 0, 0, 1, 0, 0, 0)) AS result
         """
-      Then query error .*
+      Then query error due to data type mismatch
 
     Scenario: div wide calendar interval does not overflow into a wrong answer
       When query
         """
         SELECT div(make_interval(0, 4000, 0, 1, 0, 0, 0), make_interval(0, 1, 0, 1, 0, 0, 0)) AS result
         """
-      Then query error .*
+      Then query error due to data type mismatch
 
   # Spark builds the default column name from `sqlOperator` through `BinaryOperator.sql`
   # (Expression.scala:859), so an unaliased `div` is named `(7 div 2)`. Sail names it after

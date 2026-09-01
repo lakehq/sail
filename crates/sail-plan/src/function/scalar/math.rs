@@ -406,8 +406,8 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let dividend_type = dividend.get_type(function_context.schema);
     let divisor_type = divisor.get_type(function_context.schema);
 
-    // Spark picks its `DATATYPE_MISMATCH` sub-class from the types AFTER coercion, which is
-    // ANSI-dependent, so one message rather than a heuristic. `analysis` maps to Spark's class.
+    // Spark checks the types after ANSI-dependent coercion. Keep this rejection after coercion
+    // too, so an unsupported pair cannot be hidden by a zero-divisor guard.
     let reject = || {
         Err(PlanError::analysis(
             "div: cannot resolve the operands due to data type mismatch: div accepts \
@@ -494,6 +494,7 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
     // needs both operands. The kernels own it for their arms; the Duration and fallback arms
     // reach plain DataFusion arithmetic, so the guard is built here and tests the dividend too.
     let null_if_zero = |divisor: Expr, divisor_type: &DataType| {
+        // `make_safe_divisor` only reads this message on the ANSI path.
         make_safe_divisor(divisor, divisor_type, false, "")
     };
     let kernel_guarded_divisor = |divisor: Expr, divisor_type: &DataType| {
@@ -506,10 +507,6 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let plan_guarded_divisor = |divisor: Expr, divisor_type: &DataType, dividend: &Expr| {
         if !ansi_mode {
             return null_if_zero(divisor, divisor_type);
-        }
-        // Defensive: neither call site reaches this today.
-        if matches!(divisor_type, DataType::Interval(_) | DataType::Duration(_)) {
-            return divisor;
         }
         // The dividend is duplicated into the plan deliberately; a volatile one can disagree
         // between the predicate and the division.
