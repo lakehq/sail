@@ -107,7 +107,7 @@ lz4_flex = "0.13.1"
 twox-hash = "2.1.3"
 zstd = "0.13.3"
 roaring = "0.11.3"
-datasketches = { version = "0.3.0", features = ["hll", "theta"] }
+datasketches = { version = "0.4.0", features = ["hll", "theta"] }
 sha1 = "0.10.6"
 half = { version = "2.7.1", features = ["serde", "num-traits", "zerocopy"] }
 iana-time-zone = "0.1.65"
