@@ -923,6 +923,31 @@ Feature: div (integer division)
         | result      |
         | -2147483648 |
 
+    # `IntegralDivide` OVERRIDES `resultDecimalType` (arithmetic.scala:899-906) to scale 0 —
+    # `DecimalType.bounded(p1 - s1 + s2, 0)` — because the quotient is integral. Sail instead
+    # delegates to DataFusion's regular `/`, whose division rule asks for a precision the type
+    # system cannot express once the divisor scale is extreme: `Decimal(20,0) / Decimal(38,37)`
+    # wants precision 96, so the type resolution itself fails before any value is computed.
+    # Spark asks for `bounded(57, 0)`, caps at 38, and answers. Found by the full 32x32 type
+    # matrix; ANSI-invariant (all 16 diverging cells appear identically in both modes).
+    @sail-bug
+    Scenario Outline: div by a high-scale DECIMAL divisor: <case>
+      When query
+        """
+        SELECT div(<dividend>, CAST(0.1 AS DECIMAL(38,37))) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                  | dividend                  | result |
+        | INT dividend          | 1                         | 10     |
+        | BIGINT dividend       | CAST(1 AS BIGINT)         | 10     |
+        | DECIMAL dividend      | CAST(1 AS DECIMAL(10,2))  | 10     |
+        | high-scale both sides | CAST(0.1 AS DECIMAL(38,37)) | 1    |
+        | NULL BIGINT dividend  | CAST(NULL AS BIGINT)      | NULL   |
+
     # Arrow's decimal division PRE-SCALES the dividend before dividing
     # (`l.mul_checked(10^mul_pow)`), so a dividend whose unscaled value is large enough
     # overflows i128 inside the kernel even when the true quotient is small. Spark never

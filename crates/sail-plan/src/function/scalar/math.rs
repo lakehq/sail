@@ -288,6 +288,35 @@ fn is_zero_literal(expr: &Expr) -> bool {
 ///
 /// This wraps the divisor itself (not the entire division expression) to avoid
 /// duplicating complex divisor expressions (e.g., window functions) in the plan.
+/// Spark has no dictionary or run-end encoding: those are Arrow storage details that must not
+/// reach a type check written against Spark's `inputType`. Sail does surface them (a Delta
+/// partition column is dictionary-wrapped by default, `wrap_partition_values`), so peel to the
+/// value type before classifying, or the allow-list below rejects a BIGINT that Spark accepts.
+fn peel_encoding(data_type: &DataType) -> &DataType {
+    match data_type {
+        DataType::Dictionary(_, value_type) => peel_encoding(value_type),
+        DataType::RunEndEncoded(_, values) => peel_encoding(values.data_type()),
+        _ => data_type,
+    }
+}
+
+/// [`peel_encoding`] applied to the expression as well as the type, so the arms below match on
+/// what Spark sees and the UDFs receive a type their signatures accept. A no-op when unencoded.
+fn decode_encoding(
+    arg: Expr,
+    data_type: datafusion_common::Result<DataType>,
+) -> (Expr, datafusion_common::Result<DataType>) {
+    let Ok(resolved) = data_type.as_ref() else {
+        return (arg, data_type);
+    };
+    let peeled = peel_encoding(resolved);
+    if peeled == resolved {
+        return (arg, data_type);
+    }
+    let peeled = peeled.clone();
+    (cast(arg, peeled.clone()), Ok(peeled))
+}
+
 fn make_safe_divisor(
     divisor: Expr,
     divisor_type: &DataType,
@@ -405,6 +434,8 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let ansi_mode = function_context.plan_config.ansi_mode;
     let dividend_type = dividend.get_type(function_context.schema);
     let divisor_type = divisor.get_type(function_context.schema);
+    let (dividend, dividend_type) = decode_encoding(dividend, dividend_type);
+    let (divisor, divisor_type) = decode_encoding(divisor, divisor_type);
 
     // Spark checks the types after ANSI-dependent coercion. Keep this rejection after coercion
     // too, so an unsupported pair cannot be hidden by a zero-divisor guard.
@@ -513,22 +544,32 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
         if !ansi_mode {
             return null_if_zero(divisor, divisor_type);
         }
-        // The dividend is duplicated into the plan deliberately; a volatile one can disagree
-        // between the predicate and the division.
+        // A zero of the divisor's OWN type: `lit(0)` is `Int32`, and comparing a decimal column
+        // against it makes the coercion insert a real per-batch cast of the column.
+        let zero = match divisor_type.is_numeric() {
+            true => ScalarValue::new_zero(divisor_type).map_or_else(|_| lit(0), lit),
+            false => lit(0),
+        };
         let raise = Expr::ScalarFunction(expr::ScalarFunction {
             func: Arc::new(ScalarUDF::from(RaiseError::new())),
             args: vec![lit(DIVIDE_BY_ZERO_MESSAGE)],
         });
+        // The dividend check is NESTED inside the zero branch rather than `AND`-ed into the
+        // predicate: `divisor = 0` is NULL wherever the divisor is, which makes DataFusion give
+        // up on short-circuiting the conjunction, so the common path (no zero divisor) would pay
+        // a full-width `IS NOT NULL` pass every batch. Nested, the inner `CASE` is only reached
+        // on the zero rows. Semantics are unchanged: a NULL dividend yields a NULL divisor and
+        // the division then propagates NULL, which is what Spark returns.
+        let raise_unless_null_dividend = Expr::Case(expr::Case {
+            expr: None,
+            when_then_expr: vec![(Box::new(dividend.clone().is_not_null()), Box::new(raise))],
+            else_expr: None,
+        });
         Expr::Case(expr::Case {
             expr: None,
             when_then_expr: vec![(
-                Box::new(
-                    divisor
-                        .clone()
-                        .eq(lit(0))
-                        .and(dividend.clone().is_not_null()),
-                ),
-                Box::new(raise),
+                Box::new(divisor.clone().eq(zero)),
+                Box::new(raise_unless_null_dividend),
             )],
             else_expr: Some(Box::new(divisor)),
         })
@@ -546,9 +587,10 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
             dividend / divisor
         }
         // The UDF owns its zero policy.
-        (Ok(DataType::Interval(_)), Ok(DataType::Interval(_))) => {
-            ScalarUDF::from(SparkIntervalDiv::new(ansi_mode)).call(vec![dividend, divisor])
-        }
+        (
+            Ok(DataType::Interval(IntervalUnit::YearMonth)),
+            Ok(DataType::Interval(IntervalUnit::YearMonth)),
+        ) => ScalarUDF::from(SparkIntervalDiv::new(ansi_mode)).call(vec![dividend, divisor]),
         // Integer operands: delegate to SparkIntegerDiv, which raises on a zero divisor
         // under ANSI and handles the LONG_MIN / -1 overflow edge. Outside ANSI the zero
         // has to become a NULL before it reaches the kernel.
