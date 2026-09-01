@@ -939,18 +939,18 @@ fn select_merge_join_type(
     not_matched_by_target_clauses: &[MergeNotMatchedByTargetClause],
     preserve_unmodified_target_rows: bool,
 ) -> JoinType {
-    let matched_only = !matched_clauses.is_empty()
-        && not_matched_by_source_clauses.is_empty()
-        && not_matched_by_target_clauses.is_empty();
-
     if preserve_unmodified_target_rows {
-        // The target is the left input, so retaining its unmatched rows requires a left join.
-        return if matched_only {
+        // A left join preserves every target row; source-only inserts require a full join.
+        return if not_matched_by_target_clauses.is_empty() {
             JoinType::Left
         } else {
             JoinType::Full
         };
     }
+
+    let matched_only = !matched_clauses.is_empty()
+        && not_matched_by_source_clauses.is_empty()
+        && not_matched_by_target_clauses.is_empty();
 
     if matched_only {
         JoinType::Inner
