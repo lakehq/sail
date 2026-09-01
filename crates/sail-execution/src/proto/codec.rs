@@ -22,7 +22,9 @@ use datafusion::datasource::physical_plan::{
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::{DataSource, DataSourceExec};
 use datafusion::execution::TaskContext;
+use datafusion::functions::core::coalesce::CoalesceFunc;
 use datafusion::functions::core::greatest::GreatestFunc;
+use datafusion::functions::core::input_file_name::InputFileNameFunc;
 use datafusion::functions::core::least::LeastFunc;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::functions_window::cume_dist::cume_dist_udwf;
@@ -3184,6 +3186,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "vector_inner_product" => Ok(Arc::new(ScalarUDF::from(VectorInnerProduct::new()))),
             "bitmap_count" => Ok(Arc::new(ScalarUDF::from(BitmapCount::new()))),
+            "coalesce" => Ok(Arc::new(ScalarUDF::from(CoalesceFunc::new()))),
             "format_string" => Ok(Arc::new(ScalarUDF::from(FormatStringFunc::new()))),
             "greatest" => Ok(Arc::new(ScalarUDF::from(GreatestFunc::new()))),
             "least" => Ok(Arc::new(ScalarUDF::from(LeastFunc::new()))),
@@ -3232,6 +3235,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(HllSketchEstimateFunction::new())))
             }
             "hll_union" => Ok(Arc::new(ScalarUDF::from(HllUnionFunction::new()))),
+            "input_file_name" => Ok(Arc::new(ScalarUDF::from(InputFileNameFunc::new()))),
             "theta_difference" => Ok(Arc::new(ScalarUDF::from(ThetaDifferenceFunction::new()))),
             "theta_intersection" => Ok(Arc::new(ScalarUDF::from(ThetaIntersectionFunction::new()))),
             "theta_sketch_estimate" => Ok(Arc::new(ScalarUDF::from(
@@ -3374,6 +3378,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkCastStringToInt32>()
             || node_inner.is::<VectorInnerProduct>()
             || node_inner.is::<BitmapCount>()
+            || node_inner.is::<CoalesceFunc>()
             || node_inner.is::<FormatStringFunc>()
             || node_inner.is::<GreatestFunc>()
             || node_inner.is::<LeastFunc>()
@@ -3466,6 +3471,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkTryToBinary>()
             || node_inner.is::<HllSketchEstimateFunction>()
             || node_inner.is::<HllUnionFunction>()
+            || node_inner.is::<InputFileNameFunc>()
             || node_inner.is::<ThetaDifferenceFunction>()
             || node_inner.is::<ThetaIntersectionFunction>()
             || node_inner.is::<ThetaSketchEstimateFunction>()
@@ -6050,6 +6056,16 @@ mod tests {
         );
         assert_eq!(decoded.name(), "spark_variant_explode");
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_input_file_name_expression_udfs() -> Result<()> {
+        let input_file_name = round_trip_udf(ScalarUDF::from(InputFileNameFunc::new()))?;
+        downcast_udf::<InputFileNameFunc>(&input_file_name, "InputFileNameFunc")?;
+
+        let coalesce = round_trip_udf(ScalarUDF::from(CoalesceFunc::new()))?;
+        downcast_udf::<CoalesceFunc>(&coalesce, "CoalesceFunc")?;
         Ok(())
     }
 

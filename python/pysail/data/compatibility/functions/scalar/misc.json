@@ -86,8 +86,7 @@
   {
     "module": "pyspark.sql.functions",
     "function": "input_file_name",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/507"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",

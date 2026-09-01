@@ -22,6 +22,7 @@ use datafusion::physical_optimizer::window_topn::WindowTopN;
 use crate::barrier::EnforceBarrierPartitioning;
 use crate::collect_left::RewriteCollectLeftHashJoin;
 use crate::explicit_repartition::RewriteExplicitRepartition;
+use crate::input_file_name::RewriteInputFileNameFallback;
 use crate::join_reorder::JoinReorder;
 pub use crate::join_reorder::JoinReorderOptions;
 use crate::projection_pushdown::LambdaSafeProjectionPushdown;
@@ -29,6 +30,7 @@ use crate::projection_pushdown::LambdaSafeProjectionPushdown;
 mod barrier;
 mod collect_left;
 mod explicit_repartition;
+mod input_file_name;
 mod join_reorder;
 mod projection_pushdown;
 
@@ -69,6 +71,7 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(PushdownSort::new()));
     rules.push(Arc::new(EnsureCooperative::new()));
     rules.push(Arc::new(FilterPushdown::new_post_optimization()));
+    rules.push(Arc::new(RewriteInputFileNameFallback::new()));
     rules.push(Arc::new(RewriteExplicitRepartition::new()));
     rules.push(Arc::new(RewriteCollectLeftHashJoin::new()));
     rules.push(Arc::new(EnforceBarrierPartitioning::new()));

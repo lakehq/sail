@@ -90,6 +90,11 @@ fn current_user(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .clone()))
 }
 
+fn input_file_name() -> expr::Expr {
+    // DataFusion's UDF errors outside file scans, while Spark returns an empty string.
+    expr_fn::coalesce(vec![expr_fn::input_file_name(), lit("")])
+}
+
 fn type_of(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
         arguments,
@@ -281,9 +286,7 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
             "input_file_block_start",
             F::unknown("input_file_block_start"),
         ),
-        // TODO: Map this to DataFusion's file-name UDF after preserving Spark's empty-string
-        // behavior for non-file inputs and covering driver-to-worker file scans.
-        ("input_file_name", F::unknown("input_file_name")),
+        ("input_file_name", F::nullary(input_file_name)),
         ("java_method", F::unknown("java_method")),
         (
             "monotonically_increasing_id",

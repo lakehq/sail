@@ -611,7 +611,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: input_file_name"
+        "success": "ok"
       }
     },
     {
