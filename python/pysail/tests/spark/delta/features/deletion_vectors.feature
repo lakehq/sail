@@ -348,6 +348,14 @@ Feature: Delta Lake Deletion Vectors (Merge-on-Read)
         """
       Then query plan matches snapshot
 
+    Scenario: EXPLAIN EXTENDED DELETE on DV table shows merge-on-read mode
+      When query
+        """
+        EXPLAIN EXTENDED
+        DELETE FROM delta_dv_explain WHERE id = 2
+        """
+      Then query plan matches snapshot
+
     Scenario: EXPLAIN SELECT on DV table after delete uses eager Add input
       Given statement
         """

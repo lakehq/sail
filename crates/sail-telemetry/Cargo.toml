@@ -9,6 +9,7 @@ workspace = true
 [dependencies]
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-system-store = { path = "../sail-system-store" }
 
 thiserror = { workspace = true }
 env_logger = { workspace = true }

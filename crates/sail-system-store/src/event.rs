@@ -1,11 +1,9 @@
+//! Durable system events emitted by the driver.
+
 use chrono::{DateTime, Utc};
 use sail_common_datafusion::system::types::StageInput;
 use serde::{Deserialize, Serialize};
 
-/// The OpenTelemetry log event name used for system-table changes.
-pub const SYSTEM_EVENT_NAME: &str = "sail.system";
-
-/// A durable description of a change to a system-table row.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SystemEvent {
@@ -94,44 +92,6 @@ pub enum SystemEvent {
         status: String,
         updated_at: DateTime<Utc>,
     },
-}
-
-#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
-pub struct OptionPrimaryKey {
-    pub key: String,
-}
-
-#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
-pub struct SessionPrimaryKey {
-    pub session_id: String,
-}
-
-#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
-pub struct JobPrimaryKey {
-    pub session_id: String,
-    pub job_id: u64,
-}
-
-#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
-pub struct StagePrimaryKey {
-    pub session_id: String,
-    pub job_id: u64,
-    pub stage: u64,
-}
-
-#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
-pub struct TaskPrimaryKey {
-    pub session_id: String,
-    pub job_id: u64,
-    pub stage: u64,
-    pub partition: u64,
-    pub attempt: u64,
-}
-
-#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
-pub struct WorkerPrimaryKey {
-    pub session_id: String,
-    pub worker_id: u64,
 }
 
 pub(crate) fn is_session_deleted(status: &str) -> bool {

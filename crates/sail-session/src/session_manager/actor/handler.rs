@@ -11,7 +11,7 @@ use sail_common_datafusion::session::job::JobService;
 use sail_execution::DriverId;
 use sail_execution::driver::DriverHandle;
 use sail_execution::error::ExecutionResult;
-use sail_telemetry::system_event::SystemEvent;
+use sail_system_store::SystemEvent;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 

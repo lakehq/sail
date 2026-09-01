@@ -24,7 +24,7 @@ pub struct DeltaPhysicalPlanner;
 impl ExtensionPlanner for DeltaPhysicalPlanner {
     async fn plan_extension(
         &self,
-        planner: &dyn PhysicalPlanner,
+        _planner: &dyn PhysicalPlanner,
         node: &dyn UserDefinedLogicalNode,
         logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
@@ -52,7 +52,7 @@ impl ExtensionPlanner for DeltaPhysicalPlanner {
                 return Ok(None);
             }
 
-            let plan = create_row_level_write_physical_plan(session, planner, node).await?;
+            let plan = create_row_level_write_physical_plan(session, node, physical_inputs).await?;
             return Ok(Some(plan));
         }
 

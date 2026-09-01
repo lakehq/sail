@@ -6,7 +6,7 @@ use datafusion::logical_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_planner::PhysicalPlanner;
-use sail_common_datafusion::datasource::{PhysicalSinkMode, RowLevelCommand};
+use sail_common_datafusion::datasource::{PhysicalSinkMode, RowLevelCommand, RowLevelWriteMode};
 use sail_data_source::options::ResolveOptions;
 use sail_logical_plan::row_level::RowLevelWriteNode;
 
@@ -30,10 +30,19 @@ pub(crate) async fn plan_iceberg_row_level_write(
     node: &RowLevelWriteNode,
     physical_inputs: &[Arc<dyn ExecutionPlan>],
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    match node.command() {
-        RowLevelCommand::Delete => plan_iceberg_delete(session, planner, node).await,
-        RowLevelCommand::Merge => plan_iceberg_merge(session, node, physical_inputs).await,
-        command => not_impl_err!("Iceberg row-level {command:?} operations"),
+    match (node.mode(), node.command()) {
+        (RowLevelWriteMode::MergeOnRead, RowLevelCommand::Delete) => {
+            plan_iceberg_delete(session, planner, node).await
+        }
+        (RowLevelWriteMode::MergeOnRead, RowLevelCommand::Merge) => {
+            plan_iceberg_merge(session, node, physical_inputs).await
+        }
+        (RowLevelWriteMode::MergeOnRead, command) => {
+            not_impl_err!("Iceberg row-level {command:?} operations")
+        }
+        (RowLevelWriteMode::CopyOnWrite, command) => {
+            not_impl_err!("Iceberg row-level {command:?} copy-on-write operations")
+        }
     }
 }
 
@@ -42,12 +51,9 @@ async fn plan_iceberg_merge(
     node: &RowLevelWriteNode,
     physical_inputs: &[Arc<dyn ExecutionPlan>],
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let write_plan = physical_inputs.first().cloned().ok_or_else(|| {
-        DataFusionError::Internal("Iceberg MERGE missing write plan input".to_string())
-    })?;
-    if node.touched_files_plan().is_some() && physical_inputs.len() < 2 {
-        return plan_err!("Iceberg MERGE missing touched-file plan input");
-    }
+    let [write_plan] = physical_inputs else {
+        return plan_err!("Iceberg MERGE requires exactly one write-plan input");
+    };
     let table_url =
         IcebergLakeSource::parse_table_url(vec![node.target_location().to_string()]).await?;
     let metadata_location = metadata_location_from_options(node.target_options());
@@ -73,7 +79,7 @@ async fn plan_iceberg_merge(
         data_rows_schema.as_ref(),
     )?;
     let writer: Arc<dyn ExecutionPlan> = Arc::new(IcebergWriterExec::new_merge(
-        write_plan,
+        Arc::clone(write_plan),
         table_url.clone(),
         partition_columns,
         PhysicalSinkMode::Append,

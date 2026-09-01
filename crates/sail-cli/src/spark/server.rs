@@ -41,7 +41,7 @@ pub(super) mod telemetry {
             let resource = ResourceOptions {
                 kind: ResourceKind::Server,
             };
-            init_telemetry(&config.telemetry, resource)?;
+            init_telemetry(&config.telemetry, &config.catalog.system, resource)?;
             Ok(Self { _marker: () })
         }
     }

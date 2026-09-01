@@ -11,7 +11,7 @@ use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use indexmap::IndexMap;
 pub use options::JobSchedulerOptions;
 use sail_common_datafusion::error::CommonErrorCause;
-use sail_telemetry::system_event::SystemEventReporter;
+use sail_telemetry::events::SystemEventReporter;
 pub use state::TaskState;
 
 use crate::driver::job_scheduler::state::JobDescriptor;

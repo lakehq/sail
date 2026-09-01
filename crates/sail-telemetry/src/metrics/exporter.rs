@@ -11,7 +11,7 @@ use opentelemetry_sdk::metrics::data::ResourceMetrics;
 use opentelemetry_sdk::metrics::exporter::PushMetricExporter;
 use prost::Message;
 
-use crate::system_event::SystemMetricReporter;
+use super::SystemMetricReporter;
 
 type MetricSendFuture = Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
 type SendMetrics = Arc<dyn Fn(Vec<Vec<u8>>) -> MetricSendFuture + Send + Sync>;

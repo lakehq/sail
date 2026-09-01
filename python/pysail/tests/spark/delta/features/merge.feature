@@ -107,6 +107,42 @@ Feature: Delta Lake Merge
         | __sail_src_id | value |
         | 1             | new   |
 
+    Scenario: Schema evolution rejects case-insensitive internal column collisions
+      Given variable location for temporary directory delta_merge_evolved_internal_column
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_evolved_internal_column
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_evolved_internal_column (id INT)
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_evolved_internal_column VALUES (1)
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW delta_merge_evolved_internal_source AS
+        SELECT 1 AS id, 10 AS `__SAIL_OPERATION_TYPE`
+        """
+      When query
+        """
+        MERGE WITH SCHEMA EVOLUTION INTO delta_merge_evolved_internal_column AS t
+        USING delta_merge_evolved_internal_source AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET *
+        """
+      Then query error MERGE schema evolution cannot add reserved internal column
+      When query
+        """
+        SELECT id FROM delta_merge_evolved_internal_column
+        """
+      Then query result
+        | id |
+        | 1  |
+
   Rule: MERGE assignments follow target schema semantics
 
     Scenario: Star actions reject source columns missing from the target schema
@@ -138,6 +174,95 @@ Feature: Delta Lake Merge
         WHEN NOT MATCHED THEN INSERT *
         """
       Then query error Cannot resolve source column `keep` for MERGE \* action without schema evolution
+
+    Scenario: WITH SCHEMA EVOLUTION appends source-only columns for star actions
+      Given variable location for temporary directory delta_merge_schema_evolution
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_schema_evolution
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_schema_evolution (id INT, value STRING)
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_schema_evolution VALUES (1, 'old'), (2, 'keep')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW delta_merge_schema_evolution_source AS
+        SELECT * FROM VALUES
+          (1, 'new', 10),
+          (3, 'insert', 30)
+        AS source(id, value, extra)
+        """
+      Given statement
+        """
+        MERGE WITH SCHEMA EVOLUTION INTO delta_merge_schema_evolution AS target
+        USING delta_merge_schema_evolution_source AS source
+        ON target.id = source.id
+        WHEN MATCHED THEN UPDATE SET *
+        WHEN NOT MATCHED THEN INSERT *
+        """
+      When query
+        """
+        SELECT id, value, extra FROM delta_merge_schema_evolution ORDER BY id
+        """
+      Then query result ordered
+        | id | value  | extra |
+        | 1  | new    | 10    |
+        | 2  | keep   | NULL  |
+        | 3  | insert | 30    |
+
+    Scenario: WITH SCHEMA EVOLUTION appends source-only nested struct fields
+      Given variable location for temporary directory delta_merge_nested_schema_evolution
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_nested_schema_evolution
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_nested_schema_evolution (
+          id INT,
+          payload STRUCT<a: INT>
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_nested_schema_evolution VALUES
+          (1, named_struct('a', 10)),
+          (2, named_struct('a', 20))
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW delta_merge_nested_schema_source AS
+        SELECT * FROM VALUES
+          (1, named_struct('a', 11, 'b', 'updated')),
+          (3, named_struct('a', 30, 'b', 'inserted'))
+        AS source(id, payload)
+        """
+      Given statement
+        """
+        MERGE WITH SCHEMA EVOLUTION INTO delta_merge_nested_schema_evolution AS t
+        USING delta_merge_nested_schema_source AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET *
+        WHEN NOT MATCHED THEN INSERT *
+        """
+      When query
+        """
+        SELECT id, payload.a, payload.b
+        FROM delta_merge_nested_schema_evolution
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | a  | b       |
+        | 1  | 11 | updated |
+        | 2  | 20 | NULL    |
+        | 3  | 30 | inserted |
 
     Scenario: Assignments cast to target types and reject overflow
       Given config spark.sql.ansi.enabled = true
@@ -494,6 +619,58 @@ Feature: Delta Lake Merge
         | 2  | new   | update |
         | 4  | ins   | insert |
 
+  Rule: Copy-on-write MERGE retains target rows outside matched clauses
+
+    Scenario: EXPLAIN matched-only MERGE uses a target-preserving join
+      Given variable location for temporary directory delta_merge_matched_only_cow
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_matched_only_cow
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_matched_only_cow (id INT, value STRING)
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_matched_only_cow VALUES
+          (1, 'old'),
+          (2, 'keep')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW delta_merge_matched_only_cow_source AS
+        SELECT * FROM VALUES
+          (1, 'updated'),
+          (3, 'ignored')
+        AS source(id, value)
+        """
+      When query
+        """
+        EXPLAIN
+        MERGE INTO delta_merge_matched_only_cow AS target
+        USING delta_merge_matched_only_cow_source AS source
+        ON target.id = source.id
+        WHEN MATCHED THEN UPDATE SET value = source.value
+        """
+      Then query plan matches snapshot
+      Given statement
+        """
+        MERGE INTO delta_merge_matched_only_cow AS target
+        USING delta_merge_matched_only_cow_source AS source
+        ON target.id = source.id
+        WHEN MATCHED THEN UPDATE SET value = source.value
+        """
+      When query
+        """
+        SELECT id, value FROM delta_merge_matched_only_cow ORDER BY id
+        """
+      Then query result ordered
+        | id | value   |
+        | 1  | updated |
+        | 2  | keep    |
+
   Rule: WHEN clauses use first-match semantics
 
     Scenario: Overlapping matched and target-only clauses apply only their first action
@@ -796,7 +973,7 @@ Feature: Delta Lake Merge
         """
         CREATE OR REPLACE TEMP VIEW src_merge_dv AS
         SELECT * FROM VALUES
-          (2, 'remove',   'delete'),
+          (2, 'updated',  'delete'),
           (4, 'inserted', 'insert')
         AS src(id, value, flag)
         """
@@ -866,8 +1043,8 @@ Feature: Delta Lake Merge
         | 3  | stay     | target |
         | 4  | inserted | insert |
 
-    Scenario: Matched updates are rejected for Merge-on-Read MERGE
-      When query
+    Scenario: Matched updates append replacement rows and a deletion vector
+      Given statement
         """
         MERGE INTO delta_merge_dv AS t
         USING src_merge_dv AS s
@@ -875,7 +1052,365 @@ Feature: Delta Lake Merge
         WHEN MATCHED THEN
           UPDATE SET value = s.value
         """
-      Then query error Merge-on-Read strategy for MERGE UPDATE clauses
+      Then delta log latest commit info contains
+        | path                                               | value    |
+        | operation                                          | "MERGE"  |
+        | operationParameters.matchedPredicates[0].actionType | "update" |
+        | operationMetrics.numTargetRowsUpdated              | 1        |
+        | operationMetrics.numTargetRowsMatchedUpdated       | 1        |
+        | operationMetrics.numTargetRowsDeleted              | 0        |
+        | operationMetrics.numTargetRowsCopied               | 0        |
+        | operationMetrics.numTargetDeletionVectorsAdded     | 1        |
+      Then data files in location count is 2
+      Then file tree in location matches
+        """
+        📂 <hex-prefix>
+          📄 deletion_vector_<uuid>.bin
+        📄 part-<id>.<codec>.parquet
+        📄 part-<id>.<codec>.parquet
+        """
+      When query
+        """
+        SELECT id, value, flag FROM delta_merge_dv ORDER BY id
+        """
+      Then query result ordered
+        | id | value  | flag   |
+        | 1  | keep   | target |
+        | 2  | updated | target |
+        | 3  | stay   | target |
+
+    Scenario: Target-only updates append replacement rows and a deletion vector
+      When query
+        """
+        EXPLAIN
+        MERGE INTO delta_merge_dv AS t
+        USING src_merge_dv AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED BY SOURCE AND t.id = 3 THEN
+          UPDATE SET value = concat(t.value, '_stale')
+        """
+      Then query plan matches snapshot
+      Given statement
+        """
+        MERGE INTO delta_merge_dv AS t
+        USING src_merge_dv AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED BY SOURCE AND t.id = 3 THEN
+          UPDATE SET value = concat(t.value, '_stale')
+        """
+      Then delta log latest commit info contains
+        | path                                                          | value    |
+        | operation                                                     | "MERGE"  |
+        | operationParameters.notMatchedBySourcePredicates[0].actionType | "update" |
+        | operationMetrics.numTargetRowsUpdated                         | 1        |
+        | operationMetrics.numTargetRowsNotMatchedBySourceUpdated       | 1        |
+        | operationMetrics.numTargetRowsDeleted                         | 0        |
+        | operationMetrics.numTargetRowsCopied                          | 0        |
+        | operationMetrics.numTargetDeletionVectorsAdded                | 1        |
+      Then data files in location count is 2
+      Then file tree in location matches
+        """
+        📂 <hex-prefix>
+          📄 deletion_vector_<uuid>.bin
+        📄 part-<id>.<codec>.parquet
+        📄 part-<id>.<codec>.parquet
+        """
+      When query
+        """
+        SELECT id, value, flag FROM delta_merge_dv ORDER BY id
+        """
+      Then query result ordered
+        | id | value      | flag   |
+        | 1  | keep       | target |
+        | 2  | remove     | target |
+        | 3  | stay_stale | target |
+
+    Scenario: EXPLAIN insert and target-only clauses use a full join
+      When query
+        """
+        EXPLAIN
+        MERGE INTO delta_merge_dv AS t
+        USING src_merge_dv AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED BY SOURCE AND t.id = 3 THEN
+          UPDATE SET value = concat(t.value, '_stale')
+        WHEN NOT MATCHED THEN
+          INSERT (id, value, flag) VALUES (s.id, s.value, s.flag)
+        """
+      Then query plan matches snapshot
+      Given statement
+        """
+        MERGE INTO delta_merge_dv AS t
+        USING src_merge_dv AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED BY SOURCE AND t.id = 3 THEN
+          UPDATE SET value = concat(t.value, '_stale')
+        WHEN NOT MATCHED THEN
+          INSERT (id, value, flag) VALUES (s.id, s.value, s.flag)
+        """
+      Then delta log latest commit info contains
+        | path                                                    | value |
+        | operation                                               | "MERGE" |
+        | operationMetrics.numSourceRows                          | 2     |
+        | operationMetrics.numTargetRowsInserted                  | 1     |
+        | operationMetrics.numTargetRowsUpdated                   | 1     |
+        | operationMetrics.numTargetRowsNotMatchedBySourceUpdated | 1     |
+        | operationMetrics.numTargetRowsDeleted                   | 0     |
+        | operationMetrics.numTargetRowsCopied                    | 0     |
+        | operationMetrics.numTargetDeletionVectorsAdded          | 1     |
+      When query
+        """
+        SELECT id, value, flag FROM delta_merge_dv ORDER BY id
+        """
+      Then query result ordered
+        | id | value      | flag   |
+        | 1  | keep       | target |
+        | 2  | remove     | target |
+        | 3  | stay_stale | target |
+        | 4  | inserted   | insert |
+
+    Scenario: Updates and deletes share a deletion vector without mixing row metrics
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW src_merge_dv_mixed AS
+        SELECT * FROM VALUES
+          (1, 'updated',  'update'),
+          (2, 'ignored',  'delete'),
+          (4, 'inserted', 'insert')
+        AS src(id, value, flag)
+        """
+      Given statement
+        """
+        MERGE INTO delta_merge_dv AS t
+        USING src_merge_dv_mixed AS s
+        ON t.id = s.id
+        WHEN MATCHED AND s.flag = 'update' THEN
+          UPDATE SET value = s.value
+        WHEN MATCHED AND s.flag = 'delete' THEN
+          DELETE
+        WHEN NOT MATCHED THEN
+          INSERT (id, value, flag) VALUES (s.id, s.value, s.flag)
+        """
+      Then delta log latest commit info contains
+        | path                                               | value    |
+        | operation                                          | "MERGE"  |
+        | operationMetrics.numTargetRowsUpdated              | 1        |
+        | operationMetrics.numTargetRowsDeleted              | 1        |
+        | operationMetrics.numTargetRowsInserted             | 1        |
+        | operationMetrics.numTargetRowsCopied               | 0        |
+        | operationMetrics.numTargetDeletionVectorsAdded     | 1        |
+        | operationParameters.matchedPredicates[0].actionType | "update" |
+        | operationParameters.matchedPredicates[1].actionType | "delete" |
+      Then data files in location count is at least 2
+      When query
+        """
+        SELECT id, value, flag FROM delta_merge_dv ORDER BY id
+        """
+      Then query result ordered
+        | id | value    | flag   |
+        | 1  | updated  | target |
+        | 3  | stay     | target |
+        | 4  | inserted | insert |
+
+    Scenario: Duplicate source matches for an unconditional DELETE invalidate one row index
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW src_merge_dv_duplicate_delete AS
+        SELECT * FROM VALUES
+          (2, 'first', 'delete'),
+          (2, 'second', 'delete')
+        AS src(id, value, flag)
+        """
+      Given statement
+        """
+        MERGE INTO delta_merge_dv AS t
+        USING src_merge_dv_duplicate_delete AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN DELETE
+        """
+      Then delta log latest commit info contains
+        | path                                           | value   |
+        | operation                                      | "MERGE" |
+        | operationMetrics.numTargetRowsUpdated          | 0       |
+        | operationMetrics.numTargetRowsDeleted          | 1       |
+        | operationMetrics.numTargetRowsInserted         | 0       |
+        | operationMetrics.numTargetDeletionVectorsAdded | 1       |
+      When query
+        """
+        SELECT id, value, flag FROM delta_merge_dv ORDER BY id
+        """
+      Then query result ordered
+        | id | value | flag   |
+        | 1  | keep  | target |
+        | 3  | stay  | target |
+
+    Scenario: WITH SCHEMA EVOLUTION updates and inserts on a deletion-vector table
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW src_merge_dv_schema_evolution AS
+        SELECT * FROM VALUES
+          (2, 'updated', 'target', 20),
+          (4, 'inserted', 'insert', 40)
+        AS src(id, value, flag, extra)
+        """
+      Given statement
+        """
+        MERGE WITH SCHEMA EVOLUTION INTO delta_merge_dv AS t
+        USING src_merge_dv_schema_evolution AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET *
+        WHEN NOT MATCHED THEN INSERT *
+        """
+      Then delta log latest commit info contains
+        | path                                           | value   |
+        | operation                                      | "MERGE" |
+        | operationMetrics.numTargetRowsUpdated          | 1       |
+        | operationMetrics.numTargetRowsInserted         | 1       |
+        | operationMetrics.numTargetRowsDeleted          | 0       |
+        | operationMetrics.numTargetDeletionVectorsAdded | 1       |
+      When query
+        """
+        SELECT id, value, flag, extra
+        FROM delta_merge_dv
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | value    | flag   | extra |
+        | 1  | keep     | target | NULL  |
+        | 2  | updated  | target | 20    |
+        | 3  | stay     | target | NULL  |
+        | 4  | inserted | insert | 40    |
+
+  Rule: Merge-on-Read MERGE with nullable join keys
+    Background:
+      Given variable location for temporary directory merge_dv_null_key
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_dv_null_key
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_dv_null_key (id INT, value STRING, flag STRING)
+        USING DELTA LOCATION {{ location.sql }}
+        TBLPROPERTIES ('delta.enableDeletionVectors' = 'true')
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_dv_null_key VALUES
+          (CAST(NULL AS INT), 'target-null', 'target'),
+          (1, 'keep', 'target'),
+          (2, 'old', 'target')
+        """
+
+    Scenario: NULL join keys remain unmatched during merge-on-read updates
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW src_merge_dv_null_key AS
+        SELECT * FROM VALUES
+          (CAST(NULL AS INT), 'source-null', 'insert'),
+          (2, 'updated', 'target')
+        AS src(id, value, flag)
+        """
+      Given statement
+        """
+        MERGE INTO delta_merge_dv_null_key AS t
+        USING src_merge_dv_null_key AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET value = s.value
+        WHEN NOT MATCHED THEN INSERT *
+        """
+      Then delta log latest commit info contains
+        | path                                           | value   |
+        | operation                                      | "MERGE" |
+        | operationMetrics.numTargetRowsUpdated          | 1       |
+        | operationMetrics.numTargetRowsInserted         | 1       |
+        | operationMetrics.numTargetRowsDeleted          | 0       |
+        | operationMetrics.numTargetDeletionVectorsAdded | 1       |
+      When query
+        """
+        SELECT id, value, flag
+        FROM delta_merge_dv_null_key
+        ORDER BY id NULLS FIRST, value
+        """
+      Then query result ordered
+        | id   | value       | flag   |
+        | NULL | source-null | insert |
+        | NULL | target-null | target |
+        | 1    | keep        | target |
+        | 2    | updated     | target |
+
+  Rule: Merge-on-Read MERGE across target files
+    Background:
+      Given config spark.sql.shuffle.partitions = 4
+      Given variable location for temporary directory merge_dv_multi_file
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_dv_multi_file
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_dv_multi_file (
+          id INT,
+          value STRING,
+          flag STRING,
+          bucket INT
+        )
+        USING DELTA
+        PARTITIONED BY (bucket)
+        LOCATION {{ location.sql }}
+        TBLPROPERTIES ('delta.enableDeletionVectors' = 'true')
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_dv_multi_file VALUES
+          (1, 'old-update', 'update', 0),
+          (2, 'old-delete', 'delete', 1),
+          (3, 'keep-two', 'keep', 2),
+          (4, 'keep-three', 'keep', 3)
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW src_merge_dv_multi_file AS
+        SELECT * FROM VALUES
+          (1, 'new-update', 'update', 0),
+          (2, 'ignored', 'delete', 1),
+          (5, 'inserted', 'insert', 4)
+        AS src(id, value, flag, bucket)
+        """
+
+    Scenario: Different files update and delete across multiple output partitions with exact metrics
+      Given statement
+        """
+        MERGE INTO delta_merge_dv_multi_file AS t
+        USING src_merge_dv_multi_file AS s
+        ON t.id = s.id
+        WHEN MATCHED AND s.flag = 'update' THEN UPDATE SET value = s.value
+        WHEN MATCHED AND s.flag = 'delete' THEN DELETE
+        WHEN NOT MATCHED THEN INSERT *
+        """
+      Then delta log latest commit info contains
+        | path                                                   | value   |
+        | operation                                              | "MERGE" |
+        | operationMetrics.numTargetRowsUpdated                  | 1       |
+        | operationMetrics.numTargetRowsMatchedUpdated           | 1       |
+        | operationMetrics.numTargetRowsDeleted                  | 1       |
+        | operationMetrics.numTargetRowsInserted                 | 1       |
+        | operationMetrics.numTargetRowsCopied                   | 0       |
+        | operationMetrics.numTargetDeletionVectorsAdded         | 2       |
+        | operationMetrics.numTargetDeletionVectorsUpdated       | 0       |
+        | operationMetrics.numTargetDeletionVectorsRemoved       | 0       |
+      When query
+        """
+        SELECT id, value, flag, bucket
+        FROM delta_merge_dv_multi_file
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | value       | flag   | bucket |
+        | 1  | new-update  | update | 0      |
+        | 3  | keep-two    | keep   | 2      |
+        | 4  | keep-three  | keep   | 3      |
+        | 5  | inserted    | insert | 4      |
 
 
   Rule: Updates for rows not matched by source and explicit insert columns

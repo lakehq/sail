@@ -67,6 +67,7 @@ mod tests {
         handle.primary().block_on(async {
             init_telemetry(
                 &config.telemetry,
+                &config.catalog.system,
                 ResourceOptions {
                     kind: ResourceKind::Server,
                 },

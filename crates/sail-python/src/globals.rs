@@ -130,7 +130,7 @@ impl GlobalState {
                 let resource = ResourceOptions {
                     kind: ResourceKind::Server,
                 };
-                init_telemetry(&config.telemetry, resource)
+                init_telemetry(&config.telemetry, &config.catalog.system, resource)
             })
             .map_err(|e| {
                 PyErr::new::<PyRuntimeError, _>(format!("failed to initialize telemetry: {e}"))

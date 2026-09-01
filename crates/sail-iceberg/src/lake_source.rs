@@ -16,9 +16,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion::arrow::datatypes::{Field as ArrowField, Schema as ArrowSchema};
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::{
-    DataFusionError, Result, TableReference, ToDFSchema, not_impl_err, plan_err,
-};
+use datafusion::common::{DataFusionError, Result, TableReference, not_impl_err, plan_err};
 use datafusion::logical_expr::{LogicalPlan, TableScanBuilder, TableSource};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_expr::expr::Sort;
@@ -40,6 +38,9 @@ use sail_common_datafusion::lakesource::{
     LakeSource, LakeSourceAlterTableOperation, LakeSourceCreateTableColumn,
     LakeSourceCreateTableInfo, LakeSourceCreateTableResult, LakeSourceMetadata, RowLevelOperation,
 };
+use sail_common_datafusion::logical_expr::ExprWithSource;
+use sail_common_datafusion::rename::expression::expression_before_rename;
+use sail_common_datafusion::rename::schema::rename_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
 use sail_data_source::options::ResolveOptions;
@@ -156,7 +157,13 @@ impl LakeSource for IcebergLakeSource {
         ctx: &dyn Session,
         operation: RowLevelOperation,
     ) -> Result<LogicalPlan> {
-        let DeleteInfo { target, condition } = match operation {
+        let DeleteInfo {
+            target,
+            condition,
+            input_schema,
+            resolved_target_field_names,
+            ..
+        } = match operation {
             RowLevelOperation::Delete(info) => *info,
             RowLevelOperation::Update(_) => {
                 return not_impl_err!("UPDATE is not yet implemented for Iceberg");
@@ -192,14 +199,33 @@ impl LakeSource for IcebergLakeSource {
                 .map(|snapshot| snapshot.snapshot_id()),
         );
         let table_source: Arc<dyn TableSource> = Arc::new(IcebergTableSource::new(provider));
-        let raw_input_schema = table_source.schema().to_dfschema_ref()?;
+        let resolved_input_schema =
+            rename_schema(input_schema.as_arrow(), &resolved_target_field_names)?;
+        let input_field_names = input_schema
+            .fields()
+            .iter()
+            .map(|field| field.name().clone())
+            .collect::<Vec<_>>();
+        let condition = condition
+            .map(|condition| -> Result<_> {
+                Ok(ExprWithSource::new(
+                    expression_before_rename(
+                        &condition.expr,
+                        &input_field_names,
+                        &resolved_input_schema,
+                        true,
+                    )?,
+                    condition.source,
+                ))
+            })
+            .transpose()?;
         let target_scan = LogicalPlan::TableScan(
             TableScanBuilder::new(table_reference_from_parts(&table_name), table_source).build()?,
         );
 
         let write_node = sail_logical_plan::row_level::RowLevelWriteNode::new_delete(
             Arc::new(target_scan),
-            raw_input_schema,
+            sail_common_datafusion::datasource::RowLevelWriteMode::MergeOnRead,
             condition,
             target,
         )
