@@ -470,7 +470,7 @@ pub fn data_file_schema_v1(partition_type: &StructType) -> AvroSchema {
 pub fn manifest_entry_schema_v1(partition_type: &StructType) -> AvroSchema {
     let fields = vec![
         record_field("status", AvroSchema::Int, 0, true),
-        record_field("snapshot_id", AvroSchema::Long, 1, true),
+        record_field("snapshot_id", AvroSchema::Long, 1, false),
         AvroRecordField {
             name: "data_file".to_string(),
             doc: None,

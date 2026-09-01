@@ -104,7 +104,8 @@ pub(super) struct ManifestEntryV2 {
 #[derive(Serialize, Deserialize)]
 pub(super) struct ManifestEntryV1 {
     pub status: i32,
-    pub snapshot_id: i64,
+    #[serde(default, deserialize_with = "deserialize_optional_i64")]
+    pub snapshot_id: Option<i64>,
     pub data_file: DataFileSerde,
 }
 
@@ -348,9 +349,6 @@ impl ManifestEntryV1 {
         entry: super::ManifestEntry,
         partition_type: &StructType,
     ) -> Result<Self, String> {
-        let snapshot_id = entry
-            .snapshot_id
-            .ok_or_else(|| "Iceberg v1 manifest entry requires snapshot_id".to_string())?;
         let mut data_file = DataFileSerde::from_data_file(entry.data_file, partition_type)?;
         data_file.block_size_in_bytes = Some(data_file.block_size_in_bytes.unwrap_or(67_108_864));
         Ok(Self {
@@ -359,7 +357,7 @@ impl ManifestEntryV1 {
                 super::ManifestStatus::Deleted => 2,
                 super::ManifestStatus::Existing => 0,
             },
-            snapshot_id,
+            snapshot_id: entry.snapshot_id,
             data_file,
         })
     }
@@ -377,7 +375,7 @@ impl ManifestEntryV1 {
         };
         Ok(super::ManifestEntry::new(
             status,
-            Some(self.snapshot_id),
+            self.snapshot_id,
             None,
             None,
             self.data_file

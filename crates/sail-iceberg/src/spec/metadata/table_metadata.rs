@@ -357,10 +357,10 @@ impl TableMetadata {
 
     pub fn ensure_required_format_fields(&mut self) {
         self.normalize_versioned_sequence_numbers();
+        if self.table_uuid.is_none() {
+            self.table_uuid = Some(Uuid::new_v4());
+        }
         if self.format_version >= FormatVersion::V2 {
-            if self.table_uuid.is_none() {
-                self.table_uuid = Some(Uuid::new_v4());
-            }
             if self.sort_orders.is_empty() {
                 self.sort_orders.push(SortOrder::unsorted_order());
             }
@@ -407,13 +407,6 @@ impl TableMetadata {
             && let Some(object) = value.as_object_mut()
         {
             object.remove("last-sequence-number");
-            object.remove("refs");
-            if object
-                .get("table-uuid")
-                .is_some_and(serde_json::Value::is_null)
-            {
-                object.remove("table-uuid");
-            }
             if let Some(schema) = metadata.current_schema() {
                 object.insert("schema".to_string(), serde_json::to_value(schema)?);
             }

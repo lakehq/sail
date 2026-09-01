@@ -219,9 +219,9 @@ impl ManifestListWriter {
                         manifest_length: mf.manifest_length,
                         partition_spec_id: mf.partition_spec_id,
                         added_snapshot_id: mf.added_snapshot_id,
-                        added_data_files_count: mf.added_files_count,
-                        existing_data_files_count: mf.existing_files_count,
-                        deleted_data_files_count: mf.deleted_files_count,
+                        added_files_count: mf.added_files_count,
+                        existing_files_count: mf.existing_files_count,
+                        deleted_files_count: mf.deleted_files_count,
                         added_rows_count: mf.added_rows_count,
                         existing_rows_count: mf.existing_rows_count,
                         deleted_rows_count: mf.deleted_rows_count,
@@ -884,15 +884,12 @@ pub(super) mod _serde {
         pub partition_spec_id: i32,
         #[serde(rename = "added_snapshot_id")]
         pub added_snapshot_id: i64,
-        #[serde(rename = "added_data_files_count")]
-        #[serde(alias = "added_files_count")]
-        pub added_data_files_count: Option<i32>,
-        #[serde(rename = "existing_data_files_count")]
-        #[serde(alias = "existing_files_count")]
-        pub existing_data_files_count: Option<i32>,
-        #[serde(rename = "deleted_data_files_count")]
-        #[serde(alias = "deleted_files_count")]
-        pub deleted_data_files_count: Option<i32>,
+        #[serde(rename = "added_files_count", alias = "added_data_files_count")]
+        pub added_files_count: Option<i32>,
+        #[serde(rename = "existing_files_count", alias = "existing_data_files_count")]
+        pub existing_files_count: Option<i32>,
+        #[serde(rename = "deleted_files_count", alias = "deleted_data_files_count")]
+        pub deleted_files_count: Option<i32>,
         #[serde(rename = "added_rows_count")]
         pub added_rows_count: Option<i64>,
         #[serde(rename = "existing_rows_count")]
@@ -988,9 +985,9 @@ impl From<_serde::ManifestFileV1> for ManifestFile {
             sequence_number: 0,
             min_sequence_number: 0,
             added_snapshot_id: v1.added_snapshot_id,
-            added_files_count: v1.added_data_files_count,
-            existing_files_count: v1.existing_data_files_count,
-            deleted_files_count: v1.deleted_data_files_count,
+            added_files_count: v1.added_files_count,
+            existing_files_count: v1.existing_files_count,
+            deleted_files_count: v1.deleted_files_count,
             added_rows_count: v1.added_rows_count,
             existing_rows_count: v1.existing_rows_count,
             deleted_rows_count: v1.deleted_rows_count,

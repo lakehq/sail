@@ -934,6 +934,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     )?;
                 }
                 if matches!(snapshot_update_kind, SnapshotUpdateKind::CopyOnWrite)
+                    && dynamic_partition_overwrite
                     && commit_info.data_files.is_empty()
                     && commit_info.delete_files.is_empty()
                     && removed_data_file_paths.is_empty()
@@ -1377,6 +1378,7 @@ impl ExecutionPlan for IcebergCommitExec {
                             next_version,
                             attempt
                         );
+                        prepared_snapshot.publication_did_not_happen();
                         prepared_snapshot.cleanup().await;
                         if attempt >= MAX_COMMIT_RETRIES {
                             return Err(commit_conflict_error());
@@ -1384,7 +1386,6 @@ impl ExecutionPlan for IcebergCommitExec {
                         continue;
                     }
                     Err(error) => {
-                        prepared_snapshot.cleanup().await;
                         return Err(DataFusionError::External(Box::new(error)));
                     }
                 }

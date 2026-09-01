@@ -277,7 +277,6 @@ pub enum SnapshotUpdateKind {
 struct SnapshotChanges {
     added_data_files: usize,
     added_delete_files: usize,
-    removed_data_files: usize,
     dynamic_partition_overwrite: bool,
 }
 
@@ -293,13 +292,11 @@ impl SnapshotChanges {
     fn new(
         added_data_files: &[DataFile],
         added_delete_files: &[DataFile],
-        removed_data_files: usize,
         dynamic_partition_overwrite: bool,
     ) -> Self {
         Self {
             added_data_files: added_data_files.len(),
             added_delete_files: added_delete_files.len(),
-            removed_data_files,
             dynamic_partition_overwrite,
         }
     }
@@ -310,10 +307,6 @@ impl SnapshotChanges {
 
     fn adds_delete_files(self) -> bool {
         self.added_delete_files > 0
-    }
-
-    fn removes_data_files(self) -> bool {
-        self.removed_data_files > 0
     }
 }
 
@@ -330,13 +323,8 @@ impl SnapshotUpdateKind {
             }
             Self::RowDelta => Operation::Overwrite,
             Self::CopyOnWrite if changes.dynamic_partition_overwrite => Operation::Overwrite,
-            Self::CopyOnWrite if changes.adds_data_files() && !changes.removes_data_files() => {
-                Operation::Append
-            }
-            Self::CopyOnWrite if changes.removes_data_files() && !changes.adds_data_files() => {
-                Operation::Delete
-            }
-            Self::CopyOnWrite => Operation::Overwrite,
+            Self::CopyOnWrite if changes.adds_data_files() => Operation::Overwrite,
+            Self::CopyOnWrite => Operation::Delete,
         }
     }
 
@@ -686,11 +674,13 @@ impl<'a> SnapshotProducer<'a> {
                         parent_manifest_file.partition_spec_id
                     )
                 })?;
-            metadata.format_version = self
-                .manifest_metadata
-                .as_ref()
-                .map_or(metadata.format_version, |current| current.format_version);
-            metadata.schema_id = metadata.schema.schema_id();
+            if let Some(current) = &self.manifest_metadata {
+                metadata.schema = current.schema.clone();
+                metadata.schema_id = current.schema_id;
+                metadata.format_version = current.format_version;
+            } else {
+                metadata.schema_id = metadata.schema.schema_id();
+            }
             metadata.partition_spec = partition_spec;
             let mut writer = ManifestWriterBuilder::new(Some(snapshot_id), None, metadata).build();
             let mut inherited_next_row_id = parent_manifest_file.first_row_id;
@@ -813,11 +803,6 @@ impl<'a> SnapshotProducer<'a> {
             return Err("Iceberg removed data file path cannot be empty".to_string());
         }
         if update_kind.is_targeted_rewrite() {
-            if removed_data_file_paths.is_empty() && self.added_data_files.is_empty() {
-                return Err(
-                    "Iceberg copy-on-write commit requires added or removed data files".to_string(),
-                );
-            }
             if !self.added_delete_files.is_empty() {
                 return Err(
                     "Iceberg copy-on-write commit cannot add row-level delete files".to_string(),
@@ -832,7 +817,6 @@ impl<'a> SnapshotProducer<'a> {
         let changes = SnapshotChanges::new(
             &self.added_data_files,
             &self.added_delete_files,
-            removed_data_file_paths.len(),
             self.dynamic_partition_overwrite,
         );
         let operation = update_kind.summary_operation(changes);
@@ -860,6 +844,9 @@ impl<'a> SnapshotProducer<'a> {
             }
         }
         let mut summary = crate::spec::snapshots::Summary::new(operation.clone());
+        if self.dynamic_partition_overwrite {
+            summary = summary.with_property("replace-partitions", "true");
+        }
         if added_data_file_count > 0 {
             summary = summary
                 .with_property("added-data-files", added_data_file_count.to_string())

@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pytest
+from pyiceberg.avro.file import AvroFile
 from pyiceberg.partitioning import PartitionField, PartitionSpec
 from pyiceberg.schema import Schema
 from pyiceberg.table import StaticTable
@@ -277,6 +278,19 @@ def test_iceberg_dynamic_overwrite_matches_promoted_partition_values(spark, sql_
             (2, 8, "keep"),
             (3, 7, "replacement"),
         ]
+        external_table = StaticTable.from_metadata(
+            table.location(),
+            properties=pyiceberg_file_io_properties(),
+        )
+        rewritten_manifest = next(
+            manifest
+            for manifest in external_table.current_snapshot().manifests(external_table.io)
+            if manifest.deleted_files_count
+        )
+        with AvroFile(external_table.io.new_input(rewritten_manifest.manifest_path)) as manifest:
+            manifest_schema = json.loads(manifest.header.meta["schema"])
+        part_field = next(field for field in manifest_schema["fields"] if field["name"] == "part")
+        assert part_field["type"] == "long"
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
         sql_catalog.drop_table(identifier)
@@ -315,10 +329,57 @@ def test_iceberg_v1_dynamic_overwrite_writes_v1_metadata_shapes(spark, tmp_path)
         assert metadata["partition-spec"] == [
             {"source-id": 2, "field-id": 1000, "name": "category", "transform": "identity"}
         ]
+        assert metadata["table-uuid"]
         assert "last-sequence-number" not in metadata
-        assert "refs" not in metadata
+        assert metadata["refs"]["main"]["snapshot-id"] == metadata["current-snapshot-id"]
         assert all("sequence-number" not in snapshot for snapshot in metadata["snapshots"])
         assert metadata["snapshots"][-1]["summary"]["operation"] == "overwrite"
+
+        external_table = StaticTable.from_metadata(
+            str(location),
+            properties=pyiceberg_file_io_properties(),
+        )
+        current_snapshot = external_table.current_snapshot()
+        with AvroFile(external_table.io.new_input(current_snapshot.manifest_list)) as manifest_list:
+            manifest_list_schema = json.loads(manifest_list.header.meta["avro.schema"])
+        assert [field["name"] for field in manifest_list_schema["fields"]] == [
+            "manifest_path",
+            "manifest_length",
+            "partition_spec_id",
+            "added_snapshot_id",
+            "added_files_count",
+            "existing_files_count",
+            "deleted_files_count",
+            "added_rows_count",
+            "existing_rows_count",
+            "deleted_rows_count",
+            "partitions",
+            "key_metadata",
+        ]
+
+        manifest_path = current_snapshot.manifests(external_table.io)[0].manifest_path
+        with AvroFile(external_table.io.new_input(manifest_path)) as manifest:
+            manifest_schema = json.loads(manifest.header.meta["avro.schema"])
+        snapshot_id = next(field for field in manifest_schema["fields"] if field["name"] == "snapshot_id")
+        assert snapshot_id["type"] == ["null", "long"]
+        data_file = next(field for field in manifest_schema["fields"] if field["name"] == "data_file")
+        assert [field["name"] for field in data_file["type"]["fields"]] == [
+            "file_path",
+            "file_format",
+            "partition",
+            "record_count",
+            "file_size_in_bytes",
+            "block_size_in_bytes",
+            "column_sizes",
+            "value_counts",
+            "null_value_counts",
+            "nan_value_counts",
+            "lower_bounds",
+            "upper_bounds",
+            "key_metadata",
+            "split_offsets",
+            "sort_order_id",
+        ]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
@@ -374,6 +435,35 @@ def test_iceberg_appends_after_legacy_v1_metadata(spark, sql_catalog):
         external_rows = sorted((row["id"], row["value"]) for row in external_table.scan().to_arrow().to_pylist())
         assert external_rows == [(1, "first"), (2, "second")]
         assert external_table.metadata.format_version == 1
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+        sql_catalog.drop_table(identifier)
+
+
+def test_iceberg_v1_append_preserves_non_main_snapshot_ref(spark, sql_catalog):
+    identifier = "default.v1_snapshot_ref"
+    table_name = "iceberg_v1_snapshot_ref"
+    table = sql_catalog.create_table(
+        identifier=identifier,
+        schema=Schema(NestedField(1, "id", LongType(), required=False)),
+        properties={"format-version": "1"},
+    )
+    try:
+        table.append(pa.table({"id": pa.array([1], type=pa.int64())}))
+        branch_snapshot_id = table.current_snapshot().snapshot_id
+        table.manage_snapshots().create_branch(branch_snapshot_id, "audit").commit()
+
+        location = escape_sql_string_literal(table.location())
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+        spark.sql(f"CREATE TABLE {table_name} USING iceberg LOCATION '{location}'")
+        spark.createDataFrame([(2,)], schema="id BIGINT").writeTo(table_name).append()
+
+        external_table = StaticTable.from_metadata(
+            table.location(),
+            properties=pyiceberg_file_io_properties(),
+        )
+        assert external_table.snapshot_by_name("audit").snapshot_id == branch_snapshot_id
+        assert external_table.current_snapshot().snapshot_id != branch_snapshot_id
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
         sql_catalog.drop_table(identifier)

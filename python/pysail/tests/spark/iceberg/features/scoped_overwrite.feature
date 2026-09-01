@@ -77,6 +77,29 @@ Feature: Iceberg scoped overwrite
       | 2  | B        | 20    |
       | 4  | B        | 40    |
 
+  Scenario: Empty predicate overwrite without matches records delete intent
+    Given overwrite query into iceberg table iceberg_scoped_overwrite_table where category = 'C'
+      """
+      SELECT CAST(NULL AS BIGINT) AS id,
+             CAST(NULL AS STRING) AS category,
+             CAST(NULL AS BIGINT) AS value
+      WHERE FALSE
+      """
+    Then iceberg snapshot operation is delete
+    Then iceberg snapshot count is 3
+    When query
+      """
+      SELECT id, category, value
+      FROM iceberg_scoped_overwrite_table
+      ORDER BY id
+      """
+    Then query result ordered
+      | id | category | value |
+      | 1  | A        | 10    |
+      | 2  | B        | 20    |
+      | 3  | A        | 30    |
+      | 4  | B        | 40    |
+
   Scenario: Dynamic overwrite replaces only touched partitions and empty input is a no-op
     Given remember current iceberg data manifest paths
     Given overwrite partitions of iceberg table iceberg_scoped_overwrite_table with query
@@ -141,14 +164,14 @@ Feature: Iceberg scoped overwrite
       | 4  | B        | 40    |
       | 5  | C        | 100   |
 
-  Scenario: Predicate overwrite without removals records an append
+  Scenario: Predicate overwrite without removals retains overwrite intent
     Given overwrite query into iceberg table iceberg_scoped_overwrite_table where category = 'C'
       """
       SELECT * FROM VALUES
         (5, 'C', 100)
       AS addition(id, category, value)
       """
-    Then iceberg snapshot operation is append
+    Then iceberg snapshot operation is overwrite
     Then iceberg snapshot count is 3
     When query
       """
