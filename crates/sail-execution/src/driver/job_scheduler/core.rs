@@ -472,7 +472,7 @@ impl JobScheduler {
                     OutputMode::Blocking => match job.graph.shuffle_backend() {
                         ShuffleBackendKind::Storage { .. } => TaskOutputKind::Storage,
                         ShuffleBackendKind::Celeborn { .. } => TaskOutputKind::External,
-                        ShuffleBackendKind::Flight => unreachable!(),
+                        ShuffleBackendKind::Flight => TaskOutputKind::Local,
                     },
                 };
                 let key = StageGroupKey {
@@ -786,7 +786,10 @@ impl<'a> TaskInputBuilder<'a> {
             OutputMode::Blocking => match self.job.graph.shuffle_backend() {
                 ShuffleBackendKind::Storage { .. } => self.build_storage_locator()?,
                 ShuffleBackendKind::Celeborn { .. } => self.build_shuffle_service_locator()?,
-                ShuffleBackendKind::Flight => self.build_storage_locator()?,
+                ShuffleBackendKind::Flight => match self.producer.placement {
+                    TaskPlacement::Driver => self.build_driver_locator()?,
+                    TaskPlacement::Worker => self.build_worker_locator()?,
+                },
             },
         };
         Ok(TaskInput {
@@ -1026,7 +1029,14 @@ impl<'a> TaskOutputBuilder<'a> {
             OutputMode::Pipelined => TaskOutputLocator::Pipelined {
                 replicas: self.job.graph.replicas(self.key.stage),
             },
-            OutputMode::Blocking => TaskOutputLocator::Blocking,
+            OutputMode::Blocking => match self.job.graph.shuffle_backend() {
+                ShuffleBackendKind::Flight => TaskOutputLocator::Buffered {
+                    replicas: self.job.graph.replicas(self.key.stage),
+                },
+                ShuffleBackendKind::Storage { .. } | ShuffleBackendKind::Celeborn { .. } => {
+                    TaskOutputLocator::Blocking
+                }
+            },
         };
         Ok(TaskOutput {
             distribution,

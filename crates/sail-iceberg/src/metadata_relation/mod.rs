@@ -2,6 +2,7 @@
 
 mod history;
 mod kind;
+mod manifests;
 mod metadata_log_entries;
 mod provider;
 mod refs;
@@ -20,10 +21,13 @@ mod tests {
     use datafusion::arrow::datatypes::DataType;
     use datafusion::common::Result;
 
-    use super::{IcebergMetadataRelationType, history, metadata_log_entries, refs, snapshots};
+    use super::{
+        IcebergMetadataRelationType, history, manifests, metadata_log_entries, refs, snapshots,
+    };
     use crate::spec::{
-        FormatVersion, MetadataLog, Operation, PartitionSpec, Schema, Snapshot, SnapshotLog,
-        SnapshotReference, SnapshotRetention, Summary, TableMetadata,
+        FormatVersion, ManifestContentType, ManifestFile, MetadataLog, Operation, PartitionSpec,
+        Schema, Snapshot, SnapshotLog, SnapshotReference, SnapshotRetention, Summary,
+        TableMetadata,
     };
 
     fn snapshot(
@@ -155,15 +159,21 @@ mod tests {
     }
 
     #[test]
-    fn only_static_metadata_tables_are_supported() {
-        for name in ["history", "metadata_log_entries", "snapshots", "refs"] {
+    fn implemented_metadata_tables_are_supported() {
+        for name in [
+            "history",
+            "metadata_log_entries",
+            "snapshots",
+            "refs",
+            "manifests",
+        ] {
             assert!(
                 IcebergMetadataRelationType::parse(name)
                     .expect("recognized static metadata table")
                     .is_supported()
             );
         }
-        for name in ["manifests", "files", "position_deletes"] {
+        for name in ["files", "position_deletes"] {
             assert!(
                 !IcebergMetadataRelationType::parse(name)
                     .expect("recognized deferred metadata table")
@@ -238,6 +248,73 @@ mod tests {
             .expect("snapshot id column");
         assert!(latest_snapshot_ids.is_null(0));
         assert_eq!(latest_snapshot_ids.value(1), 20);
+        Ok(())
+    }
+
+    #[test]
+    fn builds_spark_compatible_manifest_rows() -> Result<()> {
+        let metadata = table_metadata();
+        let data_manifest = ManifestFile::builder()
+            .with_manifest_path("file:///table/metadata/data.avro")
+            .with_manifest_length(100)
+            .with_partition_spec_id(0)
+            .with_content(ManifestContentType::Data)
+            .with_sequence_number(3)
+            .with_min_sequence_number(1)
+            .with_added_snapshot_id(20)
+            .with_file_counts(2, 3, 1)
+            .build()
+            .expect("valid data manifest");
+        let delete_manifest = ManifestFile::builder()
+            .with_manifest_path("file:///table/metadata/deletes.avro")
+            .with_manifest_length(80)
+            .with_partition_spec_id(0)
+            .with_content(ManifestContentType::Deletes)
+            .with_sequence_number(3)
+            .with_min_sequence_number(3)
+            .with_added_snapshot_id(20)
+            .with_file_counts(4, 0, 0)
+            .build()
+            .expect("valid delete manifest");
+
+        let batch =
+            manifests::batch_from_manifest_files(&metadata, &[data_manifest, delete_manifest])?;
+
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(
+            batch
+                .schema()
+                .fields()
+                .iter()
+                .map(|field| field.name().as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "content",
+                "path",
+                "length",
+                "partition_spec_id",
+                "added_snapshot_id",
+                "added_data_files_count",
+                "existing_data_files_count",
+                "deleted_data_files_count",
+                "added_delete_files_count",
+                "existing_delete_files_count",
+                "deleted_delete_files_count",
+                "partition_summaries",
+            ]
+        );
+        let added_data = batch
+            .column(5)
+            .as_any()
+            .downcast_ref::<datafusion::arrow::array::Int32Array>()
+            .expect("added data count column");
+        let added_deletes = batch
+            .column(8)
+            .as_any()
+            .downcast_ref::<datafusion::arrow::array::Int32Array>()
+            .expect("added delete count column");
+        assert_eq!((added_data.value(0), added_data.value(1)), (2, 0));
+        assert_eq!((added_deletes.value(0), added_deletes.value(1)), (0, 4));
         Ok(())
     }
 }

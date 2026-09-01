@@ -20,6 +20,7 @@
 use apache_avro::types::Value as AvroValue;
 use apache_avro::{Reader as AvroReader, from_value as avro_from_value};
 use serde::{Deserialize, Serialize};
+use serde_bytes::ByteBuf;
 
 use crate::spec::FormatVersion;
 mod schema;
@@ -201,8 +202,8 @@ impl ManifestListWriter {
                     .map(|p| FieldSummaryAvro {
                         contains_null: p.contains_null,
                         contains_nan: p.contains_nan,
-                        lower_bound: p.lower_bound_bytes,
-                        upper_bound: p.upper_bound_bytes,
+                        lower_bound: p.lower_bound_bytes.map(ByteBuf::from),
+                        upper_bound: p.upper_bound_bytes.map(ByteBuf::from),
                     })
                     .collect()
             });
@@ -223,7 +224,7 @@ impl ManifestListWriter {
                         existing_rows_count: mf.existing_rows_count.unwrap_or(0),
                         deleted_rows_count: mf.deleted_rows_count.unwrap_or(0),
                         partitions,
-                        key_metadata: mf.key_metadata.clone(),
+                        key_metadata: mf.key_metadata.clone().map(ByteBuf::from),
                         first_row_id: mf.first_row_id,
                     };
                     writer
@@ -246,7 +247,7 @@ impl ManifestListWriter {
                         existing_rows_count: mf.existing_rows_count.unwrap_or(0),
                         deleted_rows_count: mf.deleted_rows_count.unwrap_or(0),
                         partitions,
-                        key_metadata: mf.key_metadata.clone(),
+                        key_metadata: mf.key_metadata.clone().map(ByteBuf::from),
                     };
                     writer
                         .append_ser(v2)
@@ -271,9 +272,9 @@ pub struct FieldSummaryAvro {
     #[serde(rename = "contains_nan")]
     contains_nan: Option<bool>,
     #[serde(rename = "lower_bound")]
-    lower_bound: Option<Vec<u8>>,
+    lower_bound: Option<ByteBuf>,
     #[serde(rename = "upper_bound")]
-    upper_bound: Option<Vec<u8>>,
+    upper_bound: Option<ByteBuf>,
 }
 
 impl From<FieldSummaryAvro> for FieldSummary {
@@ -282,8 +283,8 @@ impl From<FieldSummaryAvro> for FieldSummary {
         if let Some(contains_nan) = summary.contains_nan {
             field_summary = field_summary.with_contains_nan(contains_nan);
         }
-        field_summary.lower_bound_bytes = summary.lower_bound;
-        field_summary.upper_bound_bytes = summary.upper_bound;
+        field_summary.lower_bound_bytes = summary.lower_bound.map(ByteBuf::into_vec);
+        field_summary.upper_bound_bytes = summary.upper_bound.map(ByteBuf::into_vec);
         field_summary
     }
 }
@@ -505,7 +506,7 @@ impl From<_serde::ManifestFileV2> for ManifestFile {
             existing_rows_count: Some(avro.existing_rows_count),
             deleted_rows_count: Some(avro.deleted_rows_count),
             partitions,
-            key_metadata: avro.key_metadata,
+            key_metadata: avro.key_metadata.map(ByteBuf::into_vec),
             first_row_id: None,
         }
     }
@@ -538,7 +539,7 @@ impl From<_serde::ManifestFileV3> for ManifestFile {
             existing_rows_count: Some(avro.existing_rows_count),
             deleted_rows_count: Some(avro.deleted_rows_count),
             partitions,
-            key_metadata: avro.key_metadata,
+            key_metadata: avro.key_metadata.map(ByteBuf::into_vec),
             first_row_id: avro.first_row_id,
         }
     }
@@ -874,7 +875,7 @@ pub(super) mod _serde {
         #[serde(rename = "partitions")]
         pub partitions: Option<Vec<FieldSummaryAvro>>, // V1 uses same summary encoding
         #[serde(rename = "key_metadata")]
-        pub key_metadata: Option<Vec<u8>>,
+        pub key_metadata: Option<ByteBuf>,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
@@ -909,7 +910,7 @@ pub(super) mod _serde {
         #[serde(rename = "partitions")]
         pub partitions: Option<Vec<FieldSummaryAvro>>,
         #[serde(rename = "key_metadata")]
-        pub key_metadata: Option<Vec<u8>>,
+        pub key_metadata: Option<ByteBuf>,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
@@ -944,7 +945,7 @@ pub(super) mod _serde {
         #[serde(rename = "partitions")]
         pub partitions: Option<Vec<FieldSummaryAvro>>,
         #[serde(rename = "key_metadata")]
-        pub key_metadata: Option<Vec<u8>>,
+        pub key_metadata: Option<ByteBuf>,
         #[serde(rename = "first_row_id", default)]
         pub first_row_id: Option<i64>,
     }
@@ -969,7 +970,7 @@ impl From<_serde::ManifestFileV1> for ManifestFile {
             partitions: v1
                 .partitions
                 .map(|v| v.into_iter().map(FieldSummary::from).collect()),
-            key_metadata: v1.key_metadata,
+            key_metadata: v1.key_metadata.map(ByteBuf::into_vec),
             first_row_id: None,
         }
     }

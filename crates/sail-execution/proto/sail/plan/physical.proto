@@ -1165,8 +1165,11 @@ message LakeProcedureExecNode {
 }
 
 message IcebergProcedureExecNode {
-  // JSON-encoded LakeProcedureCall used to revalidate and bind the target at execution time.
+  // JSON-encoded LakeProcedureCall.
   string call = 1;
+  // JSON-encoded table state for a worker-side metadata read. Empty for coordinator commits,
+  // which reacquire the table immediately before execution.
+  string planned_table = 2;
 }
 
 message BarrierExecNode {

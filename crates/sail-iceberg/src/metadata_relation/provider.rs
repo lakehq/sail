@@ -69,7 +69,7 @@ impl TableProvider for IcebergMetadataRelationProvider {
             self.metadata_location.clone(),
         )
         .await?;
-        let batch = self.relation_type.record_batch(&table)?;
+        let batch = self.relation_type.record_batch(&table).await?;
         let table = MemTable::try_new(Arc::clone(&self.schema), vec![vec![batch]])?;
         table.scan(session, projection, filters, limit).await
     }

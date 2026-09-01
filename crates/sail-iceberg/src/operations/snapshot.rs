@@ -461,7 +461,7 @@ impl<'a> SnapshotProducer<'a> {
             join_table_uri(self.tx.table_uri(), &manifest_rel, &self.write_path_mode),
             sequence_number,
             snapshot_id,
-        );
+        )?;
         manifest_file.manifest_length = manifest_len;
         manifest_file.min_sequence_number = min_sequence_number;
         manifest_file.first_row_id = first_row_id;
@@ -928,8 +928,7 @@ impl<'a> SnapshotProducer<'a> {
             for df in &added_data_files {
                 writer.add(df.clone());
             }
-            let manifest = writer.finish();
-            let manifest_bytes = manifest.to_avro_bytes_v2()?;
+            let manifest_bytes = writer.to_avro_bytes_v2()?;
 
             let manifest_len = manifest_bytes.len() as i64;
             let manifest_rel = format!("metadata/manifest-{}.avro", uuid::Uuid::new_v4());
@@ -944,24 +943,16 @@ impl<'a> SnapshotProducer<'a> {
                 .map_err(|e| format!("{}", e))?;
             created_paths.push(manifest_path);
 
-            let mut manifest_file_builder = crate::spec::manifest_list::ManifestFile::builder()
-                .with_manifest_path(join_table_uri(
-                    self.tx.table_uri(),
-                    &manifest_rel,
-                    &self.write_path_mode,
-                ))
-                .with_manifest_length(manifest_len)
-                .with_partition_spec_id(data_metadata.partition_spec.spec_id())
-                .with_content(ManifestContentType::Data)
-                .with_sequence_number(new_sequence_number)
-                .with_min_sequence_number(new_sequence_number)
-                .with_added_snapshot_id(new_snapshot_id)
-                .with_file_counts(added_data_files.len() as i32, 0, 0)
-                .with_row_counts(manifest_added_rows, 0, 0);
+            let mut manifest_file = writer.into_manifest_file(
+                join_table_uri(self.tx.table_uri(), &manifest_rel, &self.write_path_mode),
+                new_sequence_number,
+                new_snapshot_id,
+            )?;
+            manifest_file.manifest_length = manifest_len;
             if let Some(first_row_id) = manifest_first_row_id {
-                manifest_file_builder = manifest_file_builder.with_first_row_id(first_row_id);
+                manifest_file.first_row_id = Some(first_row_id);
             }
-            new_manifest_files.push(manifest_file_builder.build()?);
+            new_manifest_files.push(manifest_file);
         }
 
         for (delete_metadata, added_delete_files) in delete_manifest_inputs {
@@ -970,8 +961,7 @@ impl<'a> SnapshotProducer<'a> {
             for df in &added_delete_files {
                 writer.add(df.clone());
             }
-            let manifest = writer.finish();
-            let manifest_bytes = manifest.to_avro_bytes_v2()?;
+            let manifest_bytes = writer.to_avro_bytes_v2()?;
             let manifest_len = manifest_bytes.len() as i64;
             let manifest_rel = format!("metadata/manifest-{}.avro", uuid::Uuid::new_v4());
             let manifest_path = object_store::path::Path::from(manifest_rel.as_str());
@@ -984,27 +974,13 @@ impl<'a> SnapshotProducer<'a> {
                 .await
                 .map_err(|e| format!("{}", e))?;
             created_paths.push(manifest_path);
-            let added_delete_rows = added_delete_files
-                .iter()
-                .map(|df| df.record_count as i64)
-                .sum::<i64>();
-            new_manifest_files.push(
-                crate::spec::manifest_list::ManifestFile::builder()
-                    .with_manifest_path(join_table_uri(
-                        self.tx.table_uri(),
-                        &manifest_rel,
-                        &self.write_path_mode,
-                    ))
-                    .with_manifest_length(manifest_len)
-                    .with_partition_spec_id(delete_metadata.partition_spec.spec_id())
-                    .with_content(ManifestContentType::Deletes)
-                    .with_sequence_number(new_sequence_number)
-                    .with_min_sequence_number(new_sequence_number)
-                    .with_added_snapshot_id(new_snapshot_id)
-                    .with_file_counts(added_delete_files.len() as i32, 0, 0)
-                    .with_row_counts(added_delete_rows, 0, 0)
-                    .build()?,
-            );
+            let mut manifest_file = writer.into_manifest_file(
+                join_table_uri(self.tx.table_uri(), &manifest_rel, &self.write_path_mode),
+                new_sequence_number,
+                new_snapshot_id,
+            )?;
+            manifest_file.manifest_length = manifest_len;
+            new_manifest_files.push(manifest_file);
         }
 
         summary = with_manifest_totals(
@@ -1384,11 +1360,13 @@ mod tests {
             let affected_bytes = affected_writer
                 .to_avro_bytes_v2()
                 .expect("affected manifest");
-            let mut affected_file = affected_writer.into_manifest_file(
-                "metadata/affected.avro".to_string(),
-                parent_sequence_number,
-                parent_snapshot_id,
-            );
+            let mut affected_file = affected_writer
+                .into_manifest_file(
+                    "metadata/affected.avro".to_string(),
+                    parent_sequence_number,
+                    parent_snapshot_id,
+                )
+                .expect("affected manifest file");
             affected_file.manifest_length = affected_bytes.len() as i64;
             store_ctx
                 .prefixed
@@ -1409,11 +1387,13 @@ mod tests {
             let unaffected_bytes = unaffected_writer
                 .to_avro_bytes_v2()
                 .expect("unaffected manifest");
-            let mut unaffected_file = unaffected_writer.into_manifest_file(
-                "metadata/unaffected.avro".to_string(),
-                parent_sequence_number,
-                parent_snapshot_id,
-            );
+            let mut unaffected_file = unaffected_writer
+                .into_manifest_file(
+                    "metadata/unaffected.avro".to_string(),
+                    parent_sequence_number,
+                    parent_snapshot_id,
+                )
+                .expect("unaffected manifest file");
             unaffected_file.manifest_length = unaffected_bytes.len() as i64;
             store_ctx
                 .prefixed

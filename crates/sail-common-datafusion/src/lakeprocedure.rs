@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -8,7 +9,7 @@ use datafusion_common::plan_datafusion_err;
 use datafusion_expr::LogicalPlan;
 use serde::{Deserialize, Serialize};
 
-use crate::catalog::LakehouseTableBinding;
+use crate::catalog::{LakehouseOperation, LakehouseTableBinding};
 use crate::datasource::SourceInfo;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -29,6 +30,21 @@ impl LakeProcedureDataType {
             Self::Utf8 => DataType::Utf8,
             Self::TimestampMicros => DataType::Timestamp(TimeUnit::Microsecond, None),
         }
+    }
+
+    fn accepts(self, value: &LakeProcedureValue) -> bool {
+        matches!(
+            (self, value),
+            (_, LakeProcedureValue::Null)
+                | (Self::Boolean, LakeProcedureValue::Boolean(_))
+                | (Self::Int32, LakeProcedureValue::Int32(_))
+                | (Self::Int64, LakeProcedureValue::Int64(_))
+                | (Self::Utf8, LakeProcedureValue::Utf8(_))
+                | (
+                    Self::TimestampMicros,
+                    LakeProcedureValue::TimestampMicros(_)
+                )
+        )
     }
 }
 
@@ -142,6 +158,70 @@ impl LakeProcedure {
                 .collect::<Vec<_>>(),
         ))
     }
+
+    pub fn validate(&self) -> Result<()> {
+        if self.name.is_empty() {
+            return Err(plan_datafusion_err!(
+                "lake procedure name must not be empty"
+            ));
+        }
+
+        let mut parameter_names = HashSet::with_capacity(self.parameters.len());
+        for parameter in &self.parameters {
+            if parameter.name.is_empty() {
+                return Err(plan_datafusion_err!(
+                    "lake procedure '{}' has an empty parameter name",
+                    self.name
+                ));
+            }
+            if !parameter_names.insert(parameter.name.to_ascii_lowercase()) {
+                return Err(plan_datafusion_err!(
+                    "lake procedure '{}' has duplicate parameter '{}'",
+                    self.name,
+                    parameter.name
+                ));
+            }
+        }
+
+        let mut output_names = HashSet::with_capacity(self.output.len());
+        for field in &self.output {
+            if field.name.is_empty() {
+                return Err(plan_datafusion_err!(
+                    "lake procedure '{}' has an empty output field name",
+                    self.name
+                ));
+            }
+            if !output_names.insert(field.name.to_ascii_lowercase()) {
+                return Err(plan_datafusion_err!(
+                    "lake procedure '{}' has duplicate output field '{}'",
+                    self.name,
+                    field.name
+                ));
+            }
+        }
+
+        if let LakeProcedureTarget::Table { parameter } = &self.target {
+            let target = self
+                .parameters
+                .iter()
+                .find(|candidate| candidate.name.eq_ignore_ascii_case(parameter))
+                .ok_or_else(|| {
+                    plan_datafusion_err!(
+                        "lake procedure '{}' target parameter '{}' is not declared",
+                        self.name,
+                        parameter
+                    )
+                })?;
+            if target.data_type != LakeProcedureDataType::Utf8 || !target.required {
+                return Err(plan_datafusion_err!(
+                    "lake procedure '{}' target parameter '{}' must be a required string",
+                    self.name,
+                    target.name
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -172,15 +252,70 @@ pub struct LakeProcedureCall {
 
 impl LakeProcedureCall {
     pub fn validate(&self) -> Result<()> {
+        self.invocation.procedure.validate()?;
+        if self.invocation_id.0.is_empty() {
+            return Err(plan_datafusion_err!(
+                "lake procedure invocation ID must not be empty"
+            ));
+        }
+        if self.catalog.is_empty()
+            || self.lake_source.is_empty()
+            || self.namespace.is_empty()
+            || self.namespace.iter().any(String::is_empty)
+        {
+            return Err(plan_datafusion_err!(
+                "lake procedure invocation must identify its catalog, namespace, and lake source"
+            ));
+        }
         if self.invocation.arguments.len() != self.invocation.procedure.parameters.len() {
             return Err(plan_datafusion_err!(
                 "lake procedure '{}' argument count does not match its descriptor",
                 self.invocation.procedure.name
             ));
         }
+        for (parameter, value) in self
+            .invocation
+            .procedure
+            .parameters
+            .iter()
+            .zip(&self.invocation.arguments)
+        {
+            if !parameter.data_type.accepts(value) {
+                return Err(plan_datafusion_err!(
+                    "lake procedure '{}' argument '{}' does not match its descriptor",
+                    self.invocation.procedure.name,
+                    parameter.name
+                ));
+            }
+        }
         match (&self.invocation.procedure.target, &self.target) {
             (LakeProcedureTarget::Catalog, None) => {}
-            (LakeProcedureTarget::Table { .. }, Some(_)) => {}
+            (LakeProcedureTarget::Table { parameter }, Some(target)) => {
+                if !matches!(
+                    self.invocation.argument(parameter),
+                    Some(LakeProcedureValue::Utf8(_))
+                ) {
+                    return Err(plan_datafusion_err!(
+                        "lake procedure target argument '{}' must be a non-null string",
+                        parameter
+                    ));
+                }
+                let binding = &target.binding;
+                if !binding
+                    .catalog_table
+                    .first()
+                    .is_some_and(|catalog| catalog.eq_ignore_ascii_case(&self.catalog))
+                    || !binding
+                        .format
+                        .as_str()
+                        .eq_ignore_ascii_case(&self.lake_source)
+                    || binding.operation != LakehouseOperation::Maintenance
+                {
+                    return Err(plan_datafusion_err!(
+                        "lake procedure table binding does not match its catalog, lake source, or maintenance operation"
+                    ));
+                }
+            }
             _ => {
                 return Err(plan_datafusion_err!(
                     "lake procedure target does not match its descriptor"
@@ -188,6 +323,98 @@ impl LakeProcedureCall {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    fn catalog_procedure() -> LakeProcedure {
+        LakeProcedure {
+            name: "inspect".to_string(),
+            parameters: vec![LakeProcedureParameter::required(
+                "snapshot_id",
+                LakeProcedureDataType::Int64,
+            )],
+            output: vec![LakeProcedureField::new(
+                "snapshot_id",
+                LakeProcedureDataType::Int64,
+                false,
+            )],
+            access: LakeProcedureAccess::MetadataRead,
+            target: LakeProcedureTarget::Catalog,
+            retry_policy: LakeProcedureRetryPolicy::Safe,
+        }
+    }
+
+    fn catalog_call(
+        procedure: LakeProcedure,
+        arguments: Vec<LakeProcedureValue>,
+    ) -> LakeProcedureCall {
+        LakeProcedureCall {
+            invocation_id: LakeProcedureInvocationId("invocation-1".to_string()),
+            catalog: "test".to_string(),
+            namespace: vec!["system".to_string()],
+            lake_source: "iceberg".to_string(),
+            target: None,
+            invocation: LakeProcedureInvocation {
+                procedure,
+                arguments,
+            },
+        }
+    }
+
+    #[test]
+    fn procedure_descriptor_rejects_case_insensitive_duplicate_names() {
+        let mut procedure = catalog_procedure();
+        procedure.parameters.push(LakeProcedureParameter::optional(
+            "SNAPSHOT_ID",
+            LakeProcedureDataType::Int64,
+        ));
+
+        let error = procedure.validate().unwrap_err().to_string();
+
+        assert!(error.contains("duplicate parameter 'SNAPSHOT_ID'"));
+    }
+
+    #[test]
+    fn procedure_descriptor_requires_a_declared_string_table_target() {
+        let mut procedure = catalog_procedure();
+        procedure.target = LakeProcedureTarget::table("table");
+
+        let error = procedure.validate().unwrap_err().to_string();
+
+        assert!(error.contains("target parameter 'table' is not declared"));
+    }
+
+    #[test]
+    fn procedure_call_rejects_argument_type_mismatch() {
+        let call = catalog_call(
+            catalog_procedure(),
+            vec![LakeProcedureValue::Utf8("not-a-snapshot".to_string())],
+        );
+
+        let error = call.validate().unwrap_err().to_string();
+
+        assert!(error.contains("argument 'snapshot_id' does not match"));
+    }
+
+    #[test]
+    fn procedure_call_accepts_a_null_value_for_optional_arguments() {
+        let mut procedure = catalog_procedure();
+        procedure.parameters[0].required = false;
+        let call = catalog_call(procedure, vec![LakeProcedureValue::Null]);
+
+        call.validate().unwrap();
+    }
+
+    #[test]
+    fn procedure_call_accepts_an_explicit_null_for_a_required_argument() {
+        let call = catalog_call(catalog_procedure(), vec![LakeProcedureValue::Null]);
+
+        call.validate().unwrap();
     }
 }
 

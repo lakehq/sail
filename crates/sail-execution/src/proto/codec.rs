@@ -1825,8 +1825,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         return plan_err!("invalid lake procedure root placement: {value}");
                     }
                 };
-                let procedure = LakeProcedureExec::new(call, input, root_placement);
-                procedure.validate()?;
+                sail_iceberg::physical_plan::validate_iceberg_procedure_call_identity(
+                    &input, &call,
+                )?;
+                let procedure = LakeProcedureExec::try_new(call, input, root_placement)?;
                 if procedure.schema_ref().as_ref() != schema.as_ref() {
                     return plan_err!(
                         "decoded lake procedure schema does not match its descriptor"
@@ -1834,12 +1836,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 }
                 Ok(Arc::new(procedure))
             }
-            NodeKind::IcebergProcedure(r#gen::IcebergProcedureExecNode { call }) => {
+            NodeKind::IcebergProcedure(r#gen::IcebergProcedureExecNode {
+                call,
+                planned_table,
+            }) => {
                 let call: sail_common_datafusion::lakeprocedure::LakeProcedureCall =
                     serde_json::from_str(&call).map_err(|e| {
                         plan_datafusion_err!("failed to decode Iceberg LakeProcedureCall: {e}")
                     })?;
-                let procedure = IcebergProcedureExec::new(call);
+                let procedure =
+                    IcebergProcedureExec::try_new_from_serialized_table(call, &planned_table)?;
                 procedure.validate()?;
                 Ok(Arc::new(procedure))
             }
@@ -2905,6 +2911,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::CatalogCommand(r#gen::CatalogCommandExecNode { schema, command })
         } else if let Some(procedure_exec) = node.downcast_ref::<LakeProcedureExec>() {
             procedure_exec.validate()?;
+            sail_iceberg::physical_plan::validate_iceberg_procedure_call_identity(
+                procedure_exec.input(),
+                procedure_exec.call(),
+            )?;
             let schema = try_encode_schema(procedure_exec.schema_ref().as_ref())?;
             let call = serde_json::to_string(procedure_exec.call())
                 .map_err(|e| plan_datafusion_err!("failed to encode LakeProcedureCall: {e}"))?;
@@ -2928,7 +2938,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let call = serde_json::to_string(procedure_exec.call()).map_err(|e| {
                 plan_datafusion_err!("failed to encode Iceberg LakeProcedureCall: {e}")
             })?;
-            NodeKind::IcebergProcedure(r#gen::IcebergProcedureExecNode { call })
+            let planned_table = procedure_exec.serialized_table()?;
+            NodeKind::IcebergProcedure(r#gen::IcebergProcedureExecNode {
+                call,
+                planned_table,
+            })
         } else if let Some(file_delete_exec) = node.downcast_ref::<FileDeleteExec>() {
             NodeKind::FileDelete(r#gen::FileDeleteExecNode {
                 object_store_url: file_delete_exec.object_store_url().as_str().to_string(),
@@ -5514,13 +5528,14 @@ mod tests {
                 arguments: vec![],
             },
         };
-        let implementation: Arc<dyn ExecutionPlan> =
-            Arc::new(IcebergProcedureExec::new(call.clone()));
-        let plan: Arc<dyn ExecutionPlan> = Arc::new(LakeProcedureExec::new(
+        let implementation: Arc<dyn ExecutionPlan> = Arc::new(
+            IcebergProcedureExec::try_new_from_serialized_table(call.clone(), "")?,
+        );
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(LakeProcedureExec::try_new(
             call.clone(),
             implementation,
             LakeProcedureRootPlacement::Distributed,
-        ));
+        )?);
 
         let codec = RemoteExecutionCodec;
         let bytes = try_encode_physical_plan(&codec, plan)?;
@@ -5536,6 +5551,23 @@ mod tests {
             decoded.root_placement(),
             LakeProcedureRootPlacement::Distributed
         );
+
+        let mut different_call = call.clone();
+        different_call.invocation_id =
+            LakeProcedureInvocationId("different-invocation".to_string());
+        let implementation: Arc<dyn ExecutionPlan> = Arc::new(
+            IcebergProcedureExec::try_new_from_serialized_table(different_call, "")?,
+        );
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(LakeProcedureExec::try_new(
+            call,
+            implementation,
+            LakeProcedureRootPlacement::Distributed,
+        )?);
+        let error = match try_encode_physical_plan(&codec, plan) {
+            Err(error) => error.to_string(),
+            Ok(_) => return plan_err!("mismatched procedure calls should not encode"),
+        };
+        assert!(error.contains("implementation call does not match its engine boundary"));
         Ok(())
     }
 

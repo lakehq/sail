@@ -1305,8 +1305,16 @@ mod tests {
         );
         assert_eq!(
             relation_provider.resolve_relation("manifests"),
+            LakeRelationResolution::Supported(LakeRelation::new(
+                "manifests",
+                LakeRelationAccess::MetadataRead,
+                LakeRelationTimeTravel::Unsupported,
+            ))
+        );
+        assert_eq!(
+            relation_provider.resolve_relation("files"),
             LakeRelationResolution::Unsupported {
-                reason: "Iceberg metadata table 'manifests' is recognized but not implemented"
+                reason: "Iceberg metadata table 'files' is recognized but not implemented"
                     .to_string(),
             }
         );

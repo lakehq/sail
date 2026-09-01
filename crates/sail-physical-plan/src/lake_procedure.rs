@@ -4,7 +4,9 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
+use datafusion::physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+};
 use datafusion_common::{DataFusionError, Result, internal_err};
 use sail_catalog::error::{CatalogError, CatalogObject};
 use sail_catalog::lakehouse::{
@@ -31,20 +33,22 @@ pub struct LakeProcedureExec {
 }
 
 impl LakeProcedureExec {
-    pub fn new(
+    pub fn try_new(
         call: LakeProcedureCall,
         input: Arc<dyn ExecutionPlan>,
         root_placement: LakeProcedureRootPlacement,
-    ) -> Self {
+    ) -> Result<Self> {
         let schema = call.invocation.procedure.schema();
         let properties = input.properties().clone();
-        Self {
+        let procedure = Self {
             call,
             input,
             root_placement,
             schema,
             properties,
-        }
+        };
+        procedure.validate()?;
+        Ok(procedure)
     }
 
     pub fn call(&self) -> &LakeProcedureCall {
@@ -68,6 +72,13 @@ impl LakeProcedureExec {
         if self.schema.as_ref() != self.input.schema().as_ref() {
             return internal_err!(
                 "lake procedure implementation schema does not match its descriptor"
+            );
+        }
+        if matches!(self.root_placement, LakeProcedureRootPlacement::Coordinator)
+            && self.input.output_partitioning().partition_count() != 1
+        {
+            return internal_err!(
+                "coordinator lake procedure implementation must have exactly one partition"
             );
         }
         Ok(())
@@ -123,9 +134,11 @@ impl ExecutionPlan for LakeProcedureExec {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input = children.one()?;
-        let procedure = Self::new(self.call.clone(), input, self.root_placement);
-        procedure.validate()?;
-        Ok(Arc::new(procedure))
+        Ok(Arc::new(Self::try_new(
+            self.call.clone(),
+            input,
+            self.root_placement,
+        )?))
     }
 
     fn execute(

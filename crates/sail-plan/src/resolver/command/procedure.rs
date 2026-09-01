@@ -80,6 +80,7 @@ impl PlanResolver<'_> {
                 procedure_parts.join(".")
             )));
         };
+        procedure.validate()?;
 
         let mut positional_values = Vec::with_capacity(arguments.len());
         for argument in arguments {

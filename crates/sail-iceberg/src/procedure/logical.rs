@@ -5,24 +5,38 @@ use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use educe::Educe;
 use sail_common_datafusion::lakeprocedure::LakeProcedureCall;
 
+use super::table::ProcedureTable;
+
 /// A bound Iceberg system procedure call.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
 #[educe(PartialOrd)]
 pub(crate) struct IcebergProcedureNode {
     call: LakeProcedureCall,
+    planned_table: Option<ProcedureTable>,
     #[educe(PartialOrd(ignore))]
     schema: DFSchemaRef,
 }
 
 impl IcebergProcedureNode {
-    pub(super) fn try_new(call: LakeProcedureCall) -> Result<Self> {
+    pub(super) fn try_new(
+        call: LakeProcedureCall,
+        planned_table: Option<ProcedureTable>,
+    ) -> Result<Self> {
         call.validate()?;
         let schema = DFSchemaRef::new(DFSchema::try_from(call.invocation.procedure.schema())?);
-        Ok(Self { call, schema })
+        Ok(Self {
+            call,
+            planned_table,
+            schema,
+        })
     }
 
     pub(crate) fn call(&self) -> &LakeProcedureCall {
         &self.call
+    }
+
+    pub(crate) fn planned_table(&self) -> Option<&ProcedureTable> {
+        self.planned_table.as_ref()
     }
 }
 

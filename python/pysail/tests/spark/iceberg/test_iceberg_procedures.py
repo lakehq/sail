@@ -29,6 +29,36 @@ def test_procedure_catalog_and_name_are_resolved_before_arguments(spark):
 
 
 @pytest.fixture
+def local_cluster_spark():
+    with (
+        spark_connect_server(envs={"SAIL_MODE": "local-cluster"}) as server,
+        spark_session_factory(server.remote) as sessions,
+    ):
+        yield sessions.create()
+
+
+def test_metadata_read_procedure_runs_on_a_worker(local_cluster_spark, tmp_path):
+    spark = local_cluster_spark
+    table_name = "distributed_iceberg_procedure"
+    location = (tmp_path / table_name).as_uri()
+    spark.sql(
+        f"""
+        CREATE TABLE {table_name} (id BIGINT)
+        USING ICEBERG
+        LOCATION '{escape_sql_string_literal(location)}'
+        """
+    )
+    try:
+        spark.sql(f"INSERT INTO {table_name} VALUES (1)")  # noqa: S608
+
+        ancestors = spark.sql(f"CALL system.ancestors_of('{table_name}')").collect()
+
+        assert len(ancestors) == 1
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+@pytest.fixture
 def multi_catalog_spark():
     catalogs = (
         '[{name="first", type="memory", initial_database=["default"]}, '

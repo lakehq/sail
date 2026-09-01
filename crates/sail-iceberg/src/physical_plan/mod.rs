@@ -37,7 +37,7 @@ pub use manifest_scan_exec::IcebergManifestScanExec;
 pub use merge_metadata_exec::IcebergMergeMetadataExec;
 pub use partition_transform_expr::IcebergPartitionTransformExpr;
 pub use plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
-pub use procedure_exec::IcebergProcedureExec;
+pub use procedure_exec::{IcebergProcedureExec, validate_iceberg_procedure_call_identity};
 pub use scan_by_data_files_exec::IcebergScanByDataFilesExec;
 pub use write_context::{
     IcebergBaseWriteContext, IcebergWriteContext, prepare_iceberg_write_context,

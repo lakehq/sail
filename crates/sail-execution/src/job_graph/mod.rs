@@ -194,7 +194,10 @@ impl fmt::Display for InputMode {
 
 #[derive(Debug, Clone, Copy)]
 pub enum OutputMode {
+    /// The consumer may be scheduled in the same retry region as the producer.
     Pipelined,
+    /// The consumer waits for the producer to succeed and runs in a separate retry region.
+    /// Physical materialization is selected by the shuffle backend.
     Blocking,
 }
 

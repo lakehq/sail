@@ -530,9 +530,15 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
             let [input] = physical_inputs else {
                 return internal_err!("LakeProcedure requires exactly one physical input");
             };
-            let procedure =
-                LakeProcedureExec::new(node.call().clone(), input.clone(), node.root_placement());
-            procedure.validate()?;
+            sail_iceberg::physical_plan::validate_iceberg_procedure_call_identity(
+                input,
+                node.call(),
+            )?;
+            let procedure = LakeProcedureExec::try_new(
+                node.call().clone(),
+                input.clone(),
+                node.root_placement(),
+            )?;
             Arc::new(procedure)
         } else if let Some(_node) = node.as_any().downcast_ref::<BarrierNode>() {
             let (plan, preconditions) = physical_inputs.split_last().ok_or_else(|| {

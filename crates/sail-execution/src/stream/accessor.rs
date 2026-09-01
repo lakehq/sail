@@ -123,6 +123,7 @@ impl TaskStreamAccessor {
         &self,
         key: TaskStreamKey,
         replicas: usize,
+        buffered: bool,
         schema: SchemaRef,
     ) -> Result<Box<dyn TaskStreamChannelSink>> {
         let (result, rx) = oneshot::channel();
@@ -130,6 +131,7 @@ impl TaskStreamAccessor {
             TaskRunnerMessage::CreateLocalStream {
                 key,
                 replicas,
+                buffered,
                 schema,
                 result,
             },
@@ -390,6 +392,18 @@ impl TaskStreamWriter for MultiChannelTaskStreamWriter {
                     self.streams.create_local_stream(
                         self.key.task_stream_key(channel),
                         *replicas,
+                        false,
+                        self.schema.clone(),
+                    )
+                }))
+                .await?
+            }
+            TaskOutputLocator::Buffered { replicas } => {
+                try_join_all((0..channels).map(|channel| {
+                    self.streams.create_local_stream(
+                        self.key.task_stream_key(channel),
+                        *replicas,
+                        true,
                         self.schema.clone(),
                     )
                 }))

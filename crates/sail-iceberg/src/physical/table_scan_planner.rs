@@ -33,9 +33,10 @@ impl ExtensionPlanner for IcebergPhysicalPlanner {
         _planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         if let Some(node) = node.as_any().downcast_ref::<IcebergProcedureNode>() {
-            return Ok(Some(Arc::new(IcebergProcedureExec::new(
+            return Ok(Some(Arc::new(IcebergProcedureExec::try_new(
                 node.call().clone(),
-            ))));
+                node.planned_table().cloned(),
+            )?)));
         }
 
         if let Some(node) = node.as_any().downcast_ref::<IcebergWriteNode>() {

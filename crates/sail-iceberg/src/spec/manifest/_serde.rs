@@ -24,7 +24,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use super::{DataContentType, DataFileFormat};
 use crate::spec::Schema;
-use crate::spec::types::{Datum, PrimitiveLiteral, RawLiteral, StructType, Type};
+use crate::spec::types::{Datum, RawLiteral, StructType, Type};
 
 #[derive(Serialize, Deserialize)]
 pub(super) struct IntLongMapEntry {
@@ -243,43 +243,8 @@ fn int_long_map_into(
         .collect()
 }
 
-fn i128_to_min_big_endian(value: i128) -> Vec<u8> {
-    let bytes = value.to_be_bytes();
-    let mut start = 0;
-    while start < bytes.len() - 1 {
-        let current = bytes[start];
-        let next = bytes[start + 1];
-        let redundant_positive = current == 0x00 && (next & 0x80) == 0;
-        let redundant_negative = current == 0xff && (next & 0x80) != 0;
-        if redundant_positive || redundant_negative {
-            start += 1;
-        } else {
-            break;
-        }
-    }
-    bytes[start..].to_vec()
-}
-
 fn datum_to_bytes(datum: &Datum) -> Result<Vec<u8>, String> {
-    let bytes = match &datum.literal {
-        PrimitiveLiteral::Boolean(value) => vec![u8::from(*value)],
-        PrimitiveLiteral::Int(value) => value.to_le_bytes().to_vec(),
-        PrimitiveLiteral::Long(value) => value.to_le_bytes().to_vec(),
-        PrimitiveLiteral::Float(value) => value.0.to_le_bytes().to_vec(),
-        PrimitiveLiteral::Double(value) => value.0.to_le_bytes().to_vec(),
-        PrimitiveLiteral::Int128(value) => i128_to_min_big_endian(*value),
-        PrimitiveLiteral::String(value) => value.as_bytes().to_vec(),
-        PrimitiveLiteral::UInt128(value) => value.to_be_bytes().to_vec(),
-        PrimitiveLiteral::Binary(value) => value.clone(),
-    };
-    if datum.r#type.compatible(&datum.literal) {
-        Ok(bytes)
-    } else {
-        Err(format!(
-            "Literal is not compatible with Iceberg type {}",
-            datum.r#type
-        ))
-    }
+    datum.r#type.literal_to_bytes(&datum.literal)
 }
 
 fn bytes_map_from(values: HashMap<i32, Datum>) -> Result<Option<Vec<IntBytesMapEntry>>, String> {

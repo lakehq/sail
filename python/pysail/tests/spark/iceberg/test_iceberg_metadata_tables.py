@@ -3,7 +3,7 @@ import pytest
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 
-def test_static_iceberg_metadata_tables(spark, tmp_path):
+def test_iceberg_metadata_tables(spark, tmp_path):
     table_name = "iceberg_metadata_tables_test"
     table_location = tmp_path.joinpath(table_name).as_uri()
 
@@ -14,6 +14,7 @@ def test_static_iceberg_metadata_tables(spark, tmp_path):
             f"""
             CREATE TABLE {table_name} (id BIGINT, value STRING)
             USING ICEBERG
+            PARTITIONED BY (id)
             LOCATION '{escape_sql_string_literal(table_location)}'
             """
         )
@@ -21,6 +22,7 @@ def test_static_iceberg_metadata_tables(spark, tmp_path):
         assert spark.sql(f"SELECT * FROM {table_name}.snapshots").collect() == []  # noqa: S608
         assert spark.sql(f"SELECT * FROM {table_name}.history").collect() == []  # noqa: S608
         assert spark.sql(f"SELECT * FROM {table_name}.refs").collect() == []  # noqa: S608
+        assert spark.sql(f"SELECT * FROM {table_name}.manifests").collect() == []  # noqa: S608
         initial_metadata_log = spark.sql(
             f"SELECT latest_snapshot_id FROM {table_name}.metadata_log_entries"  # noqa: S608
         ).collect()
@@ -87,6 +89,29 @@ def test_static_iceberg_metadata_tables(spark, tmp_path):
         assert all(row.latest_schema_id is not None for row in metadata_log[1:])
         assert all(row.file.endswith(".metadata.json") for row in metadata_log)
 
+        manifests = spark.sql(
+            f"""
+            SELECT content, path, length, partition_spec_id, added_snapshot_id,
+                   added_data_files_count, existing_data_files_count,
+                   deleted_data_files_count, added_delete_files_count,
+                   existing_delete_files_count, deleted_delete_files_count,
+                   partition_summaries
+            FROM {table_name}.manifests
+            ORDER BY path
+            """  # noqa: S608
+        ).collect()
+        assert len(manifests) == 2  # noqa: PLR2004
+        assert all(row.content == 0 for row in manifests)
+        assert all(row.path.endswith(".avro") and row.length > 0 for row in manifests)
+        assert all(row.partition_spec_id == 0 for row in manifests)
+        assert sum(row.added_data_files_count for row in manifests) == 2  # noqa: PLR2004
+        assert all(row.added_delete_files_count == 0 for row in manifests)
+        summaries = [row.partition_summaries for row in manifests]
+        assert all(len(summary) == 1 for summary in summaries)
+        assert all(not summary[0].contains_null for summary in summaries)
+        assert all(summary[0].contains_nan is False for summary in summaries)
+        assert {(summary[0].lower_bound, summary[0].upper_bound) for summary in summaries} == {("1", "1"), ("2", "2")}
+
         projected = spark.sql(
             f"""
             SELECT snapshot_id
@@ -107,7 +132,6 @@ def test_static_iceberg_metadata_tables(spark, tmp_path):
             "files",
             "data_files",
             "delete_files",
-            "manifests",
             "partitions",
             "all_data_files",
             "all_delete_files",
@@ -194,6 +218,24 @@ def test_static_iceberg_metadata_table_schemas_and_case_insensitive_names(spark,
                 ("latest_snapshot_id", "bigint", True),
                 ("latest_schema_id", "int", True),
                 ("latest_sequence_number", "bigint", True),
+            ],
+            "MANIFESTS": [
+                ("content", "int", False),
+                ("path", "string", False),
+                ("length", "bigint", False),
+                ("partition_spec_id", "int", False),
+                ("added_snapshot_id", "bigint", False),
+                ("added_data_files_count", "int", False),
+                ("existing_data_files_count", "int", False),
+                ("deleted_data_files_count", "int", False),
+                ("added_delete_files_count", "int", False),
+                ("existing_delete_files_count", "int", False),
+                ("deleted_delete_files_count", "int", False),
+                (
+                    "partition_summaries",
+                    "array<struct<contains_null:boolean,contains_nan:boolean,lower_bound:string,upper_bound:string>>",
+                    False,
+                ),
             ],
         }
 

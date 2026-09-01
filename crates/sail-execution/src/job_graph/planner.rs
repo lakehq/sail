@@ -57,6 +57,16 @@ impl JobGraph {
             options,
         };
         let last = build_job_graph(plan, PartitionUsage::Once, &mut graph)?.plan;
+        if let Some(output) = last.downcast_ref::<StageInputExec<StageInput>>()
+            && matches!(output.input().mode, InputMode::Forward)
+            && graph.stages.get(output.input().stage).is_some_and(|stage| {
+                stage.placement == TaskPlacement::Driver
+                    && stage.retry_policy == TaskRetryPolicy::Never
+            })
+        {
+            graph.stages[output.input().stage].mode = OutputMode::Pipelined;
+            return Ok(graph);
+        }
         let (last, inputs) = rewrite_inputs(last)?;
         let retry_policy = task_retry_policy(&last);
         graph.stages.push(Stage {
@@ -993,8 +1003,43 @@ fn create_driver_stage(
         TaskPlacement::Driver,
         mode,
     )?;
+    if graph.stages[stage].retry_policy == TaskRetryPolicy::Never {
+        isolate_non_retryable_driver_stage(stage, graph)?;
+    }
     let properties = graph.stages[stage].plan.properties().clone();
     Ok(stage_input_exec(stage, InputMode::Forward, properties))
+}
+
+fn isolate_non_retryable_driver_stage(stage: usize, graph: &mut JobGraph) -> ExecutionResult<()> {
+    let partitions = graph.stages[stage]
+        .plan
+        .output_partitioning()
+        .partition_count();
+    if partitions != 1 {
+        return Err(ExecutionError::InternalError(format!(
+            "non-retryable driver stage must have exactly one partition, got {partitions}"
+        )));
+    }
+
+    let inputs = graph.stages[stage].inputs.clone();
+    for (index, input) in inputs.iter().enumerate() {
+        let producer = graph.stages.get_mut(input.stage).ok_or_else(|| {
+            ExecutionError::InternalError(format!(
+                "driver stage {stage} refers to missing input stage {}",
+                input.stage
+            ))
+        })?;
+        producer.mode = OutputMode::Blocking;
+
+        if matches!(
+            graph.options.shuffle_backend,
+            ShuffleBackendKind::Celeborn { .. }
+        ) && !matches!(input.mode, InputMode::Shuffle | InputMode::Broadcast)
+        {
+            graph.stages[stage].inputs[index].mode = InputMode::Broadcast;
+        }
+    }
+    Ok(())
 }
 
 fn task_retry_policy(plan: &Arc<dyn ExecutionPlan>) -> TaskRetryPolicy {
@@ -1037,6 +1082,7 @@ mod tests {
         Partitioning, PhysicalExpr, PhysicalSortExpr, RangePartitioning, SplitPoint,
     };
     use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
+    use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use datafusion::physical_plan::coop::CooperativeExec;
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::filter::FilterExec;
@@ -1073,11 +1119,7 @@ mod tests {
         Arc::new(EmptyExec::new(schema()))
     }
 
-    fn procedure_plan(
-        root_placement: LakeProcedureRootPlacement,
-        retry_policy: LakeProcedureRetryPolicy,
-        input: Arc<dyn ExecutionPlan>,
-    ) -> Arc<dyn ExecutionPlan> {
+    fn procedure_call(retry_policy: LakeProcedureRetryPolicy) -> LakeProcedureCall {
         let procedure = LakeProcedure {
             name: "mutate".to_string(),
             parameters: vec![],
@@ -1086,7 +1128,7 @@ mod tests {
             target: LakeProcedureTarget::Catalog,
             retry_policy,
         };
-        let call = LakeProcedureCall {
+        LakeProcedureCall {
             invocation_id: LakeProcedureInvocationId("invocation-1".to_string()),
             catalog: "test".to_string(),
             namespace: vec!["system".to_string()],
@@ -1096,8 +1138,18 @@ mod tests {
                 procedure: procedure.clone(),
                 arguments: vec![],
             },
-        };
-        Arc::new(LakeProcedureExec::new(call, input, root_placement))
+        }
+    }
+
+    fn procedure_plan(
+        root_placement: LakeProcedureRootPlacement,
+        retry_policy: LakeProcedureRetryPolicy,
+        input: Arc<dyn ExecutionPlan>,
+    ) -> Arc<dyn ExecutionPlan> {
+        Arc::new(
+            LakeProcedureExec::try_new(procedure_call(retry_policy), input, root_placement)
+                .unwrap(),
+        )
     }
 
     fn mutating_procedure_plan() -> Arc<dyn ExecutionPlan> {
@@ -1360,22 +1412,16 @@ mod tests {
     fn mutating_procedure_isolated_in_non_retryable_driver_stage() {
         let graph = JobGraph::try_new(mutating_procedure_plan(), flight_shuffle_options()).unwrap();
 
-        assert_eq!(graph.stages().len(), 2);
+        assert_eq!(graph.stages().len(), 1);
         assert_eq!(graph.stages()[0].placement, TaskPlacement::Driver);
         assert_eq!(graph.stages()[0].retry_policy, TaskRetryPolicy::Never);
-        assert!(matches!(graph.stages()[0].mode, OutputMode::Blocking));
+        assert!(matches!(graph.stages()[0].mode, OutputMode::Pipelined));
         assert!(graph.stages()[0].plan.is::<LakeProcedureExec>());
-        assert!(matches!(
-            graph.stages()[1].inputs.as_slice(),
-            [StageInput {
-                stage: 0,
-                mode: InputMode::Forward,
-            }]
-        ));
+        assert!(graph.stages()[0].inputs.is_empty());
     }
 
     #[test]
-    fn coordinator_procedure_keeps_distributed_input_on_workers() {
+    fn coordinator_procedure_rejects_a_multi_partition_root() {
         let input = Arc::new(
             RepartitionExec::try_new(
                 Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
@@ -1383,23 +1429,62 @@ mod tests {
             )
             .unwrap(),
         );
-        let graph = JobGraph::try_new(
-            procedure_plan(
-                LakeProcedureRootPlacement::Coordinator,
-                LakeProcedureRetryPolicy::Forbidden,
-                input,
-            ),
-            flight_shuffle_options(),
+        let error = LakeProcedureExec::try_new(
+            procedure_call(LakeProcedureRetryPolicy::Forbidden),
+            input,
+            LakeProcedureRootPlacement::Coordinator,
         )
-        .unwrap();
+        .unwrap_err()
+        .to_string();
 
-        assert_eq!(graph.stages().len(), 3);
-        assert_eq!(graph.stages()[0].placement, TaskPlacement::Worker);
-        assert_eq!(graph.stages()[0].retry_policy, TaskRetryPolicy::Default);
-        assert_eq!(graph.stages()[1].placement, TaskPlacement::Driver);
-        assert_eq!(graph.stages()[1].retry_policy, TaskRetryPolicy::Never);
-        assert!(graph.stages()[1].plan.is::<LakeProcedureExec>());
-        assert_eq!(graph.stages()[2].placement, TaskPlacement::Worker);
+        assert!(error.contains("must have exactly one partition"));
+    }
+
+    #[test]
+    fn coordinator_procedure_separates_retryable_workers_from_its_final_commit() {
+        for options in [
+            flight_shuffle_options(),
+            blocking_shuffle_options(),
+            celeborn_shuffle_options(),
+        ] {
+            let inputs = (0..4)
+                .map(|_| {
+                    Arc::new(EmptyExec::new(Arc::new(Schema::empty()))) as Arc<dyn ExecutionPlan>
+                })
+                .collect::<Vec<_>>();
+            let input = Arc::new(CoalescePartitionsExec::new(
+                UnionExec::try_new(inputs).unwrap(),
+            ));
+            let graph = JobGraph::try_new(
+                procedure_plan(
+                    LakeProcedureRootPlacement::Coordinator,
+                    LakeProcedureRetryPolicy::Forbidden,
+                    input,
+                ),
+                options,
+            )
+            .unwrap();
+
+            let commit = graph.stages().last().unwrap();
+            assert_eq!(commit.placement, TaskPlacement::Driver);
+            assert_eq!(commit.retry_policy, TaskRetryPolicy::Never);
+            assert!(matches!(commit.mode, OutputMode::Pipelined));
+            assert!(commit.plan.is::<LakeProcedureExec>());
+            assert_eq!(commit.inputs.len(), 1);
+            let input = commit
+                .inputs
+                .first()
+                .expect("coordinator procedure materialized input");
+            assert_eq!(graph.stages()[input.stage].placement, TaskPlacement::Worker);
+            assert_eq!(
+                graph.stages()[input.stage].retry_policy,
+                TaskRetryPolicy::Default
+            );
+            assert!(matches!(
+                graph.stages()[input.stage].mode,
+                OutputMode::Blocking
+            ));
+        }
     }
 
     #[test]

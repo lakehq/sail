@@ -5,7 +5,7 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{Field, Schema as ArrowSchema};
 use datafusion::common::Result;
 
-use super::{history, metadata_log_entries, refs, snapshots};
+use super::{history, manifests, metadata_log_entries, refs, snapshots};
 use crate::table::Table;
 
 /// Metadata relations owned by an Iceberg table rather than by its catalog.
@@ -99,7 +99,11 @@ impl IcebergMetadataRelationType {
     pub(crate) fn is_supported(self) -> bool {
         matches!(
             self,
-            Self::History | Self::MetadataLogEntries | Self::Snapshots | Self::Refs
+            Self::History
+                | Self::MetadataLogEntries
+                | Self::Snapshots
+                | Self::Refs
+                | Self::Manifests
         )
     }
 
@@ -116,6 +120,7 @@ impl IcebergMetadataRelationType {
             Self::MetadataLogEntries => metadata_log_entries::schema(),
             Self::Snapshots => snapshots::schema(),
             Self::Refs => refs::schema(),
+            Self::Manifests => manifests::schema(),
             unsupported => Arc::new(ArrowSchema::new_with_metadata(
                 Vec::<Field>::new(),
                 HashMap::from([("unsupported".to_string(), unsupported.name().to_string())]),
@@ -123,7 +128,7 @@ impl IcebergMetadataRelationType {
         }
     }
 
-    pub(super) fn record_batch(self, table: &Table) -> Result<RecordBatch> {
+    pub(super) async fn record_batch(self, table: &Table) -> Result<RecordBatch> {
         match self {
             Self::History => history::batch(table.metadata()),
             Self::MetadataLogEntries => {
@@ -131,6 +136,7 @@ impl IcebergMetadataRelationType {
             }
             Self::Refs => refs::batch(table.metadata()),
             Self::Snapshots => snapshots::batch(table.metadata()),
+            Self::Manifests => manifests::batch(table).await,
             unsupported => Err(datafusion::common::DataFusionError::NotImplemented(
                 unsupported.unsupported_reason(),
             )),
