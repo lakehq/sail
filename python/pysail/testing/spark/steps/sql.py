@@ -6,8 +6,9 @@ import time
 from contextlib import redirect_stdout
 from pathlib import Path
 
-import pytest
 from jinja2 import Template
+import pytest
+import pyspark.errors
 from pyspark.sql import functions as F  # noqa: N812
 from pytest_bdd import given, parsers, then, when
 
@@ -302,10 +303,17 @@ def query_result_collected(datatable, ordered, query, spark):
         assert sorted(expected_rows) == sorted(actual)
 
 
-@then(parsers.parse("query error {error}"))
+@then(parsers.re(r"query error(?! of class ) (?P<error>.+)"))
 def query_error(error, query, spark):
     """Executes the SQL query and expects it to fail with an error (regex match)."""
     with pytest.raises(Exception, match=error):
+        _ = spark.sql(query).collect()
+
+
+@then(parsers.re(r"query error of class (?P<exception>\w+) matching (?P<error>.+)"))
+def query_error_of_class(exception, error, query, spark):
+    """Executes SQL and checks both its PySpark exception class and message."""
+    with pytest.raises(getattr(pyspark.errors, exception), match=error):
         _ = spark.sql(query).collect()
 
 

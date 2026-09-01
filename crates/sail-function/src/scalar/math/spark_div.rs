@@ -26,11 +26,18 @@ const INTEGRAL_DIVIDE_OVERFLOW_MESSAGE: &str = "[ARITHMETIC_OVERFLOW] Overflow i
      overflow and return NULL instead. If necessary set \"spark.sql.ansi.enabled\" to \
      \"false\" to bypass this error. SQLSTATE: 22003";
 
-/// Every `ArrowError` variant renders with a prefix ("Compute error: ...") that would
-/// corrupt the Spark message; `DataFusionError::Execution` reaches the user unprefixed.
+/// Preserve Spark's known arithmetic messages as execution errors so Connect maps them to
+/// `ArithmeticException`. Other Arrow compute errors retain their normal classification.
 fn spark_error(e: ArrowError) -> DataFusionError {
     match e {
-        ArrowError::ComputeError(message) => DataFusionError::Execution(message),
+        ArrowError::ComputeError(message)
+            if message == DIVIDE_BY_ZERO_MESSAGE || message == INTEGRAL_DIVIDE_OVERFLOW_MESSAGE =>
+        {
+            DataFusionError::Execution(message)
+        }
+        ArrowError::ComputeError(message) => {
+            DataFusionError::from(ArrowError::ComputeError(message))
+        }
         other => DataFusionError::from(other),
     }
 }
@@ -172,7 +179,15 @@ impl ScalarUDFImpl for SparkIntegerDiv {
                 arg_types.len(),
             ));
         }
-        Ok(vec![DataType::Int64, DataType::Int64])
+        if arg_types.iter().all(DataType::is_integer) {
+            Ok(vec![DataType::Int64, DataType::Int64])
+        } else {
+            Err(unsupported_data_types_exec_err(
+                "spark_integer_div",
+                "integral types",
+                arg_types,
+            ))
+        }
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

@@ -18,28 +18,31 @@ Feature: div (integer division)
   # live in `divide_by_zero.feature`. This file focuses on type coverage,
   # overflow, sign/truncation, NULL propagation, intervals, and multi-row.
 
+  # Spark rejects every arity but 2, via `wrongNumArgsError`
+  # (QueryCompilationErrors.scala:1009-1016). `IntegralDivide` exposes a single
+  # all-`Expression` constructor, so `expectedNum` is "2" and, with no legacy config,
+  # the subclass is WITHOUT_SUGGESTION. Sail rejects the same arities but leaks a Rust
+  # `Debug` rendering instead ("two values expected: [Literal(Int32(10), None)]",
+  # measured on all three) — the accept/reject decision matches, only the text diverges.
+  # The leak comes from `ItemTaker` and is systemic, so it is pinned here, not fixed.
+  # `.*` spans the subclass so the pattern survives a subclass change; the trailing count
+  # is what discriminates one arity from another. SQLSTATE is deliberately left out: 3.5.9
+  # does not append it and the suite runs as an oracle against that version too.
   Rule: Argument count validation
 
-    Scenario: div zero args errors
+    @sail-bug
+    Scenario Outline: div with <n> arguments is rejected
       When query
         """
-        SELECT div() AS result
+        SELECT div(<args>) AS result
         """
-      Then query error .*
+      Then query error ^\[WRONG_NUM_ARGS.*`div` requires 2 parameters but the actual number is <n>
 
-    Scenario: div one arg errors
-      When query
-        """
-        SELECT div(10) AS result
-        """
-      Then query error .*
-
-    Scenario: div three args errors
-      When query
-        """
-        SELECT div(10, 3, 1) AS result
-        """
-      Then query error .*
+      Examples:
+        | n | args      |
+        | 0 |           |
+        | 1 | 10        |
+        | 3 | 10, 3, 1  |
 
   Rule: Basic integer division returns BIGINT
 
@@ -232,19 +235,10 @@ Feature: div (integer division)
         | INT / IYEAR      | 2, INTERVAL '10' YEAR                       |
         | IYEAR / DECIMAL  | INTERVAL '10' YEAR, CAST(2 AS DECIMAL(5,2)) |
 
-    Scenario: div untyped NULL dividend
-      When query
-        """
-        SELECT div(NULL, 5) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-
   Rule: Overflow semantics — LONG_MIN div -1
     # Two's-complement: BIGINT range is [-2^63, 2^63-1]; -LONG_MIN overflows
-    # BIGINT, so under ANSI=false Spark wraps to LONG_MIN (matches Java
-    # Math.floorDiv); ANSI=true raises ARITHMETIC_OVERFLOW.
+    # BIGINT, so under ANSI=false Spark wraps to LONG_MIN (Java `/`); ANSI=true raises
+    # ARITHMETIC_OVERFLOW.
 
     Scenario: div LONG_MIN by -1 wraps under ANSI false
       Given config spark.sql.ansi.enabled = false
@@ -255,14 +249,6 @@ Feature: div (integer division)
       Then query result
         | result                |
         | -9223372036854775808  |
-
-    Scenario: div LONG_MIN by -1 errors under ANSI true
-      Given config spark.sql.ansi.enabled = true
-      When query
-        """
-        SELECT div(CAST(-9223372036854775808 AS BIGINT), CAST(-1 AS BIGINT)) AS result
-        """
-      Then query error Overflow in integral divide
 
     Scenario: div INT MIN by -1 widens to BIGINT (no overflow)
       When query
@@ -445,14 +431,6 @@ Feature: div (integer division)
         | result |
         | NULL   |
 
-    Scenario: div INTERVAL DAY by zero INTERVAL DAY errors under ANSI true
-      Given config spark.sql.ansi.enabled = true
-      When query
-        """
-        SELECT div(INTERVAL '10' DAY, INTERVAL '0' DAY) AS result
-        """
-      Then query error Division by zero
-
     Scenario: div INTERVAL DAY multi-row with zero divisor returns NULL under ANSI false
       Given config spark.sql.ansi.enabled = false
       When query
@@ -476,14 +454,6 @@ Feature: div (integer division)
       Then query result
         | result |
         | NULL   |
-
-    Scenario: div INTERVAL YEAR by zero INTERVAL YEAR errors under ANSI true
-      Given config spark.sql.ansi.enabled = true
-      When query
-        """
-        SELECT div(INTERVAL '10' YEAR, INTERVAL '0' YEAR) AS result
-        """
-      Then query error Division by zero
 
     Scenario: div INTERVAL DAY multi-row with zero divisor errors under ANSI true
       Given config spark.sql.ansi.enabled = true
@@ -510,13 +480,6 @@ Feature: div (integer division)
     # (BINARY_OP_WRONG_TYPE / BINARY_OP_DIFF_TYPES). Sail mirrors that in
     # the `spark_div` dispatcher — see workarounds below for valid patterns.
 
-    Scenario: div STRING/STRING errors
-      When query
-        """
-        SELECT div('10', '3') AS result
-        """
-      Then query error due to data type mismatch
-
     Scenario: div BOOLEAN errors
       When query
         """
@@ -535,13 +498,6 @@ Feature: div (integer division)
       When query
         """
         SELECT div(INTERVAL '10' DAY, 2) AS result
-        """
-      Then query error due to data type mismatch
-
-    Scenario: div INTERVAL YEAR by INTERVAL DAY errors
-      When query
-        """
-        SELECT div(INTERVAL '10' YEAR, INTERVAL '2' DAY) AS result
         """
       Then query error due to data type mismatch
 
@@ -659,6 +615,7 @@ Feature: div (integer division)
         | DECIMAL by STRING    | CAST(5 AS DECIMAL(5,2)), '2'            |
         | STRING by DECIMAL    | '5', CAST(2 AS DECIMAL(5,2))            |
         | INTERVAL by STRING   | INTERVAL '10' DAY, '2'                  |
+        | STRING by INTERVAL   | '2', INTERVAL '10' DAY                  |
         | INT by unparseable   | 5, 'abc'                                |
         | INT by STRING zero   | 5, '0'                                  |
         | INT by NULL STRING   | 5, CAST(NULL AS STRING)                 |
@@ -677,6 +634,7 @@ Feature: div (integer division)
         | DECIMAL by STRING  | CAST(5 AS DECIMAL(5,2)), '2' |
         | STRING by DECIMAL  | '5', CAST(2 AS DECIMAL(5,2)) |
         | INTERVAL by STRING | INTERVAL '10' DAY, '2'       |
+        | STRING by INTERVAL | '2', INTERVAL '10' DAY       |
 
     Scenario Outline: div <case> is accepted under ANSI true
       Given config spark.sql.ansi.enabled = true
@@ -697,13 +655,17 @@ Feature: div (integer division)
 
     # Once the string is widened to LONG the rest falls out of the ordinary rules: an
     # unparseable string fails the cast, and '0' divides by zero.
+    # Sail emits DataFusion's wording ("Cannot cast string 'abc' to value of Int64 type");
+    # Spark raises CAST_INVALID_INPUT. The exception class already matches
+    # (NumberFormatException), only the text diverges, so the anchor is what discriminates.
+    @sail-bug
     Scenario: div INT by an unparseable STRING errors under ANSI true
       Given config spark.sql.ansi.enabled = true
       When query
         """
         SELECT div(5, 'abc') AS result
         """
-      Then query error (?i)cannot (be )?cast
+      Then query error ^\[CAST_INVALID_INPUT\]
 
     Scenario: div INT by STRING zero errors under ANSI true
       Given config spark.sql.ansi.enabled = true
@@ -763,37 +725,24 @@ Feature: div (integer division)
   # rule discriminating, since a check that ran only for non-zero divisors passes those.
   Rule: Type rejection is not shadowed by a zero divisor
 
-    Scenario: div DOUBLE by literal zero is rejected under ANSI false
-      Given config spark.sql.ansi.enabled = false
+    Scenario Outline: div <case> is rejected under ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
       When query
         """
-        SELECT div(CAST(1.0 AS DOUBLE), 0) AS result
+        SELECT div(<args>) AS result
         """
       Then query error due to data type mismatch
 
-    Scenario: div DOUBLE by literal zero DOUBLE is rejected under ANSI false
-      Given config spark.sql.ansi.enabled = false
-      When query
-        """
-        SELECT div(CAST(1.0 AS DOUBLE), CAST(0.0 AS DOUBLE)) AS result
-        """
-      Then query error due to data type mismatch
-
-    Scenario: div BOOLEAN by literal zero is rejected under ANSI false
-      Given config spark.sql.ansi.enabled = false
-      When query
-        """
-        SELECT div(true, 0) AS result
-        """
-      Then query error due to data type mismatch
-
-    Scenario: div DATE by literal zero is rejected under ANSI false
-      Given config spark.sql.ansi.enabled = false
-      When query
-        """
-        SELECT div(DATE '2024-01-15', 0) AS result
-        """
-      Then query error due to data type mismatch
+      Examples:
+        | case                    | ansi  | args                                     |
+        | DOUBLE by literal zero  | false | CAST(1.0 AS DOUBLE), 0                   |
+        | DOUBLE by literal zero  | true  | CAST(1.0 AS DOUBLE), 0                   |
+        | DOUBLE by zero DOUBLE   | false | CAST(1.0 AS DOUBLE), CAST(0.0 AS DOUBLE) |
+        | DOUBLE by zero DOUBLE   | true  | CAST(1.0 AS DOUBLE), CAST(0.0 AS DOUBLE) |
+        | BOOLEAN by literal zero | false | true, 0                                  |
+        | BOOLEAN by literal zero | true  | true, 0                                  |
+        | DATE by literal zero    | false | DATE '2024-01-15', 0                     |
+        | DATE by literal zero    | true  | DATE '2024-01-15', 0                     |
 
   # Spark evaluates the divisor first, but a NULL dividend still wins over a zero
   # divisor: the result is NULL, not an error, even under ANSI. The non-NULL dividend
@@ -825,6 +774,16 @@ Feature: div (integer division)
       When query
         """
         SELECT div(a, b) AS result FROM VALUES (CAST(NULL AS INTERVAL DAY), INTERVAL '0' DAY) AS t(a, b)
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: div NULL INTERVAL YEAR dividend by zero interval returns NULL under ANSI true
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT div(a, b) AS result FROM VALUES (CAST(NULL AS INTERVAL YEAR), INTERVAL '0' YEAR) AS t(a, b)
         """
       Then query result
         | result |
@@ -903,6 +862,11 @@ Feature: div (integer division)
         | INTERVAL DAY  | false | INTERVAL '10' DAY, INTERVAL '2' DAY                 |
         | INTERVAL YEAR | true  | INTERVAL '10' YEAR, INTERVAL '2' YEAR               |
         | INTERVAL YEAR | false | INTERVAL '10' YEAR, INTERVAL '2' YEAR               |
+        | NULL / INT    | true  | NULL, 5                                             |
+        | NULL / NULL   | false | NULL, NULL                                          |
+        | NULL / IDAY   | true  | NULL, INTERVAL '2' DAY                              |
+        | NULL / DECIMAL| false | NULL, CAST(2 AS DECIMAL(5,2))                       |
+        | INT / STRING  | true  | 5, '2'                                              |
 
   # DECIMAL is one of the four operand families Spark's `IntegralDivide` accepts, but it
   # reaches DataFusion arithmetic rather than a Sail kernel, so its zero-divisor policy
@@ -959,6 +923,27 @@ Feature: div (integer division)
         | result      |
         | -2147483648 |
 
+    # Arrow's decimal division PRE-SCALES the dividend before dividing
+    # (`l.mul_checked(10^mul_pow)`), so a dividend whose unscaled value is large enough
+    # overflows i128 inside the kernel even when the true quotient is small. Spark never
+    # pre-scales: `divideToIntegralValue` runs on unbounded BigDecimal and only then narrows
+    # with `Decimal.toLong` (arithmetic.scala:910-933). Measured on Sail: "Arithmetic
+    # overflow: Overflow happened on: 100000000000000000000000000000000000 * 10000" — the
+    # `* 10000` is the pre-scale factor itself. Distinct from the narrowing bug below: here
+    # the quotient fits in BIGINT comfortably and Spark returns it.
+    @sail-bug
+    Scenario: div DECIMAL overflows on Arrow's pre-scale where Spark returns the quotient
+      When query
+        """
+        SELECT div(
+          CAST(100000000000000000000000000000000000 AS DECIMAL(38,0)),
+          CAST(100000000000000000000 AS DECIMAL(38,0))
+        ) AS result
+        """
+      Then query result
+        | result           |
+        | 1000000000000000 |
+
     # `checkDivideOverflow` is enabled only when the dividend is LONG, never for an
     # interval, so Spark wraps here instead of raising — in BOTH ANSI modes, since the
     # gate does not consult `failOnError` for this operand type. Sail's day-time path
@@ -984,10 +969,11 @@ Feature: div (integer division)
         | false |
 
     # Spark divides on BigDecimal and only then narrows with `Decimal.toLong`, which
-    # discards the high-order bits. Sail casts the decimal quotient to BIGINT and the
-    # cast rejects the out-of-range value.
+    # discards the high-order bits. Sail instead overflows while Arrow pre-scales the
+    # dividend before division, before Sail's final BIGINT cast is reached.
     @sail-bug
-    Scenario: div wide DECIMAL narrows to BIGINT by wrapping
+    Scenario Outline: div wide DECIMAL narrows to BIGINT by wrapping under ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
       When query
         """
         SELECT div(CAST(12345678901234567890.12345678 AS DECIMAL(38,8)), CAST(1 AS DECIMAL(38,8))) AS result
@@ -995,6 +981,11 @@ Feature: div (integer division)
       Then query result
         | result               |
         | -6101065172474983726 |
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
 
   # Anchored at the start on purpose: a bare substring also matches a wrapper-prefixed
   # message, so only the anchor discriminates. The pattern must stay on the step line — a
@@ -1007,7 +998,7 @@ Feature: div (integer division)
         """
         SELECT div(<args>) AS result
         """
-      Then query error ^\[DIVIDE_BY_ZERO\] Division by zero
+      Then query error of class ArithmeticException matching ^\[DIVIDE_BY_ZERO\] Division by zero\. Use `try_divide` to tolerate divisor being 0 and return NULL instead\. If necessary set "spark\.sql\.ansi\.enabled" to "false" to bypass this error\.
 
       Examples:
         | family        | args                                                 |
@@ -1022,4 +1013,4 @@ Feature: div (integer division)
         """
         SELECT div(CAST(-9223372036854775808 AS BIGINT), CAST(-1 AS BIGINT)) AS result
         """
-      Then query error ^\[ARITHMETIC_OVERFLOW\] Overflow in integral divide
+      Then query error of class ArithmeticException matching ^\[ARITHMETIC_OVERFLOW\] Overflow in integral divide\. Use 'try_divide' to tolerate overflow and return NULL instead\. If necessary set "spark\.sql\.ansi\.enabled" to "false" to bypass this error\.

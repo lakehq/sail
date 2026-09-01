@@ -441,6 +441,11 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 dividend_type,
                 Ok(DataType::Int64),
             ),
+            // An unresolvable type is tolerated here for the same reason the `accepted` gate
+            // below tolerates it: a failed `get_type` must not turn into a rejected query.
+            _ if dividend_type.is_err() || divisor_type.is_err() => {
+                (dividend, divisor, dividend_type, divisor_type)
+            }
             _ => return reject(),
         };
 
@@ -476,7 +481,7 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
         (Err(_), _) | (_, Err(_)) => true,
         (Ok(l), Ok(r)) => {
             (numeric(l) && numeric(r))
-                || matches!((l, r), (DataType::Duration(_), DataType::Duration(_)))
+                || matches!((l, r), (DataType::Duration(a), DataType::Duration(b)) if a == b)
                 || matches!(
                     (l, r),
                     (
