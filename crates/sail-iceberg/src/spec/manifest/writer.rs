@@ -17,8 +17,9 @@
 
 // [CREDIT]: https://raw.githubusercontent.com/apache/iceberg-rust/dc349284a4204c1a56af47fb3177ace6f9e899a0/crates/iceberg/src/spec/manifest/writer.rs
 
+use std::cmp::Ordering;
+use std::iter;
 use std::sync::Arc;
-use std::{cmp::Ordering, iter};
 
 use apache_avro::{Writer as AvroWriter, to_value};
 
