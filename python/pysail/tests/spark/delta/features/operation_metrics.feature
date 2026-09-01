@@ -280,6 +280,9 @@ Feature: Delta Lake operationMetrics in commitInfo
         | path             |
         | operation        |
         | operationMetrics |
+      Then delta log latest commit info contains
+        | path                                 | value |
+        | operationMetrics.numTargetFilesAdded | 1     |
 
   Rule: MERGE operationMetrics (Merge-on-Read with deletion vectors)
 

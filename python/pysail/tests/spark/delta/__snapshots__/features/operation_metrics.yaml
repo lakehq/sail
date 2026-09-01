@@ -292,22 +292,22 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 3075
-    numAddedFiles: 3
-    numFiles: 3
-    numOutputBytes: 3075
-    numOutputFiles: 3
+    numAddedBytes: 1084
+    numAddedFiles: 1
+    numFiles: 1
+    numOutputBytes: 1084
+    numOutputFiles: 1
     numOutputRows: 4
     numRemovedBytes: 1069
     numRemovedFiles: 1
     numSourceRows: 0
-    numTargetBytesAdded: 3075
+    numTargetBytesAdded: 1084
     numTargetBytesRemoved: 1069
     numTargetChangeFilesAdded: 0
     numTargetDeletionVectorsAdded: 0
     numTargetDeletionVectorsRemoved: 0
     numTargetDeletionVectorsUpdated: 0
-    numTargetFilesAdded: 3
+    numTargetFilesAdded: 1
     numTargetFilesRemoved: 1
     numTargetRowsCopied: 3
     numTargetRowsDeleted: 1

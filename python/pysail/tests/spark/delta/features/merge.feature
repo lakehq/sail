@@ -702,6 +702,16 @@ Feature: Delta Lake Merge
         """
 
     Scenario: Duplicate source matches do not duplicate copied rows in a target-only MERGE
+      When query
+        """
+        EXPLAIN
+        MERGE INTO delta_merge_target_exactly_once AS target
+        USING delta_merge_target_exactly_once_source AS source
+        ON target.id = source.id
+        WHEN NOT MATCHED BY SOURCE AND target.id = 2 THEN
+          UPDATE SET value = 'stale-updated'
+        """
+      Then query plan matches snapshot
       Given statement
         """
         MERGE INTO delta_merge_target_exactly_once AS target

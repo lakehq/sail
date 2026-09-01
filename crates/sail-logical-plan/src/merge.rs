@@ -33,9 +33,11 @@ use crate::row_level::{
 };
 
 pub const SOURCE_PRESENT_COLUMN: &str = "__sail_merge_source_row_present";
-pub const SOURCE_ROW_ID_COLUMN: &str = "__sail_merge_source_row_id";
 pub const TARGET_PRESENT_COLUMN: &str = "__sail_merge_target_row_present";
 pub const TARGET_ROW_ID_COLUMN: &str = "__sail_merge_target_row_id";
+
+const COW_EXISTENCE_SOURCE_RELATION: &str = "__sail_merge_cow_existence_source";
+const COW_EXISTENCE_TARGET_RELATION: &str = "__sail_merge_cow_existence_target";
 
 type GeneratedAssignmentMarker = (String, String);
 type MergeProjection = (Vec<Expr>, Vec<GeneratedAssignmentMarker>);
@@ -192,7 +194,6 @@ pub fn validate_merge_internal_columns(info: &MergeInfo, format_columns: &[&str]
     let reserved_columns = [
         TARGET_PRESENT_COLUMN,
         SOURCE_PRESENT_COLUMN,
-        SOURCE_ROW_ID_COLUMN,
         TARGET_ROW_ID_COLUMN,
         OPERATION_COLUMN,
         MERGE_SOURCE_METRIC_COLUMN,
@@ -235,10 +236,6 @@ pub fn expand_merge(
     {
         should_check_cardinality = false;
     }
-    let should_deduplicate_cow_target_rows = requirements.preserve_unmodified_target_rows
-        && options.matched_clauses.is_empty()
-        && !options.not_matched_by_source_clauses.is_empty();
-
     trace!(
         "merge input schema fields: {:?}",
         merge_schema
@@ -568,7 +565,7 @@ pub fn expand_merge(
         )?;
     }
 
-    if should_check_cardinality || should_deduplicate_cow_target_rows {
+    if should_check_cardinality {
         // Add stable per-target-row id before join; JOIN will duplicate this value for matches.
         // Use a dedicated logical node so we don't rely on later expression rewriters (MERGE builds plans directly).
         target_plan = LogicalPlan::Extension(Extension {
@@ -717,21 +714,12 @@ fn build_default_merge_expansion(
     requirements: MergePlanRequirements,
 ) -> Result<MergeExpansion> {
     let target_schema = target_plan.schema();
-    let should_deduplicate_cow_target_rows = requirements.preserve_unmodified_target_rows
+    let should_preserve_cow_target_rows_by_existence_join = requirements
+        .preserve_unmodified_target_rows
         && options.matched_clauses.is_empty()
         && !options.not_matched_by_source_clauses.is_empty();
     let include_source_only_rows = !options.not_matched_by_target_clauses.is_empty();
-    let join_source_plan = if should_deduplicate_cow_target_rows && include_source_only_rows {
-        LogicalPlan::Extension(Extension {
-            node: Arc::new(MonotonicIdNode::try_new(
-                Arc::new(source_plan.clone()),
-                SOURCE_ROW_ID_COLUMN.to_string(),
-            )?),
-        })
-    } else {
-        source_plan.clone()
-    };
-    let source_schema = join_source_plan.schema().clone();
+    let source_schema = source_plan.schema().clone();
 
     let augmented_target = LogicalPlanBuilder::from(target_plan.clone())
         .project(append_presence_projection(
@@ -741,7 +729,7 @@ fn build_default_merge_expansion(
         )?)?
         .build()?;
 
-    let augmented_source = LogicalPlanBuilder::from(join_source_plan)
+    let augmented_source = LogicalPlanBuilder::from(source_plan.clone())
         .project(append_presence_projection(
             &source_schema,
             SOURCE_PRESENT_COLUMN,
@@ -759,10 +747,10 @@ fn build_default_merge_expansion(
     );
 
     let join = Join::try_new(
-        Arc::new(augmented_target),
-        Arc::new(augmented_source),
-        join_on,
-        residual_filter,
+        Arc::new(augmented_target.clone()),
+        Arc::new(augmented_source.clone()),
+        join_on.clone(),
+        residual_filter.clone(),
         join_type,
         JoinConstraint::On,
         NullEquality::NullEqualsNothing,
@@ -783,9 +771,12 @@ fn build_default_merge_expansion(
         join
     };
 
-    let write_join = if should_deduplicate_cow_target_rows {
-        Arc::new(deduplicate_cow_join_rows(
-            join.as_ref(),
+    let write_join = if should_preserve_cow_target_rows_by_existence_join {
+        Arc::new(build_cow_target_preserving_write_join(
+            augmented_target,
+            augmented_source,
+            &join_on,
+            residual_filter,
             include_source_only_rows,
         )?)
     } else {
@@ -957,31 +948,109 @@ fn build_default_merge_expansion(
     })
 }
 
-fn deduplicate_cow_join_rows(
-    join: &LogicalPlan,
+fn build_cow_target_preserving_write_join(
+    target: LogicalPlan,
+    source: LogicalPlan,
+    join_on: &[(Expr, Expr)],
+    residual_filter: Option<Expr>,
     include_source_only_rows: bool,
 ) -> Result<LogicalPlan> {
-    let distinct_keys = if include_source_only_rows {
-        let target_present = col(TARGET_PRESENT_COLUMN).is_not_null();
-        // Keep target and source row IDs in separate namespaces. All matches for a target share
-        // its ID, while each source-only insert keeps its own source ID.
-        vec![
-            target_present.clone(),
-            when(target_present, col(TARGET_ROW_ID_COLUMN)).otherwise(col(SOURCE_ROW_ID_COLUMN))?,
-        ]
-    } else {
-        vec![col(TARGET_ROW_ID_COLUMN)]
-    };
-    LogicalPlanBuilder::from(join.clone())
-        .distinct_on(
-            distinct_keys,
-            join.schema()
-                .columns()
-                .into_iter()
-                .map(Expr::Column)
-                .collect(),
-            None,
-        )?
+    let target_schema = target.schema().clone();
+    let source_schema = source.schema().clone();
+    let reversed_join_on = join_on
+        .iter()
+        .map(|(target_expr, source_expr)| (source_expr.clone(), target_expr.clone()))
+        .collect::<Vec<_>>();
+
+    // A right-mark join emits every target row exactly once while still recording whether any
+    // source row matched it. Keeping the target on the probe/output side also preserves its
+    // writer-friendly partitioning when the source can be collected.
+    let existence_source = LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
+        Arc::new(source.clone()),
+        COW_EXISTENCE_SOURCE_RELATION,
+    )?);
+    let existence_target = LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
+        Arc::new(target.clone()),
+        COW_EXISTENCE_TARGET_RELATION,
+    )?);
+    let target_columns = existence_target.schema().columns();
+    let target_existence_join = LogicalPlan::Join(Join::try_new(
+        Arc::new(existence_source),
+        Arc::new(existence_target),
+        reversed_join_on.clone(),
+        residual_filter.clone(),
+        JoinType::RightMark,
+        JoinConstraint::On,
+        NullEquality::NullEqualsNothing,
+        false,
+    )?);
+    let match_mark = target_existence_join
+        .schema()
+        .columns()
+        .last()
+        .cloned()
+        .ok_or_else(|| {
+            DataFusionError::Internal(
+                "MERGE target existence join is missing its mark column".to_string(),
+            )
+        })?;
+
+    let mut target_rows_projection = target_columns
+        .into_iter()
+        .zip(target_schema.fields())
+        .map(|(column, field)| Expr::Column(column).alias(field.name().clone()))
+        .collect::<Vec<_>>();
+    for field in source_schema.fields() {
+        let expression = if field.name() == SOURCE_PRESENT_COLUMN {
+            when(Expr::Column(match_mark.clone()), lit(true))
+                .otherwise(lit(ScalarValue::Boolean(None)))?
+        } else {
+            lit(ScalarValue::try_new_null(field.data_type())?)
+        };
+        target_rows_projection.push(expression.alias(field.name().clone()));
+    }
+    let target_rows = LogicalPlanBuilder::from(target_existence_join)
+        .project(target_rows_projection)?
+        .build()?;
+
+    if !include_source_only_rows {
+        return Ok(target_rows);
+    }
+
+    // The mark join intentionally carries no source values. Add only unmatched source rows for
+    // INSERT clauses; a left-anti join preserves duplicate source-only rows without multiplying
+    // matched target rows.
+    let source_only_rows = LogicalPlan::Join(Join::try_new(
+        Arc::new(source),
+        Arc::new(target),
+        reversed_join_on,
+        residual_filter,
+        JoinType::LeftAnti,
+        JoinConstraint::On,
+        NullEquality::NullEqualsNothing,
+        false,
+    )?);
+    let mut source_only_projection = target_schema
+        .fields()
+        .iter()
+        .map(|field| {
+            Ok(lit(ScalarValue::try_new_null(field.data_type())?).alias(field.name().clone()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    source_only_projection.extend(
+        source_only_rows
+            .schema()
+            .columns()
+            .into_iter()
+            .zip(source_schema.fields())
+            .map(|(column, field)| Expr::Column(column).alias(field.name().clone())),
+    );
+    let source_only_rows = LogicalPlanBuilder::from(source_only_rows)
+        .project(source_only_projection)?
+        .build()?;
+
+    LogicalPlanBuilder::from(target_rows)
+        .union(source_only_rows)?
         .build()
 }
 
@@ -1228,7 +1297,6 @@ fn is_merge_metadata_column(
     name == path_column
         || row_index_column.is_some_and(|column| name == column)
         || row_delete_metadata_columns.contains(&name)
-        || name == SOURCE_ROW_ID_COLUMN
         || name == TARGET_ROW_ID_COLUMN
 }
 
@@ -1243,7 +1311,6 @@ fn is_reserved_merge_column(
         path_column,
         TARGET_PRESENT_COLUMN,
         SOURCE_PRESENT_COLUMN,
-        SOURCE_ROW_ID_COLUMN,
         TARGET_ROW_ID_COLUMN,
         OPERATION_COLUMN,
         MERGE_SOURCE_METRIC_COLUMN,
