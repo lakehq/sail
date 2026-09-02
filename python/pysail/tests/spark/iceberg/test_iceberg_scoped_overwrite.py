@@ -415,6 +415,7 @@ def test_iceberg_appends_after_legacy_v1_metadata(spark, sql_catalog):
             "refs",
         ):
             metadata.pop(field, None)
+        metadata["schema"].pop("schema-id", None)
         with table.io.new_output(table.metadata_location).create(overwrite=True) as stream:
             stream.write(json.dumps(metadata).encode())
 
