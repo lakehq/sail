@@ -4,20 +4,19 @@ use std::collections::BTreeSet;
 use std::ops::Bound;
 
 use chrono::DateTime;
-use sail_common_datafusion::system::catalog::{
-    JobRow, MetricRow, OptionRow, SessionRow, StageRow, TaskRow, WorkerRow,
-};
-use sail_common_datafusion::system::predicate::{MapValueFilter, TimestampMicros, ValueFilter};
 use tokio::sync::oneshot;
 
 use super::candidate::{CandidateSet, ValueOrd, candidate_key_bound, candidate_set};
 use crate::access::StoreReader;
+use crate::catalog::{JobRow, MetricRow, OptionRow, SessionRow, StageRow, TaskRow, WorkerRow};
 use crate::model::{
-    JobPrimaryKey, JobTable, MetricAttributeIndex, MetricAttributeKey, MetricNameIndex,
-    MetricPointKey, MetricPointSeries, MetricSeriesId, MetricSeriesMetadata, MetricSeriesTable,
-    OptionPrimaryKey, OptionTable, SessionPrimaryKey, SessionTable, StagePrimaryKey, StageTable,
-    TaskPrimaryKey, TaskTable, WorkerPrimaryKey, WorkerTable,
+    JobPrimaryKey, JobTable, MetricAttributeIndex, MetricAttributeKey, MetricFloatPointSeries,
+    MetricHistogramPointSeries, MetricIntegerPointSeries, MetricNameIndex, MetricSeriesId,
+    MetricSeriesKind, MetricSeriesMetadata, MetricSeriesTable, OptionPrimaryKey, OptionTable,
+    SessionPrimaryKey, SessionTable, StagePrimaryKey, StageTable, StoreSeries, TaskPrimaryKey,
+    TaskTable, WorkerPrimaryKey, WorkerTable,
 };
+use crate::predicate::{MapValueFilter, TimestampMicros, ValueFilter};
 use crate::{SystemStoreError, SystemStoreResult};
 
 candidate_key_bound! {
@@ -524,32 +523,54 @@ fn query_workers<R: StoreReader>(
     )
 }
 
-fn metric_point_lower_bound(timestamp: &Bound<TimestampMicros>) -> Bound<MetricPointKey> {
-    match timestamp {
-        Bound::Included(timestamp) => Bound::Included(MetricPointKey {
-            timestamp: *timestamp,
-            ordinal: 0,
-        }),
-        Bound::Excluded(timestamp) => Bound::Excluded(MetricPointKey {
-            timestamp: *timestamp,
-            ordinal: u64::MAX,
-        }),
-        Bound::Unbounded => Bound::Unbounded,
+fn scan_metric_points<R, S, T>(
+    reader: &R,
+    series: &MetricSeriesMetadata,
+    timestamp: &ValueFilter<TimestampMicros>,
+    lower: Bound<TimestampMicros>,
+    upper: Bound<TimestampMicros>,
+    fetch: usize,
+    out: &mut Vec<MetricRow>,
+    to_metric_value: impl Fn(T) -> crate::types::MetricValue,
+) -> SystemStoreResult<bool>
+where
+    R: StoreReader + crate::access::SeriesReader<S, R::Error>,
+    S: StoreSeries<SeriesKey = MetricSeriesId, PointKey = TimestampMicros, PointValue = T>,
+{
+    let mut predicate_error = None;
+    reader
+        .series::<S>()
+        .scan(
+            &series.id,
+            lower,
+            upper,
+            &mut |point_timestamp, value| match (timestamp.predicate)(&point_timestamp) {
+                Ok(true) => {
+                    if let Some(timestamp) = DateTime::from_timestamp_micros(point_timestamp.0) {
+                        out.push(MetricRow {
+                            timestamp,
+                            name: series.name.clone(),
+                            attributes: series.attributes.clone(),
+                            value: to_metric_value(value),
+                        });
+                        if out.len() == fetch {
+                            return false;
+                        }
+                    }
+                    true
+                }
+                Ok(false) => true,
+                Err(error) => {
+                    predicate_error = Some(SystemStoreError::from(error));
+                    false
+                }
+            },
+        )
+        .map_err(|error| -> SystemStoreError { error.into() })?;
+    if let Some(error) = predicate_error {
+        return Err(error);
     }
-}
-
-fn metric_point_upper_bound(timestamp: &Bound<TimestampMicros>) -> Bound<MetricPointKey> {
-    match timestamp {
-        Bound::Included(timestamp) => Bound::Included(MetricPointKey {
-            timestamp: *timestamp,
-            ordinal: u64::MAX,
-        }),
-        Bound::Excluded(timestamp) => Bound::Excluded(MetricPointKey {
-            timestamp: *timestamp,
-            ordinal: 0,
-        }),
-        Bound::Unbounded => Bound::Unbounded,
-    }
+    Ok(out.len() == fetch)
 }
 
 fn query_metrics<R: StoreReader>(
@@ -575,39 +596,77 @@ fn query_metrics<R: StoreReader>(
             continue;
         }
         for range in timestamp.domain.ranges() {
-            let mut predicate_error = None;
-            reader
-                .series::<MetricPointSeries>()
-                .scan(
-                    &series.id,
-                    metric_point_lower_bound(&range.lower),
-                    metric_point_upper_bound(&range.upper),
-                    &mut |point, value| match (timestamp.predicate)(&point.timestamp) {
-                        Ok(true) => {
-                            if let Some(timestamp) =
-                                DateTime::from_timestamp_micros(point.timestamp.0)
-                            {
-                                out.push(MetricRow {
-                                    timestamp,
-                                    name: series.name.clone(),
-                                    attributes: series.attributes.clone(),
-                                    value,
-                                });
-                            }
-                            out.len() != fetch
-                        }
-                        Ok(false) => true,
-                        Err(error) => {
-                            predicate_error = Some(SystemStoreError::from(error));
-                            false
-                        }
+            let complete = match series.kind {
+                MetricSeriesKind::IntegerCount => {
+                    scan_metric_points::<_, MetricIntegerPointSeries, _>(
+                        reader,
+                        &series,
+                        &timestamp,
+                        range.lower,
+                        range.upper,
+                        fetch,
+                        &mut out,
+                        |value| {
+                            crate::types::MetricValue::Count(crate::types::MetricNumber::Integer(
+                                value,
+                            ))
+                        },
+                    )?
+                }
+                MetricSeriesKind::FloatCount => scan_metric_points::<_, MetricFloatPointSeries, _>(
+                    reader,
+                    &series,
+                    &timestamp,
+                    range.lower,
+                    range.upper,
+                    fetch,
+                    &mut out,
+                    |value| {
+                        crate::types::MetricValue::Count(crate::types::MetricNumber::Float(value))
                     },
-                )
-                .map_err(|error| -> SystemStoreError { error.into() })?;
-            if let Some(error) = predicate_error {
-                return Err(error);
-            }
-            if out.len() == fetch {
+                )?,
+                MetricSeriesKind::IntegerGauge => {
+                    scan_metric_points::<_, MetricIntegerPointSeries, _>(
+                        reader,
+                        &series,
+                        &timestamp,
+                        range.lower,
+                        range.upper,
+                        fetch,
+                        &mut out,
+                        |value| {
+                            crate::types::MetricValue::Gauge(crate::types::MetricNumber::Integer(
+                                value,
+                            ))
+                        },
+                    )?
+                }
+                MetricSeriesKind::FloatGauge => scan_metric_points::<_, MetricFloatPointSeries, _>(
+                    reader,
+                    &series,
+                    &timestamp,
+                    range.lower,
+                    range.upper,
+                    fetch,
+                    &mut out,
+                    |value| {
+                        crate::types::MetricValue::Gauge(crate::types::MetricNumber::Float(value))
+                    },
+                )?,
+                MetricSeriesKind::Histogram => {
+                    scan_metric_points::<_, MetricHistogramPointSeries, _>(
+                        reader,
+                        &series,
+                        &timestamp,
+                        range.lower,
+                        range.upper,
+                        fetch,
+                        &mut out,
+                        crate::types::MetricValue::Histogram,
+                    )?
+                }
+            };
+            if complete {
                 return Ok(out);
             }
         }
@@ -621,15 +680,13 @@ mod tests {
     use std::sync::Arc;
 
     use chrono::Utc;
-    use sail_common_datafusion::system::predicate::{
-        MapValueFilter, Predicates, TimestampMicros, ValueDomain,
-    };
-    use sail_common_datafusion::system::types::{MetricNumber, MetricValue};
 
     use super::{ValueFilter, query_jobs, query_metrics};
     use crate::access::DirectStoreBackend;
     use crate::backend::MemoryBackend;
     use crate::engine::{MetricSample, write_event, write_metrics};
+    use crate::predicate::{MapValueFilter, Predicates, TimestampMicros, ValueDomain};
+    use crate::types::{MetricNumber, MetricValue};
     use crate::{SystemEvent, SystemStoreResult};
 
     #[test]

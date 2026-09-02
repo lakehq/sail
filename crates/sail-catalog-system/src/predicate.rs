@@ -12,7 +12,7 @@ use datafusion::logical_expr::{Expr, Operator};
 use datafusion::physical_expr::expressions::{BinaryExpr, Column, InListExpr, Literal};
 use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::internal_err;
-use sail_common_datafusion::system::predicate::{
+use sail_system_store::predicate::{
     MapValueFilter, Predicate, TimestampMicros, ValueDomain, ValueFilter,
 };
 
@@ -562,7 +562,7 @@ mod tests {
     use datafusion::physical_expr::PhysicalExpr;
     use datafusion::physical_expr::expressions::{BinaryExpr, Column, Literal, in_list};
     use datafusion::scalar::ScalarValue;
-    use sail_common_datafusion::system::predicate::{TimestampMicros, ValueRange};
+    use sail_system_store::predicate::{TimestampMicros, ValueRange};
 
     use super::{ArrowPredicateEvaluator, PredicateExtractor};
 

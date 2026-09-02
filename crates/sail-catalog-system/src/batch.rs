@@ -9,7 +9,7 @@ use parquet_variant_compute::VariantArrayBuilder;
 use parquet_variant_json::JsonToVariant;
 use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
 use sail_common_datafusion::array::serde::ArrowSerializer;
-use sail_common_datafusion::system::catalog::{MetricRow, SystemTable};
+use sail_system_store::catalog::{MetricRow, SystemTable};
 use serde::{Deserialize, Serialize};
 
 pub fn build_rows<T>(table: SystemTable, rows: Vec<T>) -> Result<RecordBatch>

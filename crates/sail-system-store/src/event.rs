@@ -1,8 +1,9 @@
 //! Durable system events emitted by the driver.
 
 use chrono::{DateTime, Utc};
-use sail_common_datafusion::system::types::StageInput;
 use serde::{Deserialize, Serialize};
+
+use crate::types::StageInput;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]

@@ -12,7 +12,7 @@ use datafusion::physical_plan::{
     apply_expression_roots,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::system::catalog::SystemTable;
+use sail_system_store::catalog::SystemTable;
 
 use crate::service::SystemTableService;
 

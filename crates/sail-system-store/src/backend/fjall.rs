@@ -8,10 +8,6 @@ use fjall::{
     KeyspaceCreateOptions, PersistMode, Readable, SingleWriterTxDatabase, SingleWriterTxKeyspace,
     SingleWriterWriteTx, Snapshot,
 };
-use sail_common_datafusion::system::catalog::{
-    JobRow, OptionRow, SessionRow, StageRow, TaskRow, WorkerRow,
-};
-use sail_common_datafusion::system::types::MetricValue;
 
 use crate::access::{
     Commit, IndexReader, IndexWriter, SeriesReader, SeriesWriter, StoreReader, StoreWriter,
@@ -21,10 +17,11 @@ use crate::backend::codec::{
     CodecError, CodecResult, NEXT_METRIC_SERIES_ID_KEY, OrderedKeyCodec, OrderedKeyCodecExt,
     ValueCodec,
 };
+use crate::catalog::{JobRow, OptionRow, SessionRow, StageRow, TaskRow, WorkerRow};
 use crate::model::{
-    JobPrimaryKey, JobTable, MetricAttributeIndex, MetricAttributeKey, MetricNameIndex,
-    MetricPointKey, MetricPointOrdinalKey, MetricPointOrdinalTable, MetricPointSeries,
-    MetricSeriesId, MetricSeriesIdentityIndex, MetricSeriesKey, MetricSeriesMetadata,
+    JobPrimaryKey, JobTable, MetricAttributeIndex, MetricAttributeKey, MetricFloatPointSeries,
+    MetricHistogramPointSeries, MetricIntegerPointSeries, MetricNameIndex, MetricPointValues,
+    MetricSeriesId, MetricSeriesIdentityTable, MetricSeriesKey, MetricSeriesMetadata,
     MetricSeriesTable, NextMetricSeriesIdTable, OptionPrimaryKey, OptionTable, SessionPrimaryKey,
     SessionTable, StagePrimaryKey, StageTable, StoreIndex, StoreSeries, StoreTable, TaskPrimaryKey,
     TaskTable, WorkerPrimaryKey, WorkerTable,
@@ -47,11 +44,12 @@ pub(crate) struct FjallBackend {
     pub(crate) workers: SingleWriterTxKeyspace,
     pub(crate) metadata: SingleWriterTxKeyspace,
     pub(crate) metric_series: SingleWriterTxKeyspace,
-    pub(crate) metric_point_ordinals: SingleWriterTxKeyspace,
     pub(crate) metric_series_identities: SingleWriterTxKeyspace,
     pub(crate) metric_names: SingleWriterTxKeyspace,
     pub(crate) metric_attributes: SingleWriterTxKeyspace,
-    pub(crate) metric_points: SingleWriterTxKeyspace,
+    pub(crate) metric_integer_points: SingleWriterTxKeyspace,
+    pub(crate) metric_float_points: SingleWriterTxKeyspace,
+    pub(crate) metric_histogram_points: SingleWriterTxKeyspace,
 }
 
 impl FjallBackend {
@@ -77,11 +75,12 @@ impl FjallBackend {
             workers: open_keyspace(WorkerTable::NAME)?,
             metadata: open_keyspace(NextMetricSeriesIdTable::NAME)?,
             metric_series: open_keyspace(MetricSeriesTable::NAME)?,
-            metric_point_ordinals: open_keyspace(MetricPointOrdinalTable::NAME)?,
-            metric_series_identities: open_keyspace(MetricSeriesIdentityIndex::NAME)?,
+            metric_series_identities: open_keyspace(MetricSeriesIdentityTable::NAME)?,
             metric_names: open_keyspace(MetricNameIndex::NAME)?,
             metric_attributes: open_keyspace(MetricAttributeIndex::NAME)?,
-            metric_points: open_keyspace(MetricPointSeries::NAME)?,
+            metric_integer_points: open_keyspace(MetricIntegerPointSeries::NAME)?,
+            metric_float_points: open_keyspace(MetricFloatPointSeries::NAME)?,
+            metric_histogram_points: open_keyspace(MetricHistogramPointSeries::NAME)?,
             db,
         })
     }
@@ -247,12 +246,12 @@ table!(
     MetricSeriesId::decode_key
 );
 table!(
-    MetricPointOrdinalTable,
-    MetricPointOrdinalKey,
-    u64,
-    metric_point_ordinals,
-    |key: &MetricPointOrdinalKey| key.encoded_key(),
-    MetricPointOrdinalKey::decode_key
+    MetricSeriesIdentityTable,
+    MetricSeriesKey,
+    MetricSeriesId,
+    metric_series_identities,
+    |key: &MetricSeriesKey| key.encoded_key(),
+    MetricSeriesKey::decode_key
 );
 
 fn index_scan<R, K, V>(
@@ -274,24 +273,6 @@ where
         }
     }
     Ok(())
-}
-
-fn index_prefix_entries<R, K, V>(
-    reader: &R,
-    keyspace: &SingleWriterTxKeyspace,
-    prefix: Vec<u8>,
-    decode: impl Fn(&[u8], &[u8]) -> CodecResult<(K, V)>,
-) -> fjall::Result<Vec<(K, V)>>
-where
-    R: Readable,
-{
-    reader
-        .prefix(keyspace, prefix)
-        .map(|guard| {
-            let (key, value) = guard.into_inner()?;
-            Ok(decode(&key, &value)?)
-        })
-        .collect()
 }
 
 fn prefix_end(mut prefix: Vec<u8>) -> Option<Vec<u8>> {
@@ -340,18 +321,6 @@ macro_rules! index {
             I: Readable,
             B: Borrow<FjallBackend>,
         {
-            fn get(&self, key: &$key) -> Result<Vec<$value>, fjall::Error> {
-                Ok(index_prefix_entries(
-                    &self.inner,
-                    &self.backend.borrow().$keyspace,
-                    key.encoded_key(),
-                    $decode,
-                )?
-                .into_iter()
-                .filter_map(|(entry_key, value)| (entry_key == *key).then_some(value))
-                .collect())
-            }
-
             fn scan(
                 &self,
                 lower: Bound<$key>,
@@ -385,19 +354,6 @@ macro_rules! index {
 }
 
 index!(
-    MetricSeriesIdentityIndex,
-    MetricSeriesKey,
-    MetricSeriesId,
-    metric_series_identities,
-    |bound| encoded_bound(bound, |key: &MetricSeriesKey| key.encoded_key()),
-    |bound| encoded_bound(bound, |key: &MetricSeriesKey| key.encoded_key()),
-    |key, value| Ok((
-        MetricSeriesKey::decode_key(key)?,
-        MetricSeriesId::decode_key(value)?,
-    )),
-    |key: MetricSeriesKey, value: MetricSeriesId| (key.encoded_key(), value.encoded_key())
-);
-index!(
     MetricNameIndex,
     String,
     MetricSeriesId,
@@ -420,8 +376,8 @@ index!(
 
 fn series_bounds(
     id: MetricSeriesId,
-    lower: Bound<MetricPointKey>,
-    upper: Bound<MetricPointKey>,
+    lower: Bound<crate::predicate::TimestampMicros>,
+    upper: Bound<crate::predicate::TimestampMicros>,
 ) -> (Bound<Vec<u8>>, Bound<Vec<u8>>) {
     let lower = match lower {
         Bound::Included(point) => Bound::Included((id, point).encoded_key()),
@@ -439,67 +395,111 @@ fn series_bounds(
     (lower, upper)
 }
 
-fn series_scan<R: Readable>(
+fn series_scan<R, V>(
     reader: &R,
-    store: &FjallBackend,
+    keyspace: &SingleWriterTxKeyspace,
     id: MetricSeriesId,
-    lower: Bound<MetricPointKey>,
-    upper: Bound<MetricPointKey>,
-    visitor: &mut dyn FnMut(MetricPointKey, MetricValue) -> bool,
-) -> fjall::Result<()> {
+    lower: Bound<crate::predicate::TimestampMicros>,
+    upper: Bound<crate::predicate::TimestampMicros>,
+    visitor: &mut dyn FnMut(crate::predicate::TimestampMicros, V) -> bool,
+) -> fjall::Result<()>
+where
+    R: Readable,
+    V: Clone + serde::Serialize + serde::de::DeserializeOwned,
+{
     let (lower, upper) = series_bounds(id, lower, upper);
-    for guard in reader.range(&store.metric_points, (lower, upper)) {
+    for guard in reader.range(keyspace, (lower, upper)) {
         let (key, value) = guard.into_inner()?;
-        let (_, point) = <(MetricSeriesId, MetricPointKey)>::decode_key(&key)?;
-        let value = MetricValue::decode_value(&value)?;
-        if !visitor(point, value) {
-            break;
+        let (_, timestamp) =
+            <(MetricSeriesId, crate::predicate::TimestampMicros)>::decode_key(&key)?;
+        let values = MetricPointValues::<V>::decode_value(&value)?;
+        for value in values {
+            if !visitor(timestamp, value) {
+                return Ok(());
+            }
         }
     }
     Ok(())
 }
 
-impl<I, B> SeriesReader<MetricPointSeries, fjall::Error> for FjallAccessor<I, B>
-where
-    I: Readable,
-    B: Borrow<FjallBackend>,
-{
-    fn scan(
-        &self,
-        series: &MetricSeriesId,
-        lower: Bound<MetricPointKey>,
-        upper: Bound<MetricPointKey>,
-        visitor: &mut dyn FnMut(MetricPointKey, MetricValue) -> bool,
-    ) -> Result<(), fjall::Error> {
-        series_scan(
-            &self.inner,
-            self.backend.borrow(),
-            *series,
-            lower,
-            upper,
-            visitor,
-        )
-    }
-}
-
-impl<B> SeriesWriter<MetricPointSeries, fjall::Error> for FjallAccessor<SingleWriterWriteTx<'_>, B>
+impl<B> FjallAccessor<SingleWriterWriteTx<'_>, B>
 where
     B: Borrow<FjallBackend>,
 {
-    fn put(
+    /// Loads the existing value or initializes `V::default()`, invokes `modify`, then writes the
+    /// resulting value back to the keyspace.
+    fn update_or_insert_with<V>(
         &mut self,
-        series: MetricSeriesId,
-        point: MetricPointKey,
-        value: MetricValue,
-    ) -> Result<(), fjall::Error> {
-        self.inner.insert(
-            &self.backend.borrow().metric_points,
-            (series, point).encoded_key(),
-            value.encode_value()?,
-        );
+        keyspace: &SingleWriterTxKeyspace,
+        key: Vec<u8>,
+        modify: impl FnOnce(&mut V),
+    ) -> Result<(), fjall::Error>
+    where
+        V: Default + ValueCodec,
+    {
+        let mut value = match self.inner.get(keyspace, &key)? {
+            Some(value) => V::decode_value(&value)?,
+            None => V::default(),
+        };
+        modify(&mut value);
+        self.inner.insert(keyspace, key, value.encode_value()?);
         Ok(())
     }
 }
+
+macro_rules! series {
+    ($marker:ty, $value:ty, $keyspace:ident) => {
+        impl<I, B> SeriesReader<$marker, fjall::Error> for FjallAccessor<I, B>
+        where
+            I: Readable,
+            B: Borrow<FjallBackend>,
+        {
+            fn scan(
+                &self,
+                series: &MetricSeriesId,
+                lower: Bound<crate::predicate::TimestampMicros>,
+                upper: Bound<crate::predicate::TimestampMicros>,
+                visitor: &mut dyn FnMut(crate::predicate::TimestampMicros, $value) -> bool,
+            ) -> Result<(), fjall::Error> {
+                series_scan(
+                    &self.inner,
+                    &self.backend.borrow().$keyspace,
+                    *series,
+                    lower,
+                    upper,
+                    visitor,
+                )
+            }
+        }
+
+        impl<B> SeriesWriter<$marker, fjall::Error> for FjallAccessor<SingleWriterWriteTx<'_>, B>
+        where
+            B: Borrow<FjallBackend>,
+        {
+            fn put(
+                &mut self,
+                series: MetricSeriesId,
+                timestamp: crate::predicate::TimestampMicros,
+                value: $value,
+            ) -> Result<(), fjall::Error> {
+                let keyspace = self.backend.borrow().$keyspace.clone();
+                self.update_or_insert_with::<MetricPointValues<$value>>(
+                    &keyspace,
+                    (series, timestamp).encoded_key(),
+                    |existing| existing.push(value),
+                )
+            }
+        }
+    };
+}
+
+series!(MetricIntegerPointSeries, i64, metric_integer_points);
+series!(MetricFloatPointSeries, f64, metric_float_points);
+series!(
+    MetricHistogramPointSeries,
+    crate::types::MetricHistogram,
+    metric_histogram_points
+);
 
 impl<I, B> StoreReader for FjallAccessor<I, B>
 where
@@ -548,16 +548,15 @@ mod tests {
     use std::collections::BTreeMap;
     use std::ops::Bound;
 
-    use sail_common_datafusion::system::predicate::TimestampMicros;
-    use sail_common_datafusion::system::types::{MetricNumber, MetricValue};
-
     use super::FjallBackend;
     use crate::access::{Commit, StoreReader, TransactionalStoreBackend};
     use crate::engine::{MetricSample, write_event, write_metrics};
     use crate::model::{
-        MetricAttributeIndex, MetricAttributeKey, MetricNameIndex, MetricPointSeries,
+        MetricAttributeIndex, MetricAttributeKey, MetricIntegerPointSeries, MetricNameIndex,
         OptionPrimaryKey, OptionTable,
     };
+    use crate::predicate::TimestampMicros;
+    use crate::types::{MetricNumber, MetricValue};
     use crate::{SystemEvent, SystemStoreResult};
 
     #[test]
@@ -604,7 +603,7 @@ mod tests {
             Some("value".to_string())
         );
         let mut points = Vec::new();
-        snapshot.series::<MetricPointSeries>().scan(
+        snapshot.series::<MetricIntegerPointSeries>().scan(
             &0,
             Bound::Unbounded,
             Bound::Unbounded,
@@ -613,24 +612,34 @@ mod tests {
                 true
             },
         )?;
-        assert_eq!(points.len(), 2);
-        assert_eq!(points[0].1, MetricValue::Gauge(MetricNumber::Integer(1)));
-        assert_eq!(points[1].1, MetricValue::Gauge(MetricNumber::Integer(2)));
         assert_eq!(
-            snapshot
-                .index::<MetricNameIndex>()
-                .get(&"sail.metric".to_string())?,
-            vec![0]
+            points,
+            vec![(TimestampMicros(1), 1), (TimestampMicros(1), 2)]
         );
-        assert_eq!(
-            snapshot
-                .index::<MetricAttributeIndex>()
-                .get(&MetricAttributeKey {
-                    key: "host".to_string(),
-                    value: "one".to_string(),
-                })?,
-            vec![0]
-        );
+        let mut name_ids = Vec::new();
+        snapshot.index::<MetricNameIndex>().scan(
+            Bound::Included("sail.metric".to_string()),
+            Bound::Included("sail.metric".to_string()),
+            &mut |_, id| {
+                name_ids.push(id);
+                true
+            },
+        )?;
+        assert_eq!(name_ids, vec![0]);
+        let attribute = MetricAttributeKey {
+            key: "host".to_string(),
+            value: "one".to_string(),
+        };
+        let mut attribute_ids = Vec::new();
+        snapshot.index::<MetricAttributeIndex>().scan(
+            Bound::Included(attribute.clone()),
+            Bound::Included(attribute),
+            &mut |_, id| {
+                attribute_ids.push(id);
+                true
+            },
+        )?;
+        assert_eq!(attribute_ids, vec![0]);
         Ok(())
     }
 }

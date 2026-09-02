@@ -4,9 +4,9 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::common::Result;
 use datafusion::physical_expr::PhysicalExpr;
 use sail_common_datafusion::extension::SessionExtension;
-use sail_common_datafusion::system::catalog::SystemTable;
-use sail_common_datafusion::system::predicate::{Predicates, ValueFilter};
 use sail_system_store::SystemStoreReader;
+use sail_system_store::catalog::SystemTable;
+use sail_system_store::predicate::{Predicates, ValueFilter};
 
 use crate::batch::{build_metrics, build_rows};
 use crate::predicate::PredicateExtractor;
