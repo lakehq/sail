@@ -4,8 +4,8 @@ use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value};
 use opentelemetry_proto::tonic::metrics::v1::{
     HistogramDataPoint, NumberDataPoint, ResourceMetrics, metric, number_data_point,
 };
-use sail_common_datafusion::system::predicate::TimestampMicros;
-use sail_common_datafusion::system::types::{MetricHistogram, MetricNumber, MetricValue};
+use sail_system_store::predicate::TimestampMicros;
+use sail_system_store::types::{MetricHistogram, MetricNumber, MetricValue};
 use sail_system_store::{MetricSample, SystemStoreHandle};
 
 use crate::SCOPE_NAME;

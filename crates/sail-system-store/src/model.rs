@@ -2,12 +2,12 @@
 
 use std::collections::BTreeMap;
 
-use sail_common_datafusion::system::catalog::{
-    JobRow, OptionRow, SessionRow, StageRow, TaskRow, WorkerRow,
-};
-use sail_common_datafusion::system::predicate::TimestampMicros;
-use sail_common_datafusion::system::types::MetricValue;
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
+
+use crate::catalog::{JobRow, OptionRow, SessionRow, StageRow, TaskRow, WorkerRow};
+use crate::predicate::TimestampMicros;
+use crate::types::MetricHistogram;
 
 macro_rules! primary_key {
     ($name:ident { $($field:ident: $ty:ty),+ $(,)? }) => {
@@ -49,6 +49,7 @@ pub type MetricAttributes = BTreeMap<String, String>;
 pub struct MetricSeriesKey {
     pub name: String,
     pub attributes: MetricAttributes,
+    pub kind: MetricSeriesKind,
 }
 
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -57,25 +58,35 @@ pub struct MetricAttributeKey {
     pub value: String,
 }
 
+/// The logical kind of a metric series. Numeric storage is split by representation so scalar
+/// series do not pay the layout cost of histograms.
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub struct MetricPointKey {
-    pub timestamp: TimestampMicros,
-    pub ordinal: u64,
+pub enum MetricSeriesKind {
+    IntegerCount,
+    FloatCount,
+    IntegerGauge,
+    FloatGauge,
+    Histogram,
 }
 
-#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub struct MetricPointOrdinalKey {
-    pub series: MetricSeriesId,
+/// A metric sample with a timestamp and a value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MetricPoint<T> {
     pub timestamp: TimestampMicros,
+    pub value: T,
 }
 
-/// Durable metadata for a metric series. A series is identified by its name and attributes,
-/// regardless of its aggregation type. Metrics points live independently out of the metadata.
+/// A metric sample value as a list of observations at the same timestamp, in insertion order.
+pub type MetricPointValues<T> = SmallVec<[T; 1]>;
+
+/// Durable metadata for a metric series. A series is identified by its name, attributes, and
+/// logical kind. Metric points live independently out of the metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetricSeriesMetadata {
     pub id: MetricSeriesId,
     pub name: String,
     pub attributes: MetricAttributes,
+    pub kind: MetricSeriesKind,
 }
 
 /// Marker for a typed primary table in a store backend.
@@ -126,10 +137,10 @@ table!(
     MetricSeriesMetadata
 );
 table!(
-    MetricPointOrdinalTable,
-    "metric_point_ordinals",
-    MetricPointOrdinalKey,
-    u64
+    MetricSeriesIdentityTable,
+    "metric_series_identities",
+    MetricSeriesKey,
+    MetricSeriesId
 );
 
 macro_rules! index {
@@ -144,12 +155,6 @@ macro_rules! index {
     };
 }
 
-index!(
-    MetricSeriesIdentityIndex,
-    "metric_series_identities",
-    MetricSeriesKey,
-    MetricSeriesId
-);
 index!(MetricNameIndex, "metric_names", String, MetricSeriesId);
 index!(
     MetricAttributeIndex,
@@ -172,9 +177,23 @@ macro_rules! series {
 }
 
 series!(
-    MetricPointSeries,
-    "metric_points",
+    MetricIntegerPointSeries,
+    "metric_integer_points",
     MetricSeriesId,
-    MetricPointKey,
-    MetricValue
+    TimestampMicros,
+    i64
+);
+series!(
+    MetricFloatPointSeries,
+    "metric_float_points",
+    MetricSeriesId,
+    TimestampMicros,
+    f64
+);
+series!(
+    MetricHistogramPointSeries,
+    "metric_histogram_points",
+    MetricSeriesId,
+    TimestampMicros,
+    MetricHistogram
 );
