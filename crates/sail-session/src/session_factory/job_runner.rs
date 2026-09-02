@@ -99,7 +99,9 @@ impl SessionJobRunnerFactory for ServerSessionJobRunnerFactory {
         info: SessionJobRunnerInfo,
     ) -> Result<SessionJobRunner> {
         match self.config.mode {
-            ExecutionMode::Local => Ok(SessionJobRunner::local(LocalJobRunner::new())),
+            ExecutionMode::Local => Ok(SessionJobRunner::local(LocalJobRunner::new(
+                info.session_id,
+            ))),
             ExecutionMode::LocalCluster => {
                 let worker_session =
                     WorkerSessionFactory::new(self.config.clone(), self.runtime.clone())

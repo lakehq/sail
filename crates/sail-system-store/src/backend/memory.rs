@@ -13,10 +13,10 @@ use crate::catalog::{JobRow, OptionRow, SessionRow, StageRow, TaskRow, WorkerRow
 use crate::model::{
     JobPrimaryKey, JobTable, MetricAttributeIndex, MetricAttributeKey, MetricFloatPointSeries,
     MetricHistogramPointSeries, MetricIntegerPointSeries, MetricNameIndex, MetricPoint,
-    MetricPointValues, MetricSeriesId, MetricSeriesIdentityTable, MetricSeriesKey,
-    MetricSeriesMetadata, MetricSeriesTable, NextMetricSeriesIdTable, OptionPrimaryKey,
-    OptionTable, SessionPrimaryKey, SessionTable, StagePrimaryKey, StageTable, TaskPrimaryKey,
-    TaskTable, WorkerPrimaryKey, WorkerTable,
+    MetricPointValue, MetricPointValues, MetricSeriesId, MetricSeriesIdentityTable,
+    MetricSeriesKey, MetricSeriesMetadata, MetricSeriesTable, NextMetricSeriesIdTable,
+    OptionPrimaryKey, OptionTable, SessionPrimaryKey, SessionTable, StagePrimaryKey, StageTable,
+    TaskPrimaryKey, TaskTable, WorkerPrimaryKey, WorkerTable,
 };
 
 /// All in-memory backend state.
@@ -33,11 +33,13 @@ pub(crate) struct MemoryBackendState {
     metric_series_identities: BTreeMap<MetricSeriesKey, MetricSeriesId>,
     metric_names: BTreeMap<String, BTreeSet<MetricSeriesId>>,
     metric_attributes: BTreeMap<MetricAttributeKey, BTreeSet<MetricSeriesId>>,
-    metric_integer_points: BTreeMap<MetricSeriesId, Vec<MetricPoint<MetricPointValues<i64>>>>,
-    metric_float_points: BTreeMap<MetricSeriesId, Vec<MetricPoint<MetricPointValues<f64>>>>,
+    metric_integer_points:
+        BTreeMap<MetricSeriesId, Vec<MetricPoint<MetricPointValues<MetricPointValue<i64>>>>>,
+    metric_float_points:
+        BTreeMap<MetricSeriesId, Vec<MetricPoint<MetricPointValues<MetricPointValue<f64>>>>>,
     metric_histogram_points: BTreeMap<
         MetricSeriesId,
-        Vec<MetricPoint<MetricPointValues<crate::types::MetricHistogram>>>,
+        Vec<MetricPoint<MetricPointValues<MetricPointValue<crate::types::MetricHistogram>>>>,
     >,
 }
 
@@ -245,11 +247,19 @@ macro_rules! series {
     };
 }
 
-series!(MetricIntegerPointSeries, i64, metric_integer_points);
-series!(MetricFloatPointSeries, f64, metric_float_points);
+series!(
+    MetricIntegerPointSeries,
+    MetricPointValue<i64>,
+    metric_integer_points
+);
+series!(
+    MetricFloatPointSeries,
+    MetricPointValue<f64>,
+    metric_float_points
+);
 series!(
     MetricHistogramPointSeries,
-    crate::types::MetricHistogram,
+    MetricPointValue<crate::types::MetricHistogram>,
     metric_histogram_points
 );
 

@@ -352,6 +352,62 @@ Feature: Iceberg MERGE
         """
       Then query plan matches snapshot
 
+    Scenario: EXPLAIN insert-only MERGE omits source-metric joins
+      Given variable location for temporary directory iceberg_merge_insert_only_plan
+      Given final statement
+        """
+        DROP TABLE IF EXISTS merge_insert_only_plan_table
+        """
+      Given statement template
+        """
+        CREATE TABLE merge_insert_only_plan_table (id INT, value STRING)
+        USING iceberg
+        LOCATION {{ location.uri }}
+        TBLPROPERTIES (
+          'format-version' = '2',
+          'write.merge.mode' = 'merge-on-read'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO merge_insert_only_plan_table VALUES
+          (1, 'keep'),
+          (2, 'keep')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW merge_insert_only_plan_source AS
+        SELECT * FROM VALUES
+          (2, 'ignored'),
+          (3, 'inserted')
+        AS source(id, value)
+        """
+      When query
+        """
+        EXPLAIN MERGE INTO merge_insert_only_plan_table AS t
+        USING merge_insert_only_plan_source AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED THEN INSERT (id, value) VALUES (s.id, s.value)
+        """
+      Then query plan matches snapshot
+      Given statement
+        """
+        MERGE INTO merge_insert_only_plan_table AS t
+        USING merge_insert_only_plan_source AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED THEN INSERT (id, value) VALUES (s.id, s.value)
+        """
+      Then iceberg snapshot count is 2
+      When query
+        """
+        SELECT id, value FROM merge_insert_only_plan_table ORDER BY id
+        """
+      Then query result ordered
+        | id | value    |
+        | 1  | keep     |
+        | 2  | keep     |
+        | 3  | inserted |
+
     Scenario: EXPLAIN target-only MERGE uses a target-preserving join
       Given variable location for temporary directory iceberg_merge_target_only_plan
       Given final statement
@@ -410,6 +466,64 @@ Feature: Iceberg MERGE
         | 1  | present |
         | 2  | expired |
         | 3  | keep    |
+
+    Scenario: Insert and target-only clauses preserve both unmatched sides
+      Given variable location for temporary directory iceberg_merge_insert_target_only_plan
+      Given final statement
+        """
+        DROP TABLE IF EXISTS merge_insert_target_only_plan_table
+        """
+      Given statement template
+        """
+        CREATE TABLE merge_insert_target_only_plan_table (id INT, value STRING)
+        USING iceberg
+        LOCATION {{ location.uri }}
+        TBLPROPERTIES (
+          'format-version' = '2',
+          'write.merge.mode' = 'merge-on-read'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO merge_insert_target_only_plan_table VALUES
+          (1, 'present'),
+          (2, 'stale')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW merge_insert_target_only_plan_source AS
+        SELECT * FROM VALUES
+          (1, 'matched'),
+          (3, 'inserted')
+        AS source(id, value)
+        """
+      When query
+        """
+        EXPLAIN MERGE INTO merge_insert_target_only_plan_table AS t
+        USING merge_insert_target_only_plan_source AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED BY SOURCE THEN UPDATE SET value = 'expired'
+        WHEN NOT MATCHED THEN INSERT (id, value) VALUES (s.id, s.value)
+        """
+      Then query plan matches snapshot
+      Given statement
+        """
+        MERGE INTO merge_insert_target_only_plan_table AS t
+        USING merge_insert_target_only_plan_source AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED BY SOURCE THEN UPDATE SET value = 'expired'
+        WHEN NOT MATCHED THEN INSERT (id, value) VALUES (s.id, s.value)
+        """
+      Then iceberg snapshot count is 2
+      When query
+        """
+        SELECT id, value FROM merge_insert_target_only_plan_table ORDER BY id
+        """
+      Then query result ordered
+        | id | value    |
+        | 1  | present  |
+        | 2  | expired  |
+        | 3  | inserted |
 
     Scenario: EXPLAIN hashes partitioned merge intents by Iceberg transforms
       Given variable location for temporary directory iceberg_merge_partitioned_plan

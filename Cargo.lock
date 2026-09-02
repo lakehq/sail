@@ -452,6 +452,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrow-pyarrow"
+version = "59.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c196ecc25b3a8dcbc1d842f2619cee653dcfa2fb8b56a291bc0481c3cf5c3821"
+dependencies = [
+ "arrow-array",
+ "arrow-data",
+ "arrow-schema",
+ "pyo3",
+]
+
+[[package]]
 name = "arrow-row"
 version = "59.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7681,6 +7693,7 @@ name = "sail-data-source"
 version = "0.7.1"
 dependencies = [
  "arrow",
+ "arrow-pyarrow",
  "arrow-schema",
  "async-trait",
  "bytes",
@@ -7709,7 +7722,6 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-physical-plan",
- "sail-pyarrow",
  "sail-sql-analyzer",
  "serde",
  "thiserror 2.0.20",
@@ -8083,16 +8095,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sail-pyarrow"
-version = "0.7.1"
-dependencies = [
- "arrow-array",
- "arrow-data",
- "arrow-schema",
- "pyo3",
-]
-
-[[package]]
 name = "sail-python"
 version = "0.7.1"
 dependencies = [
@@ -8121,6 +8123,7 @@ dependencies = [
 name = "sail-python-udf"
 version = "0.7.1"
 dependencies = [
+ "arrow-pyarrow",
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
@@ -8131,7 +8134,6 @@ dependencies = [
  "pyo3",
  "sail-common",
  "sail-common-datafusion",
- "sail-pyarrow",
  "thiserror 2.0.20",
  "tokio",
  "tokio-stream",
