@@ -69,14 +69,14 @@ pub enum MetricSeriesKind {
     Histogram,
 }
 
-/// One timestamped physical point. Values can be scalar or a small insertion-ordered batch of
-/// duplicate samples for the same timestamp.
+/// A metric sample with a timestamp and a value.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MetricPoint<T> {
     pub timestamp: TimestampMicros,
     pub value: T,
 }
 
+/// A metric sample value as a list of observations at the same timestamp, in insertion order.
 pub type MetricPointValues<T> = SmallVec<[T; 1]>;
 
 /// Durable metadata for a metric series. A series is identified by its name, attributes, and
