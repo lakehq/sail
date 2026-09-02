@@ -196,6 +196,7 @@ arrow-buffer = { version = "59.2.0" }
 arrow-data = { version = "59.2.0" }
 arrow-schema = { version = "59.2.0", features = ["serde"] }
 arrow-flight = { version = "59.2.0", features = ["flight-sql-experimental"] }
+arrow-pyarrow = { version = "59.2.0" }
 parquet = { version = "59.2.0" }
 parquet-variant = { version = "59.2.0" }
 parquet-variant-compute = { version = "59.2.0" }

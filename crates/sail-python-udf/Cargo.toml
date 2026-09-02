@@ -9,7 +9,7 @@ workspace = true
 [dependencies]
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
-sail-pyarrow = { path = "../sail-pyarrow" }
+arrow-pyarrow = { workspace = true }
 
 thiserror = { workspace = true }
 datafusion = { workspace = true }
