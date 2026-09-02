@@ -23,6 +23,32 @@ def test_iceberg_metadata_tables(spark, tmp_path):
         assert spark.sql(f"SELECT * FROM {table_name}.history").collect() == []  # noqa: S608
         assert spark.sql(f"SELECT * FROM {table_name}.refs").collect() == []  # noqa: S608
         assert spark.sql(f"SELECT * FROM {table_name}.manifests").collect() == []  # noqa: S608
+        empty_files = spark.table(f"{table_name}.files")
+        assert empty_files.collect() == []
+        assert empty_files.schema.names == [
+            "content",
+            "file_path",
+            "file_format",
+            "spec_id",
+            "partition",
+            "record_count",
+            "file_size_in_bytes",
+            "column_sizes",
+            "value_counts",
+            "null_value_counts",
+            "nan_value_counts",
+            "lower_bounds",
+            "upper_bounds",
+            "key_metadata",
+            "split_offsets",
+            "equality_ids",
+            "sort_order_id",
+            "first_row_id",
+            "referenced_data_file",
+            "content_offset",
+            "content_size_in_bytes",
+            "readable_metrics",
+        ]
         initial_metadata_log = spark.sql(
             f"SELECT latest_snapshot_id FROM {table_name}.metadata_log_entries"  # noqa: S608
         ).collect()
@@ -112,6 +138,27 @@ def test_iceberg_metadata_tables(spark, tmp_path):
         assert all(summary[0].contains_nan is False for summary in summaries)
         assert {(summary[0].lower_bound, summary[0].upper_bound) for summary in summaries} == {("1", "1"), ("2", "2")}
 
+        files = spark.sql(
+            f"""
+            SELECT content, file_path, file_format, spec_id, partition.id AS partition_id,
+                   record_count, file_size_in_bytes,
+                   readable_metrics.id.value_count AS id_value_count,
+                   readable_metrics.id.lower_bound AS id_lower_bound,
+                   readable_metrics.id.upper_bound AS id_upper_bound
+            FROM {table_name}.files
+            ORDER BY partition_id, file_path
+            """  # noqa: S608
+        ).collect()
+        assert len(files) == 2  # noqa: PLR2004
+        assert all(row.content == 0 for row in files)
+        assert all(row.file_path.endswith(".parquet") for row in files)
+        assert all(row.file_format == "PARQUET" for row in files)
+        assert all(row.spec_id == 0 for row in files)
+        assert [row.partition_id for row in files] == [1, 2]
+        assert all(row.record_count == 1 and row.file_size_in_bytes > 0 for row in files)
+        assert all(row.id_value_count == 1 for row in files)
+        assert [(row.id_lower_bound, row.id_upper_bound) for row in files] == [(1, 1), (2, 2)]
+
         projected = spark.sql(
             f"""
             SELECT snapshot_id
@@ -129,7 +176,6 @@ def test_iceberg_metadata_tables(spark, tmp_path):
 
         unsupported_metadata_tables = [
             "entries",
-            "files",
             "data_files",
             "delete_files",
             "partitions",

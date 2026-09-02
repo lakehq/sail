@@ -271,6 +271,7 @@ pub enum SnapshotUpdateKind {
     FullOverwrite,
     RowDelta,
     CopyOnWrite,
+    RewriteDataFiles,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -317,6 +318,7 @@ impl SnapshotUpdateKind {
             }
             Self::RowDelta => Operation::Overwrite,
             Self::CopyOnWrite => Operation::Overwrite,
+            Self::RewriteDataFiles => Operation::Replace,
         }
     }
 
@@ -324,8 +326,8 @@ impl SnapshotUpdateKind {
         !matches!(self, Self::FullOverwrite)
     }
 
-    fn is_targeted_rewrite(self) -> bool {
-        matches!(self, Self::CopyOnWrite)
+    pub(crate) fn is_targeted_rewrite(self) -> bool {
+        matches!(self, Self::CopyOnWrite | Self::RewriteDataFiles)
     }
 
     fn delete_totals_base<'a>(

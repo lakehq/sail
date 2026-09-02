@@ -1612,12 +1612,20 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::IcebergManifestScan(r#gen::IcebergManifestScanExecNode {
                 table_url,
                 snapshot_json,
+                filter_data_files,
+                selected_data_file_paths,
             }) => {
                 let snapshot: sail_iceberg::spec::Snapshot = serde_json::from_str(&snapshot_json)
                     .map_err(|e| {
                     plan_datafusion_err!("failed to decode Iceberg snapshot: {e}")
                 })?;
-                Ok(Arc::new(IcebergManifestScanExec::new(table_url, snapshot)))
+                let scan = IcebergManifestScanExec::new(table_url, snapshot);
+                let scan = if filter_data_files {
+                    scan.with_selected_data_file_paths(selected_data_file_paths)
+                } else {
+                    scan
+                };
+                Ok(Arc::new(scan))
             }
             NodeKind::IcebergDiscovery(r#gen::IcebergDiscoveryExecNode {
                 input,
@@ -1845,13 +1853,29 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::IcebergProcedure(r#gen::IcebergProcedureExecNode {
                 call,
                 planned_table,
+                input,
+                rewrite_data_files,
             }) => {
                 let call: sail_common_datafusion::lakeprocedure::LakeProcedureCall =
                     serde_json::from_str(&call).map_err(|e| {
                         plan_datafusion_err!("failed to decode Iceberg LakeProcedureCall: {e}")
                     })?;
-                let procedure =
-                    IcebergProcedureExec::try_new_from_serialized_table(call, &planned_table)?;
+                let input = if input.is_empty() {
+                    None
+                } else {
+                    Some(try_decode_physical_plan_with_converter(
+                        ctx,
+                        self,
+                        proto_converter,
+                        &input,
+                    )?)
+                };
+                let procedure = IcebergProcedureExec::try_new_from_serialized(
+                    call,
+                    &planned_table,
+                    &rewrite_data_files,
+                    input,
+                )?;
                 procedure.validate()?;
                 Ok(Arc::new(procedure))
             }
@@ -2777,6 +2801,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::IcebergManifestScan(r#gen::IcebergManifestScanExecNode {
                 table_url: manifest_scan.table_url().to_string(),
                 snapshot_json,
+                filter_data_files: manifest_scan.selected_data_file_paths().is_some(),
+                selected_data_file_paths: manifest_scan
+                    .selected_data_file_paths()
+                    .unwrap_or_default()
+                    .to_vec(),
             })
         } else if let Some(discovery) = node.downcast_ref::<IcebergDiscoveryExec>() {
             let input = try_encode_physical_plan_with_converter(
@@ -2948,9 +2977,23 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 plan_datafusion_err!("failed to encode Iceberg LakeProcedureCall: {e}")
             })?;
             let planned_table = procedure_exec.serialized_table()?;
+            let rewrite_data_files = procedure_exec.serialized_rewrite_data_files()?;
+            let input = procedure_exec
+                .input()
+                .map(|input| {
+                    try_encode_physical_plan_with_converter(
+                        self,
+                        proto_converter,
+                        Arc::clone(input),
+                    )
+                })
+                .transpose()?
+                .unwrap_or_default();
             NodeKind::IcebergProcedure(r#gen::IcebergProcedureExecNode {
                 call,
                 planned_table,
+                input,
+                rewrite_data_files,
             })
         } else if let Some(file_delete_exec) = node.downcast_ref::<FileDeleteExec>() {
             NodeKind::FileDelete(r#gen::FileDeleteExecNode {
@@ -4684,6 +4727,9 @@ impl RemoteExecutionCodec {
             }
             r#gen::IcebergSnapshotUpdateKind::RowDelta => Ok(SnapshotUpdateKind::RowDelta),
             r#gen::IcebergSnapshotUpdateKind::CopyOnWrite => Ok(SnapshotUpdateKind::CopyOnWrite),
+            r#gen::IcebergSnapshotUpdateKind::RewriteDataFiles => {
+                Ok(SnapshotUpdateKind::RewriteDataFiles)
+            }
             r#gen::IcebergSnapshotUpdateKind::Unspecified => {
                 plan_err!("Iceberg snapshot update kind is unspecified")
             }
@@ -4696,6 +4742,9 @@ impl RemoteExecutionCodec {
             SnapshotUpdateKind::FullOverwrite => r#gen::IcebergSnapshotUpdateKind::FullOverwrite,
             SnapshotUpdateKind::RowDelta => r#gen::IcebergSnapshotUpdateKind::RowDelta,
             SnapshotUpdateKind::CopyOnWrite => r#gen::IcebergSnapshotUpdateKind::CopyOnWrite,
+            SnapshotUpdateKind::RewriteDataFiles => {
+                r#gen::IcebergSnapshotUpdateKind::RewriteDataFiles
+            }
         }) as i32
     }
 

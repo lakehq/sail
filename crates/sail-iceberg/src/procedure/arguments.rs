@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use datafusion::common::{DataFusionError, Result, plan_err};
 use sail_common_datafusion::lakeprocedure::{LakeProcedureInvocation, LakeProcedureValue};
 
@@ -42,5 +44,16 @@ pub(super) fn optional_string(
         Some(LakeProcedureValue::Utf8(value)) => Ok(Some(value.clone())),
         Some(LakeProcedureValue::Null) | None => Ok(None),
         value => plan_err!("Procedure argument '{name}' is not a string: {value:?}"),
+    }
+}
+
+pub(super) fn optional_string_map(
+    invocation: &LakeProcedureInvocation,
+    name: &str,
+) -> Result<Option<BTreeMap<String, String>>> {
+    match invocation.argument(name) {
+        Some(LakeProcedureValue::StringMap(value)) => Ok(Some(value.clone())),
+        Some(LakeProcedureValue::Null) | None => Ok(None),
+        value => plan_err!("Procedure argument '{name}' is not a string map: {value:?}"),
     }
 }

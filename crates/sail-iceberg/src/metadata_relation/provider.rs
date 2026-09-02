@@ -8,12 +8,13 @@ use datafusion::logical_expr::{Expr, TableType};
 use datafusion::physical_plan::ExecutionPlan;
 use url::Url;
 
-use super::IcebergMetadataRelationType;
+use super::{IcebergMetadataRelationType, files};
 use crate::table::Table;
 
-pub(crate) fn metadata_relation_provider(
+pub(crate) async fn metadata_relation_provider(
+    session: &dyn Session,
     table_url: Url,
-    metadata_location: Option<String>,
+    mut metadata_location: Option<String>,
     relation_type: IcebergMetadataRelationType,
 ) -> Result<Arc<dyn TableProvider>> {
     if !relation_type.is_supported() {
@@ -21,11 +22,23 @@ pub(crate) fn metadata_relation_provider(
             relation_type.unsupported_reason(),
         ));
     }
+    let schema = if matches!(relation_type, IcebergMetadataRelationType::Files) {
+        let table = Table::load_with_metadata_location(
+            session,
+            table_url.clone(),
+            metadata_location.clone(),
+        )
+        .await?;
+        metadata_location = Some(table.metadata_location().to_string());
+        files::schema(table.metadata())?
+    } else {
+        relation_type.schema()
+    };
     Ok(Arc::new(IcebergMetadataRelationProvider {
         table_url,
         metadata_location,
         relation_type,
-        schema: relation_type.schema(),
+        schema,
     }))
 }
 

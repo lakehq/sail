@@ -21,6 +21,7 @@ use std::collections::HashMap;
 
 use serde::de::{DeserializeOwned, IgnoredAny};
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_bytes::ByteBuf;
 
 use super::{DataContentType, DataFileFormat};
 use crate::spec::Schema;
@@ -35,7 +36,7 @@ pub(super) struct IntLongMapEntry {
 #[derive(Serialize, Deserialize)]
 pub(super) struct IntBytesMapEntry {
     key: i32,
-    value: Vec<u8>,
+    value: ByteBuf,
 }
 
 #[derive(Deserialize)]
@@ -142,7 +143,7 @@ pub(super) struct DataFileSerde {
     )]
     pub upper_bounds: Option<Vec<IntBytesMapEntry>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub key_metadata: Option<Vec<u8>>,
+    pub key_metadata: Option<ByteBuf>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -253,7 +254,12 @@ fn bytes_map_from(values: HashMap<i32, Datum>) -> Result<Option<Vec<IntBytesMapE
     } else {
         let mut out = values
             .into_iter()
-            .map(|(key, value)| datum_to_bytes(&value).map(|value| IntBytesMapEntry { key, value }))
+            .map(|(key, value)| {
+                datum_to_bytes(&value).map(|value| IntBytesMapEntry {
+                    key,
+                    value: ByteBuf::from(value),
+                })
+            })
             .collect::<Result<Vec<_>, String>>()?;
         out.sort_by_key(|entry| entry.key);
         Ok(Some(out))
@@ -278,7 +284,7 @@ fn bytes_map_into(
                     Type::Struct(_) | Type::List(_) | Type::Map(_) => None,
                 })?;
             primitive
-                .literal_from_bytes(&entry.value)
+                .literal_from_bytes(entry.value.as_ref())
                 .ok()
                 .map(|literal| (entry.key, Datum::new(primitive, literal)))
         })
@@ -333,7 +339,7 @@ impl DataFileSerde {
             nan_value_counts: int_long_map_from(df.nan_value_counts),
             lower_bounds: bytes_map_from(df.lower_bounds)?,
             upper_bounds: bytes_map_from(df.upper_bounds)?,
-            key_metadata: df.key_metadata,
+            key_metadata: df.key_metadata.map(ByteBuf::from),
             split_offsets: if df.split_offsets.is_empty() {
                 None
             } else {
@@ -388,7 +394,7 @@ impl DataFileSerde {
             lower_bounds: bytes_map_into(self.lower_bounds, schema),
             upper_bounds: bytes_map_into(self.upper_bounds, schema),
             block_size_in_bytes: None,
-            key_metadata: self.key_metadata,
+            key_metadata: self.key_metadata.map(ByteBuf::into_vec),
             split_offsets: self.split_offsets.unwrap_or_default(),
             equality_ids: self.equality_ids.unwrap_or_default(),
             sort_order_id: self.sort_order_id,

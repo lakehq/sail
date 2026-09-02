@@ -1,5 +1,7 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use datafusion::arrow::array::{Array, StringArray};
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::{Extension, LogicalPlan};
@@ -330,6 +332,7 @@ fn scalar_to_procedure_value(
         LakeProcedureDataType::Int32 => DataType::Int32,
         LakeProcedureDataType::Int64 => DataType::Int64,
         LakeProcedureDataType::Utf8 => DataType::Utf8,
+        LakeProcedureDataType::StringMap => return scalar_to_string_map(value),
         LakeProcedureDataType::TimestampMicros => DataType::Timestamp(TimeUnit::Microsecond, None),
     };
     let value = value.cast_to(&target).map_err(|error| {
@@ -349,6 +352,57 @@ fn scalar_to_procedure_value(
             "Unsupported procedure argument value after cast: {value:?}"
         ))),
     }
+}
+
+fn scalar_to_string_map(value: &ScalarValue) -> PlanResult<LakeProcedureValue> {
+    let ScalarValue::Map(array) = value else {
+        return Err(PlanError::invalid(format!(
+            "Cannot cast procedure argument {value:?} to map<string,string>"
+        )));
+    };
+    let mut rows = array.iter();
+    let row = rows.next().ok_or_else(|| {
+        PlanError::invalid("Procedure map argument must contain exactly one scalar value")
+    })?;
+    if rows.next().is_some() {
+        return Err(PlanError::invalid(
+            "Procedure map argument must contain exactly one scalar value",
+        ));
+    }
+    let Some(entries) = row else {
+        return Ok(LakeProcedureValue::Null);
+    };
+    let [keys, values] = entries.columns() else {
+        return Err(PlanError::invalid(
+            "Procedure map argument must contain key and value columns",
+        ));
+    };
+    let keys = keys
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| PlanError::invalid("Procedure map keys must be strings"))?;
+    let values = values
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| PlanError::invalid("Procedure map values must be strings"))?;
+    let mut result = BTreeMap::new();
+    for index in 0..keys.len() {
+        if keys.is_null(index) || values.is_null(index) {
+            return Err(PlanError::invalid(
+                "Procedure map keys and values must not be null",
+            ));
+        }
+        let key = keys.value(index).to_string();
+        if result
+            .insert(key.clone(), values.value(index).to_string())
+            .is_some()
+        {
+            return Err(PlanError::invalid(format!(
+                "Procedure map argument contains duplicate key '{key}'"
+            )));
+        }
+    }
+    Ok(LakeProcedureValue::StringMap(result))
 }
 
 fn table_name_for_display(status: &sail_common_datafusion::catalog::TableStatus) -> String {

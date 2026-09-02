@@ -82,8 +82,12 @@ impl ProcedureTable {
         validate_iceberg_lakehouse_storage_access(Some(context))
     }
 
-    pub(super) async fn table_url(&self) -> Result<url::Url> {
+    pub(crate) async fn table_url(&self) -> Result<url::Url> {
         IcebergLakeSource::parse_table_url(vec![self.table_location.clone()]).await
+    }
+
+    pub(crate) fn lakehouse_table(&self) -> Option<&LakehouseExecutionContext> {
+        self.lakehouse_table.as_ref()
     }
 }
 

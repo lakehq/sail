@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -18,6 +18,7 @@ pub enum LakeProcedureDataType {
     Int32,
     Int64,
     Utf8,
+    StringMap,
     TimestampMicros,
 }
 
@@ -28,6 +29,20 @@ impl LakeProcedureDataType {
             Self::Int32 => DataType::Int32,
             Self::Int64 => DataType::Int64,
             Self::Utf8 => DataType::Utf8,
+            Self::StringMap => DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(
+                        vec![
+                            Arc::new(Field::new("key", DataType::Utf8, false)),
+                            Arc::new(Field::new("value", DataType::Utf8, false)),
+                        ]
+                        .into(),
+                    ),
+                    false,
+                )),
+                false,
+            ),
             Self::TimestampMicros => DataType::Timestamp(TimeUnit::Microsecond, None),
         }
     }
@@ -40,6 +55,7 @@ impl LakeProcedureDataType {
                 | (Self::Int32, LakeProcedureValue::Int32(_))
                 | (Self::Int64, LakeProcedureValue::Int64(_))
                 | (Self::Utf8, LakeProcedureValue::Utf8(_))
+                | (Self::StringMap, LakeProcedureValue::StringMap(_))
                 | (
                     Self::TimestampMicros,
                     LakeProcedureValue::TimestampMicros(_)
@@ -55,6 +71,7 @@ pub enum LakeProcedureValue {
     Int32(i32),
     Int64(i64),
     Utf8(String),
+    StringMap(BTreeMap<String, String>),
     TimestampMicros(i64),
 }
 

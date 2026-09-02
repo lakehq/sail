@@ -113,6 +113,7 @@ impl IcebergProcedureType {
         let string = LakeProcedureDataType::Utf8;
         let long = LakeProcedureDataType::Int64;
         let timestamp = LakeProcedureDataType::TimestampMicros;
+        let string_map = LakeProcedureDataType::StringMap;
         let (parameters, output, access) = match self {
             Self::AncestorsOf => (
                 vec![
@@ -148,6 +149,40 @@ impl IcebergProcedureType {
                     LakeProcedureParameter::optional("ref", string),
                 ],
                 snapshot_change_output(true),
+                LakeProcedureAccess::MetadataCommit,
+            ),
+            Self::RewriteDataFiles => (
+                vec![
+                    LakeProcedureParameter::required("table", string),
+                    LakeProcedureParameter::optional("strategy", string),
+                    LakeProcedureParameter::optional("sort_order", string),
+                    LakeProcedureParameter::optional("options", string_map),
+                    LakeProcedureParameter::optional("where", string),
+                    LakeProcedureParameter::optional("branch", string),
+                ],
+                vec![
+                    LakeProcedureField::new(
+                        "rewritten_data_files_count",
+                        LakeProcedureDataType::Int32,
+                        false,
+                    ),
+                    LakeProcedureField::new(
+                        "added_data_files_count",
+                        LakeProcedureDataType::Int32,
+                        false,
+                    ),
+                    LakeProcedureField::new("rewritten_bytes_count", long, false),
+                    LakeProcedureField::new(
+                        "failed_data_files_count",
+                        LakeProcedureDataType::Int32,
+                        false,
+                    ),
+                    LakeProcedureField::new(
+                        "removed_delete_files_count",
+                        LakeProcedureDataType::Int32,
+                        false,
+                    ),
+                ],
                 LakeProcedureAccess::MetadataCommit,
             ),
             Self::FastForward => (

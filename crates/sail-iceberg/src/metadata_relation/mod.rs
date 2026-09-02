@@ -1,5 +1,6 @@
 //! Iceberg metadata relations.
 
+pub(crate) mod files;
 mod history;
 mod kind;
 mod manifests;
@@ -161,6 +162,7 @@ mod tests {
     #[test]
     fn implemented_metadata_tables_are_supported() {
         for name in [
+            "files",
             "history",
             "metadata_log_entries",
             "snapshots",
@@ -173,7 +175,7 @@ mod tests {
                     .is_supported()
             );
         }
-        for name in ["files", "position_deletes"] {
+        for name in ["entries", "position_deletes"] {
             assert!(
                 !IcebergMetadataRelationType::parse(name)
                     .expect("recognized deferred metadata table")

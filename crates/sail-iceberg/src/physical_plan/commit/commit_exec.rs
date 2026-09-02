@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use datafusion::arrow::array::Int64Array;
+use datafusion::arrow::array::{Int32Array, Int64Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::tree_node::TreeNodeRecursion;
@@ -125,6 +125,48 @@ fn commit_count_batch(schema: SchemaRef, row_count: u64) -> Result<RecordBatch> 
         .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
 }
 
+#[derive(Debug, Clone)]
+enum CommitOutput {
+    RowCount,
+    RewriteDataFiles {
+        rewritten_data_files_count: i32,
+        rewritten_bytes_count: i64,
+    },
+}
+
+fn commit_output_batch(
+    schema: SchemaRef,
+    output: &CommitOutput,
+    row_count: u64,
+    added_data_files_count: usize,
+) -> Result<RecordBatch> {
+    match output {
+        CommitOutput::RowCount => commit_count_batch(schema, row_count),
+        CommitOutput::RewriteDataFiles {
+            rewritten_data_files_count,
+            rewritten_bytes_count,
+        } => {
+            let added_data_files_count =
+                i32::try_from(added_data_files_count).map_err(|error| {
+                    DataFusionError::Execution(format!(
+                        "rewrite_data_files added file count overflow: {error}"
+                    ))
+                })?;
+            RecordBatch::try_new(
+                schema,
+                vec![
+                    Arc::new(Int32Array::from(vec![*rewritten_data_files_count])),
+                    Arc::new(Int32Array::from(vec![added_data_files_count])),
+                    Arc::new(Int64Array::from(vec![*rewritten_bytes_count])),
+                    Arc::new(Int32Array::from(vec![0])),
+                    Arc::new(Int32Array::from(vec![0])),
+                ],
+            )
+            .map_err(|error| DataFusionError::ArrowError(Box::new(error), None))
+        }
+    }
+}
+
 fn expected_snapshot_requirement(
     expected_snapshot_id: Option<Option<i64>>,
 ) -> Option<TableRequirement> {
@@ -148,9 +190,7 @@ fn validate_scoped_overwrite_format(
     snapshot_update_kind: SnapshotUpdateKind,
     format_version: FormatVersion,
 ) -> Result<()> {
-    if matches!(snapshot_update_kind, SnapshotUpdateKind::CopyOnWrite)
-        && matches!(format_version, FormatVersion::V3)
-    {
+    if snapshot_update_kind.is_targeted_rewrite() && matches!(format_version, FormatVersion::V3) {
         return Err(DataFusionError::NotImplemented(
             "Iceberg v3 scoped overwrite is not supported until row lineage is preserved"
                 .to_string(),
@@ -168,6 +208,7 @@ pub struct IcebergCommitExec {
     expected_snapshot_id: Option<Option<i64>>,
     removed_data_file_paths: Vec<String>,
     dynamic_partition_overwrite: bool,
+    output: CommitOutput,
     cache: Arc<PlanProperties>,
 }
 
@@ -197,6 +238,7 @@ impl IcebergCommitExec {
             expected_snapshot_id: None,
             removed_data_file_paths: Vec::new(),
             dynamic_partition_overwrite: false,
+            output: CommitOutput::RowCount,
             cache,
         }
     }
@@ -213,6 +255,25 @@ impl IcebergCommitExec {
 
     pub fn with_dynamic_partition_overwrite(mut self, enabled: bool) -> Self {
         self.dynamic_partition_overwrite = enabled;
+        self
+    }
+
+    pub fn with_rewrite_data_files_output(
+        mut self,
+        schema: SchemaRef,
+        rewritten_data_files_count: i32,
+        rewritten_bytes_count: i64,
+    ) -> Self {
+        self.output = CommitOutput::RewriteDataFiles {
+            rewritten_data_files_count,
+            rewritten_bytes_count,
+        };
+        self.cache = Arc::new(PlanProperties::new(
+            EquivalenceProperties::new(schema),
+            Partitioning::UnknownPartitioning(1),
+            EmissionType::Final,
+            Boundedness::Bounded,
+        ));
         self
     }
 
@@ -622,17 +683,27 @@ impl ExecutionPlan for IcebergCommitExec {
         if children.len() != 1 {
             return internal_err!("IcebergCommitExec requires exactly one child");
         }
-        Ok(Arc::new(
-            Self::new(
-                Arc::clone(&children[0]),
-                self.table_url.clone(),
-                self.lakehouse_table.clone(),
-                self.snapshot_update_kind,
-            )
-            .with_expected_snapshot_id(self.expected_snapshot_id)
-            .with_removed_data_file_paths(self.removed_data_file_paths.clone())
-            .with_dynamic_partition_overwrite(self.dynamic_partition_overwrite),
-        ))
+        let mut commit = Self::new(
+            Arc::clone(&children[0]),
+            self.table_url.clone(),
+            self.lakehouse_table.clone(),
+            self.snapshot_update_kind,
+        )
+        .with_expected_snapshot_id(self.expected_snapshot_id)
+        .with_removed_data_file_paths(self.removed_data_file_paths.clone())
+        .with_dynamic_partition_overwrite(self.dynamic_partition_overwrite);
+        if let CommitOutput::RewriteDataFiles {
+            rewritten_data_files_count,
+            rewritten_bytes_count,
+        } = &self.output
+        {
+            commit = commit.with_rewrite_data_files_output(
+                self.schema(),
+                *rewritten_data_files_count,
+                *rewritten_bytes_count,
+            );
+        }
+        Ok(Arc::new(commit))
     }
 
     fn execute(
@@ -659,6 +730,7 @@ impl ExecutionPlan for IcebergCommitExec {
         let expected_snapshot_id = self.expected_snapshot_id;
         let planned_removed_data_file_paths = self.removed_data_file_paths.clone();
         let dynamic_partition_overwrite = self.dynamic_partition_overwrite;
+        let output = self.output.clone();
         let schema = self.schema();
         let future = async move {
             let object_store = get_object_store_from_context(&context, &table_url)?;
@@ -692,13 +764,14 @@ impl ExecutionPlan for IcebergCommitExec {
             }
 
             let task_file_paths = task_file_paths(&added_data_files, &added_delete_files);
+            let added_data_files_count = added_data_files.len();
             let mut task_files_may_be_committed = false;
             let commit_result: Result<RecordBatch> = async {
 
             // No-op path (e.g. IgnoreIfExists on existing table): no rows, no meta.
             if commit_meta.is_none() && added_data_files.is_empty() && added_delete_files.is_empty()
             {
-                return commit_count_batch(schema, 0);
+                return commit_output_batch(schema, &output, 0, 0);
             }
 
             let commit_meta = commit_meta.ok_or_else(|| {
@@ -727,7 +800,7 @@ impl ExecutionPlan for IcebergCommitExec {
             {
                 commit_info.requirements.push(requirement);
             }
-            if !matches!(snapshot_update_kind, SnapshotUpdateKind::CopyOnWrite)
+            if !snapshot_update_kind.is_targeted_rewrite()
                 && (dynamic_partition_overwrite || !planned_removed_data_file_paths.is_empty())
             {
                 return Err(DataFusionError::Internal(
@@ -739,11 +812,11 @@ impl ExecutionPlan for IcebergCommitExec {
                     "dynamic partition overwrite cannot carry planned removal paths".to_string(),
                 ));
             }
-            if matches!(snapshot_update_kind, SnapshotUpdateKind::CopyOnWrite)
+            if snapshot_update_kind.is_targeted_rewrite()
                 && commit_info.data_files.is_empty()
                 && planned_removed_data_file_paths.is_empty()
             {
-                return commit_count_batch(schema, 0);
+                return commit_output_batch(schema, &output, 0, 0);
             }
             let mut removed_data_file_paths = planned_removed_data_file_paths;
 
@@ -873,7 +946,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     }
                 }
 
-                return commit_count_batch(schema, commit_info.row_count);
+                return commit_output_batch(schema, &output, commit_info.row_count, added_data_files_count);
             }
 
             let initial_latest_meta = latest_meta_res.ok_or_else(|| {
@@ -1054,7 +1127,7 @@ impl ExecutionPlan for IcebergCommitExec {
                                 if committed.payload().is_some() {
                                     log::trace!("Iceberg catalog commit returned a payload");
                                 }
-                                return commit_count_batch(schema, commit_info.row_count);
+                                return commit_output_batch(schema, &output, commit_info.row_count, added_data_files_count);
                             }
                             CatalogCommitOutcome::NotSupported => {
                                 task_files_may_be_committed = false;
@@ -1132,7 +1205,7 @@ impl ExecutionPlan for IcebergCommitExec {
                         .await?;
                     }
 
-                    return commit_count_batch(schema, commit_info.row_count);
+                    return commit_output_batch(schema, &output, commit_info.row_count, added_data_files_count);
                 }
 
                 let snapshot = maybe_snapshot.ok_or_else(|| {
@@ -1231,7 +1304,7 @@ impl ExecutionPlan for IcebergCommitExec {
                             if committed.payload().is_some() {
                                 log::trace!("Iceberg catalog commit returned a payload");
                             }
-                            return commit_count_batch(schema, commit_info.row_count);
+                            return commit_output_batch(schema, &output, commit_info.row_count, added_data_files_count);
                         }
                         CatalogCommitOutcome::NotSupported
                             if matches!(
@@ -1432,7 +1505,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     .await?;
                 }
 
-                return commit_count_batch(schema, commit_info.row_count);
+                return commit_output_batch(schema, &output, commit_info.row_count, added_data_files_count);
             }
             }
             .await;

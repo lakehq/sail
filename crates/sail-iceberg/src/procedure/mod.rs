@@ -16,6 +16,7 @@ use sail_common_datafusion::lakeprocedure::{
 mod arguments;
 mod descriptor;
 mod logical;
+mod rewrite_data_files;
 mod snapshot;
 pub(crate) mod table;
 
@@ -24,6 +25,9 @@ use arguments::{
 };
 use descriptor::IcebergProcedureType;
 pub(crate) use logical::IcebergProcedureNode;
+pub use rewrite_data_files::RewriteDataFilesPlan;
+pub(crate) use rewrite_data_files::RewriteDataFilesScanNode;
+use rewrite_data_files::plan_rewrite_data_files;
 use snapshot::{SnapshotOperation, ancestors_output, commit_snapshot_operation};
 use table::{ProcedureTable, load_current_metadata};
 
@@ -48,10 +52,31 @@ impl LakeProcedureProvider for IcebergLakeSource {
 
     async fn plan_procedure(
         &self,
-        _session: &dyn Session,
+        session: &dyn Session,
         target: LakeProcedurePlanningTarget,
         call: &LakeProcedureCall,
     ) -> Result<LakeProcedurePlan> {
+        let procedure_type = IcebergProcedureType::parse(&call.invocation.procedure.name)
+            .ok_or_else(|| {
+                datafusion::common::DataFusionError::Plan(format!(
+                    "Unknown Iceberg system procedure: {}",
+                    call.invocation.procedure.name
+                ))
+            })?;
+        if matches!(procedure_type, IcebergProcedureType::RewriteDataFiles) {
+            let LakeProcedurePlanningTarget::Table(info) = target else {
+                return plan_err!("Iceberg system procedures require a table target");
+            };
+            let (worker_plan, rewrite_plan) = plan_rewrite_data_files(session, *info, call).await?;
+            let implementation = LogicalPlan::Extension(Extension {
+                node: Arc::new(IcebergProcedureNode::try_new_rewrite_data_files(
+                    call.clone(),
+                    worker_plan,
+                    rewrite_plan,
+                )?),
+            });
+            return Ok(LakeProcedurePlan::coordinator(implementation));
+        }
         let planned_table = match target {
             LakeProcedurePlanningTarget::Table(info) => {
                 let table = ProcedureTable::from_source_info(*info).await?;
@@ -245,6 +270,7 @@ mod tests {
                 "rollback_to_snapshot",
                 "rollback_to_timestamp",
                 "set_current_snapshot",
+                "rewrite_data_files",
                 "ancestors_of",
                 "fast_forward",
             ]

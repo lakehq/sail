@@ -140,6 +140,9 @@ impl DataSource for IcebergLakeSource {
                     sort_order,
                     options,
                     lakehouse_table,
+                    defer_commit: false,
+                    target_file_size: None,
+                    write_partitions: None,
                 },
             )),
         }))
@@ -183,7 +186,8 @@ impl LakeRelationProvider for IcebergLakeSource {
         }
         let read = resolve_iceberg_read(ctx, info, IcebergReadPurpose::MetadataRelation).await?;
         Ok(datafusion::datasource::provider_as_source(
-            metadata_relation_provider(read.table_url, read.metadata_location, relation_type)?,
+            metadata_relation_provider(ctx, read.table_url, read.metadata_location, relation_type)
+                .await?,
         ))
     }
 }
@@ -453,6 +457,12 @@ pub struct IcebergWriteNodeOptions {
     pub sort_order: Vec<Sort>,
     pub options: Vec<OptionLayer>,
     pub lakehouse_table: Option<LakehouseExecutionContext>,
+    /// Leaves the writer action stream uncommitted for a coordinator-owned operation.
+    pub defer_commit: bool,
+    /// Operation-specific Parquet target size. Ordinary writes use the writer default.
+    pub target_file_size: Option<u64>,
+    /// Operation-specific writer parallelism. Ordinary writes use the builder default.
+    pub write_partitions: Option<usize>,
 }
 
 #[derive(Clone, Debug, Educe)]
@@ -532,6 +542,9 @@ pub(crate) async fn plan_iceberg_write(
         sort_order,
         options,
         lakehouse_table,
+        defer_commit,
+        target_file_size,
+        write_partitions,
     } = node.options().clone();
 
     let mode = match mode {
@@ -666,7 +679,13 @@ pub(crate) async fn plan_iceberg_write(
     let mut options = IcebergWriterExecOptions::from(iceberg_options);
     options.apply_variant_shredding_option_presence(variant_shredding_option_presence);
     options.table_properties = table_properties;
-    options.lakehouse_table = lakehouse_table;
+    // A deferred coordinator commit must use the execution-time access session rather than the
+    // planning session serialized into worker commit metadata.
+    options.lakehouse_table = if defer_commit { None } else { lakehouse_table };
+    if let Some(target_file_size) = target_file_size {
+        options.target_file_size = target_file_size;
+    }
+    options.fixed_write_partitions = write_partitions;
     let logical_input_schema = Arc::new(logical_input.schema().as_arrow().clone());
     let writer_input_schema =
         input_schema_with_logical_metadata(physical_input.schema(), Some(&logical_input_schema));
@@ -693,6 +712,9 @@ pub(crate) async fn plan_iceberg_write(
         physical_sort,
         ctx,
     );
+    if let Some(write_partitions) = write_partitions {
+        builder = builder.with_write_partitions(write_partitions)?;
+    }
     if matches!(mode, PhysicalSinkMode::OverwriteIf { .. }) {
         builder = builder
             .with_expected_snapshot_id(expected_snapshot_id)
@@ -702,7 +724,11 @@ pub(crate) async fn plan_iceberg_write(
             .with_expected_snapshot_id(expected_snapshot_id)
             .with_dynamic_partition_overwrite(true);
     }
-    builder.build().await
+    if defer_commit {
+        builder.build_writer().await
+    } else {
+        builder.build().await
+    }
 }
 
 impl IcebergLakeSource {
@@ -860,12 +886,12 @@ async fn build_iceberg_provider(
 }
 
 #[derive(Clone, Copy)]
-enum IcebergReadPurpose {
+pub(crate) enum IcebergReadPurpose {
     DataScan,
     MetadataRelation,
 }
 
-async fn load_iceberg_read_table(
+pub(crate) async fn load_iceberg_read_table(
     ctx: &dyn Session,
     info: SourceInfo,
     read_purpose: IcebergReadPurpose,
@@ -1339,10 +1365,11 @@ mod tests {
         );
         assert_eq!(
             relation_provider.resolve_relation("files"),
-            LakeRelationResolution::Unsupported {
-                reason: "Iceberg metadata table 'files' is recognized but not implemented"
-                    .to_string(),
-            }
+            LakeRelationResolution::Supported(LakeRelation::new(
+                "files",
+                LakeRelationAccess::MetadataRead,
+                LakeRelationTimeTravel::Unsupported,
+            ))
         );
         assert_eq!(
             relation_provider.resolve_relation("unknown_relation"),

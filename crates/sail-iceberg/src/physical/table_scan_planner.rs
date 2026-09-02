@@ -8,6 +8,7 @@ use datafusion::logical_expr::expr_rewriter::unnormalize_cols;
 use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::logical_expr::{LogicalPlan, TableScan, UserDefinedLogicalNode};
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use sail_logical_plan::merge::MergeCardinalityCheckNode;
 use sail_logical_plan::row_level::RowLevelWriteNode;
@@ -16,8 +17,10 @@ use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use crate::lake_source::{IcebergWriteNode, plan_iceberg_write};
 use crate::logical::IcebergTableSource;
 use crate::physical::row_level_planner::plan_iceberg_row_level_write;
-use crate::physical_plan::IcebergProcedureExec;
-use crate::procedure::IcebergProcedureNode;
+use crate::physical_plan::{
+    IcebergManifestScanExec, IcebergProcedureExec, IcebergScanByDataFilesExec,
+};
+use crate::procedure::{IcebergProcedureNode, RewriteDataFilesScanNode};
 
 pub struct IcebergPhysicalPlanner;
 
@@ -33,10 +36,52 @@ impl ExtensionPlanner for IcebergPhysicalPlanner {
         _planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         if let Some(node) = node.as_any().downcast_ref::<IcebergProcedureNode>() {
-            return Ok(Some(Arc::new(IcebergProcedureExec::try_new(
-                node.call().clone(),
-                node.planned_table().cloned(),
-            )?)));
+            let procedure = if let Some(rewrite_data_files) = node.rewrite_data_files() {
+                let [input] = physical_inputs else {
+                    return datafusion_common::internal_err!(
+                        "rewrite_data_files requires exactly one physical input"
+                    );
+                };
+                IcebergProcedureExec::try_new_rewrite_data_files(
+                    node.call().clone(),
+                    Arc::clone(input),
+                    rewrite_data_files.clone(),
+                )?
+            } else {
+                if !physical_inputs.is_empty() {
+                    return datafusion_common::internal_err!(
+                        "leaf Iceberg procedure cannot have physical inputs"
+                    );
+                }
+                IcebergProcedureExec::try_new(node.call().clone(), node.planned_table().cloned())?
+            };
+            return Ok(Some(Arc::new(procedure)));
+        }
+
+        if let Some(node) = node.as_any().downcast_ref::<RewriteDataFilesScanNode>() {
+            if !physical_inputs.is_empty() {
+                return datafusion_common::internal_err!(
+                    "IcebergRewriteDataFilesScan does not accept physical inputs"
+                );
+            }
+            let schema = node.arrow_schema();
+            if node.snapshot_json().is_empty() {
+                return Ok(Some(Arc::new(EmptyExec::new(schema))));
+            }
+            let snapshot = serde_json::from_str(node.snapshot_json()).map_err(|error| {
+                datafusion_common::DataFusionError::Plan(format!(
+                    "failed to decode rewrite_data_files snapshot: {error}"
+                ))
+            })?;
+            let manifests: Arc<dyn ExecutionPlan> = Arc::new(
+                IcebergManifestScanExec::new(node.table_url().to_string(), snapshot)
+                    .with_selected_data_file_paths(node.selected_data_file_paths().to_vec()),
+            );
+            return Ok(Some(Arc::new(IcebergScanByDataFilesExec::new(
+                manifests,
+                node.table_url().to_string(),
+                schema,
+            ))));
         }
 
         if let Some(node) = node.as_any().downcast_ref::<IcebergWriteNode>() {

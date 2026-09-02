@@ -5,7 +5,7 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{Field, Schema as ArrowSchema};
 use datafusion::common::Result;
 
-use super::{history, manifests, metadata_log_entries, refs, snapshots};
+use super::{files, history, manifests, metadata_log_entries, refs, snapshots};
 use crate::table::Table;
 
 /// Metadata relations owned by an Iceberg table rather than by its catalog.
@@ -99,7 +99,8 @@ impl IcebergMetadataRelationType {
     pub(crate) fn is_supported(self) -> bool {
         matches!(
             self,
-            Self::History
+            Self::Files
+                | Self::History
                 | Self::MetadataLogEntries
                 | Self::Snapshots
                 | Self::Refs
@@ -121,6 +122,7 @@ impl IcebergMetadataRelationType {
             Self::Snapshots => snapshots::schema(),
             Self::Refs => refs::schema(),
             Self::Manifests => manifests::schema(),
+            Self::Files => Arc::new(ArrowSchema::empty()),
             unsupported => Arc::new(ArrowSchema::new_with_metadata(
                 Vec::<Field>::new(),
                 HashMap::from([("unsupported".to_string(), unsupported.name().to_string())]),
@@ -137,6 +139,7 @@ impl IcebergMetadataRelationType {
             Self::Refs => refs::batch(table.metadata()),
             Self::Snapshots => snapshots::batch(table.metadata()),
             Self::Manifests => manifests::batch(table).await,
+            Self::Files => files::batch(table).await,
             unsupported => Err(datafusion::common::DataFusionError::NotImplemented(
                 unsupported.unsupported_reason(),
             )),

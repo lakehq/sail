@@ -400,8 +400,9 @@ mod tests {
 
     use super::{ManifestMetadata, ManifestWriterBuilder, compare_partition_values};
     use crate::spec::{
-        DataContentType, DataFile, DataFileFormat, FormatVersion, Literal, ManifestContentType,
-        NestedField, PartitionSpec, PrimitiveLiteral, PrimitiveType, Schema, Transform, Type,
+        DataContentType, DataFile, DataFileFormat, Datum, FormatVersion, Literal, Manifest,
+        ManifestContentType, NestedField, PartitionSpec, PrimitiveLiteral, PrimitiveType, Schema,
+        Transform, Type,
     };
 
     fn partitioned_file(path: &str, partition: Vec<Option<Literal>>) -> DataFile {
@@ -552,5 +553,52 @@ mod tests {
             compare_partition_values(&PrimitiveType::Uuid, &signed_high_bit, &positive_high_half)
                 .is_lt()
         );
+    }
+
+    #[test]
+    fn manifest_roundtrip_preserves_binary_metrics_and_key_metadata() {
+        let schema = Schema::builder()
+            .with_fields([Arc::new(NestedField::new(
+                1,
+                "id",
+                Type::Primitive(PrimitiveType::Long),
+                false,
+            ))])
+            .build()
+            .expect("table schema");
+        let metadata = ManifestMetadata::new(
+            Arc::new(schema),
+            0,
+            PartitionSpec::unpartitioned_spec(),
+            FormatVersion::V2,
+            ManifestContentType::Data,
+        );
+        let mut file = partitioned_file("data.parquet", vec![]);
+        file.content = DataContentType::Data;
+        file.lower_bounds.insert(
+            1,
+            Datum::new(PrimitiveType::Long, PrimitiveLiteral::Long(10)),
+        );
+        file.upper_bounds.insert(
+            1,
+            Datum::new(PrimitiveType::Long, PrimitiveLiteral::Long(20)),
+        );
+        file.key_metadata = Some(vec![1, 2, 3]);
+        let mut writer = ManifestWriterBuilder::new(Some(7), None, metadata).build();
+        writer.add(file);
+
+        let bytes = writer.to_avro_bytes_v2().expect("manifest bytes");
+        let manifest = Manifest::parse_avro(&bytes).expect("parsed manifest");
+        let parsed = &manifest.entries()[0].data_file;
+
+        assert_eq!(
+            parsed.lower_bounds.get(&1),
+            Some(&Datum::new(PrimitiveType::Long, PrimitiveLiteral::Long(10)))
+        );
+        assert_eq!(
+            parsed.upper_bounds.get(&1),
+            Some(&Datum::new(PrimitiveType::Long, PrimitiveLiteral::Long(20)))
+        );
+        assert_eq!(parsed.key_metadata.as_deref(), Some([1, 2, 3].as_slice()));
     }
 }

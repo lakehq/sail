@@ -58,6 +58,77 @@ def test_metadata_read_procedure_runs_on_a_worker(local_cluster_spark, tmp_path)
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
 
+def test_rewrite_data_files_uses_workers_and_coordinator_commit(local_cluster_spark, tmp_path):
+    spark = local_cluster_spark
+    table_name = "distributed_rewrite_data_files"
+    location = (tmp_path / table_name).as_uri()
+    spark.sql(
+        f"""
+        CREATE TABLE {table_name} (id BIGINT, value STRING)
+        USING ICEBERG
+        LOCATION '{escape_sql_string_literal(location)}'
+        """
+    )
+    try:
+        for identifier in range(8):
+            spark.sql(f"INSERT INTO {table_name} VALUES ({identifier}, 'v{identifier}')")  # noqa: S608
+
+        before = spark.sql(
+            f"SELECT file_path, file_size_in_bytes FROM {table_name}.files ORDER BY file_path"  # noqa: S608
+        ).collect()
+        assert len(before) == 8  # noqa: PLR2004
+        target_file_size = sum(row.file_size_in_bytes for row in before)
+
+        result = spark.sql(
+            f"""
+            CALL system.rewrite_data_files(
+              table => '{table_name}',
+              options => map(
+                'rewrite-all', 'true',
+                'target-file-size-bytes', '{target_file_size}'))
+            """
+        ).first()
+
+        assert result.rewritten_data_files_count == len(before)
+        assert result.added_data_files_count == 1
+        assert result.rewritten_bytes_count == sum(row.file_size_in_bytes for row in before)
+        assert result.failed_data_files_count == 0
+        assert result.removed_delete_files_count == 0
+
+        after = spark.sql(f"SELECT file_path FROM {table_name}.files ORDER BY file_path").collect()  # noqa: S608
+        assert len(after) == result.added_data_files_count
+        assert {row.file_path for row in after}.isdisjoint({row.file_path for row in before})
+        assert [row.id for row in spark.table(table_name).orderBy("id").collect()] == list(range(8))
+        assert (
+            spark.sql(
+                f"SELECT operation FROM {table_name}.snapshots ORDER BY committed_at DESC LIMIT 1"  # noqa: S608
+            )
+            .first()
+            .operation
+            == "replace"
+        )
+
+        snapshot_count = (
+            spark.sql(
+                f"SELECT count(*) AS snapshot_count FROM {table_name}.snapshots"  # noqa: S608
+            )
+            .first()
+            .snapshot_count
+        )
+        no_op = spark.sql(f"CALL system.rewrite_data_files('{table_name}')").first()
+        assert tuple(no_op) == (0, 0, 0, 0, 0)
+        assert (
+            spark.sql(
+                f"SELECT count(*) AS snapshot_count FROM {table_name}.snapshots"  # noqa: S608
+            )
+            .first()
+            .snapshot_count
+            == snapshot_count
+        )
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
 @pytest.fixture
 def multi_catalog_spark():
     catalogs = (
