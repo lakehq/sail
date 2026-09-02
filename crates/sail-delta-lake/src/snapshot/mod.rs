@@ -39,8 +39,9 @@ use crate::checkpoint::{
 use crate::delta_log::LogStore;
 use crate::delta_log::segment_files::ReplayedTableHeader;
 use crate::schema::{
-    arrow_field_physical_name, arrow_schema_reorder_partitions, protocol_supports_type_widening,
-    schema_contains_type_widening_metadata, validate_type_widening_metadata,
+    PhysicalPartitionColumn, arrow_field_physical_name, arrow_schema_reorder_partitions,
+    protocol_supports_type_widening, schema_contains_type_widening_metadata,
+    validate_type_widening_metadata,
 };
 pub use crate::snapshot::stats::SnapshotPruningStats;
 use crate::spec::fields::{
@@ -51,7 +52,8 @@ use crate::spec::fields::{
 use crate::spec::{
     Add, ColumnMappingMode, ColumnMetadataKey, CommitConflictError, DeltaError as DeltaTableError,
     DeltaResult, DomainMetadata, Metadata, Protocol, Remove, SchemaRef, StructType, TableFeature,
-    TableProperties, Transaction, TransactionError, VersionChecksum,
+    TableProperties, Transaction, TransactionError, VersionChecksum, contains_timestampntz,
+    contains_variant,
 };
 use crate::table::{
     ChangeDataFeedSupport, ChangeDataFeedToken, ColumnMappingToken, DeletionVectorToken,
@@ -60,6 +62,7 @@ use crate::table::{
 
 mod config;
 pub(crate) mod materialize;
+mod metadata_aggregate;
 mod stats;
 
 pub use config::DeltaSnapshotConfig;
@@ -67,6 +70,7 @@ pub(crate) use config::{
     CatalogManagedCommitFile, CatalogManagedCommitSet, catalog_managed_commit_file_name,
     catalog_managed_commit_path,
 };
+pub(crate) use metadata_aggregate::{GroupedCountMetadata, GroupedCountMetadataRow};
 
 pub struct DeltaSnapshot {
     version: i64,
@@ -443,6 +447,10 @@ impl DeltaSnapshot {
         self.adds.as_ref()
     }
 
+    pub(crate) fn shared_adds(&self) -> Arc<Vec<Add>> {
+        Arc::clone(&self.adds)
+    }
+
     pub fn removes(&self) -> &[Remove] {
         self.removes.as_ref()
     }
@@ -467,6 +475,22 @@ impl DeltaSnapshot {
             .map_err(map_read_protocol_error)?;
 
         let schema = StructType::try_from(self.schema())?;
+        if contains_timestampntz(schema.fields())
+            && !crate::transaction::PROTOCOL.supports_timestamp_ntz_schema(self.protocol())
+        {
+            return Err(DeltaTableError::Unsupported(
+                "Delta schema contains timestamp_ntz requires the timestampNtz reader and writer features"
+                    .to_string(),
+            ));
+        }
+        if contains_variant(schema.fields())
+            && !crate::transaction::PROTOCOL.supports_variant_schema(self.protocol())
+        {
+            return Err(DeltaTableError::Unsupported(
+                "Delta schema contains Variant requires matching variantType or variantType-preview reader and writer features"
+                    .to_string(),
+            ));
+        }
         let has_type_changes = schema_contains_type_widening_metadata(&schema);
         if has_type_changes && !protocol_supports_type_widening(self.protocol()) {
             return Err(DeltaTableError::Unsupported(
@@ -569,7 +593,7 @@ impl DeltaSnapshot {
         }))
     }
 
-    pub fn physical_partition_columns(&self) -> Vec<(String, String)> {
+    pub fn physical_partition_columns(&self) -> Vec<PhysicalPartitionColumn> {
         let mode = self.effective_column_mapping_mode();
         self.metadata()
             .partition_columns()
@@ -580,7 +604,7 @@ impl DeltaSnapshot {
                     .field_with_name(logical)
                     .map(|field| arrow_field_physical_name(field, mode).to_string())
                     .unwrap_or_else(|_| logical.clone());
-                (logical.clone(), physical)
+                PhysicalPartitionColumn::new(logical, physical)
             })
             .collect()
     }
@@ -1001,6 +1025,8 @@ mod tests {
     use std::collections::{BTreeMap, HashMap};
     use std::sync::Arc;
 
+    use datafusion::common::ScalarValue;
+    use datafusion::common::stats::Precision;
     use object_store::ObjectStore;
     use object_store::memory::InMemory;
     use once_cell::sync::OnceCell;
@@ -1012,8 +1038,9 @@ mod tests {
     use crate::logical::table_source::DeltaTableSource;
     use crate::snapshot::{CatalogManagedCommitSet, DeltaSnapshotConfig};
     use crate::spec::{
-        Add, ColumnMappingMode, ColumnMetadataKey, DataType, DomainMetadata, Metadata,
-        MetadataValue, Protocol, StructField, StructType, TableFeature, TableProperties,
+        Add, ColumnMappingMode, ColumnMetadataKey, DataType, DeletionVectorDescriptor,
+        DomainMetadata, Metadata, MetadataValue, Protocol, StorageType, StructField, StructType,
+        TableFeature, TableProperties,
     };
     use crate::table::{ChangeDataFeedSupport, RowTrackingToken};
 
@@ -1033,6 +1060,10 @@ mod tests {
                 .collect(),
         )
         .unwrap()
+    }
+
+    fn test_metadata_with_schema(schema: StructType) -> crate::spec::DeltaResult<Metadata> {
+        Metadata::try_new(None, None, schema, Vec::new(), 0, HashMap::new())
     }
 
     fn test_snapshot(
@@ -1073,6 +1104,25 @@ mod tests {
         }
     }
 
+    fn stats_add(path: &str, stats: Option<&str>, deletion_cardinality: Option<i64>) -> Add {
+        Add {
+            path: path.to_string(),
+            partition_values: HashMap::new(),
+            size: 10,
+            modification_time: 0,
+            data_change: true,
+            stats: stats.map(str::to_string),
+            deletion_vector: deletion_cardinality.map(|cardinality| DeletionVectorDescriptor {
+                storage_type: StorageType::Inline,
+                path_or_inline_dv: "encoded-dv".to_string(),
+                offset: None,
+                size_in_bytes: 1,
+                cardinality,
+            }),
+            ..Default::default()
+        }
+    }
+
     #[expect(clippy::unwrap_used)]
     fn test_log_store() -> LogStoreRef {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
@@ -1082,6 +1132,331 @@ mod tests {
             &Url::parse("memory:///").unwrap(),
             &StorageConfig,
         )
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn snapshot_statistics_subtract_deletion_vector_cardinality() {
+        let snapshot = test_snapshot_with_adds(
+            Protocol::new(3, 7, Some(vec![TableFeature::DeletionVectors]), None),
+            test_metadata([]),
+            Vec::new(),
+            vec![
+                stats_add(
+                    "plain.parquet",
+                    Some(
+                        r#"{"numRecords":5,"minValues":{"id":1},"maxValues":{"id":5},"nullCount":{"id":0}}"#,
+                    ),
+                    None,
+                ),
+                stats_add(
+                    "dv.parquet",
+                    Some(
+                        r#"{"numRecords":4,"tightBounds":false,"minValues":{"id":6},"maxValues":{"id":9},"nullCount":{"id":0}}"#,
+                    ),
+                    Some(1),
+                ),
+            ],
+        );
+
+        let statistics = snapshot.pruning_stats().unwrap().statistics().unwrap();
+
+        assert_eq!(statistics.num_rows, Precision::Exact(8));
+        assert_eq!(
+            statistics.column_statistics[0].null_count,
+            Precision::Exact(0)
+        );
+        assert!(matches!(
+            statistics.column_statistics[0].min_value,
+            Precision::Inexact(_)
+        ));
+        assert!(matches!(
+            statistics.column_statistics[0].max_value,
+            Precision::Inexact(_)
+        ));
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn snapshot_statistics_reject_invalid_deletion_vector_cardinality() {
+        let snapshot = test_snapshot_with_adds(
+            Protocol::new(3, 7, Some(vec![TableFeature::DeletionVectors]), None),
+            test_metadata([]),
+            Vec::new(),
+            vec![stats_add(
+                "invalid.parquet",
+                Some(r#"{"numRecords":2,"nullCount":{"id":0}}"#),
+                Some(3),
+            )],
+        );
+
+        let statistics = snapshot.pruning_stats().unwrap().statistics().unwrap();
+
+        assert_eq!(statistics.num_rows, Precision::Absent);
+        assert_eq!(
+            statistics.column_statistics[0].null_count,
+            Precision::Absent
+        );
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn snapshot_statistics_require_complete_bounds_for_nonnull_files() {
+        let snapshot = test_snapshot_with_adds(
+            Protocol::new(1, 2, None, None),
+            test_metadata([]),
+            Vec::new(),
+            vec![
+                stats_add(
+                    "bounded.parquet",
+                    Some(
+                        r#"{"numRecords":2,"minValues":{"id":10},"maxValues":{"id":20},"nullCount":{"id":0}}"#,
+                    ),
+                    None,
+                ),
+                stats_add(
+                    "missing-bounds.parquet",
+                    Some(r#"{"numRecords":2,"nullCount":{"id":0}}"#),
+                    None,
+                ),
+            ],
+        );
+
+        let statistics = snapshot.pruning_stats().unwrap().statistics().unwrap();
+
+        assert_eq!(statistics.column_statistics[0].min_value, Precision::Absent);
+        assert_eq!(statistics.column_statistics[0].max_value, Precision::Absent);
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn snapshot_statistics_ignore_fully_deleted_files() {
+        let snapshot = test_snapshot_with_adds(
+            Protocol::new(3, 7, Some(vec![TableFeature::DeletionVectors]), None),
+            test_metadata([]),
+            Vec::new(),
+            vec![
+                stats_add(
+                    "live.parquet",
+                    Some(
+                        r#"{"numRecords":2,"minValues":{"id":10},"maxValues":{"id":20},"nullCount":{"id":0}}"#,
+                    ),
+                    None,
+                ),
+                stats_add(
+                    "deleted.parquet",
+                    Some(
+                        r#"{"numRecords":2,"tightBounds":false,"minValues":{"id":-100},"maxValues":{"id":100}}"#,
+                    ),
+                    Some(2),
+                ),
+            ],
+        );
+
+        let statistics = snapshot.pruning_stats().unwrap().statistics().unwrap();
+        let id = &statistics.column_statistics[0];
+
+        assert_eq!(statistics.num_rows, Precision::Exact(2));
+        assert_eq!(id.null_count, Precision::Exact(0));
+        assert_eq!(id.min_value, Precision::Exact(ScalarValue::Int64(Some(10))));
+        assert_eq!(id.max_value, Precision::Exact(ScalarValue::Int64(Some(20))));
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn snapshot_statistics_derive_partition_column_values() {
+        let metadata = Metadata::try_new(
+            None,
+            None,
+            StructType::try_new([
+                StructField::not_null("id", DataType::LONG),
+                StructField::nullable("region", DataType::STRING),
+            ])
+            .unwrap(),
+            vec!["region".to_string()],
+            0,
+            HashMap::new(),
+        )
+        .unwrap();
+        let mut west = stats_add(
+            "region=west/part.parquet",
+            Some(r#"{"numRecords":3,"nullCount":{"id":0}}"#),
+            None,
+        );
+        west.partition_values = HashMap::from([("region".to_string(), Some("west".to_string()))]);
+        let mut null_region = stats_add(
+            "region=null/part.parquet",
+            Some(r#"{"numRecords":2,"nullCount":{"id":0}}"#),
+            None,
+        );
+        null_region.partition_values = HashMap::from([("region".to_string(), None)]);
+        let snapshot = test_snapshot_with_adds(
+            Protocol::new(1, 2, None, None),
+            metadata,
+            Vec::new(),
+            vec![west, null_region],
+        );
+
+        let statistics = snapshot.pruning_stats().unwrap().statistics().unwrap();
+        let region = &statistics.column_statistics[1];
+
+        assert_eq!(region.null_count, Precision::Exact(2));
+        assert_eq!(
+            region.min_value,
+            Precision::Exact(ScalarValue::Utf8(Some("west".to_string())))
+        );
+        assert_eq!(
+            region.max_value,
+            Precision::Exact(ScalarValue::Utf8(Some("west".to_string())))
+        );
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn selected_add_statistics_only_describe_the_selected_files() {
+        let snapshot = test_snapshot_with_adds(
+            Protocol::new(3, 7, Some(vec![TableFeature::DeletionVectors]), None),
+            test_metadata([]),
+            Vec::new(),
+            vec![
+                stats_add(
+                    "unselected.parquet",
+                    Some(r#"{"numRecords":100,"nullCount":{"id":0}}"#),
+                    None,
+                ),
+                stats_add(
+                    "selected.parquet",
+                    Some(r#"{"numRecords":5,"tightBounds":false,"nullCount":{"id":0}}"#),
+                    Some(2),
+                ),
+            ],
+        );
+
+        let statistics = snapshot
+            .datafusion_table_statistics_for_adds(&snapshot.adds()[1..])
+            .unwrap();
+
+        assert_eq!(statistics.num_rows, Precision::Exact(3));
+        assert_eq!(statistics.total_byte_size, Precision::Inexact(10));
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn grouped_count_metadata_splits_constant_and_residual_files() {
+        let metadata = test_metadata_with_schema(
+            StructType::try_new([StructField::nullable("provider", DataType::STRING)]).unwrap(),
+        )
+        .unwrap();
+        let snapshot = test_snapshot_with_adds(
+            Protocol::new(3, 7, Some(vec![TableFeature::DeletionVectors]), None),
+            metadata,
+            Vec::new(),
+            vec![
+                stats_add(
+                    "constant.parquet",
+                    Some(
+                        r#"{"numRecords":10,"minValues":{"provider":"fb"},"maxValues":{"provider":"fb"},"nullCount":{"provider":0}}"#,
+                    ),
+                    None,
+                ),
+                stats_add(
+                    "constant-dv.parquet",
+                    Some(
+                        r#"{"numRecords":5,"tightBounds":false,"minValues":{"provider":"fb"},"maxValues":{"provider":"fb"},"nullCount":{"provider":0}}"#,
+                    ),
+                    Some(2),
+                ),
+                stats_add(
+                    "mixed.parquet",
+                    Some(
+                        r#"{"numRecords":7,"minValues":{"provider":"fb"},"maxValues":{"provider":"yt"},"nullCount":{"provider":0}}"#,
+                    ),
+                    None,
+                ),
+                stats_add(
+                    "null.parquet",
+                    Some(r#"{"numRecords":4,"nullCount":{"provider":4}}"#),
+                    None,
+                ),
+                stats_add(
+                    "wide-mixed-null.parquet",
+                    Some(
+                        r#"{"numRecords":3,"tightBounds":false,"minValues":{"provider":"fb"},"maxValues":{"provider":"fb"},"nullCount":{"provider":1}}"#,
+                    ),
+                    None,
+                ),
+                stats_add(
+                    "deleted.parquet",
+                    Some(r#"{"numRecords":2,"tightBounds":false}"#),
+                    Some(2),
+                ),
+            ],
+        );
+
+        let metadata = snapshot
+            .grouped_count_metadata(&["provider".to_string()], 10)
+            .unwrap();
+
+        assert_eq!(metadata.metadata_file_count, 4);
+        assert_eq!(metadata.residual_file_indices, vec![2, 4]);
+        assert_eq!(metadata.metadata_bytes, 40);
+        assert_eq!(metadata.residual_bytes, 20);
+        assert_eq!(metadata.rows.len(), 2);
+        assert_eq!(
+            metadata.rows[0].group_values,
+            vec![ScalarValue::Utf8(Some("fb".to_string()))]
+        );
+        assert_eq!(metadata.rows[0].count, 13);
+        assert_eq!(metadata.rows[1].group_values, vec![ScalarValue::Utf8(None)]);
+        assert_eq!(metadata.rows[1].count, 4);
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn grouped_count_metadata_uses_physical_partition_names() {
+        let schema = StructType::try_new([StructField::not_null("provider", DataType::STRING)
+            .with_metadata([
+                (
+                    ColumnMetadataKey::ColumnMappingId.as_ref(),
+                    MetadataValue::Number(1),
+                ),
+                (
+                    ColumnMetadataKey::ColumnMappingPhysicalName.as_ref(),
+                    MetadataValue::String("col-provider".to_string()),
+                ),
+            ])])
+        .unwrap();
+        let metadata = Metadata::try_new(
+            None,
+            None,
+            schema,
+            vec!["provider".to_string()],
+            0,
+            [("delta.columnMapping.mode".to_string(), "name".to_string())]
+                .into_iter()
+                .collect(),
+        )
+        .unwrap();
+        let mut add = stats_add("partition.parquet", Some(r#"{"numRecords":5}"#), None);
+        add.partition_values
+            .insert("col-provider".to_string(), Some("fb".to_string()));
+        let snapshot = test_snapshot_with_adds(
+            Protocol::new(2, 5, None, None),
+            metadata,
+            Vec::new(),
+            vec![add],
+        );
+
+        let metadata = snapshot
+            .grouped_count_metadata(&["provider".to_string()], 10)
+            .unwrap();
+
+        assert_eq!(metadata.residual_file_indices, Vec::<usize>::new());
+        assert_eq!(metadata.rows[0].count, 5);
+        assert_eq!(
+            metadata.rows[0].group_values,
+            vec![ScalarValue::Utf8(Some("fb".to_string()))]
+        );
     }
 
     #[test]
@@ -1359,6 +1734,80 @@ mod tests {
     }
 
     #[test]
+    fn data_read_support_validates_schema_feature_matrix() -> crate::spec::DeltaResult<()> {
+        let cases = [
+            (
+                "timestamp_ntz",
+                StructField::nullable("event_time", DataType::TIMESTAMP_NTZ),
+                TableFeature::TimestampWithoutTimezone,
+                vec![TableFeature::TimestampWithoutTimezone],
+                "schema contains timestamp_ntz requires the timestampNtz reader and writer features",
+            ),
+            (
+                "Variant",
+                StructField::nullable("payload", DataType::unshredded_variant()),
+                TableFeature::VariantType,
+                vec![TableFeature::VariantType, TableFeature::VariantTypePreview],
+                "schema contains Variant requires matching variantType or variantType-preview reader and writer features",
+            ),
+        ];
+
+        for (label, feature_field, required_feature, supported_features, expected_error) in cases {
+            let metadata = test_metadata_with_schema(StructType::try_new([
+                StructField::not_null("id", DataType::LONG),
+                feature_field,
+            ])?)?;
+            let legacy = test_snapshot(
+                Protocol::new(1, 2, None, None),
+                metadata.clone(),
+                Vec::new(),
+            );
+            let result = legacy.ensure_data_read_supported();
+            assert!(
+                matches!(
+                    result,
+                    Err(crate::spec::DeltaError::Unsupported(message))
+                        if message.contains(expected_error)
+                ),
+                "a {label} schema without its protocol feature must be rejected"
+            );
+
+            for feature in supported_features {
+                let supported = test_snapshot(
+                    Protocol::new(3, 7, Some(vec![feature.clone()]), Some(vec![feature])),
+                    metadata.clone(),
+                    Vec::new(),
+                );
+                assert!(
+                    supported.ensure_data_read_supported().is_ok(),
+                    "{label} must accept its matching reader and writer feature"
+                );
+            }
+
+            let missing_feature_cases = [
+                (
+                    "reader feature list",
+                    Protocol::new(1, 7, None, Some(vec![required_feature.clone()])),
+                ),
+                (
+                    "writer feature list",
+                    Protocol::new(3, 7, Some(vec![required_feature]), Some(Vec::new())),
+                ),
+            ];
+            for (missing_side, protocol) in missing_feature_cases {
+                let result = test_snapshot(protocol, metadata.clone(), Vec::new())
+                    .ensure_data_read_supported();
+                assert!(
+                    result.is_err(),
+                    "{label} must be rejected without its {missing_side}"
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn data_read_support_rejects_catalog_managed_without_catalog_replay() {
         let protocol = Protocol::new(
             3,
@@ -1395,13 +1844,11 @@ mod tests {
 
     #[test]
     fn delta_table_source_rejects_unsupported_reader_features() {
-        // VacuumProtocolCheck is a reader-writer feature that we does not yet support.
-        // Use it to verify that the source correctly rejects tables with unsupported features.
         let protocol = Protocol::new(
             3,
             7,
-            Some(vec![TableFeature::VacuumProtocolCheck]),
-            Some(vec![TableFeature::VacuumProtocolCheck]),
+            Some(vec![TableFeature::Unknown]),
+            Some(vec![TableFeature::AppendOnly, TableFeature::Unknown]),
         );
         let snapshot = Arc::new(test_snapshot(protocol, test_metadata([]), Vec::new()));
 
@@ -1418,22 +1865,22 @@ mod tests {
 
         assert!(matches!(
             err,
-            crate::spec::DeltaError::Unsupported(message) if message.contains("VacuumProtocolCheck")
+            crate::spec::DeltaError::Unsupported(message) if message.contains("Unknown")
         ));
     }
 
     #[test]
     #[expect(clippy::unwrap_used)]
-    fn version_checksum_skips_explicitly_known_but_unsupported_features() {
-        // TODO: support VacuumProtocolCheck
-        let protocol = Protocol::new(1, 7, None, Some(vec![TableFeature::VacuumProtocolCheck]));
-        let snapshot = test_snapshot(protocol, test_metadata([]), Vec::new());
-
-        assert!(
-            snapshot
-                .build_version_checksum(None, None)
-                .unwrap()
-                .is_none()
+    fn version_checksum_includes_vacuum_protocol_check_feature() {
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::VacuumProtocolCheck]),
+            Some(vec![TableFeature::VacuumProtocolCheck]),
         );
+        let snapshot = test_snapshot(protocol.clone(), test_metadata([]), Vec::new());
+
+        let checksum = snapshot.build_version_checksum(None, None).unwrap();
+        assert_eq!(checksum.map(|checksum| checksum.protocol), Some(protocol));
     }
 }

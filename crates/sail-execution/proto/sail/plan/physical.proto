@@ -70,6 +70,7 @@ message ExtendedPhysicalPlanNode {
     RemoteCheckpointCommitExecNode remote_checkpoint_commit = 55;
     IcebergMergeMetadataExecNode iceberg_merge_metadata = 56;
     IcebergEqualityDeleteWriterExecNode iceberg_equality_delete_writer = 57;
+    PartitionedTopKExecNode partitioned_top_k = 58;
   }
 }
 
@@ -144,6 +145,8 @@ message HigherOrderUdf {
     SparkArrayForallUdf forall = 4;
     SparkArrayAggregateUdf aggregate = 5;
     SparkArraySortUdf sort = 6;
+    SparkSequenceUdf spark_sequence_lazy = 7;
+    ConvertTzUdf convert_tz_lazy = 8;
   }
 }
 
@@ -225,6 +228,10 @@ message ExtendedScalarUdf {
     SparkFloorUdf spark_floor = 34;
     SparkTryToTimestampUdf spark_try_to_timestamp = 35;
     SparkDateFormatUdf spark_date_format = 36;
+    SparkMapFromArraysUdf spark_map_from_arrays = 37;
+    SparkMapFromEntriesUdf spark_map_from_entries = 38;
+    StrToMapUdf str_to_map = 39;
+    SparkSequenceUdf spark_sequence = 40;
   }
 }
 
@@ -299,8 +306,25 @@ message SparkUnixTimestampUdf {
   bool ansi_mode = 2;
 }
 
+message SparkSequenceUdf {
+  string session_timezone = 1;
+  bool ansi_mode = 2;
+}
+
 message SparkDateFormatUdf {
   string session_timezone = 1;
+}
+
+message SparkMapFromArraysUdf {
+  bool last_value_wins = 1;
+}
+
+message SparkMapFromEntriesUdf {
+  bool last_value_wins = 1;
+}
+
+message StrToMapUdf {
+  bool last_value_wins = 1;
 }
 
 message StructFunctionUdf {
@@ -412,6 +436,7 @@ message SparkMakeTimestampNtzUdf {
 
 message ConvertTzUdf {
   bool classic = 1;
+  bool null_short_circuit = 2;
 }
 
 message StandardUdaf {}
@@ -714,6 +739,19 @@ message PartialSortExecNode {
   uint64 common_prefix_length = 3;
 }
 
+message PartitionedTopKExecNode {
+  LexOrdering expr = 1;
+  uint64 partition_prefix_len = 2;
+  uint64 fetch = 3;
+  PartitionedTopKWindowFnKind window_fn_kind = 4;
+}
+
+enum PartitionedTopKWindowFnKind {
+  PARTITIONED_TOP_K_WINDOW_FN_KIND_UNSPECIFIED = 0;
+  PARTITIONED_TOP_K_WINDOW_FN_KIND_ROW_NUMBER = 1;
+  PARTITIONED_TOP_K_WINDOW_FN_KIND_RANK = 2;
+}
+
 message AppendMode {}
 message OverwriteMode {}
 message OverwriteIfMode {
@@ -807,8 +845,6 @@ message DeltaScanByAddsExecNode {
 
 message DeltaDiscoveryExecNode {
   string table_url = 1;
-  optional bytes predicate = 2;
-  optional bytes table_schema = 3;
   int64 version = 4;
   optional bytes input = 5;
   repeated string input_partition_columns = 6;
@@ -963,7 +999,7 @@ message IcebergWriterExecNode {
   PhysicalSinkMode sink_mode = 4;
   bool table_exists = 5;
   string options = 6;
-  bytes logical_input_schema = 7;
+  string write_context_json = 7;
   string lakehouse_table_json = 8;
   bool merge_row_intents = 9;
 }
@@ -973,6 +1009,7 @@ enum IcebergSnapshotUpdateKind {
   ICEBERG_SNAPSHOT_UPDATE_KIND_FAST_APPEND = 1;
   ICEBERG_SNAPSHOT_UPDATE_KIND_FULL_OVERWRITE = 2;
   ICEBERG_SNAPSHOT_UPDATE_KIND_ROW_DELTA = 3;
+  ICEBERG_SNAPSHOT_UPDATE_KIND_COPY_ON_WRITE = 4;
 }
 
 message IcebergCommitExecNode {
@@ -984,6 +1021,8 @@ message IcebergCommitExecNode {
   // Absent when validation is required and the target had no current snapshot.
   optional int64 expected_snapshot_id = 5;
   IcebergSnapshotUpdateKind snapshot_update_kind = 6;
+  bool dynamic_partition_overwrite = 7;
+  repeated string removed_data_file_paths = 8;
 }
 
 message IcebergManifestScanExecNode {
@@ -1030,19 +1069,24 @@ message IcebergEqualityDeleteWriterExecNode {
   optional string write_data_path = 4;
   optional string write_folder_storage_path = 5;
   string lakehouse_table_json = 6;
+  string write_context_json = 7;
+}
+
+message DeltaLogReplayHashInputs {
+  bytes checkpoint_input = 1;
+  bytes commits_input = 2;
 }
 
 message DeltaLogReplayExecNode {
-  // Legacy single-input encoding for sort replay mode.
-  bytes input = 1;
-  string table_url = 2;
-  int64 version = 3;
-  repeated string partition_columns = 4;
-  repeated string checkpoint_files = 5;
-  repeated string commit_files = 6;
-  // Preferred encoding for hash replay mode.
-  optional bytes checkpoint_input = 7;
-  optional bytes commits_input = 8;
+  string table_url = 1;
+  int64 version = 2;
+  repeated string checkpoint_files = 3;
+  repeated string commit_files = 4;
+  oneof replay_input {
+    bytes sort_input = 5;
+    DeltaLogReplayHashInputs hash_inputs = 6;
+    bytes hash_commits_input = 7;
+  }
 }
 
 message DeletionVectorWriterExecNode {
@@ -1055,6 +1099,13 @@ message DeletionVectorWriterExecNode {
   optional string partition_value_columns_json = 7;
 }
 
+enum DeletionVectorRowOperationMode {
+  DELETION_VECTOR_ROW_OPERATION_MODE_UNSPECIFIED = 0;
+  DELETION_VECTOR_ROW_OPERATION_MODE_UPDATE = 1;
+  DELETION_VECTOR_ROW_OPERATION_MODE_DELETE = 2;
+  DELETION_VECTOR_ROW_OPERATION_MODE_MIXED = 3;
+}
+
 message DeletionVectorRowsWriterExecNode {
   bytes input = 1;
   string table_url = 2;
@@ -1064,6 +1115,7 @@ message DeletionVectorRowsWriterExecNode {
   optional string operation_json = 6;
   bytes adds_input = 7;
   optional string partition_value_columns_json = 8;
+  DeletionVectorRowOperationMode operation_mode = 9;
 }
 
 message PythonDataSourceInputPartition {

@@ -1,6 +1,9 @@
 from collections.abc import Mapping
+from datetime import UTC, datetime
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql import Row
@@ -165,6 +168,29 @@ def test_parquet_explicit_schema_allows_missing_fields(spark, tmp_path):
     rows = spark.read.schema("id INT, missing STRING").parquet(path).collect()
 
     assert rows == [Row(id=1, missing=None)]
+
+
+@pytest.mark.parametrize("requested_type", ["TIMESTAMP", "TIMESTAMP_NTZ"])
+def test_parquet_explicit_schema_determines_int96_timestamp_family(spark, tmp_path, requested_type):
+    path = tmp_path / "int96_explicit_timestamp_schema.parquet"
+    table = pa.table(
+        {
+            "value": pa.array(
+                [datetime(2024, 1, 2, 3, 4, 5, tzinfo=UTC)],
+                type=pa.timestamp("us"),
+            )
+        }
+    )
+    pq.write_table(table, path, use_deprecated_int96_timestamps=True)
+
+    rows = (
+        spark.read.schema(f"value {requested_type}")
+        .parquet(str(path))
+        .selectExpr("CAST(value AS STRING) AS value")
+        .collect()
+    )
+
+    assert rows == [Row(value="2024-01-02 03:04:05")]
 
 
 def test_parquet_write_with_bloom_filter(spark, tmpdir):

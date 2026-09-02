@@ -1,90 +1,199 @@
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use prost::Message;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 use uuid::Uuid;
 
+use crate::common::{
+    PartitionLocation, SlotReservation, UserIdentifier, WorkerIdentity, WorkerSlotLocations,
+};
+use crate::endpoint::parse_endpoint;
 use crate::error::{CelebornError, CelebornResult};
-use crate::protocol::MessageType;
+use crate::protocol::StatusCode;
 use crate::protocol::proto::{
+    MessageType, PbHeartbeatFromApplication, PbHeartbeatFromApplicationResponse,
     PbRegisterApplicationInfo, PbRequestSlots, PbRequestSlotsResponse, PbUnregisterShuffle,
-    PbUnregisterShuffleResponse, PbUserIdentifier,
+    PbUnregisterShuffleResponse, PbWorkerInfo,
 };
-use crate::protocol::transport::{
-    NATIVE_TRANSPORT_MARKER, RPC_FAILURE, RPC_HEADER_LENGTH, RPC_REQUEST, RPC_RESPONSE,
-    TransportResponse, decode_java_transport_message,
-};
+use crate::protocol::transport::{TransportConnection, TransportMessage};
 
 const MASTER_ENDPOINT_NAME: &str = "MasterEndpoint";
 
-/// The master endpoint and timeout used by a [`MasterClient`].
+/// The master endpoints and timeout used by a [`MasterClient`].
 #[derive(Debug, Clone)]
 pub struct MasterClientOptions {
-    pub host: String,
-    pub port: u16,
+    pub endpoints: Vec<String>,
     pub timeout: Duration,
 }
 
 impl MasterClientOptions {
-    pub fn new(host: impl Into<String>, port: u16) -> Self {
+    pub fn new(endpoints: Vec<String>) -> Self {
         Self {
-            host: host.into(),
-            port,
+            endpoints,
             timeout: Duration::from_secs(30),
         }
     }
 }
 
-/// Slots reserved by the Celeborn master for a shuffle.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SlotReservation {
-    /// Celeborn worker unique IDs that received slots.
-    pub worker_ids: Vec<String>,
+#[derive(Debug, Clone)]
+struct MasterConnection {
+    host: String,
+    port: u16,
+    connection: TransportConnection,
+}
+
+impl MasterConnection {
+    fn try_new(endpoint: String, timeout: Duration) -> Option<Self> {
+        let (host, port) = parse_endpoint(&endpoint)?;
+        Some(Self {
+            host: host.clone(),
+            port,
+            connection: TransportConnection::new(host, port, timeout),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+enum MasterConnections {
+    Available {
+        valid: Vec<MasterConnection>,
+        current: Arc<AtomicUsize>,
+        invalid: Vec<String>,
+    },
+    Unavailable {
+        invalid: Vec<String>,
+    },
+}
+
+impl MasterConnections {
+    fn new(options: MasterClientOptions) -> Self {
+        let mut valid = Vec::new();
+        let mut invalid = Vec::new();
+        for endpoint in options.endpoints {
+            if let Some(connection) = MasterConnection::try_new(endpoint.clone(), options.timeout) {
+                valid.push(connection);
+            } else {
+                invalid.push(endpoint);
+            }
+        }
+        if valid.is_empty() {
+            Self::Unavailable { invalid }
+        } else {
+            Self::Available {
+                valid,
+                current: Arc::new(AtomicUsize::new(0)),
+                invalid,
+            }
+        }
+    }
+
+    fn fallback_error(&self) -> CelebornError {
+        let invalid = match self {
+            Self::Available { invalid, .. } | Self::Unavailable { invalid } => invalid,
+        };
+        if invalid.is_empty() {
+            CelebornError::InvalidArgument(
+                "at least one Celeborn master endpoint must be configured".to_string(),
+            )
+        } else {
+            CelebornError::InvalidArgument(format!(
+                "invalid Celeborn master endpoints: {}",
+                invalid.join(", ")
+            ))
+        }
+    }
+
+    fn advance_after_failure(current: &AtomicUsize, index: usize, count: usize) {
+        let next = (index + 1) % count;
+        let _ = current.compare_exchange(index, next, Ordering::Relaxed, Ordering::Relaxed);
+    }
 }
 
 /// A small async client for Celeborn's Netty master RPC protocol.
 ///
-/// Each request uses an independent TCP connection. This keeps the client stateless and makes it
-/// suitable for dispatch from the lifecycle actor without synchronization.
+/// Clones share a serialized TCP connection, matching Celeborn's Netty client channel lifecycle.
 #[derive(Debug, Clone)]
 pub struct MasterClient {
-    options: MasterClientOptions,
+    connections: MasterConnections,
 }
 
 impl MasterClient {
     pub fn new(options: MasterClientOptions) -> Self {
-        Self { options }
+        Self {
+            connections: MasterConnections::new(options),
+        }
     }
 
     pub async fn register_application(
         &self,
         application_id: String,
-        user_identifier: PbUserIdentifier,
+        user_identifier: UserIdentifier,
     ) -> CelebornResult<()> {
         let request = PbRegisterApplicationInfo {
             app_id: application_id,
-            user_identifier: Some(user_identifier),
+            user_identifier: Some(user_identifier.into()),
             extra_info: HashMap::new(),
             request_id: request_id(),
         };
         let response = self
             .request(
-                MessageType::REGISTER_APPLICATION_INFO,
+                MessageType::RegisterApplicationInfo,
                 request.encode_to_vec(),
             )
             .await?;
-        if response.message_type != MessageType::ONE_WAY_MESSAGE_RESPONSE {
+        if response.message_type != MessageType::OneWayMessageResponse {
             return Err(CelebornError::Protocol(format!(
                 "invalid registration acknowledgement message type: expected {} but got {}",
-                MessageType::ONE_WAY_MESSAGE_RESPONSE,
-                response.message_type
+                MessageType::OneWayMessageResponse as i32,
+                response.message_type as i32
             )));
         }
         Ok(())
     }
 
+    /// Keep an application alive on the master while its shuffle client is running.
+    pub async fn heartbeat_application(
+        &self,
+        application_id: String,
+        metrics: crate::common::ApplicationMetrics,
+    ) -> CelebornResult<()> {
+        let request = PbHeartbeatFromApplication {
+            app_id: application_id,
+            total_written: metrics.total_written,
+            file_count: metrics.file_count,
+            request_id: request_id(),
+            need_checked_worker_list: Vec::new(),
+            should_response: true,
+            shuffle_count: metrics.shuffle_count,
+            shuffle_fallback_counts: metrics.shuffle_fallback_counts,
+            application_count: metrics.application_count,
+            application_fallback_counts: metrics.application_fallback_counts,
+        };
+        let response = self
+            .request(
+                MessageType::HeartbeatFromApplication,
+                request.encode_to_vec(),
+            )
+            .await?;
+        if response.message_type != MessageType::HeartbeatFromApplicationResponse {
+            return Err(CelebornError::Protocol(format!(
+                "invalid application heartbeat response message type: expected {} but got {}",
+                MessageType::HeartbeatFromApplicationResponse as i32,
+                response.message_type as i32
+            )));
+        }
+        let response = PbHeartbeatFromApplicationResponse::decode(response.payload.as_slice())?;
+        if response.status != i32::from(StatusCode::Success as u8) {
+            return Err(CelebornError::Master {
+                status: response.status,
+            });
+        }
+        Ok(())
+    }
+
+    #[expect(clippy::too_many_arguments)]
     pub async fn request_slots(
         &self,
         application_id: String,
@@ -93,7 +202,8 @@ impl MasterClient {
         hostname: String,
         should_replicate: bool,
         max_workers: i32,
-        user_identifier: PbUserIdentifier,
+        user_identifier: UserIdentifier,
+        excluded_workers: Vec<PartitionLocation>,
     ) -> CelebornResult<SlotReservation> {
         let request = PbRequestSlots {
             application_id,
@@ -103,37 +213,87 @@ impl MasterClient {
             should_replicate,
             request_id: request_id(),
             storage_type: 0,
-            user_identifier: Some(user_identifier),
+            user_identifier: Some(user_identifier.into()),
             should_rack_aware: false,
             max_workers,
             available_storage_types: 0,
-            excluded_worker_set: Vec::new(),
-            packed: true,
+            excluded_worker_set: excluded_workers
+                .into_iter()
+                .map(|worker| PbWorkerInfo {
+                    host: worker.host,
+                    rpc_port: i32::from(worker.rpc_port),
+                    push_port: i32::from(worker.push_port),
+                    fetch_port: i32::from(worker.fetch_port),
+                    replicate_port: i32::from(worker.replicate_port),
+                    disks: Vec::new(),
+                    user_resource_consumption: HashMap::new(),
+                    internal_port: 0,
+                    network_location: String::new(),
+                })
+                .collect(),
+            // Keep locations unpacked so the native client can address the selected worker.
+            packed: false,
             tags_expr: String::new(),
         };
         let response = self
-            .request(MessageType::REQUEST_SLOTS, request.encode_to_vec())
+            .request(MessageType::RequestSlots, request.encode_to_vec())
             .await?;
-        if response.message_type != MessageType::REQUEST_SLOTS_RESPONSE {
+        if response.message_type != MessageType::RequestSlotsResponse {
             return Err(CelebornError::Protocol(format!(
                 "invalid slot response message type: expected {} but got {}",
-                MessageType::REQUEST_SLOTS_RESPONSE,
-                response.message_type
+                MessageType::RequestSlotsResponse as i32,
+                response.message_type as i32
             )));
         }
         let response = PbRequestSlotsResponse::decode(response.payload.as_slice())?;
-        if response.status != 0 {
+        if response.status != i32::from(StatusCode::Success as u8) {
             return Err(CelebornError::Master {
                 status: response.status,
             });
         }
-        let mut worker_ids = response
-            .packed_worker_resource
-            .into_keys()
-            .chain(response.worker_resource.into_keys())
-            .collect::<Vec<_>>();
+        let mut primary_locations = HashMap::new();
+        let mut worker_locations = HashMap::new();
+        let mut worker_ids = Vec::with_capacity(response.worker_resource.len());
+        for (worker_id, resource) in response.worker_resource {
+            let worker_identity = worker_id.parse::<WorkerIdentity>()?;
+            worker_ids.push(worker_identity.clone());
+            let primary = resource
+                .primary_partitions
+                .into_iter()
+                .map(PartitionLocation::try_from)
+                .collect::<CelebornResult<Vec<_>>>()?;
+            let replica = resource
+                .replica_partitions
+                .into_iter()
+                .map(PartitionLocation::try_from)
+                .collect::<CelebornResult<Vec<_>>>()?;
+            // Celeborn can include resource entries for workers that did not receive any
+            // partitions in this reservation. Keep the identity, but defer client creation until
+            // a partition location selects that worker.
+            if primary.is_empty() && replica.is_empty() {
+                continue;
+            }
+            primary_locations.extend(
+                primary
+                    .iter()
+                    .cloned()
+                    .map(|location| (location.id, location)),
+            );
+            worker_locations.insert(
+                worker_identity,
+                WorkerSlotLocations {
+                    primary_locations: primary,
+                    replica_locations: replica,
+                },
+            );
+        }
         worker_ids.sort();
-        Ok(SlotReservation { worker_ids })
+        worker_ids.dedup();
+        Ok(SlotReservation {
+            worker_ids,
+            primary_locations,
+            worker_locations,
+        })
     }
 
     pub async fn unregister_shuffle(
@@ -147,17 +307,17 @@ impl MasterClient {
             request_id: request_id(),
         };
         let response = self
-            .request(MessageType::UNREGISTER_SHUFFLE, request.encode_to_vec())
+            .request(MessageType::UnregisterShuffle, request.encode_to_vec())
             .await?;
-        if response.message_type != MessageType::UNREGISTER_SHUFFLE_RESPONSE {
+        if response.message_type != MessageType::UnregisterShuffleResponse {
             return Err(CelebornError::Protocol(format!(
                 "invalid unregister response message type: expected {} but got {}",
-                MessageType::UNREGISTER_SHUFFLE_RESPONSE,
-                response.message_type
+                MessageType::UnregisterShuffleResponse as i32,
+                response.message_type as i32
             )));
         }
         let response = PbUnregisterShuffleResponse::decode(response.payload.as_slice())?;
-        if response.status != 0 {
+        if response.status != i32::from(StatusCode::Success as u8) {
             return Err(CelebornError::Master {
                 status: response.status,
             });
@@ -167,112 +327,40 @@ impl MasterClient {
 
     async fn request(
         &self,
-        message_type: i32,
+        message_type: MessageType,
         payload: Vec<u8>,
-    ) -> CelebornResult<TransportResponse> {
-        tokio::time::timeout(self.options.timeout, async {
-            let mut stream = TcpStream::connect((&*self.options.host, self.options.port)).await?;
-            let request_id = 0_i64;
-            let payload = self.rpc_envelope(message_type, payload)?;
-            let body_length = i32::try_from(payload.len())
-                .map_err(|_| CelebornError::Protocol("request body is too large".to_string()))?;
-
-            // Celeborn's Netty decoder treats this as the encoded RPC header size, then reads
-            // `transport_length` bytes as its body.
-            stream.write_i32(RPC_HEADER_LENGTH).await?;
-            stream.write_u8(RPC_REQUEST).await?;
-            stream.write_i32(body_length).await?;
-            stream.write_i64(request_id).await?;
-            stream.write_i32(body_length).await?;
-            stream.write_all(&payload).await?;
-            stream.flush().await?;
-
-            let encoded_length = stream.read_i32().await?;
-            let response_type = stream.read_u8().await?;
-            let body_length = stream.read_i32().await?;
-            if response_type == RPC_FAILURE {
-                if encoded_length < 12 || body_length != 0 {
-                    return Err(CelebornError::Protocol(
-                        "invalid RPC failure frame header".to_string(),
-                    ));
+    ) -> CelebornResult<TransportMessage> {
+        let mut last_error = None;
+        if let MasterConnections::Available { valid, current, .. } = &self.connections {
+            let mut index = current.load(Ordering::Relaxed) % valid.len();
+            for _ in 0..valid.len() {
+                let connection = &valid[index];
+                let request = TransportMessage::new(message_type, payload.clone())
+                    .into_rpc_envelope(
+                        &connection.host,
+                        &connection.host,
+                        connection.port,
+                        MASTER_ENDPOINT_NAME,
+                    )
+                    .encode()?;
+                match connection.connection.send_rpc(request).await {
+                    Ok(response) => match TransportMessage::decode_java(&response) {
+                        Ok(response) => return Ok(response),
+                        Err(error) => {
+                            last_error = Some(error);
+                            MasterConnections::advance_after_failure(current, index, valid.len());
+                            index = (index + 1) % valid.len();
+                        }
+                    },
+                    Err(error) => {
+                        last_error = Some(error);
+                        MasterConnections::advance_after_failure(current, index, valid.len());
+                        index = (index + 1) % valid.len();
+                    }
                 }
-                let response_id = stream.read_i64().await?;
-                if response_id != request_id {
-                    return Err(CelebornError::Protocol(
-                        "RPC failure ID does not match request".to_string(),
-                    ));
-                }
-                let error_length = stream.read_i32().await?;
-                let error_length = usize::try_from(error_length).map_err(|_| {
-                    CelebornError::Protocol("invalid RPC failure length".to_string())
-                })?;
-                let mut error = vec![0; error_length];
-                stream.read_exact(&mut error).await?;
-                return Err(CelebornError::Protocol(
-                    String::from_utf8_lossy(&error).into_owned(),
-                ));
             }
-            if encoded_length != RPC_HEADER_LENGTH || body_length < 0 {
-                return Err(CelebornError::Protocol(format!(
-                    "invalid RPC response frame header: encoded length {encoded_length}, body length {body_length}"
-                )));
-            }
-            if response_type != RPC_RESPONSE {
-                return Err(CelebornError::Protocol(format!(
-                    "invalid RPC response frame message type: expected {RPC_RESPONSE} but got {response_type}"
-                )));
-            }
-            let response_id = stream.read_i64().await?;
-            if response_id != request_id {
-                return Err(CelebornError::Protocol(
-                    "RPC response ID does not match request".to_string(),
-                ));
-            }
-            let declared_body_length = stream.read_i32().await?;
-            if declared_body_length != body_length || body_length < 8 {
-                return Err(CelebornError::Protocol(
-                    "invalid RPC response body length".to_string(),
-                ));
-            }
-            let response_length = usize::try_from(body_length).map_err(|_| {
-                CelebornError::Protocol("invalid RPC response body length".to_string())
-            })?;
-            let mut response = vec![0; response_length];
-            stream.read_exact(&mut response).await?;
-            decode_java_transport_message(&response)
-        })
-        .await
-        .map_err(|_| CelebornError::Timeout)?
-    }
-
-    fn rpc_envelope(&self, message_type: i32, payload: Vec<u8>) -> CelebornResult<Vec<u8>> {
-        let host = self.options.host.as_bytes();
-        let endpoint = MASTER_ENDPOINT_NAME.as_bytes();
-        let host_length = u16::try_from(host.len())
-            .map_err(|_| CelebornError::Protocol("master host is too long".to_string()))?;
-        let endpoint_length = u16::try_from(endpoint.len())
-            .map_err(|_| CelebornError::Protocol("master endpoint name is too long".to_string()))?;
-        let payload_length = i32::try_from(payload.len())
-            .map_err(|_| CelebornError::Protocol("request payload is too large".to_string()))?;
-        let mut bytes = Vec::with_capacity(host.len() + endpoint.len() + payload.len() + 24);
-        // Sender RpcAddress: a lightweight client address is sufficient because the master only
-        // uses it for endpoint bookkeeping.
-        bytes.push(1);
-        bytes.extend_from_slice(&host_length.to_be_bytes());
-        bytes.extend_from_slice(host);
-        bytes.extend_from_slice(&0_i32.to_be_bytes());
-        // Receiver RpcAddress and endpoint name.
-        bytes.push(1);
-        bytes.extend_from_slice(&host_length.to_be_bytes());
-        bytes.extend_from_slice(host);
-        bytes.extend_from_slice(&i32::from(self.options.port).to_be_bytes());
-        bytes.extend_from_slice(&endpoint_length.to_be_bytes());
-        bytes.extend_from_slice(endpoint);
-        bytes.push(NATIVE_TRANSPORT_MARKER);
-        bytes.extend_from_slice(&message_type.to_be_bytes());
-        bytes.extend_from_slice(&payload_length.to_be_bytes());
-        bytes.extend_from_slice(&payload);
-        Ok(bytes)
+        }
+        Err(last_error.unwrap_or_else(|| self.connections.fallback_error()))
     }
 }
 

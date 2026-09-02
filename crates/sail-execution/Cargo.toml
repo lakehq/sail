@@ -18,17 +18,21 @@ sail-function = { path = "../sail-function" }
 sail-logical-plan = { path = "../sail-logical-plan" }
 sail-physical-plan = { path = "../sail-physical-plan" }
 sail-telemetry = { path = "../sail-telemetry" }
+sail-system-store = { path = "../sail-system-store" }
 sail-catalog-system = { path = "../sail-catalog-system" }
 sail-object-store = { path = "../sail-object-store" }
+sail-celeborn = { path = "../sail-celeborn" }
 
 thiserror = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 tonic = { workspace = true }
 tonic-types = { workspace = true }
 tonic-prost = { workspace = true }
 fastrace = { workspace = true }
 tower = { workspace = true }
 prost = { workspace = true }
+opentelemetry-proto = { workspace = true }
 datafusion = { workspace = true }
 datafusion-proto = { workspace = true }
 datafusion-spark = { workspace = true }
@@ -38,6 +42,7 @@ log = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+toml = { workspace = true }
 kube = { workspace = true }
 k8s-openapi = { workspace = true }
 rand = { workspace = true }
@@ -45,6 +50,7 @@ url = { workspace = true }
 readonly = { workspace = true }
 indexmap = { workspace = true }
 chrono = { workspace = true }
+bytes = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }

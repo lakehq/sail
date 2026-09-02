@@ -27,6 +27,7 @@ sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 # DataFusion dependencies
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
+datafusion-datasource = { workspace = true }
 datafusion-expr = { workspace = true }
 arrow-schema = { workspace = true }
 parquet-variant = { workspace = true }
@@ -41,7 +42,7 @@ serde_json = { workspace = true }
 url = { workspace = true }
 futures = { workspace = true }
 flate2 = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
+serde = { workspace = true }
 uuid = { workspace = true }
 parquet = { workspace = true }
 bytes = { workspace = true }

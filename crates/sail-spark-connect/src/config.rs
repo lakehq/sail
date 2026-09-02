@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use sail_plan::config::{DefaultTimestampType, PlanConfig, StoreAssignmentPolicy};
+use sail_plan::config::{
+    DefaultTimestampType, MapKeyDedupPolicy, PlanConfig, StoreAssignmentPolicy,
+};
 use sail_python_udf::config::PySparkUdfConfig;
 
 use crate::error::{SparkError, SparkResult};
@@ -279,6 +281,18 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             };
         }
 
+        if let Some(value) = config.get_option(SparkConfigKey::SPARK_SQL_MAP_KEY_DEDUP_POLICY) {
+            output.map_key_dedup_policy = match value.trim().to_ascii_uppercase().as_str() {
+                "EXCEPTION" => MapKeyDedupPolicy::Exception,
+                "LAST_WIN" => MapKeyDedupPolicy::LastWin,
+                _ => {
+                    return Err(SparkError::invalid(format!(
+                        "invalid map key dedup policy: {value}"
+                    )));
+                }
+            };
+        }
+
         if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_CROSS_JOIN_ENABLED)
             .map(|x| x.to_lowercase().parse::<bool>())
@@ -309,6 +323,14 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             .transpose()?
         {
             output.tvf_allow_multiple_table_arguments = value;
+        }
+
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_LEGACY_ALLOW_PARAMETERLESS_COUNT)
+            .map(|x| x.to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.legacy_allow_parameterless_count = value;
         }
 
         output.pyspark_udf_config = Arc::new(PySparkUdfConfig::try_from(config)?);

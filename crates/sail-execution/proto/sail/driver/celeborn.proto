@@ -1,0 +1,101 @@
+syntax = "proto3";
+
+package sail.driver;
+
+message CelebornGetShuffleIdRequest {
+  uint64 driver_id = 1;
+  uint64 job_id = 2;
+  uint64 stage = 3;
+}
+
+message CelebornGetShuffleIdResponse {
+  int32 shuffle_id = 1;
+}
+
+message CelebornGetJobShuffleIdsRequest {
+  uint64 driver_id = 1;
+  uint64 job_id = 2;
+}
+
+message CelebornShuffleId {
+  uint64 stage = 1;
+  int32 shuffle_id = 2;
+}
+
+message CelebornGetJobShuffleIdsResponse {
+  repeated CelebornShuffleId shuffle_ids = 1;
+}
+
+message CelebornRegisterShuffleRequest {
+  uint64 driver_id = 1;
+  int32 shuffle_id = 2;
+  repeated int32 partition_ids = 3;
+  bool should_replicate = 4;
+  int32 max_workers = 5;
+}
+
+message CelebornPartitionLocation {
+  int32 id = 1;
+  int32 epoch = 2;
+  string host = 3;
+  uint32 rpc_port = 4;
+  uint32 push_port = 5;
+  uint32 fetch_port = 6;
+  uint32 replicate_port = 7;
+  CelebornPartitionLocation peer = 8;
+  int32 mode = 9;
+}
+
+message CelebornRegisterShuffleResponse {
+  repeated CelebornPartitionLocation primary_locations = 1;
+  repeated CelebornPartitionLocation all_primary_locations = 2;
+}
+
+message CelebornReviveRequest {
+  uint64 driver_id = 1;
+  int32 shuffle_id = 2;
+  int32 partition_id = 3;
+  int32 map_id = 4;
+  int32 attempt_id = 5;
+  CelebornPartitionLocation old_location = 6;
+  int32 cause = 7;
+}
+
+message CelebornReviveResponse {
+  CelebornPartitionLocation location = 1;
+}
+
+message CelebornMapperEndRequest {
+  uint64 driver_id = 1;
+  int32 shuffle_id = 2;
+  int32 map_id = 3;
+  int32 attempt_id = 4;
+  int32 num_mappers = 5;
+}
+
+message CelebornMapperEndResponse {}
+
+message CelebornUnregisterShuffleRequest {
+  uint64 driver_id = 1;
+  int32 shuffle_id = 2;
+}
+
+message CelebornUnregisterShuffleResponse {}
+
+message CelebornReportMetricsRequest {
+  uint64 driver_id = 1;
+  int64 total_written = 2;
+  int64 file_count = 3;
+}
+
+message CelebornReportMetricsResponse {}
+
+service CelebornLifecycleManagerService {
+  rpc GetShuffleId(CelebornGetShuffleIdRequest) returns (CelebornGetShuffleIdResponse) {}
+  rpc GetJobShuffleIds(CelebornGetJobShuffleIdsRequest) returns (CelebornGetJobShuffleIdsResponse) {}
+  rpc RegisterShuffle(CelebornRegisterShuffleRequest) returns (CelebornRegisterShuffleResponse) {}
+  rpc Revive(CelebornReviveRequest) returns (CelebornReviveResponse) {}
+  rpc MapperEnd(CelebornMapperEndRequest) returns (CelebornMapperEndResponse) {}
+  rpc UnregisterShuffle(CelebornUnregisterShuffleRequest) returns (CelebornUnregisterShuffleResponse) {}
+  rpc ReportMetrics(CelebornReportMetricsRequest) returns (CelebornReportMetricsResponse) {}
+}

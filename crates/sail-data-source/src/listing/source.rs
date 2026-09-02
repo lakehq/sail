@@ -8,7 +8,7 @@ use datafusion::catalog::Session;
 use datafusion::datasource::physical_plan::FileSinkConfig;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::{Extension, LogicalPlan, LogicalPlanBuilder, TableSource};
-use datafusion::physical_expr::LexRequirement;
+use datafusion::physical_expr::{LexRequirement, Partitioning};
 use datafusion::physical_expr_common::sort_expr::LexOrdering;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::parsers::CompressionTypeVariant;
@@ -19,7 +19,7 @@ use datafusion_datasource::{ListingTableUrl, TableSchema};
 use futures::TryStreamExt;
 use object_store::{ObjectMeta, ObjectStore};
 use sail_common_datafusion::datasource::{
-    OptionLayer, SinkInfo, SinkMode, SourceInfo, TableFormat, find_path_in_options,
+    DataSource, OptionLayer, SinkInfo, SinkMode, SourceInfo, find_path_in_options,
     get_partition_columns_and_file_schema,
 };
 use url::Url;
@@ -123,7 +123,7 @@ pub struct ListingScanInput {
     pub preserve_order: bool,
     pub output_ordering: Vec<LexOrdering>,
     pub statistics: Statistics,
-    pub partitioned_by_file_group: bool,
+    pub output_partitioning: Option<Partitioning>,
     pub schema: TableSchema,
     pub compression: CompressionTypeVariant,
 }
@@ -146,12 +146,12 @@ pub trait WriteFormat: Debug + Send + Sync + 'static {
 }
 
 #[derive(Debug, Default)]
-pub struct ListingTableFormat<T: FormatFactory> {
+pub struct ListingDataSource<T: FormatFactory> {
     phantom: PhantomData<T>,
 }
 
 #[async_trait]
-impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
+impl<T: FormatFactory> DataSource for ListingDataSource<T> {
     fn name(&self) -> &str {
         T::name()
     }
@@ -261,7 +261,9 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
 
         let source = ListingTableSource::try_new(ListingTableSourceConfig {
             table_paths: urls,
-            schema: TableSchema::new(schema, partition_fields),
+            schema: TableSchema::builder(schema)
+                .with_table_partition_cols(partition_fields)
+                .build(),
             constraints,
             file_sort_order: vec![sort_order],
             collect_stat: ctx.config().collect_statistics(),
@@ -288,10 +290,10 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         } = info;
         let catalog_managed = lakehouse_table.is_some();
         if bucket_by.is_some() {
-            return not_impl_err!("bucketing for writing listing table format");
+            return not_impl_err!("bucketing for writing listing data source");
         }
         if partition_by.iter().any(|field| field.transform.is_some()) {
-            return not_impl_err!("partition transforms for writing listing table format");
+            return not_impl_err!("partition transforms for writing listing data source");
         }
         let url = resolve_listing_writer_url(path.clone())?;
         let overwrite = match mode {

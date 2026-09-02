@@ -5,53 +5,46 @@ use object_store::path::Path;
 use object_store::{Error as ObjectStoreError, ObjectMeta, ObjectStore, ObjectStoreExt};
 
 use crate::spec::{
-    DeltaResult, LastCheckpointHint, delta_log_prefix_path, delta_log_root_path,
-    last_checkpoint_path, parse_checkpoint_version, parse_checksum_version, parse_commit_version,
+    DELTA_LOG_DIR, DeltaError, DeltaResult, LastCheckpointHint, delta_log_prefix_path,
+    delta_log_root_path, is_uuid_checkpoint_filename, last_checkpoint_path,
+    parse_checkpoint_version, parse_checksum_version, parse_commit_version,
     parse_compacted_json_versions,
 };
 
 pub(crate) fn parse_delta_log_entry_version(meta: &ObjectMeta) -> Option<i64> {
-    let filename = meta.location.as_ref().rsplit('/').next()?;
-    parse_commit_version(filename)
-        .or_else(|| parse_checkpoint_version(filename))
-        .or_else(|| parse_compacted_json_versions(filename).map(|(_, end)| end))
+    parse_commit_version_from_location(&meta.location)
+        .or_else(|| parse_checkpoint_version_from_location(&meta.location))
+        .or_else(|| parse_compacted_json_versions_from_location(&meta.location).map(|(_, end)| end))
+}
+
+fn delta_log_top_level_filename(location: &Path) -> Option<&str> {
+    let log_root = delta_log_root_path();
+    let relative = location
+        .as_ref()
+        .strip_prefix(log_root.as_ref())?
+        .strip_prefix('/')?;
+    (!relative.is_empty() && !relative.contains('/')).then_some(relative)
 }
 
 pub(crate) fn parse_checksum_version_from_location(location: &Path) -> Option<i64> {
-    location
-        .as_ref()
-        .rsplit('/')
-        .next()
-        .and_then(parse_checksum_version)
+    delta_log_top_level_filename(location).and_then(parse_checksum_version)
 }
 
 pub(crate) fn parse_commit_version_from_location(location: &Path) -> Option<i64> {
-    location
-        .as_ref()
-        .rsplit('/')
-        .next()
-        .and_then(parse_commit_version)
+    delta_log_top_level_filename(location).and_then(parse_commit_version)
 }
 
 pub(crate) fn parse_checkpoint_version_from_location(location: &Path) -> Option<i64> {
-    location
-        .as_ref()
-        .rsplit('/')
-        .next()
-        .and_then(parse_checkpoint_version)
+    delta_log_top_level_filename(location).and_then(parse_checkpoint_version)
 }
 
 pub(crate) fn parse_compacted_json_versions_from_location(location: &Path) -> Option<(i64, i64)> {
-    location
-        .as_ref()
-        .rsplit('/')
-        .next()
-        .and_then(parse_compacted_json_versions)
+    delta_log_top_level_filename(location).and_then(parse_compacted_json_versions)
 }
 
-pub(crate) async fn read_last_checkpoint_version_from_store(
+pub(crate) async fn read_last_checkpoint_hint_from_store(
     store: Arc<dyn ObjectStore>,
-) -> Option<i64> {
+) -> Option<LastCheckpointHint> {
     let bytes = store
         .get(&last_checkpoint_path())
         .await
@@ -59,8 +52,39 @@ pub(crate) async fn read_last_checkpoint_version_from_store(
         .bytes()
         .await
         .ok()?;
-    let hint: LastCheckpointHint = serde_json::from_slice(&bytes).ok()?;
-    Some(hint.version)
+    serde_json::from_slice(&bytes).ok()
+}
+
+pub(crate) async fn read_last_checkpoint_version_from_store(
+    store: Arc<dyn ObjectStore>,
+) -> Option<i64> {
+    read_last_checkpoint_hint_from_store(store)
+        .await
+        .map(|hint| hint.version)
+}
+
+pub(crate) fn v2_checkpoint_path_from_hint(hint: &LastCheckpointHint) -> DeltaResult<Option<Path>> {
+    let Some(v2_checkpoint) = &hint.v2_checkpoint else {
+        return Ok(None);
+    };
+    let path = v2_checkpoint.path.trim_start_matches('/');
+    let filename = path
+        .strip_prefix(&format!("{DELTA_LOG_DIR}/"))
+        .unwrap_or(path);
+    if filename.is_empty() || filename.contains('/') || !is_uuid_checkpoint_filename(filename) {
+        return Err(DeltaError::generic(format!(
+            "_last_checkpoint contains an invalid V2 checkpoint path: {}",
+            v2_checkpoint.path
+        )));
+    }
+    let location = Path::from(format!("{DELTA_LOG_DIR}/{filename}"));
+    if parse_checkpoint_version_from_location(&location) != Some(hint.version) {
+        return Err(DeltaError::generic(format!(
+            "_last_checkpoint V2 path {} does not match checkpoint version {}",
+            v2_checkpoint.path, hint.version
+        )));
+    }
+    Ok(Some(location))
 }
 
 pub(crate) async fn list_delta_log_entries_from(
@@ -78,12 +102,23 @@ pub(crate) async fn list_delta_log_entries_from(
     {
         Ok(entries) => entries,
         Err(ObjectStoreError::NotSupported { .. } | ObjectStoreError::NotImplemented { .. }) => {
-            // TODO: Apply the same `location > offset` filter here if needed for the specific store implementation.
-            store.list(Some(&log_path)).try_collect::<Vec<_>>().await?
+            match store.list_with_delimiter(Some(&log_path)).await {
+                Ok(result) => result.objects,
+                Err(
+                    ObjectStoreError::NotSupported { .. } | ObjectStoreError::NotImplemented { .. },
+                ) => store.list(Some(&log_path)).try_collect::<Vec<_>>().await?,
+                Err(err) => return Err(err.into()),
+            }
         }
         Err(err) => return Err(err.into()),
     };
-    Ok(entries)
+    Ok(entries
+        .into_iter()
+        .filter(|meta| {
+            meta.location.as_ref() > offset.as_ref()
+                && delta_log_top_level_filename(&meta.location).is_some()
+        })
+        .collect())
 }
 
 pub(crate) async fn latest_version_from_listing(
@@ -114,6 +149,13 @@ mod tests {
     #[tokio::test]
     async fn latest_version_from_listing_works_without_last_checkpoint_hint() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let sidecar = Path::from(
+            "_delta_log/_sidecars/00000000000000000042.checkpoint.0000000001.0000000001.uuid.parquet",
+        );
+        store
+            .put(&sidecar, b"sidecar".to_vec().into())
+            .await
+            .unwrap();
         store
             .put(
                 &Path::from("_delta_log/00000000000000000007.json"),
@@ -122,7 +164,13 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(latest_version_from_listing(store).await.unwrap(), Some(7));
+        assert_eq!(parse_checkpoint_version_from_location(&sidecar), None);
+        assert_eq!(
+            latest_version_from_listing(store.clone()).await.unwrap(),
+            Some(7)
+        );
+        let entries = list_delta_log_entries_from(store, 0).await.unwrap();
+        assert_eq!(entries.len(), 1);
     }
 
     #[tokio::test]

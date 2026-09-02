@@ -8,14 +8,8 @@ use crate::io::StoreContext;
 use crate::operations::write::arrow_parquet::ArrowParquetWriter;
 use crate::operations::write::base_writer::DataFileWriter;
 use crate::physical_plan::write_location;
+use crate::spec::DataFile;
 use crate::spec::types::values::Literal;
-use crate::spec::{DataFile, TableMetadata};
-use crate::table::metadata_loader::{
-    load_metadata_file_bytes, metadata_location_to_object_path_string,
-};
-use crate::table_format::{
-    catalog_managed_iceberg_from_properties, metadata_location_from_properties,
-};
 
 pub(crate) fn store_context(context: &TaskContext, location_url: &Url) -> Result<StoreContext> {
     let object_store = context
@@ -64,39 +58,6 @@ impl IcebergDeleteWriterConfig {
     pub(crate) fn write_folder_storage_path(&self) -> Option<&str> {
         self.write_folder_storage_path.as_deref()
     }
-
-    pub(crate) async fn load_current_table_metadata(
-        &self,
-        store_ctx: &StoreContext,
-    ) -> Result<TableMetadata> {
-        load_current_table_metadata(store_ctx, &self.table_url, &self.table_properties).await
-    }
-
-    pub(crate) fn resolve_data_location(&self, table_meta: &TableMetadata) -> Result<Url> {
-        write_location::resolve_data_location_from_options_and_properties(
-            self.write_data_path(),
-            self.write_folder_storage_path(),
-            &table_meta.properties,
-            &self.table_url,
-        )
-    }
-}
-
-pub(crate) async fn load_current_table_metadata(
-    store_ctx: &StoreContext,
-    table_url: &Url,
-    table_properties: &[(String, String)],
-) -> Result<TableMetadata> {
-    let metadata_file = if catalog_managed_iceberg_from_properties(table_properties) {
-        match metadata_location_from_properties(table_properties) {
-            Some(location) => metadata_location_to_object_path_string(&location)?,
-            None => crate::table::find_latest_metadata_file(&store_ctx.base, table_url).await?,
-        }
-    } else {
-        crate::table::find_latest_metadata_file(&store_ctx.base, table_url).await?
-    };
-    let bytes = load_metadata_file_bytes(&store_ctx.base, &metadata_file).await?;
-    TableMetadata::from_json(&bytes).map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
 pub(crate) async fn write_delete_parquet_file(
@@ -119,7 +80,7 @@ pub(crate) async fn write_delete_parquet_file(
     let delete_file_path = write_location::manifest_file_path(data_url, &relative_path);
 
     DataFileWriter::new(partition_spec_id, delete_file_path, partition)
-        .finish(meta)
+        .finish_without_bounds(meta)
         .map(|outcome| outcome.data_file)
         .map_err(DataFusionError::Execution)
 }

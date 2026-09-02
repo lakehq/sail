@@ -1,6 +1,4 @@
 mod actor;
-mod event;
-mod options;
 mod session;
 
 use std::fmt;
@@ -12,15 +10,15 @@ use sail_common::actor::{ActorHandle, ActorSystem};
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_execution::driver::{DriverGateway, DriverGatewayOptions};
+use sail_telemetry::telemetry::global_system_event_reporter;
 use tokio::sync::oneshot;
 
 use crate::error::{SessionError, SessionResult};
 use crate::session_factory::{
     ServerSessionInfo, ServerSessionJobRunnerFactory, SessionFactory, SessionJobRunnerFactory,
 };
-pub(crate) use crate::session_manager::actor::SessionManagerActor;
-pub(crate) use crate::session_manager::event::SessionManagerEvent;
-pub use crate::session_manager::options::{SessionManagerComponents, SessionManagerOptions};
+pub(crate) use crate::session_manager::actor::{SessionManagerActor, SessionManagerMessage};
+pub use crate::session_manager::actor::{SessionManagerComponents, SessionManagerOptions};
 
 pub type ServerSessionFactoryFn =
     fn(Arc<AppConfig>, RuntimeHandle) -> Box<dyn SessionFactory<ServerSessionInfo>>;
@@ -52,23 +50,23 @@ impl SessionManager {
         user_id: String,
     ) -> SessionResult<SessionContext> {
         let (tx, rx) = oneshot::channel();
-        let event = SessionManagerEvent::GetOrCreateSession {
+        let message = SessionManagerMessage::GetOrCreateSession {
             session_id,
             user_id,
             result: tx,
         };
-        self.handle.send(event).await?;
+        self.handle.send(message).await?;
         rx.await
             .map_err(|e| SessionError::internal(format!("failed to get session: {e}")))?
     }
 
     pub async fn delete_session(&self, session_id: String) -> SessionResult<()> {
         let (tx, rx) = oneshot::channel();
-        let event = SessionManagerEvent::DeleteSession {
+        let message = SessionManagerMessage::DeleteSession {
             session_id,
             result: tx,
         };
-        self.handle.send(event).await?;
+        self.handle.send(message).await?;
         rx.await
             .map_err(|e| SessionError::internal(format!("failed to delete session: {e}")))?
     }
@@ -77,7 +75,7 @@ impl SessionManager {
     pub async fn shutdown(&self) -> SessionResult<()> {
         let (tx, rx) = oneshot::channel();
         self.handle
-            .send(SessionManagerEvent::Shutdown { result: tx })
+            .send(SessionManagerMessage::Shutdown { result: tx })
             .await?;
         rx.await.map_err(|e| {
             SessionError::internal(format!("failed to shut down session manager: {e}"))
@@ -120,6 +118,9 @@ pub async fn create_session_manager(
         session_factory,
         job_runner_factory,
         driver_gateway,
+        event_reporter: global_system_event_reporter().ok_or_else(|| {
+            SessionError::internal("telemetry is not initialized for system store")
+        })?,
     };
     SessionManager::try_new(options, components, system)
 }

@@ -54,8 +54,8 @@ Feature: Unity Catalog managed Delta table operations
       | path                                                   | value                                  |
       | protocol.minReaderVersion                              | 3                                      |
       | protocol.minWriterVersion                              | 7                                      |
-      | protocol.readerFeatures                                | ["catalogManaged"]                     |
-      | protocol.writerFeatures                                | ["catalogManaged","inCommitTimestamp"] |
+      | protocol.readerFeatures                                | ["catalogManaged","vacuumProtocolCheck"] |
+      | protocol.writerFeatures                                | ["appendOnly","invariants","catalogManaged","inCommitTimestamp","vacuumProtocolCheck"] |
       | metaData.configuration["delta.feature.catalogManaged"]  | "supported"                            |
       | metaData.configuration["delta.enableInCommitTimestamps"] | "true"                                |
 
@@ -178,8 +178,8 @@ Feature: Unity Catalog managed Delta table operations
       | path                                                   | value                                      |
       | protocol.minReaderVersion                              | 3                                          |
       | protocol.minWriterVersion                              | 7                                          |
-      | protocol.readerFeatures                                | ["catalogManaged"]                         |
-      | protocol.writerFeatures                                | ["catalogManaged","inCommitTimestamp"]     |
+      | protocol.readerFeatures                                | ["catalogManaged","vacuumProtocolCheck"]   |
+      | protocol.writerFeatures                                | ["catalogManaged","inCommitTimestamp","vacuumProtocolCheck"] |
       | metaData.configuration["delta.feature.catalogManaged"]  | "supported"                                |
       | metaData.configuration["delta.enableInCommitTimestamps"] | "true"                                    |
 
@@ -500,6 +500,36 @@ Feature: Unity Catalog managed Delta table operations
       | 3  | three |
     Then Unity Catalog table unity_table_test.managed_delta_delete_t is a managed Delta table
     Then Unity Catalog Delta commit for table unity_table_test.managed_delta_delete_t version 2 references staged Delta commit in location
+
+  Scenario: UPDATE on managed Delta table is coordinated by Unity Catalog
+    Given statement
+      """
+      CREATE TABLE unity_table_test.managed_delta_update_t
+      USING delta
+      AS SELECT * FROM VALUES
+        (1, 'one'),
+        (2, 'two'),
+        (3, 'three')
+      AS t(id, name)
+      """
+    Given statement
+      """
+      UPDATE unity_table_test.managed_delta_update_t
+      SET name = concat(name, ' updated')
+      WHERE id = 2
+      """
+    Given variable location for table unity_table_test.managed_delta_update_t
+    When query
+      """
+      SELECT id, name FROM unity_table_test.managed_delta_update_t ORDER BY id
+      """
+    Then query result ordered
+      | id | name        |
+      | 1  | one         |
+      | 2  | two updated |
+      | 3  | three       |
+    Then Unity Catalog table unity_table_test.managed_delta_update_t is a managed Delta table
+    Then Unity Catalog Delta commit for table unity_table_test.managed_delta_update_t version 2 references staged Delta commit in location
 
   Scenario: DELETE can infer schema from managed Delta log when catalog columns are empty
     Given Unity Catalog managed Delta table unity_table_test.managed_delta_empty_catalog_schema_t exists with no catalog columns and id and name Delta schema

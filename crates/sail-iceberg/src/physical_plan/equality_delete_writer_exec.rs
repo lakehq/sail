@@ -5,8 +5,9 @@ use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::concat_batches;
 use datafusion::arrow::datatypes::{FieldRef, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::context::TaskContext;
-use datafusion::physical_expr::{Distribution, EquivalenceProperties};
+use datafusion::physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
@@ -25,15 +26,15 @@ use crate::physical_plan::action_schema::{
     CommitMeta, encode_commit_meta, encode_delete_data_files, iceberg_action_schema,
 };
 use crate::physical_plan::delete_writer_common::{self, IcebergDeleteWriterConfig};
+use crate::physical_plan::write_context::{IcebergBaseWriteContext, IcebergWriteContext};
 use crate::spec::types::{PrimitiveType, Type};
-use crate::spec::{
-    DataContentType, DataFile, FormatVersion, MAIN_BRANCH, TableMetadata, TableRequirement,
-};
+use crate::spec::{DataContentType, DataFile, FormatVersion, MAIN_BRANCH, TableRequirement};
 
 #[derive(Debug, Clone)]
 pub struct IcebergEqualityDeleteWriterExec {
     input: Arc<dyn ExecutionPlan>,
     writer_config: IcebergDeleteWriterConfig,
+    write_context: IcebergWriteContext,
     lakehouse_table: Option<sail_common_datafusion::catalog::LakehouseExecutionContext>,
     cache: Arc<PlanProperties>,
 }
@@ -45,8 +46,10 @@ impl IcebergEqualityDeleteWriterExec {
         table_properties: Vec<(String, String)>,
         write_data_path: Option<String>,
         write_folder_storage_path: Option<String>,
+        write_context: IcebergWriteContext,
         lakehouse_table: Option<sail_common_datafusion::catalog::LakehouseExecutionContext>,
-    ) -> Self {
+    ) -> Result<Self> {
+        write_context.validate_table_state(true)?;
         let schema = iceberg_action_schema().unwrap_or_else(|e| {
             log::error!("failed to initialize iceberg action schema: {e}");
             Arc::new(Schema::empty())
@@ -57,7 +60,7 @@ impl IcebergEqualityDeleteWriterExec {
             EmissionType::Final,
             Boundedness::Bounded,
         ));
-        Self {
+        Ok(Self {
             input,
             writer_config: IcebergDeleteWriterConfig::new(
                 table_url,
@@ -65,9 +68,10 @@ impl IcebergEqualityDeleteWriterExec {
                 write_data_path,
                 write_folder_storage_path,
             ),
+            write_context,
             lakehouse_table,
             cache,
-        }
+        })
     }
 
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
@@ -88,6 +92,10 @@ impl IcebergEqualityDeleteWriterExec {
 
     pub fn write_folder_storage_path(&self) -> Option<&str> {
         self.writer_config.write_folder_storage_path()
+    }
+
+    pub fn write_context(&self) -> &IcebergWriteContext {
+        &self.write_context
     }
 
     pub fn lakehouse_table(
@@ -117,6 +125,22 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
         vec![&self.input]
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    #[expect(deprecated)]
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: datafusion::physical_plan::ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.with_new_children(children)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -134,8 +158,9 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
             self.writer_config
                 .write_folder_storage_path()
                 .map(ToString::to_string),
+            self.write_context.clone(),
             self.lakehouse_table.clone(),
-        )))
+        )?))
     }
 
     fn execute(
@@ -158,28 +183,25 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
         let input = self.input.execute(0, Arc::clone(&context))?;
         let input_schema = self.input.schema();
         let writer_config = self.writer_config.clone();
+        let write_context = self.write_context.clone();
         let lakehouse_table = self.lakehouse_table.clone();
         let output_schema = self.schema();
         let schema_for_adapter = output_schema.clone();
 
         let future = async move {
-            let table_store_ctx =
-                delete_writer_common::store_context(&context, writer_config.table_url())?;
-            let table_meta = writer_config
-                .load_current_table_metadata(&table_store_ctx)
-                .await?;
-            if table_meta.format_version < FormatVersion::V2 {
+            let base_table_context = write_context.base_table.as_ref().ok_or_else(|| {
+                DataFusionError::Internal(
+                    "Iceberg equality delete writer requires base table state".to_string(),
+                )
+            })?;
+            if base_table_context.format_version < FormatVersion::V2 {
                 return Err(DataFusionError::Plan(
                     "Iceberg equality delete writes require table format-version 2 or higher"
                         .to_string(),
                 ));
             }
-            let current_schema = table_meta.current_schema().ok_or_else(|| {
-                DataFusionError::Plan(
-                    "Iceberg table metadata is missing current schema".to_string(),
-                )
-            })?;
-            let default_spec = table_meta
+            let current_schema = &write_context.writer_schema;
+            let default_spec = base_table_context
                 .default_partition_spec()
                 .cloned()
                 .unwrap_or_else(crate::spec::PartitionSpec::unpartitioned_spec);
@@ -189,7 +211,7 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
                         .to_string(),
                 ));
             }
-            let data_location = writer_config.resolve_data_location(&table_meta)?;
+            let data_location = write_context.data_location()?;
             let data_store_ctx = delete_writer_common::store_context(&context, &data_location)?;
 
             // TODO: Prefer identifier/configured equality fields over full-row keys.
@@ -240,7 +262,7 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
                 delete_spec.equality_ids.clone(),
             )
             .await?;
-            let requirements = commit_requirements(&table_meta);
+            let requirements = commit_requirements(base_table_context);
             let commit_meta = CommitMeta {
                 table_uri: writer_config.table_url().to_string(),
                 row_count: total_rows,
@@ -323,9 +345,9 @@ fn equality_delete_fields(
     iceberg_schema: &crate::spec::Schema,
     input_schema: &SchemaRef,
 ) -> Result<Vec<EqualityDeleteField>> {
+    validate_equality_delete_schema(iceberg_schema)?;
     let mut fields = Vec::with_capacity(iceberg_schema.fields().len());
     for field in iceberg_schema.fields() {
-        validate_equality_delete_type(&field.name, &field.field_type)?;
         let arrow_field = Arc::new(iceberg_field_to_arrow(field)?);
         let input_field = input_schema.field_with_name(&field.name).map_err(|_| {
             DataFusionError::Plan(format!(
@@ -348,6 +370,13 @@ fn equality_delete_fields(
         });
     }
     Ok(fields)
+}
+
+pub(crate) fn validate_equality_delete_schema(iceberg_schema: &crate::spec::Schema) -> Result<()> {
+    for field in iceberg_schema.fields() {
+        validate_equality_delete_type(&field.name, &field.field_type)?;
+    }
+    Ok(())
 }
 
 fn validate_equality_delete_type(name: &str, ty: &Type) -> Result<()> {
@@ -428,23 +457,23 @@ async fn write_equality_delete_file(
     Ok(delete_file)
 }
 
-fn commit_requirements(table_meta: &TableMetadata) -> Vec<TableRequirement> {
+fn commit_requirements(base_table_context: &IcebergBaseWriteContext) -> Vec<TableRequirement> {
     vec![
         TableRequirement::LastAssignedFieldIdMatch {
-            last_assigned_field_id: table_meta.last_column_id,
+            last_assigned_field_id: base_table_context.last_column_id,
         },
         TableRequirement::CurrentSchemaIdMatch {
-            current_schema_id: table_meta.current_schema_id,
+            current_schema_id: base_table_context.current_schema_id,
         },
         TableRequirement::LastAssignedPartitionIdMatch {
-            last_assigned_partition_id: table_meta.last_partition_id,
+            last_assigned_partition_id: base_table_context.last_partition_id,
         },
         TableRequirement::DefaultSpecIdMatch {
-            default_spec_id: table_meta.default_spec_id,
+            default_spec_id: base_table_context.default_spec_id,
         },
         TableRequirement::RefSnapshotIdMatch {
             r#ref: MAIN_BRANCH.to_string(),
-            snapshot_id: table_meta.current_snapshot_id.filter(|id| *id >= 0),
+            snapshot_id: base_table_context.current_snapshot_id.filter(|id| *id >= 0),
         },
     ]
 }

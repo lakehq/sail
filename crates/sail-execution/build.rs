@@ -86,7 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
     ProtoBuilder::new("stream", &["common.proto"]).build()?;
     ProtoBuilder::new("task", &["common.proto"]).build()?;
-    ProtoBuilder::new("driver", &["service.proto"])
+    ProtoBuilder::new("driver", &["service.proto", "celeborn.proto"])
         .with_service()
         .build()?;
     ProtoBuilder::new("worker", &["service.proto"])

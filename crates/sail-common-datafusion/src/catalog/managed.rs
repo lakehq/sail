@@ -6,7 +6,7 @@ pub const METADATA_LOCATION_KEYS: &[&str] =
     &[METADATA_LOCATION_KEY, METADATA_LOCATION_UNDERSCORE_KEY];
 pub const PREVIOUS_METADATA_LOCATION_KEY: &str = "previous_metadata_location";
 
-pub fn is_table_format_marker(key: &str, value: &str, format: &str) -> bool {
+pub fn is_lake_source_marker(key: &str, value: &str, format: &str) -> bool {
     (key.eq_ignore_ascii_case(TABLE_TYPE_KEY) || key.eq_ignore_ascii_case(CLASSIFICATION_KEY))
         && value.eq_ignore_ascii_case(format)
 }
@@ -17,13 +17,13 @@ pub fn is_metadata_location_key(key: &str) -> bool {
         .any(|candidate| key.eq_ignore_ascii_case(candidate))
 }
 
-pub fn is_table_format_properties<'a, I>(properties: I, format: &str) -> bool
+pub fn is_lake_source_properties<'a, I>(properties: I, format: &str) -> bool
 where
     I: IntoIterator<Item = (&'a str, &'a str)>,
 {
     properties
         .into_iter()
-        .any(|(key, value)| is_table_format_marker(key.trim(), value.trim(), format))
+        .any(|(key, value)| is_lake_source_marker(key.trim(), value.trim(), format))
 }
 
 pub fn property_value<'a, I>(properties: I, key: &str) -> Option<&'a str>
@@ -71,18 +71,14 @@ pub fn existing_metadata_location_key(properties: &[(String, String)]) -> Option
 #[cfg(test)]
 mod tests {
     #[test]
-    fn test_table_format_marker_is_format_agnostic() {
-        assert!(super::is_table_format_marker(
-            "TABLE_TYPE",
-            "DELTA",
-            "delta"
-        ));
-        assert!(super::is_table_format_marker(
+    fn test_lake_source_marker_is_format_agnostic() {
+        assert!(super::is_lake_source_marker("TABLE_TYPE", "DELTA", "delta"));
+        assert!(super::is_lake_source_marker(
             "classification",
             "ICEBERG",
             "iceberg"
         ));
-        assert!(!super::is_table_format_marker(
+        assert!(!super::is_lake_source_marker(
             "table_type",
             "iceberg",
             "delta"
@@ -100,8 +96,8 @@ mod tests {
             super::metadata_location_value(properties),
             Some("s3://bucket/table/metadata/00001.json")
         );
-        assert!(super::is_table_format_properties(properties, "delta"));
-        assert!(!super::is_table_format_properties(
+        assert!(super::is_lake_source_properties(properties, "delta"));
+        assert!(!super::is_lake_source_properties(
             [("metadata_location", "s3://bucket/table/metadata/00001.json")],
             "delta"
         ));

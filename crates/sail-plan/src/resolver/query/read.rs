@@ -5,12 +5,14 @@ use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::catalog::TableFunctionArgs;
 use datafusion::datasource::{TableProvider, provider_as_source, source_as_provider};
 use datafusion_common::{DFSchema, ScalarValue, TableReference};
-use datafusion_expr::{Expr, LogicalPlan, SubqueryAlias, TableScan, TableSource, UNNAMED_TABLE};
+use datafusion_expr::{
+    Expr, LogicalPlan, SubqueryAlias, TableScanBuilder, TableSource, UNNAMED_TABLE,
+};
 use rand::{RngExt, rng};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::{LakehouseOperation, TableColumnStatus, TableKind};
-use sail_common_datafusion::datasource::{OptionLayer, SourceInfo, TableFormatRegistry};
+use sail_common_datafusion::datasource::{DataSourceRegistry, OptionLayer, SourceInfo};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
@@ -18,6 +20,7 @@ use sail_common_datafusion::rename::table_provider::RenameTableProvider;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
+use super::sample::SAMPLE_ROUNDING_EPSILON;
 use crate::error::{PlanError, PlanResult};
 use crate::function::{get_built_in_table_function, is_built_in_generator_function};
 use crate::resolver::PlanResolver;
@@ -41,11 +44,11 @@ impl PlanResolver<'_> {
         } = table;
 
         // Check if the name is in the form `<format>.<path>` where `<format>` is a
-        // registered table format. In that case, treat it as a direct data source read.
+        // registered data source. In that case, treat it as a direct data source read.
         if let [format, path] = name.parts() {
             let format = format.as_ref().to_ascii_lowercase();
-            let registry = self.ctx.extension::<TableFormatRegistry>()?;
-            if registry.get(&format).is_ok() {
+            let registry = self.ctx.extension::<DataSourceRegistry>()?;
+            if registry.get_data_source(&format).is_ok() {
                 let temporal_options = self
                     .resolve_time_travel_options(&format, temporal, state)
                     .await?;
@@ -130,9 +133,9 @@ impl PlanResolver<'_> {
                     ],
                     read_case_sensitive: self.config.case_sensitive,
                 };
-                let registry = self.ctx.extension::<TableFormatRegistry>()?;
+                let registry = self.ctx.extension::<DataSourceRegistry>()?;
                 let table_source = registry
-                    .get(&format)?
+                    .get_data_source(&format)?
                     .create_source(&self.ctx.state(), info)
                     .await?;
                 self.resolve_table_source_with_rename(
@@ -244,7 +247,7 @@ impl PlanResolver<'_> {
             spec::TableSampleMethod::Percent { value } => {
                 let percent = self.evaluate_sample_expr_to_f64(value, state).await?;
                 let fraction = percent / 100.0;
-                if !(0.0..=1.0).contains(&fraction) {
+                if !(-SAMPLE_ROUNDING_EPSILON..=1.0 + SAMPLE_ROUNDING_EPSILON).contains(&fraction) {
                     return Err(PlanError::invalid(format!(
                         "Sampling fraction ({fraction}) must be on interval [0, 1]"
                     )));
@@ -258,15 +261,13 @@ impl PlanResolver<'_> {
                 numerator,
                 denominator,
             } => {
-                if numerator == 0 || numerator > denominator {
+                let fraction = numerator as f64 / denominator as f64;
+                if !(-SAMPLE_ROUNDING_EPSILON..=1.0 + SAMPLE_ROUNDING_EPSILON).contains(&fraction) {
                     return Err(PlanError::invalid(format!(
-                        "invalid TABLESAMPLE bucket: {numerator} out of {denominator}"
+                        "Sampling fraction ({fraction}) must be on interval [0, 1]"
                     )));
                 }
-                let fraction = 1.0 / denominator as f64;
-                let lower = (numerator - 1) as f64 * fraction;
-                let upper = numerator as f64 * fraction;
-                (lower, upper)
+                (0.0, fraction)
             }
         };
 
@@ -480,9 +481,9 @@ impl PlanResolver<'_> {
             }],
             read_case_sensitive: self.config.case_sensitive,
         };
-        let registry = self.ctx.extension::<TableFormatRegistry>()?;
+        let registry = self.ctx.extension::<DataSourceRegistry>()?;
         let table_source = registry
-            .get(&format)?
+            .get_data_source(&format)?
             .create_source(&self.ctx.state(), info)
             .await?;
         self.resolve_table_source_with_rename(
@@ -545,13 +546,13 @@ impl PlanResolver<'_> {
             table_source
         };
 
-        let table_scan = LogicalPlan::TableScan(TableScan::try_new(
-            table_reference,
-            table_source,
-            projection,
-            filters,
-            fetch,
-        )?);
+        let table_scan = LogicalPlan::TableScan(
+            TableScanBuilder::new(table_reference, table_source)
+                .with_projection(projection)
+                .with_filters(filters)
+                .with_fetch(fetch)
+                .build()?,
+        );
 
         if !has_duplicates {
             let names = state.register_fields(table_scan.schema().fields());

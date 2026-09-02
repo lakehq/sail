@@ -43,15 +43,15 @@ use sail_common_datafusion::schema_evolution::{
 use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
 
 use crate::conversion::ScalarConverter;
+use crate::datasource::pruning::{arrow_type_contains_timestamp, widen_timestamp_max_scalar};
 use crate::datasource::{DeltaScanConfig, create_object_store_url, partitioned_file_from_action};
 use crate::delta_log::LogStoreRef;
 use crate::schema::arrow_field_physical_name;
-use crate::spec::{Add, ColumnMappingMode, MaxStat, MinStat};
+use crate::spec::{Add, ColumnMappingMode};
 use crate::table::DeltaSnapshot;
 
 /// Parameters for building file scan configuration
 pub struct FileScanParams<'a> {
-    pub pruning_mask: Option<&'a [bool]>,
     pub projection: Option<&'a Vec<usize>>,
     pub limit: Option<usize>,
     pub pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
@@ -65,7 +65,7 @@ pub struct FileScanParams<'a> {
 /// Strategy for providing table-level statistics to DataFusion.
 #[derive(Debug, Clone, Copy)]
 pub enum TableStatsMode {
-    /// Use snapshot/log-derived statistics (can be expensive for large snapshots).
+    /// Use snapshot/log-derived statistics for the provided `Add` actions.
     Snapshot,
     /// Aggregate statistics only from the provided `Add` actions (chunk-local).
     AddsOnly,
@@ -190,7 +190,6 @@ pub fn build_file_scan_config(
         None => Arc::new(snapshot.schema().clone()),
     };
     let config = scan_config.clone();
-    let table_partition_cols = snapshot.metadata().partition_columns();
     let partition_columns_mapped = snapshot.physical_partition_columns();
     let physical_to_logical = physical_to_logical_name_map(snapshot);
     let logical_file_schema = logical_file_schema_for_scan(
@@ -217,7 +216,7 @@ pub fn build_file_scan_config(
 
         let mut part =
             partitioned_file_from_action(action, &partition_columns_mapped, &complete_schema)?;
-        let action_stats = stats_for_add(action, &file_schema, &physical_to_logical)?;
+        let action_stats = stats_for_add(action, &file_schema)?;
         if let Some(stats) = action_stats {
             per_file_stats.push(Arc::clone(&stats));
             part.statistics = Some(stats);
@@ -264,11 +263,16 @@ pub fn build_file_scan_config(
     });
 
     // Build table partition columns schema
-    let mut table_partition_cols_schema = Vec::with_capacity(table_partition_cols.len());
-    for col in table_partition_cols {
-        let field = complete_schema.field_with_name(col).map_err(|_| {
-            DataFusionError::Plan(format!("Partition column {col} not found in schema"))
-        })?;
+    let mut table_partition_cols_schema = Vec::with_capacity(partition_columns_mapped.len());
+    for column in &partition_columns_mapped {
+        let field = complete_schema
+            .field_with_name(&column.logical_name)
+            .map_err(|_| {
+                DataFusionError::Plan(format!(
+                    "Partition column {} not found in schema",
+                    column.logical_name
+                ))
+            })?;
         let corrected = if config.wrap_partition_values {
             match field.data_type() {
                 ArrowDataType::Utf8
@@ -282,8 +286,13 @@ pub fn build_file_scan_config(
         } else {
             field.data_type().clone()
         };
-        table_partition_cols_schema
-            .push(Arc::new(field.as_ref().clone().with_data_type(corrected)));
+        table_partition_cols_schema.push(Arc::new(
+            field
+                .as_ref()
+                .clone()
+                .with_name(&column.physical_name)
+                .with_data_type(corrected),
+        ));
     }
 
     // Add file column to partition schema if configured
@@ -320,7 +329,9 @@ pub fn build_file_scan_config(
         ..Default::default()
     };
 
-    let table_schema = TableSchema::new(logical_file_schema, table_partition_cols_schema);
+    let table_schema = TableSchema::builder(logical_file_schema)
+        .with_table_partition_cols(table_partition_cols_schema)
+        .build();
     // Calculate table statistics.
     //
     // `Statistics::column_statistics` expects the same length as the table schema
@@ -331,7 +342,7 @@ pub fn build_file_scan_config(
         TableStatsMode::Snapshot => {
             let snapshot_schema = Arc::new(snapshot.schema().clone());
             snapshot
-                .datafusion_table_statistics(params.pruning_mask)
+                .datafusion_table_statistics_for_adds(files)
                 .map(|stats| {
                     map_statistics_to_schema_with_name_mapping(
                         &stats,
@@ -551,27 +562,11 @@ fn sanitize_bound_for_type(
     bound: &Precision<ScalarValue>,
     data_type: &ArrowDataType,
 ) -> Precision<ScalarValue> {
-    let sanitize_value = |value: &ScalarValue| {
-        if value.is_null() {
-            return None;
-        }
-        if value.data_type() == *data_type {
-            return Some(value.clone());
-        }
-        value
-            .cast_to(data_type)
-            .ok()
-            .filter(|casted| !casted.is_null())
-    };
-
-    match bound {
-        Precision::Exact(value) => sanitize_value(value)
-            .map(Precision::Exact)
-            .unwrap_or(Precision::Absent),
-        Precision::Inexact(value) => sanitize_value(value)
-            .map(Precision::Inexact)
-            .unwrap_or(Precision::Absent),
-        Precision::Absent => Precision::Absent,
+    let sanitized = bound.cast_to(data_type).unwrap_or(Precision::Absent);
+    if sanitized.get_value().is_some_and(ScalarValue::is_null) {
+        Precision::Absent
+    } else {
+        sanitized
     }
 }
 
@@ -633,11 +628,7 @@ fn looks_like_absolute_uri(path: &str) -> bool {
         && rest.starts_with('/')
 }
 
-fn stats_for_add(
-    action: &Add,
-    file_schema: &SchemaRef,
-    physical_to_logical: &HashMap<String, String>,
-) -> Result<Option<Arc<Statistics>>> {
+fn stats_for_add(action: &Add, file_schema: &SchemaRef) -> Result<Option<Arc<Statistics>>> {
     let stats = action
         .get_stats()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -648,55 +639,49 @@ fn stats_for_add(
     let mut column_statistics = Vec::with_capacity(file_schema.fields().len());
     for field in file_schema.fields() {
         let field_name = field.name();
-        let logical_name = physical_to_logical.get(field_name);
-        let name_candidates = logical_name
-            .iter()
-            .map(|name| name.as_str())
-            .chain(std::iter::once(field_name.as_str()));
-        let mut min_value = Precision::Absent;
-        let mut max_value = Precision::Absent;
-        let mut null_count = Precision::Absent;
-
-        for name in name_candidates {
-            if min_value == Precision::Absent {
-                let min_stat = stats.get_min_stat(name);
-                if let Some(value) = min_stat.value().and_then(|v| {
-                    ScalarConverter::stat_value_to_arrow_scalar_value(v, field.data_type())
-                        .ok()
-                        .flatten()
-                }) && !value.is_null()
-                {
-                    min_value = match min_stat {
-                        MinStat::Exact(_) => Precision::Exact(value),
-                        MinStat::LowerBound(_) => Precision::Inexact(value),
-                        MinStat::Absent => Precision::Absent,
-                    };
-                }
+        let bound = |value| {
+            if stats.tight_bounds {
+                Precision::Exact(value)
+            } else {
+                Precision::Inexact(value)
             }
-            if max_value == Precision::Absent {
-                let max_stat = stats.get_max_stat(name);
-                if let Some(value) = max_stat.value().and_then(|v| {
-                    ScalarConverter::stat_value_to_arrow_scalar_value(v, field.data_type())
-                        .ok()
-                        .flatten()
-                }) && !value.is_null()
-                {
-                    max_value = match max_stat {
-                        MaxStat::Exact(_) => Precision::Exact(value),
-                        MaxStat::UpperBound(_) => Precision::Inexact(value),
-                        MaxStat::Absent => Precision::Absent,
-                    };
-                }
-            }
-            if null_count == Precision::Absent
-                && let Some(value) = stats.null_count_value(name)
-            {
-                null_count = if stats.tight_bounds {
+        };
+        let mut min_value = stats
+            .min_values
+            .get(field_name)
+            .and_then(|value| {
+                ScalarConverter::column_value_stat_to_arrow_scalar_value(value, field.data_type())
+                    .ok()
+                    .flatten()
+            })
+            .filter(|value| !value.is_null())
+            .map(bound)
+            .unwrap_or(Precision::Absent);
+        let mut max_value = stats
+            .max_values
+            .get(field_name)
+            .and_then(|value| {
+                ScalarConverter::column_value_stat_to_arrow_scalar_value(value, field.data_type())
+                    .ok()
+                    .flatten()
+            })
+            .filter(|value| !value.is_null())
+            .map(bound)
+            .unwrap_or(Precision::Absent);
+        let null_count = stats
+            .null_count_value(field_name)
+            .map(|value| {
+                if stats.tight_bounds {
                     Precision::Exact(value.max(0) as usize)
                 } else {
                     Precision::Inexact(value.max(0) as usize)
-                };
-            }
+                }
+            })
+            .unwrap_or(Precision::Absent);
+
+        if arrow_type_contains_timestamp(field.data_type()) {
+            min_value = min_value.to_inexact();
+            max_value = max_value.map(widen_timestamp_max_scalar).to_inexact();
         }
 
         column_statistics.push(ColumnStatistics {
@@ -1004,7 +989,7 @@ mod tests {
             commit_timestamp: None,
         };
 
-        let stats = stats_for_add(&add, &file_schema, &HashMap::new())
+        let stats = stats_for_add(&add, &file_schema)
             .unwrap()
             .expect("stats should be present");
         let column = &stats.column_statistics[0];
@@ -1018,5 +1003,41 @@ mod tests {
             Precision::Inexact(ScalarValue::Int32(Some(7)))
         );
         assert_eq!(column.null_count, Precision::Inexact(0));
+    }
+
+    #[test]
+    #[expect(clippy::expect_used, clippy::unwrap_used)]
+    fn test_stats_for_add_does_not_fallback_to_a_colliding_logical_name() {
+        let file_schema = Arc::new(Schema::new(vec![Field::new(
+            "col-target",
+            DataType::Int64,
+            true,
+        )]));
+        let add = Add {
+            path: "part-000.parquet".to_string(),
+            partition_values: HashMap::new(),
+            size: 1,
+            modification_time: 0,
+            data_change: true,
+            stats: Some(
+                r#"{"numRecords":1,"minValues":{"col-source":0},"maxValues":{"col-source":0},"nullCount":{"col-source":0}}"#
+                    .to_string(),
+            ),
+            tags: None,
+            deletion_vector: None,
+            base_row_id: None,
+            default_row_commit_version: None,
+            clustering_provider: None,
+            commit_version: None,
+            commit_timestamp: None,
+        };
+        let stats = stats_for_add(&add, &file_schema)
+            .unwrap()
+            .expect("stats should be present");
+        let column = &stats.column_statistics[0];
+
+        assert_eq!(column.min_value, Precision::Absent);
+        assert_eq!(column.max_value, Precision::Absent);
+        assert_eq!(column.null_count, Precision::Absent);
     }
 }

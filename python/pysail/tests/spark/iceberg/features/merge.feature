@@ -352,6 +352,65 @@ Feature: Iceberg MERGE
         """
       Then query plan matches snapshot
 
+    Scenario: EXPLAIN target-only MERGE uses a target-preserving join
+      Given variable location for temporary directory iceberg_merge_target_only_plan
+      Given final statement
+        """
+        DROP TABLE IF EXISTS merge_target_only_plan_table
+        """
+      Given statement template
+        """
+        CREATE TABLE merge_target_only_plan_table (
+          id INT,
+          value STRING
+        )
+        USING iceberg
+        LOCATION {{ location.uri }}
+        TBLPROPERTIES (
+          'format-version' = '2',
+          'write.merge.mode' = 'merge-on-read'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO merge_target_only_plan_table VALUES
+          (1, 'present'),
+          (2, 'stale'),
+          (3, 'keep')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW merge_target_only_plan_source AS
+        SELECT 1 AS id
+        """
+      When query
+        """
+        EXPLAIN MERGE INTO merge_target_only_plan_table AS t
+        USING merge_target_only_plan_source AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED BY SOURCE AND t.id = 2 THEN
+          UPDATE SET value = 'expired'
+        """
+      Then query plan matches snapshot
+      Given statement
+        """
+        MERGE INTO merge_target_only_plan_table AS t
+        USING merge_target_only_plan_source AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED BY SOURCE AND t.id = 2 THEN
+          UPDATE SET value = 'expired'
+        """
+      Then iceberg snapshot count is 2
+      When query
+        """
+        SELECT id, value FROM merge_target_only_plan_table ORDER BY id
+        """
+      Then query result ordered
+        | id | value   |
+        | 1  | present |
+        | 2  | expired |
+        | 3  | keep    |
+
     Scenario: EXPLAIN hashes partitioned merge intents by Iceberg transforms
       Given variable location for temporary directory iceberg_merge_partitioned_plan
       Given final statement

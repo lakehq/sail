@@ -46,6 +46,17 @@ pub(crate) fn to_decimal128_array(
     }
 }
 
+/// Mirrors Spark's `INVALID_PARAMETER_VALUE.TIME_UNIT`, raised by
+/// `QueryExecutionErrors.invalidTimeUnitError` for `time_diff` and `time_trunc`.
+/// The doubled quotes around the unit are Spark's: `toSQLValue` already quotes the value and
+/// the message template quotes it again.
+pub(crate) fn invalid_time_unit_err<T>(fn_name: &str, unit: &str) -> Result<T> {
+    exec_err!(
+        "The value of parameter(s) `unit` in `{fn_name}` is invalid: expects one of the units \
+         'HOUR', 'MINUTE', 'SECOND', 'MILLISECOND', 'MICROSECOND', but got ''{unit}''."
+    )
+}
+
 pub(crate) fn to_int32_array(
     col: &ColumnarValue,
     arg_name: &str,

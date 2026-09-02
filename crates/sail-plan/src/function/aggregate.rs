@@ -9,10 +9,11 @@ use datafusion::functions_aggregate::{
     variance,
 };
 use datafusion::functions_nested::string::array_to_string;
-use datafusion_common::ScalarValue;
+use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
+use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
 use datafusion_expr::{
-    AggregateUDF, BinaryExpr, ExprSchemable, Operator, ScalarUDF, cast, expr, lit, when,
+    AggregateUDF, BinaryExpr, ExprSchemable, Operator, ScalarUDF, cast, expr, lit, try_cast, when,
 };
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use lazy_static::lazy_static;
@@ -83,10 +84,17 @@ fn spark_sum(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         ignore_nulls,
         filter,
         order_by,
+        preserve_count_argument_columns: _,
         function_context,
     } = input;
     let supports_linear_rewrite =
         !distinct && ignore_nulls.is_none() && filter.is_none() && order_by.is_empty();
+    let arguments = coerce_string_sum_arguments(
+        arguments,
+        filter.as_deref(),
+        function_context.schema.as_ref(),
+        function_context.plan_config.ansi_mode,
+    )?;
     let arguments = if supports_linear_rewrite {
         arguments
             .into_iter()
@@ -108,6 +116,38 @@ fn spark_sum(input: AggFunctionInput) -> PlanResult<expr::Expr> {
             null_treatment: get_null_treatment(ignore_nulls),
         },
     }))
+}
+
+pub(super) fn coerce_string_sum_arguments(
+    arguments: Vec<expr::Expr>,
+    filter: Option<&expr::Expr>,
+    schema: &DFSchema,
+    ansi_mode: bool,
+) -> PlanResult<Vec<expr::Expr>> {
+    arguments
+        .into_iter()
+        .map(|argument| {
+            let argument_type = argument.get_type(schema)?;
+            match argument_type {
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+                    if ansi_mode {
+                        let argument = if let Some(filter) = filter {
+                            // Grouped aggregates evaluate arguments before FILTER, so mask
+                            // excluded rows before applying the fallible ANSI cast.
+                            let null_value = ScalarValue::try_from(&argument_type)?;
+                            when(filter.clone(), argument).otherwise(lit(null_value))?
+                        } else {
+                            argument
+                        };
+                        Ok(cast(argument, DataType::Float64))
+                    } else {
+                        Ok(try_cast(argument, DataType::Float64))
+                    }
+                }
+                _ => Ok(argument),
+            }
+        })
+        .collect()
 }
 
 fn widen_safe_linear_sum_argument(
@@ -177,6 +217,7 @@ fn grouping_id(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         ignore_nulls,
         filter,
         order_by,
+        preserve_count_argument_columns: _,
         function_context: _,
     } = input;
     if distinct || ignore_nulls.is_some() || filter.is_some() || !order_by.is_empty() {
@@ -413,16 +454,98 @@ fn try_avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let AggFunctionInput {
         arguments,
-        distinct,
+        mut distinct,
         ignore_nulls,
         filter,
         order_by,
-        function_context: _,
+        preserve_count_argument_columns,
+        function_context,
     } = input;
     let null_treatment = get_null_treatment(ignore_nulls);
     // For COUNT(DISTINCT *), the resolver already expanded the wildcard to column references
     // (with hidden-column filtering). For COUNT(*), convert to COUNT(1).
-    let args = transform_count_star_wildcard_expr(arguments);
+    let mut args = transform_count_star_wildcard_expr(arguments);
+    if args.is_empty() {
+        if function_context
+            .plan_config
+            .legacy_allow_parameterless_count
+        {
+            args.push(lit(ScalarValue::Null));
+        } else {
+            return Err(PlanError::invalid(
+                "The `count` function requires at least one parameter; set \
+                 `spark.sql.legacy.allowParameterlessCount` to true to restore the legacy \
+                 COUNT() result of zero",
+            ));
+        }
+    }
+
+    // Implicit SQL PIVOT grouping collects columns from the resolved aggregate, so its
+    // preservation scope must retain the original arguments through constant-filter folding.
+    let filter = match filter {
+        Some(filter)
+            if matches!(
+                filter.as_ref(),
+                expr::Expr::Literal(ScalarValue::Boolean(Some(true)), _)
+            ) =>
+        {
+            None
+        }
+        Some(filter)
+            if !preserve_count_argument_columns
+                && matches!(
+                    filter.as_ref(),
+                    expr::Expr::Literal(ScalarValue::Boolean(Some(false) | None), _)
+                        | expr::Expr::Literal(ScalarValue::Null, _)
+                ) =>
+        {
+            args = vec![lit(ScalarValue::Null)];
+            None
+        }
+        filter => filter,
+    };
+
+    if args.iter().all(is_typed_null_literal) {
+        // Keep an aggregate in the plan so global COUNT still emits one row on empty input.
+        args = vec![lit(ScalarValue::Null)];
+        distinct = false;
+    }
+
+    if distinct && order_by.is_empty() && args.iter().all(is_non_null_literal) {
+        // A distinct tuple of constants contributes exactly one value when the filtered input is
+        // non-empty. Express that through row COUNT so exact table cardinality can answer it.
+        let rows = expr::Expr::AggregateFunction(AggregateFunction {
+            func: count::count_udaf(),
+            params: AggregateFunctionParams {
+                args: vec![expr::Expr::Literal(COUNT_STAR_EXPANSION, None)],
+                distinct: false,
+                filter,
+                order_by,
+                null_treatment,
+            },
+        });
+        return Ok(when(rows.gt(lit(0_i64)), lit(1_i64)).otherwise(lit(0_i64))?);
+    }
+
+    if !distinct && !preserve_count_argument_columns {
+        let mut nullable_args = Vec::with_capacity(args.len());
+        for argument in args {
+            if argument.nullable(function_context.schema)?
+                && !matches!(&argument, expr::Expr::Column(column) if nullable_args.iter().any(
+                    |existing| matches!(existing, expr::Expr::Column(other) if other == column)
+                ))
+            {
+                nullable_args.push(argument);
+            }
+        }
+        // COUNT only tests whether every argument is non-null. Arguments proven non-null can be
+        // removed; an empty remainder is DataFusion's canonical COUNT(*) expansion.
+        args = if nullable_args.is_empty() {
+            vec![expr::Expr::Literal(COUNT_STAR_EXPANSION, None)]
+        } else {
+            nullable_args
+        };
+    }
     // TODO: remove StructFunction call when count distinct from multiple arguments is implemented
     // https://github.com/apache/datafusion/blob/58ddf0d4390c770bc571f3ac2727c7de77aa25ab/datafusion/functions-aggregate/src/count.rs#L333
     let args = if distinct && (args.len() > 1) {
@@ -459,6 +582,50 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
             filter,
             order_by,
             null_treatment,
+        },
+    }))
+}
+
+fn is_typed_null_literal(expression: &expr::Expr) -> bool {
+    match expression {
+        expr::Expr::Alias(alias) => is_typed_null_literal(alias.expr.as_ref()),
+        expr::Expr::Literal(value, _) => value.is_null(),
+        expr::Expr::Cast(cast) => is_typed_null_literal(cast.expr.as_ref()),
+        expr::Expr::TryCast(cast) => is_typed_null_literal(cast.expr.as_ref()),
+        _ => false,
+    }
+}
+
+fn is_non_null_literal(expression: &expr::Expr) -> bool {
+    match expression {
+        expr::Expr::Alias(alias) => is_non_null_literal(alias.expr.as_ref()),
+        expr::Expr::Literal(value, _) => !value.is_null(),
+        _ => false,
+    }
+}
+
+fn min_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    duplicate_agnostic_extreme(input, min_max::min_udaf)
+}
+
+fn max_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    duplicate_agnostic_extreme(input, min_max::max_udaf)
+}
+
+fn duplicate_agnostic_extreme(
+    input: AggFunctionInput,
+    function: fn() -> Arc<AggregateUDF>,
+) -> PlanResult<expr::Expr> {
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: function(),
+        params: AggregateFunctionParams {
+            args: input.arguments,
+            // Duplicate elimination cannot change an extremum, and retaining DISTINCT creates
+            // an avoidable grouped aggregate that prevents exact-statistics substitution.
+            distinct: false,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
         },
     }))
 }
@@ -797,12 +964,12 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("last", F::custom(last_value)),
         ("last_value", F::custom(last_value)),
         ("listagg", F::custom(listagg)),
-        ("max", F::default(min_max::max_udaf)),
+        ("max", F::custom(max_value)),
         ("max_by", F::custom(max_by)),
         ("mean", F::default(average::avg_udaf)),
         ("measure", F::unknown("measure")),
         ("median", F::custom(median)),
-        ("min", F::default(min_max::min_udaf)),
+        ("min", F::custom(min_value)),
         ("min_by", F::custom(min_by)),
         ("mode", F::custom(mode)),
         ("percentile", F::custom(percentile_exact)),
@@ -906,4 +1073,80 @@ pub(crate) fn get_built_in_aggregate_function(name: &str) -> PlanResult<AggFunct
 
 pub(crate) fn list_built_in_aggregate_function_names() -> impl Iterator<Item = &'static str> {
     BUILT_IN_AGGREGATE_FUNCTIONS.keys().copied()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow::datatypes::Schema;
+    use datafusion::prelude::SessionContext;
+    use datafusion_expr::{ExprSchemable, col};
+
+    use super::*;
+    use crate::config::PlanConfig;
+    use crate::function::common::FunctionContextInput;
+
+    fn sum_test_schema(data_type: DataType) -> PlanResult<Arc<DFSchema>> {
+        Ok(Arc::new(DFSchema::try_from(Schema::new(vec![
+            Field::new("value", data_type, true),
+            Field::new("included", DataType::Boolean, true),
+        ]))?))
+    }
+
+    #[test]
+    fn string_sum_uses_mode_specific_cast_for_all_string_types() -> PlanResult<()> {
+        for data_type in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+            let schema = sum_test_schema(data_type)?;
+            let ansi_arguments =
+                coerce_string_sum_arguments(vec![col("value")], None, schema.as_ref(), true)?;
+            assert_eq!(ansi_arguments, vec![cast(col("value"), DataType::Float64)]);
+
+            let legacy_arguments =
+                coerce_string_sum_arguments(vec![col("value")], None, schema.as_ref(), false)?;
+            assert_eq!(
+                legacy_arguments,
+                vec![try_cast(col("value"), DataType::Float64)]
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ansi_string_sum_masks_filter_before_cast_and_preserves_clauses() -> PlanResult<()> {
+        let schema = sum_test_schema(DataType::Utf8)?;
+        let argument_display_names = ["value".to_string()];
+        let plan_config = Arc::new(PlanConfig::default());
+        let session_context = SessionContext::new();
+        let filter = col("included");
+        let expression = spark_sum(AggFunctionInput {
+            arguments: vec![col("value")],
+            distinct: true,
+            ignore_nulls: None,
+            filter: Some(Box::new(filter.clone())),
+            order_by: vec![],
+            preserve_count_argument_columns: false,
+            function_context: FunctionContextInput {
+                argument_display_names: &argument_display_names,
+                plan_config: &plan_config,
+                session_context: &session_context,
+                schema: &schema,
+            },
+        })?;
+
+        assert_eq!(expression.get_type(schema.as_ref())?, DataType::Float64);
+        assert!(expression.nullable(schema.as_ref())?);
+        let expr::Expr::AggregateFunction(sum) = expression else {
+            return Err(PlanError::internal("expected aggregate SUM expression"));
+        };
+        let masked_argument =
+            when(filter.clone(), col("value")).otherwise(lit(ScalarValue::Utf8(None)))?;
+        assert_eq!(
+            sum.params.args,
+            vec![cast(masked_argument, DataType::Float64)]
+        );
+        assert_eq!(sum.params.filter, Some(Box::new(filter)));
+        assert!(sum.params.distinct);
+        Ok(())
+    }
 }

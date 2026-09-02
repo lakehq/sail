@@ -4,13 +4,15 @@ use std::fmt;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr::{PhysicalExpr, RangePartitioning};
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
+use crate::shuffle::ShuffleBackendKind;
+
 #[derive(Debug, Clone)]
 pub struct JobGraphOptions {
-    pub use_blocking_shuffle: bool,
+    pub shuffle_backend: ShuffleBackendKind,
 }
 
 /// A job graph represents a distributed execution plan for a job.
@@ -36,6 +38,10 @@ impl JobGraph {
 
     pub fn schema(&self) -> &SchemaRef {
         &self.schema
+    }
+
+    pub(crate) fn shuffle_backend(&self) -> &ShuffleBackendKind {
+        &self.options.shuffle_backend
     }
 
     /// Get the required number of output replicas for the given stage.
@@ -189,11 +195,14 @@ pub enum OutputDistribution {
         keys: Vec<Arc<dyn PhysicalExpr>>,
         channels: usize,
     },
-    RoundRobin {
+    Range {
+        partitioning: RangePartitioning,
+    },
+    RoundRobinBatch {
         channels: usize,
     },
     /// Row-level round-robin distribution for explicit user repartition calls.
-    /// Unlike `RoundRobin` (batch-based), this distributes individual rows across
+    /// Unlike `RoundRobinBatch`, this distributes individual rows across
     /// output partitions to ensure even data distribution.
     RoundRobinRow {
         channels: usize,
@@ -204,7 +213,8 @@ impl OutputDistribution {
     pub fn channels(&self) -> usize {
         match self {
             OutputDistribution::Hash { channels, .. } => *channels,
-            OutputDistribution::RoundRobin { channels } => *channels,
+            OutputDistribution::Range { partitioning } => partitioning.partition_count(),
+            OutputDistribution::RoundRobinBatch { channels } => *channels,
             OutputDistribution::RoundRobinRow { channels } => *channels,
         }
     }
@@ -217,8 +227,9 @@ impl fmt::Display for OutputDistribution {
                 let keys = keys.iter().map(|k| k.to_string()).collect::<Vec<_>>();
                 write!(f, "Hash(keys=[{}], channels={})", keys.join(", "), channels)
             }
-            OutputDistribution::RoundRobin { channels } => {
-                write!(f, "RoundRobin(channels={})", channels)
+            OutputDistribution::Range { partitioning } => write!(f, "{partitioning}"),
+            OutputDistribution::RoundRobinBatch { channels } => {
+                write!(f, "RoundRobinBatch(channels={})", channels)
             }
             OutputDistribution::RoundRobinRow { channels } => {
                 write!(f, "RoundRobinRow(channels={})", channels)

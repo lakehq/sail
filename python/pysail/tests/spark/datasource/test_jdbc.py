@@ -527,6 +527,33 @@ def test_custom_schema_case_insensitive(spark, jdbc_opts):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    ("source", "expected_query"),
+    [
+        ({"query": "SELECT 1 AS n"}, "SELECT TOP 0 * FROM (SELECT 1 AS n) AS _cx_schema_q"),
+        ({"dbtable": "events"}, "SELECT TOP 0 * FROM events"),
+    ],
+)
+def test_mssql_schema_query_uses_top(monkeypatch, source, expected_query):
+    import pyarrow as pa
+
+    from pysail.spark.datasource import jdbc
+
+    queries = []
+
+    def read_sql(_conn_str, query, *, return_type):
+        assert return_type == "arrow"
+        queries.append(query)
+        return pa.table({})
+
+    monkeypatch.setattr(jdbc.cx, "read_sql", read_sql)
+
+    datasource = jdbc.JdbcDataSource(options={"url": "jdbc:mssql://localhost:1433/test", **source})
+    datasource.schema()
+
+    assert queries == [expected_query]
+
+
 def test_filter_to_sql_unit():
     from pyspark.sql.datasource import (
         EqualTo,

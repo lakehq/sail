@@ -108,9 +108,9 @@ def normalize_plan_text(plan_text: str) -> str:
         flags=re.IGNORECASE,
     )
     # Normalize Delta V2 UUID-named checkpoint files:
-    # e.g. 00000000000000000001.checkpoint.{uuid}.parquet -> 00000000000000000001.checkpoint.<uuid>.parquet
+    # e.g. 00000000000000000001.checkpoint.{uuid}.json -> 00000000000000000001.checkpoint.<uuid>.json
     text = re.sub(
-        r"(\d{20}\.checkpoint\.)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\.parquet)",
+        r"(\d{20}\.checkpoint\.)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\.(?:parquet|json))",
         r"\1<uuid>\2",
         text,
         flags=re.IGNORECASE,
@@ -127,6 +127,12 @@ def normalize_plan_text(plan_text: str) -> str:
     text = re.sub(
         r"[A-Za-z0-9]{16}_(\d+)\.(zst|snappy|gzip|lz4|brotli)\.parquet",
         r"<id>_\1.\2.parquet",
+        text,
+    )
+    # Normalize Sail default CSV filenames: <16-char random>_<partition>.csv.
+    text = re.sub(
+        r"[A-Za-z0-9]{16}_(\d+)\.csv",
+        r"<id>_\1.csv",
         text,
     )
 
