@@ -76,6 +76,13 @@ pub struct MetricPoint<T> {
     pub value: T,
 }
 
+/// One observation in a metric point, including its optional aggregation start timestamp.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MetricPointValue<T> {
+    pub start_timestamp: Option<TimestampMicros>,
+    pub value: T,
+}
+
 /// A metric sample value as a list of observations at the same timestamp, in insertion order.
 pub type MetricPointValues<T> = SmallVec<[T; 1]>;
 
@@ -181,19 +188,19 @@ series!(
     "metric_integer_points",
     MetricSeriesId,
     TimestampMicros,
-    i64
+    MetricPointValue<i64>
 );
 series!(
     MetricFloatPointSeries,
     "metric_float_points",
     MetricSeriesId,
     TimestampMicros,
-    f64
+    MetricPointValue<f64>
 );
 series!(
     MetricHistogramPointSeries,
     "metric_histogram_points",
     MetricSeriesId,
     TimestampMicros,
-    MetricHistogram
+    MetricPointValue<MetricHistogram>
 );

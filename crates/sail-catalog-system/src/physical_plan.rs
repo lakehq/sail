@@ -11,6 +11,7 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     apply_expression_roots,
 };
+use futures::TryStreamExt;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_system_store::catalog::SystemTable;
 
@@ -142,7 +143,8 @@ impl ExecutionPlan for SystemTableExec {
                 .extension::<SystemTableService>()?
                 .read(table, projection, filters, fetch)
                 .await
-        });
+        })
+        .try_flatten();
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),
             stream,

@@ -13,10 +13,12 @@ impl Actor for TaskRunnerActor {
 
     fn new(options: Self::Options) -> Self {
         let TaskRunnerComponents {
+            session_id,
             extensions,
             placement,
         } = options;
         Self {
+            session_id,
             signals: Default::default(),
             codec: Box::new(RemoteExecutionCodec),
             extensions,

@@ -12,10 +12,10 @@ use crate::event::{
 use crate::model::{
     JobPrimaryKey, JobTable, MetricAttributeIndex, MetricAttributeKey, MetricAttributes,
     MetricFloatPointSeries, MetricHistogramPointSeries, MetricIntegerPointSeries, MetricNameIndex,
-    MetricSeriesIdentityTable, MetricSeriesKey, MetricSeriesKind, MetricSeriesMetadata,
-    MetricSeriesTable, NextMetricSeriesIdTable, OptionPrimaryKey, OptionTable, SessionPrimaryKey,
-    SessionTable, StagePrimaryKey, StageTable, TaskPrimaryKey, TaskTable, WorkerPrimaryKey,
-    WorkerTable,
+    MetricPointValue, MetricSeriesIdentityTable, MetricSeriesKey, MetricSeriesKind,
+    MetricSeriesMetadata, MetricSeriesTable, NextMetricSeriesIdTable, OptionPrimaryKey,
+    OptionTable, SessionPrimaryKey, SessionTable, StagePrimaryKey, StageTable, TaskPrimaryKey,
+    TaskTable, WorkerPrimaryKey, WorkerTable,
 };
 use crate::predicate::TimestampMicros;
 use crate::types::{MetricNumber, MetricValue, StageInput};
@@ -28,6 +28,7 @@ pub struct MetricSample {
     pub name: String,
     pub attributes: MetricAttributes,
     pub timestamp: TimestampMicros,
+    pub start_timestamp: Option<TimestampMicros>,
     pub value: MetricValue,
 }
 
@@ -496,16 +497,37 @@ where
         };
         match sample.value {
             MetricValue::Count(MetricNumber::Integer(value))
-            | MetricValue::Gauge(MetricNumber::Integer(value)) => writer
-                .series_mut::<MetricIntegerPointSeries>()
-                .put(id, sample.timestamp, value)?,
+            | MetricValue::Gauge(MetricNumber::Integer(value)) => {
+                writer.series_mut::<MetricIntegerPointSeries>().put(
+                    id,
+                    sample.timestamp,
+                    MetricPointValue {
+                        start_timestamp: sample.start_timestamp,
+                        value,
+                    },
+                )?
+            }
             MetricValue::Count(MetricNumber::Float(value))
-            | MetricValue::Gauge(MetricNumber::Float(value)) => writer
-                .series_mut::<MetricFloatPointSeries>()
-                .put(id, sample.timestamp, value)?,
-            MetricValue::Histogram(value) => writer
-                .series_mut::<MetricHistogramPointSeries>()
-                .put(id, sample.timestamp, value)?,
+            | MetricValue::Gauge(MetricNumber::Float(value)) => {
+                writer.series_mut::<MetricFloatPointSeries>().put(
+                    id,
+                    sample.timestamp,
+                    MetricPointValue {
+                        start_timestamp: sample.start_timestamp,
+                        value,
+                    },
+                )?
+            }
+            MetricValue::Histogram(value) => {
+                writer.series_mut::<MetricHistogramPointSeries>().put(
+                    id,
+                    sample.timestamp,
+                    MetricPointValue {
+                        start_timestamp: sample.start_timestamp,
+                        value,
+                    },
+                )?
+            }
         }
     }
     Ok(())

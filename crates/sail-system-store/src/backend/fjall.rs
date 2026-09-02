@@ -20,11 +20,11 @@ use crate::backend::codec::{
 use crate::catalog::{JobRow, OptionRow, SessionRow, StageRow, TaskRow, WorkerRow};
 use crate::model::{
     JobPrimaryKey, JobTable, MetricAttributeIndex, MetricAttributeKey, MetricFloatPointSeries,
-    MetricHistogramPointSeries, MetricIntegerPointSeries, MetricNameIndex, MetricPointValues,
-    MetricSeriesId, MetricSeriesIdentityTable, MetricSeriesKey, MetricSeriesMetadata,
-    MetricSeriesTable, NextMetricSeriesIdTable, OptionPrimaryKey, OptionTable, SessionPrimaryKey,
-    SessionTable, StagePrimaryKey, StageTable, StoreIndex, StoreSeries, StoreTable, TaskPrimaryKey,
-    TaskTable, WorkerPrimaryKey, WorkerTable,
+    MetricHistogramPointSeries, MetricIntegerPointSeries, MetricNameIndex, MetricPointValue,
+    MetricPointValues, MetricSeriesId, MetricSeriesIdentityTable, MetricSeriesKey,
+    MetricSeriesMetadata, MetricSeriesTable, NextMetricSeriesIdTable, OptionPrimaryKey,
+    OptionTable, SessionPrimaryKey, SessionTable, StagePrimaryKey, StageTable, StoreIndex,
+    StoreSeries, StoreTable, TaskPrimaryKey, TaskTable, WorkerPrimaryKey, WorkerTable,
 };
 
 impl From<CodecError> for fjall::Error {
@@ -493,11 +493,19 @@ macro_rules! series {
     };
 }
 
-series!(MetricIntegerPointSeries, i64, metric_integer_points);
-series!(MetricFloatPointSeries, f64, metric_float_points);
+series!(
+    MetricIntegerPointSeries,
+    MetricPointValue<i64>,
+    metric_integer_points
+);
+series!(
+    MetricFloatPointSeries,
+    MetricPointValue<f64>,
+    metric_float_points
+);
 series!(
     MetricHistogramPointSeries,
-    crate::types::MetricHistogram,
+    MetricPointValue<crate::types::MetricHistogram>,
     metric_histogram_points
 );
 
@@ -553,7 +561,7 @@ mod tests {
     use crate::engine::{MetricSample, write_event, write_metrics};
     use crate::model::{
         MetricAttributeIndex, MetricAttributeKey, MetricIntegerPointSeries, MetricNameIndex,
-        OptionPrimaryKey, OptionTable,
+        MetricPointValue, OptionPrimaryKey, OptionTable,
     };
     use crate::predicate::TimestampMicros;
     use crate::types::{MetricNumber, MetricValue};
@@ -578,12 +586,14 @@ mod tests {
                     name: "sail.metric".to_string(),
                     attributes: BTreeMap::from([("host".to_string(), "one".to_string())]),
                     timestamp: TimestampMicros(1),
+                    start_timestamp: None,
                     value: MetricValue::Gauge(MetricNumber::Integer(1)),
                 },
                 MetricSample {
                     name: "sail.metric".to_string(),
                     attributes: BTreeMap::from([("host".to_string(), "one".to_string())]),
                     timestamp: TimestampMicros(1),
+                    start_timestamp: None,
                     value: MetricValue::Gauge(MetricNumber::Integer(2)),
                 },
             ],
@@ -614,7 +624,22 @@ mod tests {
         )?;
         assert_eq!(
             points,
-            vec![(TimestampMicros(1), 1), (TimestampMicros(1), 2)]
+            vec![
+                (
+                    TimestampMicros(1),
+                    MetricPointValue {
+                        start_timestamp: None,
+                        value: 1,
+                    },
+                ),
+                (
+                    TimestampMicros(1),
+                    MetricPointValue {
+                        start_timestamp: None,
+                        value: 2,
+                    },
+                ),
+            ]
         );
         let mut name_ids = Vec::new();
         snapshot.index::<MetricNameIndex>().scan(
