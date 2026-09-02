@@ -148,6 +148,8 @@ pub struct MergeExpansion {
 
 #[derive(Clone, Copy, Debug)]
 pub struct MergePlanRequirements {
+    /// Whether the write branch must retain unchanged target rows for file rewrites.
+    pub preserve_unmodified_target_rows: bool,
     pub source_metrics: bool,
     pub effects: RowLevelEffectRequirements,
 }
@@ -694,7 +696,7 @@ pub fn expand_merge(
     )
 }
 
-/// Default MERGE expansion: full outer join + presence columns + touched files.
+/// Default MERGE expansion: clause-aware join + presence columns + touched files.
 fn build_default_merge_expansion(
     options: MergeIntoOptions,
     target_plan: LogicalPlan,
@@ -726,13 +728,19 @@ fn build_default_merge_expansion(
 
     let join_on = options.join_key_pairs.clone();
     let residual_filter = combine_conjunction(&options.residual_predicates);
+    let join_type = select_merge_join_type(
+        &options.matched_clauses,
+        &options.not_matched_by_source_clauses,
+        &options.not_matched_by_target_clauses,
+        requirements.preserve_unmodified_target_rows,
+    );
 
     let join = Join::try_new(
         Arc::new(augmented_target),
         Arc::new(augmented_source),
         join_on,
         residual_filter,
-        JoinType::Full,
+        join_type,
         JoinConstraint::On,
         NullEquality::NullEqualsNothing,
         false,
@@ -923,6 +931,36 @@ fn build_default_merge_expansion(
         output_schema: command_schema,
         options,
     })
+}
+
+fn select_merge_join_type(
+    matched_clauses: &[MergeMatchedClause],
+    not_matched_by_source_clauses: &[MergeNotMatchedBySourceClause],
+    not_matched_by_target_clauses: &[MergeNotMatchedByTargetClause],
+    preserve_unmodified_target_rows: bool,
+) -> JoinType {
+    if preserve_unmodified_target_rows {
+        // A left join preserves every target row; source-only inserts require a full join.
+        return if not_matched_by_target_clauses.is_empty() {
+            JoinType::Left
+        } else {
+            JoinType::Full
+        };
+    }
+
+    let matched_only = !matched_clauses.is_empty()
+        && not_matched_by_source_clauses.is_empty()
+        && not_matched_by_target_clauses.is_empty();
+
+    if matched_only {
+        JoinType::Inner
+    } else if not_matched_by_source_clauses.is_empty() {
+        JoinType::Right
+    } else if not_matched_by_target_clauses.is_empty() {
+        JoinType::Left
+    } else {
+        JoinType::Full
+    }
 }
 
 fn append_presence_projection(
