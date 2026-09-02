@@ -727,8 +727,8 @@ impl ExecutionPlan for IcebergCommitExec {
             .await;
             input_result?;
 
-            // Blocking-shuffle retries can replay these actions, so task files remain owned by
-            // the job until a commit succeeds or orphan-file maintenance removes them.
+            // FIXME: Task files need a job-terminal cleanup owner. Attempt-local cleanup is
+            // unsafe because blocking-shuffle retries replay these actions.
             let commit_result: Result<RecordBatch> = async {
 
             // No-op path (e.g. IgnoreIfExists on existing table): no rows, no meta.
@@ -1676,6 +1676,28 @@ mod tests {
             IcebergCommitExec::dynamic_partition_overwrite_paths(&added, &live, &spec, &schema)
                 .expect("dynamic overwrite paths");
         assert_eq!(paths, vec!["old-2.parquet"]);
+    }
+
+    #[test]
+    fn dynamic_partition_overwrite_matches_distinct_nan_payloads() {
+        let spec = identity_partition_spec();
+        let added = vec![partitioned_data_file_with_literal(
+            "new-nan.parquet",
+            3,
+            PrimitiveLiteral::Float(ordered_float::OrderedFloat(f32::from_bits(0x7fc0_0001))),
+        )];
+        let live = vec![partitioned_data_file_with_literal(
+            "old-nan.parquet",
+            3,
+            PrimitiveLiteral::Float(ordered_float::OrderedFloat(f32::from_bits(0xffc0_0042))),
+        )];
+        let schema = identity_partition_schema(PrimitiveType::Float);
+
+        let paths =
+            IcebergCommitExec::dynamic_partition_overwrite_paths(&added, &live, &spec, &schema)
+                .expect("dynamic overwrite paths");
+
+        assert_eq!(paths, vec!["old-nan.parquet"]);
     }
 
     #[test]

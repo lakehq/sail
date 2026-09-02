@@ -141,6 +141,110 @@ mod tests {
         assert_eq!(output["last-sequence-number"], 0);
         assert_eq!(output["snapshots"][0]["sequence-number"], 0);
     }
+
+    #[test]
+    fn legacy_v1_schema_and_partition_spec_are_normalized() {
+        let mut value = metadata_json(1, 7);
+        let object = value.as_object_mut().expect("metadata object");
+        let mut schema = object.remove("schemas").expect("schemas")[0].clone();
+        schema
+            .as_object_mut()
+            .expect("schema object")
+            .remove("schema-id");
+        object.insert("schema".to_string(), schema);
+        object.remove("current-schema-id");
+        let partition_fields =
+            object.remove("partition-specs").expect("partition specs")[0]["fields"].clone();
+        object.insert("partition-spec".to_string(), partition_fields);
+        object.remove("default-spec-id");
+        object.remove("last-partition-id");
+
+        let metadata = TableMetadata::from_json(
+            &serde_json::to_vec(&value).expect("serialized legacy metadata"),
+        )
+        .expect("legacy v1 metadata");
+
+        assert_eq!(metadata.current_schema_id, 0);
+        assert!(metadata.current_schema().is_some());
+        assert_eq!(metadata.default_spec_id, 0);
+        assert!(metadata.default_partition_spec().is_some());
+        assert_eq!(metadata.last_partition_id, 999);
+        assert_eq!(metadata.last_sequence_number, 0);
+        assert_eq!(metadata.snapshots[0].sequence_number(), 0);
+    }
+
+    #[test]
+    fn legacy_v1_requires_partition_spec() {
+        let mut value = metadata_json(1, 0);
+        let object = value.as_object_mut().expect("metadata object");
+        let schema = object.remove("schemas").expect("schemas")[0].clone();
+        object.insert("schema".to_string(), schema);
+        object.remove("current-schema-id");
+        object.remove("partition-specs");
+        object.remove("default-spec-id");
+
+        let error = TableMetadata::from_json(
+            &serde_json::to_vec(&value).expect("serialized legacy metadata"),
+        )
+        .expect_err("partition-spec must be required");
+
+        assert!(error.to_string().contains("partition-spec is required"));
+    }
+
+    #[test]
+    fn legacy_v1_requires_schema() {
+        let mut value = metadata_json(1, 0);
+        let object = value.as_object_mut().expect("metadata object");
+        object.remove("schemas");
+        object.remove("current-schema-id");
+
+        let error =
+            TableMetadata::from_json(&serde_json::to_vec(&value).expect("serialized metadata"))
+                .expect_err("schema must be required");
+
+        assert!(error.to_string().contains("schema is required"));
+    }
+
+    #[test]
+    fn v1_schema_array_requires_current_schema_id() {
+        let mut value = metadata_json(1, 0);
+        value
+            .as_object_mut()
+            .expect("metadata object")
+            .remove("current-schema-id");
+
+        let error =
+            TableMetadata::from_json(&serde_json::to_vec(&value).expect("serialized metadata"))
+                .expect_err("current-schema-id must be required");
+
+        assert!(error.to_string().contains("current-schema-id is required"));
+    }
+
+    #[test]
+    fn v1_partition_spec_array_requires_default_spec_id() {
+        let mut value = metadata_json(1, 0);
+        value
+            .as_object_mut()
+            .expect("metadata object")
+            .remove("default-spec-id");
+
+        let error =
+            TableMetadata::from_json(&serde_json::to_vec(&value).expect("serialized metadata"))
+                .expect_err("default-spec-id must be required");
+
+        assert!(error.to_string().contains("default-spec-id is required"));
+    }
+
+    #[test]
+    fn v1_current_schema_id_must_reference_existing_schema() {
+        let mut missing_schema = metadata_json(1, 0);
+        missing_schema["current-schema-id"] = serde_json::Value::from(7);
+        let schema_error = TableMetadata::from_json(
+            &serde_json::to_vec(&missing_schema).expect("serialized metadata"),
+        )
+        .expect_err("unknown current schema must fail");
+        assert!(schema_error.to_string().contains("current-schema-id=7"));
+    }
 }
 
 /// Snapshot log entry
@@ -171,82 +275,85 @@ enum TableMetadataEnum {
     V3(TableMetadata),
 }
 
-fn normalize_v1_compatibility_fields(value: &mut serde_json::Value) {
+fn invalid_metadata(message: impl Into<String>) -> serde_json::Error {
+    <serde_json::Error as serde::de::Error>::custom(message.into())
+}
+
+fn normalize_v1_compatibility_fields(
+    value: &mut serde_json::Value,
+) -> Result<(), serde_json::Error> {
     let Some(object) = value.as_object_mut() else {
-        return;
+        return Ok(());
     };
     if object
         .get("format-version")
         .and_then(serde_json::Value::as_u64)
         != Some(1)
     {
-        return;
+        return Ok(());
     }
 
-    let mut current_schema = object.get("schema").cloned().or_else(|| {
-        object
-            .get("schemas")
-            .and_then(serde_json::Value::as_array)
-            .and_then(|schemas| schemas.first())
+    if object.contains_key("schemas") {
+        if !object.contains_key("current-schema-id") {
+            return Err(invalid_metadata(
+                "current-schema-id is required when schemas is present",
+            ));
+        }
+        if let Some(schemas) = object
+            .get_mut("schemas")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            for schema in schemas {
+                if let Some(schema) = schema.as_object_mut() {
+                    schema
+                        .entry("schema-id".to_string())
+                        .or_insert_with(|| serde_json::Value::from(0));
+                }
+            }
+        }
+    } else {
+        let mut schema = object
+            .get("schema")
             .cloned()
-    });
-    let current_schema_id = object
-        .get("current-schema-id")
-        .and_then(serde_json::Value::as_i64)
-        .or_else(|| {
-            current_schema
-                .as_ref()
-                .and_then(serde_json::Value::as_object)
-                .and_then(|schema| schema.get("schema-id"))
-                .and_then(serde_json::Value::as_i64)
-        })
-        .unwrap_or(0);
-    if let Some(schema) = current_schema
-        .as_mut()
-        .and_then(serde_json::Value::as_object_mut)
-    {
+            .ok_or_else(|| invalid_metadata("schema is required in legacy v1 metadata"))?;
+        let schema = schema
+            .as_object_mut()
+            .ok_or_else(|| invalid_metadata("schema must be an object"))?;
+        let current_schema_id = schema
+            .get("schema-id")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
         schema
             .entry("schema-id".to_string())
             .or_insert_with(|| serde_json::Value::from(current_schema_id));
-    }
-    if !object.contains_key("schemas")
-        && let Some(schema) = current_schema
-    {
         object.insert(
             "schemas".to_string(),
-            serde_json::Value::Array(vec![schema]),
+            serde_json::Value::Array(vec![serde_json::Value::Object(schema.clone())]),
+        );
+        object.insert(
+            "current-schema-id".to_string(),
+            serde_json::Value::from(current_schema_id),
         );
     }
-    object
-        .entry("current-schema-id".to_string())
-        .or_insert_with(|| serde_json::Value::from(current_schema_id));
 
-    let default_spec_id = object
-        .get("default-spec-id")
-        .and_then(serde_json::Value::as_i64)
-        .or_else(|| {
-            object
-                .get("partition-specs")
-                .and_then(serde_json::Value::as_array)
-                .and_then(|specs| specs.first())
-                .and_then(serde_json::Value::as_object)
-                .and_then(|spec| spec.get("spec-id"))
-                .and_then(serde_json::Value::as_i64)
-        })
-        .unwrap_or(0);
-    if !object.contains_key("partition-specs") {
+    if object.contains_key("partition-specs") {
+        if !object.contains_key("default-spec-id") {
+            return Err(invalid_metadata(
+                "default-spec-id is required when partition-specs is present",
+            ));
+        }
+    } else {
         let fields = object
             .get("partition-spec")
             .cloned()
-            .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
+            .ok_or_else(|| invalid_metadata("partition-spec is required in legacy v1 metadata"))?;
         object.insert(
             "partition-specs".to_string(),
-            serde_json::json!([{"spec-id": default_spec_id, "fields": fields}]),
+            serde_json::json!([{"spec-id": 0, "fields": fields}]),
         );
+        object.insert("default-spec-id".to_string(), serde_json::Value::from(0));
     }
-    object
-        .entry("default-spec-id".to_string())
-        .or_insert_with(|| serde_json::Value::from(default_spec_id));
+
     if !object.contains_key("last-partition-id") {
         let last_partition_id = object
             .get("partition-specs")
@@ -267,6 +374,7 @@ fn normalize_v1_compatibility_fields(value: &mut serde_json::Value) {
             serde_json::Value::from(last_partition_id),
         );
     }
+    Ok(())
 }
 
 impl TableMetadata {
@@ -314,7 +422,7 @@ impl TableMetadata {
 
         match serde_json::from_slice::<serde_json::Value>(data) {
             Ok(mut json_value) => {
-                normalize_v1_compatibility_fields(&mut json_value);
+                normalize_v1_compatibility_fields(&mut json_value)?;
                 if let Some(obj) = json_value.as_object() {
                     log::trace!("JSON fields present: {:?}", obj.keys().collect::<Vec<_>>());
 
@@ -333,7 +441,7 @@ impl TableMetadata {
                 }
 
                 log::trace!("Deserializing to TableMetadata struct");
-                serde_json::from_value::<TableMetadataEnum>(json_value)
+                let mut metadata = serde_json::from_value::<TableMetadataEnum>(json_value)
                     .map_err(|e| {
                         log::trace!("Failed to deserialize TableMetadata: {:?}", e);
                         e
@@ -342,11 +450,15 @@ impl TableMetadata {
                         TableMetadataEnum::V1(t)
                         | TableMetadataEnum::V2(t)
                         | TableMetadataEnum::V3(t) => t,
-                    })
-                    .map(|mut metadata| {
-                        metadata.normalize_versioned_sequence_numbers();
-                        metadata
-                    })
+                    })?;
+                if metadata.current_schema().is_none() {
+                    return Err(invalid_metadata(format!(
+                        "Cannot find schema with current-schema-id={} from schemas",
+                        metadata.current_schema_id
+                    )));
+                }
+                metadata.normalize_versioned_sequence_numbers();
+                Ok(metadata)
             }
             Err(e) => {
                 log::trace!("Failed to parse as JSON: {:?}", e);
