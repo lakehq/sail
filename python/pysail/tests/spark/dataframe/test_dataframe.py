@@ -510,3 +510,68 @@ def test_union_by_name_matches_names_with_allow_missing_columns(spark):
     right = spark.sql("SELECT 3 AS `Ä`, 4 AS c")
     result = left.unionByName(right, allowMissingColumns=True)
     assert result.columns == ["ä", "b", "c"]
+
+
+def test_drop_duplicates_accepts_a_repeated_subset_name(spark):
+    # The same name twice selects the same column twice, which is not an error.
+    df = spark.sql("SELECT * FROM VALUES (1, 'x'), (1, 'y'), (2, 'z') AS t(k, v)")
+    assert sorted(r.k for r in df.dropDuplicates(["k", "k"]).collect()) == [1, 2]
+
+
+
+
+def test_union_by_name_fills_missing_columns_with_the_right_type(spark):
+    # The padded column keeps the type of the side that has it, rather than becoming untyped.
+    left = spark.sql("SELECT 1 AS a, 'p' AS b")
+    right = spark.sql("SELECT 2 AS a, 3 AS c")
+    assert (
+        left.unionByName(right, allowMissingColumns=True).schema.simpleString()
+        == "struct<a:int,b:string,c:int>"
+    )
+
+
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_union_by_name_rejects_duplicate_names_on_either_side(spark):
+    # The names of each side are checked for duplicates before they are matched against each
+    # other, so a duplicate on either side is rejected, and the check folds the names.
+    with pytest.raises(Exception, match="COLUMN_ALREADY_EXISTS"):
+        spark.sql("SELECT 1 AS a").unionByName(spark.sql("SELECT 2 AS a, 3 AS a")).collect()
+    with pytest.raises(Exception, match="COLUMN_ALREADY_EXISTS"):
+        spark.sql("SELECT 1 AS a, 2 AS a").unionByName(spark.sql("SELECT 3 AS a")).collect()
+    with pytest.raises(Exception, match="COLUMN_ALREADY_EXISTS"):
+        spark.sql("SELECT 1 AS a, 2 AS A").unionByName(spark.sql("SELECT 3 AS a")).collect()
+
+
+def test_union_by_name_merges_reordered_nested_struct_fields(spark):
+    # The fields of a nested struct are matched by name rather than by position.
+    left = spark.sql("SELECT named_struct('x', 1, 'y', 2) AS s")
+    right = spark.sql("SELECT named_struct('y', 4, 'x', 3) AS s")
+    assert sorted((r.s.asDict() for r in left.unionByName(right).collect()), key=lambda s: s["x"]) == [
+        {"x": 1, "y": 2},
+        {"x": 3, "y": 4},
+    ]
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_union_by_name_fills_a_missing_nested_struct_field(spark):
+    left = spark.sql("SELECT named_struct('x', 1, 'y', 2) AS s")
+    right = spark.sql("SELECT named_struct('x', 3) AS s")
+    assert [r.s.asDict() for r in left.unionByName(right, allowMissingColumns=True).collect()] == [
+        {"x": 1, "y": 2},
+        {"x": 3, "y": None},
+    ]
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_union_by_name_matches_nested_struct_fields_case_insensitively(spark):
+    left = spark.sql("SELECT named_struct('x', 1) AS s")
+    right = spark.sql("SELECT named_struct('X', 3) AS s")
+    assert [r.s.asDict() for r in left.unionByName(right).collect()] == [{"x": 1}, {"x": 3}]
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_drop_duplicates_rejects_an_empty_subset(spark):
+    with pytest.raises(Exception, match="DEDUPLICATE_REQUIRES"):
+        spark.sql("SELECT 1 AS a").dropDuplicates([]).collect()

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use datafusion_common::arrow::datatypes::{FieldRef, Fields};
 use datafusion_common::{Column, DFSchemaRef, TableReference};
+use datafusion_expr::UNNAMED_TABLE;
 use sail_common::spec;
 use sail_common::utils::string::{equals_ignore_case, to_lowercase};
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -235,9 +236,19 @@ impl PlanResolver<'_> {
     ) -> PlanResult<Option<Column>> {
         let columns = self.resolve_column_candidates(schema, name, plan_id, state);
         if columns.len() > 1 {
+            let mut references = columns
+                .iter()
+                .map(|x| match &x.relation {
+                    Some(relation) if relation.table() != UNNAMED_TABLE => {
+                        format!("`{relation}`.`{name}`")
+                    }
+                    _ => format!("`{name}`"),
+                })
+                .collect::<Vec<_>>();
+            references.sort();
             return Err(PlanError::AnalysisError(format!(
-                "[AMBIGUOUS_REFERENCE] Reference {name} is ambiguous, found: {} matches",
-                columns.len()
+                "[AMBIGUOUS_REFERENCE] Reference `{name}` is ambiguous, could be: [{}].",
+                references.join(", ")
             )));
         }
         if columns.is_empty() {

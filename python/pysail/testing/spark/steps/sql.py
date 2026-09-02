@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from jinja2 import Template
+from pyspark.sql import Row
 from pyspark.sql import functions as F  # noqa: N812
 from pytest_bdd import given, parsers, then, when
 
@@ -153,6 +154,82 @@ def query_schema(docstring, query, spark):
     assert_schema_tree(df, docstring)
 
 
+def _join_dataframes(spark):
+    """Builds the three frames the `DataFrame.join` cases are defined over."""
+    df1 = spark.createDataFrame([Row(name="Alice", age=2), Row(name="Bob", age=5)])
+    df2 = spark.createDataFrame([Row(name="Tom", height=80), Row(name="Bob", height=85)])
+    df3 = spark.createDataFrame(
+        [
+            Row(name="Alice", age=10, height=80),
+            Row(name="Bob", age=5, height=None),
+            Row(name="Tom", age=None, height=None),
+            Row(name=None, age=None, height=None),
+        ]
+    )
+    return df1, df2, df3
+
+
+def _join_cases(spark):
+    """DataFrame cases for `DataFrame.join`, which SQL cannot express.
+
+    A column object such as `df1.name` is resolved through the plan id of the frame it
+    came from, which is a different resolution path from a SQL qualifier, so these cases
+    have to keep using the DataFrame API.
+    """
+    df1, df2, df3 = _join_dataframes(spark)
+    return {
+        "join on name": lambda: df1.join(df2, "name"),
+        "join on name selecting a column of each side": lambda: df1.join(df2, "name").select(df1.name, df2.height),
+        "join on name selecting columns by name": lambda: df1.join(df2, "name").select("name", "height"),
+        "join on a name equality": lambda: df1.join(df2, df1.name == df2.name),
+        "join on a name equality selecting the duplicated name": lambda: df1.join(
+            df2, df1.name == df2.name
+        ).select("name", "height"),
+        "join on two names": lambda: df1.join(df3, ["name", "age"]),
+        "join on two names selecting the left side": lambda: df1.join(df3, ["name", "age"]).select(df1.name, df1.age),
+        "outer join on a name equality": lambda: df1.join(df2, df1.name == df2.name, "outer").sort(F.desc(df1.name)),
+        "outer join on a name equality selecting a column of each side": lambda: df1.join(
+            df2, df1.name == df2.name, "outer"
+        )
+        .sort(F.desc(df1.name))
+        .select(df1.name, df2.height),
+        "outer join on a name equality sorted after the projection": lambda: df1.join(
+            df2, df1.name == df2.name, "outer"
+        )
+        .select(df1.name, df2.height)
+        .sort(F.desc("name")),
+        "outer join on two equalities": lambda: df1.join(
+            df3, [df1.name == df3.name, df1.age == df3.age], "outer"
+        )
+        .select(df1.name, df3.age)
+        .sort(df1.name, df3.age),
+        "outer self join selecting the ambiguous name": lambda: df1.join(
+            df1, df1.name == df1.name, "outer"
+        ).select(df1.name),
+        "outer self join of two aliases": lambda: df1.alias("a")
+        .join(df1.alias("b"), F.col("a.name") == F.col("b.name"), "outer")
+        .sort(F.desc("a.name"))
+        .select("a.name", "b.age"),
+        "outer join on name": lambda: df1.join(df2, "name", "outer").sort(F.desc("name")),
+        "outer join on name sorted by the left side": lambda: df1.join(df2, "name", "outer").sort(F.desc(df1.name)),
+        "outer join on name sorted by the right side": lambda: df1.join(df2, "name", "outer").sort(F.desc(df2.name)),
+        "outer join on name selecting columns by name": lambda: df1.join(df2, "name", "outer")
+        .select("name", "height")
+        .sort(F.desc("name")),
+        "outer join on name selecting the left name": lambda: df1.join(df2, "name", "outer")
+        .select(df1.name, "height")
+        .sort(F.desc("name")),
+        "outer join on name selecting the right name": lambda: df1.join(df2, "name", "outer")
+        .select(df2.name, "height")
+        .sort(F.desc("name")),
+        "outer join on two names": lambda: df1.join(df3, ["name", "age"], "outer").sort("name", "age"),
+        "left outer join on name": lambda: df1.join(df2, "name", "left_outer").sort(F.asc("name")),
+        "right outer join on name": lambda: df1.join(df2, "name", "right_outer").sort(F.asc("name")),
+        "left semi join on name": lambda: df1.join(df2, "name", "left_semi"),
+        "left anti join on name": lambda: df1.join(df2, "name", "left_anti"),
+    }
+
+
 @when(parsers.parse("dataframe for {case}"), target_fixture="dataframe")
 def dataframe_for(case, spark):
     """Builds a DataFrame for a named BDD case."""
@@ -185,6 +262,7 @@ def dataframe_for(case, spark):
             F.to_timestamp_ntz(F.lit("2024-01-02"), F.lit(None)).alias("result")
         ),
     }
+    cases.update(_join_cases(spark))
     try:
         return cases[case]()
     except KeyError:
@@ -274,6 +352,18 @@ def query_result(datatable, ordered, query, spark):
     header, *rows = datatable
     df = spark.sql(query)
     [h, *r] = parse_show_string(df._show_string(n=0x7FFFFFFF, truncate=False))  # noqa: SLF001
+    assert header == h
+    if ordered:
+        assert rows == r
+    else:
+        assert sorted(rows) == sorted(r)
+
+
+@then(parsers.re("dataframe result(?P<ordered>( ordered)?)"))
+def dataframe_result(datatable, ordered, dataframe):
+    """Collect the DataFrame and compare result with expected data table."""
+    header, *rows = datatable
+    [h, *r] = parse_show_string(dataframe._show_string(n=0x7FFFFFFF, truncate=False))  # noqa: SLF001
     assert header == h
     if ordered:
         assert rows == r

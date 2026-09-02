@@ -29,14 +29,17 @@ impl PlanResolver<'_> {
         if !column_names.is_empty() && !all_columns_as_keys {
             // The name selects output columns, so it is matched with the resolver alone, and
             // every column that matches becomes a key.
-            let on_expr: Vec<Expr> = column_names
-                .iter()
-                .map(|name| self.resolve_columns_by_resolver(schema, name.as_ref(), state))
-                .collect::<PlanResult<Vec<_>>>()?
-                .into_iter()
-                .flatten()
-                .map(Expr::Column)
-                .collect();
+            // A column that is named more than once is a key only once, since the same
+            // expression cannot be repeated in the plan.
+            let mut on_expr: Vec<Expr> = Vec::new();
+            for name in &column_names {
+                for column in self.resolve_columns_by_resolver(schema, name.as_ref(), state)? {
+                    let expr = Expr::Column(column);
+                    if !on_expr.contains(&expr) {
+                        on_expr.push(expr);
+                    }
+                }
+            }
             let select_expr: Vec<Expr> = schema.columns().into_iter().map(Expr::Column).collect();
             Ok(LogicalPlan::Distinct(Distinct::On(DistinctOn::try_new(
                 on_expr,
