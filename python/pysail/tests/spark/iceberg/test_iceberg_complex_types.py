@@ -261,7 +261,7 @@ def test_pruning_exotic_types(spark, sql_catalog):
 
         data = spark.read.format("iceberg").load(table.location())
         predicates = [
-            F.col("f_val") > 5.0,
+            F.col("f_val") > 5.0,  # noqa: PLR2004
             F.col("u_val") == F.lit(second_uuid.bytes),
             F.col("d_val") >= F.lit(Decimal("9.00")),
             F.col("fixed_val") == F.lit(b"\x00\x00\x00\x02"),
