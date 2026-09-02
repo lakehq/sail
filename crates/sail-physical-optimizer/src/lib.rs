@@ -22,7 +22,9 @@ use datafusion::physical_optimizer::window_topn::WindowTopN;
 use crate::barrier::EnforceBarrierPartitioning;
 use crate::collect_left::RewriteCollectLeftHashJoin;
 use crate::explicit_repartition::RewriteExplicitRepartition;
-use crate::input_file_name::RewriteInputFileNameFallback;
+use crate::input_file_name::{
+    PushDownInputFileMetadata, RewriteInputFileMetadataFallback, WrapInputFileMetadataSource,
+};
 use crate::join_reorder::JoinReorder;
 pub use crate::join_reorder::JoinReorderOptions;
 use crate::projection_pushdown::LambdaSafeProjectionPushdown;
@@ -57,6 +59,8 @@ pub fn get_physical_optimizers(
     // PartitionedTopKExec can regress memory and runtime for high-cardinality partition keys.
     // Revisit the opt-in default when that trade-off is addressed.
     rules.push(Arc::new(WindowTopN::new()));
+    rules.push(Arc::new(WrapInputFileMetadataSource::new()));
+    rules.push(Arc::new(PushDownInputFileMetadata::new()));
     rules.push(Arc::new(EnsureRequirements::new()));
     rules.push(Arc::new(CombinePartialFinalAggregate::new()));
     rules.push(Arc::new(OptimizeAggregateOrder::new()));
@@ -71,7 +75,7 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(PushdownSort::new()));
     rules.push(Arc::new(EnsureCooperative::new()));
     rules.push(Arc::new(FilterPushdown::new_post_optimization()));
-    rules.push(Arc::new(RewriteInputFileNameFallback::new()));
+    rules.push(Arc::new(RewriteInputFileMetadataFallback::new()));
     rules.push(Arc::new(RewriteExplicitRepartition::new()));
     rules.push(Arc::new(RewriteCollectLeftHashJoin::new()));
     rules.push(Arc::new(EnforceBarrierPartitioning::new()));

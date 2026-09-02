@@ -10,9 +10,13 @@ use datafusion::arrow::array::{Array, ArrayRef, RecordBatch};
 use datafusion::arrow::compute::filter_record_batch;
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::arrow::row::{OwnedRow, RowConverter, SortField};
-use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion::datasource::physical_plan::FileScanConfig;
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr::projection::ProjectionExprs;
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
@@ -29,6 +33,10 @@ use parquet::arrow::async_reader::{AsyncFileReader, ParquetRecordBatchStreamBuil
 use parquet::errors::{ParquetError, Result as ParquetResult};
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use parquet::schema::types::SchemaDescriptor;
+use sail_common_datafusion::input_file::{
+    InputFileMetadata, project_input_file_metadata_stream,
+    projection_references_input_file_metadata,
+};
 use url::Url;
 
 use crate::io::StoreContext;
@@ -112,14 +120,19 @@ pub struct IcebergDeleteApplyExec {
     /// Iceberg schema used to map equality-delete `equality_ids` (field ids) to
     /// column names.
     iceberg_schema: IcebergSchema,
+    output_schema: SchemaRef,
+    input_file_projection: Option<ProjectionExprs>,
     /// Cached plan properties (derived from the child's schema).
     cache: Arc<PlanProperties>,
 }
 
 impl IcebergDeleteApplyExec {
-    fn compute_properties(input: &Arc<dyn ExecutionPlan>) -> Arc<PlanProperties> {
+    fn compute_properties(
+        input: &Arc<dyn ExecutionPlan>,
+        output_schema: SchemaRef,
+    ) -> Arc<PlanProperties> {
         Arc::new(PlanProperties::new(
-            input.equivalence_properties().clone(),
+            datafusion::physical_expr::EquivalenceProperties::new(output_schema),
             Partitioning::UnknownPartitioning(1),
             input.pipeline_behavior(),
             input.boundedness(),
@@ -144,7 +157,8 @@ impl IcebergDeleteApplyExec {
                 input_partitions
             );
         }
-        let cache = Self::compute_properties(&input);
+        let output_schema = input.schema();
+        let cache = Self::compute_properties(&input, Arc::clone(&output_schema));
         Self {
             input,
             data_file_path,
@@ -152,6 +166,8 @@ impl IcebergDeleteApplyExec {
             equality_deletes,
             table_url,
             iceberg_schema,
+            output_schema,
+            input_file_projection: None,
             cache,
         }
     }
@@ -173,6 +189,47 @@ impl IcebergDeleteApplyExec {
     }
     pub fn iceberg_schema(&self) -> &IcebergSchema {
         &self.iceberg_schema
+    }
+
+    pub fn input_file_projection(&self) -> Option<&ProjectionExprs> {
+        self.input_file_projection.as_ref()
+    }
+
+    pub fn with_input_file_projection(
+        mut self,
+        projection: Option<ProjectionExprs>,
+    ) -> Result<Self> {
+        self.output_schema = match &projection {
+            Some(projection) => Arc::new(projection.project_schema(self.input.schema().as_ref())?),
+            None => self.input.schema(),
+        };
+        self.input_file_projection = projection;
+        self.cache = Self::compute_properties(&self.input, Arc::clone(&self.output_schema));
+        Ok(self)
+    }
+
+    fn input_file_metadata(&self) -> Result<InputFileMetadata> {
+        let mut metadata = None;
+        self.input.apply(|plan| {
+            if let Some(scan) = plan.downcast_ref::<DataSourceExec>()
+                && let Some(config) = scan.data_source().downcast_ref::<FileScanConfig>()
+                && let Some(file) = config
+                    .file_groups
+                    .iter()
+                    .flat_map(|group| group.files())
+                    .next()
+            {
+                metadata = Some(InputFileMetadata::try_new(&config.object_store_url, file)?);
+                return Ok(TreeNodeRecursion::Stop);
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        metadata.ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "IcebergDeleteApplyExec could not find file metadata for {}",
+                self.data_file_path
+            ))
+        })
     }
 }
 
@@ -201,7 +258,7 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
     }
 
     fn schema(&self) -> SchemaRef {
-        self.input.schema()
+        Arc::clone(&self.output_schema)
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -210,9 +267,14 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
 
     fn apply_expressions(
         &self,
-        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
+        datafusion::physical_plan::apply_expression_roots(
+            self.input_file_projection
+                .iter()
+                .flat_map(|projection| projection.iter().map(|expression| &expression.expr)),
+            f,
+        )
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -247,8 +309,32 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
         }
         let mut cloned = (*self).clone();
         cloned.input = children[0].clone();
-        cloned.cache = Self::compute_properties(&cloned.input);
+        cloned.output_schema = match &cloned.input_file_projection {
+            Some(projection) => {
+                Arc::new(projection.project_schema(cloned.input.schema().as_ref())?)
+            }
+            None => cloned.input.schema(),
+        };
+        cloned.cache = Self::compute_properties(&cloned.input, Arc::clone(&cloned.output_schema));
         Ok(Arc::new(cloned))
+    }
+
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if self.input_file_projection.is_none()
+            && !projection_references_input_file_metadata(projection.projection_expr())
+        {
+            return Ok(None);
+        }
+        let projection = match &self.input_file_projection {
+            Some(current) => current.try_merge(projection.projection_expr())?,
+            None => projection.projection_expr().clone(),
+        };
+        Ok(Some(Arc::new(
+            self.clone().with_input_file_projection(Some(projection))?,
+        )))
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -266,14 +352,20 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
             )));
         }
 
+        let data_schema = self.input.schema();
         let output_schema = self.schema();
+        let input_file_projection = self.input_file_projection.clone();
+        let input_file_metadata = input_file_projection
+            .as_ref()
+            .map(|_| self.input_file_metadata())
+            .transpose()?;
         let child = self.input.execute(0, Arc::clone(&context))?;
         let data_file_path = self.data_file_path.clone();
         let positional_deletes = self.positional_deletes.clone();
         let equality_deletes = self.equality_deletes.clone();
         let table_url = self.table_url.clone();
         let iceberg_schema = self.iceberg_schema.clone();
-        let schema_for_adapter = output_schema.clone();
+        let schema_for_adapter = Arc::clone(&data_schema);
 
         let stream = try_stream! {
             let parsed_table_url = Url::parse(&table_url)
@@ -312,10 +404,19 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
             }
         };
 
-        Ok(Box::pin(RecordBatchStreamAdapter::new(
+        let filtered = Box::pin(RecordBatchStreamAdapter::new(
             schema_for_adapter,
             Box::pin(stream),
-        )))
+        ));
+        match (input_file_projection, input_file_metadata) {
+            (Some(projection), Some(metadata)) => {
+                project_input_file_metadata_stream(filtered, &projection, &metadata)
+            }
+            _ => Ok(Box::pin(RecordBatchStreamAdapter::new(
+                output_schema,
+                filtered,
+            ))),
+        }
     }
 }
 

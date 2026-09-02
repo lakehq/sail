@@ -38,6 +38,7 @@ use datafusion::logical_expr::{
 use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use datafusion::physical_expr::equivalence::{EquivalenceClass, EquivalenceGroup};
 use datafusion::physical_expr::expressions::{Column, LambdaExpr, LambdaVariable};
+use datafusion::physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion::physical_expr::{
     AcrossPartitions, ConstExpr, EquivalenceProperties, LexOrdering, LexRequirement, Partitioning,
     PhysicalExpr, PhysicalSortExpr,
@@ -47,6 +48,7 @@ use datafusion::physical_expr_common::physical_expr::proto_encode::PhysicalExprE
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::joins::SortMergeJoinExec;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion::physical_plan::sorts::partial_sort::PartialSortExec;
 use datafusion::physical_plan::sorts::partitioned_topk::{PartitionedTopKExec, WindowFnKind};
@@ -93,6 +95,9 @@ use sail_common_datafusion::catalog::{
     CatalogPartitionField, LakehouseExecutionContext, PartitionTransform,
 };
 use sail_common_datafusion::datasource::PhysicalSinkMode;
+use sail_common_datafusion::input_file::{
+    InputFileBlockLengthFunc, InputFileBlockStartFunc, InputFileMetadataSource,
+};
 use sail_common_datafusion::schema_evolution::{
     SchemaEvolutionCastColumnExpr, SchemaEvolutionPhysicalExprAdapterFactoryWithMatching,
     SchemaEvolutionTimezoneMode, StructFieldMatching,
@@ -1037,6 +1042,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 statistics,
                 lakehouse_table_json,
                 catalog_managed_commits_json,
+                input_file_projection,
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -1078,6 +1084,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 } else {
                     None
                 };
+                let input_file_projection = self.try_decode_physical_projection_exprs(
+                    &input_file_projection,
+                    &output_schema,
+                    ctx,
+                    proto_converter,
+                )?;
                 let statistics = statistics
                     .as_ref()
                     .map(|bytes| self.try_decode_statistics(bytes))
@@ -1105,6 +1117,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         lakehouse_table,
                         catalog_managed_commits,
                     )
+                    .with_input_file_projection(input_file_projection)?
                     .with_output_statistics(statistics),
                 ))
             }
@@ -1629,15 +1642,21 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 table_url,
                 output_schema,
+                input_file_projection,
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
                 let output_schema = Arc::new(try_decode_schema(&output_schema)?);
-                Ok(Arc::new(IcebergScanByDataFilesExec::new(
-                    input,
-                    table_url,
-                    output_schema,
-                )))
+                let input_file_projection = self.try_decode_physical_projection_exprs(
+                    &input_file_projection,
+                    &output_schema,
+                    ctx,
+                    proto_converter,
+                )?;
+                Ok(Arc::new(
+                    IcebergScanByDataFilesExec::new(input, table_url, output_schema)
+                        .with_input_file_projection(input_file_projection)?,
+                ))
             }
             NodeKind::IcebergDeleteApply(r#gen::IcebergDeleteApplyExecNode {
                 input,
@@ -1646,6 +1665,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 equality_deletes_json,
                 table_url,
                 iceberg_schema_json,
+                input_file_projection,
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -1661,14 +1681,23 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     serde_json::from_str(&iceberg_schema_json).map_err(|e| {
                         plan_datafusion_err!("failed to decode Iceberg schema: {e}")
                     })?;
-                Ok(Arc::new(IcebergDeleteApplyExec::new(
-                    input,
-                    data_file_path,
-                    positional_deletes,
-                    equality_deletes,
-                    table_url,
-                    iceberg_schema,
-                )))
+                let input_file_projection = self.try_decode_physical_projection_exprs(
+                    &input_file_projection,
+                    input.schema().as_ref(),
+                    ctx,
+                    proto_converter,
+                )?;
+                Ok(Arc::new(
+                    IcebergDeleteApplyExec::new(
+                        input,
+                        data_file_path,
+                        positional_deletes,
+                        equality_deletes,
+                        table_url,
+                        iceberg_schema,
+                    )
+                    .with_input_file_projection(input_file_projection)?,
+                ))
             }
             NodeKind::IcebergMergeMetadata(r#gen::IcebergMergeMetadataExecNode {
                 input,
@@ -1815,6 +1844,48 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let plan =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &plan)?;
                 Ok(Arc::new(BarrierExec::new(preconditions, plan)))
+            }
+            NodeKind::InputFileMetadata(r#gen::InputFileMetadataExecNode { projection_plan }) => {
+                let projection_plan = try_decode_physical_plan_with_converter(
+                    ctx,
+                    self,
+                    proto_converter,
+                    &projection_plan,
+                )?;
+                let projection = projection_plan
+                    .downcast_ref::<ProjectionExec>()
+                    .ok_or_else(|| {
+                        plan_datafusion_err!(
+                            "InputFileMetadataExecNode payload is not a ProjectionExec"
+                        )
+                    })?;
+                let scan = projection
+                    .input()
+                    .downcast_ref::<DataSourceExec>()
+                    .ok_or_else(|| {
+                        plan_datafusion_err!(
+                            "InputFileMetadataExecNode projection input is not a DataSourceExec"
+                        )
+                    })?;
+                let config = scan
+                    .data_source()
+                    .downcast_ref::<FileScanConfig>()
+                    .ok_or_else(|| {
+                        plan_datafusion_err!("InputFileMetadataExecNode input is not a file scan")
+                    })?;
+                let source = Arc::new(InputFileMetadataSource::try_new_with_projection(
+                    Arc::clone(&config.file_source),
+                    projection.projection_expr().clone(),
+                )?) as Arc<dyn FileSource>;
+                let statistics = Statistics::new_unknown(source.table_schema().table_schema());
+                let mut config = FileScanConfigBuilder::from(config.clone())
+                    .with_source(source)
+                    .with_statistics(statistics)
+                    .with_output_ordering(Vec::new())
+                    .with_output_partitioning(None)
+                    .build();
+                config.constraints = Constraints::default();
+                Ok(Arc::new(DataSourceExec::new(Arc::new(config))))
             }
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }
@@ -2091,7 +2162,27 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 };
             if let Some(file_scan) = source.downcast_ref::<FileScanConfig>() {
                 let file_source = file_scan.file_source();
-                if let Some(text_source) = file_source.downcast_ref::<TextSource>() {
+                if let Some(metadata_source) = file_source.downcast_ref::<InputFileMetadataSource>()
+                {
+                    let mut source_config = file_scan.clone();
+                    source_config.file_source = Arc::clone(metadata_source.file_source());
+                    let source_scan = DataSourceExec::new(Arc::new(source_config));
+                    let remote_scan =
+                        Arc::new(RemoteDataSourceExec::new(&source_scan)) as Arc<dyn ExecutionPlan>;
+                    let projection = Arc::new(ProjectionExec::try_new(
+                        metadata_source
+                            .metadata_projection()
+                            .as_ref()
+                            .iter()
+                            .cloned(),
+                        remote_scan,
+                    )?) as Arc<dyn ExecutionPlan>;
+                    let projection_plan =
+                        try_encode_physical_plan_with_converter(self, proto_converter, projection)?;
+                    NodeKind::InputFileMetadata(r#gen::InputFileMetadataExecNode {
+                        projection_plan,
+                    })
+                } else if let Some(text_source) = file_source.downcast_ref::<TextSource>() {
                     let base_config = try_encode_message(serialize_file_scan_config(
                         file_scan,
                         self,
@@ -2271,7 +2362,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 delta_scan_by_adds_exec.input().clone(),
             )?;
             let table_schema = try_encode_schema(delta_scan_by_adds_exec.table_schema())?;
-            let output_schema = try_encode_schema(delta_scan_by_adds_exec.output_schema())?;
+            let output_schema = try_encode_schema(delta_scan_by_adds_exec.scan_output_schema())?;
             let scan_config_json = serde_json::to_string(delta_scan_by_adds_exec.scan_config())
                 .map_err(|e| plan_datafusion_err!("failed to encode Delta scan config: {e}"))?;
             let projection = delta_scan_by_adds_exec
@@ -2298,6 +2389,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             };
             let statistics =
                 Some(self.try_encode_statistics(delta_scan_by_adds_exec.statistics())?);
+            let input_file_projection = self.try_encode_physical_projection_exprs(
+                delta_scan_by_adds_exec.input_file_projection(),
+                proto_converter,
+            )?;
             let catalog_managed_commits_json = delta_scan_by_adds_exec
                 .catalog_managed_commits()
                 .map(|value| self.try_encode_json(value, "Delta catalog-managed commit set"))
@@ -2316,6 +2411,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 lakehouse_table_json: self
                     .try_encode_lakehouse_table(delta_scan_by_adds_exec.lakehouse_table())?,
                 catalog_managed_commits_json,
+                input_file_projection,
             })
         } else if let Some(delta_discovery_exec) = node.downcast_ref::<DeltaDiscoveryExec>() {
             let input = Some(try_encode_physical_plan_with_converter(
@@ -2740,11 +2836,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 proto_converter,
                 scan_by_files.input().clone(),
             )?;
-            let output_schema = try_encode_schema(scan_by_files.output_schema().as_ref())?;
+            let output_schema = try_encode_schema(scan_by_files.scan_output_schema().as_ref())?;
+            let input_file_projection = self.try_encode_physical_projection_exprs(
+                scan_by_files.input_file_projection(),
+                proto_converter,
+            )?;
             NodeKind::IcebergScanByDataFiles(r#gen::IcebergScanByDataFilesExecNode {
                 input,
                 table_url: scan_by_files.table_url().to_string(),
                 output_schema,
+                input_file_projection,
             })
         } else if let Some(delete_apply) = node.downcast_ref::<IcebergDeleteApplyExec>() {
             let input = try_encode_physical_plan_with_converter(
@@ -2760,6 +2861,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 .map_err(|e| plan_datafusion_err!("failed to encode equality delete refs: {e}"))?;
             let iceberg_schema_json = serde_json::to_string(delete_apply.iceberg_schema())
                 .map_err(|e| plan_datafusion_err!("failed to encode Iceberg schema: {e}"))?;
+            let input_file_projection = self.try_encode_physical_projection_exprs(
+                delete_apply.input_file_projection(),
+                proto_converter,
+            )?;
             NodeKind::IcebergDeleteApply(r#gen::IcebergDeleteApplyExecNode {
                 input,
                 data_file_path: delete_apply.data_file_path().to_string(),
@@ -2767,6 +2872,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 equality_deletes_json,
                 table_url: delete_apply.table_url().to_string(),
                 iceberg_schema_json,
+                input_file_projection,
             })
         } else if let Some(merge_metadata) = node.downcast_ref::<IcebergMergeMetadataExec>() {
             let input = try_encode_physical_plan_with_converter(
@@ -3235,6 +3341,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(HllSketchEstimateFunction::new())))
             }
             "hll_union" => Ok(Arc::new(ScalarUDF::from(HllUnionFunction::new()))),
+            "input_file_block_length" => {
+                Ok(Arc::new(ScalarUDF::from(InputFileBlockLengthFunc::new())))
+            }
+            "input_file_block_start" => {
+                Ok(Arc::new(ScalarUDF::from(InputFileBlockStartFunc::new())))
+            }
             "input_file_name" => Ok(Arc::new(ScalarUDF::from(InputFileNameFunc::new()))),
             "theta_difference" => Ok(Arc::new(ScalarUDF::from(ThetaDifferenceFunction::new()))),
             "theta_intersection" => Ok(Arc::new(ScalarUDF::from(ThetaIntersectionFunction::new()))),
@@ -3471,6 +3583,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkTryToBinary>()
             || node_inner.is::<HllSketchEstimateFunction>()
             || node_inner.is::<HllUnionFunction>()
+            || node_inner.is::<InputFileBlockLengthFunc>()
+            || node_inner.is::<InputFileBlockStartFunc>()
             || node_inner.is::<InputFileNameFunc>()
             || node_inner.is::<ThetaDifferenceFunction>()
             || node_inner.is::<ThetaIntersectionFunction>()
@@ -4805,6 +4919,56 @@ impl RemoteExecutionCodec {
         Ok(projection)
     }
 
+    fn try_decode_physical_projection_exprs(
+        &self,
+        projection: &[r#gen::PhysicalProjectionExpr],
+        schema: &Schema,
+        ctx: &TaskContext,
+        proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<Option<ProjectionExprs>> {
+        if projection.is_empty() {
+            return Ok(None);
+        }
+        projection
+            .iter()
+            .map(|projection| {
+                Ok(ProjectionExpr::new(
+                    try_decode_physical_expr_with_converter(
+                        ctx,
+                        self,
+                        proto_converter,
+                        &projection.expression,
+                        schema,
+                    )?,
+                    projection.alias.clone(),
+                ))
+            })
+            .collect::<Result<Vec<_>>>()
+            .map(ProjectionExprs::new)
+            .map(Some)
+    }
+
+    fn try_encode_physical_projection_exprs(
+        &self,
+        projection: Option<&ProjectionExprs>,
+        proto_converter: &dyn PhysicalProtoConverterExtension,
+    ) -> Result<Vec<r#gen::PhysicalProjectionExpr>> {
+        projection
+            .into_iter()
+            .flat_map(ProjectionExprs::iter)
+            .map(|projection| {
+                Ok(r#gen::PhysicalProjectionExpr {
+                    expression: try_encode_physical_expr_with_converter(
+                        self,
+                        proto_converter,
+                        &projection.expr,
+                    )?,
+                    alias: projection.alias.clone(),
+                })
+            })
+            .collect()
+    }
+
     fn try_decode_lex_ordering(
         &self,
         lex_ordering: &r#gen::LexOrdering,
@@ -5492,6 +5656,87 @@ mod tests {
     }
 
     #[test]
+    fn test_round_trip_input_file_metadata_source_preserves_projection() -> Result<()> {
+        use datafusion::config::ConfigOptions;
+        use datafusion::datasource::physical_plan::FileGroup;
+        use datafusion::execution::object_store::ObjectStoreUrl;
+        use datafusion::physical_expr::ScalarFunctionExpr;
+        use sail_common_datafusion::input_file::projection_references_input_file_metadata;
+
+        let input_schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            false,
+        )]));
+        let config_options = Arc::new(ConfigOptions::default());
+        let input_file_name = Arc::new(ScalarFunctionExpr::try_new(
+            Arc::new(ScalarUDF::from(InputFileNameFunc::new())),
+            vec![],
+            input_schema.as_ref(),
+            Arc::clone(&config_options),
+        )?) as Arc<dyn PhysicalExpr>;
+        let block_start = Arc::new(ScalarFunctionExpr::try_new(
+            Arc::new(ScalarUDF::from(InputFileBlockStartFunc::new())),
+            vec![],
+            input_schema.as_ref(),
+            Arc::clone(&config_options),
+        )?) as Arc<dyn PhysicalExpr>;
+        let block_length = Arc::new(ScalarFunctionExpr::try_new(
+            Arc::new(ScalarUDF::from(InputFileBlockLengthFunc::new())),
+            vec![],
+            input_schema.as_ref(),
+            config_options,
+        )?) as Arc<dyn PhysicalExpr>;
+        let projection = ProjectionExprs::new(vec![
+            ProjectionExpr::new(input_file_name, "file_name"),
+            ProjectionExpr::new(block_start, "block_start"),
+            ProjectionExpr::new(block_length, "block_length"),
+        ]);
+        let parquet_source =
+            Arc::new(ParquetSource::new(Arc::clone(&input_schema))) as Arc<dyn FileSource>;
+        let metadata_source = Arc::new(InputFileMetadataSource::try_new_with_projection(
+            parquet_source,
+            projection,
+        )?) as Arc<dyn FileSource>;
+        let file_scan =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), metadata_source)
+                .with_file_groups(vec![FileGroup::from(vec![])])
+                .build();
+        let scan = DataSourceExec::new(Arc::new(file_scan));
+        let expected_schema = scan.schema();
+        let plan = Arc::new(RemoteDataSourceExec::new(&scan)) as Arc<dyn ExecutionPlan>;
+
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, plan)?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let scan = decoded
+            .downcast_ref::<DataSourceExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not a DataSourceExec"))?;
+        let config = scan
+            .data_source()
+            .downcast_ref::<FileScanConfig>()
+            .ok_or_else(|| plan_datafusion_err!("decoded data source is not a file scan"))?;
+        let source = config
+            .file_source
+            .downcast_ref::<InputFileMetadataSource>()
+            .ok_or_else(|| plan_datafusion_err!("decoded file source lost metadata wrapper"))?;
+
+        assert_eq!(decoded.schema(), expected_schema);
+        assert_eq!(
+            source
+                .metadata_projection()
+                .iter()
+                .map(|expression| expression.alias.as_str())
+                .collect::<Vec<_>>(),
+            ["file_name", "block_start", "block_length"]
+        );
+        assert!(projection_references_input_file_metadata(
+            source.metadata_projection()
+        ));
+        Ok(())
+    }
+
+    #[test]
     fn test_round_trip_partitioned_top_k_preserves_window_fn_kind() -> Result<()> {
         use datafusion::physical_plan::empty::EmptyExec;
 
@@ -6063,6 +6308,12 @@ mod tests {
     fn test_round_trip_input_file_name_expression_udfs() -> Result<()> {
         let input_file_name = round_trip_udf(ScalarUDF::from(InputFileNameFunc::new()))?;
         downcast_udf::<InputFileNameFunc>(&input_file_name, "InputFileNameFunc")?;
+
+        let block_start = round_trip_udf(ScalarUDF::from(InputFileBlockStartFunc::new()))?;
+        downcast_udf::<InputFileBlockStartFunc>(&block_start, "InputFileBlockStartFunc")?;
+
+        let block_length = round_trip_udf(ScalarUDF::from(InputFileBlockLengthFunc::new()))?;
+        downcast_udf::<InputFileBlockLengthFunc>(&block_length, "InputFileBlockLengthFunc")?;
 
         let coalesce = round_trip_udf(ScalarUDF::from(CoalesceFunc::new()))?;
         downcast_udf::<CoalesceFunc>(&coalesce, "CoalesceFunc")?;
