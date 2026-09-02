@@ -232,7 +232,9 @@ impl DeletionVectorRowsWriterExec {
             .schema()
             .index_of(&row_index_column)
             .map_err(|e| DataFusionError::Plan(format!("{e}")))?;
-        if matches!(operation_mode, DeletionVectorRowOperationMode::Mixed) {
+        if matches!(operation_mode, DeletionVectorRowOperationMode::Mixed)
+            || matches!(operation.as_ref(), Some(DeltaOperation::Merge { .. }))
+        {
             input
                 .schema()
                 .index_of(OPERATION_COLUMN)
@@ -323,13 +325,15 @@ impl DisplayAs for DeletionVectorRowsWriterExec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DeletionVectorRowOperation {
     Update,
-    Delete,
+    MatchedDelete,
+    NotMatchedBySourceDelete,
 }
 
 #[derive(Debug, Default)]
 struct RowLevelDvBitmaps {
     update_bitmap: DeletionVectorBitmap,
-    delete_bitmap: DeletionVectorBitmap,
+    matched_delete_bitmap: DeletionVectorBitmap,
+    not_matched_by_source_delete_bitmap: DeletionVectorBitmap,
 }
 
 impl RowLevelDvBitmaps {
@@ -338,8 +342,11 @@ impl RowLevelDvBitmaps {
             DeletionVectorRowOperation::Update => {
                 self.update_bitmap.insert(row_index);
             }
-            DeletionVectorRowOperation::Delete => {
-                self.delete_bitmap.insert(row_index);
+            DeletionVectorRowOperation::MatchedDelete => {
+                self.matched_delete_bitmap.insert(row_index);
+            }
+            DeletionVectorRowOperation::NotMatchedBySourceDelete => {
+                self.not_matched_by_source_delete_bitmap.insert(row_index);
             }
         }
     }
@@ -348,19 +355,22 @@ impl RowLevelDvBitmaps {
 struct ReconciledRowLevelDv {
     final_bitmap: DeletionVectorBitmap,
     newly_updated_rows: u64,
-    newly_deleted_rows: u64,
+    newly_matched_deleted_rows: u64,
+    newly_not_matched_by_source_deleted_rows: u64,
 }
 
 struct RowLevelDvWriteStats {
     newly_updated_rows: u64,
-    newly_deleted_rows: u64,
+    newly_matched_deleted_rows: u64,
+    newly_not_matched_by_source_deleted_rows: u64,
     had_existing_dv: bool,
 }
 
 #[derive(Default)]
 struct RowLevelDvWriteMetrics {
     newly_updated_rows: u64,
-    newly_deleted_rows: u64,
+    newly_matched_deleted_rows: u64,
+    newly_not_matched_by_source_deleted_rows: u64,
     num_dv_added: u64,
     num_dv_updated: u64,
 }
@@ -370,9 +380,12 @@ impl RowLevelDvWriteMetrics {
         self.newly_updated_rows = self
             .newly_updated_rows
             .saturating_add(stats.newly_updated_rows);
-        self.newly_deleted_rows = self
-            .newly_deleted_rows
-            .saturating_add(stats.newly_deleted_rows);
+        self.newly_matched_deleted_rows = self
+            .newly_matched_deleted_rows
+            .saturating_add(stats.newly_matched_deleted_rows);
+        self.newly_not_matched_by_source_deleted_rows = self
+            .newly_not_matched_by_source_deleted_rows
+            .saturating_add(stats.newly_not_matched_by_source_deleted_rows);
         self.num_dv_added = self.num_dv_added.saturating_add(1);
         if stats.had_existing_dv {
             self.num_dv_updated = self.num_dv_updated.saturating_add(1);
@@ -381,7 +394,12 @@ impl RowLevelDvWriteMetrics {
 
     fn newly_invalidated_rows(&self) -> u64 {
         self.newly_updated_rows
-            .saturating_add(self.newly_deleted_rows)
+            .saturating_add(self.newly_deleted_rows())
+    }
+
+    fn newly_deleted_rows(&self) -> u64 {
+        self.newly_matched_deleted_rows
+            .saturating_add(self.newly_not_matched_by_source_deleted_rows)
     }
 }
 
@@ -421,8 +439,9 @@ fn merge_deletion_vector_row_operation(
         RowLevelOperationType::MatchedUpdate | RowLevelOperationType::NotMatchedBySourceUpdate => {
             Ok(DeletionVectorRowOperation::Update)
         }
-        RowLevelOperationType::MatchedDelete | RowLevelOperationType::NotMatchedBySourceDelete => {
-            Ok(DeletionVectorRowOperation::Delete)
+        RowLevelOperationType::MatchedDelete => Ok(DeletionVectorRowOperation::MatchedDelete),
+        RowLevelOperationType::NotMatchedBySourceDelete => {
+            Ok(DeletionVectorRowOperation::NotMatchedBySourceDelete)
         }
         operation => Err(DataFusionError::Internal(format!(
             "row-level MERGE DV input contains unsupported operation {operation:?}"
@@ -438,27 +457,44 @@ fn reconcile_row_level_dv_bitmaps(
     if !bitmaps
         .update_bitmap
         .inner()
-        .is_disjoint(bitmaps.delete_bitmap.inner())
+        .is_disjoint(bitmaps.matched_delete_bitmap.inner())
+        || !bitmaps
+            .update_bitmap
+            .inner()
+            .is_disjoint(bitmaps.not_matched_by_source_delete_bitmap.inner())
     {
         return Err(DataFusionError::Execution(format!(
             "row-level DV assigns the same row in file '{path}' to both UPDATE and DELETE"
         )));
     }
+    if !bitmaps
+        .matched_delete_bitmap
+        .inner()
+        .is_disjoint(bitmaps.not_matched_by_source_delete_bitmap.inner())
+    {
+        return Err(DataFusionError::Execution(format!(
+            "row-level DV assigns the same row in file '{path}' to multiple DELETE categories"
+        )));
+    }
 
     let new_updates =
         DeletionVectorBitmap::from_treemap(bitmaps.update_bitmap.inner() - existing_bitmap.inner());
-    let deletes_without_existing =
-        DeletionVectorBitmap::from_treemap(bitmaps.delete_bitmap.inner() - existing_bitmap.inner());
-    let new_deletes =
-        DeletionVectorBitmap::from_treemap(deletes_without_existing.inner() - new_updates.inner());
+    let new_matched_deletes = DeletionVectorBitmap::from_treemap(
+        bitmaps.matched_delete_bitmap.inner() - existing_bitmap.inner(),
+    );
+    let new_not_matched_by_source_deletes = DeletionVectorBitmap::from_treemap(
+        bitmaps.not_matched_by_source_delete_bitmap.inner() - existing_bitmap.inner(),
+    );
 
     existing_bitmap.union_with(&bitmaps.update_bitmap);
-    existing_bitmap.union_with(&bitmaps.delete_bitmap);
+    existing_bitmap.union_with(&bitmaps.matched_delete_bitmap);
+    existing_bitmap.union_with(&bitmaps.not_matched_by_source_delete_bitmap);
 
     Ok(ReconciledRowLevelDv {
         final_bitmap: existing_bitmap,
         newly_updated_rows: new_updates.len(),
-        newly_deleted_rows: new_deletes.len(),
+        newly_matched_deleted_rows: new_matched_deletes.len(),
+        newly_not_matched_by_source_deleted_rows: new_not_matched_by_source_deletes.len(),
     })
 }
 
@@ -490,7 +526,8 @@ async fn write_row_level_dv_actions_for_path(
 
     if reconciled
         .newly_updated_rows
-        .saturating_add(reconciled.newly_deleted_rows)
+        .saturating_add(reconciled.newly_matched_deleted_rows)
+        .saturating_add(reconciled.newly_not_matched_by_source_deleted_rows)
         == 0
     {
         return Ok(None);
@@ -545,7 +582,9 @@ async fn write_row_level_dv_actions_for_path(
 
     Ok(Some(RowLevelDvWriteStats {
         newly_updated_rows: reconciled.newly_updated_rows,
-        newly_deleted_rows: reconciled.newly_deleted_rows,
+        newly_matched_deleted_rows: reconciled.newly_matched_deleted_rows,
+        newly_not_matched_by_source_deleted_rows: reconciled
+            .newly_not_matched_by_source_deleted_rows,
         had_existing_dv,
     }))
 }
@@ -660,6 +699,8 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
         let partition_value_columns = self.partition_value_columns.clone();
         let operation = self.operation.clone();
         let operation_mode = self.operation_mode;
+        let classify_merge_operations =
+            matches!(operation.as_ref(), Some(DeltaOperation::Merge { .. }));
 
         let output_rows = MetricBuilder::new(&self.metrics).output_rows(partition);
         let elapsed_compute = MetricBuilder::new(&self.metrics).elapsed_compute(partition);
@@ -722,10 +763,9 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
                             "row-level DV row-index column '{row_index_column}' must be Int64"
                         ))
                     })?;
-                let operation_column = if matches!(
-                    operation_mode,
-                    DeletionVectorRowOperationMode::Mixed
-                ) {
+                let operation_column = if classify_merge_operations
+                    || matches!(operation_mode, DeletionVectorRowOperationMode::Mixed)
+                {
                     Some(batch.column_by_name(OPERATION_COLUMN).ok_or_else(|| {
                         DataFusionError::Internal(format!(
                             "row-level MERGE DV input is missing required column '{OPERATION_COLUMN}'"
@@ -774,20 +814,29 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
                     } else if current_path.is_none() {
                         current_path = Some(path.to_string());
                     }
-                    let row_operation = match operation_mode {
-                        DeletionVectorRowOperationMode::Update => {
-                            DeletionVectorRowOperation::Update
-                        }
-                        DeletionVectorRowOperationMode::Delete => {
-                            DeletionVectorRowOperation::Delete
-                        }
-                        DeletionVectorRowOperationMode::Mixed => {
-                            let operation_column = operation_column.ok_or_else(|| {
-                                DataFusionError::Internal(format!(
-                                    "row-level MERGE DV input is missing required column '{OPERATION_COLUMN}'"
-                                ))
-                            })?;
-                            merge_deletion_vector_row_operation(operation_column.as_ref(), row)?
+                    let row_operation = if classify_merge_operations
+                        || matches!(operation_mode, DeletionVectorRowOperationMode::Mixed)
+                    {
+                        let operation_column = operation_column.ok_or_else(|| {
+                            DataFusionError::Internal(format!(
+                                "row-level MERGE DV input is missing required column '{OPERATION_COLUMN}'"
+                            ))
+                        })?;
+                        merge_deletion_vector_row_operation(operation_column.as_ref(), row)?
+                    } else {
+                        match operation_mode {
+                            DeletionVectorRowOperationMode::Update => {
+                                DeletionVectorRowOperation::Update
+                            }
+                            DeletionVectorRowOperationMode::Delete => {
+                                DeletionVectorRowOperation::MatchedDelete
+                            }
+                            DeletionVectorRowOperationMode::Mixed => {
+                                return Err(DataFusionError::Internal(
+                                    "mixed row-level DV operations require an operation column"
+                                        .to_string(),
+                                ));
+                            }
                         }
                     };
                     current_bitmaps.insert(row_operation, row_index as u64);
@@ -822,10 +871,10 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
                 write_metrics.num_dv_added,
                 write_metrics.num_dv_updated,
                 write_metrics.newly_updated_rows,
-                write_metrics.newly_deleted_rows,
+                write_metrics.newly_deleted_rows(),
             );
 
-            let target_rows_deleted = write_metrics.newly_deleted_rows;
+            let target_rows_deleted = write_metrics.newly_deleted_rows();
             let execution_time_ms = Some(exec_start.elapsed().as_millis() as u64);
             let (row_count, operation_metrics) = match operation.as_ref() {
                 Some(DeltaOperation::Update { .. }) => (
@@ -846,6 +895,12 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
                         num_removed_files: Some(write_metrics.num_dv_added),
                         num_added_files: Some(write_metrics.num_dv_added),
                         num_target_rows_deleted: Some(target_rows_deleted),
+                        num_target_rows_matched_deleted: Some(
+                            write_metrics.newly_matched_deleted_rows,
+                        ),
+                        num_target_rows_not_matched_by_source_deleted: Some(
+                            write_metrics.newly_not_matched_by_source_deleted_rows,
+                        ),
                         num_target_deletion_vectors_added: Some(write_metrics.num_dv_added),
                         num_target_deletion_vectors_updated: Some(write_metrics.num_dv_updated),
                         num_target_deletion_vectors_removed: Some(write_metrics.num_dv_updated),
@@ -1233,16 +1288,18 @@ mod tests {
         bitmaps.insert(DeletionVectorRowOperation::Update, 1);
         bitmaps.insert(DeletionVectorRowOperation::Update, 2);
         bitmaps.insert(DeletionVectorRowOperation::Update, 2);
-        bitmaps.insert(DeletionVectorRowOperation::Delete, 3);
-        bitmaps.insert(DeletionVectorRowOperation::Delete, 3);
-        bitmaps.insert(DeletionVectorRowOperation::Delete, 4);
+        bitmaps.insert(DeletionVectorRowOperation::MatchedDelete, 3);
+        bitmaps.insert(DeletionVectorRowOperation::MatchedDelete, 3);
+        bitmaps.insert(DeletionVectorRowOperation::NotMatchedBySourceDelete, 4);
+        bitmaps.insert(DeletionVectorRowOperation::NotMatchedBySourceDelete, 5);
 
         let reconciled = reconcile_row_level_dv_bitmaps("part.parquet", existing_bitmap, &bitmaps)?;
 
         assert_eq!(reconciled.newly_updated_rows, 1);
-        assert_eq!(reconciled.newly_deleted_rows, 1);
-        assert_eq!(reconciled.final_bitmap.len(), 4);
-        for row_index in [1, 2, 3, 4] {
+        assert_eq!(reconciled.newly_matched_deleted_rows, 1);
+        assert_eq!(reconciled.newly_not_matched_by_source_deleted_rows, 1);
+        assert_eq!(reconciled.final_bitmap.len(), 5);
+        for row_index in [1, 2, 3, 4, 5] {
             assert!(reconciled.final_bitmap.contains(row_index));
         }
         Ok(())
@@ -1252,7 +1309,7 @@ mod tests {
     fn row_level_dv_metrics_are_aggregated_after_per_file_reconciliation() -> Result<()> {
         let mut first_file_bitmaps = RowLevelDvBitmaps::default();
         first_file_bitmaps.insert(DeletionVectorRowOperation::Update, 1);
-        first_file_bitmaps.insert(DeletionVectorRowOperation::Delete, 2);
+        first_file_bitmaps.insert(DeletionVectorRowOperation::MatchedDelete, 2);
         let first_file = reconcile_row_level_dv_bitmaps(
             "first.parquet",
             DeletionVectorBitmap::from_row_indices([1]),
@@ -1262,6 +1319,7 @@ mod tests {
         let mut second_file_bitmaps = RowLevelDvBitmaps::default();
         second_file_bitmaps.insert(DeletionVectorRowOperation::Update, 5);
         second_file_bitmaps.insert(DeletionVectorRowOperation::Update, 6);
+        second_file_bitmaps.insert(DeletionVectorRowOperation::NotMatchedBySourceDelete, 7);
         let second_file = reconcile_row_level_dv_bitmaps(
             "second.parquet",
             DeletionVectorBitmap::new(),
@@ -1271,18 +1329,24 @@ mod tests {
         let mut metrics = RowLevelDvWriteMetrics::default();
         metrics.record_file(RowLevelDvWriteStats {
             newly_updated_rows: first_file.newly_updated_rows,
-            newly_deleted_rows: first_file.newly_deleted_rows,
+            newly_matched_deleted_rows: first_file.newly_matched_deleted_rows,
+            newly_not_matched_by_source_deleted_rows: first_file
+                .newly_not_matched_by_source_deleted_rows,
             had_existing_dv: true,
         });
         metrics.record_file(RowLevelDvWriteStats {
             newly_updated_rows: second_file.newly_updated_rows,
-            newly_deleted_rows: second_file.newly_deleted_rows,
+            newly_matched_deleted_rows: second_file.newly_matched_deleted_rows,
+            newly_not_matched_by_source_deleted_rows: second_file
+                .newly_not_matched_by_source_deleted_rows,
             had_existing_dv: false,
         });
 
         assert_eq!(metrics.newly_updated_rows, 2);
-        assert_eq!(metrics.newly_deleted_rows, 1);
-        assert_eq!(metrics.newly_invalidated_rows(), 3);
+        assert_eq!(metrics.newly_matched_deleted_rows, 1);
+        assert_eq!(metrics.newly_not_matched_by_source_deleted_rows, 1);
+        assert_eq!(metrics.newly_deleted_rows(), 2);
+        assert_eq!(metrics.newly_invalidated_rows(), 4);
         assert_eq!(metrics.num_dv_added, 2);
         assert_eq!(metrics.num_dv_updated, 1);
         Ok(())
@@ -1292,7 +1356,7 @@ mod tests {
     fn row_level_dv_rejects_update_delete_conflicts() {
         let mut bitmaps = RowLevelDvBitmaps::default();
         bitmaps.insert(DeletionVectorRowOperation::Update, 7);
-        bitmaps.insert(DeletionVectorRowOperation::Delete, 7);
+        bitmaps.insert(DeletionVectorRowOperation::MatchedDelete, 7);
 
         let result = reconcile_row_level_dv_bitmaps(
             "conflict.parquet",
@@ -1308,9 +1372,29 @@ mod tests {
     }
 
     #[test]
+    fn row_level_dv_rejects_conflicting_delete_categories() {
+        let mut bitmaps = RowLevelDvBitmaps::default();
+        bitmaps.insert(DeletionVectorRowOperation::MatchedDelete, 7);
+        bitmaps.insert(DeletionVectorRowOperation::NotMatchedBySourceDelete, 7);
+
+        let result = reconcile_row_level_dv_bitmaps(
+            "conflict.parquet",
+            DeletionVectorBitmap::new(),
+            &bitmaps,
+        );
+        assert!(matches!(
+            result,
+            Err(DataFusionError::Execution(message))
+                if message.contains("multiple DELETE categories")
+                    && message.contains("conflict.parquet")
+        ));
+    }
+
+    #[test]
     fn merge_dv_operation_column_decodes_to_typed_operations() -> Result<()> {
         let operations = Int32Array::from(vec![
             RowLevelOperationType::MatchedUpdate.as_i32(),
+            RowLevelOperationType::MatchedDelete.as_i32(),
             RowLevelOperationType::NotMatchedBySourceDelete.as_i32(),
         ]);
         assert_eq!(
@@ -1319,7 +1403,11 @@ mod tests {
         );
         assert_eq!(
             merge_deletion_vector_row_operation(&operations, 1)?,
-            DeletionVectorRowOperation::Delete
+            DeletionVectorRowOperation::MatchedDelete
+        );
+        assert_eq!(
+            merge_deletion_vector_row_operation(&operations, 2)?,
+            DeletionVectorRowOperation::NotMatchedBySourceDelete
         );
 
         let operation = Int64Array::from(vec![i64::from(
