@@ -24,7 +24,6 @@ mod tests {
     use sail_catalog_system::{SYSTEM_CATALOG_NAME, SystemCatalogProvider};
     use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
     use sail_common_datafusion::session::plan::PlanService;
-    use sail_common_datafusion::system::catalog::SystemCatalog;
     use sail_plan::catalog::SparkCatalogObjectDisplay;
     use sail_plan::config::PlanConfig;
     use sail_plan::formatter::SparkPlanFormatter;
@@ -32,6 +31,7 @@ mod tests {
     use sail_sql_analyzer::data_type::from_ast_data_type;
     use sail_sql_analyzer::parser::{parse_data_type, parse_one_statement};
     use sail_sql_analyzer::statement::from_ast_statement;
+    use sail_system_store::catalog::SystemCatalog;
 
     fn create_session() -> Result<SessionContext, Box<dyn std::error::Error>> {
         let mut state = SessionStateBuilder::new()

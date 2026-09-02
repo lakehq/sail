@@ -4,9 +4,8 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
+use sail_common_datafusion::variant::{VARIANT_VALUE_FIELD_NAME, variant_metadata_field};
 use serde::{Deserialize, Serialize};
-
-use crate::variant::{VARIANT_VALUE_FIELD_NAME, variant_metadata_field};
 
 pub(crate) fn string() -> DataType {
     DataType::Utf8

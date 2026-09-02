@@ -1,3 +1,6 @@
+- name: session.id
+  description: The unique identifier for the session.
+
 - name: execution.job.id
   description: The unique identifier for the job.
 

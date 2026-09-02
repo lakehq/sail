@@ -9,7 +9,7 @@ use parquet_variant_compute::VariantArrayBuilder;
 use parquet_variant_json::JsonToVariant;
 use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
 use sail_common_datafusion::array::serde::ArrowSerializer;
-use sail_common_datafusion::system::catalog::{MetricRow, SystemTable};
+use sail_system_store::catalog::{MetricRow, SystemTable};
 use serde::{Deserialize, Serialize};
 
 pub fn build_rows<T>(table: SystemTable, rows: Vec<T>) -> Result<RecordBatch>
@@ -23,6 +23,7 @@ pub fn build_metrics(rows: Vec<MetricRow>) -> Result<RecordBatch> {
     #[derive(Serialize, Deserialize)]
     struct MetricMetadataRow {
         timestamp: DateTime<Utc>,
+        start_timestamp: Option<DateTime<Utc>>,
         name: String,
         attributes: BTreeMap<String, String>,
     }
@@ -31,12 +32,13 @@ pub fn build_metrics(rows: Vec<MetricRow>) -> Result<RecordBatch> {
         .iter()
         .map(|row| MetricMetadataRow {
             timestamp: row.timestamp,
+            start_timestamp: row.start_timestamp,
             name: row.name.clone(),
             attributes: row.attributes.clone(),
         })
         .collect::<Vec<_>>();
     let table_schema = SystemTable::Metrics.schema();
-    let metadata_schema = Arc::new(Schema::new(table_schema.fields()[..3].to_vec()));
+    let metadata_schema = Arc::new(Schema::new(table_schema.fields()[..4].to_vec()));
     let metadata_batch =
         ArrowSerializer::build_record_batch_with_schema(&metadata, metadata_schema)?;
     let mut values = VariantArrayBuilder::new(rows.len());

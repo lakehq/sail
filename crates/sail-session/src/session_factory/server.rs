@@ -161,7 +161,10 @@ impl ServerSessionFactory {
                 "telemetry is not initialized for system store".to_string(),
             )
         })?;
-        Ok(SystemTableService::new(reader))
+        Ok(SystemTableService::new(
+            reader,
+            self.config.execution.batch_size,
+        ))
     }
 
     fn apply_execution_config(&mut self, config: &mut SessionConfig) -> Result<()> {

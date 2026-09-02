@@ -1,14 +1,12 @@
 //! Public asynchronous reader for system tables.
 
-use sail_common_datafusion::system::catalog::{
-    JobRow, MetricRow, OptionRow, SessionRow, StageRow, TaskRow, WorkerRow,
-};
-use sail_common_datafusion::system::predicate::{MapValueFilter, TimestampMicros, ValueFilter};
 use tokio::sync::oneshot;
 
 use crate::actor::SystemStoreMessage;
+use crate::catalog::{JobRow, MetricRow, OptionRow, SessionRow, StageRow, TaskRow, WorkerRow};
 use crate::engine::SystemStoreQuery;
 use crate::handle::SystemStoreHandleInner;
+use crate::predicate::{MapValueFilter, TimestampMicros, ValueFilter};
 use crate::{SystemStoreError, SystemStoreResult};
 
 #[derive(Clone, Debug)]
