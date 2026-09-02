@@ -619,6 +619,58 @@ Feature: Delta Lake Merge
         | 2  | new   | update |
         | 4  | ins   | insert |
 
+  Rule: Copy-on-write MERGE retains target rows outside matched clauses
+
+    Scenario: EXPLAIN matched-only MERGE uses a target-preserving join
+      Given variable location for temporary directory delta_merge_matched_only_cow
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_matched_only_cow
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_matched_only_cow (id INT, value STRING)
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_matched_only_cow VALUES
+          (1, 'old'),
+          (2, 'keep')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW delta_merge_matched_only_cow_source AS
+        SELECT * FROM VALUES
+          (1, 'updated'),
+          (3, 'ignored')
+        AS source(id, value)
+        """
+      When query
+        """
+        EXPLAIN
+        MERGE INTO delta_merge_matched_only_cow AS target
+        USING delta_merge_matched_only_cow_source AS source
+        ON target.id = source.id
+        WHEN MATCHED THEN UPDATE SET value = source.value
+        """
+      Then query plan matches snapshot
+      Given statement
+        """
+        MERGE INTO delta_merge_matched_only_cow AS target
+        USING delta_merge_matched_only_cow_source AS source
+        ON target.id = source.id
+        WHEN MATCHED THEN UPDATE SET value = source.value
+        """
+      When query
+        """
+        SELECT id, value FROM delta_merge_matched_only_cow ORDER BY id
+        """
+      Then query result ordered
+        | id | value   |
+        | 1  | updated |
+        | 2  | keep    |
+
   Rule: WHEN clauses use first-match semantics
 
     Scenario: Overlapping matched and target-only clauses apply only their first action
@@ -1028,6 +1080,16 @@ Feature: Delta Lake Merge
         | 3  | stay   | target |
 
     Scenario: Target-only updates append replacement rows and a deletion vector
+      When query
+        """
+        EXPLAIN
+        MERGE INTO delta_merge_dv AS t
+        USING src_merge_dv AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED BY SOURCE AND t.id = 3 THEN
+          UPDATE SET value = concat(t.value, '_stale')
+        """
+      Then query plan matches snapshot
       Given statement
         """
         MERGE INTO delta_merge_dv AS t
@@ -1062,6 +1124,50 @@ Feature: Delta Lake Merge
         | 1  | keep       | target |
         | 2  | remove     | target |
         | 3  | stay_stale | target |
+
+    Scenario: EXPLAIN insert and target-only clauses use a full join
+      When query
+        """
+        EXPLAIN
+        MERGE INTO delta_merge_dv AS t
+        USING src_merge_dv AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED BY SOURCE AND t.id = 3 THEN
+          UPDATE SET value = concat(t.value, '_stale')
+        WHEN NOT MATCHED THEN
+          INSERT (id, value, flag) VALUES (s.id, s.value, s.flag)
+        """
+      Then query plan matches snapshot
+      Given statement
+        """
+        MERGE INTO delta_merge_dv AS t
+        USING src_merge_dv AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED BY SOURCE AND t.id = 3 THEN
+          UPDATE SET value = concat(t.value, '_stale')
+        WHEN NOT MATCHED THEN
+          INSERT (id, value, flag) VALUES (s.id, s.value, s.flag)
+        """
+      Then delta log latest commit info contains
+        | path                                                    | value |
+        | operation                                               | "MERGE" |
+        | operationMetrics.numSourceRows                          | 2     |
+        | operationMetrics.numTargetRowsInserted                  | 1     |
+        | operationMetrics.numTargetRowsUpdated                   | 1     |
+        | operationMetrics.numTargetRowsNotMatchedBySourceUpdated | 1     |
+        | operationMetrics.numTargetRowsDeleted                   | 0     |
+        | operationMetrics.numTargetRowsCopied                    | 0     |
+        | operationMetrics.numTargetDeletionVectorsAdded          | 1     |
+      When query
+        """
+        SELECT id, value, flag FROM delta_merge_dv ORDER BY id
+        """
+      Then query result ordered
+        | id | value      | flag   |
+        | 1  | keep       | target |
+        | 2  | remove     | target |
+        | 3  | stay_stale | target |
+        | 4  | inserted   | insert |
 
     Scenario: Updates and deletes share a deletion vector without mixing row metrics
       Given statement

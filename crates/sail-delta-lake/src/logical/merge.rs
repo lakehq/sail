@@ -87,6 +87,7 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         row_index_column,
         &[],
         MergePlanRequirements {
+            preserve_unmodified_target_rows: matches!(mode, RowLevelWriteMode::CopyOnWrite),
             source_metrics: true,
             effects: RowLevelEffectRequirements {
                 // Delta resolves both COW removals and MOR DV updates from touched paths.
