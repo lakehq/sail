@@ -11,10 +11,10 @@ use crate::access::StoreReader;
 use crate::catalog::{JobRow, MetricRow, OptionRow, SessionRow, StageRow, TaskRow, WorkerRow};
 use crate::model::{
     JobPrimaryKey, JobTable, MetricAttributeIndex, MetricAttributeKey, MetricFloatPointSeries,
-    MetricHistogramPointSeries, MetricIntegerPointSeries, MetricNameIndex, MetricSeriesId,
-    MetricSeriesKind, MetricSeriesMetadata, MetricSeriesTable, OptionPrimaryKey, OptionTable,
-    SessionPrimaryKey, SessionTable, StagePrimaryKey, StageTable, StoreSeries, TaskPrimaryKey,
-    TaskTable, WorkerPrimaryKey, WorkerTable,
+    MetricHistogramPointSeries, MetricIntegerPointSeries, MetricNameIndex, MetricPointValue,
+    MetricSeriesId, MetricSeriesKind, MetricSeriesMetadata, MetricSeriesTable, OptionPrimaryKey,
+    OptionTable, SessionPrimaryKey, SessionTable, StagePrimaryKey, StageTable, StoreSeries,
+    TaskPrimaryKey, TaskTable, WorkerPrimaryKey, WorkerTable,
 };
 use crate::predicate::{MapValueFilter, TimestampMicros, ValueFilter};
 use crate::{SystemStoreError, SystemStoreResult};
@@ -535,23 +535,30 @@ fn scan_metric_points<R, S, T>(
 ) -> SystemStoreResult<bool>
 where
     R: StoreReader + crate::access::SeriesReader<S, R::Error>,
-    S: StoreSeries<SeriesKey = MetricSeriesId, PointKey = TimestampMicros, PointValue = T>,
+    S: StoreSeries<
+            SeriesKey = MetricSeriesId,
+            PointKey = TimestampMicros,
+            PointValue = MetricPointValue<T>,
+        >,
 {
     let mut predicate_error = None;
     reader
         .series::<S>()
-        .scan(
-            &series.id,
-            lower,
-            upper,
-            &mut |point_timestamp, value| match (timestamp.predicate)(&point_timestamp) {
+        .scan(&series.id, lower, upper, &mut |point_timestamp,
+                                              point: MetricPointValue<
+            T,
+        >| {
+            match (timestamp.predicate)(&point_timestamp) {
                 Ok(true) => {
                     if let Some(timestamp) = DateTime::from_timestamp_micros(point_timestamp.0) {
                         out.push(MetricRow {
                             timestamp,
+                            start_timestamp: point
+                                .start_timestamp
+                                .and_then(|timestamp| DateTime::from_timestamp_micros(timestamp.0)),
                             name: series.name.clone(),
                             attributes: series.attributes.clone(),
-                            value: to_metric_value(value),
+                            value: to_metric_value(point.value),
                         });
                         if out.len() == fetch {
                             return false;
@@ -564,8 +571,8 @@ where
                     predicate_error = Some(SystemStoreError::from(error));
                     false
                 }
-            },
-        )
+            }
+        })
         .map_err(|error| -> SystemStoreError { error.into() })?;
     if let Some(error) = predicate_error {
         return Err(error);
@@ -740,18 +747,21 @@ mod tests {
                         name: "target".to_string(),
                         attributes: [("host".to_string(), "one".to_string())].into(),
                         timestamp: TimestampMicros(1),
+                        start_timestamp: None,
                         value: MetricValue::Gauge(MetricNumber::Integer(1)),
                     },
                     MetricSample {
                         name: "target".to_string(),
                         attributes: [("host".to_string(), "two".to_string())].into(),
                         timestamp: TimestampMicros(2),
+                        start_timestamp: Some(TimestampMicros(1)),
                         value: MetricValue::Gauge(MetricNumber::Integer(2)),
                     },
                     MetricSample {
                         name: "other".to_string(),
                         attributes: [("host".to_string(), "one".to_string())].into(),
                         timestamp: TimestampMicros(3),
+                        start_timestamp: None,
                         value: MetricValue::Gauge(MetricNumber::Integer(3)),
                     },
                 ],
@@ -776,6 +786,10 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].name, "target");
         assert_eq!(rows[0].attributes["host"], "two");
+        assert_eq!(
+            rows[0].start_timestamp,
+            chrono::DateTime::from_timestamp_micros(1)
+        );
         Ok(())
     }
 }

@@ -294,6 +294,12 @@
           sql_type: TIMESTAMP_LTZ(6)
           arrow_type: crate::types::timestamp()
           nullable: false
+        - name: start_timestamp
+          description: The start timestamp of the metric aggregation interval.
+          rust_type: Option<chrono::DateTime<chrono::Utc>>
+          sql_type: TIMESTAMP_LTZ(6)
+          arrow_type: crate::types::timestamp()
+          nullable: true
         - name: name
           description: The metric name.
           rust_type: String
@@ -301,7 +307,7 @@
           arrow_type: crate::types::string()
           nullable: false
         - name: attributes
-          description: The resource and data point attributes identifying the metric series.
+          description: The data point attributes identifying the metric series.
           rust_type: std::collections::BTreeMap<String, String>
           sql_type: "MAP<STRING, STRING>"
           arrow_type: crate::types::string_map()
