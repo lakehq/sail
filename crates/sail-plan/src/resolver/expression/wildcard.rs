@@ -96,30 +96,35 @@ impl PlanResolver<'_> {
                         if self.match_attribute_qualifier(q.as_ref(), qualifier)
                             && self.match_field(info, column.as_ref(), None)
                         {
-                            Self::resolve_nested_field_wildcard(
-                                col((q.as_ref(), field)),
+                            self.resolve_nested_field_wildcard(
+                                // The expansion compares the qualifier literally, so the column
+                                // refers to the qualifier in the schema rather than the one that
+                                // the user wrote.
+                                col((qualifier, field)),
                                 field.data_type(),
                                 inner,
                             )
+                            .transpose()
                         } else {
                             None
                         }
                     })
                     .collect(),
             })
-            .collect::<Vec<_>>();
+            .collect::<PlanResult<Vec<_>>>()?;
         candidates
             .one()
             .map_err(|_| PlanError::AnalysisError(format!("cannot resolve wildcard: {name:?}")))
     }
 
     fn resolve_nested_field_wildcard<T: AsRef<str>>(
+        &self,
         expr: expr::Expr,
         data_type: &DataType,
         inner: &[T],
-    ) -> Option<NamedExpr> {
+    ) -> PlanResult<Option<NamedExpr>> {
         let DataType::Struct(fields) = data_type else {
-            return None;
+            return Ok(None);
         };
         match inner {
             [] => {
@@ -134,20 +139,19 @@ impl PlanResolver<'_> {
                         )
                     })
                     .unzip();
-                Some(NamedExpr::new(
+                Ok(Some(NamedExpr::new(
                     names,
                     ScalarUDF::from(MultiExpr::new()).call(exprs),
-                ))
+                )))
             }
-            [name, remaining @ ..] => fields
-                .iter()
-                .find(|x| x.name().eq_ignore_ascii_case(name.as_ref()))
-                .and_then(|field| {
-                    let args = vec![expr, lit(field.name().to_string())];
-                    let expr =
-                        expr::Expr::ScalarFunction(ScalarFunction::new_udf(get_field(), args));
-                    Self::resolve_nested_field_wildcard(expr, field.data_type(), remaining)
-                }),
+            [name, remaining @ ..] => {
+                let Some(field) = self.resolve_struct_field(fields, name.as_ref())? else {
+                    return Ok(None);
+                };
+                let args = vec![expr, lit(field.name().to_string())];
+                let expr = expr::Expr::ScalarFunction(ScalarFunction::new_udf(get_field(), args));
+                self.resolve_nested_field_wildcard(expr, field.data_type(), remaining)
+            }
         }
     }
 

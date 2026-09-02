@@ -45,7 +45,7 @@ impl PlanResolver<'_> {
                         .map(|(left_idx, left_name)| {
                             match right_names
                                 .iter()
-                                .position(|right_name| left_name.eq_ignore_ascii_case(right_name))
+                                .position(|right_name| self.match_identifier(left_name, right_name))
                             {
                                 Some(right_idx) => Ok((
                                     Expr::Column(Column::from(
@@ -62,8 +62,10 @@ impl PlanResolver<'_> {
                                     Expr::Literal(ScalarValue::Null, None)
                                         .alias(state.register_field_name(left_name)),
                                 )),
-                                None => Err(PlanError::invalid(format!(
-                                    "right column not found: {left_name}"
+                                None => Err(PlanError::AnalysisError(format!(
+                                    "[UNRESOLVED_COLUMN_AMONG_FIELD_NAMES] Cannot resolve column \
+                                     name \"{left_name}\" among ({}).",
+                                    right_names.join(", ")
                                 ))),
                             }
                         })
@@ -76,9 +78,9 @@ impl PlanResolver<'_> {
                                 .into_iter()
                                 .enumerate()
                                 .filter(|(_, right_name)| {
-                                    !left_names
-                                        .iter()
-                                        .any(|left_name| left_name.eq_ignore_ascii_case(right_name))
+                                    !left_names.iter().any(|left_name| {
+                                        self.match_identifier(left_name, right_name)
+                                    })
                                 })
                                 .map(|(right_idx, right_name)| {
                                     (

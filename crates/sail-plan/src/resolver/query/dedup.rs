@@ -27,9 +27,14 @@ impl PlanResolver<'_> {
             return Err(PlanError::todo("deduplicate within watermark"));
         }
         if !column_names.is_empty() && !all_columns_as_keys {
-            let on_expr: Vec<Expr> = self
-                .resolve_columns(schema, &column_names, state)?
+            // The name selects output columns, so it is matched with the resolver alone, and
+            // every column that matches becomes a key.
+            let on_expr: Vec<Expr> = column_names
+                .iter()
+                .map(|name| self.resolve_columns_by_resolver(schema, name.as_ref(), state))
+                .collect::<PlanResult<Vec<_>>>()?
                 .into_iter()
+                .flatten()
                 .map(Expr::Column)
                 .collect();
             let select_expr: Vec<Expr> = schema.columns().into_iter().map(Expr::Column).collect();

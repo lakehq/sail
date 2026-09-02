@@ -95,7 +95,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<Option<(String, expr::Expr)>> {
         let candidates = Self::generate_qualified_nested_field_candidates(name.parts());
-        let mut candidates = schema
+        let candidates = schema
             .iter()
             .flat_map(|(qualifier, field)| {
                 let Ok(info) = state.get_field_info(field.name()) else {
@@ -110,13 +110,17 @@ impl PlanResolver<'_> {
                         if self.match_attribute_qualifier(q.as_ref(), qualifier)
                             && self.match_field(info, name.as_ref(), plan_id)
                         {
-                            let expr = Self::resolve_potentially_nested_field(
+                            let expr = match self.resolve_potentially_nested_field(
                                 col((qualifier, field)),
                                 field.data_type(),
                                 inner,
-                            )?;
+                            ) {
+                                Ok(Some(expr)) => expr,
+                                Ok(None) => return None,
+                                Err(e) => return Some(Err(e)),
+                            };
                             let name = inner.last().unwrap_or(name).as_ref().to_string();
-                            Some((name, expr))
+                            Some(Ok((name, expr)))
                         } else {
                             None
                         }
@@ -124,12 +128,23 @@ impl PlanResolver<'_> {
                     .collect()
             })
             .collect::<Vec<_>>();
+        // A field that cannot be extracted only fails the interpretation that reaches it, since
+        // another one may still resolve the name. The error is reported only when no
+        // interpretation succeeded, which is the order in which Spark resolves the name.
+        let (mut candidates, errors): (Vec<_>, Vec<_>) =
+            candidates.into_iter().partition(Result::is_ok);
+        if candidates.is_empty() {
+            if let Some(error) = errors.into_iter().next() {
+                error?;
+            }
+            return Ok(None);
+        }
         if candidates.len() > 1 {
             return Err(PlanError::AnalysisError(format!(
                 "ambiguous attribute: {name:?}"
             )));
         }
-        Ok(candidates.pop())
+        candidates.pop().transpose()
     }
 
     fn resolve_aggregate_field(
@@ -245,50 +260,47 @@ impl PlanResolver<'_> {
     }
 
     fn resolve_potentially_nested_field<T: AsRef<str>>(
+        &self,
         expr: expr::Expr,
         data_type: &DataType,
         inner: &[T],
-    ) -> Option<expr::Expr> {
+    ) -> PlanResult<Option<expr::Expr>> {
         match inner {
-            [] => Some(expr),
+            [] => Ok(Some(expr)),
             [name, remaining @ ..] => match data_type {
-                DataType::Struct(fields) => fields
-                    .iter()
-                    .find(|x| x.name().eq_ignore_ascii_case(name.as_ref()))
-                    .and_then(|field| {
-                        let args = vec![expr, lit(field.name().to_string())];
-                        let expr =
-                            expr::Expr::ScalarFunction(ScalarFunction::new_udf(get_field(), args));
-                        Self::resolve_potentially_nested_field(expr, field.data_type(), remaining)
-                    }),
+                DataType::Struct(fields) => {
+                    let Some(field) = self.resolve_struct_field(fields, name.as_ref())? else {
+                        return Ok(None);
+                    };
+                    let args = vec![expr, lit(field.name().to_string())];
+                    let expr =
+                        expr::Expr::ScalarFunction(ScalarFunction::new_udf(get_field(), args));
+                    self.resolve_potentially_nested_field(expr, field.data_type(), remaining)
+                }
                 DataType::List(field)
                 | DataType::LargeList(field)
                 | DataType::FixedSizeList(field, _) => {
                     let DataType::Struct(fields) = field.data_type() else {
-                        return None;
+                        return Ok(None);
                     };
-                    fields
-                        .iter()
-                        .find(|x| x.name().eq_ignore_ascii_case(name.as_ref()))
-                        .and_then(|child| {
-                            let expr = ScalarUDF::from(ArrayStructField::new())
-                                .call(vec![expr, lit(child.name().to_string())]);
-                            let item = Arc::new(Field::new_list_field(
-                                child.data_type().clone(),
-                                field.is_nullable() || child.is_nullable(),
-                            ));
-                            let data_type = match data_type {
-                                DataType::List(_) => DataType::List(item),
-                                DataType::LargeList(_) => DataType::LargeList(item),
-                                DataType::FixedSizeList(_, size) => {
-                                    DataType::FixedSizeList(item, *size)
-                                }
-                                _ => unreachable!("list data type matched above"),
-                            };
-                            Self::resolve_potentially_nested_field(expr, &data_type, remaining)
-                        })
+                    let Some(child) = self.resolve_struct_field(fields, name.as_ref())? else {
+                        return Ok(None);
+                    };
+                    let expr = ScalarUDF::from(ArrayStructField::new())
+                        .call(vec![expr, lit(child.name().to_string())]);
+                    let item = Arc::new(Field::new_list_field(
+                        child.data_type().clone(),
+                        field.is_nullable() || child.is_nullable(),
+                    ));
+                    let data_type = match data_type {
+                        DataType::List(_) => DataType::List(item),
+                        DataType::LargeList(_) => DataType::LargeList(item),
+                        DataType::FixedSizeList(_, size) => DataType::FixedSizeList(item, *size),
+                        _ => unreachable!("list data type matched above"),
+                    };
+                    self.resolve_potentially_nested_field(expr, &data_type, remaining)
                 }
-                _ => None,
+                _ => Ok(None),
             },
         }
     }

@@ -342,8 +342,10 @@ def test_attribute_reference_does_not_use_the_resolver_alone(spark):
 def test_to_schema_matches_name_like_the_analyzer(spark):
     src = spark.sql("SELECT 1 AS `Ä`, 2 AS b")
     target = StructType([StructField("b", IntegerType()), StructField("ä", IntegerType())])
-    assert src.to(target).columns == ["b", "ä"]
-    assert src.to(target).collect() == [Row(b=2, ä=1)]
+    # `columns` is derived by the client from the schema that it passed, and `Row` compares by
+    # position rather than by name, so the schema is what tells the two spellings apart.
+    assert src.to(target).schema.names == ["b", "ä"]
+    assert [r.asDict() for r in src.to(target).collect()] == [{"b": 2, "ä": 1}]
 
 
 def test_to_schema_fills_missing_nullable_field(spark):
@@ -395,3 +397,116 @@ def test_replace_rejects_ambiguous_subset_name(spark):
 
     with pytest.raises(Exception, match="AMBIGUOUS_REFERENCE"):
         df.replace("x", "y", subset=["a"]).collect()
+
+
+def test_union_by_name_matches_non_ascii_names(spark):
+    left = spark.sql("SELECT 1 AS `ä`")
+    right = spark.sql("SELECT 2 AS `Ä`")
+    assert sorted(row[0] for row in left.unionByName(right).collect()) == [1, 2]
+
+
+def test_union_by_name_is_case_sensitive_when_configured(spark):
+    spark.conf.set("spark.sql.caseSensitive", "true")
+    try:
+        left = spark.sql("SELECT 1 AS a, 2 AS b")
+        right = spark.sql("SELECT 3 AS B, 4 AS A")
+        with pytest.raises(Exception, match="Cannot resolve column name"):
+            left.unionByName(right).collect()
+    finally:
+        spark.conf.unset("spark.sql.caseSensitive")
+
+
+def test_drop_duplicates_matches_name_with_the_resolver(spark):
+    # The subset name selects output columns by name, so it is matched by the resolver alone,
+    # which folds `ı` to `I` even though the lowercase forms differ.
+    assert spark.sql("SELECT 1 AS `ıd`").dropDuplicates(["Id"]).columns == ["ıd"]
+    assert spark.sql("SELECT 1 AS `ς`").dropDuplicates(["Σ"]).columns == ["ς"]
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_describe_names_the_column_as_written(spark):
+    # Resolving an attribute renames it to the spelling that was asked for.
+    assert spark.sql("SELECT 1 AS id").describe("ID").columns == ["summary", "ID"]
+    assert spark.sql("SELECT 1 AS `Ä`").describe("ä").columns == ["summary", "ä"]
+
+
+def test_fillna_rejects_a_subset_name_that_matches_nothing(spark):
+    # A subset name that resolves to no column is an error rather than being ignored.
+    df = spark.sql("SELECT CAST(NULL AS INT) AS a")
+    with pytest.raises(Exception, match="UNRESOLVED_COLUMN"):
+        df.fillna(0, subset=["nope"]).collect()
+    with pytest.raises(Exception, match="UNRESOLVED_COLUMN"):
+        df.dropna(subset=["nope"]).collect()
+
+
+def test_names_are_folded_with_the_case_mappings_of_the_jvm(spark):
+    # Vithkuqi was assigned in Unicode 14, which OpenJDK 17 does not know, so the two names do not
+    # fold into each other and both columns are added.
+    assert spark.range(1).withColumns({"𐕰": lit(1), "𐖗": lit(2)}).columns == ["id", "𐕰", "𐖗"]
+
+
+def test_drop_duplicates_keeps_every_matching_column(spark):
+    # The name selects output columns, so every column that matches becomes a key rather than
+    # the name being rejected as ambiguous.
+    assert spark.sql("SELECT 1 AS a, 1 AS a").dropDuplicates(["a"]).columns == ["a", "a"]
+    assert spark.sql("SELECT 1 AS a").dropDuplicates().columns == ["a"]
+
+    with pytest.raises(Exception, match="Cannot resolve column name"):
+        spark.sql("SELECT 1 AS a").dropDuplicates(["nope"]).columns
+
+
+def test_fillna_and_dropna_without_subset_are_unaffected(spark):
+    df = spark.sql("SELECT CAST(NULL AS INT) AS a")
+    assert df.fillna(0).collect() == [Row(a=0)]
+    assert df.dropna().collect() == []
+
+
+def test_fillna_rejects_an_ambiguous_subset_name(spark):
+    df = spark.sql("SELECT CAST(NULL AS INT) AS a, CAST(NULL AS INT) AS a")
+    with pytest.raises(Exception, match="AMBIGUOUS_REFERENCE"):
+        df.fillna(0, subset=["a"]).collect()
+
+
+def test_fillna_rejects_a_map_key_that_matches_nothing(spark):
+    with pytest.raises(Exception, match="UNRESOLVED_COLUMN"):
+        spark.sql("SELECT CAST(NULL AS INT) AS a").fillna({"nope": 0}).collect()
+
+
+def test_fillna_accepts_a_nested_subset_name(spark):
+    # A subset name that resolves to a nested field is not a column, so it is discarded and the
+    # frame is left untouched rather than the name being rejected.
+    df = spark.sql("SELECT named_struct('x', CAST(NULL AS INT)) AS s, 1 AS a")
+    assert df.fillna(0, subset=["s.x"]).collect() == [Row(s=Row(x=None), a=1)]
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_dropna_filters_on_a_nested_subset_name(spark):
+    # Unlike `fillna`, `dropna` keeps the resolved nested field and filters on it.
+    df = spark.sql("SELECT named_struct('x', CAST(NULL AS INT)) AS s, 1 AS a")
+    assert df.dropna(subset=["s.x"]).collect() == []
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_union_by_name_rejects_an_extra_column_on_the_right(spark):
+    left = spark.sql("SELECT 1 AS a")
+    right = spark.sql("SELECT 2 AS a, 3 AS b")
+    with pytest.raises(Exception, match="NUM_COLUMNS_MISMATCH"):
+        left.unionByName(right).collect()
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_array_struct_field_keeps_the_nullability_of_the_array(spark):
+    # Extracting a field from an array of structs inherits the array's nullability, and
+    # `containsNull` comes from the array and the field, not from a hardcoded `true`.
+    schema = spark.sql("SELECT s.`Ä` AS r FROM (SELECT array(named_struct('ä', 1)) AS s)").schema
+    assert schema["r"].nullable is False
+    assert schema["r"].dataType.containsNull is False
+
+
+def test_union_by_name_matches_names_with_allow_missing_columns(spark):
+    # The right-side extras are matched with the resolver too, so a case-differing name is not
+    # appended twice.
+    left = spark.sql("SELECT 1 AS `ä`, 2 AS b")
+    right = spark.sql("SELECT 3 AS `Ä`, 4 AS c")
+    result = left.unionByName(right, allowMissingColumns=True)
+    assert result.columns == ["ä", "b", "c"]

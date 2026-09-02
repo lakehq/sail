@@ -1,67 +1,14 @@
 use std::sync::Arc;
 
+use datafusion_common::arrow::datatypes::{FieldRef, Fields};
 use datafusion_common::{Column, DFSchemaRef, TableReference};
 use sail_common::spec;
+use sail_common::utils::string::{equals_ignore_case, to_lowercase};
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::{FieldInfo, PlanResolverState};
-
-/// Returns the simple uppercase mapping of a character, the way `Character.toUpperCase` does.
-/// [`char::to_uppercase`] returns the full mapping, which may expand to several characters
-/// (e.g. `ß` becomes `SS`), while Java leaves the character unchanged when it has no simple
-/// mapping.
-fn simple_uppercase(c: char) -> char {
-    let mut chars = c.to_uppercase();
-    match (chars.next(), chars.next()) {
-        (Some(x), None) => x,
-        _ => c,
-    }
-}
-
-/// Returns the simple lowercase mapping of a character, the way `Character.toLowerCase` does.
-/// See [`simple_uppercase`] for why the full mapping cannot be used.
-fn simple_lowercase(c: char) -> char {
-    // `İ` is the only character whose unconditional full lowercase mapping expands to more than
-    // one character (`i` followed by a combining dot above) even though it does have a simple
-    // mapping, so the rule below would otherwise leave it unchanged.
-    if c == 'İ' {
-        return 'i';
-    }
-    let mut chars = c.to_lowercase();
-    match (chars.next(), chars.next()) {
-        (Some(x), None) => x,
-        _ => c,
-    }
-}
-
-/// Compares two strings the way `String.equalsIgnoreCase` does, so that identifiers are folded
-/// beyond ASCII. Note that this is not the same as comparing the lowercased strings, since the
-/// case mappings of a character are not always symmetric.
-/// The result can still differ from the JVM for the characters whose case mappings were added
-/// after the Unicode version that the JVM implements, since the mappings come from the Rust
-/// standard library here.
-pub(super) fn equals_ignore_case(a: &str, b: &str) -> bool {
-    let mut a = a.chars();
-    let mut b = b.chars();
-    loop {
-        match (a.next(), b.next()) {
-            (None, None) => return true,
-            (Some(x), Some(y)) => {
-                if x == y {
-                    continue;
-                }
-                let (x, y) = (simple_uppercase(x), simple_uppercase(y));
-                if x == y || simple_lowercase(x) == simple_lowercase(y) {
-                    continue;
-                }
-                return false;
-            }
-            _ => return false,
-        }
-    }
-}
 
 impl PlanResolver<'_> {
     /// Matches an identifier against another one the way the Spark analyzer resolver does.
@@ -78,6 +25,15 @@ impl PlanResolver<'_> {
     /// name must match both ways. This is stricter than the resolver alone, which folds through
     /// the simple case mappings while lowercasing uses the full ones.
     pub(super) fn match_attribute(&self, a: &str, b: &str) -> bool {
+        if self.config.case_sensitive {
+            return a == b;
+        }
+        // Identifiers are overwhelmingly ASCII, where lowercasing and the resolver agree with
+        // each other, so the folded names only have to be built beyond ASCII. This matters
+        // because the comparison runs once per schema field for every name being resolved.
+        if a.is_ascii() && b.is_ascii() {
+            return a.eq_ignore_ascii_case(b);
+        }
         self.fold_identifier(a) == self.fold_identifier(b) && self.match_identifier(a, b)
     }
 
@@ -151,13 +107,39 @@ impl PlanResolver<'_> {
         }
     }
 
+    /// Finds the struct field with the given name. The name is matched with the resolver, and
+    /// more than one match is an error, which is why the field cannot simply be looked up.
+    /// A field that matches no name is not an error here, since the caller may be considering
+    /// more than one candidate for the same expression.
+    pub(super) fn resolve_struct_field<'a>(
+        &self,
+        fields: &'a Fields,
+        name: &str,
+    ) -> PlanResult<Option<&'a FieldRef>> {
+        let mut matched = fields
+            .iter()
+            .filter(|field| self.match_identifier(field.name(), name));
+        let Some(field) = matched.next() else {
+            return Ok(None);
+        };
+        let count = 1 + matched.count();
+        if count > 1 {
+            return Err(PlanError::AnalysisError(format!(
+                "[AMBIGUOUS_REFERENCE_TO_FIELDS] Ambiguous reference to the field `{}`. \
+                 It appears {count} times in the schema.",
+                name.replace('`', "``")
+            )));
+        }
+        Ok(Some(field))
+    }
+
     /// Folds an identifier so that duplicates can be detected. Spark lowercases the name here
     /// instead of using the resolver, so this is deliberately not [`Self::match_identifier`].
     pub(super) fn fold_identifier(&self, name: &str) -> String {
         if self.config.case_sensitive {
             name.to_string()
         } else {
-            name.to_lowercase()
+            to_lowercase(name)
         }
     }
 
@@ -205,6 +187,26 @@ impl PlanResolver<'_> {
         self.column_candidates(schema, state, |info| {
             self.match_identifier(info.name(), name)
         })
+    }
+
+    /// Returns the columns whose name matches the resolver, and fails when the name matches none.
+    /// Spark keeps every match rather than rejecting an ambiguous name for the operations that
+    /// select the output columns by name.
+    pub(super) fn resolve_columns_by_resolver(
+        &self,
+        schema: &DFSchemaRef,
+        name: &str,
+        state: &PlanResolverState,
+    ) -> PlanResult<Vec<Column>> {
+        let columns = self.resolve_column_candidates_by_resolver(schema, name, state);
+        if columns.is_empty() {
+            return Err(PlanError::AnalysisError(format!(
+                "[UNRESOLVED_COLUMN_AMONG_FIELD_NAMES] Cannot resolve column name \"{name}\" \
+                 among ({}).",
+                Self::get_field_names(schema, state)?.join(", ")
+            )));
+        }
+        Ok(columns)
     }
 
     fn column_candidates(

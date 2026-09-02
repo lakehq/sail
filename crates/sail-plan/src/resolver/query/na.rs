@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
+use datafusion_common::DFSchemaRef;
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{
     Expr, ExprSchemable, Filter, LogicalPlan, Projection, TryCast, cast, col, is_false, lit, when,
@@ -32,6 +33,12 @@ impl PlanResolver<'_> {
         let schema = input.schema();
         let values = self.resolve_expressions(values, schema, state).await?;
         let columns: Vec<String> = columns.into_iter().map(|x| x.into()).collect();
+        // The names are resolved as attribute references, so a name that matches no column is an
+        // error rather than being ignored. A name that resolves to a nested field is not a
+        // column, and Spark discards it instead of filling it.
+        for name in &columns {
+            self.validate_na_column(schema, name, state)?;
+        }
 
         if values.is_empty() {
             return Err(PlanError::invalid("missing fill na values"));
@@ -111,6 +118,22 @@ impl PlanResolver<'_> {
         }
     }
 
+    /// Validates a column name used by the `fillna` and `dropna` subsets. Spark resolves the name
+    /// the way a column reference is resolved, so a name that matches nothing is an error, while
+    /// a name that refers to a nested field resolves and is simply not a column.
+    fn validate_na_column(
+        &self,
+        schema: &DFSchemaRef,
+        name: &str,
+        state: &PlanResolverState,
+    ) -> PlanResult<()> {
+        if name.contains('.') {
+            return Ok(());
+        }
+        self.resolve_one_column(schema, name, state)?;
+        Ok(())
+    }
+
     pub(super) async fn resolve_query_drop_na(
         &self,
         input: spec::QueryPlan,
@@ -120,6 +143,11 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
         let schema = input.schema();
+        // The names are resolved as attribute references, so a name that matches no column is an
+        // error rather than being ignored.
+        for name in &columns {
+            self.validate_na_column(schema, name.as_ref(), state)?;
+        }
         let not_null_exprs = schema
             .columns()
             .into_iter()

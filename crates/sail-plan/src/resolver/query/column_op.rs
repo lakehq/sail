@@ -94,9 +94,10 @@ impl PlanResolver<'_> {
                 expr
             } else {
                 expr.cast_to(target_field.data_type(), &input.schema())?
-                    .alias_qualified(input_qualifier.cloned(), input_field.name())
             };
-            projected_exprs.push(expr);
+            // The column takes the name of the target field rather than the one it matched.
+            let field_id = state.register_field_name(target_name.clone());
+            projected_exprs.push(expr.alias(field_id));
         }
         let projected_plan =
             LogicalPlan::Projection(Projection::try_new(projected_exprs, Arc::new(input))?);
