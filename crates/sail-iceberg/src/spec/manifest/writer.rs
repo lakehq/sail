@@ -345,18 +345,8 @@ impl ManifestWriter {
             .partition_spec
             .partition_type(&self.metadata.schema)
             .map_err(|e| format!("Partition type error: {e}"))?;
-        let declared_schema = match self.metadata.format_version {
-            FormatVersion::V1 => super::schema::manifest_entry_schema_v1(&partition_type),
-            FormatVersion::V2 | FormatVersion::V3 => {
-                super::schema::manifest_entry_schema_v2(&partition_type)
-            }
-        };
-        let encoding_schema = match self.metadata.format_version {
-            FormatVersion::V1 => super::schema::manifest_entry_encoding_schema_v1(&partition_type),
-            FormatVersion::V2 | FormatVersion::V3 => {
-                super::schema::manifest_entry_encoding_schema_v2(&partition_type)
-            }
-        };
+        let (declared_schema, encoding_schema) =
+            super::schema::manifest_entry_schemas(&partition_type, self.metadata.format_version);
         let mut writer = AvroWriter::new(&encoding_schema, Vec::new());
 
         // Add user metadata per Iceberg spec

@@ -365,13 +365,9 @@ fn unquote_str(value: &str) -> &str {
 }
 
 fn parse_uuid_to_u128(s: &str) -> Result<u128, String> {
-    let u = uuid::Uuid::parse_str(s).map_err(|e| e.to_string())?;
-    let bytes = u.as_bytes();
-    let mut acc: u128 = 0;
-    for b in bytes.iter() {
-        acc = (acc << 8) | (*b as u128);
-    }
-    Ok(acc)
+    uuid::Uuid::parse_str(s)
+        .map(|value| value.as_u128())
+        .map_err(|error| error.to_string())
 }
 
 impl Literal {
@@ -537,16 +533,6 @@ impl Literal {
                 Ok(dt) => Ok(dt.timestamp_micros()),
                 Err(_) => Err(last_err.unwrap_or_else(|| "Invalid timestamp".to_string())),
             }
-        }
-
-        fn parse_uuid_to_u128(s: &str) -> Result<u128, String> {
-            let u = uuid::Uuid::parse_str(s).map_err(|e| e.to_string())?;
-            let bytes = u.as_bytes();
-            let mut acc: u128 = 0;
-            for b in bytes.iter() {
-                acc = (acc << 8) | (*b as u128);
-            }
-            Ok(acc)
         }
 
         fn parse_decimal_to_i128(s: &str, scale: u32) -> Result<i128, String> {
@@ -776,15 +762,8 @@ impl Literal {
                 (PrimitiveType::String, PrimitiveLiteral::String(s)) => {
                     Ok(JsonValue::String(s.clone()))
                 }
-                (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(u)) => {
-                    let mut bytes = [0u8; 16];
-                    let mut tmp = *u;
-                    for i in (0..16).rev() {
-                        bytes[i] = (tmp & 0xFF) as u8;
-                        tmp >>= 8;
-                    }
-                    let u = uuid::Uuid::from_bytes(bytes);
-                    Ok(JsonValue::String(u.to_string()))
+                (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(value)) => {
+                    Ok(JsonValue::String(uuid::Uuid::from_u128(*value).to_string()))
                 }
                 (PrimitiveType::Decimal { scale, .. }, PrimitiveLiteral::Int128(v)) => {
                     // render scaled decimal as string
@@ -956,7 +935,7 @@ impl<'de> Deserialize<'de> for RawPrimitiveLiteral {
 
 /// Type-aware Avro representation of the primitive partition tuple in a manifest data file.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RawLiteral(Vec<(String, Option<RawPrimitiveLiteral>)>);
+pub(crate) struct RawLiteral(Vec<(String, Option<RawPrimitiveLiteral>)>);
 
 impl RawLiteral {
     fn decimal_bytes(value: i128, precision: u32) -> Result<ByteBuf, String> {
@@ -1092,15 +1071,13 @@ impl RawLiteral {
                 PrimitiveLiteral::String(value)
             }
             (PrimitiveType::Uuid, RawPrimitiveLiteral::String(value)) => PrimitiveLiteral::UInt128(
-                uuid::Uuid::parse_str(&value)
-                    .map_err(|error| format!("Invalid UUID partition value {value:?}: {error}"))?
-                    .as_u128(),
+                parse_uuid_to_u128(&value)
+                    .map_err(|error| format!("Invalid UUID partition value {value:?}: {error}"))?,
             ),
             (PrimitiveType::Uuid, RawPrimitiveLiteral::Bytes(value)) => {
-                let bytes: [u8; 16] = value.as_ref().try_into().map_err(|_| {
+                primitive_type.literal_from_bytes(&value).map_err(|_| {
                     format!("UUID partition value must be 16 bytes, got {}", value.len())
-                })?;
-                PrimitiveLiteral::UInt128(u128::from_be_bytes(bytes))
+                })?
             }
             (PrimitiveType::Fixed(size), RawPrimitiveLiteral::Bytes(value)) => {
                 let expected = usize::try_from(*size)
@@ -1111,7 +1088,7 @@ impl RawLiteral {
                         value.len()
                     ));
                 }
-                PrimitiveLiteral::Binary(value.into_vec())
+                primitive_type.literal_from_bytes(&value)?
             }
             (
                 PrimitiveType::Binary
@@ -1128,10 +1105,7 @@ impl RawLiteral {
                         value.len()
                     ));
                 }
-                let sign_extension = if value[0] & 0x80 == 0 { 0 } else { u8::MAX };
-                let mut bytes = [sign_extension; 16];
-                bytes[16 - value.len()..].copy_from_slice(&value);
-                PrimitiveLiteral::Int128(i128::from_be_bytes(bytes))
+                primitive_type.literal_from_bytes(&value)?
             }
             (PrimitiveType::Unknown, _) => {
                 return Err("Iceberg unknown partition type cannot contain a value".to_string());
@@ -1147,7 +1121,7 @@ impl RawLiteral {
 
     /// Build from a positional vector of values and a struct type; positions
     /// are matched to the struct fields' order.
-    pub fn from_struct_values(
+    pub(crate) fn from_struct_values(
         values: &[Option<Literal>],
         ty: &crate::spec::types::StructType,
     ) -> Result<Self, String> {
@@ -1173,7 +1147,7 @@ impl RawLiteral {
     }
 
     /// Convert back to positional vector based on the struct type's field order.
-    pub fn into_struct_values(
+    pub(crate) fn into_struct_values(
         self,
         ty: &crate::spec::types::StructType,
     ) -> Result<Vec<Option<Literal>>, String> {

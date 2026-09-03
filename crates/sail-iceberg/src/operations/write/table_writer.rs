@@ -26,9 +26,7 @@ use url::Url;
 use crate::operations::write::arrow_parquet::ArrowParquetWriter;
 use crate::operations::write::base_writer::DataFileWriter;
 use crate::operations::write::config::WriterConfig;
-use crate::operations::write::file_writer::location_generator::{
-    DefaultLocationGenerator, LocationGenerator,
-};
+use crate::operations::write::file_writer::location_generator::DefaultLocationGenerator;
 use crate::operations::write::partition::split_record_batch_by_partition;
 use crate::operations::write::variant_shredding::{
     VariantShreddingPlan, apply_variant_shredding_plan, build_variant_shredding_plan,
@@ -62,6 +60,8 @@ pub struct IcebergTableWriter {
     pub generator: DefaultLocationGenerator,
     pub data_url: Url,
     // Typed partition tuple -> writer.
+    // TODO: Roll each partition writer using the `target-file-size-bytes` write option or
+    // `write.target-file-size-bytes` table property.
     writers: HashMap<Vec<Option<Literal>>, PartitionWriter>,
     written: Vec<DataFile>,
     pub partition_spec_id: i32,
@@ -87,34 +87,10 @@ impl IcebergTableWriter {
     }
 
     pub async fn write(&mut self, batch: &RecordBatch) -> Result<(), String> {
-        if batch.num_rows() == 0 {
-            return Ok(());
-        }
-
         let spec = &self.config.partition_spec;
         let iceberg_schema = &self.config.iceberg_schema;
-
-        if spec.fields.is_empty() {
-            // Unpartitioned: write as-is once
-            let partition_dir = String::new();
-            let partition_values = Vec::new();
-            let padded = Self::align_batch_with_table_schema(
-                batch,
-                &self.config.table_schema,
-                self.config.iceberg_schema.as_ref(),
-            )
-            .map_err(|e| e.to_string())?;
-            let normalized =
-                unshred_shredded_variants_for_write(&padded, &self.config.table_schema)?;
-            let aligned = cast_record_batch_relaxed_tz(&normalized, &self.config.table_schema)
-                .map_err(|e| e.to_string())?;
-            self.write_aligned_batch(partition_values, partition_dir, aligned)
-                .await?;
-            return Ok(());
-        }
-
         let parts = split_record_batch_by_partition(batch, spec, iceberg_schema)?;
-        for p in parts.into_iter() {
+        for p in parts {
             let partition_dir = p.partition_dir;
             let partition_values = p.partition_values;
             let padded = Self::align_batch_with_table_schema(
@@ -279,7 +255,7 @@ impl IcebergTableWriter {
     ) -> Result<(), String> {
         let writer = self.finish_partition_state(state).await?;
         let (bytes, meta) = writer.close().await?;
-        let (rel, full) = self.generator.with_partition_dir(Some(partition_dir))?;
+        let (rel, full) = self.generator.next_data_path(Some(partition_dir))?;
         log::trace!("iceberg.table_writer.flush_partition.writing: {}", full);
         self.store
             .put(&full, object_store::PutPayload::from(bytes))

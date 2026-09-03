@@ -15,14 +15,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use object_store::path::Path as ObjectPath;
 use uuid::Uuid;
 
-pub trait LocationGenerator {
-    fn next_data_path(&self) -> Result<(String, ObjectPath), String>;
-    fn with_partition_dir(
-        &self,
-        partition_dir: Option<&str>,
-    ) -> Result<(String, ObjectPath), String>;
-}
-
 pub struct DefaultLocationGenerator {
     base: ObjectPath,
     counter: AtomicU64,
@@ -35,14 +27,8 @@ impl DefaultLocationGenerator {
             counter: AtomicU64::new(0),
         }
     }
-}
 
-impl LocationGenerator for DefaultLocationGenerator {
-    fn next_data_path(&self) -> Result<(String, ObjectPath), String> {
-        self.with_partition_dir(None)
-    }
-
-    fn with_partition_dir(
+    pub fn next_data_path(
         &self,
         partition_dir: Option<&str>,
     ) -> Result<(String, ObjectPath), String> {

@@ -183,10 +183,6 @@ impl Transform {
                     Literal::Primitive(PrimitiveLiteral::UInt128(value)),
                 ) => uuid::Uuid::from_u128(*value).to_string(),
                 (_, Literal::Primitive(PrimitiveLiteral::UInt128(value))) => value.to_string(),
-                (
-                    Type::Primitive(PrimitiveType::Fixed(_) | PrimitiveType::Binary),
-                    Literal::Primitive(PrimitiveLiteral::Binary(value)),
-                ) => BASE64_STANDARD.encode(value),
                 (_, Literal::Primitive(PrimitiveLiteral::Binary(value))) => {
                     BASE64_STANDARD.encode(value)
                 }
@@ -303,7 +299,14 @@ impl Transform {
                         | PrimitiveType::Timestamp
                         | PrimitiveType::Timestamptz
                         | PrimitiveType::TimestampNs
-                        | PrimitiveType::TimestamptzNs => Ok(Type::Primitive(PrimitiveType::Int)),
+                        | PrimitiveType::TimestamptzNs => {
+                            let result_type = if matches!(self, Transform::Day) {
+                                PrimitiveType::Date
+                            } else {
+                                PrimitiveType::Int
+                            };
+                            Ok(Type::Primitive(result_type))
+                        }
                         _ => Err(format!(
                             "{input_type} is not a valid input type of date transform"
                         )),
@@ -460,5 +463,18 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn day_transform_has_date_result_type() {
+        let timestamp_type = Type::Primitive(PrimitiveType::Timestamp);
+        assert_eq!(
+            Transform::Day.result_type(&timestamp_type),
+            Ok(Type::Primitive(PrimitiveType::Date))
+        );
+        assert_eq!(
+            Transform::Month.result_type(&timestamp_type),
+            Ok(Type::Primitive(PrimitiveType::Int))
+        );
     }
 }

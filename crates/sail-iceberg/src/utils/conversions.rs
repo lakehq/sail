@@ -300,40 +300,32 @@ fn convert_temporal_unit(
     }
 }
 
-fn timestamp_parts(scalar: &ScalarValue) -> Option<(i64, TimeUnit, Option<&str>)> {
-    use ScalarValue as SV;
-
-    match scalar {
-        SV::TimestampSecond(Some(value), timezone) => {
-            Some((*value, TimeUnit::Second, timezone.as_deref()))
-        }
-        SV::TimestampMillisecond(Some(value), timezone) => {
-            Some((*value, TimeUnit::Millisecond, timezone.as_deref()))
-        }
-        SV::TimestampMicrosecond(Some(value), timezone) => {
-            Some((*value, TimeUnit::Microsecond, timezone.as_deref()))
-        }
-        SV::TimestampNanosecond(Some(value), timezone) => {
-            Some((*value, TimeUnit::Nanosecond, timezone.as_deref()))
-        }
-        _ => None,
-    }
-}
-
-fn timezone_is_utc_alias(timezone: &str) -> bool {
-    ["UTC", "+00:00", "Etc/UTC", "Z"]
-        .iter()
-        .any(|alias| alias.eq_ignore_ascii_case(timezone.trim()))
-}
-
 fn timestamp_literal(
     scalar: &ScalarValue,
     iceberg_type: &Type,
 ) -> Result<PrimitiveLiteral, String> {
-    let Some((value, source_unit, timezone)) = timestamp_parts(scalar) else {
-        return Err(incompatible_literal_type(scalar, iceberg_type));
+    use ScalarValue as SV;
+
+    let (value, source_unit, timezone) = match scalar {
+        SV::TimestampSecond(Some(value), timezone) => {
+            (*value, TimeUnit::Second, timezone.as_deref())
+        }
+        SV::TimestampMillisecond(Some(value), timezone) => {
+            (*value, TimeUnit::Millisecond, timezone.as_deref())
+        }
+        SV::TimestampMicrosecond(Some(value), timezone) => {
+            (*value, TimeUnit::Microsecond, timezone.as_deref())
+        }
+        SV::TimestampNanosecond(Some(value), timezone) => {
+            (*value, TimeUnit::Nanosecond, timezone.as_deref())
+        }
+        _ => return Err(incompatible_literal_type(scalar, iceberg_type)),
     };
-    if timezone.is_some_and(|timezone| !timezone_is_utc_alias(timezone)) {
+    if timezone.is_some_and(|timezone| {
+        !["UTC", "+00:00", "Etc/UTC", "Z"]
+            .iter()
+            .any(|alias| alias.eq_ignore_ascii_case(timezone.trim()))
+    }) {
         return Err(format!(
             "Arrow timestamp timezone {timezone:?} is incompatible with Iceberg type {iceberg_type}"
         ));
@@ -431,11 +423,11 @@ fn fixed_binary_value<'a>(
     Ok(value)
 }
 
-/// Convert a non-null DataFusion scalar using its target Iceberg logical type.
-pub fn scalar_to_iceberg_literal(
+/// Convert a non-null DataFusion scalar into an Iceberg primitive using its target logical type.
+pub(crate) fn scalar_to_primitive_literal(
     scalar: &ScalarValue,
     iceberg_type: &Type,
-) -> Result<Literal, String> {
+) -> Result<PrimitiveLiteral, String> {
     use PrimitiveLiteral as PL;
     use ScalarValue as SV;
 
@@ -547,24 +539,11 @@ pub fn scalar_to_iceberg_literal(
             return Err(incompatible_literal_type(scalar, iceberg_type));
         }
     };
-    Ok(Literal::Primitive(primitive))
-}
-
-/// Convert a DataFusion ScalarValue into an Iceberg PrimitiveLiteral using the target logical type.
-pub fn scalar_to_primitive_literal(
-    scalar: &ScalarValue,
-    iceberg_type: &Type,
-) -> Result<PrimitiveLiteral, String> {
-    match scalar_to_iceberg_literal(scalar, iceberg_type)? {
-        Literal::Primitive(prim) => Ok(prim),
-        other => Err(format!(
-            "Expected primitive literal, got non-primitive literal: {other:?}"
-        )),
-    }
+    Ok(primitive)
 }
 
 /// Extract a typed Iceberg literal from an Arrow array row.
-pub fn array_value_to_literal(
+pub(crate) fn array_value_to_literal(
     array: &ArrayRef,
     row: usize,
     iceberg_type: &Type,
@@ -580,7 +559,9 @@ pub fn array_value_to_literal(
     }
     let scalar = ScalarValue::try_from_array(array.as_ref(), row)
         .map_err(|error| format!("Failed to read Arrow {} value: {error}", array.data_type()))?;
-    scalar_to_iceberg_literal(&scalar, iceberg_type).map(Some)
+    scalar_to_primitive_literal(&scalar, iceberg_type)
+        .map(Literal::Primitive)
+        .map(Some)
 }
 
 #[cfg(test)]
@@ -679,54 +660,57 @@ mod tests {
     }
 
     #[test]
-    fn scalar_to_iceberg_literal_uses_logical_type() -> Result<(), String> {
+    fn scalar_to_primitive_literal_uses_logical_type() -> Result<(), String> {
         assert_eq!(
-            scalar_to_iceberg_literal(
+            scalar_to_primitive_literal(
                 &ScalarValue::Int32(Some(42)),
                 &Type::Primitive(PrimitiveType::Long),
             )?,
-            Literal::Primitive(PrimitiveLiteral::Long(42))
+            PrimitiveLiteral::Long(42)
         );
         assert_eq!(
-            scalar_to_iceberg_literal(
+            scalar_to_primitive_literal(
                 &ScalarValue::Utf8View(Some("test".to_string())),
                 &Type::Primitive(PrimitiveType::String),
             )?,
-            Literal::Primitive(PrimitiveLiteral::String("test".to_string()))
+            PrimitiveLiteral::String("test".to_string())
         );
         assert_eq!(
-            scalar_to_iceberg_literal(
+            scalar_to_primitive_literal(
                 &ScalarValue::Date32(Some(19_000)),
                 &Type::Primitive(PrimitiveType::Date),
             )?,
-            Literal::Primitive(PrimitiveLiteral::Int(19_000))
+            PrimitiveLiteral::Int(19_000)
         );
         Ok(())
     }
 
     #[test]
-    fn scalar_to_iceberg_literal_accepts_variable_binary_layouts() -> Result<(), String> {
+    fn scalar_to_primitive_literal_accepts_variable_binary_layouts() -> Result<(), String> {
         let iceberg_type = Type::Primitive(PrimitiveType::Binary);
-        let expected = Literal::Primitive(PrimitiveLiteral::Binary(vec![0xfb, 0xff]));
+        let expected = PrimitiveLiteral::Binary(vec![0xfb, 0xff]);
         for scalar in [
             ScalarValue::Binary(Some(vec![0xfb, 0xff])),
             ScalarValue::LargeBinary(Some(vec![0xfb, 0xff])),
             ScalarValue::BinaryView(Some(vec![0xfb, 0xff])),
         ] {
-            assert_eq!(scalar_to_iceberg_literal(&scalar, &iceberg_type)?, expected);
+            assert_eq!(
+                scalar_to_primitive_literal(&scalar, &iceberg_type)?,
+                expected
+            );
         }
         Ok(())
     }
 
     #[test]
-    fn scalar_to_iceberg_literal_validates_fixed_and_uuid_widths() -> Result<(), String> {
+    fn scalar_to_primitive_literal_validates_fixed_and_uuid_widths() -> Result<(), String> {
         let fixed_type = Type::Primitive(PrimitiveType::Fixed(3));
         assert_eq!(
-            scalar_to_iceberg_literal(&ScalarValue::Binary(Some(vec![1, 2, 3])), &fixed_type,)?,
-            Literal::Primitive(PrimitiveLiteral::Binary(vec![1, 2, 3]))
+            scalar_to_primitive_literal(&ScalarValue::Binary(Some(vec![1, 2, 3])), &fixed_type,)?,
+            PrimitiveLiteral::Binary(vec![1, 2, 3])
         );
         assert!(
-            scalar_to_iceberg_literal(&ScalarValue::LargeBinary(Some(vec![1, 2])), &fixed_type,)
+            scalar_to_primitive_literal(&ScalarValue::LargeBinary(Some(vec![1, 2])), &fixed_type,)
                 .is_err()
         );
 
@@ -738,42 +722,43 @@ mod tests {
                 .map_err(|_| "test UUID must have 16 bytes".to_string())?,
         );
         assert_eq!(
-            scalar_to_iceberg_literal(
+            scalar_to_primitive_literal(
                 &ScalarValue::FixedSizeBinary(16, Some(bytes.clone())),
                 &Type::Primitive(PrimitiveType::Uuid),
             )?,
-            Literal::Primitive(PrimitiveLiteral::UInt128(expected_uuid))
+            PrimitiveLiteral::UInt128(expected_uuid)
         );
         assert_eq!(
-            scalar_to_iceberg_literal(
+            scalar_to_primitive_literal(
                 &ScalarValue::FixedSizeBinary(16, Some(bytes.clone())),
                 &Type::Primitive(PrimitiveType::Fixed(16)),
             )?,
-            Literal::Primitive(PrimitiveLiteral::Binary(bytes))
+            PrimitiveLiteral::Binary(bytes)
         );
         Ok(())
     }
 
     #[test]
-    fn scalar_to_iceberg_literal_preserves_or_rejects_timestamp_precision() -> Result<(), String> {
+    fn scalar_to_primitive_literal_preserves_or_rejects_timestamp_precision() -> Result<(), String>
+    {
         let nanoseconds_type = Type::Primitive(PrimitiveType::TimestampNs);
         assert_eq!(
-            scalar_to_iceberg_literal(
+            scalar_to_primitive_literal(
                 &ScalarValue::TimestampNanosecond(Some(123_456), None),
                 &nanoseconds_type,
             )?,
-            Literal::Primitive(PrimitiveLiteral::Long(123_456))
+            PrimitiveLiteral::Long(123_456)
         );
 
         let microseconds_type = Type::Primitive(PrimitiveType::Timestamp);
         assert_eq!(
-            scalar_to_iceberg_literal(
+            scalar_to_primitive_literal(
                 &ScalarValue::TimestampNanosecond(Some(123_000), None),
                 &microseconds_type,
             )?,
-            Literal::Primitive(PrimitiveLiteral::Long(123))
+            PrimitiveLiteral::Long(123)
         );
-        let result = scalar_to_iceberg_literal(
+        let result = scalar_to_primitive_literal(
             &ScalarValue::TimestampNanosecond(Some(123_456), None),
             &microseconds_type,
         );
@@ -785,28 +770,28 @@ mod tests {
     }
 
     #[test]
-    fn scalar_to_iceberg_literal_supports_decimal_and_time() -> Result<(), String> {
+    fn scalar_to_primitive_literal_supports_decimal_and_time() -> Result<(), String> {
         use datafusion::arrow::datatypes::i256;
 
         assert_eq!(
-            scalar_to_iceberg_literal(
+            scalar_to_primitive_literal(
                 &ScalarValue::Decimal256(Some(i256::from(12_345)), 10, 2),
                 &Type::Primitive(PrimitiveType::Decimal {
                     precision: 10,
                     scale: 2,
                 }),
             )?,
-            Literal::Primitive(PrimitiveLiteral::Int128(12_345))
+            PrimitiveLiteral::Int128(12_345)
         );
         assert_eq!(
-            scalar_to_iceberg_literal(
+            scalar_to_primitive_literal(
                 &ScalarValue::Time64Nanosecond(Some(1_000)),
                 &Type::Primitive(PrimitiveType::Time),
             )?,
-            Literal::Primitive(PrimitiveLiteral::Long(1))
+            PrimitiveLiteral::Long(1)
         );
         assert!(
-            scalar_to_iceberg_literal(
+            scalar_to_primitive_literal(
                 &ScalarValue::Time64Nanosecond(Some(999)),
                 &Type::Primitive(PrimitiveType::Time),
             )

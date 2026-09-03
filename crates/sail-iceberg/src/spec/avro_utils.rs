@@ -20,7 +20,7 @@ pub const FIELD_ID_ATTR: &str = "field-id";
 pub const ICEBERG_FIELD_NAME_ATTR: &str = "iceberg-field-name";
 
 /// Convert an Iceberg field name to a valid Avro field name.
-pub fn avro_compatible_name(name: &str) -> String {
+pub(crate) fn avro_compatible_name(name: &str) -> String {
     let mut output = String::with_capacity(name.len());
     for (index, character) in name.chars().enumerate() {
         let valid = if index == 0 {

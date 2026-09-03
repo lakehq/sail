@@ -21,7 +21,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use apache_avro::types::Value as AvroValue;
-use apache_avro::{Reader as AvroReader, Schema as AvroSchema, from_value as avro_from_value};
+use apache_avro::{
+    Reader as AvroReader, Schema as AvroSchema, from_avro_datum, from_value as avro_from_value,
+};
 use serde_json::Value as JsonValue;
 
 mod _serde;
@@ -44,38 +46,6 @@ use crate::spec::types::{PrimitiveType, StructType, Type};
 
 const AVRO_OBJECT_HEADER: &[u8] = b"Obj\x01";
 
-fn read_avro_long(bytes: &[u8], offset: &mut usize) -> Result<i64, String> {
-    let mut encoded = 0_u64;
-    for shift in (0..=63).step_by(7) {
-        let byte = *bytes
-            .get(*offset)
-            .ok_or_else(|| "Unexpected end of Avro object header".to_string())?;
-        *offset += 1;
-        if shift == 63 && byte & 0x7e != 0 {
-            return Err("Avro long in object header exceeds 64 bits".to_string());
-        }
-        encoded |= u64::from(byte & 0x7f) << shift;
-        if byte & 0x80 == 0 {
-            return Ok(((encoded >> 1) as i64) ^ -((encoded & 1) as i64));
-        }
-    }
-    Err("Invalid Avro long in object header".to_string())
-}
-
-fn read_avro_bytes<'a>(bytes: &'a [u8], offset: &mut usize) -> Result<&'a [u8], String> {
-    let length = read_avro_long(bytes, offset)?;
-    let length = usize::try_from(length)
-        .map_err(|_| format!("Invalid negative Avro byte length {length}"))?;
-    let end = offset
-        .checked_add(length)
-        .ok_or_else(|| "Avro byte length overflow".to_string())?;
-    let value = bytes
-        .get(*offset..end)
-        .ok_or_else(|| "Unexpected end of Avro object header bytes".to_string())?;
-    *offset = end;
-    Ok(value)
-}
-
 struct AvroObjectHeader {
     metadata: HashMap<String, Vec<u8>>,
     marker: [u8; 16],
@@ -86,53 +56,33 @@ fn parse_avro_object_header(bytes: &[u8]) -> Result<AvroObjectHeader, String> {
     if !bytes.starts_with(AVRO_OBJECT_HEADER) {
         return Err("Invalid Avro object container magic".to_string());
     }
-    let mut offset = AVRO_OBJECT_HEADER.len();
-    let mut metadata = HashMap::new();
-    loop {
-        let count = read_avro_long(bytes, &mut offset)?;
-        if count == 0 {
-            break;
-        }
-        let (count, block_end) = if count < 0 {
-            let count = count
-                .checked_neg()
-                .ok_or_else(|| "Invalid Avro metadata block count".to_string())?;
-            let block_size = usize::try_from(read_avro_long(bytes, &mut offset)?)
-                .map_err(|_| "Invalid negative Avro metadata block size".to_string())?;
-            let block_end = offset
-                .checked_add(block_size)
-                .ok_or_else(|| "Avro metadata block size overflow".to_string())?;
-            (count, Some(block_end))
-        } else {
-            (count, None)
-        };
-        for _ in 0..count {
-            let key = std::str::from_utf8(read_avro_bytes(bytes, &mut offset)?)
-                .map_err(|error| format!("Invalid Avro metadata key: {error}"))?
-                .to_string();
-            let value = read_avro_bytes(bytes, &mut offset)?.to_vec();
-            metadata.insert(key, value);
-        }
-        if let Some(block_end) = block_end
-            && offset != block_end
-        {
-            return Err(format!(
-                "Avro metadata block ended at {offset}, expected {block_end}"
-            ));
-        }
-    }
-    let marker_end = offset
-        .checked_add(16)
-        .ok_or_else(|| "Avro sync marker offset overflow".to_string())?;
-    let marker: [u8; 16] = bytes
-        .get(offset..marker_end)
-        .ok_or_else(|| "Missing Avro object container sync marker".to_string())?
-        .try_into()
-        .map_err(|_| "Invalid Avro object container sync marker".to_string())?;
+    let mut cursor = std::io::Cursor::new(&bytes[AVRO_OBJECT_HEADER.len()..]);
+    let metadata = from_avro_datum(&AvroSchema::map(AvroSchema::Bytes), &mut cursor, None)
+        .map_err(|error| format!("Avro object metadata error: {error}"))?;
+    let AvroValue::Map(metadata) = metadata else {
+        return Err("Avro object metadata is not a map".to_string());
+    };
+    let metadata = metadata
+        .into_iter()
+        .map(|(key, value)| match value {
+            AvroValue::Bytes(value) => Ok((key, value)),
+            _ => Err(format!("Avro object metadata {key:?} is not bytes")),
+        })
+        .collect::<Result<HashMap<_, _>, String>>()?;
+    let mut marker = [0; 16];
+    std::io::Read::read_exact(&mut cursor, &mut marker)
+        .map_err(|error| format!("Missing Avro object container sync marker: {error}"))?;
+    let payload_offset = AVRO_OBJECT_HEADER
+        .len()
+        .checked_add(
+            usize::try_from(cursor.position())
+                .map_err(|_| "Avro object header offset exceeds usize".to_string())?,
+        )
+        .ok_or_else(|| "Avro object header offset overflow".to_string())?;
     Ok(AvroObjectHeader {
         metadata,
         marker,
-        payload_offset: marker_end,
+        payload_offset,
     })
 }
 
@@ -171,33 +121,6 @@ pub(super) fn replace_avro_schema_header(
     let schema = serde_json::to_vec(schema)
         .map_err(|error| format!("Avro schema serialization error: {error}"))?;
     replace_avro_schema_header_bytes(bytes, schema)
-}
-
-fn partition_requires_iceberg_avro_codec(partition_type: &StructType) -> bool {
-    partition_type.fields().iter().any(|field| {
-        matches!(
-            field.field_type.as_ref(),
-            Type::Primitive(PrimitiveType::Fixed(_) | PrimitiveType::Uuid)
-        )
-    })
-}
-
-fn partition_has_named_avro_schema(partition_type: &StructType) -> bool {
-    partition_type.fields().iter().any(|field| {
-        matches!(
-            field.field_type.as_ref(),
-            Type::Primitive(
-                PrimitiveType::Decimal { .. } | PrimitiveType::Fixed(_) | PrimitiveType::Uuid
-            )
-        )
-    })
-}
-
-fn read_avro_values(bytes: &[u8]) -> Result<Vec<AvroValue>, String> {
-    AvroReader::new(bytes)
-        .map_err(|error| format!("Avro reader error: {error}"))?
-        .map(|value| value.map_err(|error| format!("Avro read value error: {error}")))
-        .collect()
 }
 
 fn find_avro_field_type(schema: &mut JsonValue, field_id: i32) -> Option<&mut JsonValue> {
@@ -400,7 +323,14 @@ fn decode_avro_values<T, F>(bytes: &[u8], decode: &F) -> Result<Vec<T>, String>
 where
     F: Fn(AvroValue) -> Result<T, String>,
 {
-    read_avro_values(bytes)?.into_iter().map(decode).collect()
+    AvroReader::new(bytes)
+        .map_err(|error| format!("Avro reader error: {error}"))?
+        .map(|value| {
+            value
+                .map_err(|error| format!("Avro read value error: {error}"))
+                .and_then(decode)
+        })
+        .collect()
 }
 
 fn decode_iceberg_avro<T, F>(
@@ -411,11 +341,19 @@ fn decode_iceberg_avro<T, F>(
 where
     F: Fn(AvroValue) -> Result<T, String>,
 {
-    if !partition_has_named_avro_schema(partition_type) {
+    let (has_named_schema, requires_iceberg_codec) = partition_type.fields().iter().fold(
+        (false, false),
+        |(has_named_schema, requires_iceberg_codec), field| match field.field_type.as_ref() {
+            Type::Primitive(PrimitiveType::Fixed(_) | PrimitiveType::Uuid) => (true, true),
+            Type::Primitive(PrimitiveType::Decimal { .. }) => (true, requires_iceberg_codec),
+            _ => (has_named_schema, requires_iceberg_codec),
+        },
+    );
+    if !has_named_schema {
         return decode_avro_values(bytes, &decode);
     }
 
-    if !partition_requires_iceberg_avro_codec(partition_type) {
+    if !requires_iceberg_codec {
         let normalized_header = partition_avro_header(bytes, partition_type, false)?;
         return decode_avro_values(&normalized_header, &decode);
     }
@@ -443,16 +381,7 @@ pub fn write_data_files_to_avro<W: std::io::Write>(
     partition_type: &StructType,
     version: FormatVersion,
 ) -> Result<usize, String> {
-    let declared_schema = match version {
-        FormatVersion::V1 => schema::data_file_schema_v1(partition_type),
-        FormatVersion::V2 | FormatVersion::V3 => schema::data_file_schema_v2(partition_type),
-    };
-    let encoding_schema = match version {
-        FormatVersion::V1 => schema::data_file_encoding_schema_v1(partition_type),
-        FormatVersion::V2 | FormatVersion::V3 => {
-            schema::data_file_encoding_schema_v2(partition_type)
-        }
-    };
+    let (declared_schema, encoding_schema) = schema::data_file_schemas(partition_type, version);
     let mut avro_writer = AvroWriter::new(&encoding_schema, Vec::new());
 
     for data_file in data_files {
@@ -769,7 +698,8 @@ mod tests {
             content_offset: None,
             content_size_in_bytes: None,
         };
-        let legacy_schema = super::schema::data_file_schema_v2(&partition_type);
+        let (legacy_schema, _) =
+            super::schema::data_file_schemas(&partition_type, FormatVersion::V2);
         let value = to_value(super::_serde::DataFileSerde::from_data_file(
             data_file,
             &partition_type,

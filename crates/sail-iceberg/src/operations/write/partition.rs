@@ -13,33 +13,25 @@
 use datafusion::arrow::array::UInt32Array;
 use datafusion::arrow::compute;
 use datafusion::arrow::record_batch::RecordBatch;
-use sail_common_datafusion::catalog::CatalogPartitionField;
 
-use crate::spec::partition::UnboundPartitionSpec as PartitionSpec;
+use crate::spec::partition::UnboundPartitionSpec;
 use crate::spec::schema::Schema as IcebergSchema;
 use crate::spec::types::values::Literal;
 use crate::utils::conversions::array_value_to_literal;
 use crate::utils::transform::apply_transform;
 
-pub struct PartitionBatchResult {
-    pub record_batch: RecordBatch,
-    pub partition_values: Vec<Option<Literal>>, // aligned with PartitionSpec fields
-    pub partition_dir: String, // formatted path segment like key=value/... or empty
-    pub spec_id: i32,
-}
-
-pub fn field_name_from_id(schema: &IcebergSchema, field_id: i32) -> Option<String> {
-    schema
-        .name_by_field_id(field_id)
-        .map(|s| s.split('.').next_back().unwrap_or(s).to_string())
+pub(super) struct PartitionBatchResult {
+    pub(super) record_batch: RecordBatch,
+    pub(super) partition_values: Vec<Option<Literal>>,
+    pub(super) partition_dir: String,
 }
 
 fn encode_partition_path_component(value: &str) -> String {
     url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
 }
 
-pub fn build_partition_dir(
-    spec: &PartitionSpec,
+pub(super) fn build_partition_dir(
+    spec: &UnboundPartitionSpec,
     iceberg_schema: &IcebergSchema,
     values: &[Option<Literal>],
 ) -> Result<String, String> {
@@ -51,11 +43,7 @@ pub fn build_partition_dir(
         let source_field = iceberg_schema
             .field_by_id(field.source_id)
             .ok_or_else(|| format!("Unknown partition source field id {}", field.source_id))?;
-        let result_type = if matches!(field.transform, crate::spec::Transform::Day) {
-            crate::spec::Type::Primitive(crate::spec::PrimitiveType::Date)
-        } else {
-            field.transform.result_type(&source_field.field_type)?
-        };
+        let result_type = field.transform.result_type(&source_field.field_type)?;
         let val = values
             .get(i)
             .ok_or_else(|| format!("Missing value for partition field '{}'", field.name))?
@@ -71,45 +59,9 @@ pub fn build_partition_dir(
     Ok(segs.join("/"))
 }
 
-pub fn compute_partition_values(
+pub(super) fn split_record_batch_by_partition(
     batch: &RecordBatch,
-    spec: &PartitionSpec,
-    iceberg_schema: &IcebergSchema,
-    partition_columns: &[CatalogPartitionField],
-) -> Result<(Vec<Option<Literal>>, String), String> {
-    let _ = partition_columns; // not used in single-group fallback
-    let mut values = Vec::with_capacity(spec.fields.len());
-    for f in &spec.fields {
-        let source_field = iceberg_schema
-            .field_by_id(f.source_id)
-            .ok_or_else(|| format!("Unknown partition source field id {}", f.source_id))?;
-        let col_name = field_name_from_id(iceberg_schema, f.source_id)
-            .ok_or_else(|| format!("Unknown field id {}", f.source_id))?;
-        let col_index = batch
-            .schema()
-            .index_of(&col_name)
-            .map_err(|e| e.to_string())?;
-        let literal =
-            array_value_to_literal(batch.column(col_index), 0, source_field.field_type.as_ref())
-                .map_err(|error| {
-                    format!(
-                        "Failed to extract partition field '{}' at row 0: {error}",
-                        f.name
-                    )
-                })?;
-        values.push(apply_transform(
-            f.transform,
-            source_field.field_type.as_ref(),
-            literal,
-        ));
-    }
-    let dir = build_partition_dir(spec, iceberg_schema, &values)?;
-    Ok((values, dir))
-}
-
-pub fn split_record_batch_by_partition(
-    batch: &RecordBatch,
-    spec: &PartitionSpec,
+    spec: &UnboundPartitionSpec,
     iceberg_schema: &IcebergSchema,
 ) -> Result<Vec<PartitionBatchResult>, String> {
     if batch.num_rows() == 0 {
@@ -120,42 +72,38 @@ pub fn split_record_batch_by_partition(
             record_batch: batch.clone(),
             partition_values: vec![],
             partition_dir: String::new(),
-            spec_id: 0,
         }]);
     }
 
     use std::collections::HashMap;
     let mut groups: HashMap<Vec<Option<Literal>>, Vec<u32>> = HashMap::new();
+    let batch_schema = batch.schema();
+    let partition_inputs = spec
+        .fields
+        .iter()
+        .map(|field| {
+            let source_field = iceberg_schema
+                .field_by_id(field.source_id)
+                .ok_or_else(|| format!("Unknown partition source field id {}", field.source_id))?;
+            let column_index = batch_schema
+                .index_of(&source_field.name)
+                .map_err(|error| error.to_string())?;
+            Ok((field, source_field.field_type.as_ref(), column_index))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
 
     let num_rows = batch.num_rows();
     for row in 0..num_rows {
         let mut vals: Vec<Option<Literal>> = Vec::with_capacity(spec.fields.len());
-        for f in &spec.fields {
-            let source_field = iceberg_schema
-                .field_by_id(f.source_id)
-                .ok_or_else(|| format!("Unknown partition source field id {}", f.source_id))?;
-            let col_name = field_name_from_id(iceberg_schema, f.source_id)
-                .ok_or_else(|| format!("Unknown field id {}", f.source_id))?;
-            let col_index = batch
-                .schema()
-                .index_of(&col_name)
-                .map_err(|e| e.to_string())?;
-            let literal = array_value_to_literal(
-                batch.column(col_index),
-                row,
-                source_field.field_type.as_ref(),
-            )
-            .map_err(|error| {
-                format!(
-                    "Failed to extract partition field '{}' at row {row}: {error}",
-                    f.name
-                )
-            })?;
-            vals.push(apply_transform(
-                f.transform,
-                source_field.field_type.as_ref(),
-                literal,
-            ));
+        for (field, source_type, column_index) in &partition_inputs {
+            let literal = array_value_to_literal(batch.column(*column_index), row, source_type)
+                .map_err(|error| {
+                    format!(
+                        "Failed to extract partition field '{}' at row {row}: {error}",
+                        field.name
+                    )
+                })?;
+            vals.push(apply_transform(field.transform, source_type, literal));
         }
         groups.entry(vals).or_default().push(row as u32);
     }
@@ -169,7 +117,6 @@ pub fn split_record_batch_by_partition(
             record_batch: rb,
             partition_values,
             partition_dir,
-            spec_id: 0,
         });
     }
 

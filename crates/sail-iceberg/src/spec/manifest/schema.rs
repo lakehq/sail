@@ -20,6 +20,7 @@ use apache_avro::schema::{
 use serde_json::{Number, Value as JsonValue};
 
 use crate::spec::avro_utils::{FIELD_ID_ATTR, optional, record_field};
+use crate::spec::metadata::format::FormatVersion;
 use crate::spec::types::{PrimitiveType, StructType, Type};
 
 const ELEMENT_ID: &str = "element-id";
@@ -188,7 +189,7 @@ fn avro_primitive(
     }
 }
 
-fn struct_to_avro_record_with_names(
+fn struct_to_avro_record(
     name: &str,
     s: &StructType,
     layout: PartitionAvroLayout,
@@ -206,12 +207,7 @@ fn struct_to_avro_record_with_names(
             ),
             Type::Struct(inner) => record_field(
                 &f.name,
-                struct_to_avro_record_with_names(
-                    &format!("r{}", f.id),
-                    inner,
-                    layout,
-                    defined_names,
-                ),
+                struct_to_avro_record(&format!("r{}", f.id), inner, layout, defined_names),
                 f.id,
                 f.required,
             ),
@@ -223,7 +219,7 @@ fn struct_to_avro_record_with_names(
                 );
                 let elem_schema = match &*list.element_field.field_type {
                     Type::Primitive(p) => avro_primitive(p, layout, defined_names),
-                    Type::Struct(inner) => struct_to_avro_record_with_names(
+                    Type::Struct(inner) => struct_to_avro_record(
                         &format!("r{}", list.element_field.id),
                         inner,
                         layout,
@@ -331,12 +327,8 @@ fn struct_to_avro_record_with_names(
     })
 }
 
-fn struct_to_avro_record(name: &str, s: &StructType, layout: PartitionAvroLayout) -> AvroSchema {
-    struct_to_avro_record_with_names(name, s, layout, &mut BTreeSet::new())
-}
-
 fn partition_record_schema(partition_type: &StructType, layout: PartitionAvroLayout) -> AvroSchema {
-    struct_to_avro_record("r102", partition_type, layout)
+    struct_to_avro_record("r102", partition_type, layout, &mut BTreeSet::new())
 }
 
 fn array_of_longs(element_id: i32, required: bool) -> AvroSchema {
@@ -525,14 +517,6 @@ fn data_file_schema_v2_with_layout(
     })
 }
 
-pub fn data_file_schema_v2(partition_type: &StructType) -> AvroSchema {
-    data_file_schema_v2_with_layout(partition_type, PartitionAvroLayout::Declared)
-}
-
-pub(super) fn data_file_encoding_schema_v2(partition_type: &StructType) -> AvroSchema {
-    data_file_schema_v2_with_layout(partition_type, PartitionAvroLayout::Encoded)
-}
-
 fn data_file_schema_v1_with_layout(
     partition_type: &StructType,
     layout: PartitionAvroLayout,
@@ -541,17 +525,29 @@ fn data_file_schema_v1_with_layout(
     else {
         unreachable!("data file schema must be an Avro record")
     };
-    let partition_index = record
+    let Some(partition_index) = record
         .fields
         .iter()
         .position(|field| field.name == "partition")
-        .unwrap_or_default();
-    record.fields[partition_index] = record_field(
-        "partition",
-        partition_record_schema(partition_type, layout),
-        102,
-        true,
-    );
+    else {
+        unreachable!("data file schema must contain a partition field")
+    };
+    let partition_field = &mut record.fields[partition_index];
+    let optional_schema = std::mem::replace(&mut partition_field.schema, AvroSchema::Null);
+    partition_field.schema = match optional_schema {
+        AvroSchema::Union(union) => {
+            let Some(schema) = union
+                .variants()
+                .iter()
+                .find(|schema| !matches!(schema, AvroSchema::Null))
+            else {
+                unreachable!("partition field union must contain a non-null schema")
+            };
+            schema.clone()
+        }
+        schema => schema,
+    };
+    partition_field.default = None;
     record.fields.retain(|field| {
         !matches!(
             field.name.as_str(),
@@ -584,12 +580,18 @@ fn data_file_schema_v1_with_layout(
     AvroSchema::Record(record)
 }
 
-pub fn data_file_schema_v1(partition_type: &StructType) -> AvroSchema {
-    data_file_schema_v1_with_layout(partition_type, PartitionAvroLayout::Declared)
-}
-
-pub(super) fn data_file_encoding_schema_v1(partition_type: &StructType) -> AvroSchema {
-    data_file_schema_v1_with_layout(partition_type, PartitionAvroLayout::Encoded)
+pub(super) fn data_file_schemas(
+    partition_type: &StructType,
+    version: FormatVersion,
+) -> (AvroSchema, AvroSchema) {
+    let schema = match version {
+        FormatVersion::V1 => data_file_schema_v1_with_layout,
+        FormatVersion::V2 | FormatVersion::V3 => data_file_schema_v2_with_layout,
+    };
+    (
+        schema(partition_type, PartitionAvroLayout::Declared),
+        schema(partition_type, PartitionAvroLayout::Encoded),
+    )
 }
 
 fn manifest_entry_schema_v1_with_layout(
@@ -628,14 +630,6 @@ fn manifest_entry_schema_v1_with_layout(
         lookup,
         attributes: Default::default(),
     })
-}
-
-pub fn manifest_entry_schema_v1(partition_type: &StructType) -> AvroSchema {
-    manifest_entry_schema_v1_with_layout(partition_type, PartitionAvroLayout::Declared)
-}
-
-pub(super) fn manifest_entry_encoding_schema_v1(partition_type: &StructType) -> AvroSchema {
-    manifest_entry_schema_v1_with_layout(partition_type, PartitionAvroLayout::Encoded)
 }
 
 fn manifest_entry_schema_v2_with_layout(
@@ -679,12 +673,18 @@ fn manifest_entry_schema_v2_with_layout(
     })
 }
 
-pub fn manifest_entry_schema_v2(partition_type: &StructType) -> AvroSchema {
-    manifest_entry_schema_v2_with_layout(partition_type, PartitionAvroLayout::Declared)
-}
-
-pub(super) fn manifest_entry_encoding_schema_v2(partition_type: &StructType) -> AvroSchema {
-    manifest_entry_schema_v2_with_layout(partition_type, PartitionAvroLayout::Encoded)
+pub(super) fn manifest_entry_schemas(
+    partition_type: &StructType,
+    version: FormatVersion,
+) -> (AvroSchema, AvroSchema) {
+    let schema = match version {
+        FormatVersion::V1 => manifest_entry_schema_v1_with_layout,
+        FormatVersion::V2 | FormatVersion::V3 => manifest_entry_schema_v2_with_layout,
+    };
+    (
+        schema(partition_type, PartitionAvroLayout::Declared),
+        schema(partition_type, PartitionAvroLayout::Encoded),
+    )
 }
 
 #[cfg(test)]
@@ -693,7 +693,8 @@ mod tests {
 
     use apache_avro::Schema as AvroSchema;
 
-    use super::manifest_entry_schema_v2;
+    use super::manifest_entry_schemas;
+    use crate::spec::metadata::format::FormatVersion;
     use crate::spec::types::{NestedField, PrimitiveType, StructType, Type};
 
     #[test]
@@ -710,7 +711,7 @@ mod tests {
                 Type::Primitive(PrimitiveType::Fixed(3)),
             )),
         ]);
-        let schema = manifest_entry_schema_v2(&partition_type);
+        let (schema, _) = manifest_entry_schemas(&partition_type, FormatVersion::V2);
         let schema = serde_json::to_string(&schema)
             .map_err(|error| format!("Avro schema serialization error: {error}"))?;
 

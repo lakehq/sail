@@ -11,7 +11,8 @@ use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, plan_dat
 
 use crate::datasource::type_converter::{arrow_type_to_iceberg, iceberg_type_to_arrow};
 use crate::spec::transform::Transform;
-use crate::utils::conversions::{scalar_to_iceberg_literal, to_scalar};
+use crate::spec::types::values::Literal;
+use crate::utils::conversions::{scalar_to_primitive_literal, to_scalar};
 use crate::utils::transform::apply_transform;
 
 /// Evaluates an Iceberg partition transform for physical distribution and ordering.
@@ -96,8 +97,10 @@ impl PhysicalExpr for IcebergPartitionTransformExpr {
                     return ScalarValue::try_new_null(&output_type);
                 }
                 let scalar = ScalarValue::try_from_array(input.as_ref(), index)?;
-                let literal = scalar_to_iceberg_literal(&scalar, &input_type)
-                    .map_err(|error| plan_datafusion_err!("{error}"))?;
+                let literal = Literal::Primitive(
+                    scalar_to_primitive_literal(&scalar, &input_type)
+                        .map_err(|error| plan_datafusion_err!("{error}"))?,
+                );
                 let transformed = apply_transform(self.transform, &input_type, Some(literal))
                     .ok_or_else(|| {
                         DataFusionError::Execution(format!(
@@ -141,7 +144,7 @@ impl PhysicalExpr for IcebergPartitionTransformExpr {
 #[cfg(test)]
 #[expect(clippy::expect_used)]
 mod tests {
-    use datafusion::arrow::array::{Int32Array, TimestampMicrosecondArray};
+    use datafusion::arrow::array::{Date32Array, TimestampMicrosecondArray};
     use datafusion::arrow::datatypes::Field;
     use datafusion::physical_expr::expressions::Column;
 
@@ -176,11 +179,11 @@ mod tests {
             .expect("day array");
         let actual = actual
             .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("Int32 day values");
+            .downcast_ref::<Date32Array>()
+            .expect("Date32 day values");
         assert_eq!(
             actual,
-            &Int32Array::from(vec![Some(0), Some(0), Some(1), None])
+            &Date32Array::from(vec![Some(0), Some(0), Some(1), None])
         );
     }
 }

@@ -167,23 +167,17 @@ impl SchemaEvolver {
         matches!(
             (table_type, input_type),
             (DataType::Int64, DataType::Int32) | (DataType::Float64, DataType::Float32)
-        ) || matches!(
-            (table_type, input_type),
-            (
-                DataType::FixedSizeBinary(_),
-                DataType::Binary | DataType::LargeBinary | DataType::BinaryView
-            )
-        ) || Self::decimal_precision_contracts(table_type, input_type)
+        ) || (matches!(table_type, DataType::FixedSizeBinary(_))
+            && Self::is_variable_binary(input_type))
+            || Self::decimal_precision_contracts(table_type, input_type)
     }
 
     fn variable_binary_types_equivalent(table_type: &DataType, input_type: &DataType) -> bool {
-        matches!(
-            (table_type, input_type),
-            (
-                DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
-                DataType::Binary | DataType::LargeBinary | DataType::BinaryView
-            )
-        )
+        Self::is_variable_binary(table_type) && Self::is_variable_binary(input_type)
+    }
+
+    fn is_variable_binary(data_type: &DataType) -> bool {
+        data_type.is_binary() && !matches!(data_type, DataType::FixedSizeBinary(_))
     }
 
     fn decimal_precision_expands(table_type: &DataType, input_type: &DataType) -> bool {
