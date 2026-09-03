@@ -26,7 +26,8 @@ impl SparkTryToTimestamp {
     pub fn try_new(timezone: Option<Arc<str>>) -> Self {
         Self {
             timezone,
-            signature: Signature::variadic_any(Volatility::Immutable),
+            // Delegates to SparkTimestamp, which reads the clock for time-only inputs.
+            signature: Signature::variadic_any(Volatility::Volatile),
         }
     }
 
@@ -63,5 +64,16 @@ impl ScalarUDFImpl for SparkTryToTimestamp {
         // ansi_mode is set to true for try_to_timestamp (safe parsing)
         let spark_timestamp = SparkTimestamp::try_new(self.timezone.clone(), true, true)?;
         spark_timestamp.invoke_with_args(args)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn time_only_parser_wrapper_is_volatile() {
+        let parser = SparkTryToTimestamp::try_new(Some(Arc::from("UTC")));
+        assert_eq!(parser.signature().volatility, Volatility::Volatile);
     }
 }

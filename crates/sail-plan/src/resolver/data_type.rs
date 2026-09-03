@@ -306,6 +306,23 @@ impl PlanResolver<'_> {
             metadata,
         } = field;
         let mut metadata: HashMap<String, String> = metadata.iter().cloned().collect();
+        if let spec::DataType::Interval {
+            interval_unit,
+            start_field,
+            end_field,
+        } = data_type
+            && let Some(interval) =
+                spec::SparkIntervalMetadata::new(*interval_unit, *start_field, *end_field)
+        {
+            metadata.insert(
+                spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+                serde_json::to_string(&interval).map_err(|error| {
+                    PlanError::internal(format!(
+                        "failed to serialize Spark interval metadata: {error}"
+                    ))
+                })?,
+            );
+        }
         let data_type = match data_type {
             spec::DataType::UserDefined {
                 jvm_class,

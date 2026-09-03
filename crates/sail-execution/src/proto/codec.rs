@@ -224,7 +224,9 @@ use sail_function::scalar::multi_expr::MultiExpr;
 use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
 use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
-use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
+use sail_function::scalar::spark_to_string::{
+    SparkIntervalToUtf8, SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View,
+};
 use sail_function::scalar::string::format_number::FormatNumber;
 use sail_function::scalar::string::levenshtein::Levenshtein;
 use sail_function::scalar::string::make_valid_utf8::MakeValidUtf8;
@@ -3345,6 +3347,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "spark_expm1" | "expm1" => Ok(Arc::new(ScalarUDF::from(SparkExpm1::new()))),
             "spark_sqrt" | "sqrt" => Ok(Arc::new(ScalarUDF::from(SparkSqrt::new()))),
+            "spark_interval_to_utf8" => Ok(Arc::new(ScalarUDF::from(SparkIntervalToUtf8::new()))),
             "spark_to_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8::new()))),
             "spark_to_large_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToLargeUtf8::new()))),
             "spark_to_utf8_view" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8View::new()))),
@@ -3467,6 +3470,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkSentences>()
             || node_inner.is::<SparkSplit>()
             || node_inner.is::<SparkToBinary>()
+            || node_inner.is::<SparkIntervalToUtf8>()
             || node_inner.is::<SparkToLargeUtf8>()
             || node_inner.is::<SparkToUtf8>()
             || node_inner.is::<SparkToUtf8View>()
@@ -7508,6 +7512,15 @@ mod tests {
         let decoded = round_trip_udf(ScalarUDF::from(SparkSqrt::new()))?;
 
         assert!(decoded.inner().downcast_ref::<SparkSqrt>().is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_interval_to_utf8_standard_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkIntervalToUtf8::new()))?;
+
+        downcast_udf::<SparkIntervalToUtf8>(&decoded, "SparkIntervalToUtf8")?;
+        assert_eq!(decoded.name(), "spark_interval_to_utf8");
         Ok(())
     }
 

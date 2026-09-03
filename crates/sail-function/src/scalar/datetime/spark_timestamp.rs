@@ -417,7 +417,8 @@ impl SparkTimestamp {
         Ok(Self {
             timezone,
             parser,
-            signature: Signature::variadic_any(Volatility::Stable),
+            // Time-only inputs resolve their date from the runtime clock for Spark parity.
+            signature: Signature::variadic_any(Volatility::Volatile),
             ansi_mode,
             is_try,
         })
@@ -715,6 +716,13 @@ fn get_or_parse_format<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unformatted_parser_is_volatile_because_time_only_values_read_the_clock() -> Result<()> {
+        let parser = SparkTimestamp::try_new(Some(Arc::from("UTC")), false, false)?;
+        assert_eq!(parser.signature().volatility, Volatility::Volatile);
+        Ok(())
+    }
 
     #[test]
     fn unformatted_parser_rejects_leap_seconds_in_safe_and_strict_modes() -> Result<()> {

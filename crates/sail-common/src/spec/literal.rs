@@ -98,6 +98,13 @@ pub enum Literal {
     },
     IntervalYearMonth {
         months: Option<i32>,
+        start_field: Option<spec::IntervalFieldType>,
+        end_field: Option<spec::IntervalFieldType>,
+    },
+    IntervalDayTimeMicrosecond {
+        microseconds: Option<i64>,
+        start_field: Option<spec::IntervalFieldType>,
+        end_field: Option<spec::IntervalFieldType>,
     },
     IntervalDayTime {
         value: Option<IntervalDayTime>,
@@ -197,6 +204,32 @@ pub struct IntervalMonthDayNano {
     pub nanoseconds: i64,
 }
 
+impl Literal {
+    pub fn spark_interval_metadata(&self) -> Option<spec::SparkIntervalMetadata> {
+        match self {
+            Literal::IntervalYearMonth {
+                start_field,
+                end_field,
+                ..
+            } => spec::SparkIntervalMetadata::new(
+                spec::IntervalUnit::YearMonth,
+                *start_field,
+                *end_field,
+            ),
+            Literal::IntervalDayTimeMicrosecond {
+                start_field,
+                end_field,
+                ..
+            } => spec::SparkIntervalMetadata::new(
+                spec::IntervalUnit::DayTime,
+                *start_field,
+                *end_field,
+            ),
+            _ => None,
+        }
+    }
+}
+
 fn serialize_optional<T, S>(value: &Option<T>, serializer: S) -> Result<S::Ok, S::Error>
 where
     T: ToString,
@@ -278,11 +311,19 @@ pub fn data_type_to_null_literal(data_type: spec::DataType) -> CommonResult<Lite
         },
         spec::DataType::Interval {
             interval_unit,
-            start_field: _,
-            end_field: _,
+            start_field,
+            end_field,
         } => match interval_unit {
-            spec::IntervalUnit::YearMonth => Ok(Literal::IntervalYearMonth { months: None }),
-            spec::IntervalUnit::DayTime => Ok(Literal::IntervalDayTime { value: None }),
+            spec::IntervalUnit::YearMonth => Ok(Literal::IntervalYearMonth {
+                months: None,
+                start_field,
+                end_field,
+            }),
+            spec::IntervalUnit::DayTime => Ok(Literal::IntervalDayTimeMicrosecond {
+                microseconds: None,
+                start_field,
+                end_field,
+            }),
             spec::IntervalUnit::MonthDayNano => Ok(Literal::IntervalMonthDayNano { value: None }),
         },
         spec::DataType::Binary => Ok(Literal::Binary { value: None }),

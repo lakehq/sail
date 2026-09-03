@@ -496,105 +496,12 @@ macro_rules! primitive_display {
 
 /// Formats a `f64` with the notation used by Java `Double.toString` and Spark casts.
 pub fn spark_f64_to_string(value: f64) -> String {
-    if value.is_nan() {
-        return "NaN".to_string();
-    }
-    if value.is_infinite() {
-        return if value.is_sign_positive() {
-            "Infinity"
-        } else {
-            "-Infinity"
-        }
-        .to_string();
-    }
-    if value == 0.0 {
-        return if value.is_sign_negative() {
-            "-0.0"
-        } else {
-            "0.0"
-        }
-        .to_string();
-    }
-    if value.abs().to_bits() == 1 {
-        return if value.is_sign_negative() {
-            "-4.9E-324"
-        } else {
-            "4.9E-324"
-        }
-        .to_string();
-    }
-    java_float_repr(value.is_sign_negative(), &format!("{:e}", value.abs()))
+    crate::java_float::format_f64(value)
 }
 
 /// Formats an `f32` with the notation used by Java `Float.toString` and Spark casts.
 pub fn spark_f32_to_string(value: f32) -> String {
-    if value.is_nan() {
-        return "NaN".to_string();
-    }
-    if value.is_infinite() {
-        return if value.is_sign_positive() {
-            "Infinity"
-        } else {
-            "-Infinity"
-        }
-        .to_string();
-    }
-    if value == 0.0 {
-        return if value.is_sign_negative() {
-            "-0.0"
-        } else {
-            "0.0"
-        }
-        .to_string();
-    }
-    if value.abs().to_bits() == 1 {
-        return if value.is_sign_negative() {
-            "-1.4E-45"
-        } else {
-            "1.4E-45"
-        }
-        .to_string();
-    }
-    java_float_repr(value.is_sign_negative(), &format!("{:e}", value.abs()))
-}
-
-fn java_float_repr(negative: bool, rust_scientific: &str) -> String {
-    let Some((mantissa, exponent)) = rust_scientific.split_once('e') else {
-        return rust_scientific.to_string();
-    };
-    let Ok(exponent) = exponent.parse::<i32>() else {
-        return rust_scientific.to_string();
-    };
-    let digits = mantissa
-        .chars()
-        .filter(|character| *character != '.')
-        .collect::<String>();
-    let sign = if negative { "-" } else { "" };
-
-    if (-3..7).contains(&exponent) {
-        let body = if exponent >= 0 {
-            let integer_length = exponent as usize + 1;
-            if integer_length >= digits.len() {
-                format!("{}{}.0", digits, "0".repeat(integer_length - digits.len()))
-            } else {
-                format!(
-                    "{}.{}",
-                    &digits[..integer_length],
-                    &digits[integer_length..]
-                )
-            }
-        } else {
-            format!("0.{}{}", "0".repeat((-exponent - 1) as usize), digits)
-        };
-        format!("{sign}{body}")
-    } else {
-        let mantissa = if digits.len() == 1 {
-            format!("{}.0", digits)
-        } else {
-            format!("{}.{}", &digits[..1], &digits[1..])
-        };
-        format!("{sign}{mantissa}E{exponent}")
-    }
+    crate::java_float::format_f32(value)
 }
 
 macro_rules! primitive_display_float {
@@ -1137,6 +1044,30 @@ mod tests {
         assert_eq!(spark_f32_to_string(f32::from_bits(1)), "1.4E-45");
         assert_eq!(spark_f32_to_string(-f32::from_bits(1)), "-1.4E-45");
         assert_eq!(spark_f32_to_string(-0.0), "-0.0");
+        assert_eq!(
+            spark_f64_to_string(f64::from_bits(0x43d0_0000_0000_0000)),
+            "4.6116860184273879E18"
+        );
+        assert_eq!(
+            spark_f64_to_string(f64::from_bits(0xc36c_415f_f381_377c)),
+            "-6.3625437687430112E16"
+        );
+        assert_eq!(
+            spark_f64_to_string(f64::from_bits(0xc395_327f_1b7a_a2d1)),
+            "-3.8185574490758867E17"
+        );
+        assert_eq!(
+            spark_f32_to_string(f32::from_bits(0xd75b_54b0)),
+            "-2.41156777E14"
+        );
+        assert_eq!(
+            spark_f32_to_string(f32::from_bits(0x4d32_a0e4)),
+            "1.87305536E8"
+        );
+        assert_eq!(
+            spark_f32_to_string(f32::from_bits(0xddbd_6f50)),
+            "-1.70627712E18"
+        );
     }
 
     #[expect(clippy::unwrap_used)]

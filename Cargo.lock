@@ -7659,6 +7659,7 @@ dependencies = [
  "either",
  "futures",
  "lexical-core",
+ "num-bigint 0.4.8",
  "parquet-variant",
  "parquet-variant-compute",
  "parquet-variant-json",

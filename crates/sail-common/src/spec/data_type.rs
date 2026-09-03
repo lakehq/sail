@@ -600,6 +600,42 @@ pub enum IntervalFieldType {
     Second = 5,
 }
 
+pub const SAIL_SPARK_INTERVAL_METADATA_KEY: &str = "__sail_spark_interval";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SparkIntervalMetadata {
+    pub interval_unit: IntervalUnit,
+    pub start_field: IntervalFieldType,
+    pub end_field: IntervalFieldType,
+}
+
+impl SparkIntervalMetadata {
+    pub fn new(
+        interval_unit: IntervalUnit,
+        start_field: Option<IntervalFieldType>,
+        end_field: Option<IntervalFieldType>,
+    ) -> Option<Self> {
+        let (default_start, default_end) = match interval_unit {
+            IntervalUnit::YearMonth => (IntervalFieldType::Year, IntervalFieldType::Month),
+            IntervalUnit::DayTime => (IntervalFieldType::Day, IntervalFieldType::Second),
+            IntervalUnit::MonthDayNano => return None,
+        };
+        let has_explicit_start = start_field.is_some();
+        let start_field = start_field.unwrap_or(default_start);
+        let end_field = end_field.unwrap_or(if has_explicit_start {
+            start_field
+        } else {
+            default_end
+        });
+        Some(Self {
+            interval_unit,
+            start_field,
+            end_field,
+        })
+    }
+}
+
 impl IntervalFieldType {
     fn invalid(value: i32) -> CommonError {
         CommonError::invalid(format!("interval field type: {value}"))

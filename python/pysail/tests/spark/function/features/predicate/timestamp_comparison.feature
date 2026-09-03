@@ -203,14 +203,55 @@ Feature: Timestamp and string predicate coercion
             '1.4E-45',
             TIMESTAMP '2000-01-01 00:00:00'
           ) AS min_float,
+          CAST('4.611686018427388E18' AS DOUBLE) IN (
+            '4.6116860184273879E18',
+            TIMESTAMP '2000-01-01 00:00:00'
+          ) AS jdk17_double,
+          CAST('-2.41156777E14' AS FLOAT) IN (
+            '-2.41156777E14',
+            TIMESTAMP '2000-01-01 00:00:00'
+          ) AS jdk17_float,
           INTERVAL 1 DAY IN (
             CONCAT('INTERVAL ', CHR(39), '1', CHR(39), ' DAY'),
             TIMESTAMP '2000-01-01 00:00:00'
           ) AS day_interval
         """
       Then query result
-        | large_value | small_value | negative_zero | min_double | min_float | day_interval |
-        | true        | true        | true          | true       | true      | true         |
+        | large_value | small_value | negative_zero | min_double | min_float | jdk17_double | jdk17_float | day_interval |
+        | true        | true        | true          | true       | true      | true         | true        | true         |
+      When query
+        """
+        SELECT
+          day_value IN (
+            CONCAT('INTERVAL ', CHR(39), '1', CHR(39), ' DAY'),
+            TIMESTAMP '2000-01-01 00:00:00'
+          ) AS day_column,
+          day_second_value IN (
+            CONCAT('INTERVAL ', CHR(39), '1 00:00:00', CHR(39), ' DAY TO SECOND'),
+            TIMESTAMP '2000-01-01 00:00:00'
+          ) AS day_to_second_column,
+          day_value + INTERVAL '1' DAY IN (
+            CONCAT('INTERVAL ', CHR(39), '2', CHR(39), ' DAY'),
+            TIMESTAMP '2000-01-01 00:00:00'
+          ) AS day_expression,
+          month_value IN (
+            CONCAT('INTERVAL ', CHR(39), '1', CHR(39), ' MONTH'),
+            TIMESTAMP '2000-01-01 00:00:00'
+          ) AS month_column,
+          year_month_value IN (
+            CONCAT('INTERVAL ', CHR(39), '0-1', CHR(39), ' YEAR TO MONTH'),
+            TIMESTAMP '2000-01-01 00:00:00'
+          ) AS year_to_month_column
+        FROM VALUES (
+          INTERVAL '1' DAY,
+          INTERVAL '1 00:00:00' DAY TO SECOND,
+          INTERVAL '1' MONTH,
+          INTERVAL '0-1' YEAR TO MONTH
+        ) AS intervals(day_value, day_second_value, month_value, year_month_value)
+        """
+      Then query result
+        | day_column | day_to_second_column | day_expression | month_column | year_to_month_column |
+        | true       | true                 | true           | true         | true                 |
 
     Scenario: Legacy datetime ordering honors datetimeToString configuration
       Given config spark.sql.session.timeZone = UTC

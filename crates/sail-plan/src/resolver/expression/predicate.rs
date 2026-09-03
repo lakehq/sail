@@ -1,7 +1,7 @@
 use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
-use datafusion_common::{DFSchemaRef, Result as DataFusionResult, ScalarValue};
+use datafusion_common::{DFSchemaRef, Result as DataFusionResult};
 use datafusion_expr::expr::{BinaryExpr, HigherOrderFunction, InList, Lambda, LambdaVariable};
 use datafusion_expr::{ExprSchemable, HigherOrderUDF, ScalarUDF, cast, expr, lit};
 use datafusion_expr_common::operator::Operator;
@@ -10,7 +10,7 @@ use sail_common::spec;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
-use sail_function::scalar::spark_to_string::SparkToUtf8;
+use sail_function::scalar::spark_to_string::{SparkIntervalToUtf8, SparkToUtf8};
 use sail_function::scalar::update_struct_field::UpdateStructField;
 
 use crate::config::PlanConfig;
@@ -175,7 +175,7 @@ fn apply_timestamp_string_in_coercion(
             if data_type.is_null() {
                 Ok(cast(expression, DataType::Utf8))
             } else {
-                stringify_non_ansi_expression(expression, data_type, session_timezone)
+                stringify_non_ansi_expression(expression, data_type, schema, session_timezone)
             }
         }
         TimestampStringInCoercion::ToTimestamp(timezone) => {
@@ -424,12 +424,17 @@ fn coerce_timestamp_pair(
         && is_ordering_comparison(operator)
     {
         if is_datetime_type(&left_type) && is_string_type(&right_type) {
-            let left = stringify_non_ansi_expression(left, &left_type, &config.session_timezone)?;
+            let left =
+                stringify_non_ansi_expression(left, &left_type, schema, &config.session_timezone)?;
             return Ok((left, right));
         }
         if is_string_type(&left_type) && is_datetime_type(&right_type) {
-            let right =
-                stringify_non_ansi_expression(right, &right_type, &config.session_timezone)?;
+            let right = stringify_non_ansi_expression(
+                right,
+                &right_type,
+                schema,
+                &config.session_timezone,
+            )?;
             return Ok((left, right));
         }
     }
@@ -461,35 +466,77 @@ fn coerce_string_to_timestamp(
 fn stringify_non_ansi_expression(
     expression: expr::Expr,
     data_type: &DataType,
+    schema: &DFSchemaRef,
     session_timezone: &Arc<str>,
 ) -> DataFusionResult<expr::Expr> {
     if is_string_type(data_type) || data_type == &DataType::Null {
         return Ok(expression);
     }
-    if let Some(string) = stringify_day_interval_literal(&expression, data_type) {
-        return Ok(string);
+    if let Some(interval) = spark_interval_metadata_for_expression(&expression, schema)? {
+        let metadata = serde_json::to_string(&interval).map_err(|error| {
+            datafusion_common::DataFusionError::Plan(format!(
+                "failed to serialize Spark interval metadata: {error}"
+            ))
+        })?;
+        return Ok(
+            ScalarUDF::from(SparkIntervalToUtf8::new()).call(vec![expression, lit(metadata)])
+        );
     }
     let expression = localize_timestamp_for_string(expression, data_type, session_timezone);
     Ok(ScalarUDF::from(SparkToUtf8::new()).call(vec![expression]))
 }
 
-fn stringify_day_interval_literal(
+fn spark_interval_metadata_for_expression(
     expression: &expr::Expr,
-    data_type: &DataType,
-) -> Option<expr::Expr> {
-    const MICROSECONDS_PER_DAY: i64 = 86_400_000_000;
-
-    let expr::Expr::Literal(ScalarValue::DurationMicrosecond(Some(value)), _) = expression else {
-        return None;
-    };
-    if data_type != &DataType::Duration(TimeUnit::Microsecond) || value % MICROSECONDS_PER_DAY != 0
-    {
-        return None;
+    schema: &DFSchemaRef,
+) -> DataFusionResult<Option<spec::SparkIntervalMetadata>> {
+    let field = expression.to_field(schema.as_ref())?.1;
+    if let Some(value) = field.metadata().get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY) {
+        return serde_json::from_str(value).map(Some).map_err(|error| {
+            datafusion_common::DataFusionError::Plan(format!(
+                "invalid Spark interval metadata {value:?}: {error}"
+            ))
+        });
     }
-    Some(lit(format!(
-        "INTERVAL '{}' DAY",
-        value / MICROSECONDS_PER_DAY
-    )))
+    if !matches!(
+        field.data_type(),
+        DataType::Duration(TimeUnit::Microsecond) | DataType::Interval(IntervalUnit::YearMonth)
+    ) {
+        return Ok(None);
+    }
+
+    let candidates = match expression {
+        expr::Expr::Alias(alias) => vec![alias.expr.as_ref()],
+        expr::Expr::Negative(value)
+        | expr::Expr::Cast(datafusion_expr::expr::Cast { expr: value, .. })
+        | expr::Expr::TryCast(datafusion_expr::expr::TryCast { expr: value, .. }) => {
+            vec![value.as_ref()]
+        }
+        expr::Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
+            vec![left.as_ref(), right.as_ref()]
+        }
+        expr::Expr::ScalarFunction(function) => function.args.iter().collect(),
+        _ => vec![],
+    };
+    candidates.into_iter().try_fold(
+        None::<spec::SparkIntervalMetadata>,
+        |combined, candidate| {
+            let Some(candidate) = spark_interval_metadata_for_expression(candidate, schema)? else {
+                return Ok(combined);
+            };
+            Ok(match combined {
+                None => Some(candidate),
+                Some(current) if current.interval_unit == candidate.interval_unit => {
+                    Some(spec::SparkIntervalMetadata {
+                        interval_unit: current.interval_unit,
+                        start_field: current.start_field.min(candidate.start_field),
+                        end_field: current.end_field.max(candidate.end_field),
+                    })
+                }
+                Some(_) => None,
+            })
+        },
+    )
 }
 
 fn localize_timestamp_for_string(

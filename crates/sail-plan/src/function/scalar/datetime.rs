@@ -1074,7 +1074,7 @@ fn window_interval_micros(expr: &Expr) -> PlanResult<i64> {
         return match parse_interval(s)
             .map_err(|e| PlanError::invalid(format!("invalid window interval {s:?}: {e}")))?
         {
-            IntervalValue::Microsecond { microseconds } => Ok(microseconds),
+            IntervalValue::Microsecond { microseconds, .. } => Ok(microseconds),
             _ => Err(PlanError::invalid(format!(
                 "window interval must not contain months or years: {s:?}"
             ))),
