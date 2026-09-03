@@ -1,4 +1,4 @@
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, plan_err};
 use sail_catalog::error::CatalogError;
 use sail_catalog::lakehouse::{LakehouseCommitOutcome, LakehouseCommitRequest};
 use sail_catalog::manager::CatalogManager;
@@ -73,30 +73,34 @@ impl IcebergCatalogCommitMode {
         context: Option<&LakehouseExecutionContext>,
         catalog_table_info: &CatalogTableInfo,
         table_properties: &[(String, String)],
-    ) -> Self {
+    ) -> Result<Self> {
         if let Some(context) = context {
             if matches!(context.commit, CommitAuthority::Filesystem)
                 && catalog_table_info.is_catalog_managed_iceberg_table
             {
-                return Self::MetadataLocationCas;
+                return Ok(Self::MetadataLocationCas);
             }
             return match context.commit {
-                CommitAuthority::IcebergMetadataLocationCas => Self::MetadataLocationCas,
+                CommitAuthority::IcebergMetadataLocationCas => Ok(Self::MetadataLocationCas),
                 CommitAuthority::IcebergRestCommit | CommitAuthority::VersionedCatalogCommit => {
-                    Self::CatalogCommit
+                    Ok(Self::CatalogCommit)
                 }
-                CommitAuthority::Filesystem
-                | CommitAuthority::DeltaRatifiedCommit
-                | CommitAuthority::ReadOnly => Self::Filesystem,
+                CommitAuthority::Filesystem => Ok(Self::Filesystem),
+                CommitAuthority::ReadOnly => plan_err!(
+                    "Iceberg metadata commit is forbidden by the resolved read-only catalog authority"
+                ),
+                CommitAuthority::DeltaRatifiedCommit => plan_err!(
+                    "Delta ratified commit authority cannot be used for an Iceberg metadata commit"
+                ),
             };
         }
 
         if catalog_table_info.is_catalog_managed_iceberg_table
             || catalog_managed_iceberg_from_properties(table_properties)
         {
-            Self::CompatibilityCatalogCommit
+            Ok(Self::CompatibilityCatalogCommit)
         } else {
-            Self::Filesystem
+            Ok(Self::Filesystem)
         }
     }
 
@@ -201,17 +205,11 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> IcebergCatalogCommitCoordinator<'
                     log::warn!("Iceberg catalog commit conflict: {message}");
                     Ok(CatalogCommitOutcome::Conflict)
                 }
-                LakehouseCommitOutcome::StateUnknown { message } => {
-                    // TODO: Preserve recovery and cleanup policy for Iceberg
-                    // commit-state-unknown instead of reducing it to an execution error.
-                    // REST requirements/updates, metadata-location CAS, and provider-native
-                    // updates need distinct reconciliation paths.
-                    Err(DataFusionError::Execution(format!(
-                        "Iceberg catalog commit state is unknown: {message}"
-                    )))
-                }
-                LakehouseCommitOutcome::Rejected { message } => Err(DataFusionError::Execution(
-                    format!("Iceberg catalog commit was rejected: {message}"),
+                LakehouseCommitOutcome::StateUnknown { message } => Err(DataFusionError::External(
+                    Box::new(CatalogError::CommitStateUnknown(message)),
+                )),
+                LakehouseCommitOutcome::Rejected { message } => Err(DataFusionError::External(
+                    Box::new(CatalogError::CommitRejected(message)),
                 )),
             },
             Err(CatalogError::NotSupported(err) | CatalogError::UnsupportedCapability(err)) => {
@@ -303,6 +301,27 @@ pub(crate) fn table_metadata_location(table_url: &Url, metadata_file: &str) -> R
 mod tests {
     use super::*;
 
+    fn iceberg_context(commit: CommitAuthority) -> LakehouseExecutionContext {
+        let mut context = LakehouseExecutionContext::catalog_table_context(
+            sail_common_datafusion::catalog::CatalogProviderId("test".to_string()),
+            vec![
+                "test".to_string(),
+                "default".to_string(),
+                "items".to_string(),
+            ],
+            sail_common_datafusion::catalog::CatalogTableIdentity {
+                table_id: Some("items-id".to_string()),
+                table_uri: Some("s3://bucket/items".to_string()),
+            },
+            sail_common_datafusion::catalog::LakehouseOperation::Maintenance,
+            sail_common_datafusion::catalog::LakehouseFormat::Iceberg,
+            sail_common_datafusion::catalog::LakehouseAuthority::PathManaged,
+            sail_common_datafusion::catalog::ScanAuthority::ClientLakeSource,
+        );
+        context.commit = commit;
+        context
+    }
+
     #[test]
     fn committed_table_preserves_rest_commit_payload_metadata_location() {
         let payload = serde_json::json!({
@@ -319,5 +338,27 @@ mod tests {
             Some("s3://bucket/table/metadata/00002-uuid.metadata.json")
         );
         assert_eq!(committed.payload(), Some(&payload));
+    }
+
+    #[test]
+    fn incompatible_commit_authorities_never_fall_back_to_filesystem() -> Result<()> {
+        for (authority, expected_message) in [
+            (CommitAuthority::ReadOnly, "read-only catalog authority"),
+            (
+                CommitAuthority::DeltaRatifiedCommit,
+                "Delta ratified commit authority",
+            ),
+        ] {
+            let context = iceberg_context(authority);
+            let Err(error) = IcebergCatalogCommitMode::resolve(
+                Some(&context),
+                &CatalogTableInfo::default(),
+                &[],
+            ) else {
+                return plan_err!("incompatible authority unexpectedly allowed metadata commit");
+            };
+            assert!(error.to_string().contains(expected_message));
+        }
+        Ok(())
     }
 }

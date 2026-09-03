@@ -2,11 +2,15 @@ from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pyiceberg.manifest import DataFileContent, ManifestContent, read_manifest_list
+from pyiceberg.schema import Schema
+from pyiceberg.table import TableProperties
 from pyiceberg.typedef import Record
+from pyiceberg.types import LongType, NestedField, StringType
 from pyspark.sql.dataframe import DataFrame as SparkDataFrame
 
 from pysail.testing.spark.steps.iceberg import (
@@ -546,30 +550,43 @@ def test_iceberg_merge_with_schema_evolution_is_rejected_without_side_effects(sp
         _drop_table(spark, table_name)
 
 
-def test_iceberg_merge_updates_rows_beyond_the_first_input_batch(spark, tmp_path):
+def test_iceberg_merge_updates_rows_beyond_the_first_input_batch(spark, sql_catalog):
     table_name = "iceberg_merge_multi_batch"
-    table_path = tmp_path / table_name
-    target_id = 49_999
+    table_identifier = f"default.{table_name}"
+    input_batch_size = 8192
+    target_id = input_batch_size
 
     _drop_table(spark, table_name)
+    table = sql_catalog.create_table(
+        identifier=table_identifier,
+        schema=Schema(
+            NestedField(field_id=1, name="id", field_type=LongType(), required=False),
+            NestedField(field_id=2, name="value", field_type=StringType(), required=False),
+        ),
+        properties={
+            TableProperties.FORMAT_VERSION: "2",
+            "write.merge.mode": "merge-on-read",
+        },
+    )
     try:
+        table.append(
+            pa.table(
+                {
+                    "id": pa.array(range(target_id + 1), type=pa.int64()),
+                    "value": pa.array(["old"] * (target_id + 1), type=pa.string()),
+                }
+            )
+        )
+        table_path = _local_file_path(table.location())
         spark.sql(
             f"""
-            CREATE TABLE {table_name} (
-              id BIGINT,
-              value STRING
-            )
+            CREATE TABLE {table_name}
             USING iceberg
             LOCATION '{_uri_sql(table_path)}'
-            TBLPROPERTIES (
-              'format-version' = '2',
-              'write.merge.mode' = 'merge-on-read'
-            )
             """
         )
-        spark.sql("INSERT INTO iceberg_merge_multi_batch SELECT id, 'old' FROM range(50000)")
         _, target_position = _find_data_file_row_position(table_path, target_id)
-        assert target_position >= 8192  # noqa: PLR2004
+        assert target_position == input_batch_size
         spark.sql(
             f"""
             CREATE OR REPLACE TEMP VIEW iceberg_merge_multi_batch_source AS
@@ -595,41 +612,63 @@ def test_iceberg_merge_updates_rows_beyond_the_first_input_batch(spark, tmp_path
         assert rows == [(target_id, "updated")]
     finally:
         _drop_table(spark, table_name)
+        sql_catalog.drop_table(table_identifier)
 
 
-def test_iceberg_merge_uses_absolute_positions_for_large_multi_row_group_file(spark, tmp_path):
+def test_iceberg_merge_uses_absolute_positions_for_large_multi_row_group_file(spark, sql_catalog):
     table_name = "iceberg_merge_split_file_position"
-    table_path = tmp_path / table_name
-    target_id = 4_300_000
+    table_identifier = f"default.{table_name}"
+    row_count = 4
+    row_group_rows = 2
+    target_id = row_count - 1
+    repartition_file_min_size = 10 * 1024 * 1024
+    padding_size = 3 * 1024 * 1024
 
     _drop_table(spark, table_name)
+    table = sql_catalog.create_table(
+        identifier=table_identifier,
+        schema=Schema(
+            NestedField(field_id=1, name="id", field_type=LongType(), required=False),
+            NestedField(field_id=2, name="value", field_type=StringType(), required=False),
+            NestedField(field_id=3, name="padding", field_type=StringType(), required=False),
+        ),
+        properties={
+            TableProperties.FORMAT_VERSION: "2",
+            "write.merge.mode": "merge-on-read",
+            TableProperties.PARQUET_ROW_GROUP_LIMIT: str(row_group_rows),
+            TableProperties.PARQUET_COMPRESSION: "uncompressed",
+            TableProperties.PARQUET_DICT_SIZE_BYTES: "1",
+        },
+    )
     try:
+        table.append(
+            pa.table(
+                {
+                    "id": pa.array(range(row_count), type=pa.int64()),
+                    "value": pa.array(["old"] * row_count, type=pa.string()),
+                    # Cross the file-repartition threshold without making MERGE process millions of rows.
+                    "padding": pa.array(
+                        [str(row) * padding_size for row in range(row_count)],
+                        type=pa.string(),
+                    ),
+                }
+            )
+        )
+        table_path = _local_file_path(table.location())
         spark.sql(
             f"""
-            CREATE TABLE {table_name} (
-              id BIGINT,
-              value STRING
-            )
+            CREATE TABLE {table_name}
             USING iceberg
             LOCATION '{_uri_sql(table_path)}'
-            TBLPROPERTIES (
-              'format-version' = '2',
-              'write.merge.mode' = 'merge-on-read'
-            )
             """
         )
-        large_file_insert_sql = (
-            f"INSERT INTO {table_name} "  # noqa: S608
-            "SELECT id, sha2(CAST(id AS STRING), 256) AS value "
-            "FROM range(4400000)"
-        )
-        spark.sql(large_file_insert_sql)
 
         data_file, expected_position = _find_data_file_row_position(table_path, target_id)
         parquet_file = pq.ParquetFile(data_file)
-        assert data_file.stat().st_size > 10 * 1024 * 1024
-        assert parquet_file.metadata.num_row_groups >= 2  # noqa: PLR2004
-        assert expected_position >= parquet_file.metadata.row_group(0).num_rows
+        assert data_file.stat().st_size > repartition_file_min_size
+        assert parquet_file.metadata.num_row_groups == row_count // row_group_rows
+        assert parquet_file.metadata.row_group(0).num_rows == row_group_rows
+        assert expected_position == target_id
 
         spark.sql(
             f"""
@@ -661,6 +700,7 @@ def test_iceberg_merge_uses_absolute_positions_for_large_multi_row_group_file(sp
         assert positions == [expected_position]
     finally:
         _drop_table(spark, table_name)
+        sql_catalog.drop_table(table_identifier)
 
 
 def test_iceberg_merge_metadata_as_data_read_preserves_row_level_metadata(spark, tmp_path):

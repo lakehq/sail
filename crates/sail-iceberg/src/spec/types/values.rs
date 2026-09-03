@@ -104,6 +104,43 @@ impl Datum {
     pub fn new(r#type: crate::spec::types::PrimitiveType, literal: PrimitiveLiteral) -> Self {
         Self { r#type, literal }
     }
+
+    /// Encode the datum using Iceberg's single-value binary representation.
+    pub fn to_bytes(&self) -> Result<Vec<u8>, String> {
+        let literal = self.r#type.promote_literal(&self.literal).ok_or_else(|| {
+            format!(
+                "Literal is not compatible with Iceberg type {}",
+                self.r#type
+            )
+        })?;
+        let bytes = match literal.as_ref() {
+            PrimitiveLiteral::Boolean(value) => vec![u8::from(*value)],
+            PrimitiveLiteral::Int(value) => value.to_le_bytes().to_vec(),
+            PrimitiveLiteral::Long(value) => value.to_le_bytes().to_vec(),
+            PrimitiveLiteral::Float(value) => value.0.to_le_bytes().to_vec(),
+            PrimitiveLiteral::Double(value) => value.0.to_le_bytes().to_vec(),
+            PrimitiveLiteral::Int128(value) => {
+                let bytes = value.to_be_bytes();
+                let mut start = 0;
+                while start < bytes.len() - 1 {
+                    let current = bytes[start];
+                    let next = bytes[start + 1];
+                    let redundant_positive = current == 0x00 && (next & 0x80) == 0;
+                    let redundant_negative = current == 0xff && (next & 0x80) != 0;
+                    if redundant_positive || redundant_negative {
+                        start += 1;
+                    } else {
+                        break;
+                    }
+                }
+                bytes[start..].to_vec()
+            }
+            PrimitiveLiteral::String(value) => value.as_bytes().to_vec(),
+            PrimitiveLiteral::UInt128(value) => value.to_be_bytes().to_vec(),
+            PrimitiveLiteral::Binary(value) => value.clone(),
+        };
+        Ok(bytes)
+    }
 }
 
 fn sail_literal_from_str(
@@ -1020,5 +1057,40 @@ mod tests {
 
         let c = PrimitiveLiteral::Binary(vec![1, 2, 3]);
         assert_eq!(a, c);
+    }
+
+    #[test]
+    fn decimal_uses_minimal_signed_big_endian_bytes() -> Result<(), String> {
+        let decimal = PrimitiveType::Decimal {
+            precision: 38,
+            scale: 0,
+        };
+        let cases = [
+            (-129, vec![0xff, 0x7f]),
+            (-128, vec![0x80]),
+            (-1, vec![0xff]),
+            (0, vec![0x00]),
+            (127, vec![0x7f]),
+            (128, vec![0x00, 0x80]),
+        ];
+
+        for (value, expected) in cases {
+            let literal = PrimitiveLiteral::Int128(value);
+            let encoded = Datum::new(decimal.clone(), literal.clone()).to_bytes()?;
+            assert_eq!(encoded, expected);
+            assert_eq!(decimal.literal_from_bytes(&encoded)?, literal);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn uuid_uses_sixteen_big_endian_bytes() -> Result<(), String> {
+        let value = 0x00112233445566778899aabbccddeeff_u128;
+        let literal = PrimitiveLiteral::UInt128(value);
+        let encoded = Datum::new(PrimitiveType::Uuid, literal.clone()).to_bytes()?;
+
+        assert_eq!(encoded, value.to_be_bytes());
+        assert_eq!(PrimitiveType::Uuid.literal_from_bytes(&encoded)?, literal);
+        Ok(())
     }
 }

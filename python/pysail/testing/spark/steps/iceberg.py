@@ -169,6 +169,17 @@ def _manifest_record_to_dict(record) -> dict:
     content = data[3]
     if isinstance(content, ManifestContent):
         content = content.name.lower()
+    partitions = data[13]
+    if partitions is not None:
+        partitions = [
+            {
+                "contains-null": summary.contains_null,
+                "contains-nan": summary.contains_nan,
+                "lower-bound": summary.lower_bound,
+                "upper-bound": summary.upper_bound,
+            }
+            for summary in partitions
+        ]
     manifest = {
         "manifest-path": data[0],
         "manifest-length": data[1],
@@ -183,7 +194,7 @@ def _manifest_record_to_dict(record) -> dict:
         "added-rows-count": data[10],
         "existing-rows-count": data[11],
         "deleted-rows-count": data[12],
-        "partitions": data[13],
+        "partitions": partitions,
         "key-metadata": data[14],
     }
     if len(data) > _MANIFEST_LIST_FIRST_ROW_ID_POSITION:

@@ -40,6 +40,7 @@ lazy_static = "1.5.0"
 once_cell = "1.21.4"
 icu_casemap = "=1.5.1"
 serde = { version = "1.0.228", features = ["derive"] }
+serde_bytes = "0.11.19"
 serde_json = { version = "1.0.150", features = ["preserve_order", "raw_value"] }
 postcard = { version = "1.1.3", default-features = false, features = ["use-std"] }
 smallvec = { version = "1.15.1", features = ["serde"] }

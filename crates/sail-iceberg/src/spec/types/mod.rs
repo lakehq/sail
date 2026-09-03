@@ -19,6 +19,7 @@
 
 pub mod values;
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
 use std::ops::Index;
@@ -341,6 +342,24 @@ impl PrimitiveType {
                 | (PrimitiveType::Geometry { .. }, PrimitiveLiteral::Binary(_))
                 | (PrimitiveType::Geography { .. }, PrimitiveLiteral::Binary(_))
         )
+    }
+
+    /// Return a literal that uses this type's representation, applying Iceberg's
+    /// supported primitive promotions when necessary.
+    pub(crate) fn promote_literal<'a>(
+        &self,
+        literal: &'a PrimitiveLiteral,
+    ) -> Option<Cow<'a, PrimitiveLiteral>> {
+        match (self, literal) {
+            (PrimitiveType::Long, PrimitiveLiteral::Int(value)) => {
+                Some(Cow::Owned(PrimitiveLiteral::Long(i64::from(*value))))
+            }
+            (PrimitiveType::Double, PrimitiveLiteral::Float(value)) => Some(Cow::Owned(
+                PrimitiveLiteral::Double(OrderedFloat(f64::from(value.into_inner()))),
+            )),
+            (_, literal) if self.compatible(literal) => Some(Cow::Borrowed(literal)),
+            _ => None,
+        }
     }
 
     /// Decode a PrimitiveLiteral from the serialized bound bytes that appear in manifests.
