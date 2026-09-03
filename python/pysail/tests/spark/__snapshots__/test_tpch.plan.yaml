@@ -205,7 +205,7 @@ data:
     ProjectionExec: expr=[#63@0 as o_year, #64@1 as mkt_share]
       SortPreservingMergeExec: [#63@0 ASC]
         SortExec: expr=[#63@0 ASC], preserve_partitioning=[true]
-          ProjectionExec: expr=[#60@0 as #63, sum(CASE WHEN all_nations.#62 = Utf8("IRAQ") THEN all_nations.#61 WHEN Boolean(true) THEN Int32(0) END)@1 / CASE WHEN sum(all_nations.#61)@2 = 0.0000 THEN CAST(raise_error(Division by zero) AS Decimal128(31, 4)) ELSE sum(all_nations.#61)@2 END as #64]
+          ProjectionExec: expr=[#60@0 as #63, CAST(round(CAST(sum(CASE WHEN all_nations.#62 = Utf8("IRAQ") THEN all_nations.#61 WHEN Boolean(true) THEN Int32(0) END)@1 AS Decimal256(76, 13)) / CAST(CASE WHEN sum(all_nations.#61)@2 = 0.0000 THEN CAST(raise_error([DIVIDE_BY_ZERO] Division by zero.) AS Decimal128(22, 4)) ELSE sum(all_nations.#61)@2 END AS Decimal256(76, 4)), 16) AS Decimal128(38, 16)) as #64]
             AggregateExec: mode=FinalPartitioned, gby=[#60@0 as #60], aggr=[sum(CASE WHEN all_nations.#62 = IRAQ THEN all_nations.#61 ELSE 0.0000 END) as sum(CASE WHEN all_nations.#62 = Utf8("IRAQ") THEN all_nations.#61 WHEN Boolean(true) THEN Int32(0) END), sum(all_nations.#61)]
               RepartitionExec: partitioning=Hash([#60@0], 4), input_partitions=4
                 AggregateExec: mode=Partial, gby=[#60@0 as #60], aggr=[sum(CASE WHEN all_nations.#62 = IRAQ THEN all_nations.#61 ELSE 0.0000 END) as sum(CASE WHEN all_nations.#62 = Utf8("IRAQ") THEN all_nations.#61 WHEN Boolean(true) THEN Int32(0) END), sum(all_nations.#61)]
@@ -313,7 +313,7 @@ data:
         SortPreservingMergeExec: [#34@1 DESC NULLS LAST]
           ProjectionExec: expr=[#0@0 as #33, sum(partsupp.#3 * partsupp.#2)@1 as #34]
             SortExec: expr=[sum(partsupp.#3 * partsupp.#2)@1 DESC NULLS LAST], preserve_partitioning=[true]
-              FilterExec: CAST(sum(partsupp.#3 * partsupp.#2)@1 AS Decimal128(38, 12)) > scalar_subquery(<pending>)
+              FilterExec: CAST(sum(partsupp.#3 * partsupp.#2)@1 AS Decimal128(38, 6)) > scalar_subquery(<pending>)
                 AggregateExec: mode=FinalPartitioned, gby=[#0@0 as #0], aggr=[sum(partsupp.#3 * partsupp.#2)]
                   RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=4
                     AggregateExec: mode=Partial, gby=[#0@0 as #0], aggr=[sum(partsupp.#3 * partsupp.#2)]
@@ -327,7 +327,7 @@ data:
                               DataSourceExec: partitions=1, partition_sizes=[1]
                             ProjectionExec: expr=[_0@0 as #0, _1@1 as #1, _2@2 as #2, _3@3 as #3]
                               DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[sum(partsupp.#19 * partsupp.#18)@0 * 0.0001000000 as #32]
+        ProjectionExec: expr=[CAST(round(CAST(sum(partsupp.#19 * partsupp.#18)@0 AS Decimal256(76, 2)) * 0.0001000000, 6) AS Decimal128(38, 6)) as #32]
           AggregateExec: mode=Final, gby=[], aggr=[sum(partsupp.#19 * partsupp.#18)]
             CoalescePartitionsExec
               AggregateExec: mode=Partial, gby=[], aggr=[sum(partsupp.#19 * partsupp.#18)]
@@ -389,7 +389,7 @@ data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#25@0 as promo_revenue]
-      ProjectionExec: expr=[100.00 * sum(CASE WHEN part.#20 LIKE Utf8("PROMO%") THEN lineitem.#5 * Int32(1) - lineitem.#6 WHEN Boolean(true) THEN Int32(0) END)@0 / CASE WHEN sum(lineitem.#5 * Int32(1) - lineitem.#6)@1 = 0.0000 THEN CAST(raise_error(Division by zero) AS Decimal128(31, 4)) ELSE sum(lineitem.#5 * Int32(1) - lineitem.#6)@1 END as #25]
+      ProjectionExec: expr=[CAST(round(CAST(100.00 * sum(CASE WHEN part.#20 LIKE Utf8("PROMO%") THEN lineitem.#5 * Int32(1) - lineitem.#6 WHEN Boolean(true) THEN Int32(0) END)@0 AS Decimal256(76, 9)) / CAST(CASE WHEN sum(lineitem.#5 * Int32(1) - lineitem.#6)@1 = 0.0000 THEN CAST(raise_error([DIVIDE_BY_ZERO] Division by zero.) AS Decimal128(22, 4)) ELSE sum(lineitem.#5 * Int32(1) - lineitem.#6)@1 END AS Decimal256(76, 4)), 12) AS Decimal128(38, 12)) as #25]
         AggregateExec: mode=Final, gby=[], aggr=[sum(CASE WHEN part.#20 LIKE PROMO% THEN __common_expr_1 ELSE 0.0000 END) as sum(CASE WHEN part.#20 LIKE Utf8("PROMO%") THEN lineitem.#5 * Int32(1) - lineitem.#6 WHEN Boolean(true) THEN Int32(0) END), sum(__common_expr_1) as sum(lineitem.#5 * Int32(1) - lineitem.#6)]
           CoalescePartitionsExec
             AggregateExec: mode=Partial, gby=[], aggr=[sum(CASE WHEN part.#20 LIKE PROMO% THEN __common_expr_1 ELSE 0.0000 END) as sum(CASE WHEN part.#20 LIKE Utf8("PROMO%") THEN lineitem.#5 * Int32(1) - lineitem.#6 WHEN Boolean(true) THEN Int32(0) END), sum(__common_expr_1) as sum(lineitem.#5 * Int32(1) - lineitem.#6)]
@@ -485,7 +485,7 @@ data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#42@0 as avg_yearly]
-      ProjectionExec: expr=[sum(lineitem.#5)@0 / 7.0 as #42]
+      ProjectionExec: expr=[CAST(round(CAST(sum(lineitem.#5)@0 AS Decimal128(38, 3)) / 7.0, 6) AS Decimal128(22, 6)) as #42]
         AggregateExec: mode=Final, gby=[], aggr=[sum(lineitem.#5)]
           CoalescePartitionsExec
             AggregateExec: mode=Partial, gby=[], aggr=[sum(lineitem.#5)]
