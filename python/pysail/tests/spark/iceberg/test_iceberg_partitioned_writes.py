@@ -152,12 +152,20 @@ def test_logical_identity_partitions_use_jvm_manifest_values_and_paths(spark, tm
     )
     table = catalog.create_table(identifier=table_name, schema=schema, partition_spec=spec)
     expected_uuid = uuid.UUID("00112233-4455-6677-8899-aabbccddeeff")
+    expected_time = dt.time(10, 12, 55, 38_194)
     expected_time_micros = 36_775_038_194
     try:
-        spark.createDataFrame(
-            [(1, Decimal("12.34"), expected_uuid.bytes, dt.time(10, 12, 55, 38_194))],
-            schema="id INT, decimal_value DECIMAL(9, 2), uuid_value BINARY, time_value TIME(6)",
-        ).write.format("iceberg").mode("append").save(table.location())
+        # PySpark clients before 4.1 cannot deserialize Spark Connect TIME schemas.
+        frame = spark.createDataFrame(
+            [(1, Decimal("12.34"), expected_uuid.bytes, expected_time.isoformat())],
+            schema="id INT, decimal_value DECIMAL(9, 2), uuid_value BINARY, time_text STRING",
+        ).selectExpr(
+            "id",
+            "decimal_value",
+            "uuid_value",
+            "CAST(time_text AS TIME(6)) AS time_value",
+        )
+        frame.write.format("iceberg").mode("append").save(table.location())
 
         rows = spark.read.format("iceberg").load(table.location()).select("id").collect()
         assert [row.id for row in rows] == [1]
