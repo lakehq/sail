@@ -110,14 +110,18 @@ Feature: NATURAL and USING joins
 
     @sail-bug
     Scenario Outline: qualified key: <case>
+      # An inner join cannot tell the two sides apart, since the keys are equal by definition, so
+      # the rows that match only one side are what makes the qualifier observable.
       When query
         """
-        SELECT l.k, r.k FROM (VALUES (1, 'a')) AS l(k, lv)
-        <clause> JOIN (VALUES (1, 'x')) AS r(k, rv) <using>
+        SELECT l.k, r.k FROM (VALUES (1, 'a'), (2, 'b')) AS l(k, lv)
+        <clause> FULL OUTER JOIN (VALUES (1, 'x'), (3, 'y')) AS r(k, rv) <using>
         """
       Then query result
-        | k | k |
-        | 1 | 1 |
+        | k    | k    |
+        | 1    | 1    |
+        | 2    | NULL |
+        | NULL | 3    |
 
       Examples:
         | case    | clause  | using     |
