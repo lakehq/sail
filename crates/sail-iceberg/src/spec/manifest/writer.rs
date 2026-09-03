@@ -345,13 +345,19 @@ impl ManifestWriter {
             .partition_spec
             .partition_type(&self.metadata.schema)
             .map_err(|e| format!("Partition type error: {e}"))?;
-        let avro_schema = match self.metadata.format_version {
+        let declared_schema = match self.metadata.format_version {
             FormatVersion::V1 => super::schema::manifest_entry_schema_v1(&partition_type),
             FormatVersion::V2 | FormatVersion::V3 => {
                 super::schema::manifest_entry_schema_v2(&partition_type)
             }
         };
-        let mut writer = AvroWriter::new(&avro_schema, Vec::new());
+        let encoding_schema = match self.metadata.format_version {
+            FormatVersion::V1 => super::schema::manifest_entry_encoding_schema_v1(&partition_type),
+            FormatVersion::V2 | FormatVersion::V3 => {
+                super::schema::manifest_entry_encoding_schema_v2(&partition_type)
+            }
+        };
+        let mut writer = AvroWriter::new(&encoding_schema, Vec::new());
 
         // Add user metadata per Iceberg spec
         let schema_json = serde_json::to_vec(&self.metadata.schema)
@@ -401,16 +407,17 @@ impl ManifestWriter {
                 ),
             }
             .map_err(|e| format!("Avro to_value error: {e}"))?
-            .resolve(&avro_schema)
+            .resolve(&encoding_schema)
             .map_err(|e| format!("Avro resolve error: {e}"))?;
             writer
                 .append(value)
                 .map_err(|e| format!("Avro append error: {e}"))?;
         }
 
-        writer
+        let encoded = writer
             .into_inner()
-            .map_err(|e| format!("Avro writer finalize error: {e}"))
+            .map_err(|e| format!("Avro writer finalize error: {e}"))?;
+        super::replace_avro_schema_header(&encoded, &declared_schema)
     }
 }
 
@@ -624,5 +631,98 @@ mod tests {
             Some(&Datum::new(PrimitiveType::Long, PrimitiveLiteral::Long(20)))
         );
         assert_eq!(parsed.key_metadata.as_deref(), Some([1, 2, 3].as_slice()));
+    }
+
+    #[test]
+    fn manifest_roundtrip_preserves_fixed_decimal_and_uuid_partitions() {
+        let schema = Schema::builder()
+            .with_fields([
+                Arc::new(NestedField::new(
+                    1,
+                    "fixed_value",
+                    Type::Primitive(PrimitiveType::Fixed(3)),
+                    false,
+                )),
+                Arc::new(NestedField::new(
+                    2,
+                    "decimal_value",
+                    Type::Primitive(PrimitiveType::Decimal {
+                        precision: 9,
+                        scale: 2,
+                    }),
+                    false,
+                )),
+                Arc::new(NestedField::new(
+                    3,
+                    "uuid_value",
+                    Type::Primitive(PrimitiveType::Uuid),
+                    false,
+                )),
+                Arc::new(NestedField::new(
+                    4,
+                    "decimal_copy",
+                    Type::Primitive(PrimitiveType::Decimal {
+                        precision: 9,
+                        scale: 2,
+                    }),
+                    false,
+                )),
+                Arc::new(NestedField::new(
+                    5,
+                    "uuid_copy",
+                    Type::Primitive(PrimitiveType::Uuid),
+                    false,
+                )),
+            ])
+            .build()
+            .expect("table schema");
+        let partition_spec = PartitionSpec::builder()
+            .add_field(1, "fixed_value", Transform::Identity)
+            .add_field(2, "decimal_value", Transform::Identity)
+            .add_field(3, "uuid_value", Transform::Identity)
+            .add_field(4, "decimal_copy", Transform::Identity)
+            .add_field(5, "uuid_copy", Transform::Identity)
+            .build();
+        let metadata = ManifestMetadata::new(
+            Arc::new(schema),
+            0,
+            partition_spec,
+            FormatVersion::V2,
+            ManifestContentType::Data,
+        );
+        let expected_partition = vec![
+            Some(Literal::Primitive(PrimitiveLiteral::Binary(vec![1, 2, 3]))),
+            Some(Literal::Primitive(PrimitiveLiteral::Int128(1_234))),
+            Some(Literal::Primitive(PrimitiveLiteral::UInt128(
+                0x00112233_4455_6677_8899_aabbccddeeff,
+            ))),
+            Some(Literal::Primitive(PrimitiveLiteral::Int128(-1_234))),
+            Some(Literal::Primitive(PrimitiveLiteral::UInt128(
+                0xffeeddcc_bbaa_9988_7766_554433221100,
+            ))),
+        ];
+        let mut file = partitioned_file("data.parquet", expected_partition.clone());
+        file.content = DataContentType::Data;
+        let mut writer = ManifestWriterBuilder::new(Some(7), None, metadata).build();
+        writer.add(file);
+
+        let bytes = writer.to_avro_bytes_v2().expect("manifest bytes");
+        let header = super::super::parse_avro_object_header(&bytes).expect("Avro header");
+        let declared_schema = std::str::from_utf8(
+            header
+                .metadata
+                .get("avro.schema")
+                .expect("Avro schema header metadata"),
+        )
+        .expect("UTF-8 Avro schema");
+        assert!(declared_schema.contains("\"name\":\"fixed_3\""));
+        assert!(declared_schema.contains("\"name\":\"decimal_9_2\""));
+        assert!(declared_schema.contains("\"logicalType\":\"uuid\""));
+
+        let manifest = Manifest::parse_avro(&bytes).expect("parsed manifest");
+        assert_eq!(
+            manifest.entries()[0].data_file.partition,
+            expected_partition
+        );
     }
 }

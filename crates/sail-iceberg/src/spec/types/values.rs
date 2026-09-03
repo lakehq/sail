@@ -20,6 +20,7 @@
 use ordered_float::OrderedFloat;
 use sail_common::spec as sail_spec;
 use serde::{Deserialize, Serialize};
+use serde_bytes::ByteBuf;
 use serde_json::Value as JsonValue;
 
 use crate::spec::avro_utils::avro_compatible_name;
@@ -860,17 +861,290 @@ impl Literal {
     }
 }
 
-/// A lightweight, schema-agnostic representation of a struct literal that
-/// serializes into an Avro record matching a provided `StructType`.
-///
-/// This is used for encoding the `partition` tuple in `DataFile` manifest
-/// entries. It intentionally avoids carrying type information and focuses on
-/// field-name to optional `Literal` mapping; type validation is deferred to
-/// the caller that provides the `StructType`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RawLiteral(pub Vec<(String, Option<Literal>)>);
+enum RawPrimitiveLiteral {
+    Boolean(bool),
+    Int(i32),
+    Long(i64),
+    Float(OrderedFloat<f32>),
+    Double(OrderedFloat<f64>),
+    String(String),
+    Bytes(ByteBuf),
+}
+
+impl Serialize for RawPrimitiveLiteral {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Boolean(value) => serializer.serialize_bool(*value),
+            Self::Int(value) => serializer.serialize_i32(*value),
+            Self::Long(value) => serializer.serialize_i64(*value),
+            Self::Float(value) => serializer.serialize_f32(value.0),
+            Self::Double(value) => serializer.serialize_f64(value.0),
+            Self::String(value) => serializer.serialize_str(value),
+            Self::Bytes(value) => serializer.serialize_bytes(value),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RawPrimitiveLiteral {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Visitor;
+
+        struct RawPrimitiveVisitor;
+
+        impl<'de> Visitor<'de> for RawPrimitiveVisitor {
+            type Value = RawPrimitiveLiteral;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("an Iceberg primitive manifest value")
+            }
+
+            fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
+                Ok(RawPrimitiveLiteral::Boolean(value))
+            }
+
+            fn visit_i32<E>(self, value: i32) -> Result<Self::Value, E> {
+                Ok(RawPrimitiveLiteral::Int(value))
+            }
+
+            fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
+                Ok(RawPrimitiveLiteral::Long(value))
+            }
+
+            fn visit_f32<E>(self, value: f32) -> Result<Self::Value, E> {
+                Ok(RawPrimitiveLiteral::Float(OrderedFloat(value)))
+            }
+
+            fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E> {
+                Ok(RawPrimitiveLiteral::Double(OrderedFloat(value)))
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+                Ok(RawPrimitiveLiteral::String(value.to_string()))
+            }
+
+            fn visit_borrowed_str<E>(self, value: &'de str) -> Result<Self::Value, E> {
+                Ok(RawPrimitiveLiteral::String(value.to_string()))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+                Ok(RawPrimitiveLiteral::String(value))
+            }
+
+            fn visit_bytes<E>(self, value: &[u8]) -> Result<Self::Value, E> {
+                Ok(RawPrimitiveLiteral::Bytes(ByteBuf::from(value)))
+            }
+
+            fn visit_borrowed_bytes<E>(self, value: &'de [u8]) -> Result<Self::Value, E> {
+                Ok(RawPrimitiveLiteral::Bytes(ByteBuf::from(value)))
+            }
+
+            fn visit_byte_buf<E>(self, value: Vec<u8>) -> Result<Self::Value, E> {
+                Ok(RawPrimitiveLiteral::Bytes(ByteBuf::from(value)))
+            }
+        }
+
+        deserializer.deserialize_any(RawPrimitiveVisitor)
+    }
+}
+
+/// Type-aware Avro representation of the primitive partition tuple in a manifest data file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawLiteral(Vec<(String, Option<RawPrimitiveLiteral>)>);
 
 impl RawLiteral {
+    fn decimal_bytes(value: i128, precision: u32) -> Result<ByteBuf, String> {
+        let byte_count = crate::spec::Type::decimal_required_bytes(precision)? as usize;
+        let bytes = value.to_be_bytes();
+        let start = bytes.len() - byte_count;
+        let encoded = &bytes[start..];
+        let sign_extension = if encoded[0] & 0x80 == 0 { 0 } else { u8::MAX };
+        let mut decoded = [sign_extension; 16];
+        decoded[start..].copy_from_slice(encoded);
+        if i128::from_be_bytes(decoded) != value {
+            return Err(format!(
+                "Decimal value {value} exceeds Iceberg precision {precision}"
+            ));
+        }
+        Ok(ByteBuf::from(encoded))
+    }
+
+    fn from_literal(
+        literal: &Literal,
+        ty: &crate::spec::types::Type,
+    ) -> Result<RawPrimitiveLiteral, String> {
+        use crate::spec::types::{PrimitiveType, Type};
+
+        let Type::Primitive(primitive_type) = ty else {
+            return Err(format!("Partition field type must be primitive, got {ty}"));
+        };
+        let Literal::Primitive(literal) = literal else {
+            return Err(format!(
+                "Partition value must be primitive, got {literal:?}"
+            ));
+        };
+        let literal = primitive_type.promote_literal(literal).ok_or_else(|| {
+            format!("Partition value {literal:?} is incompatible with type {primitive_type}")
+        })?;
+
+        match (primitive_type, literal.as_ref()) {
+            (PrimitiveType::Boolean, PrimitiveLiteral::Boolean(value)) => {
+                Ok(RawPrimitiveLiteral::Boolean(*value))
+            }
+            (PrimitiveType::Int | PrimitiveType::Date, PrimitiveLiteral::Int(value)) => {
+                Ok(RawPrimitiveLiteral::Int(*value))
+            }
+            (
+                PrimitiveType::Long
+                | PrimitiveType::Time
+                | PrimitiveType::Timestamp
+                | PrimitiveType::Timestamptz
+                | PrimitiveType::TimestampNs
+                | PrimitiveType::TimestamptzNs,
+                PrimitiveLiteral::Long(value),
+            ) => Ok(RawPrimitiveLiteral::Long(*value)),
+            (PrimitiveType::Float, PrimitiveLiteral::Float(value)) => {
+                Ok(RawPrimitiveLiteral::Float(*value))
+            }
+            (PrimitiveType::Double, PrimitiveLiteral::Double(value)) => {
+                Ok(RawPrimitiveLiteral::Double(*value))
+            }
+            (PrimitiveType::Decimal { precision, .. }, PrimitiveLiteral::Int128(value)) => Ok(
+                RawPrimitiveLiteral::Bytes(Self::decimal_bytes(*value, *precision)?),
+            ),
+            (PrimitiveType::String, PrimitiveLiteral::String(value)) => {
+                Ok(RawPrimitiveLiteral::String(value.clone()))
+            }
+            (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(value)) => Ok(
+                RawPrimitiveLiteral::Bytes(ByteBuf::from(value.to_be_bytes())),
+            ),
+            (PrimitiveType::Fixed(size), PrimitiveLiteral::Binary(value)) => {
+                let expected = usize::try_from(*size)
+                    .map_err(|_| format!("Iceberg fixed width {size} is too large"))?;
+                if value.len() != expected {
+                    return Err(format!(
+                        "Fixed partition value must be {expected} bytes, got {}",
+                        value.len()
+                    ));
+                }
+                Ok(RawPrimitiveLiteral::Bytes(ByteBuf::from(value.clone())))
+            }
+            (
+                PrimitiveType::Binary
+                | PrimitiveType::Variant
+                | PrimitiveType::Geometry { .. }
+                | PrimitiveType::Geography { .. },
+                PrimitiveLiteral::Binary(value),
+            ) => Ok(RawPrimitiveLiteral::Bytes(ByteBuf::from(value.clone()))),
+            (PrimitiveType::Unknown, _) => {
+                Err("Iceberg unknown partition type cannot contain a value".to_string())
+            }
+            _ => Err(format!(
+                "Partition value {literal:?} is incompatible with type {primitive_type}"
+            )),
+        }
+    }
+
+    fn into_literal(
+        literal: RawPrimitiveLiteral,
+        ty: &crate::spec::types::Type,
+    ) -> Result<Literal, String> {
+        use crate::spec::types::{PrimitiveType, Type};
+
+        let Type::Primitive(primitive_type) = ty else {
+            return Err(format!("Partition field type must be primitive, got {ty}"));
+        };
+        let literal = match (primitive_type, literal) {
+            (PrimitiveType::Boolean, RawPrimitiveLiteral::Boolean(value)) => {
+                PrimitiveLiteral::Boolean(value)
+            }
+            (PrimitiveType::Int | PrimitiveType::Date, RawPrimitiveLiteral::Int(value)) => {
+                PrimitiveLiteral::Int(value)
+            }
+            (PrimitiveType::Long, RawPrimitiveLiteral::Int(value)) => {
+                PrimitiveLiteral::Long(i64::from(value))
+            }
+            (
+                PrimitiveType::Long
+                | PrimitiveType::Time
+                | PrimitiveType::Timestamp
+                | PrimitiveType::Timestamptz
+                | PrimitiveType::TimestampNs
+                | PrimitiveType::TimestamptzNs,
+                RawPrimitiveLiteral::Long(value),
+            ) => PrimitiveLiteral::Long(value),
+            (PrimitiveType::Float, RawPrimitiveLiteral::Float(value)) => {
+                PrimitiveLiteral::Float(value)
+            }
+            (PrimitiveType::Double, RawPrimitiveLiteral::Float(value)) => {
+                PrimitiveLiteral::Double(OrderedFloat(f64::from(value.0)))
+            }
+            (PrimitiveType::Double, RawPrimitiveLiteral::Double(value)) => {
+                PrimitiveLiteral::Double(value)
+            }
+            (PrimitiveType::String, RawPrimitiveLiteral::String(value)) => {
+                PrimitiveLiteral::String(value)
+            }
+            (PrimitiveType::Uuid, RawPrimitiveLiteral::String(value)) => PrimitiveLiteral::UInt128(
+                uuid::Uuid::parse_str(&value)
+                    .map_err(|error| format!("Invalid UUID partition value {value:?}: {error}"))?
+                    .as_u128(),
+            ),
+            (PrimitiveType::Uuid, RawPrimitiveLiteral::Bytes(value)) => {
+                let bytes: [u8; 16] = value.as_ref().try_into().map_err(|_| {
+                    format!("UUID partition value must be 16 bytes, got {}", value.len())
+                })?;
+                PrimitiveLiteral::UInt128(u128::from_be_bytes(bytes))
+            }
+            (PrimitiveType::Fixed(size), RawPrimitiveLiteral::Bytes(value)) => {
+                let expected = usize::try_from(*size)
+                    .map_err(|_| format!("Iceberg fixed width {size} is too large"))?;
+                if value.len() != expected {
+                    return Err(format!(
+                        "Fixed partition value must be {expected} bytes, got {}",
+                        value.len()
+                    ));
+                }
+                PrimitiveLiteral::Binary(value.into_vec())
+            }
+            (
+                PrimitiveType::Binary
+                | PrimitiveType::Variant
+                | PrimitiveType::Geometry { .. }
+                | PrimitiveType::Geography { .. },
+                RawPrimitiveLiteral::Bytes(value),
+            ) => PrimitiveLiteral::Binary(value.into_vec()),
+            (PrimitiveType::Decimal { precision, .. }, RawPrimitiveLiteral::Bytes(value)) => {
+                let expected = crate::spec::Type::decimal_required_bytes(*precision)? as usize;
+                if value.len() != expected {
+                    return Err(format!(
+                        "Decimal partition value with precision {precision} must be {expected} bytes, got {}",
+                        value.len()
+                    ));
+                }
+                let sign_extension = if value[0] & 0x80 == 0 { 0 } else { u8::MAX };
+                let mut bytes = [sign_extension; 16];
+                bytes[16 - value.len()..].copy_from_slice(&value);
+                PrimitiveLiteral::Int128(i128::from_be_bytes(bytes))
+            }
+            (PrimitiveType::Unknown, _) => {
+                return Err("Iceberg unknown partition type cannot contain a value".to_string());
+            }
+            (_, value) => {
+                return Err(format!(
+                    "Manifest value {value:?} is incompatible with partition type {primitive_type}"
+                ));
+            }
+        };
+        Ok(Literal::Primitive(literal))
+    }
+
     /// Build from a positional vector of values and a struct type; positions
     /// are matched to the struct fields' order.
     pub fn from_struct_values(
@@ -886,14 +1160,23 @@ impl RawLiteral {
             ));
         }
         let mut out = Vec::with_capacity(values.len());
-        for (i, f) in fields.iter().enumerate() {
-            out.push((avro_compatible_name(&f.name), values[i].clone()));
+        for (value, field) in values.iter().zip(fields) {
+            out.push((
+                avro_compatible_name(&field.name),
+                value
+                    .as_ref()
+                    .map(|value| Self::from_literal(value, &field.field_type))
+                    .transpose()?,
+            ));
         }
         Ok(RawLiteral(out))
     }
 
     /// Convert back to positional vector based on the struct type's field order.
-    pub fn into_struct_values(self, ty: &crate::spec::types::StructType) -> Vec<Option<Literal>> {
+    pub fn into_struct_values(
+        self,
+        ty: &crate::spec::types::StructType,
+    ) -> Result<Vec<Option<Literal>>, String> {
         let mut by_name = std::collections::HashMap::with_capacity(self.0.len());
         for (k, v) in self.0.into_iter() {
             by_name.insert(k, v);
@@ -902,11 +1185,14 @@ impl RawLiteral {
             .iter()
             .map(|f| {
                 let avro_name = avro_compatible_name(&f.name);
-                match by_name.remove(&avro_name) {
+                let value = match by_name.remove(&avro_name) {
                     Some(value) => value,
                     None if avro_name != f.name => by_name.remove(&f.name).unwrap_or(None),
                     None => None,
-                }
+                };
+                value
+                    .map(|value| Self::into_literal(value, &f.field_type))
+                    .transpose()
             })
             .collect()
     }
@@ -917,13 +1203,13 @@ impl Serialize for RawLiteral {
     where
         S: serde::Serializer,
     {
-        use serde::ser::SerializeStruct;
-        let mut ss = serializer.serialize_struct("", self.0.len())?;
+        use serde::ser::SerializeMap;
+
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
         for (k, v) in &self.0 {
-            // Avro's serde requires &'static str for field names
-            ss.serialize_field(Box::leak(k.clone().into_boxed_str()), v)?;
+            map.serialize_entry(k, v)?;
         }
-        ss.end()
+        map.end()
     }
 }
 
@@ -943,8 +1229,8 @@ impl<'de> Deserialize<'de> for RawLiteral {
             where
                 M: MapAccess<'de>,
             {
-                let mut out: Vec<(String, Option<Literal>)> = Vec::new();
-                while let Some((k, v)) = map.next_entry::<String, Option<Literal>>()? {
+                let mut out: Vec<(String, Option<RawPrimitiveLiteral>)> = Vec::new();
+                while let Some((k, v)) = map.next_entry::<String, Option<RawPrimitiveLiteral>>()? {
                     out.push((k, v));
                 }
                 Ok(RawLiteral(out))

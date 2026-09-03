@@ -1,5 +1,7 @@
 import datetime as dt
 import platform
+import uuid
+from decimal import Decimal
 from pathlib import Path
 from typing import List, Tuple  # noqa: UP035
 
@@ -17,7 +19,17 @@ from pyiceberg.partitioning import (
 )
 from pyiceberg.schema import Schema
 from pyiceberg.table import StaticTable
-from pyiceberg.types import DateType, FixedType, IntegerType, NestedField, StringType, TimestampType
+from pyiceberg.types import (
+    DateType,
+    DecimalType,
+    FixedType,
+    IntegerType,
+    NestedField,
+    StringType,
+    TimestampType,
+    TimeType,
+    UUIDType,
+)
 
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 from pysail.tests.spark.iceberg.utils import create_sql_catalog, pyiceberg_to_pandas
@@ -116,16 +128,57 @@ def test_fixed_identity_partition_dataframe_write_uses_base64_path(spark, tmp_pa
             (2, None),
         ]
 
-        reloaded = StaticTable.from_metadata(table.location())
-        manifest_partitions = {
-            bytes(task.file.partition[0]) if task.file.partition[0] is not None else None
-            for task in reloaded.scan().plan_files()
-        }
-        assert manifest_partitions == {bytes.fromhex("010203"), None}
-
         table_path = Path(table.location().removeprefix("file://"))
         partition_directories = {path.name for path in (table_path / "data").iterdir() if path.is_dir()}
         assert partition_directories == {"fixed_value=AQID", "fixed_value=null"}
+    finally:
+        catalog.drop_table(table_name)
+
+
+@pytest.mark.skipif(platform.system() == "Windows", reason="may not work on Windows")
+def test_logical_identity_partitions_use_jvm_manifest_values_and_paths(spark, tmp_path):
+    catalog = create_sql_catalog(tmp_path)
+    table_name = "default.logical_identity_partitions"
+    schema = Schema(
+        NestedField(1, "id", IntegerType(), required=True),
+        NestedField(2, "decimal_value", DecimalType(9, 2), required=False),
+        NestedField(3, "uuid_value", UUIDType(), required=False),
+        NestedField(4, "time_value", TimeType(), required=False),
+    )
+    spec = PartitionSpec(
+        PartitionField(2, 1000, IdentityTransform(), "decimal_value"),
+        PartitionField(3, 1001, IdentityTransform(), "uuid_value"),
+        PartitionField(4, 1002, IdentityTransform(), "time_value"),
+    )
+    table = catalog.create_table(identifier=table_name, schema=schema, partition_spec=spec)
+    expected_uuid = uuid.UUID("00112233-4455-6677-8899-aabbccddeeff")
+    expected_time_micros = 36_775_038_194
+    try:
+        spark.createDataFrame(
+            [(1, Decimal("12.34"), expected_uuid.bytes, dt.time(10, 12, 55, 38_194))],
+            schema="id INT, decimal_value DECIMAL(9, 2), uuid_value BINARY, time_value TIME(6)",
+        ).write.format("iceberg").mode("append").save(table.location())
+
+        rows = spark.read.format("iceberg").load(table.location()).select("id").collect()
+        assert [row.id for row in rows] == [1]
+
+        reloaded = StaticTable.from_metadata(table.location())
+        manifest_partition = next(iter(reloaded.scan().plan_files())).file.partition
+        assert manifest_partition[0] == Decimal("12.34")
+        assert manifest_partition[1] == expected_uuid
+        assert manifest_partition[2] == expected_time_micros
+
+        table_path = Path(table.location().removeprefix("file://"))
+        data_files = list(
+            (
+                table_path
+                / "data"
+                / "decimal_value=12.34"
+                / "uuid_value=00112233-4455-6677-8899-aabbccddeeff"
+                / "time_value=10%3A12%3A55.038194"
+            ).glob("*.parquet")
+        )
+        assert len(data_files) == 1
     finally:
         catalog.drop_table(table_name)
 
