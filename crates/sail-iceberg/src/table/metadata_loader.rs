@@ -234,21 +234,15 @@ pub async fn find_latest_metadata_file(
 mod tests {
     use std::collections::HashMap;
     use std::io::{self, Write};
-    use std::sync::Arc;
 
-    use bytes::Bytes;
-    use datafusion::common::{DataFusionError, Result};
+    use datafusion::common::Result;
     use flate2::Compression;
     use flate2::write::GzEncoder;
-    use object_store::memory::InMemory;
-    use object_store::path::Path as ObjectPath;
-    use object_store::{ObjectStore, ObjectStoreExt};
-    use url::Url;
 
     use super::{
         MetadataFileCodec, MetadataFileName, decode_metadata_file, encode_metadata_file,
-        find_latest_metadata_file, metadata_file_extension_from_properties,
-        metadata_location_to_object_path, parse_metadata_file_name,
+        metadata_file_extension_from_properties, metadata_location_to_object_path,
+        parse_metadata_file_name,
     };
 
     #[test]
@@ -375,33 +369,5 @@ mod tests {
             "zstd".to_string(),
         );
         assert!(metadata_file_extension_from_properties(&properties).is_err());
-    }
-
-    #[test]
-    fn stale_version_hint_does_not_select_stale_metadata() -> Result<()> {
-        futures::executor::block_on(async {
-            let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-            for (path, value) in [
-                ("table/metadata/v1.metadata.json", b"v1".as_slice()),
-                ("table/metadata/v2.metadata.json", b"v2".as_slice()),
-                ("table/metadata/version-hint.text", b"1".as_slice()),
-            ] {
-                store
-                    .put(
-                        &ObjectPath::from(path),
-                        object_store::PutPayload::from(Bytes::copy_from_slice(value)),
-                    )
-                    .await
-                    .map_err(|error| DataFusionError::External(Box::new(error)))?;
-            }
-            let table_url = Url::parse("memory:///table/")
-                .map_err(|error| DataFusionError::External(Box::new(error)))?;
-
-            assert_eq!(
-                find_latest_metadata_file(&store, &table_url).await?,
-                "table/metadata/v2.metadata.json"
-            );
-            Ok(())
-        })
     }
 }

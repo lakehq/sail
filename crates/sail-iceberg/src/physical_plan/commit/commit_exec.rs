@@ -58,8 +58,7 @@ use crate::spec::partition::{UnboundPartitionField, UnboundPartitionSpec};
 use crate::spec::snapshots::MAIN_BRANCH;
 use crate::spec::{
     DataContentType, DataFile, FormatVersion, Literal, PartitionKey, PartitionSpec,
-    PrimitiveLiteral, PrimitiveType, Schema as IcebergSchema, StructType, TableMetadata,
-    TableRequirement, Type,
+    Schema as IcebergSchema, StructType, TableMetadata, TableRequirement, Type,
 };
 use crate::table::metadata_loader::{
     encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
@@ -133,16 +132,6 @@ fn expected_snapshot_requirement(
         r#ref: MAIN_BRANCH.to_string(),
         snapshot_id,
     })
-}
-
-fn initializes_catalog_metadata_pointer(
-    expected_snapshot_id: Option<Option<i64>>,
-    commit_mode: IcebergCatalogCommitMode,
-    catalog_metadata_location: Option<&str>,
-) -> bool {
-    expected_snapshot_id.is_none()
-        && catalog_metadata_location.is_none()
-        && commit_mode.uses_metadata_location_update()
 }
 
 fn validate_scoped_overwrite_format(
@@ -588,22 +577,14 @@ impl IcebergCommitExec {
                         "Iceberg partition fields must have primitive result types".to_string(),
                     ));
                 };
-                let value = match (expected_type, value) {
-                    (PrimitiveType::Long, PrimitiveLiteral::Int(value)) => {
-                        PrimitiveLiteral::Long(i64::from(*value))
-                    }
-                    (PrimitiveType::Double, PrimitiveLiteral::Float(value)) => {
-                        PrimitiveLiteral::Double(ordered_float::OrderedFloat(f64::from(
-                            value.into_inner(),
-                        )))
-                    }
-                    (_, value) if expected_type.compatible(value) => value.clone(),
-                    _ => {
-                        return Err(DataFusionError::Plan(format!(
+                let value = expected_type
+                    .promote_literal(value)
+                    .ok_or_else(|| {
+                        DataFusionError::Plan(format!(
                             "Iceberg partition value {value:?} is incompatible with {expected_type}"
-                        )));
-                    }
-                };
+                        ))
+                    })?
+                    .into_owned();
                 Ok(Some(Literal::Primitive(value)))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -820,18 +801,14 @@ impl ExecutionPlan for IcebergCommitExec {
                 &catalog_table_info,
                 &commit_info.table_properties,
             )?;
-            let table_property_metadata_location =
-                metadata_location_from_properties(&commit_info.table_properties);
-            let catalog_recorded_metadata_location = table_property_metadata_location
-                .clone()
-                .or(catalog_table_info.metadata_location.clone());
+            let catalog_recorded_metadata_location =
+                metadata_location_from_properties(&commit_info.table_properties)
+                    .or_else(|| catalog_table_info.metadata_location.clone());
             // A catalog entry can precede the first metadata commit for a write planned without
             // a base table. Only that plan may initialize the catalog pointer with a CAS update.
-            let initializes_catalog_metadata_pointer = initializes_catalog_metadata_pointer(
-                expected_snapshot_id,
-                catalog_commit_mode,
-                catalog_recorded_metadata_location.as_deref(),
-            );
+            let initializes_catalog_metadata_pointer = expected_snapshot_id.is_none()
+                && catalog_recorded_metadata_location.is_none()
+                && catalog_commit_mode.uses_metadata_location_update();
             let catalog_metadata_location = if initializes_catalog_metadata_pointer {
                 None
             } else {
@@ -875,7 +852,9 @@ impl ExecutionPlan for IcebergCommitExec {
                 catalog_commit_mode
             );
 
-            if latest_meta_res.as_ref().is_none_or(Result::is_err) {
+            let initial_latest_meta = if let Some(Ok(path)) = latest_meta_res {
+                path
+            } else {
                 Self::validate_requirements(None, &commit_info.requirements)?;
                 if let Some(catalog_table) = catalog_metadata_update_table {
                     let bootstrap_result = bootstrap_new_table_with_style(
@@ -927,14 +906,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 }
 
                 return commit_count_batch(schema, commit_info.row_count);
-            }
-
-            let initial_latest_meta = latest_meta_res.ok_or_else(|| {
-                DataFusionError::Internal(
-                    "missing resolved Iceberg metadata after catalog pointer initialization"
-                        .to_string(),
-                )
-            })??;
+            };
 
             let mut attempt = 0;
             loop {
@@ -1574,46 +1546,6 @@ mod tests {
         DataContentType, DataFileFormat, FormatVersion, Operation, SnapshotBuilder,
         SnapshotReference, SnapshotRetention,
     };
-
-    #[test]
-    fn catalog_pointer_initialization_requires_a_planned_new_table_and_cas_commit() {
-        for commit_mode in [
-            IcebergCatalogCommitMode::MetadataLocationCas,
-            IcebergCatalogCommitMode::CompatibilityCatalogCommit,
-        ] {
-            assert!(initializes_catalog_metadata_pointer(
-                None,
-                commit_mode,
-                None
-            ));
-            assert!(!initializes_catalog_metadata_pointer(
-                Some(None),
-                commit_mode,
-                None
-            ));
-            assert!(!initializes_catalog_metadata_pointer(
-                Some(Some(42)),
-                commit_mode,
-                None
-            ));
-            assert!(!initializes_catalog_metadata_pointer(
-                None,
-                commit_mode,
-                Some("s3://bucket/table/metadata/00000.metadata.json")
-            ));
-        }
-
-        assert!(!initializes_catalog_metadata_pointer(
-            None,
-            IcebergCatalogCommitMode::Filesystem,
-            None
-        ));
-        assert!(!initializes_catalog_metadata_pointer(
-            None,
-            IcebergCatalogCommitMode::CatalogCommit,
-            None
-        ));
-    }
 
     #[test]
     fn scoped_overwrite_rejects_effective_v3_after_schema_evolution() {

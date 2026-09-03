@@ -268,20 +268,16 @@ fn int_long_map_into(
         .collect()
 }
 
-fn datum_to_bytes(datum: &Datum) -> Result<Vec<u8>, String> {
-    datum.r#type.literal_to_bytes(&datum.literal)
-}
-
 fn bytes_map_from(values: HashMap<i32, Datum>) -> Result<Option<Vec<IntBytesMapEntry>>, String> {
     if values.is_empty() {
         Ok(None)
     } else {
         let mut out = values
             .into_iter()
-            .map(|(key, value)| {
-                datum_to_bytes(&value).map(|value| IntBytesMapEntry {
+            .map(|(key, datum)| {
+                Ok(IntBytesMapEntry {
                     key,
-                    value: ByteBuf::from(value),
+                    value: ByteBuf::from(datum.to_bytes()?),
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;

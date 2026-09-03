@@ -18,7 +18,6 @@
 // [CREDIT]: https://raw.githubusercontent.com/apache/iceberg-rust/dc349284a4204c1a56af47fb3177ace6f9e899a0/crates/iceberg/src/spec/manifest/writer.rs
 
 use std::cmp::Ordering;
-use std::iter;
 use std::sync::Arc;
 
 use apache_avro::{Writer as AvroWriter, to_value};
@@ -28,7 +27,7 @@ use super::{
 };
 use crate::spec::FormatVersion;
 use crate::spec::manifest_list::{FieldSummary, ManifestContentType, ManifestFile};
-use crate::spec::types::{Literal, PrimitiveLiteral, PrimitiveType, Type};
+use crate::spec::types::{Datum, Literal, PrimitiveLiteral, PrimitiveType, Type};
 
 #[derive(Debug, Default)]
 struct PartitionFieldStats {
@@ -38,7 +37,7 @@ struct PartitionFieldStats {
     upper_bound: Option<PrimitiveLiteral>,
 }
 
-fn compare_partition_values(
+fn compare_partition_literals(
     partition_type: &PrimitiveType,
     left: &PrimitiveLiteral,
     right: &PrimitiveLiteral,
@@ -69,14 +68,6 @@ fn compare_partition_values(
     }
 }
 
-fn is_nan(value: &PrimitiveLiteral) -> bool {
-    match value {
-        PrimitiveLiteral::Float(value) => value.0.is_nan(),
-        PrimitiveLiteral::Double(value) => value.0.is_nan(),
-        _ => false,
-    }
-}
-
 fn partition_summaries(
     metadata: &ManifestMetadata,
     entries: &[ManifestEntryRef],
@@ -86,8 +77,9 @@ fn partition_summaries(
         .partition_type(&metadata.schema)
         .map_err(|error| format!("Partition type error: {error}"))?;
     let fields = partition_type.fields();
-    let mut stats = iter::repeat_with(PartitionFieldStats::default)
-        .take(fields.len())
+    let mut stats = fields
+        .iter()
+        .map(|_| PartitionFieldStats::default())
         .collect::<Vec<_>>();
 
     for entry in entries {
@@ -131,29 +123,31 @@ fn partition_summaries(
                     field.name
                 ));
             };
-            if !primitive_type.compatible(value) {
-                return Err(format!(
+            let value = primitive_type.promote_literal(value).ok_or_else(|| {
+                format!(
                     "Iceberg partition field `{}` value is incompatible with type {primitive_type}",
                     field.name
-                ));
-            }
-            if is_nan(value) {
+                )
+            })?;
+            let value = value.as_ref();
+            let is_nan = match value {
+                PrimitiveLiteral::Float(value) => value.0.is_nan(),
+                PrimitiveLiteral::Double(value) => value.0.is_nan(),
+                _ => false,
+            };
+            if is_nan {
                 field_stats.contains_nan = true;
                 continue;
             }
 
-            if field_stats
-                .lower_bound
-                .as_ref()
-                .is_none_or(|lower| compare_partition_values(primitive_type, value, lower).is_lt())
-            {
+            if field_stats.lower_bound.as_ref().is_none_or(|lower| {
+                compare_partition_literals(primitive_type, value, lower).is_lt()
+            }) {
                 field_stats.lower_bound = Some(value.clone());
             }
-            if field_stats
-                .upper_bound
-                .as_ref()
-                .is_none_or(|upper| compare_partition_values(primitive_type, value, upper).is_gt())
-            {
+            if field_stats.upper_bound.as_ref().is_none_or(|upper| {
+                compare_partition_literals(primitive_type, value, upper).is_gt()
+            }) {
                 field_stats.upper_bound = Some(value.clone());
             }
         }
@@ -172,12 +166,14 @@ fn partition_summaries(
             let mut summary =
                 FieldSummary::new(stats.contains_null).with_contains_nan(stats.contains_nan);
             if let Some(lower_bound) = stats.lower_bound {
-                summary =
-                    summary.with_lower_bound_bytes(primitive_type.literal_to_bytes(&lower_bound)?);
+                summary = summary.with_lower_bound_bytes(
+                    Datum::new(primitive_type.clone(), lower_bound).to_bytes()?,
+                );
             }
             if let Some(upper_bound) = stats.upper_bound {
-                summary =
-                    summary.with_upper_bound_bytes(primitive_type.literal_to_bytes(&upper_bound)?);
+                summary = summary.with_upper_bound_bytes(
+                    Datum::new(primitive_type.clone(), upper_bound).to_bytes()?,
+                );
             }
             Ok(summary)
         })
@@ -426,7 +422,7 @@ mod tests {
 
     use ordered_float::OrderedFloat;
 
-    use super::{ManifestMetadata, ManifestWriterBuilder, compare_partition_values};
+    use super::{ManifestMetadata, ManifestWriterBuilder, compare_partition_literals};
     use crate::spec::{
         DataContentType, DataFile, DataFileFormat, Datum, FormatVersion, Literal, Manifest,
         ManifestContentType, NestedField, PartitionSpec, PrimitiveLiteral, PrimitiveType, Schema,
@@ -578,7 +574,7 @@ mod tests {
         let positive_high_half = PrimitiveLiteral::UInt128(1_u128 << 126);
 
         assert!(
-            compare_partition_values(&PrimitiveType::Uuid, &signed_high_bit, &positive_high_half)
+            compare_partition_literals(&PrimitiveType::Uuid, &signed_high_bit, &positive_high_half)
                 .is_lt()
         );
     }

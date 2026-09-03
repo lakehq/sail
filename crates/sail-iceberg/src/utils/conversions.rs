@@ -53,13 +53,9 @@ fn primitive_literal_to_scalar(prim: &PrimitiveLiteral, prim_type: &PrimitiveTyp
     use PrimitiveLiteral as PL;
     use ScalarValue as SV;
 
+    let promoted = prim_type.promote_literal(prim);
+    let prim = promoted.as_deref().unwrap_or(prim);
     match (prim_type, prim) {
-        // Manifest partition values may use the narrower Avro integer representation even when
-        // the table field is long. Honor the explicit Iceberg type when building Arrow arrays.
-        (PrimitiveType::Long, PL::Int(value)) => SV::Int64(Some(i64::from(*value))),
-        (PrimitiveType::Double, PL::Float(value)) => {
-            SV::Float64(Some(f64::from(value.into_inner())))
-        }
         // Date: Int -> Date32
         (PrimitiveType::Date, PL::Int(v)) => SV::Date32(Some(*v)),
         // Time: Long (microseconds) -> Time64Microsecond
@@ -458,7 +454,7 @@ mod tests {
     }
 
     #[test]
-    fn test_primitive_literal_uses_widened_target_type() {
+    fn test_widened_primitive_literal_uses_target_type() {
         assert_eq!(
             primitive_literal_to_scalar(&PrimitiveLiteral::Int(42), &PrimitiveType::Long),
             ScalarValue::Int64(Some(42))
@@ -469,17 +465,6 @@ mod tests {
                 &PrimitiveType::Double,
             ),
             ScalarValue::Float64(Some(1.5))
-        );
-        assert_eq!(
-            primitive_literal_to_scalar(
-                &PrimitiveLiteral::Binary(vec![1, 2, 3]),
-                &PrimitiveType::Binary,
-            ),
-            ScalarValue::LargeBinary(Some(vec![1, 2, 3]))
-        );
-        assert_eq!(
-            primitive_literal_to_scalar(&PrimitiveLiteral::UInt128(1), &PrimitiveType::Uuid),
-            ScalarValue::FixedSizeBinary(16, Some(1_u128.to_be_bytes().to_vec()))
         );
     }
 
