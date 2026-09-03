@@ -19,7 +19,16 @@ where
                 | SystemStoreMessage::Flush { reply } => {
                     let _ = reply.send(Err(self.failure()));
                 }
-                SystemStoreMessage::Read(query) => query.fail(self.failure()),
+                SystemStoreMessage::Read(query) => {
+                    let failure = self.failure();
+                    ctx.spawn(async move {
+                        if let Err(error) =
+                            tokio::task::spawn_blocking(move || query.fail(failure)).await
+                        {
+                            log::error!("system store read failure task failed: {error}");
+                        }
+                    });
+                }
                 SystemStoreMessage::Shutdown { reply } => {
                     let _ = reply.send(Ok(()));
                     return ActorAction::Stop;
@@ -41,23 +50,17 @@ where
                 }
                 let _ = reply.send(result);
             }
-            SystemStoreMessage::Read(query) => match self.engine.read(query).await {
-                Ok(None) => {}
-                Ok(Some(read)) => {
-                    ctx.spawn(async move {
-                        // Aborting this task cancels the reply. Tokio cannot interrupt a
-                        // blocking scan that has already started, but it will release its snapshot
-                        // when it completes.
-                        if let Err(error) = tokio::task::spawn_blocking(read).await {
-                            log::error!("system store read task failed: {error}");
-                        }
-                    });
-                }
-                Err(error) => {
-                    self.fail(&error);
-                    log::error!("failed to acquire system store read snapshot: {error}");
-                }
-            },
+            SystemStoreMessage::Read(query) => {
+                let read = self.engine.read(query).await;
+                ctx.spawn(async move {
+                    // Aborting this task cancels the reply. Tokio cannot interrupt a
+                    // blocking scan that has already started, but it will release its snapshot
+                    // when it completes.
+                    if let Err(error) = tokio::task::spawn_blocking(read).await {
+                        log::error!("system store read task failed: {error}");
+                    }
+                });
+            }
             SystemStoreMessage::Flush { reply } => {
                 let result = self.engine.flush().await;
                 if let Err(error) = &result {
