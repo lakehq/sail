@@ -108,11 +108,13 @@ fn type_of(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 
 fn bitmap_bit_position(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput { arguments, .. } = input;
-    let value = arguments.one()?;
-    let num_bits = 8 * 4 * 1024;
+    // Spark coerces the input to LONG and returns LONG (bitmapExpressions.scala:79).
+    // Doing the arithmetic in 64 bits also keeps large inputs from overflowing.
+    let value = cast(arguments.one()?, DataType::Int64);
+    let num_bits = 8i64 * 4 * 1024;
     Ok(when(
-        value.clone().gt(lit(0)),
-        (value.clone() - lit(1)) % lit(num_bits),
+        value.clone().gt(lit(0i64)),
+        (value.clone() - lit(1i64)) % lit(num_bits),
     )
     .when(lit(true), (-value) % lit(num_bits))
     .end()?)
@@ -120,11 +122,13 @@ fn bitmap_bit_position(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 
 fn bitmap_bucket_number(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput { arguments, .. } = input;
-    let value = arguments.one()?;
-    let num_bits = 8 * 4 * 1024;
+    // Spark coerces the input to LONG and returns LONG (bitmapExpressions.scala:46).
+    // Doing the arithmetic in 64 bits also keeps large inputs from overflowing.
+    let value = cast(arguments.one()?, DataType::Int64);
+    let num_bits = 8i64 * 4 * 1024;
     Ok(when(
-        value.clone().gt(lit(0)),
-        lit(1) + (value.clone() - lit(1)) / lit(num_bits),
+        value.clone().gt(lit(0i64)),
+        lit(1i64) + (value.clone() - lit(1i64)) / lit(num_bits),
     )
     .when(lit(true), value / lit(num_bits))
     .end()?)
