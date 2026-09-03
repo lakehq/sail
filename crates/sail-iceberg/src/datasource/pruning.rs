@@ -148,10 +148,10 @@ impl PruningStatistics for IcebergPruningStats {
         if let Some(arr) = self.nulls_cache.borrow().get(&field_id) {
             return Some(arr.clone());
         }
-        let counts: Vec<u64> = self
+        let counts: Vec<Option<u64>> = self
             .files
             .iter()
-            .map(|f| f.null_value_counts().get(&field_id).copied().unwrap_or(0))
+            .map(|f| f.null_value_counts().get(&field_id).copied())
             .collect();
         let arr: ArrayRef = Arc::new(UInt64Array::from(counts));
         self.nulls_cache.borrow_mut().insert(field_id, arr.clone());

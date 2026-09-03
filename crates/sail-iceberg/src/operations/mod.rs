@@ -24,7 +24,7 @@ pub use bootstrap::*;
 pub use overwrite::*;
 pub use snapshot::*;
 
-use crate::spec::Snapshot;
+use crate::spec::{FormatVersion, Snapshot};
 
 pub struct Transaction {
     table_uri: String,
@@ -51,7 +51,10 @@ impl Transaction {
         &self.snapshot
     }
 
-    pub fn next_sequence_number(&self) -> Result<i64, String> {
+    pub fn next_sequence_number(&self, format_version: FormatVersion) -> Result<i64, String> {
+        if format_version == FormatVersion::V1 {
+            return Ok(0);
+        }
         self.last_sequence_number.checked_add(1).ok_or_else(|| {
             "cannot allocate Iceberg snapshot sequence number: table sequence is exhausted"
                 .to_string()

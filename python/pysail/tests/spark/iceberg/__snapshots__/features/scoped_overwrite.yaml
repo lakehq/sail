@@ -7,6 +7,7 @@ data:
   deleted-data-files: '0'
   deleted-records: '0'
   operation: overwrite
+  replace-partitions: 'true'
   total-data-files: '3'
   total-delete-files: '0'
   total-equality-deletes: '0'
@@ -108,6 +109,7 @@ data:
       deleted-data-files: '1'
       deleted-records: '2'
       operation: overwrite
+      replace-partitions: 'true'
       total-data-files: '2'
       total-delete-files: '0'
       total-equality-deletes: '0'
@@ -133,7 +135,7 @@ data:
     key-metadata: null
     manifest-length: <bytes>
     manifest-path: file://<root>/metadata/manifest-<uuid>.avro
-    min-sequence-number: 1
+    min-sequence-number: 3
     partition-spec-id: 0
     partitions: null
     sequence-number: 3
@@ -175,6 +177,7 @@ data:
   deleted-data-files: '1'
   deleted-records: '2'
   operation: overwrite
+  replace-partitions: 'true'
   total-data-files: '2'
   total-delete-files: '0'
   total-equality-deletes: '0'
@@ -322,7 +325,7 @@ data:
     key-metadata: null
     manifest-length: <bytes>
     manifest-path: file://<root>/metadata/manifest-<uuid>.avro
-    min-sequence-number: 1
+    min-sequence-number: 3
     partition-spec-id: 0
     partitions: null
     sequence-number: 3
@@ -397,7 +400,7 @@ data:
   added-records: '0'
   deleted-data-files: '1'
   deleted-records: '2'
-  operation: overwrite
+  operation: delete
   total-data-files: '1'
   total-delete-files: '0'
   total-equality-deletes: '0'

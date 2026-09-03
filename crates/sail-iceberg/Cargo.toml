@@ -43,6 +43,7 @@ url = { workspace = true }
 futures = { workspace = true }
 flate2 = { workspace = true }
 serde = { workspace = true }
+tokio = { workspace = true }
 uuid = { workspace = true }
 parquet = { workspace = true }
 bytes = { workspace = true }
