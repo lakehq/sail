@@ -137,7 +137,13 @@ data:
     manifest-path: file://<root>/metadata/manifest-<uuid>.avro
     min-sequence-number: 3
     partition-spec-id: 0
-    partitions: null
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        QQ==
+      upper-bound: !!binary |
+        QQ==
     sequence-number: 3
   - added-files-count: 1
     added-rows-count: 2
@@ -152,7 +158,13 @@ data:
     manifest-path: file://<root>/metadata/manifest-<uuid>.avro
     min-sequence-number: 2
     partition-spec-id: 0
-    partitions: null
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        Qg==
+      upper-bound: !!binary |
+        Qg==
     sequence-number: 2
   - added-files-count: 1
     added-rows-count: 2
@@ -167,7 +179,13 @@ data:
     manifest-path: file://<root>/metadata/manifest-<uuid>.avro
     min-sequence-number: 3
     partition-spec-id: 0
-    partitions: null
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        QQ==
+      upper-bound: !!binary |
+        QQ==
     sequence-number: 3
 ---
 name: "test_dynamic_overwrite_replaces_only_touched_partitions_and_empty_input_is_a_noop.2"
@@ -327,7 +345,13 @@ data:
     manifest-path: file://<root>/metadata/manifest-<uuid>.avro
     min-sequence-number: 3
     partition-spec-id: 0
-    partitions: null
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        QQ==
+      upper-bound: !!binary |
+        QQ==
     sequence-number: 3
   - added-files-count: 1
     added-rows-count: 2
@@ -342,7 +366,13 @@ data:
     manifest-path: file://<root>/metadata/manifest-<uuid>.avro
     min-sequence-number: 2
     partition-spec-id: 0
-    partitions: null
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        Qg==
+      upper-bound: !!binary |
+        Qg==
     sequence-number: 2
   - added-files-count: 1
     added-rows-count: 2
@@ -357,7 +387,13 @@ data:
     manifest-path: file://<root>/metadata/manifest-<uuid>.avro
     min-sequence-number: 3
     partition-spec-id: 0
-    partitions: null
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        QQ==
+      upper-bound: !!binary |
+        QQ==
     sequence-number: 3
 ---
 name: "test_predicate_overwrite_rewrites_only_candidate_manifests.2"

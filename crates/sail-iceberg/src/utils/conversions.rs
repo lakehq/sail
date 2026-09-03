@@ -17,8 +17,8 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{
     Array, ArrayRef, BooleanArray, Date32Array, Float32Array, Float64Array, Int32Array, Int64Array,
-    MapArray, StringArray, StructArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, new_empty_array,
+    ListArray, MapArray, StringArray, StructArray, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, new_empty_array,
 };
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
@@ -54,6 +54,12 @@ fn primitive_literal_to_scalar(prim: &PrimitiveLiteral, prim_type: &PrimitiveTyp
     use ScalarValue as SV;
 
     match (prim_type, prim) {
+        // Manifest partition values may use the narrower Avro integer representation even when
+        // the table field is long. Honor the explicit Iceberg type when building Arrow arrays.
+        (PrimitiveType::Long, PL::Int(value)) => SV::Int64(Some(i64::from(*value))),
+        (PrimitiveType::Double, PL::Float(value)) => {
+            SV::Float64(Some(f64::from(value.into_inner())))
+        }
         // Date: Int -> Date32
         (PrimitiveType::Date, PL::Int(v)) => SV::Date32(Some(*v)),
         // Time: Long (microseconds) -> Time64Microsecond
@@ -79,7 +85,11 @@ fn primitive_literal_to_scalar(prim: &PrimitiveLiteral, prim_type: &PrimitiveTyp
             Ok(size) => SV::FixedSizeBinary(size, Some(value.clone())),
             Err(_) => SV::LargeBinary(Some(value.clone())),
         },
-        (PrimitiveType::Binary, PL::Binary(value)) => SV::LargeBinary(Some(value.clone())),
+        (PrimitiveType::Binary, PL::Binary(value))
+        | (PrimitiveType::Geometry { .. }, PL::Binary(value))
+        | (PrimitiveType::Geography { .. }, PL::Binary(value)) => {
+            SV::LargeBinary(Some(value.clone()))
+        }
         // Iceberg encodes String lower/upper bounds as raw bytes (UTF-8) in file metrics.
         // Decode them so pruning predicates comparing against Utf8 literals work.
         (PrimitiveType::String, PL::Binary(b)) => {
@@ -160,18 +170,26 @@ fn struct_literal_with_type(
 }
 
 fn list_literal_with_type(items: &[Option<Literal>], list_ty: &ListType) -> Result<ScalarValue> {
-    let element_type = iceberg_type_to_arrow(list_ty.element_field.field_type.as_ref())?;
-    let nullable = !list_ty.element_field.required;
+    let arrow_type = iceberg_type_to_arrow(&Type::List(list_ty.clone()))?;
+    let ArrowDataType::List(element_field) = arrow_type else {
+        return Err(DataFusionError::Internal(
+            "Expected Arrow list type when converting Iceberg list literal".to_string(),
+        ));
+    };
+    let element_type = element_field.data_type();
     let mut scalars = Vec::with_capacity(items.len());
     for item in items {
         let scalar = match item {
             Some(lit) => to_scalar(lit, list_ty.element_field.field_type.as_ref())?,
-            None => null_scalar_for_type(&element_type),
+            None => null_scalar_for_type(element_type),
         };
         scalars.push(scalar);
     }
-    let list_array = ScalarValue::new_list(&scalars, &element_type, nullable);
-    Ok(ScalarValue::List(list_array))
+    let values = scalars_to_array_or_empty(scalars, element_type);
+    let offsets = OffsetBuffer::new(vec![0, items.len() as i32].into());
+    let list_array = ListArray::try_new(element_field, offsets, values, None)
+        .map_err(|error| DataFusionError::ArrowError(Box::new(error), None))?;
+    Ok(ScalarValue::List(Arc::new(list_array)))
 }
 
 fn map_literal_with_type(
@@ -378,6 +396,7 @@ pub fn array_value_to_literal(array: &ArrayRef, row: usize) -> Option<Literal> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::spec::types::NestedField;
 
     #[test]
     fn test_primitive_to_scalar_default() {
@@ -436,6 +455,48 @@ mod tests {
             primitive_literal_to_scalar(&lit, &ty),
             ScalarValue::TimestampNanosecond(Some(42_000), None)
         );
+    }
+
+    #[test]
+    fn test_primitive_literal_uses_widened_target_type() {
+        assert_eq!(
+            primitive_literal_to_scalar(&PrimitiveLiteral::Int(42), &PrimitiveType::Long),
+            ScalarValue::Int64(Some(42))
+        );
+        assert_eq!(
+            primitive_literal_to_scalar(
+                &PrimitiveLiteral::Float(ordered_float::OrderedFloat(1.5)),
+                &PrimitiveType::Double,
+            ),
+            ScalarValue::Float64(Some(1.5))
+        );
+        assert_eq!(
+            primitive_literal_to_scalar(
+                &PrimitiveLiteral::Binary(vec![1, 2, 3]),
+                &PrimitiveType::Binary,
+            ),
+            ScalarValue::LargeBinary(Some(vec![1, 2, 3]))
+        );
+        assert_eq!(
+            primitive_literal_to_scalar(&PrimitiveLiteral::UInt128(1), &PrimitiveType::Uuid),
+            ScalarValue::FixedSizeBinary(16, Some(1_u128.to_be_bytes().to_vec()))
+        );
+    }
+
+    #[test]
+    fn test_list_scalar_preserves_element_field_metadata() -> Result<()> {
+        let list_type = Type::List(ListType::new(Arc::new(NestedField::list_element(
+            17,
+            Type::Primitive(PrimitiveType::Long),
+            true,
+        ))));
+        let scalar = to_scalar(
+            &Literal::List(vec![Some(Literal::Primitive(PrimitiveLiteral::Long(42)))]),
+            &list_type,
+        )?;
+
+        assert_eq!(scalar.data_type(), iceberg_type_to_arrow(&list_type)?);
+        Ok(())
     }
 
     #[test]

@@ -39,7 +39,10 @@ use crate::catalog_support::commit::{
     IcebergCatalogCommitMode, catalog_requirements, table_metadata_location,
 };
 use crate::io::{StoreContext, load_manifest, load_manifest_list};
-use crate::lake_source::metadata_location_from_properties;
+use crate::lake_source::{
+    catalog_managed_iceberg_from_properties, metadata_location_from_properties,
+    resolve_iceberg_metadata_location,
+};
 use crate::operations::bootstrap::{
     NewTableMetadataStyle, PersistStrategy, bootstrap_first_snapshot,
     bootstrap_new_table_with_style, prepare_bootstrap_snapshot,
@@ -130,6 +133,16 @@ fn expected_snapshot_requirement(
         r#ref: MAIN_BRANCH.to_string(),
         snapshot_id,
     })
+}
+
+fn initializes_catalog_metadata_pointer(
+    expected_snapshot_id: Option<Option<i64>>,
+    commit_mode: IcebergCatalogCommitMode,
+    catalog_metadata_location: Option<&str>,
+) -> bool {
+    expected_snapshot_id.is_none()
+        && catalog_metadata_location.is_none()
+        && commit_mode.uses_metadata_location_update()
 }
 
 fn validate_scoped_overwrite_format(
@@ -806,23 +819,42 @@ impl ExecutionPlan for IcebergCommitExec {
                 commit_info.lakehouse_table.as_ref(),
                 &catalog_table_info,
                 &commit_info.table_properties,
-            );
+            )?;
             let table_property_metadata_location =
                 metadata_location_from_properties(&commit_info.table_properties);
             let catalog_recorded_metadata_location = table_property_metadata_location
                 .clone()
                 .or(catalog_table_info.metadata_location.clone());
-            let catalog_metadata_location = catalog_commit_mode
-                .uses_catalog_metadata()
-                .then(|| catalog_recorded_metadata_location.clone())
-                .flatten();
+            // A catalog entry can precede the first metadata commit for a write planned without
+            // a base table. Only that plan may initialize the catalog pointer with a CAS update.
+            let initializes_catalog_metadata_pointer = initializes_catalog_metadata_pointer(
+                expected_snapshot_id,
+                catalog_commit_mode,
+                catalog_recorded_metadata_location.as_deref(),
+            );
+            let catalog_metadata_location = if initializes_catalog_metadata_pointer {
+                None
+            } else {
+                resolve_iceberg_metadata_location(
+                    commit_info.lakehouse_table.as_ref(),
+                    catalog_recorded_metadata_location.clone(),
+                    catalog_table_info.is_catalog_managed_iceberg_table
+                        || catalog_managed_iceberg_from_properties(&commit_info.table_properties),
+                )?
+            };
 
             // Managed external catalogs use the authoritative metadata-location.
             // Path tables may record metadata-location in the session catalog for display, but
-            // their current state is discovered from the metadata directory and version hint.
-            let latest_meta_res = match catalog_metadata_location.as_deref() {
-                Some(location) => Ok(metadata_location_to_object_path_string(location)?),
-                None => crate::table::find_latest_metadata_file(&object_store, &table_url).await,
+            // their current state is discovered from the authoritative metadata directory listing.
+            let latest_meta_res = if initializes_catalog_metadata_pointer {
+                None
+            } else {
+                Some(match catalog_metadata_location.as_deref() {
+                    Some(location) => Ok(metadata_location_to_object_path_string(location)?),
+                    None => {
+                        crate::table::find_latest_metadata_file(&object_store, &table_url).await
+                    }
+                })
             };
             let catalog_metadata_table = catalog_table
                 .as_ref()
@@ -843,7 +875,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 catalog_commit_mode
             );
 
-            if latest_meta_res.is_err() {
+            if latest_meta_res.as_ref().is_none_or(Result::is_err) {
                 Self::validate_requirements(None, &commit_info.requirements)?;
                 if let Some(catalog_table) = catalog_metadata_update_table {
                     let bootstrap_result = bootstrap_new_table_with_style(
@@ -897,7 +929,12 @@ impl ExecutionPlan for IcebergCommitExec {
                 return commit_count_batch(schema, commit_info.row_count);
             }
 
-            let initial_latest_meta = latest_meta_res?;
+            let initial_latest_meta = latest_meta_res.ok_or_else(|| {
+                DataFusionError::Internal(
+                    "missing resolved Iceberg metadata after catalog pointer initialization"
+                        .to_string(),
+                )
+            })??;
 
             let mut attempt = 0;
             loop {
@@ -1539,6 +1576,46 @@ mod tests {
     };
 
     #[test]
+    fn catalog_pointer_initialization_requires_a_planned_new_table_and_cas_commit() {
+        for commit_mode in [
+            IcebergCatalogCommitMode::MetadataLocationCas,
+            IcebergCatalogCommitMode::CompatibilityCatalogCommit,
+        ] {
+            assert!(initializes_catalog_metadata_pointer(
+                None,
+                commit_mode,
+                None
+            ));
+            assert!(!initializes_catalog_metadata_pointer(
+                Some(None),
+                commit_mode,
+                None
+            ));
+            assert!(!initializes_catalog_metadata_pointer(
+                Some(Some(42)),
+                commit_mode,
+                None
+            ));
+            assert!(!initializes_catalog_metadata_pointer(
+                None,
+                commit_mode,
+                Some("s3://bucket/table/metadata/00000.metadata.json")
+            ));
+        }
+
+        assert!(!initializes_catalog_metadata_pointer(
+            None,
+            IcebergCatalogCommitMode::Filesystem,
+            None
+        ));
+        assert!(!initializes_catalog_metadata_pointer(
+            None,
+            IcebergCatalogCommitMode::CatalogCommit,
+            None
+        ));
+    }
+
+    #[test]
     fn scoped_overwrite_rejects_effective_v3_after_schema_evolution() {
         let schema = IcebergSchema::builder()
             .with_schema_id(1)
@@ -2024,7 +2101,7 @@ mod tests {
     }
 
     #[test]
-    fn metadata_conflict_cleans_attempt_artifacts_and_uncommitted_task_file() {
+    fn metadata_conflict_refreshes_listing_and_commits_the_next_version() {
         futures::executor::block_on(async {
             let table_url = Url::parse("file:///tmp/commit-conflict/").expect("table URL");
             let memory = Arc::new(object_store::memory::InMemory::new());
@@ -2167,13 +2244,13 @@ mod tests {
             let mut output = commit
                 .execute(0, context.task_ctx())
                 .expect("commit stream");
-            let error = output
+            let batch = output
                 .next()
                 .await
                 .expect("commit result")
-                .expect_err("injected metadata conflict must exhaust retries");
+                .expect("commit must retry from the authoritative metadata listing");
 
-            assert!(error.to_string().contains("after 5 retries"));
+            assert_eq!(batch.num_rows(), 1);
             assert!(conflict_store.conflict_injected.load(Ordering::SeqCst));
             let metadata_prefix = Path::from("tmp/commit-conflict/metadata");
             let metadata_objects = memory
@@ -2193,12 +2270,13 @@ mod tests {
             assert!(
                 metadata_paths
                     .iter()
-                    .all(|path| !path.contains("/manifest-") && !path.contains("/snap-"))
+                    .any(|path| path.ends_with("metadata/v3.metadata.json"))
             );
-            assert!(matches!(
-                store_ctx.prefixed.head(&task_file_path).await,
-                Err(object_store::Error::NotFound { .. })
-            ));
+            store_ctx
+                .prefixed
+                .head(&task_file_path)
+                .await
+                .expect("successfully committed task file");
         });
     }
 }

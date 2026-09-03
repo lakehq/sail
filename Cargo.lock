@@ -7947,6 +7947,7 @@ dependencies = [
  "sail-sql-analyzer",
  "serde",
  "serde_arrow",
+ "serde_bytes",
  "serde_json",
  "tokio",
  "url",
