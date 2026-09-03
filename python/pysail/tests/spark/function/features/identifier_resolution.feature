@@ -38,11 +38,11 @@ Feature: identifier resolution beyond ASCII
         | 1 |
 
       Examples:
-        | case                          | qualifier | alias |
-        | ASCII                         | t         | T     |
-        | umlaut                        | `ä`       | `Ä`   |
-        | Cherokee                      | `Ꭰ`       | `ꭰ`   |
-        | lowercase forms differ        | `ID`      | `ıd`  |
+        | case                   | qualifier | alias |
+        | ASCII                  | t         | T     |
+        | umlaut                 | `ä`       | `Ä`   |
+        | Cherokee               | `Ꭰ`       | `ꭰ`   |
+        | lowercase forms differ | `ID`      | `ıd`  |
 
   Rule: A lambda parameter is matched by the lowercased name
 
@@ -141,3 +141,88 @@ Feature: identifier resolution beyond ASCII
         SELECT transform(array(1), `𐕰` -> `𐖗` + 1) AS result
         """
       Then query error UNRESOLVED_COLUMN|is missing from the schema
+
+  Rule: The alias of an aggregate is matched the way an attribute reference is
+
+    # `HAVING` and `ORDER BY` look the alias up with the rule for an attribute reference, not with
+    # the resolver alone: `ıd` and `Id` are equal under `equalsIgnoreCase` and Spark still rejects
+    # them, so the name must also survive lowercasing. The pair is what tells the two rules apart.
+    Scenario Outline: aggregate alias: <case>
+      When query
+        """
+        SELECT a, count(*) AS <alias> FROM (SELECT 1 AS a) GROUP BY a HAVING <probe> > 0
+        """
+      Then query result
+        | a | <name> |
+        | 1 | 1      |
+
+      Examples:
+        | case           | alias | probe | name |
+        | same case      | c     | c     | c    |
+        | differing case | c     | C     | c    |
+
+    Scenario: the alias is matched beyond ASCII
+      When query
+        """
+        SELECT a, count(*) AS `ä` FROM (SELECT 1 AS a) GROUP BY a HAVING `Ä` > 0
+        """
+      Then query result
+        | a | ä |
+        | 1 | 1 |
+
+    Scenario: the alias of a sort is matched the same way
+      When query
+        """
+        SELECT a, count(*) AS c FROM (SELECT 1 AS a) GROUP BY a ORDER BY C
+        """
+      Then query result
+        | a | c |
+        | 1 | 1 |
+
+    # The controls for the setting: matching the name exactly still works when the analysis is
+    # case sensitive, and a name that differs beyond ASCII is rejected there rather than folded.
+    Scenario: a case sensitive analysis still matches the alias written exactly
+      Given config spark.sql.caseSensitive = true
+      When query
+        """
+        SELECT a, count(*) AS c FROM (SELECT 1 AS a) GROUP BY a HAVING c > 0
+        """
+      Then query result
+        | a | c |
+        | 1 | 1 |
+
+    Scenario: a case sensitive analysis does not match the alias beyond ASCII
+      Given config spark.sql.caseSensitive = true
+      When query
+        """
+        SELECT a, count(*) AS `ä` FROM (SELECT 1 AS a) GROUP BY a HAVING `Ä` > 0
+        """
+      Then query error UNRESOLVED_COLUMN\.WITH_SUGGESTION
+
+    Scenario Outline: an alias that only the resolver would match is rejected: <case>
+      When query
+        """
+        SELECT a, count(*) AS <alias> FROM (SELECT 1 AS a) GROUP BY a HAVING <probe> > 0
+        """
+      Then query error UNRESOLVED_COLUMN\.WITH_SUGGESTION
+
+      Examples:
+        | case              | alias | probe |
+        | dotless i         | `ıd`  | `Id`  |
+        | Greek final sigma | `ς`   | `Σ`   |
+
+    Scenario: a case sensitive analysis does not match the alias
+      Given config spark.sql.caseSensitive = true
+      When query
+        """
+        SELECT a, count(*) AS c FROM (SELECT 1 AS a) GROUP BY a HAVING C
+        """
+      Then query error UNRESOLVED_COLUMN\.WITH_SUGGESTION
+
+    Scenario: a case sensitive analysis does not match the alias of a sort
+      Given config spark.sql.caseSensitive = true
+      When query
+        """
+        SELECT a, count(*) AS c FROM (SELECT 1 AS a) GROUP BY a ORDER BY C
+        """
+      Then query error UNRESOLVED_COLUMN\.WITH_SUGGESTION

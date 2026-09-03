@@ -11,7 +11,7 @@ use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_logical_plan::sort::SortWithinPartitionsNode;
 
-use crate::error::{PlanError, PlanResult};
+use crate::error::PlanResult;
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
@@ -244,16 +244,23 @@ impl PlanResolver<'_> {
             .await;
         match sort_expr {
             Ok(sort_expr) => Ok(sort_expr),
-            Err(_) => {
+            Err(error) => {
                 let mut sorts = Vec::with_capacity(plan.inputs().len());
                 for input_plan in plan.inputs() {
-                    let sort_expr = self
+                    match self
                         .resolve_query_sort_order_by_plan(input_plan, sort, state)
-                        .await?;
-                    sorts.push(sort_expr);
+                        .await
+                    {
+                        Ok(sort_expr) => sorts.push(sort_expr),
+                        // The sort is resolved against the output of the plan first and against
+                        // its inputs only as a fallback, so when neither works the failure to
+                        // report is the one from the output: the fallback saw a narrower schema
+                        // and its message would name fewer columns.
+                        Err(_) => return Err(error),
+                    }
                 }
                 if sorts.len() != 1 {
-                    Err(PlanError::invalid(format!("sort expression: {sort:?}")))
+                    Err(error)
                 } else {
                     Ok(sorts.one()?)
                 }

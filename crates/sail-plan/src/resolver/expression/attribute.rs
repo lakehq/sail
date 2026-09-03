@@ -268,7 +268,10 @@ impl PlanResolver<'_> {
                     name: agg, expr, ..
                 } = expr;
                 match agg.as_slice() {
-                    [agg] if agg.eq_ignore_ascii_case(name.as_ref()) => {
+                    // The alias is looked up with the rule for an attribute reference rather than
+                    // with the resolver alone, so a name that only the resolver would match, such
+                    // as `ıd` against `Id`, does not resolve.
+                    [agg] if self.match_attribute(agg, name.as_ref()) => {
                         Some((name.as_ref().to_string(), expr.clone()))
                     }
                     _ => None,
@@ -277,7 +280,8 @@ impl PlanResolver<'_> {
             .collect::<Vec<_>>();
         if candidates.len() > 1 {
             return Err(PlanError::AnalysisError(format!(
-                "ambiguous aggregate expression: {name:?}"
+                "ambiguous aggregate expression: `{}`",
+                name.as_ref()
             )));
         }
         Ok(candidates.pop())
