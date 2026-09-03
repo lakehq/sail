@@ -67,6 +67,22 @@ impl PlanResolver<'_> {
             } => end_field.or(*start_field),
             _ => None,
         };
+        let spark_interval_metadata = match &cast_to_type {
+            spec::DataType::Interval {
+                interval_unit,
+                start_field,
+                end_field,
+            } => spec::SparkIntervalMetadata::new(*interval_unit, *start_field, *end_field)
+                .map(|metadata| {
+                    serde_json::to_string(&metadata).map_err(|error| {
+                        PlanError::internal(format!(
+                            "failed to serialize Spark interval metadata: {error}"
+                        ))
+                    })
+                })
+                .transpose()?,
+            _ => None,
+        };
         let cast_to_type = self.resolve_data_type(&cast_to_type, state)?;
         let NamedExpr { expr, name, .. } =
             self.resolve_named_expression(expr, schema, state).await?;
@@ -238,7 +254,14 @@ impl PlanResolver<'_> {
             (_, to, true) => try_cast(expr, to),
             (_, to, _) => cast(expr, to),
         };
-        Ok(NamedExpr::new(name, expr))
+        let named_expr = NamedExpr::new(name, expr);
+        Ok(match spark_interval_metadata {
+            Some(metadata) => named_expr.with_metadata(vec![(
+                spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+                metadata,
+            )]),
+            None => named_expr,
+        })
     }
 }
 

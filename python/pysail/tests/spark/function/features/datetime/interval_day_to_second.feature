@@ -195,6 +195,23 @@ Feature: INTERVAL DAY TO SECOND literal parsing and operations
 
   Rule: Subquery and projection
 
+    Scenario: VALUES widens interval qualifiers across rows
+      When query
+        """
+        SELECT day_time, year_month
+        FROM VALUES
+          (INTERVAL 1 DAY, INTERVAL 1 YEAR),
+          (INTERVAL 1 HOUR, INTERVAL 1 MONTH),
+          (NULL, NULL)
+        AS t(day_time, year_month)
+        """
+      Then query schema
+        """
+        root
+         |-- day_time: interval day to hour (nullable = true)
+         |-- year_month: interval year to month (nullable = true)
+        """
+
     Scenario: interval in subquery
       When query
         """

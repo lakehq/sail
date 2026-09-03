@@ -238,9 +238,6 @@ Feature: length() returns character length for strings and byte length for binar
         | big | small |
         | 6   | 6     |
 
-    # Sail still renders a day interval as `INTERVAL '1 00:00:00' DAY TO SECOND`,
-    # while Spark renders it as `INTERVAL '1' DAY`.
-    @sail-bug
     Scenario: an interval is measured as Spark renders it
       When query
         """

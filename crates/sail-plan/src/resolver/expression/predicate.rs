@@ -378,6 +378,9 @@ pub(super) fn coerce_timestamp_string_predicate(
             ) else {
                 return Ok(expr::Expr::InList(InList::new(expr, list, negated)));
             };
+            let has_null_list_value = list.iter().any(is_null_literal_expression);
+            let recursive_list_coercion =
+                matches!(&coercion, TimestampStringInCoercion::List { .. });
 
             let expr = apply_timestamp_string_in_coercion(
                 *expr,
@@ -403,10 +406,57 @@ pub(super) fn coerce_timestamp_string_predicate(
                     )
                 })
                 .collect::<DataFusionResult<Vec<_>>>()?;
-            expr::Expr::InList(InList::new(Box::new(expr), list, negated))
+            if recursive_list_coercion && has_null_list_value && !expr.is_volatile() {
+                // A static nested IN set can miss an equal value when the set also contains NULL.
+                // Spark defines IN as a Kleene equality disjunction for non-volatile operands.
+                recursive_list_in_as_comparisons(expr, list, negated)
+            } else {
+                expr::Expr::InList(InList::new(Box::new(expr), list, negated))
+            }
         }
         expression => expression,
     })
+}
+
+fn is_null_literal_expression(expression: &expr::Expr) -> bool {
+    match expression {
+        expr::Expr::Literal(value, _) => value.is_null(),
+        expr::Expr::Alias(alias) => is_null_literal_expression(&alias.expr),
+        expr::Expr::Cast(datafusion_expr::expr::Cast { expr, .. })
+        | expr::Expr::TryCast(datafusion_expr::expr::TryCast { expr, .. }) => {
+            is_null_literal_expression(expr)
+        }
+        _ => false,
+    }
+}
+
+fn recursive_list_in_as_comparisons(
+    expression: expr::Expr,
+    list: Vec<expr::Expr>,
+    negated: bool,
+) -> expr::Expr {
+    let mut comparisons = list.into_iter().map(|value| {
+        expr::Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(expression.clone()),
+            Operator::Eq,
+            Box::new(value),
+        ))
+    });
+    let Some(first) = comparisons.next() else {
+        return expr::Expr::InList(InList::new(Box::new(expression), vec![], negated));
+    };
+    let combined = comparisons.fold(first, |left, right| {
+        expr::Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(left),
+            Operator::Or,
+            Box::new(right),
+        ))
+    });
+    if negated {
+        expr::Expr::Not(Box::new(combined))
+    } else {
+        combined
+    }
 }
 
 fn coerce_timestamp_pair(
@@ -486,7 +536,7 @@ fn stringify_non_ansi_expression(
     Ok(ScalarUDF::from(SparkToUtf8::new()).call(vec![expression]))
 }
 
-fn spark_interval_metadata_for_expression(
+pub(in crate::resolver) fn spark_interval_metadata_for_expression(
     expression: &expr::Expr,
     schema: &DFSchemaRef,
 ) -> DataFusionResult<Option<spec::SparkIntervalMetadata>> {
@@ -526,14 +576,7 @@ fn spark_interval_metadata_for_expression(
             };
             Ok(match combined {
                 None => Some(candidate),
-                Some(current) if current.interval_unit == candidate.interval_unit => {
-                    Some(spec::SparkIntervalMetadata {
-                        interval_unit: current.interval_unit,
-                        start_field: current.start_field.min(candidate.start_field),
-                        end_field: current.end_field.max(candidate.end_field),
-                    })
-                }
-                Some(_) => None,
+                Some(current) => current.wider(candidate),
             })
         },
     )

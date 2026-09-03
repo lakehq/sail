@@ -634,6 +634,14 @@ impl SparkIntervalMetadata {
             end_field,
         })
     }
+
+    pub fn wider(self, other: Self) -> Option<Self> {
+        (self.interval_unit == other.interval_unit).then_some(Self {
+            interval_unit: self.interval_unit,
+            start_field: self.start_field.min(other.start_field),
+            end_field: self.end_field.max(other.end_field),
+        })
+    }
 }
 
 impl IntervalFieldType {
