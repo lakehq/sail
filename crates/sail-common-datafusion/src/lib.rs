@@ -14,7 +14,6 @@ pub mod rename;
 pub mod schema_evolution;
 pub mod session;
 pub mod streaming;
-pub mod system;
 pub mod udf;
 pub mod utils;
 pub mod variant;

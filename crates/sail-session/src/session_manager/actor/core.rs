@@ -6,6 +6,7 @@ use sail_common::actor::{Actor, ActorAction, ActorContext, ActorHandle};
 use sail_execution::driver::{DriverHandle, DriverRegistryAccessor};
 use sail_execution::error::{ExecutionError, ExecutionResult};
 use sail_execution::{DriverId, IdGenerator};
+use sail_system_store::SystemEvent;
 
 use crate::session_manager::actor::SessionManagerActor;
 use crate::session_manager::{
@@ -31,7 +32,6 @@ impl DriverRegistryAccessor for SessionDriverRegistry {
     }
 }
 
-#[tonic::async_trait]
 impl Actor for SessionManagerActor {
     type Message = SessionManagerMessage;
     type Options = (SessionManagerOptions, SessionManagerComponents);
@@ -63,11 +63,10 @@ impl Actor for SessionManagerActor {
 
     async fn start(&mut self, ctx: &mut ActorContext<Self>) {
         for (key, value) in &self.options.options {
-            self.event_reporter
-                .report(sail_telemetry::system_event::SystemEvent::OptionCreated {
-                    key: key.clone(),
-                    value: value.clone(),
-                });
+            self.event_reporter.report(SystemEvent::OptionCreated {
+                key: key.clone(),
+                value: value.clone(),
+            });
         }
         let Some(driver_gateway) = &mut self.driver_gateway else {
             return;
@@ -78,7 +77,11 @@ impl Actor for SessionManagerActor {
         info!("driver server is ready on port {}", driver_gateway.port());
     }
 
-    fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
+    async fn receive(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        message: Self::Message,
+    ) -> ActorAction {
         match message {
             SessionManagerMessage::GetOrCreateSession {
                 session_id,

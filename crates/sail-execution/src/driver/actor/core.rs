@@ -22,7 +22,6 @@ use crate::task_runner::{
     TaskRunnerPlacement,
 };
 
-#[tonic::async_trait]
 impl Actor for DriverActor {
     type Message = DriverMessage;
     type Options = (DriverOptions, DriverComponents);
@@ -113,6 +112,7 @@ impl Actor for DriverActor {
         };
         self.task_runner = Some(ctx.children_mut().spawn::<TaskRunnerActor>(
             TaskRunnerComponents {
+                session_id: self.options.session_id.clone(),
                 extensions: TaskRunnerExtensions {
                     local_streams,
                     storage_streams,
@@ -123,7 +123,11 @@ impl Actor for DriverActor {
         ));
     }
 
-    fn receive(&mut self, ctx: &mut ActorContext<Self>, message: DriverMessage) -> ActorAction {
+    async fn receive(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        message: DriverMessage,
+    ) -> ActorAction {
         match message {
             DriverMessage::Activate => self.handle_activate(ctx),
             DriverMessage::RegisterWorker {

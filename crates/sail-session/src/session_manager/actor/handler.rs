@@ -5,13 +5,14 @@ use fastrace::collector::SpanContext;
 use log::{info, warn};
 use sail_cache::remote_checkpoint::RemoteCheckpointRegistry;
 use sail_common::actor::{ActorAction, ActorContext};
+use sail_common::telemetry::SpanAttribute;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::activity::ActivityTracker;
 use sail_common_datafusion::session::job::JobService;
 use sail_execution::DriverId;
 use sail_execution::driver::DriverHandle;
 use sail_execution::error::ExecutionResult;
-use sail_telemetry::system_event::SystemEvent;
+use sail_system_store::SystemEvent;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
@@ -56,7 +57,8 @@ impl SessionManagerActor {
             let span = Span::root(
                 "SessionManagerActor::create_session_context",
                 SpanContext::random(),
-            );
+            )
+            .with_property(|| (SpanAttribute::SESSION_ID, session_id.clone()));
             let _guard = span.set_local_parent();
             let driver_id = match self.driver_id_generator.generate() {
                 Ok(driver_id) => driver_id,

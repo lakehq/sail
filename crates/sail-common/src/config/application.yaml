@@ -905,6 +905,18 @@
     Sessions that have been inactive for longer than this duration will be cleaned up.
   experimental: true
 
+- key: catalog.system.store
+  type: string
+  default: "memory"
+  description: The system catalog store backend. Valid values are `memory` and `disk`.
+  experimental: true
+
+- key: catalog.system.disk.path
+  type: string
+  default: ""
+  description: The existing directory used by the disk-backed system catalog store.
+  experimental: true
+
 - key: telemetry.export_traces
   type: boolean
   default: "false"
@@ -943,6 +955,12 @@
   type: number
   default: "10"
   description: The timeout in seconds for OTLP telemetry data export.
+  experimental: true
+
+- key: telemetry.exporter.system.enabled
+  type: boolean
+  default: "false"
+  description: Whether metrics are written to the system catalog store.
   experimental: true
 
 - key: telemetry.traces_export_interval_secs

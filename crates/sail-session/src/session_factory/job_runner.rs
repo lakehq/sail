@@ -11,7 +11,7 @@ use sail_execution::job_runner::{ClusterJobRunner, LocalJobRunner};
 use sail_execution::worker_manager::{
     KubernetesWorkerManager, KubernetesWorkerManagerOptions, LocalWorkerManager,
 };
-use sail_telemetry::system_event::SystemEventReporter;
+use sail_telemetry::events::SystemEventReporter;
 
 use crate::session_factory::{SessionFactory, WorkerSessionFactory};
 
@@ -99,7 +99,9 @@ impl SessionJobRunnerFactory for ServerSessionJobRunnerFactory {
         info: SessionJobRunnerInfo,
     ) -> Result<SessionJobRunner> {
         match self.config.mode {
-            ExecutionMode::Local => Ok(SessionJobRunner::local(LocalJobRunner::new())),
+            ExecutionMode::Local => Ok(SessionJobRunner::local(LocalJobRunner::new(
+                info.session_id,
+            ))),
             ExecutionMode::LocalCluster => {
                 let worker_session =
                     WorkerSessionFactory::new(self.config.clone(), self.runtime.clone())

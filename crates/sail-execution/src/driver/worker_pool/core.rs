@@ -11,7 +11,7 @@ use sail_common::actor::ActorContext;
 use sail_common::telemetry::SpanAttribute;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
-use sail_telemetry::system_event::SystemEvent;
+use sail_system_store::SystemEvent;
 use tokio::time::Instant;
 use tonic::Code;
 

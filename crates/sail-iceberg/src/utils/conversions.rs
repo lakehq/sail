@@ -72,21 +72,14 @@ fn primitive_literal_to_scalar(prim: &PrimitiveLiteral, prim_type: &PrimitiveTyp
         (PrimitiveType::Decimal { precision, scale }, PL::Int128(v)) => {
             SV::Decimal128(Some(*v), *precision as u8, *scale as i8)
         }
-        // UUID: UInt128 -> could be represented as string or binary, use string for now
-        (PrimitiveType::Uuid, PL::UInt128(u)) => {
-            let mut bytes = [0u8; 16];
-            let mut tmp = *u;
-            for i in (0..16).rev() {
-                bytes[i] = (tmp & 0xFF) as u8;
-                tmp >>= 8;
-            }
-            let uuid = uuid::Uuid::from_bytes(bytes);
-            SV::Utf8(Some(uuid.to_string()))
+        (PrimitiveType::Uuid, PL::UInt128(value)) => {
+            SV::FixedSizeBinary(16, Some(value.to_be_bytes().to_vec()))
         }
-        // Fixed/Binary: Binary -> Binary
-        (PrimitiveType::Fixed(_), PL::Binary(b)) | (PrimitiveType::Binary, PL::Binary(b)) => {
-            SV::Binary(Some(b.clone()))
-        }
+        (PrimitiveType::Fixed(size), PL::Binary(value)) => match i32::try_from(*size) {
+            Ok(size) => SV::FixedSizeBinary(size, Some(value.clone())),
+            Err(_) => SV::LargeBinary(Some(value.clone())),
+        },
+        (PrimitiveType::Binary, PL::Binary(value)) => SV::LargeBinary(Some(value.clone())),
         // Iceberg encodes String lower/upper bounds as raw bytes (UTF-8) in file metrics.
         // Decode them so pruning predicates comparing against Utf8 literals work.
         (PrimitiveType::String, PL::Binary(b)) => {
