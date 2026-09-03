@@ -1,8 +1,11 @@
 import uuid
+from decimal import Decimal
 
 import pytest
 from pyiceberg.schema import Schema
 from pyiceberg.types import (
+    DecimalType,
+    FixedType,
     FloatType,
     IntegerType,
     ListType,
@@ -13,6 +16,7 @@ from pyiceberg.types import (
     StructType,
     UUIDType,
 )
+from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql.types import DoubleType as SparkDoubleType
 from pyspark.sql.types import LongType as SparkLongType
 from pyspark.sql.types import MapType as SparkMapType
@@ -234,26 +238,36 @@ def test_iceberg_merge_schema_map_key_invalid_promotion(spark, sql_catalog):
 
 def test_pruning_exotic_types(spark, sql_catalog):
     identifier = "default.pruning_exotic"
+    first_uuid = uuid.UUID("00112233-4455-6677-8899-aabbccddee00")
+    second_uuid = uuid.UUID("00112233-4455-6677-8899-aabbccddeeff")
     schema = Schema(
         NestedField(field_id=1, name="id", field_type=IntegerType(), required=True),
         NestedField(field_id=2, name="f_val", field_type=FloatType(), required=False),
         NestedField(field_id=3, name="u_val", field_type=UUIDType(), required=False),
+        NestedField(field_id=4, name="d_val", field_type=DecimalType(9, 2), required=False),
+        NestedField(field_id=5, name="fixed_val", field_type=FixedType(4), required=False),
     )
     table = sql_catalog.create_table(identifier=identifier, schema=schema)
     try:
         spark.createDataFrame(
-            [(1, 0.5, uuid.uuid4().bytes)],
-            schema="id INT, f_val FLOAT, u_val BINARY",
+            [(1, 0.5, first_uuid.bytes, Decimal("1.23"), b"\x00\x00\x00\x01")],
+            schema="id INT, f_val FLOAT, u_val BINARY, d_val DECIMAL(9, 2), fixed_val BINARY",
         ).write.format("iceberg").mode("append").save(table.location())
 
         spark.createDataFrame(
-            [(2, 10.5, uuid.uuid4().bytes)],
-            schema="id INT, f_val FLOAT, u_val BINARY",
+            [(2, 10.5, second_uuid.bytes, Decimal("9.87"), b"\x00\x00\x00\x02")],
+            schema="id INT, f_val FLOAT, u_val BINARY, d_val DECIMAL(9, 2), fixed_val BINARY",
         ).write.format("iceberg").mode("append").save(table.location())
 
-        filtered = spark.read.format("iceberg").load(table.location()).filter("f_val > 5.0")
-        rows = filtered.collect()
-        assert len(rows) == 1
-        assert rows[0].id == 2  # noqa: PLR2004
+        data = spark.read.format("iceberg").load(table.location())
+        predicates = [
+            F.col("f_val") > 5.0,  # noqa: PLR2004
+            F.col("u_val") == F.lit(second_uuid.bytes),
+            F.col("d_val") >= F.lit(Decimal("9.00")),
+            F.col("fixed_val") == F.lit(b"\x00\x00\x00\x02"),
+        ]
+        for predicate in predicates:
+            rows = data.filter(predicate).select("id").collect()
+            assert [row.id for row in rows] == [2]
     finally:
         sql_catalog.drop_table(identifier)

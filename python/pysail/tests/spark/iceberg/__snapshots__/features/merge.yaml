@@ -67,7 +67,13 @@ data:
     manifest-path: file://<root>/metadata/manifest-<uuid>.avro
     min-sequence-number: 1
     partition-spec-id: 0
-    partitions: null
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        C00AAA==
+      upper-bound: !!binary |
+        C00AAA==
     sequence-number: 1
   - added-files-count: 2
     added-rows-count: 2
@@ -82,7 +88,13 @@ data:
     manifest-path: file://<root>/metadata/manifest-<uuid>.avro
     min-sequence-number: 2
     partition-spec-id: 0
-    partitions: null
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        C00AAA==
+      upper-bound: !!binary |
+        DE0AAA==
     sequence-number: 2
   - added-files-count: 1
     added-rows-count: 1
@@ -97,7 +109,13 @@ data:
     manifest-path: file://<root>/metadata/manifest-<uuid>.avro
     min-sequence-number: 2
     partition-spec-id: 0
-    partitions: null
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        C00AAA==
+      upper-bound: !!binary |
+        C00AAA==
     sequence-number: 2
 ---
 name: "test_explain_hashes_partitioned_merge_intents_by_iceberg_transforms.2"
@@ -168,7 +186,13 @@ data:
     manifest-path: file://<root>/metadata/manifest-<uuid>.avro
     min-sequence-number: 1
     partition-spec-id: 0
-    partitions: null
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        AQAAAA==
+      upper-bound: !!binary |
+        AQAAAA==
     sequence-number: 1
   - added-files-count: 1
     added-rows-count: 1
@@ -183,7 +207,13 @@ data:
     manifest-path: file://<root>/metadata/manifest-<uuid>.avro
     min-sequence-number: 2
     partition-spec-id: 0
-    partitions: null
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        AgAAAA==
+      upper-bound: !!binary |
+        AgAAAA==
     sequence-number: 2
   - added-files-count: 1
     added-rows-count: 1
@@ -198,7 +228,13 @@ data:
     manifest-path: file://<root>/metadata/manifest-<uuid>.avro
     min-sequence-number: 3
     partition-spec-id: 0
-    partitions: null
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        AwAAAA==
+      upper-bound: !!binary |
+        AwAAAA==
     sequence-number: 3
   - added-files-count: 3
     added-rows-count: 3
@@ -213,7 +249,13 @@ data:
     manifest-path: file://<root>/metadata/manifest-<uuid>.avro
     min-sequence-number: 4
     partition-spec-id: 0
-    partitions: null
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        AQAAAA==
+      upper-bound: !!binary |
+        AwAAAA==
     sequence-number: 4
   - added-files-count: 3
     added-rows-count: 3
@@ -228,7 +270,13 @@ data:
     manifest-path: file://<root>/metadata/manifest-<uuid>.avro
     min-sequence-number: 4
     partition-spec-id: 0
-    partitions: null
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        AQAAAA==
+      upper-bound: !!binary |
+        AwAAAA==
     sequence-number: 4
 ---
 name: "test_explain_keeps_merge_metadata_scans_constant_across_target_files.2"
@@ -388,7 +436,13 @@ data:
     manifest-path: file://<root>/metadata/manifest-<uuid>.avro
     min-sequence-number: 1
     partition-spec-id: 0
-    partitions: null
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        ZGVsZXRl
+      upper-bound: !!binary |
+        dXBkYXRl
     sequence-number: 1
   - added-files-count: 3
     added-rows-count: 3
@@ -403,7 +457,13 @@ data:
     manifest-path: file://<root>/metadata/manifest-<uuid>.avro
     min-sequence-number: 2
     partition-spec-id: 0
-    partitions: null
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        ZXhwaXJl
+      upper-bound: !!binary |
+        dXBkYXRl
     sequence-number: 2
   - added-files-count: 4
     added-rows-count: 4
@@ -418,7 +478,13 @@ data:
     manifest-path: file://<root>/metadata/manifest-<uuid>.avro
     min-sequence-number: 2
     partition-spec-id: 0
-    partitions: null
+    partitions:
+    - contains-nan: false
+      contains-null: false
+      lower-bound: !!binary |
+        ZGVsZXRl
+      upper-bound: !!binary |
+        dXBkYXRl
     sequence-number: 2
 ---
 name: "test_merge_writes_overwrite_metadata_with_data_and_positiondelete_manifests.2"

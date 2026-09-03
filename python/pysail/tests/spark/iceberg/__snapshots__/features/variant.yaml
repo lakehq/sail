@@ -158,7 +158,7 @@ data:
     manifest-path: file://<root>/metadata/manifest-<uuid>.avro
     min-sequence-number: 1
     partition-spec-id: 0
-    partitions: null
+    partitions: []
     sequence-number: 1
   - added-files-count: 1
     added-rows-count: 1
@@ -174,7 +174,7 @@ data:
     manifest-path: file://<root>/metadata/manifest-<uuid>.avro
     min-sequence-number: 2
     partition-spec-id: 0
-    partitions: null
+    partitions: []
     sequence-number: 2
 ---
 name: "test_write_and_read_a_variant_column"
@@ -255,5 +255,5 @@ data:
     manifest-path: file://<root>/metadata/manifest-<uuid>.avro
     min-sequence-number: 1
     partition-spec-id: 0
-    partitions: null
+    partitions: []
     sequence-number: 1

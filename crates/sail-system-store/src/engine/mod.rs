@@ -8,7 +8,7 @@ mod query;
 
 pub use mutation::MetricSample;
 pub(crate) use mutation::{write_event, write_metrics};
-pub(crate) use query::SystemStoreQuery;
+pub(crate) use query::{Deferred, Eager, SystemStoreQuery};
 
 use crate::access::{Commit, DirectStoreBackend, TransactionalStoreBackend};
 use crate::{SystemEvent, SystemStoreError, SystemStoreResult};
@@ -28,7 +28,7 @@ pub(crate) trait StoreEngine: Send + 'static {
     fn read(
         &mut self,
         query: SystemStoreQuery,
-    ) -> impl Future<Output = SystemStoreResult<Option<Box<dyn FnOnce() + Send>>>> + Send;
+    ) -> impl Future<Output = Box<dyn FnOnce() + Send>> + Send;
 
     fn flush(&mut self) -> impl Future<Output = SystemStoreResult<()>> + Send;
 }
@@ -49,16 +49,11 @@ where
         write_metrics(&mut self.backend.write(), samples).map_err(SystemStoreError::from)
     }
 
-    async fn read(
-        &mut self,
-        query: SystemStoreQuery,
-    ) -> SystemStoreResult<Option<Box<dyn FnOnce() + Send>>> {
-        // The direct storage engine executes the query immediately
-        // and does not return a deferred read closure to be executed later.
-        // This is because the direct storage engine does not support snapshots or transactions,
-        // so the read operation must finish before subsequent writes.
-        query.execute(&self.backend.read());
-        Ok(None)
+    async fn read(&mut self, query: SystemStoreQuery) -> Box<dyn FnOnce() + Send> {
+        // Direct-backend reads must finish while the backend is borrowed, so they materialize rows
+        // first.
+        // The returned closure forwards those rows in batches without blocking later actor writes.
+        query.execute(&self.backend.read(), Eager)
     }
 
     async fn flush(&mut self) -> SystemStoreResult<()> {
@@ -99,10 +94,7 @@ where
         .map_err(|error| SystemStoreError::internal(format!("system store task failed: {error}")))?
     }
 
-    async fn read(
-        &mut self,
-        query: SystemStoreQuery,
-    ) -> SystemStoreResult<Option<Box<dyn FnOnce() + Send>>> {
+    async fn read(&mut self, query: SystemStoreQuery) -> Box<dyn FnOnce() + Send> {
         // The transactional storage engine acquires a snapshot of the store and returns
         // a closure that executes the query against that snapshot.
         // This allows multiple concurrent reads without blocking writes.
@@ -111,10 +103,12 @@ where
             move || store.snapshot().map_err(SystemStoreError::from)
         })
         .await
-        .map_err(|error| {
-            SystemStoreError::internal(format!("system store task failed: {error}"))
-        })??;
-        Ok(Some(Box::new(move || query.execute(&snapshot))))
+        .map_err(|error| SystemStoreError::internal(format!("system store task failed: {error}")))
+        .and_then(|result| result);
+        match snapshot {
+            Ok(snapshot) => Box::new(move || query.execute(&snapshot, Deferred)),
+            Err(error) => Box::new(move || query.fail(error)),
+        }
     }
 
     async fn flush(&mut self) -> SystemStoreResult<()> {
