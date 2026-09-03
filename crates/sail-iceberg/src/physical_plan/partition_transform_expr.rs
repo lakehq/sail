@@ -96,7 +96,7 @@ impl PhysicalExpr for IcebergPartitionTransformExpr {
                     return ScalarValue::try_new_null(&output_type);
                 }
                 let scalar = ScalarValue::try_from_array(input.as_ref(), index)?;
-                let literal = scalar_to_iceberg_literal(&scalar, input.data_type())
+                let literal = scalar_to_iceberg_literal(&scalar, &input_type)
                     .map_err(|error| plan_datafusion_err!("{error}"))?;
                 let transformed = apply_transform(self.transform, &input_type, Some(literal))
                     .ok_or_else(|| {

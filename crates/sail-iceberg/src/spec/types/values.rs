@@ -22,6 +22,8 @@ use sail_common::spec as sail_spec;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
+use crate::spec::avro_utils::avro_compatible_name;
+
 /// Literal values used in Iceberg
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -44,7 +46,7 @@ pub enum PrimitiveLiteral {
     Int128(i128),
     String(String),
     UInt128(u128),
-    Binary(Vec<u8>),
+    Binary(#[serde(with = "serde_bytes")] Vec<u8>),
 }
 
 impl PartialOrd for PrimitiveLiteral {
@@ -885,7 +887,7 @@ impl RawLiteral {
         }
         let mut out = Vec::with_capacity(values.len());
         for (i, f) in fields.iter().enumerate() {
-            out.push((f.name.clone(), values[i].clone()));
+            out.push((avro_compatible_name(&f.name), values[i].clone()));
         }
         Ok(RawLiteral(out))
     }
@@ -898,7 +900,14 @@ impl RawLiteral {
         }
         ty.fields()
             .iter()
-            .map(|f| by_name.remove(&f.name).unwrap_or(None))
+            .map(|f| {
+                let avro_name = avro_compatible_name(&f.name);
+                match by_name.remove(&avro_name) {
+                    Some(value) => value,
+                    None if avro_name != f.name => by_name.remove(&f.name).unwrap_or(None),
+                    None => None,
+                }
+            })
             .collect()
     }
 }

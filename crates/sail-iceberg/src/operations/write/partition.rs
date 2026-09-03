@@ -10,8 +10,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike};
-use datafusion::arrow::array::{ArrayRef, UInt32Array};
+use datafusion::arrow::array::UInt32Array;
 use datafusion::arrow::compute;
 use datafusion::arrow::record_batch::RecordBatch;
 use sail_common_datafusion::catalog::CatalogPartitionField;
@@ -19,7 +21,6 @@ use sail_common_datafusion::catalog::CatalogPartitionField;
 use crate::spec::partition::UnboundPartitionSpec as PartitionSpec;
 use crate::spec::schema::Schema as IcebergSchema;
 use crate::spec::types::values::{Literal, PrimitiveLiteral};
-use crate::spec::types::{PrimitiveType, Type};
 use crate::utils::conversions::array_value_to_literal;
 use crate::utils::transform::apply_transform;
 
@@ -30,15 +31,14 @@ pub struct PartitionBatchResult {
     pub spec_id: i32,
 }
 
-pub fn scalar_to_literal(array: &ArrayRef, row: usize) -> Option<Literal> {
-    // Delegate to the unified conversion function
-    array_value_to_literal(array, row)
-}
-
 pub fn field_name_from_id(schema: &IcebergSchema, field_id: i32) -> Option<String> {
     schema
         .name_by_field_id(field_id)
         .map(|s| s.split('.').next_back().unwrap_or(s).to_string())
+}
+
+fn encode_partition_path_component(value: &str) -> String {
+    url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
 }
 
 pub fn build_partition_dir(
@@ -56,12 +56,15 @@ pub fn build_partition_dir(
         let field_type = iceberg_schema
             .field_by_id(f.source_id)
             .map(|nf| nf.field_type.as_ref())
-            .unwrap_or(&Type::Primitive(PrimitiveType::String));
+            .ok_or_else(|| format!("Unknown partition source field id {}", f.source_id))?;
         // Use already-transformed values to build partition directories.
         // This ensures bucket paths are simple integers like `number_bucket=4`
         // instead of verbose strings like `bucket[8](4)`.
-        let val = values.get(i).cloned().flatten();
-        let base_human = match val.as_ref() {
+        let val = values
+            .get(i)
+            .ok_or_else(|| format!("Missing value for partition field '{}'", f.name))?
+            .as_ref();
+        let base_human = match val {
             None => "null".to_string(),
             Some(Literal::Primitive(p)) => match p {
                 PrimitiveLiteral::Boolean(v) => v.to_string(),
@@ -72,16 +75,7 @@ pub fn build_partition_dir(
                 PrimitiveLiteral::Int128(v) => v.to_string(),
                 PrimitiveLiteral::String(s) => s.clone(),
                 PrimitiveLiteral::UInt128(v) => v.to_string(),
-                PrimitiveLiteral::Binary(b) => {
-                    // hex-encode binary values for stability
-                    let mut s = String::with_capacity(b.len() * 2 + 2);
-                    s.push_str("0x");
-                    for byte in b.iter() {
-                        use std::fmt::Write as _;
-                        let _ = write!(&mut s, "{:02x}", byte);
-                    }
-                    s
-                }
+                PrimitiveLiteral::Binary(value) => BASE64_STANDARD.encode(value),
             },
             Some(l @ (Literal::Struct(_) | Literal::List(_) | Literal::Map(_))) => {
                 // Fallback debug formatting for complex types
@@ -94,7 +88,7 @@ pub fn build_partition_dir(
         // - months(date) => YYYY-MM
         // - days(date)   => YYYY-MM-DD
         // - hours(ts)    => YYYY-MM-DD-HH
-        let human = match (f.transform, field_type, val.as_ref()) {
+        let human = match (f.transform, field_type, val) {
             (
                 crate::spec::transform::Transform::Year,
                 _,
@@ -146,7 +140,11 @@ pub fn build_partition_dir(
             _ => base_human,
         };
 
-        segs.push(format!("{}={}", f.name, human));
+        segs.push(format!(
+            "{}={}",
+            encode_partition_path_component(&f.name),
+            encode_partition_path_component(&human)
+        ));
     }
     Ok(segs.join("/"))
 }
@@ -160,18 +158,28 @@ pub fn compute_partition_values(
     let _ = partition_columns; // not used in single-group fallback
     let mut values = Vec::with_capacity(spec.fields.len());
     for f in &spec.fields {
+        let source_field = iceberg_schema
+            .field_by_id(f.source_id)
+            .ok_or_else(|| format!("Unknown partition source field id {}", f.source_id))?;
         let col_name = field_name_from_id(iceberg_schema, f.source_id)
             .ok_or_else(|| format!("Unknown field id {}", f.source_id))?;
         let col_index = batch
             .schema()
             .index_of(&col_name)
             .map_err(|e| e.to_string())?;
-        let lit = scalar_to_literal(batch.column(col_index), 0);
-        let field_type = iceberg_schema
-            .field_by_id(f.source_id)
-            .map(|nf| nf.field_type.as_ref())
-            .unwrap_or(&Type::Primitive(PrimitiveType::String));
-        values.push(apply_transform(f.transform, field_type, lit));
+        let literal =
+            array_value_to_literal(batch.column(col_index), 0, source_field.field_type.as_ref())
+                .map_err(|error| {
+                    format!(
+                        "Failed to extract partition field '{}' at row 0: {error}",
+                        f.name
+                    )
+                })?;
+        values.push(apply_transform(
+            f.transform,
+            source_field.field_type.as_ref(),
+            literal,
+        ));
     }
     let dir = build_partition_dir(spec, iceberg_schema, &values)?;
     Ok((values, dir))
@@ -201,18 +209,31 @@ pub fn split_record_batch_by_partition(
     for row in 0..num_rows {
         let mut vals: Vec<Option<Literal>> = Vec::with_capacity(spec.fields.len());
         for f in &spec.fields {
+            let source_field = iceberg_schema
+                .field_by_id(f.source_id)
+                .ok_or_else(|| format!("Unknown partition source field id {}", f.source_id))?;
             let col_name = field_name_from_id(iceberg_schema, f.source_id)
                 .ok_or_else(|| format!("Unknown field id {}", f.source_id))?;
             let col_index = batch
                 .schema()
                 .index_of(&col_name)
                 .map_err(|e| e.to_string())?;
-            let lit = scalar_to_literal(batch.column(col_index), row);
-            let field_type = iceberg_schema
-                .field_by_id(f.source_id)
-                .map(|nf| nf.field_type.as_ref())
-                .unwrap_or(&Type::Primitive(PrimitiveType::String));
-            vals.push(apply_transform(f.transform, field_type, lit));
+            let literal = array_value_to_literal(
+                batch.column(col_index),
+                row,
+                source_field.field_type.as_ref(),
+            )
+            .map_err(|error| {
+                format!(
+                    "Failed to extract partition field '{}' at row {row}: {error}",
+                    f.name
+                )
+            })?;
+            vals.push(apply_transform(
+                f.transform,
+                source_field.field_type.as_ref(),
+                literal,
+            ));
         }
         groups.entry(vals).or_default().push(row as u32);
     }

@@ -134,6 +134,9 @@ impl SchemaEvolver {
         if variant_storage_types_equivalent(table_type, input_type) {
             return true;
         }
+        if Self::variable_binary_types_equivalent(table_type, input_type) {
+            return true;
+        }
 
         matches!(
             (table_type, input_type),
@@ -168,9 +171,19 @@ impl SchemaEvolver {
             (table_type, input_type),
             (
                 DataType::FixedSizeBinary(_),
-                DataType::Binary | DataType::LargeBinary
+                DataType::Binary | DataType::LargeBinary | DataType::BinaryView
             )
         ) || Self::decimal_precision_contracts(table_type, input_type)
+    }
+
+    fn variable_binary_types_equivalent(table_type: &DataType, input_type: &DataType) -> bool {
+        matches!(
+            (table_type, input_type),
+            (
+                DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
+                DataType::Binary | DataType::LargeBinary | DataType::BinaryView
+            )
+        )
     }
 
     fn decimal_precision_expands(table_type: &DataType, input_type: &DataType) -> bool {
@@ -217,6 +230,9 @@ impl SchemaEvolver {
 
     fn nested_types_equivalent(table_type: &DataType, input_type: &DataType) -> bool {
         if table_type == input_type {
+            return true;
+        }
+        if Self::variable_binary_types_equivalent(table_type, input_type) {
             return true;
         }
         if let (
@@ -928,6 +944,81 @@ mod tests {
 
         SchemaEvolver::validate_exact_schema(table_schema.as_ref(), &iceberg_schema, &input_schema)
             .expect("int -> long promotion should be allowed");
+    }
+
+    #[test]
+    fn binary_storage_width_equivalence_is_recursive_but_excludes_fixed() {
+        let table_type = DataType::Struct(
+            vec![
+                Field::new("payload", DataType::LargeBinary, true),
+                Field::new(
+                    "items",
+                    DataType::List(Arc::new(Field::new("element", DataType::LargeBinary, true))),
+                    true,
+                ),
+                Field::new(
+                    "lookup",
+                    DataType::Map(
+                        Arc::new(Field::new(
+                            "entries",
+                            DataType::Struct(
+                                vec![
+                                    Field::new("key", DataType::Utf8, false),
+                                    Field::new("value", DataType::LargeBinary, true),
+                                ]
+                                .into(),
+                            ),
+                            false,
+                        )),
+                        false,
+                    ),
+                    true,
+                ),
+            ]
+            .into(),
+        );
+        let input_type = DataType::Struct(
+            vec![
+                Field::new("payload", DataType::Binary, true),
+                Field::new(
+                    "items",
+                    DataType::LargeList(Arc::new(Field::new(
+                        "element",
+                        DataType::BinaryView,
+                        true,
+                    ))),
+                    true,
+                ),
+                Field::new(
+                    "lookup",
+                    DataType::Map(
+                        Arc::new(Field::new(
+                            "entries",
+                            DataType::Struct(
+                                vec![
+                                    Field::new("key", DataType::Utf8, false),
+                                    Field::new("value", DataType::Binary, true),
+                                ]
+                                .into(),
+                            ),
+                            false,
+                        )),
+                        false,
+                    ),
+                    true,
+                ),
+            ]
+            .into(),
+        );
+
+        assert!(SchemaEvolver::field_types_equivalent(
+            &table_type,
+            &input_type
+        ));
+        assert!(!SchemaEvolver::field_types_equivalent(
+            &DataType::LargeBinary,
+            &DataType::FixedSizeBinary(3),
+        ));
     }
 
     #[test]

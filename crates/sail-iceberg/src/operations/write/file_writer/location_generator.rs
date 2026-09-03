@@ -16,8 +16,11 @@ use object_store::path::Path as ObjectPath;
 use uuid::Uuid;
 
 pub trait LocationGenerator {
-    fn next_data_path(&self) -> (String, ObjectPath);
-    fn with_partition_dir(&self, partition_dir: Option<&str>) -> (String, ObjectPath);
+    fn next_data_path(&self) -> Result<(String, ObjectPath), String>;
+    fn with_partition_dir(
+        &self,
+        partition_dir: Option<&str>,
+    ) -> Result<(String, ObjectPath), String>;
 }
 
 pub struct DefaultLocationGenerator {
@@ -35,29 +38,27 @@ impl DefaultLocationGenerator {
 }
 
 impl LocationGenerator for DefaultLocationGenerator {
-    fn next_data_path(&self) -> (String, ObjectPath) {
+    fn next_data_path(&self) -> Result<(String, ObjectPath), String> {
         self.with_partition_dir(None)
     }
 
-    fn with_partition_dir(&self, partition_dir: Option<&str>) -> (String, ObjectPath) {
+    fn with_partition_dir(
+        &self,
+        partition_dir: Option<&str>,
+    ) -> Result<(String, ObjectPath), String> {
         let id = self.counter.fetch_add(1, Ordering::Relaxed);
         let file = format!("part-{}-{:020}.parquet", Uuid::new_v4(), id);
-        let rel_unencoded = match partition_dir {
+        let relative_path = match partition_dir {
             Some(dir) if !dir.is_empty() => format!("{}/{}", dir.trim_matches('/'), file),
             _ => file,
         };
-        // Join each component to avoid encoding '/' into '%2F'
-        let mut full = self.base.clone();
-        for comp in rel_unencoded.split('/').filter(|s| !s.is_empty()) {
-            full = full.join(comp);
-        }
-        // Derive relative path from encoded ObjectPath so manifest file_path matches actual object keys.
-        let rel = full
-            .as_ref()
-            .strip_prefix(self.base.as_ref())
-            .unwrap_or(full.as_ref())
-            .trim_start_matches('/')
-            .to_string();
-        (rel, full)
+        let full_path = if self.base.as_ref().is_empty() {
+            relative_path.clone()
+        } else {
+            format!("{}/{relative_path}", self.base)
+        };
+        let full = ObjectPath::parse(full_path)
+            .map_err(|error| format!("Invalid Iceberg data path: {error}"))?;
+        Ok((relative_path, full))
     }
 }

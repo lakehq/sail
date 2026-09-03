@@ -7919,6 +7919,7 @@ dependencies = [
  "arrow-schema",
  "async-stream",
  "async-trait",
+ "base64 0.22.1",
  "bytes",
  "chrono",
  "datafusion",
