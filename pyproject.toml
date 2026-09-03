@@ -193,6 +193,36 @@ matrix.spark.extra-dependencies = [
 ]
 env.CI.installer = "uv"
 
+[tool.hatch.envs.test-freethreaded]
+# The environment for the free-threading tests, on a free-threaded (no-GIL)
+# interpreter. PYTHON_GIL=0: grpcio (used by the Spark Connect client) does
+# not yet support free-threading (grpc/grpc#38762) and would otherwise
+# re-enable the GIL.
+python = "3.14t"
+installer = "pip"
+skip-install = true
+env-vars = { PYTHON_GIL = "0" }
+dependencies = [
+    "pyspark-client==4.2.0",
+    "pytest>=9.1,<10",
+    "pytest-bdd>=8.1,<9",
+    "syrupy>=5.0,<6",
+    "jinja2>=3.1,<4",
+    "jsonpath-ng>=1.6,<2",
+    "PyYAML>=6.0,<7",
+    "testcontainers>=4,<5",
+    # Without the extras used by the `test` environment: the Spark test
+    # machinery only needs the pure-Python core of pyiceberg.
+    "pyiceberg==0.11.1",
+    # Bumped relative to the `test` environment (pandas<3 / pyarrow>=24,<25 /
+    # pillow>=10.3,<11): these are the minimum versions that publish cp314t
+    # (free-threaded) wheels.
+    "pandas>=3,<4",
+    "pyarrow>=25,<26",
+    "pillow>=11.3,<13",
+]
+path = ".venvs/test-freethreaded"
+
 [tool.hatch.envs.test-spark]
 matrix-name-format = "{variable}-{value}"
 python = "3.11"
