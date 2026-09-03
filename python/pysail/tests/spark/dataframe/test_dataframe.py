@@ -8,6 +8,10 @@ from pyspark.sql.window import Window
 
 from pysail.testing.spark.utils.common import is_jvm_spark
 
+# `ıd` and `ς` are deliberately confusable with ASCII names: they are what tells the resolver rule
+# apart from the lowercasing one.
+# ruff: noqa: RUF001, RUF003
+
 
 def test_dataframe_drop(spark):
     df = spark.createDataFrame([(14, "Tom"), (23, "Alice"), (16, "Bob")], ["age", "name"])
@@ -452,7 +456,7 @@ def test_drop_duplicates_keeps_every_matching_column(spark):
     assert spark.sql("SELECT 1 AS a").dropDuplicates().columns == ["a"]
 
     with pytest.raises(Exception, match="Cannot resolve column name"):
-        spark.sql("SELECT 1 AS a").dropDuplicates(["nope"]).columns
+        _ = spark.sql("SELECT 1 AS a").dropDuplicates(["nope"]).columns
 
 
 def test_fillna_and_dropna_without_subset_are_unaffected(spark):
@@ -518,18 +522,11 @@ def test_drop_duplicates_accepts_a_repeated_subset_name(spark):
     assert sorted(r.k for r in df.dropDuplicates(["k", "k"]).collect()) == [1, 2]
 
 
-
-
 def test_union_by_name_fills_missing_columns_with_the_right_type(spark):
     # The padded column keeps the type of the side that has it, rather than becoming untyped.
     left = spark.sql("SELECT 1 AS a, 'p' AS b")
     right = spark.sql("SELECT 2 AS a, 3 AS c")
-    assert (
-        left.unionByName(right, allowMissingColumns=True).schema.simpleString()
-        == "struct<a:int,b:string,c:int>"
-    )
-
-
+    assert left.unionByName(right, allowMissingColumns=True).schema.simpleString() == "struct<a:int,b:string,c:int>"
 
 
 @pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)

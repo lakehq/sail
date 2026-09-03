@@ -182,9 +182,9 @@ def _join_cases(spark):
         "join on name selecting a column of each side": lambda: df1.join(df2, "name").select(df1.name, df2.height),
         "join on name selecting columns by name": lambda: df1.join(df2, "name").select("name", "height"),
         "join on a name equality": lambda: df1.join(df2, df1.name == df2.name),
-        "join on a name equality selecting the duplicated name": lambda: df1.join(
-            df2, df1.name == df2.name
-        ).select("name", "height"),
+        "join on a name equality selecting the duplicated name": lambda: df1.join(df2, df1.name == df2.name).select(
+            "name", "height"
+        ),
         "join on two names": lambda: df1.join(df3, ["name", "age"]),
         "join on two names selecting the left side": lambda: df1.join(df3, ["name", "age"]).select(df1.name, df1.age),
         "outer join on a name equality": lambda: df1.join(df2, df1.name == df2.name, "outer").sort(F.desc(df1.name)),
@@ -198,14 +198,12 @@ def _join_cases(spark):
         )
         .select(df1.name, df2.height)
         .sort(F.desc("name")),
-        "outer join on two equalities": lambda: df1.join(
-            df3, [df1.name == df3.name, df1.age == df3.age], "outer"
-        )
+        "outer join on two equalities": lambda: df1.join(df3, [df1.name == df3.name, df1.age == df3.age], "outer")
         .select(df1.name, df3.age)
         .sort(df1.name, df3.age),
-        "outer self join selecting the ambiguous name": lambda: df1.join(
-            df1, df1.name == df1.name, "outer"
-        ).select(df1.name),
+        "outer self join selecting the ambiguous name": lambda: df1.join(df1, df1.name == df1.name, "outer").select(
+            df1.name
+        ),
         "outer self join of two aliases": lambda: df1.alias("a")
         .join(df1.alias("b"), F.col("a.name") == F.col("b.name"), "outer")
         .sort(F.desc("a.name"))
