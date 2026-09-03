@@ -44,6 +44,7 @@ use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_datasource::file_scan_config::output_partitioning_from_partition_fields;
 use object_store::ObjectMeta;
+use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use sail_common_datafusion::schema_evolution::{
     SchemaEvolutionPhysicalExprAdapterFactoryWithMatching, StructFieldMatching,
 };
@@ -66,7 +67,7 @@ use crate::row_level_metadata::{
 };
 use crate::spec::delete_index::{DeleteFileIndex, DeleteFileRef};
 use crate::spec::transform::Transform;
-use crate::spec::types::values::Literal;
+use crate::spec::types::values::{Datum, Literal};
 use crate::spec::{
     DataFile, ManifestContentType, ManifestList, ManifestStatus, PartitionSpec, Schema, Snapshot,
 };
@@ -105,6 +106,29 @@ pub struct IcebergTableProvider {
 }
 
 impl IcebergTableProvider {
+    fn iceberg_field_id_for_arrow_field(
+        field: &datafusion::arrow::datatypes::Field,
+    ) -> Option<i32> {
+        field
+            .metadata()
+            .get(PARQUET_FIELD_ID_META_KEY)
+            .and_then(|value| value.parse().ok())
+    }
+
+    fn statistic_scalar(&self, field_id: i32, datum: &Datum) -> Option<ScalarValue> {
+        let field = self.schema.field_by_id(field_id)?;
+        to_scalar(
+            &Literal::Primitive(datum.literal.clone()),
+            field.field_type.as_ref(),
+        )
+        .inspect_err(|error| {
+            log::debug!(
+                "Ignoring Iceberg statistic for field ID {field_id} because it cannot be converted: {error}"
+            );
+        })
+        .ok()
+    }
+
     /// Create a new Iceberg table provider
     pub fn new(
         table_uri: impl ToString,
@@ -776,8 +800,12 @@ impl IcebergTableProvider {
         let mut total_rows: usize = 0;
         let mut total_bytes: usize = 0;
 
-        // Pre-compute field id per column index
-        let field_ids: Vec<i32> = self.schema.fields().iter().map(|f| f.id).collect();
+        let field_ids: Vec<Option<i32>> = self
+            .arrow_schema
+            .fields()
+            .iter()
+            .map(|field| Self::iceberg_field_id_for_arrow_field(field))
+            .collect();
 
         // Initialize accumulators per column
         let mut min_scalars: Vec<Option<ScalarValue>> =
@@ -791,14 +819,18 @@ impl IcebergTableProvider {
             total_bytes = total_bytes.saturating_add(df.file_size_in_bytes() as usize);
 
             for (col_idx, field_id) in field_ids.iter().enumerate() {
+                let Some(field_id) = field_id else {
+                    continue;
+                };
                 // null counts
                 if let Some(c) = df.null_value_counts().get(field_id) {
                     null_counts[col_idx] = null_counts[col_idx].saturating_add(*c as usize);
                 }
 
                 // min
-                if let Some(d) = df.lower_bounds().get(field_id) {
-                    let sv = primitive_to_scalar_default(&d.literal);
+                if let Some(d) = df.lower_bounds().get(field_id)
+                    && let Some(sv) = self.statistic_scalar(*field_id, d)
+                {
                     min_scalars[col_idx] = match (&min_scalars[col_idx], &sv) {
                         (None, s) => Some(s.clone()),
                         (Some(existing), s) => Some(if s < existing {
@@ -810,8 +842,9 @@ impl IcebergTableProvider {
                 }
 
                 // max
-                if let Some(d) = df.upper_bounds().get(field_id) {
-                    let sv = primitive_to_scalar_default(&d.literal);
+                if let Some(d) = df.upper_bounds().get(field_id)
+                    && let Some(sv) = self.statistic_scalar(*field_id, d)
+                {
                     max_scalars[col_idx] = match (&max_scalars[col_idx], &sv) {
                         (None, s) => Some(s.clone()),
                         (Some(existing), s) => Some(if s > existing {
@@ -858,14 +891,10 @@ impl IcebergTableProvider {
             .arrow_schema
             .fields()
             .iter()
-            .enumerate()
-            .map(|(i, _field)| {
-                let field_id = self
-                    .schema
-                    .fields()
-                    .get(i)
-                    .map(|f| f.id)
-                    .unwrap_or(i as i32 + 1);
+            .map(|field| {
+                let Some(field_id) = Self::iceberg_field_id_for_arrow_field(field) else {
+                    return ColumnStatistics::new_unknown();
+                };
 
                 let null_count = data_file
                     .null_value_counts()
@@ -878,14 +907,14 @@ impl IcebergTableProvider {
                 let min_value = data_file
                     .lower_bounds()
                     .get(&field_id)
-                    .map(|datum| primitive_to_scalar_default(&datum.literal))
+                    .and_then(|datum| self.statistic_scalar(field_id, datum))
                     .map(Precision::Exact)
                     .unwrap_or(Precision::Absent);
 
                 let max_value = data_file
                     .upper_bounds()
                     .get(&field_id)
-                    .map(|datum| primitive_to_scalar_default(&datum.literal))
+                    .and_then(|datum| self.statistic_scalar(field_id, datum))
                     .map(Precision::Exact)
                     .unwrap_or(Precision::Absent);
 
@@ -1652,5 +1681,145 @@ impl IcebergTableProvider {
         );
 
         Ok(scan_exec)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::spec::manifest::{DataContentType, DataFileFormat};
+    use crate::spec::types::values::{Datum, PrimitiveLiteral};
+    use crate::spec::types::{NestedField, PrimitiveType, Type};
+
+    fn reordered_identity_provider() -> Result<IcebergTableProvider> {
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                Arc::new(NestedField::required(
+                    1,
+                    "id",
+                    Type::Primitive(PrimitiveType::Int),
+                )),
+                Arc::new(NestedField::required(
+                    2,
+                    "event_time",
+                    Type::Primitive(PrimitiveType::Timestamp),
+                )),
+                Arc::new(NestedField::required(
+                    3,
+                    "value",
+                    Type::Primitive(PrimitiveType::String),
+                )),
+            ])
+            .build()
+            .map_err(datafusion::common::DataFusionError::Execution)?;
+        let spec = PartitionSpec::builder()
+            .add_field(1, "id", Transform::Identity)
+            .build();
+        IcebergTableProvider::new_empty("memory:///table", schema, vec![spec], 0)
+    }
+
+    fn data_file_with_bounds() -> DataFile {
+        DataFile {
+            content: DataContentType::Data,
+            file_path: "data/id=10/file.parquet".to_string(),
+            file_format: DataFileFormat::Parquet,
+            partition: vec![Some(Literal::Primitive(PrimitiveLiteral::Int(10)))],
+            record_count: 2,
+            file_size_in_bytes: 100,
+            column_sizes: HashMap::new(),
+            value_counts: HashMap::new(),
+            null_value_counts: HashMap::from([(1, 0), (2, 0), (3, 1)]),
+            nan_value_counts: HashMap::new(),
+            lower_bounds: HashMap::from([
+                (1, Datum::new(PrimitiveType::Int, PrimitiveLiteral::Int(10))),
+                (
+                    2,
+                    Datum::new(
+                        PrimitiveType::Timestamp,
+                        PrimitiveLiteral::Long(1_700_000_000_000_000),
+                    ),
+                ),
+                (
+                    3,
+                    Datum::new(
+                        PrimitiveType::String,
+                        PrimitiveLiteral::String("updated".to_string()),
+                    ),
+                ),
+            ]),
+            upper_bounds: HashMap::from([
+                (1, Datum::new(PrimitiveType::Int, PrimitiveLiteral::Int(10))),
+                (
+                    2,
+                    Datum::new(
+                        PrimitiveType::Timestamp,
+                        PrimitiveLiteral::Long(1_700_000_000_000_000),
+                    ),
+                ),
+                (
+                    3,
+                    Datum::new(
+                        PrimitiveType::String,
+                        PrimitiveLiteral::String("updated".to_string()),
+                    ),
+                ),
+            ]),
+            block_size_in_bytes: None,
+            key_metadata: None,
+            split_offsets: vec![],
+            equality_ids: vec![],
+            sort_order_id: None,
+            first_row_id: None,
+            partition_spec_id: 0,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
+        }
+    }
+
+    fn assert_statistics_follow_field_ids(statistics: &Statistics) {
+        assert_eq!(
+            statistics.column_statistics[0].min_value,
+            Precision::Exact(ScalarValue::TimestampMicrosecond(
+                Some(1_700_000_000_000_000),
+                None,
+            ))
+        );
+        assert_eq!(
+            statistics.column_statistics[1].min_value,
+            Precision::Exact(ScalarValue::Utf8(Some("updated".to_string())))
+        );
+        assert_eq!(
+            statistics.column_statistics[1].null_count,
+            Precision::Exact(1)
+        );
+        assert_eq!(
+            statistics.column_statistics[2].min_value,
+            Precision::Exact(ScalarValue::Int32(Some(10)))
+        );
+        assert_eq!(
+            statistics.column_statistics[2].null_count,
+            Precision::Exact(0)
+        );
+    }
+
+    #[test]
+    fn statistics_follow_field_ids_after_identity_partition_reorder() -> Result<()> {
+        let provider = reordered_identity_provider()?;
+        assert_eq!(
+            provider
+                .arrow_schema
+                .fields()
+                .iter()
+                .map(|field| field.name().as_str())
+                .collect::<Vec<_>>(),
+            vec!["event_time", "value", "id"]
+        );
+
+        let data_file = data_file_with_bounds();
+        assert_statistics_follow_field_ids(&provider.create_file_statistics(&data_file));
+        assert_statistics_follow_field_ids(&provider.aggregate_statistics(&[data_file]));
+        Ok(())
     }
 }
