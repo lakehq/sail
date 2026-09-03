@@ -653,8 +653,10 @@
                   "part",
                   {
                     "literal": {
-                      "durationMicrosecond": {
-                        "microseconds": 93784128462
+                      "intervalDayTimeMicrosecond": {
+                        "microseconds": 93784128462,
+                        "startField": "day",
+                        "endField": "second"
                       }
                     }
                   }
@@ -701,7 +703,9 @@
                   {
                     "literal": {
                       "intervalYearMonth": {
-                        "months": 14
+                        "months": 14,
+                        "startField": "year",
+                        "endField": "month"
                       }
                     }
                   }
