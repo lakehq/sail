@@ -11,6 +11,9 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
+use crate::resolver::expression::attribute::{
+    unresolved_column_fields_error, unresolved_column_name_error,
+};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
@@ -66,13 +69,11 @@ impl PlanResolver<'_> {
                 // A target field that matches no input column is filled with NULL when it is
                 // nullable, and is only rejected otherwise.
                 if !target_field.is_nullable() {
-                    return Err(PlanError::AnalysisError(format!(
-                        "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function \
-                         parameter with name `{}` cannot be resolved. Did you mean one of the \
-                         following? [{}].",
-                        target_name.replace('`', "``"),
-                        Self::format_column_candidates(&input_names)
-                    )));
+                    let candidates = input_names.iter().map(|x| x.as_str()).collect::<Vec<_>>();
+                    return Err(unresolved_column_name_error(
+                        &spec::ObjectName::bare(target_name.as_str()),
+                        &candidates,
+                    ));
                 }
                 let field_id = state.register_field_name(target_name.clone());
                 projected_exprs.push(
@@ -376,12 +377,9 @@ impl PlanResolver<'_> {
                     .iter()
                     .map(|(_, _, name)| name.as_str())
                     .collect::<Vec<_>>();
-                return Err(PlanError::AnalysisError(format!(
-                    "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter \
-                     with name `{}` cannot be resolved. Did you mean one of the following? [{}].",
-                    name.replace('`', "``"),
-                    Self::format_column_candidates(&candidates)
-                )));
+                let object = spec::ObjectName::parse_attribute(name)
+                    .unwrap_or_else(|| spec::ObjectName::bare(name.as_str()));
+                return Err(unresolved_column_fields_error(&object, &candidates));
             }
         }
 

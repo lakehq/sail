@@ -9,6 +9,9 @@ use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
+use crate::resolver::expression::attribute::{
+    quote_identifier_part, unresolved_column_fields_error,
+};
 use crate::resolver::state::{FieldInfo, PlanResolverState};
 
 impl PlanResolver<'_> {
@@ -240,14 +243,20 @@ impl PlanResolver<'_> {
                 .iter()
                 .map(|x| match &x.relation {
                     Some(relation) if relation.table() != UNNAMED_TABLE => {
-                        format!("`{relation}`.`{name}`")
+                        let qualifier = relation.to_string();
+                        let parts = qualifier.split('.').chain(std::iter::once(name));
+                        parts
+                            .map(quote_identifier_part)
+                            .collect::<Vec<_>>()
+                            .join(".")
                     }
-                    _ => format!("`{name}`"),
+                    _ => quote_identifier_part(name),
                 })
                 .collect::<Vec<_>>();
             references.sort();
             return Err(PlanError::AnalysisError(format!(
-                "[AMBIGUOUS_REFERENCE] Reference `{name}` is ambiguous, could be: [{}].",
+                "[AMBIGUOUS_REFERENCE] Reference {} is ambiguous, could be: [{}].",
+                quote_identifier_part(name),
                 references.join(", ")
             )));
         }
@@ -265,12 +274,16 @@ impl PlanResolver<'_> {
         state: &PlanResolverState,
     ) -> PlanResult<Column> {
         if let Some(column) = self.resolve_optional_column(schema, name, None, state)? {
-            Ok(column)
-        } else {
-            Err(PlanError::AnalysisError(format!(
-                "[UNRESOLVED_COLUMN] Cannot find column {name}"
-            )))
+            return Ok(column);
         }
+        // The name is the one the user wrote, so it is split the way a column reference is
+        // before it is reported.
+        let object =
+            spec::ObjectName::parse_attribute(name).unwrap_or_else(|| spec::ObjectName::bare(name));
+        Err(unresolved_column_fields_error(
+            &object,
+            &Self::get_field_names(schema, state)?,
+        ))
     }
 
     pub(super) fn resolve_columns<T: AsRef<str>>(
@@ -283,15 +296,6 @@ impl PlanResolver<'_> {
             .iter()
             .map(|name| self.resolve_one_column(schema, name.as_ref(), state))
             .collect::<PlanResult<Vec<Column>>>()
-    }
-
-    /// Formats column names the way Spark lists the candidates of an unresolved column error.
-    pub(super) fn format_column_candidates<T: AsRef<str>>(names: &[T]) -> String {
-        names
-            .iter()
-            .map(|name| format!("`{}`", name.as_ref().replace('`', "``")))
-            .collect::<Vec<_>>()
-            .join(", ")
     }
 
     /// Returns the user-visible field names for a resolved schema.

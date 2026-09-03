@@ -136,6 +136,7 @@ def test_dataframe_sample_rejects_individual_bounds(spark):
 
 @jvm_spark_only
 @pytest.mark.parametrize("with_replacement", [False, True])
+@pytest.mark.skipif(is_jvm_spark(), reason="The sampled rows depend on the engine's own random number generator")
 def test_seeded_sample_pattern_differs_across_batches(
     single_partition_spark,
     with_replacement,

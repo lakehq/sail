@@ -24,7 +24,7 @@ Feature: identifier resolution beyond ASCII
         """
         SELECT `ID`.a FROM (SELECT 1 AS a) AS `ıd`
         """
-      Then query error UNRESOLVED_COLUMN|is missing from the schema
+      Then query error \[UNRESOLVED_COLUMN\.WITH_SUGGESTION\] A column, variable, or function parameter with name `ID`\.`a` cannot be resolved\. Did you mean one of the following\? \[`ıd`\.`a`\]\.
 
   Rule: A wildcard target is matched by the resolver alone
 
@@ -70,7 +70,7 @@ Feature: identifier resolution beyond ASCII
         """
         SELECT transform(array(1, 2), `ıd` -> `ID` + 1) AS result
         """
-      Then query error UNRESOLVED_COLUMN|is missing from the schema
+      Then query error \[UNRESOLVED_COLUMN\.WITHOUT_SUGGESTION\] A column, variable, or function parameter with name `ID` cannot be resolved\.
 
   Rule: A struct field is matched by the resolver
 
@@ -140,7 +140,7 @@ Feature: identifier resolution beyond ASCII
         """
         SELECT transform(array(1), `𐕰` -> `𐖗` + 1) AS result
         """
-      Then query error UNRESOLVED_COLUMN|is missing from the schema
+      Then query error \[UNRESOLVED_COLUMN\.WITHOUT_SUGGESTION\] A column, variable, or function parameter with name `𐖗` cannot be resolved\.
 
   Rule: The alias of an aggregate is matched the way an attribute reference is
 
@@ -226,3 +226,163 @@ Feature: identifier resolution beyond ASCII
         SELECT a, count(*) AS c FROM (SELECT 1 AS a) GROUP BY a ORDER BY C
         """
       Then query error UNRESOLVED_COLUMN\.WITH_SUGGESTION
+
+  Rule: An unresolved name is reported the way the analyzer reports it
+
+    Scenario: the suggestion is ordered by similarity and truncated to five names
+      # `zzzzzz` is the first column of the schema but the least similar name, so it is the one
+      # that the truncation drops.
+      When query
+        """
+        SELECT nope FROM (SELECT 1 AS zzzzzz, 2 AS nope1, 3 AS c, 4 AS d, 5 AS e, 6 AS f)
+        """
+      Then query error \[UNRESOLVED_COLUMN\.WITH_SUGGESTION\] A column, variable, or function parameter with name `nope` cannot be resolved\. Did you mean one of the following\? \[`nope1`, `c`, `d`, `e`, `f`\]\.
+
+    Scenario: the suggestion for an unqualified name carries no qualifier
+      When query
+        """
+        SELECT nope FROM (SELECT 1 AS a) AS t
+        """
+      Then query error Did you mean one of the following\? \[`a`\]\.
+
+    Scenario: a backtick in a suggested name is doubled
+      When query
+        """
+        SELECT nope FROM (SELECT 1 AS `a``b`)
+        """
+      Then query error Did you mean one of the following\? \[`a``b`\]\.
+
+    Scenario: an ambiguous reference lists the requested name once per candidate
+      # The candidates are `a` and `A`, but the analyzer renames each match to the name that was
+      # requested before it builds the message, so both entries read `a`.
+      When query
+        """
+        SELECT a FROM (SELECT 1 AS a, 2 AS A)
+        """
+      Then query error \[AMBIGUOUS_REFERENCE\] Reference `a` is ambiguous, could be: \[`a`, `a`\]\.
+
+    Scenario: an ambiguous reference quotes each part of the qualifier
+      When query
+        """
+        SELECT id FROM (SELECT 1 AS ID) l JOIN (SELECT 2 AS ID) r
+        """
+      Then query error \[AMBIGUOUS_REFERENCE\] Reference `id` is ambiguous, could be: \[`l`\.`id`, `r`\.`id`\]\.
+
+    Scenario: a wildcard whose target does not resolve reports the star expansion condition
+      When query
+        """
+        SELECT nope.* FROM (SELECT 1 AS a)
+        """
+      Then query error \[CANNOT_RESOLVE_STAR_EXPAND\] Cannot resolve `nope`\.\* given input columns `a`\. Please check that the specified table or struct exists and is accessible in the input columns\.
+
+  Rule: An unresolved join key is reported the way the analyzer reports it
+
+    Scenario: the left-side columns are sorted before they are quoted
+      # Sorting the quoted names would put `a b` first, since a space sorts below a backtick.
+      When query
+        """
+        SELECT * FROM (SELECT 1 AS a, 2 AS `a b`) t1 JOIN (SELECT 1 AS z) t2 USING (nope)
+        """
+      Then query error \[UNRESOLVED_USING_COLUMN_FOR_JOIN\] USING column `nope` cannot be resolved on the left side of the join\. The left-side columns: \[`a`, `a b`\]\.
+
+    Scenario: a dotted join key is reported as several quoted parts
+      When query
+        """
+        SELECT * FROM (SELECT 1 AS a) t1 JOIN (SELECT 1 AS a) t2 USING (`x.y`)
+        """
+      Then query error USING column `x`\.`y` cannot be resolved on the left side of the join\.
+
+  Rule: The names suggested for an unresolved column are ordered the way the analyzer orders them
+
+    Scenario: two names at the same distance are ordered by name, not by position in the schema
+      # The candidates reach the ordering through `AttributeSet.toSeq`, which sorts them by name,
+      # and the sort by distance is stable, so an order that the schema imposes never survives.
+      When query
+        """
+        SELECT xx FROM (SELECT 1 AS mm, 2 AS aa, 3 AS zz)
+        """
+      Then query error Did you mean one of the following\? \[`aa`, `mm`, `zz`\]\.
+
+    Scenario: the order of the schema does not reach the suggestion
+      When query
+        """
+        SELECT xx FROM (SELECT 1 AS zz, 2 AS yy, 3 AS ww)
+        """
+      Then query error Did you mean one of the following\? \[`ww`, `yy`, `zz`\]\.
+
+    Scenario: the nearest name comes first even when it is last in the schema
+      When query
+        """
+        SELECT nope FROM (SELECT 1 AS aaaaaa, 2 AS bbbbbb, 3 AS nope1)
+        """
+      Then query error Did you mean one of the following\? \[`nope1`, `aaaaaa`, `bbbbbb`\]\.
+
+    Scenario: the distance is measured over characters rather than bytes
+      When query
+        """
+        SELECT nope FROM (SELECT 1 AS `ñññññññ`, 2 AS `nopé`)
+        """
+      Then query error Did you mean one of the following\? \[`nopé`, `ñññññññ`\]\.
+
+    Scenario: a qualifier shared by every candidate is stripped
+      When query
+        """
+        SELECT nope FROM (SELECT 1 AS a, 2 AS b) AS t
+        """
+      Then query error Did you mean one of the following\? \[`a`, `b`\]\.
+
+    Scenario: a qualifier is kept when the candidates do not share one
+      When query
+        """
+        SELECT nope FROM (SELECT 1 AS a) AS t1 JOIN (SELECT 2 AS b) AS t2
+        """
+      Then query error Did you mean one of the following\? \[`t1`\.`a`, `t2`\.`b`\]\.
+
+    Scenario: a qualifier is kept when the name that failed carries one
+      When query
+        """
+        SELECT t.nope FROM (SELECT 1 AS a, 2 AS b) AS t
+        """
+      Then query error with name `t`\.`nope` cannot be resolved\. Did you mean one of the following\? \[`t`\.`a`, `t`\.`b`\]\.
+
+    Scenario: the suggestion is truncated to five names after it is ordered
+      When query
+        """
+        SELECT nope FROM (SELECT 1 AS q, 2 AS r, 3 AS nope1, 4 AS s, 5 AS t, 6 AS u)
+        """
+      Then query error Did you mean one of the following\? \[`nope1`, `q`, `r`, `s`, `t`\]\.
+
+  Rule: A qualified interpretation of a name wins over a nested one
+
+    @sail-bug
+    Scenario: a qualifier is preferred over a struct of the same name
+      # The analyzer tries the interpretations from the longest qualifier down and stops at the
+      # first one that matches anything, so the struct field is never considered.
+      When query
+        """
+        SELECT a.b FROM (SELECT named_struct('b', 1) AS a, 2 AS b) a
+        """
+      Then query result
+        | b |
+        | 2 |
+
+  Rule: A nested field that matches nothing is reported as a missing field
+
+    @sail-bug
+    Scenario: a struct field that matches nothing is not an unresolved column
+      # Once one attribute has matched, the remaining parts walk into it, and a part that names
+      # no field is a missing field rather than a name that did not resolve.
+      When query
+        """
+        SELECT s.missing FROM (SELECT named_struct('x', 1) AS s)
+        """
+      Then query error \[FIELD_NOT_FOUND\] No such struct field `missing` in `x`\.
+
+  Rule: The columns listed by a failed wildcard are ordered the way the analyzer orders them
+
+    Scenario: the input columns of a star expansion are sorted by name
+      When query
+        """
+        SELECT nope.* FROM (SELECT 1 AS zz, 2 AS aa, 3 AS mm)
+        """
+      Then query error given input columns `aa`, `mm`, `zz`\.

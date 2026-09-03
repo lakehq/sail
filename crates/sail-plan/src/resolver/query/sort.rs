@@ -245,6 +245,11 @@ impl PlanResolver<'_> {
         match sort_expr {
             Ok(sort_expr) => Ok(sort_expr),
             Err(error) => {
+                // A plan with several inputs has no single schema to fall back to, and resolving
+                // the sort against each of them would register names that are then discarded.
+                if plan.inputs().len() != 1 {
+                    return Err(error);
+                }
                 let mut sorts = Vec::with_capacity(plan.inputs().len());
                 for input_plan in plan.inputs() {
                     match self

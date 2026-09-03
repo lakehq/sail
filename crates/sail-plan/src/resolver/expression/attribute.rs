@@ -20,7 +20,7 @@ use crate::resolver::state::PlanResolverState;
 fn ambiguous_attribute_error(
     name: &spec::ObjectName,
     plan_id: Option<i64>,
-    references: Vec<String>,
+    references: Vec<Vec<String>>,
 ) -> PlanError {
     if plan_id.is_some() {
         return PlanError::AnalysisError(format!(
@@ -28,17 +28,14 @@ fn ambiguous_attribute_error(
              several DataFrame together, and some of these DataFrames are the same. This column \
              points to one of the DataFrames but Spark is unable to figure out which one. \
              Please alias the DataFrames with different names via `DataFrame.alias` before \
-             joining them, and specify the column using qualified name.",
-            name.parts()
-                .iter()
-                .map(|x| x.as_ref())
-                .collect::<Vec<_>>()
-                .join(".")
+             joining them, and specify the column using qualified name, e.g. \
+             `df.alias(\"a\").join(df.alias(\"b\"), col(\"a.id\") > col(\"b.id\"))`.",
+            pretty_attribute(name)
         ));
     }
     let mut references = references
         .iter()
-        .map(|x| quote_identifier_parts(x.split('.')))
+        .map(|x| quote_identifier_parts(x.iter().map(|x| x.as_str())))
         .collect::<Vec<_>>();
     references.sort();
     PlanError::AnalysisError(format!(
@@ -55,20 +52,103 @@ fn quote_identifier(name: &spec::ObjectName) -> String {
 
 fn quote_identifier_parts<'a>(parts: impl Iterator<Item = &'a str>) -> String {
     parts
-        .map(|x| format!("`{x}`"))
+        .map(quote_identifier_part)
         .collect::<Vec<_>>()
         .join(".")
+}
+
+/// Quotes one part of an identifier as Spark's `QuotingUtils.quoteIdentifier` does, doubling the
+/// back quotes it contains.
+pub(crate) fn quote_identifier_part(part: &str) -> String {
+    format!("`{}`", part.replace('`', "``"))
+}
+
+/// Quotes one part only when it is not a plain identifier, as `QuotingUtils.quoteIfNeeded` does.
+fn quote_if_needed(part: &str) -> String {
+    let mut characters = part.chars();
+    let plain = matches!(characters.next(), Some(x) if x.is_ascii_alphabetic() || x == '_')
+        && characters.all(|x| x.is_ascii_alphanumeric() || x == '_');
+    if plain {
+        part.to_string()
+    } else {
+        quote_identifier_part(part)
+    }
+}
+
+/// Renders an attribute the way Spark's `toSQLExpr` does, which is the `sql` of the unresolved
+/// attribute rather than the fully quoted form used for a column name.
+fn pretty_attribute(name: &spec::ObjectName) -> String {
+    name.parts()
+        .iter()
+        .map(|x| quote_if_needed(x.as_ref()))
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+/// The edit distance Spark orders the suggested names by
+/// (`org.apache.commons.text.similarity.LevenshteinDistance`).
+fn edit_distance(left: &str, right: &str) -> usize {
+    let right = right.chars().collect::<Vec<_>>();
+    let mut row = (0..=right.len()).collect::<Vec<_>>();
+    for (i, left_char) in left.chars().enumerate() {
+        let mut previous = row[0];
+        row[0] = i + 1;
+        for (j, right_char) in right.iter().enumerate() {
+            let substitution = previous + usize::from(left_char != *right_char);
+            previous = row[j + 1];
+            row[j + 1] = substitution.min(row[j] + 1).min(row[j + 1] + 1);
+        }
+    }
+    row[right.len()]
+}
+
+/// Orders the names Spark suggests for an unresolved column, as
+/// `StringUtils.orderSuggestedIdentifiersBySimilarity` does. A qualifier that every candidate
+/// shares is stripped, since it is not what tells them apart.
+fn order_candidates_by_similarity(
+    name: &spec::ObjectName,
+    candidates: Vec<Vec<String>>,
+) -> Vec<String> {
+    let parts = name.parts().len();
+    let shared = |depth: usize| {
+        let mut prefixes = candidates
+            .iter()
+            .map(|x| &x[..x.len().saturating_sub(depth)]);
+        let first = prefixes.next();
+        first.is_some_and(|first| prefixes.all(|x| x == first))
+    };
+    let stripped = if parts == 1 && shared(1) {
+        1
+    } else if parts <= 2 && shared(2) {
+        2
+    } else {
+        usize::MAX
+    };
+    let base = pretty_attribute(name);
+    let mut candidates = candidates;
+    // The candidates reach the ordering through `AttributeSet.toSeq`, which sorts them by name,
+    // and the sort by distance is stable, so an equal distance is broken by name.
+    candidates.sort_by(|a, b| a.last().cmp(&b.last()));
+    let mut candidates = candidates
+        .into_iter()
+        .map(|parts| {
+            let start = parts.len().saturating_sub(stripped);
+            quote_identifier_parts(parts[start..].iter().map(|x| x.as_str()))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|x| edit_distance(x, &base));
+    candidates
 }
 
 /// Builds the error Spark reports when a name resolves to no column. The suggestion lists the
 /// first few columns in scope, and its absence selects the other sub-condition, as
 /// `QueryCompilationErrors.unresolvedColumnError` does.
-fn unresolved_column_error(
+pub(in crate::resolver) fn unresolved_column_error(
     name: &spec::ObjectName,
     schema: &DFSchemaRef,
     state: &PlanResolverState,
 ) -> PlanError {
-    let proposal = schema
+    let candidates = schema
         .columns()
         .into_iter()
         .filter_map(|column| {
@@ -76,11 +156,22 @@ fn unresolved_column_error(
             if info.is_hidden() {
                 return None;
             }
-            Some(match column.relation {
-                Some(relation) => format!("`{relation}`.`{}`", info.name()),
-                None => format!("`{}`", info.name()),
-            })
+            // The placeholder qualifier of a relation that has no name is not part of the name
+            // of the column, so it must not reach the suggestion.
+            let mut parts = match &column.relation {
+                Some(relation) if relation.table() != UNNAMED_TABLE => relation
+                    .to_string()
+                    .split('.')
+                    .map(|x| x.to_string())
+                    .collect::<Vec<_>>(),
+                _ => vec![],
+            };
+            parts.push(info.name().to_string());
+            Some(parts)
         })
+        .collect::<Vec<_>>();
+    let proposal = order_candidates_by_similarity(name, candidates)
+        .into_iter()
         .take(5)
         .collect::<Vec<_>>();
     let name = quote_identifier(name);
@@ -96,6 +187,58 @@ fn unresolved_column_error(
             proposal.join(", ")
         ))
     }
+}
+
+/// Builds the unresolved column error for a name matched against a flat list of column names.
+pub(in crate::resolver) fn unresolved_column_name_error(
+    name: &spec::ObjectName,
+    candidates: &[&str],
+) -> PlanError {
+    let candidates = candidates
+        .iter()
+        .map(|x| vec![x.to_string()])
+        .collect::<Vec<_>>();
+    let proposal = order_candidates_by_similarity(name, candidates)
+        .into_iter()
+        .take(5)
+        .collect::<Vec<_>>();
+    let name = quote_identifier(name);
+    if proposal.is_empty() {
+        PlanError::AnalysisError(format!(
+            "[UNRESOLVED_COLUMN.WITHOUT_SUGGESTION] A column, variable, or function parameter \
+             with name {name} cannot be resolved."
+        ))
+    } else {
+        PlanError::AnalysisError(format!(
+            "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with \
+             name {name} cannot be resolved. Did you mean one of the following? [{}].",
+            proposal.join(", ")
+        ))
+    }
+}
+
+/// Builds the unresolved column error that `Dataset.resolve` reports. Unlike the suggestion of a
+/// name written in a query, this one lists every field of the schema, in order and untruncated.
+pub(in crate::resolver) fn unresolved_column_fields_error<T: AsRef<str>>(
+    name: &spec::ObjectName,
+    fields: &[T],
+) -> PlanError {
+    let name = quote_identifier(name);
+    if fields.is_empty() {
+        return PlanError::AnalysisError(format!(
+            "[UNRESOLVED_COLUMN.WITHOUT_SUGGESTION] A column, variable, or function parameter \
+             with name {name} cannot be resolved."
+        ));
+    }
+    let proposal = fields
+        .iter()
+        .map(|x| quote_identifier_part(x.as_ref()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    PlanError::AnalysisError(format!(
+        "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name \
+         {name} cannot be resolved. Did you mean one of the following? [{proposal}]."
+    ))
 }
 
 impl PlanResolver<'_> {
@@ -163,11 +306,7 @@ impl PlanResolver<'_> {
             return Err(PlanError::AnalysisError(format!(
                 "[CANNOT_RESOLVE_DATAFRAME_COLUMN] Cannot resolve dataframe column \"{}\". \
                  It's probably because of illegal references like `df1.select(df2.col(\"a\"))`.",
-                name.parts()
-                    .iter()
-                    .map(|x| x.as_ref())
-                    .collect::<Vec<_>>()
-                    .join(".")
+                pretty_attribute(&name)
             )));
         }
         let Some(outer_schema) = state.get_outer_query_schema().cloned() else {
@@ -214,12 +353,15 @@ impl PlanResolver<'_> {
                             // A plan that the user did not name carries DataFusion's placeholder
                             // qualifier, while the matching attribute in Spark has no qualifier
                             // at all, so it must not reach the reference list.
-                            let reference = match qualifier {
-                                Some(qualifier) if qualifier.table() != UNNAMED_TABLE => {
-                                    format!("{qualifier}.{}", info.name())
-                                }
-                                _ => info.name().to_string(),
+                            let mut reference = match qualifier {
+                                Some(qualifier) if qualifier.table() != UNNAMED_TABLE => qualifier
+                                    .to_string()
+                                    .split('.')
+                                    .map(|x| x.to_string())
+                                    .collect::<Vec<_>>(),
+                                _ => vec![],
                             };
+                            reference.push(name.as_ref().to_string());
                             let name = inner.last().unwrap_or(name).as_ref().to_string();
                             Some(Ok((reference, name, expr)))
                         } else {
@@ -311,7 +453,7 @@ impl PlanResolver<'_> {
                 }
                 if self.match_field(info, identifier.as_ref(), plan_id) {
                     Some((
-                        info.name().to_string(),
+                        vec![identifier.as_ref().to_string()],
                         identifier.as_ref().to_string(),
                         expr::Expr::Column(Column::new_unqualified(field.name())),
                     ))
@@ -365,9 +507,11 @@ impl PlanResolver<'_> {
             })
             .collect::<Vec<_>>();
         if candidates.len() > 1 {
-            return Err(PlanError::AnalysisError(format!(
-                "ambiguous outer attribute: {name:?}"
-            )));
+            let references = candidates
+                .iter()
+                .map(|(reference, _)| vec![reference.clone()])
+                .collect();
+            return Err(ambiguous_attribute_error(name, None, references));
         }
         Ok(candidates.pop())
     }

@@ -34,6 +34,8 @@ from pyspark.sql.window import Window
 
 from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
+_SAIL_BUG = pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+
 ANALYZER = {"spark.sql.analyzer.singlePassResolver.enabled": "false"}
 
 # The three rows of the reported repro fold to two distinct products.
@@ -58,6 +60,12 @@ _SPARK_4 = pytest.mark.skipif(
 )
 
 
+def _error_param(*values, marks=()):
+    """Builds an error case, gating it when the condition is one an older JVM oracle lacks."""
+    gates = [_SPARK_4] if values[-1] in SPARK_4_CONDITIONS else []
+    return pytest.param(*values, marks=[*gates, *marks])
+
+
 def _normalise(value):
     """Strips the client's own rendering of a value, so the rows read the same anywhere.
 
@@ -73,8 +81,28 @@ def _normalise(value):
     return value
 
 
+def _row_keys(names):
+    """Disambiguates repeated column names so a row keeps every column it has.
+
+    `Row.asDict` keeps only one of a pair of columns that share a name, which is exactly the
+    column a case about duplicate names is asserting, so the repeated ones are numbered by
+    position instead.
+    """
+    repeated = {name for name in names if names.count(name) > 1}
+    seen = {}
+    keys = []
+    for name in names:
+        if name in repeated:
+            seen[name] = seen.get(name, 0) + 1
+            keys.append(f"{name}#{seen[name]}")
+        else:
+            keys.append(name)
+    return keys
+
+
 def _rows(df):
-    return sorted(str({k: _normalise(v) for k, v in row.asDict().items()}) for row in df.collect())
+    keys = _row_keys(df.columns)
+    return sorted(str(dict(zip(keys, [_normalise(value) for value in row], strict=True))) for row in df.collect())
 
 
 def _configure(spark, case_sensitive):
@@ -142,7 +170,7 @@ RESULTS = [
     ("with_column_referring_to_itself", "true", ["a", "b", "A"], ["{'a': 1, 'b': 2, 'A': 2}"], [{}, {}, {}]),
     ("with_column_dotted_name", "false", ["s", "s.x"], ["{'s': Row(x=1), 's.x': 9}"], [{}, {}]),
     ("with_column_dotted_name", "true", ["s", "s.x"], ["{'s': Row(x=1), 's.x': 9}"], [{}, {}]),
-    ("with_column_ambiguous_name", "false", ["a", "a"], ["{'a': 9}"], [{}, {}]),
+    ("with_column_ambiguous_name", "false", ["a", "a"], ["{'a#1': 9, 'a#2': 9}"], [{}, {}]),
     ("with_column_ambiguous_name", "true", ["a", "A"], ["{'a': 9, 'A': 2}"], [{}, {}]),
     ("with_columns_two_entries", "false", ["A", "b", "c"], ["{'A': 9, 'b': 2, 'c': 7}"], [{}, {}, {}]),
     ("with_columns_two_entries", "true", ["a", "b", "A", "c"], ["{'a': 1, 'b': 2, 'A': 9, 'c': 7}"], [{}, {}, {}, {}]),
@@ -159,18 +187,18 @@ RESULTS = [
     ("with_column_renamed_differing_case", "true", ["a", "b"], ["{'a': 1, 'b': 2}"], [{}, {}]),
     ("with_column_renamed_unknown_name", "false", ["a", "b"], ["{'a': 1, 'b': 2}"], [{}, {}]),
     ("with_column_renamed_unknown_name", "true", ["a", "b"], ["{'a': 1, 'b': 2}"], [{}, {}]),
-    ("with_column_renamed_onto_existing", "false", ["b", "b"], ["{'b': 2}"], [{}, {}]),
-    ("with_column_renamed_onto_existing", "true", ["b", "b"], ["{'b': 2}"], [{}, {}]),
+    ("with_column_renamed_onto_existing", "false", ["b", "b"], ["{'b#1': 1, 'b#2': 2}"], [{}, {}]),
+    ("with_column_renamed_onto_existing", "true", ["b", "b"], ["{'b#1': 1, 'b#2': 2}"], [{}, {}]),
     ("with_column_renamed_onto_existing_case", "false", ["B", "b"], ["{'B': 1, 'b': 2}"], [{}, {}]),
     ("with_column_renamed_onto_existing_case", "true", ["B", "b"], ["{'B': 1, 'b': 2}"], [{}, {}]),
     ("with_column_renamed_non_ascii", "false", ["z"], ["{'z': 1}"], [{}]),
     ("with_column_renamed_non_ascii", "true", ["ä"], ["{'ä': 1}"], [{}]),
-    ("with_column_renamed_ambiguous_name", "false", ["z", "z"], ["{'z': 2}"], [{}, {}]),
+    ("with_column_renamed_ambiguous_name", "false", ["z", "z"], ["{'z#1': 1, 'z#2': 2}"], [{}, {}]),
     ("with_column_renamed_ambiguous_name", "true", ["z", "A"], ["{'z': 1, 'A': 2}"], [{}, {}]),
-    ("with_columns_renamed_sequential", "false", ["c", "c"], ["{'c': 2}"], [{}, {}]),
-    ("with_columns_renamed_sequential", "true", ["c", "c"], ["{'c': 2}"], [{}, {}]),
-    ("with_columns_renamed_swap", "false", ["a", "a"], ["{'a': 2}"], [{}, {}]),
-    ("with_columns_renamed_swap", "true", ["a", "a"], ["{'a': 2}"], [{}, {}]),
+    ("with_columns_renamed_sequential", "false", ["c", "c"], ["{'c#1': 1, 'c#2': 2}"], [{}, {}]),
+    ("with_columns_renamed_sequential", "true", ["c", "c"], ["{'c#1': 1, 'c#2': 2}"], [{}, {}]),
+    ("with_columns_renamed_swap", "false", ["a", "a"], ["{'a#1': 1, 'a#2': 2}"], [{}, {}]),
+    ("with_columns_renamed_swap", "true", ["a", "a"], ["{'a#1': 1, 'a#2': 2}"], [{}, {}]),
     ("with_columns_renamed_targets_differing_in_case", "false", ["z", "Z"], ["{'z': 1, 'Z': 2}"], [{}, {}]),
     ("with_columns_renamed_targets_differing_in_case", "true", ["z", "Z"], ["{'z': 1, 'Z': 2}"], [{}, {}]),
     ("with_columns_renamed_differing_case", "false", ["z", "b"], ["{'z': 1, 'b': 2}"], [{}, {}]),
@@ -190,10 +218,10 @@ RESULTS = [
 # (case, caseSensitive, error condition)
 ERRORS = [
     ("with_columns_entries_differing_in_case", "false", "COLUMN_ALREADY_EXISTS"),
-    pytest.param(*("with_metadata_differing_case", "true", "CANNOT_RESOLVE_DATAFRAME_COLUMN"), marks=_SPARK_4),
-    pytest.param(*("with_metadata_unknown_name", "false", "CANNOT_RESOLVE_DATAFRAME_COLUMN"), marks=_SPARK_4),
-    pytest.param(*("with_metadata_unknown_name", "true", "CANNOT_RESOLVE_DATAFRAME_COLUMN"), marks=_SPARK_4),
-    pytest.param(*("with_metadata_non_ascii", "true", "CANNOT_RESOLVE_DATAFRAME_COLUMN"), marks=_SPARK_4),
+    _error_param("with_metadata_differing_case", "true", "CANNOT_RESOLVE_DATAFRAME_COLUMN"),
+    _error_param("with_metadata_unknown_name", "false", "CANNOT_RESOLVE_DATAFRAME_COLUMN"),
+    _error_param("with_metadata_unknown_name", "true", "CANNOT_RESOLVE_DATAFRAME_COLUMN"),
+    _error_param("with_metadata_non_ascii", "true", "CANNOT_RESOLVE_DATAFRAME_COLUMN"),
 ]
 
 
@@ -248,6 +276,47 @@ def test_replacement_survives_a_later_analysis(spark, case_sensitive, columns):
         _unconfigure(spark)
 
 
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_an_added_column_carries_no_qualifier(spark):
+    # The star expansion returns the input's own attributes for the columns it passes through, so
+    # those keep their qualifier, while a column the projection adds is an alias with none.
+    df = spark.sql("SELECT 1 AS a, 2 AS b").alias("x")
+
+    assert df.withColumn("c", lit(1)).select("x.a").columns == ["a"]
+    with pytest.raises(Exception, match="UNRESOLVED_COLUMN"):
+        _ = df.withColumn("c", lit(1)).select("x.c").collect()
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_a_rename_keeps_the_qualifier_of_the_columns_it_did_not_touch(spark):
+    # Renaming one column does not take the qualifier away from the others.
+    df = spark.sql("SELECT 1 AS a, 2 AS b").alias("x")
+
+    assert df.withColumnRenamed("a", "z").select("x.b").columns == ["b"]
+
+
+@pytest.mark.parametrize(
+    ("expression", "data_type", "nullable"),
+    [
+        # The two that agree, as the controls: a fix that made every added column nullable, or
+        # none of them, would still have to pass these.
+        ("1", "int", False),
+        ("a", "int", False),
+        pytest.param("CAST(1 AS DECIMAL(10,2))", "decimal(10,2)", True, marks=_SAIL_BUG),
+        pytest.param("map('k', 1)", "map<string,int>", False, marks=_SAIL_BUG),
+        pytest.param("CASE WHEN a > 1 THEN 'big' ELSE 'small' END", "string", False, marks=_SAIL_BUG),
+    ],
+)
+def test_an_added_column_reports_the_nullability_of_its_expression(spark, expression, data_type, nullable):
+    # The matrices above compare `schema.simpleString()`, which renders neither `nullable` nor the
+    # nullability inside a container, so this is the only place the flag is asserted.
+    df = spark.sql(f"SELECT *, {expression} AS c FROM VALUES (1, 'x'), (2, 'y') AS t(a, b)")  # noqa: S608
+    field = df.schema["c"]
+
+    assert field.dataType.simpleString() == data_type
+    assert field.nullable == nullable
+
+
 def _annotated(spark):
     """A column that the projection passes through, annotated with metadata."""
     return spark.sql("SELECT * FROM VALUES (1, 'x'), (2, 'y') AS t(a, b)").withMetadata("a", {"k": "v"})
@@ -262,7 +331,10 @@ def test_metadata_on_a_passed_through_column_reaches_collect(spark):
     assert [row.asDict() for row in _annotated(spark).collect()] == [{"a": 1, "b": "x"}, {"a": 2, "b": "y"}]
 
 
-@pytest.mark.skipif(pyspark_version() < (4, 0), reason="`toArrow` requires PySpark 4.0+")
+@pytest.mark.skipif(
+    pyspark_version() < (4, 2),
+    reason="The client carries the field metadata through `toArrow` from PySpark 4.2 on",
+)
 @pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_metadata_on_a_passed_through_column_reaches_to_arrow(spark):
     table = _annotated(spark).toArrow()
@@ -271,7 +343,10 @@ def test_metadata_on_a_passed_through_column_reaches_to_arrow(spark):
     assert table.schema.field("a").metadata == {b"SPARK::metadata::json": b'{"k": "v"}'}
 
 
-@pytest.mark.skipif(pyspark_version() < (4, 0), reason="`toArrow` requires PySpark 4.0+")
+@pytest.mark.skipif(
+    pyspark_version() < (4, 2),
+    reason="The client carries the field metadata through `toArrow` from PySpark 4.2 on",
+)
 def test_metadata_on_a_column_the_projection_builds_reaches_the_client(spark):
     # The same metadata on a column produced by the projection itself, rather than passed through
     # from the input, does reach the client. This is what keeps the failure above narrow.
@@ -284,7 +359,6 @@ def test_metadata_on_a_column_the_projection_builds_reaches_the_client(spark):
 # A column added or renamed, then consumed by another operation. The reported failure was deferred:
 # the replacement built fine and the collision only surfaced when a later operation had to resolve
 # the name again, so these cases put an operation after the replacement.
-_SAIL_BUG = pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 
 
 def _composition(spark):
@@ -394,18 +468,18 @@ COMPOSITION_RESULTS = [
         "replaced_then_join_on_condition",
         "true",
         ["a", "b", "A", "a", "c"],
-        ["{'a': 1, 'b': 'x', 'A': 1, 'c': 'p'}", "{'a': 1, 'b': 'z', 'A': 1, 'c': 'p'}"],
+        ["{'a#1': 1, 'b': 'x', 'A': 1, 'a#2': 1, 'c': 'p'}", "{'a#1': 1, 'b': 'z', 'A': 1, 'a#2': 1, 'c': 'p'}"],
     ),
     (
         "replaced_then_self_join",
         "false",
         ["A", "b", "a", "b"],
         [
-            "{'A': 1, 'b': 'x', 'a': 1}",
-            "{'A': 1, 'b': 'x', 'a': 1}",
-            "{'A': 1, 'b': 'z', 'a': 1}",
-            "{'A': 1, 'b': 'z', 'a': 1}",
-            "{'A': 2, 'b': 'y', 'a': 2}",
+            "{'A': 1, 'b#1': 'x', 'a': 1, 'b#2': 'x'}",
+            "{'A': 1, 'b#1': 'x', 'a': 1, 'b#2': 'z'}",
+            "{'A': 1, 'b#1': 'z', 'a': 1, 'b#2': 'x'}",
+            "{'A': 1, 'b#1': 'z', 'a': 1, 'b#2': 'z'}",
+            "{'A': 2, 'b#1': 'y', 'a': 2, 'b#2': 'y'}",
         ],
     ),
     (
@@ -413,11 +487,11 @@ COMPOSITION_RESULTS = [
         "true",
         ["a", "b", "A", "a", "b"],
         [
-            "{'a': 1, 'b': 'x', 'A': 1}",
-            "{'a': 1, 'b': 'x', 'A': 1}",
-            "{'a': 1, 'b': 'z', 'A': 1}",
-            "{'a': 1, 'b': 'z', 'A': 1}",
-            "{'a': 2, 'b': 'y', 'A': 2}",
+            "{'a#1': 1, 'b#1': 'x', 'A': 1, 'a#2': 1, 'b#2': 'x'}",
+            "{'a#1': 1, 'b#1': 'x', 'A': 1, 'a#2': 1, 'b#2': 'z'}",
+            "{'a#1': 1, 'b#1': 'z', 'A': 1, 'a#2': 1, 'b#2': 'x'}",
+            "{'a#1': 1, 'b#1': 'z', 'A': 1, 'a#2': 1, 'b#2': 'z'}",
+            "{'a#1': 2, 'b#1': 'y', 'A': 2, 'a#2': 2, 'b#2': 'y'}",
         ],
     ),
     (
@@ -491,8 +565,18 @@ COMPOSITION_RESULTS = [
         ["{'Z': 1, 'b': 'x', 'z': 9}", "{'Z': 1, 'b': 'z', 'z': 9}", "{'Z': 2, 'b': 'y', 'z': 9}"],
     ),
     ("renamed_then_group_by", "false", ["z", "count"], ["{'z': 1, 'count': 2}", "{'z': 2, 'count': 1}"]),
-    ("renamed_then_join_on_name", "false", ["a", "c", "c"], ["{'a': 1, 'c': 'p'}", "{'a': 1, 'c': 'p'}"]),
-    ("renamed_then_join_on_name", "true", ["a", "c", "c"], ["{'a': 1, 'c': 'p'}", "{'a': 1, 'c': 'p'}"]),
+    (
+        "renamed_then_join_on_name",
+        "false",
+        ["a", "c", "c"],
+        ["{'a': 1, 'c#1': 'x', 'c#2': 'p'}", "{'a': 1, 'c#1': 'z', 'c#2': 'p'}"],
+    ),
+    (
+        "renamed_then_join_on_name",
+        "true",
+        ["a", "c", "c"],
+        ["{'a': 1, 'c#1': 'x', 'c#2': 'p'}", "{'a': 1, 'c#1': 'z', 'c#2': 'p'}"],
+    ),
     (
         "renamed_twice_then_select",
         "false",
@@ -509,13 +593,13 @@ COMPOSITION_RESULTS = [
 # (case, caseSensitive, error condition)
 COMPOSITION_ERRORS = [
     pytest.param(*("replaced_then_union", "true", "NUM_COLUMNS_MISMATCH"), marks=[_SAIL_BUG]),
-    pytest.param(*("replaced_then_union_by_name", "true", "UNRESOLVED_COLUMN_AMONG_FIELD_NAMES"), marks=[_SPARK_4]),
+    _error_param("replaced_then_union_by_name", "true", "UNRESOLVED_COLUMN_AMONG_FIELD_NAMES"),
     # The client decides whether the name carries a plan id, and that is what selects between the
     # two conditions Spark raises, so an older client reaches this through
     # `CANNOT_RESOLVE_DATAFRAME_COLUMN` instead.
     pytest.param(
         *("renamed_then_group_by", "true", "UNRESOLVED_COLUMN.WITH_SUGGESTION"),
-        marks=pytest.mark.skipif(pyspark_version() < (4, 0), reason="The client sends a plan id"),
+        marks=pytest.mark.skipif(pyspark_version() < (4, 1), reason="The client sends a plan id from PySpark 4.1 on"),
     ),
     ("renamed_twice_then_select", "true", "UNRESOLVED_COLUMN.WITH_SUGGESTION"),
     ("metadata_then_select", "true", "UNRESOLVED_COLUMN.WITH_SUGGESTION"),
@@ -1460,8 +1544,8 @@ NAME_RESULTS = [
 
 # (case, error condition)
 NAME_ERRORS = [
-    ("metadata/dot", "CANNOT_RESOLVE_DATAFRAME_COLUMN"),
-    ("metadata/backtick", "INVALID_ATTRIBUTE_NAME_SYNTAX"),
+    _error_param("metadata/dot", "CANNOT_RESOLVE_DATAFRAME_COLUMN"),
+    _error_param("metadata/backtick", "INVALID_ATTRIBUTE_NAME_SYNTAX"),
 ]
 
 
@@ -1550,13 +1634,13 @@ PARSER_RESULTS = [
 
 # (case, error condition)
 PARSER_ERRORS = [
-    pytest.param(*("unterminated backtick", "INVALID_ATTRIBUTE_NAME_SYNTAX"), marks=[_SPARK_4]),
-    pytest.param(*("backtick after text", "INVALID_ATTRIBUTE_NAME_SYNTAX"), marks=[_SPARK_4]),
-    pytest.param(*("backtick then text", "INVALID_ATTRIBUTE_NAME_SYNTAX"), marks=[_SPARK_4]),
-    pytest.param(*("leading dot", "INVALID_ATTRIBUTE_NAME_SYNTAX"), marks=[_SPARK_4]),
-    pytest.param(*("trailing dot", "INVALID_ATTRIBUTE_NAME_SYNTAX"), marks=[_SPARK_4]),
-    pytest.param(*("double dot", "INVALID_ATTRIBUTE_NAME_SYNTAX"), marks=[_SPARK_4]),
-    pytest.param(*("only a dot", "INVALID_ATTRIBUTE_NAME_SYNTAX"), marks=[_SPARK_4]),
+    _error_param("unterminated backtick", "INVALID_ATTRIBUTE_NAME_SYNTAX"),
+    _error_param("backtick after text", "INVALID_ATTRIBUTE_NAME_SYNTAX"),
+    _error_param("backtick then text", "INVALID_ATTRIBUTE_NAME_SYNTAX"),
+    _error_param("leading dot", "INVALID_ATTRIBUTE_NAME_SYNTAX"),
+    _error_param("trailing dot", "INVALID_ATTRIBUTE_NAME_SYNTAX"),
+    _error_param("double dot", "INVALID_ATTRIBUTE_NAME_SYNTAX"),
+    _error_param("only a dot", "INVALID_ATTRIBUTE_NAME_SYNTAX"),
     ("only backticks", "UNRESOLVED_COLUMN.WITH_SUGGESTION"),
 ]
 

@@ -13,6 +13,7 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
+use crate::resolver::expression::attribute::unresolved_column_name_error;
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
@@ -120,17 +121,39 @@ impl PlanResolver<'_> {
 
     /// Validates a column name used by the `fillna` and `dropna` subsets. Spark resolves the name
     /// the way a column reference is resolved, so a name that matches nothing is an error, while
-    /// a name that refers to a nested field resolves and is simply not a column.
+    /// a name that resolves to a nested field is simply not a column to fill.
     fn validate_na_column(
         &self,
         schema: &DFSchemaRef,
         name: &str,
         state: &PlanResolverState,
     ) -> PlanResult<()> {
-        if name.contains('.') {
+        let Some(object) = spec::ObjectName::parse_attribute(name) else {
+            self.resolve_one_column(schema, name, state)?;
+            return Ok(());
+        };
+        let [leading, ..] = object.parts() else {
+            self.resolve_one_column(schema, name, state)?;
+            return Ok(());
+        };
+        // Only the leading part names a column; the rest walks into it, and a nested field that
+        // resolves is dropped rather than filled.
+        if object.parts().len() == 1 {
+            self.resolve_one_column(schema, name, state)?;
             return Ok(());
         }
-        self.resolve_one_column(schema, name, state)?;
+        if self
+            .resolve_optional_column(schema, leading.as_ref(), None, state)?
+            .is_none()
+        {
+            return Err(unresolved_column_name_error(
+                &object,
+                &Self::get_field_names(schema, state)?
+                    .iter()
+                    .map(|x| x.as_str())
+                    .collect::<Vec<_>>(),
+            ));
+        }
         Ok(())
     }
 

@@ -10,6 +10,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::function::common::{FunctionContextInput, ScalarFunctionInput};
 use crate::function::get_built_in_function;
 use crate::resolver::PlanResolver;
+use crate::resolver::expression::attribute::quote_identifier_part;
 use crate::resolver::state::PlanResolverState;
 
 /// Returns `true` if the expression is itself a top-level Python scalar UDF call.
@@ -213,13 +214,25 @@ impl PlanResolver<'_> {
         {
             return Ok(column);
         }
-        let mut suggestion = Self::get_field_names(schema, state)?
-            .into_iter()
-            .map(|x| format!("`{x}`"))
+        // The names are sorted before they are quoted, so a name that is a prefix of another one
+        // keeps its place: a back quote sorts above every character a name can start with.
+        let mut names = Self::get_field_names(schema, state)?;
+        names.sort();
+        let suggestion = names
+            .iter()
+            .map(|x| quote_identifier_part(x))
             .collect::<Vec<_>>();
-        suggestion.sort();
+        let name = spec::ObjectName::parse_attribute(name)
+            .map(|x| {
+                x.parts()
+                    .iter()
+                    .map(|x| quote_identifier_part(x.as_ref()))
+                    .collect::<Vec<_>>()
+                    .join(".")
+            })
+            .unwrap_or_else(|| quote_identifier_part(name));
         Err(PlanError::AnalysisError(format!(
-            "[UNRESOLVED_USING_COLUMN_FOR_JOIN] USING column `{name}` cannot be resolved on the \
+            "[UNRESOLVED_USING_COLUMN_FOR_JOIN] USING column {name} cannot be resolved on the \
              {side} side of the join. The {side}-side columns: [{}].",
             suggestion.join(", ")
         )))

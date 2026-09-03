@@ -194,8 +194,13 @@ impl PlanResolver<'_> {
         // Remove backticks from the pattern if present
         let pattern_str = col_name.trim_matches('`');
 
-        // Add anchors to match the entire column name (like Spark does)
-        let anchored_pattern = format!("^{}$", pattern_str);
+        // Add anchors to match the entire column name (like Spark does). Spark compiles the
+        // pattern case-insensitively unless the analysis is case sensitive.
+        let anchored_pattern = if self.config.case_sensitive {
+            format!("^{pattern_str}$")
+        } else {
+            format!("(?i)^{pattern_str}$")
+        };
 
         // Compile the regex pattern
         let pattern = Regex::new(&anchored_pattern).map_err(|e| {
@@ -224,7 +229,7 @@ impl PlanResolver<'_> {
 
             // Check if the field name matches the pattern and plan_id
             let field_name = info.name();
-            if pattern.is_match(field_name) && self.match_field(info, field_name, plan_id) {
+            if pattern.is_match(field_name) && info.has_plan_id(plan_id) {
                 matching_columns.push(expr::Expr::Column(Column::new_unqualified(field.name())));
                 matching_names.push(field_name.to_string());
             }

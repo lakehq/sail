@@ -1,3 +1,5 @@
+import re
+
 import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
@@ -394,6 +396,57 @@ def test_to_schema_rejects_nullable_column_for_non_nullable_field(spark):
         src.to(target).collect()
 
 
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_to_schema_keeps_the_metadata_of_the_target_field(spark):
+    # `DataFrame.to` caches the requested schema on the client, so reading `.schema` straight after
+    # it answers from that cache and measures nothing. The cache has to go first.
+    src = spark.sql("SELECT CAST(1 AS INT) AS a, CAST('x' AS STRING) AS b").withMetadata("a", {"j": "w"})
+    target = StructType([StructField("a", IntegerType(), True, {"k": "v"}), StructField("b", StringType(), True)])
+
+    out = src.to(target)
+    out._cached_schema = None  # noqa: SLF001
+
+    # The target's metadata is merged over the column's own, the target winning per key.
+    assert [dict(field.metadata) for field in out.schema.fields] == [{"j": "w", "k": "v"}, {}]
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_to_schema_keeps_the_metadata_of_a_filled_field(spark):
+    # A field the input does not have is filled with NULL, and the target's metadata is the only
+    # metadata such a column can carry.
+    src = spark.sql("SELECT CAST(1 AS INT) AS a")
+    target = StructType([StructField("a", IntegerType(), True), StructField("c", IntegerType(), True, {"k": "v"})])
+
+    out = src.to(target)
+    out._cached_schema = None  # noqa: SLF001
+
+    assert [dict(field.metadata) for field in out.schema.fields] == [{}, {"k": "v"}]
+
+
+def test_fillna_rejects_a_nested_subset_name_that_matches_nothing(spark):
+    # A dotted name is resolved like any other column reference, so one that matches nothing is an
+    # error rather than a name to skip.
+    with pytest.raises(
+        Exception,
+        match=re.escape(
+            "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with "
+            "name `nope`.`x` cannot be resolved. Did you mean one of the following? [`a`]."
+        ),
+    ):
+        spark.sql("SELECT CAST(NULL AS INT) AS a").fillna(0, subset=["nope.x"]).collect()
+
+
+def test_dropna_rejects_a_nested_subset_name_that_matches_nothing(spark):
+    with pytest.raises(
+        Exception,
+        match=re.escape(
+            "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with "
+            "name `nope`.`x` cannot be resolved. Did you mean one of the following? [`a`]."
+        ),
+    ):
+        spark.sql("SELECT CAST(NULL AS INT) AS a").dropna(subset=["nope.x"]).collect()
+
+
 def test_replace_rejects_ambiguous_subset_name(spark):
     # The subset name is resolved as an attribute reference, which fails when it matches more
     # than one column of the input.
@@ -572,3 +625,125 @@ def test_union_by_name_matches_nested_struct_fields_case_insensitively(spark):
 def test_drop_duplicates_rejects_an_empty_subset(spark):
     with pytest.raises(Exception, match="DEDUPLICATE_REQUIRES"):
         spark.sql("SELECT 1 AS a").dropDuplicates([]).collect()
+
+
+def test_fillna_skips_a_nested_subset_name(spark):
+    # A subset name that resolves to a nested field is discarded rather than filled, so the null
+    # inside the struct survives.
+    df = spark.sql("SELECT named_struct('a', CAST(NULL AS INT)) AS s")
+
+    assert df.fillna(0, subset=["s.a"]).collect() == [Row(s=Row(a=None))]
+
+
+def test_to_schema_reports_no_suggestion_when_the_input_has_no_column(spark):
+    # The condition carries the suggestion in a sub-condition, so an input with nothing to
+    # suggest reports the other one instead of an empty list.
+    schema = StructType([StructField("a", IntegerType(), nullable=False)])
+
+    with pytest.raises(
+        Exception,
+        match=re.escape(
+            "[UNRESOLVED_COLUMN.WITHOUT_SUGGESTION] A column, variable, or function parameter "
+            "with name `a` cannot be resolved."
+        ),
+    ):
+        spark.range(1).select().to(schema).collect()
+
+
+def test_ambiguous_column_reference_names_the_way_out(spark):
+    # The condition ends with the example that tells the user how to disambiguate, which is the
+    # only actionable part of the message.
+    df = spark.sql("SELECT 1 AS name")
+
+    with pytest.raises(
+        Exception,
+        match=re.escape(
+            'and specify the column using qualified name, e.g. `df.alias("a").join('
+            'df.alias("b"), col("a.id") > col("b.id"))`.'
+        ),
+    ):
+        df.join(df, df.name == df.name, "outer").select(df.name).collect()
+
+
+def test_col_regex_is_case_sensitive_when_configured(spark):
+    # The pattern is compiled case-insensitively unless the analysis is case sensitive, so the
+    # same regex selects the column under one setting and nothing under the other.
+    df = spark.sql("SELECT 1 AS id, 2 AS other")
+
+    try:
+        spark.conf.set("spark.sql.caseSensitive", "false")
+        assert df.select(df.colRegex("`ID`")).columns == ["id"]
+        spark.conf.set("spark.sql.caseSensitive", "true")
+        assert df.select(df.colRegex("`ID`")).columns == []
+    finally:
+        spark.conf.unset("spark.sql.caseSensitive")
+
+
+def test_join_on_condition_keeps_both_key_columns(spark):
+    # Joining on a condition keeps the key of each side, so the output has two columns named `k`
+    # and the row carries both values. A comparison that keys the row by column name sees only
+    # one of them, which is why the values are read by position here.
+    left = spark.sql("SELECT * FROM VALUES (1, 'x') AS l(k, lv)")
+    right = spark.sql("SELECT * FROM VALUES (1, 'p') AS r(k, rv)")
+
+    joined = left.join(right, left.k == right.k, "inner")
+
+    assert joined.columns == ["k", "lv", "k", "rv"]
+    assert [list(row) for row in joined.collect()] == [[1, "x", 1, "p"]]
+
+
+def test_left_outer_join_on_condition_keeps_the_unmatched_left_key(spark):
+    # The left key of an unmatched row keeps its value while the right key is null. Both columns
+    # are named `k`, so keying the row by name drops the left one and reports the null as if it
+    # were the value of the key.
+    left = spark.sql("SELECT * FROM VALUES (1, 'x'), (2, 'y') AS l(k, lv)")
+    right = spark.sql("SELECT * FROM VALUES (1, 'p') AS r(k, rv)")
+
+    joined = left.join(right, left.k == right.k, "left_outer")
+
+    assert joined.columns == ["k", "lv", "k", "rv"]
+    assert sorted([list(row) for row in joined.collect()], key=str) == [
+        [1, "x", 1, "p"],
+        [2, "y", None, None],
+    ]
+
+
+# The name of a `na` or `replace` subset is resolved by `Dataset.resolve`, which reports every
+# field of the schema in order, unlike the suggestion of an unresolved column in a query.
+_SIX = "SELECT 1 AS zzzzzz, 2 AS nope1, 3 AS c, 4 AS d, 5 AS e, 6 AS f"
+_ALL_SIX = re.escape("Did you mean one of the following? [`zzzzzz`, `nope1`, `c`, `d`, `e`, `f`].")
+
+
+def test_dropna_lists_every_field_of_the_schema(spark):
+    with pytest.raises(Exception, match=_ALL_SIX):
+        spark.sql(_SIX).dropna(subset=["nope"]).collect()
+
+
+def test_fillna_lists_every_field_of_the_schema(spark):
+    with pytest.raises(Exception, match=_ALL_SIX):
+        spark.sql(_SIX).fillna(0, subset=["nope"]).collect()
+
+
+def test_replace_lists_every_field_of_the_schema(spark):
+    with pytest.raises(Exception, match=_ALL_SIX):
+        spark.sql(_SIX).replace(1, 2, subset=["nope"]).collect()
+
+
+def test_select_orders_and_truncates_the_suggestion(spark):
+    # The same input through a column reference takes the other overload, which orders the names
+    # by similarity and keeps five of them.
+    with pytest.raises(
+        Exception,
+        match=re.escape("Did you mean one of the following? [`nope1`, `c`, `d`, `e`, `f`]."),
+    ):
+        spark.sql(_SIX).select("nope").collect()
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_col_regex_folds_only_ascii(spark):
+    # Spark compiles the pattern with Java's `(?i)`, which is ASCII-only unless `UNICODE_CASE` is
+    # set, so a Greek capital sigma does not reach a column named with a small one.
+    df = spark.sql("SELECT 1 AS `\u03c3`")
+
+    assert df.select(df.colRegex("`\u03a3`")).columns == []
+    assert df.select(df.colRegex("`\u03c3`")).columns == ["\u03c3"]

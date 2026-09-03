@@ -13,6 +13,7 @@ use sail_function::scalar::multi_expr::MultiExpr;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
+use crate::resolver::expression::attribute::quote_identifier_part;
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
@@ -32,8 +33,17 @@ impl PlanResolver<'_> {
                 self.resolve_wildcard_or_nested_field_wildcard(&target, schema, state)
             }
             _ => {
+                // The expansion compares the qualifier literally here as well, so the one the
+                // user wrote is replaced with the matching one in the schema.
                 let qualifier = target
-                    .map(|x| self.resolve_table_reference(&x))
+                    .map(|x| {
+                        let written = self.resolve_table_reference(&x)?;
+                        let matched = schema.iter().find_map(|(qualifier, _)| {
+                            self.match_wildcard_qualifier(Some(&written), qualifier)
+                                .then(|| qualifier.cloned())
+                        });
+                        Ok::<_, PlanError>(matched.flatten().unwrap_or(written))
+                    })
                     .transpose()?;
                 let options = self
                     .resolve_wildcard_options(wildcard_options, schema, state)
@@ -112,9 +122,31 @@ impl PlanResolver<'_> {
                     .collect(),
             })
             .collect::<PlanResult<Vec<_>>>()?;
-        candidates
-            .one()
-            .map_err(|_| PlanError::AnalysisError(format!("cannot resolve wildcard: {name:?}")))
+        candidates.one().map_err(|_| {
+            let target = name
+                .parts()
+                .iter()
+                .map(|x| quote_identifier_part(x.as_ref()))
+                .collect::<Vec<_>>()
+                .join(".");
+            // The columns come from `AttributeSet.toSeq`, which sorts them by name.
+            let columns = match Self::get_field_names(schema, state) {
+                Ok(mut names) => {
+                    names.sort();
+                    names
+                        .iter()
+                        .map(|x| quote_identifier_part(x))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                }
+                Err(_) => String::new(),
+            };
+            PlanError::AnalysisError(format!(
+                "[CANNOT_RESOLVE_STAR_EXPAND] Cannot resolve {target}.* given input columns \
+                 {columns}. Please check that the specified table or struct exists and is \
+                 accessible in the input columns."
+            ))
+        })
     }
 
     fn resolve_nested_field_wildcard<T: AsRef<str>>(

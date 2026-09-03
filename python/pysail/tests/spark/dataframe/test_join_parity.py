@@ -73,14 +73,14 @@ RESULTS = [
         "false",
         ["k", "lv", "k", "rv"],
         "struct<k:int,lv:string,k:int,rv:string>",
-        ["{'k': 1, 'lv': 'x', 'rv': 'p'}"],
+        ["{'k#1': 1, 'lv': 'x', 'k#2': 1, 'rv': 'p'}"],
     ),
     (
         "on/INNER",
         "true",
         ["k", "lv", "k", "rv"],
         "struct<k:int,lv:string,k:int,rv:string>",
-        ["{'k': 1, 'lv': 'x', 'rv': 'p'}"],
+        ["{'k#1': 1, 'lv': 'x', 'k#2': 1, 'rv': 'p'}"],
     ),
     (
         "using/INNER",
@@ -109,14 +109,22 @@ RESULTS = [
         "false",
         ["k", "lv", "k", "rv"],
         "struct<k:int,lv:string,k:int,rv:string>",
-        ["{'k': 1, 'lv': 'x', 'rv': 'p'}", "{'k': None, 'lv': 'y', 'rv': None}", "{'k': None, 'lv': 'z', 'rv': None}"],
+        [
+            "{'k#1': 1, 'lv': 'x', 'k#2': 1, 'rv': 'p'}",
+            "{'k#1': 2, 'lv': 'y', 'k#2': None, 'rv': None}",
+            "{'k#1': None, 'lv': 'z', 'k#2': None, 'rv': None}",
+        ],
     ),
     (
         "on/LEFT OUTER",
         "true",
         ["k", "lv", "k", "rv"],
         "struct<k:int,lv:string,k:int,rv:string>",
-        ["{'k': 1, 'lv': 'x', 'rv': 'p'}", "{'k': None, 'lv': 'y', 'rv': None}", "{'k': None, 'lv': 'z', 'rv': None}"],
+        [
+            "{'k#1': 1, 'lv': 'x', 'k#2': 1, 'rv': 'p'}",
+            "{'k#1': 2, 'lv': 'y', 'k#2': None, 'rv': None}",
+            "{'k#1': None, 'lv': 'z', 'k#2': None, 'rv': None}",
+        ],
     ),
     (
         "using/LEFT OUTER",
@@ -151,14 +159,22 @@ RESULTS = [
         "false",
         ["k", "lv", "k", "rv"],
         "struct<k:int,lv:string,k:int,rv:string>",
-        ["{'k': 1, 'lv': 'x', 'rv': 'p'}", "{'k': 3, 'lv': None, 'rv': 'q'}", "{'k': None, 'lv': None, 'rv': 'r'}"],
+        [
+            "{'k#1': 1, 'lv': 'x', 'k#2': 1, 'rv': 'p'}",
+            "{'k#1': None, 'lv': None, 'k#2': 3, 'rv': 'q'}",
+            "{'k#1': None, 'lv': None, 'k#2': None, 'rv': 'r'}",
+        ],
     ),
     (
         "on/RIGHT OUTER",
         "true",
         ["k", "lv", "k", "rv"],
         "struct<k:int,lv:string,k:int,rv:string>",
-        ["{'k': 1, 'lv': 'x', 'rv': 'p'}", "{'k': 3, 'lv': None, 'rv': 'q'}", "{'k': None, 'lv': None, 'rv': 'r'}"],
+        [
+            "{'k#1': 1, 'lv': 'x', 'k#2': 1, 'rv': 'p'}",
+            "{'k#1': None, 'lv': None, 'k#2': 3, 'rv': 'q'}",
+            "{'k#1': None, 'lv': None, 'k#2': None, 'rv': 'r'}",
+        ],
     ),
     (
         "using/RIGHT OUTER",
@@ -194,11 +210,11 @@ RESULTS = [
         ["k", "lv", "k", "rv"],
         "struct<k:int,lv:string,k:int,rv:string>",
         [
-            "{'k': 1, 'lv': 'x', 'rv': 'p'}",
-            "{'k': 3, 'lv': None, 'rv': 'q'}",
-            "{'k': None, 'lv': 'y', 'rv': None}",
-            "{'k': None, 'lv': 'z', 'rv': None}",
-            "{'k': None, 'lv': None, 'rv': 'r'}",
+            "{'k#1': 1, 'lv': 'x', 'k#2': 1, 'rv': 'p'}",
+            "{'k#1': 2, 'lv': 'y', 'k#2': None, 'rv': None}",
+            "{'k#1': None, 'lv': 'z', 'k#2': None, 'rv': None}",
+            "{'k#1': None, 'lv': None, 'k#2': 3, 'rv': 'q'}",
+            "{'k#1': None, 'lv': None, 'k#2': None, 'rv': 'r'}",
         ],
     ),
     (
@@ -207,11 +223,11 @@ RESULTS = [
         ["k", "lv", "k", "rv"],
         "struct<k:int,lv:string,k:int,rv:string>",
         [
-            "{'k': 1, 'lv': 'x', 'rv': 'p'}",
-            "{'k': 3, 'lv': None, 'rv': 'q'}",
-            "{'k': None, 'lv': 'y', 'rv': None}",
-            "{'k': None, 'lv': 'z', 'rv': None}",
-            "{'k': None, 'lv': None, 'rv': 'r'}",
+            "{'k#1': 1, 'lv': 'x', 'k#2': 1, 'rv': 'p'}",
+            "{'k#1': 2, 'lv': 'y', 'k#2': None, 'rv': None}",
+            "{'k#1': None, 'lv': 'z', 'k#2': None, 'rv': None}",
+            "{'k#1': None, 'lv': None, 'k#2': 3, 'rv': 'q'}",
+            "{'k#1': None, 'lv': None, 'k#2': None, 'rv': 'r'}",
         ],
     ),
     (
@@ -298,7 +314,7 @@ RESULTS = [
             "false",
             ["k", "lv", "k", "rv"],
             "struct<k:int,lv:string,k:int,rv:string>",
-            ["{'k': 1, 'lv': 'x', 'rv': 'p'}"],
+            ["{'k#1': 1, 'lv': 'x', 'k#2': 1, 'rv': 'p'}"],
         ),
         marks=_SAIL_BUG,
     ),
@@ -308,7 +324,7 @@ RESULTS = [
             "true",
             ["k", "lv", "k", "rv"],
             "struct<k:int,lv:string,k:int,rv:string>",
-            ["{'k': 1, 'lv': 'x', 'rv': 'p'}"],
+            ["{'k#1': 1, 'lv': 'x', 'k#2': 1, 'rv': 'p'}"],
         ),
         marks=_SAIL_BUG,
     ),
@@ -351,14 +367,14 @@ RESULTS = [
         "false",
         ["k", "k", "lv", "rv"],
         "struct<k:int,k:int,lv:string,rv:string>",
-        ["{'k': 1, 'lv': 'x', 'rv': 'p'}"],
+        ["{'k#1': 1, 'k#2': 1, 'lv': 'x', 'rv': 'p'}"],
     ),
     (
         "key/key repeated in the clause",
         "true",
         ["k", "k", "lv", "rv"],
         "struct<k:int,k:int,lv:string,rv:string>",
-        ["{'k': 1, 'lv': 'x', 'rv': 'p'}"],
+        ["{'k#1': 1, 'k#2': 1, 'lv': 'x', 'rv': 'p'}"],
     ),
     (
         "key/key differing in case",
@@ -367,10 +383,10 @@ RESULTS = [
         "struct<a:int,b:string,c:string>",
         ["{'a': 1, 'b': 'p', 'c': 'q'}"],
     ),
-    ("key/key duplicated on the left", "false", ["a", "a"], "struct<a:int,a:int>", ["{'a': 1}"]),
-    ("key/key duplicated on the left", "true", ["a", "a"], "struct<a:int,a:int>", ["{'a': 1}"]),
-    ("key/key duplicated on the right", "false", ["a", "a"], "struct<a:int,a:int>", ["{'a': 1}"]),
-    ("key/key duplicated on the right", "true", ["a", "a"], "struct<a:int,a:int>", ["{'a': 1}"]),
+    ("key/key duplicated on the left", "false", ["a", "a"], "struct<a:int,a:int>", ["{'a#1': 1, 'a#2': 1}"]),
+    ("key/key duplicated on the left", "true", ["a", "a"], "struct<a:int,a:int>", ["{'a#1': 1, 'a#2': 1}"]),
+    ("key/key duplicated on the right", "false", ["a", "a"], "struct<a:int,a:int>", ["{'a#1': 1, 'a#2': 1}"]),
+    ("key/key duplicated on the right", "true", ["a", "a"], "struct<a:int,a:int>", ["{'a#1': 1, 'a#2': 1}"]),
     ("key/widening key types", "false", ["k"], "struct<k:int>", ["{'k': 1}"]),
     ("key/widening key types", "true", ["k"], "struct<k:int>", ["{'k': 1}"]),
     ("key/array key", "false", ["k"], "struct<k:array<int>>", ["{'k': [1, 2]}"]),
@@ -382,14 +398,14 @@ RESULTS = [
         "false",
         ["k", "lv", "lv"],
         "struct<k:int,lv:string,lv:string>",
-        ["{'k': 1, 'lv': 'x'}", "{'k': 2, 'lv': 'y'}"],
+        ["{'k': 1, 'lv#1': 'x', 'lv#2': 'x'}", "{'k': 2, 'lv#1': 'y', 'lv#2': 'y'}"],
     ),
     (
         "key/self join",
         "true",
         ["k", "lv", "lv"],
         "struct<k:int,lv:string,lv:string>",
-        ["{'k': 1, 'lv': 'x'}", "{'k': 2, 'lv': 'y'}"],
+        ["{'k': 1, 'lv#1': 'x', 'lv#2': 'x'}", "{'k': 2, 'lv#1': 'y', 'lv#2': 'y'}"],
     ),
     (
         "key/natural self join",
@@ -431,7 +447,7 @@ RESULTS = [
             "false",
             ["k", "lv", "rv", "k"],
             "struct<k:int,lv:string,rv:string,k:int>",
-            ["{'k': 1, 'lv': 'x', 'rv': 'p'}"],
+            ["{'k#1': 1, 'lv': 'x', 'rv': 'p', 'k#2': 1}"],
         ),
         marks=_SAIL_BUG,
     ),
@@ -441,7 +457,7 @@ RESULTS = [
             "true",
             ["k", "lv", "rv", "k"],
             "struct<k:int,lv:string,rv:string,k:int>",
-            ["{'k': 1, 'lv': 'x', 'rv': 'p'}"],
+            ["{'k#1': 1, 'lv': 'x', 'rv': 'p', 'k#2': 1}"],
         ),
         marks=_SAIL_BUG,
     ),
@@ -480,14 +496,14 @@ RESULTS = [
         "false",
         ["k", "lv", "rv", "rv"],
         "struct<k:int,lv:string,rv:string,rv:string>",
-        ["{'k': 1, 'lv': 'x', 'rv': 'p'}"],
+        ["{'k': 1, 'lv': 'x', 'rv#1': 'p', 'rv#2': 'p'}"],
     ),
     (
         "key/three way using",
         "true",
         ["k", "lv", "rv", "rv"],
         "struct<k:int,lv:string,rv:string,rv:string>",
-        ["{'k': 1, 'lv': 'x', 'rv': 'p'}"],
+        ["{'k': 1, 'lv': 'x', 'rv#1': 'p', 'rv#2': 'p'}"],
     ),
     (
         "key/three way natural",
@@ -549,6 +565,25 @@ def _unconfigure(spark):
         spark.conf.unset(key)
 
 
+def _row_keys(names):
+    """Disambiguates repeated column names so a row keeps every column it has.
+
+    `Row.asDict` keeps only one of a pair of columns that share a name, which is exactly the
+    column a case about duplicate names is asserting, so the repeated ones are numbered by
+    position instead.
+    """
+    repeated = {name for name in names if names.count(name) > 1}
+    seen = {}
+    keys = []
+    for name in names:
+        if name in repeated:
+            seen[name] = seen.get(name, 0) + 1
+            keys.append(f"{name}#{seen[name]}")
+        else:
+            keys.append(name)
+    return keys
+
+
 @pytest.mark.parametrize(("case", "case_sensitive", "columns", "schema", "rows"), RESULTS)
 def test_join_result(spark, case, case_sensitive, columns, schema, rows):
     _configure(spark, case_sensitive)
@@ -556,7 +591,8 @@ def test_join_result(spark, case, case_sensitive, columns, schema, rows):
         df = spark.sql(QUERIES[case])
         assert df.columns == columns
         assert df.schema.simpleString() == schema
-        assert sorted(str(row.asDict()) for row in df.collect()) == rows
+        keys = _row_keys(df.columns)
+        assert sorted(str(dict(zip(keys, list(row), strict=True))) for row in df.collect()) == rows
     finally:
         _unconfigure(spark)
 
