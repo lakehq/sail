@@ -7545,13 +7545,12 @@ dependencies = [
  "datafusion",
  "educe",
  "futures",
+ "parquet-variant",
  "parquet-variant-compute",
- "parquet-variant-json",
  "sail-catalog",
  "sail-common-datafusion",
  "sail-system-store",
  "serde",
- "serde_json",
  "tokio",
 ]
 

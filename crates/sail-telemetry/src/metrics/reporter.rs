@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value};
 use opentelemetry_proto::tonic::metrics::v1::{
     HistogramDataPoint, NumberDataPoint, ResourceMetrics, metric, number_data_point,
@@ -217,4 +219,3 @@ fn attribute_json_value(value: AnyValue) -> serde_json::Value {
         None => serde_json::Value::Null,
     }
 }
-use std::collections::BTreeMap;
