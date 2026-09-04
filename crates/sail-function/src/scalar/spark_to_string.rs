@@ -5,15 +5,16 @@ use datafusion::arrow::array::{
     OffsetSizeTrait, StringViewBuilder,
 };
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion::common::{DataFusionError, Result, ScalarValue, exec_err};
+use datafusion::common::{DataFusionError, Result, exec_err};
 use datafusion::logical_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_expr::ScalarFunctionArgs;
-use sail_common::spec::{
-    IntervalFieldType, IntervalUnit, SAIL_SPARK_INTERVAL_METADATA_KEY, SparkIntervalMetadata,
-};
+use sail_common::spec::{SAIL_SPARK_INTERVAL_METADATA_KEY, SparkIntervalMetadata};
 use sail_common_datafusion::display::{ArrayFormatter, FormatOptions};
+use sail_common_datafusion::formatter::{
+    SparkDayTimeIntervalFormatter, SparkYearMonthIntervalFormatter,
+};
 use sail_common_datafusion::utils::items::ItemTaker;
 
 macro_rules! define_to_string_udf {
@@ -99,80 +100,6 @@ define_to_string_udf!(
     value_to_string_view,
 );
 
-#[derive(Debug, PartialEq, Eq, Hash)]
-pub struct SparkIntervalToUtf8 {
-    signature: Signature,
-}
-
-impl Default for SparkIntervalToUtf8 {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl SparkIntervalToUtf8 {
-    pub fn new() -> Self {
-        Self {
-            signature: Signature::any(2, Volatility::Immutable),
-        }
-    }
-}
-
-impl ScalarUDFImpl for SparkIntervalToUtf8 {
-    fn name(&self) -> &str {
-        "spark_interval_to_utf8"
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Utf8)
-    }
-
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let [value, _metadata] = args.arg_fields else {
-            return exec_err!(
-                "{} expects exactly two arguments, got {}",
-                self.name(),
-                args.arg_fields.len()
-            );
-        };
-        Ok(Arc::new(Field::new(
-            self.name(),
-            DataType::Utf8,
-            value.is_nullable(),
-        )))
-    }
-
-    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let ScalarFunctionArgs {
-            args, number_rows, ..
-        } = args;
-        let [value, metadata] = args.as_slice() else {
-            return exec_err!(
-                "{} expects exactly two arguments, got {}",
-                self.name(),
-                args.len()
-            );
-        };
-        let ColumnarValue::Scalar(ScalarValue::Utf8(Some(metadata))) = metadata else {
-            return exec_err!("{} requires constant UTF8 metadata", self.name());
-        };
-        let metadata: SparkIntervalMetadata = serde_json::from_str(metadata).map_err(|error| {
-            DataFusionError::Execution(format!(
-                "invalid Spark interval metadata {metadata:?}: {error}"
-            ))
-        })?;
-        let array = value.clone().into_array(number_rows)?;
-        Ok(ColumnarValue::Array(interval_value_to_string::<i32>(
-            array.as_ref(),
-            metadata,
-        )?))
-    }
-}
-
 // [Credit]: <https://github.com/apache/arrow-rs/blob/main/arrow-cast/src/cast/string.rs>
 
 fn value_to_string<O: OffsetSizeTrait>(
@@ -232,11 +159,8 @@ fn spark_interval_metadata(field: &Field) -> Result<Option<SparkIntervalMetadata
         .metadata()
         .get(SAIL_SPARK_INTERVAL_METADATA_KEY)
         .map(|value| {
-            serde_json::from_str(value).map_err(|error| {
-                DataFusionError::Execution(format!(
-                    "invalid Spark interval metadata {value:?}: {error}"
-                ))
-            })
+            SparkIntervalMetadata::from_json(value)
+                .map_err(|error| DataFusionError::Execution(error.to_string()))
         })
         .transpose()
 }
@@ -248,8 +172,8 @@ enum SparkIntervalArray<'a> {
 
 impl<'a> SparkIntervalArray<'a> {
     fn try_new(array: &'a dyn Array, metadata: SparkIntervalMetadata) -> Result<Self> {
-        match metadata.interval_unit {
-            IntervalUnit::YearMonth => array
+        match metadata {
+            SparkIntervalMetadata::YearMonth { .. } => array
                 .as_any()
                 .downcast_ref::<IntervalYearMonthArray>()
                 .map(Self::YearMonth)
@@ -259,7 +183,7 @@ impl<'a> SparkIntervalArray<'a> {
                         array.data_type()
                     ))
                 }),
-            IntervalUnit::DayTime => array
+            SparkIntervalMetadata::DayTime { .. } => array
                 .as_any()
                 .downcast_ref::<DurationMicrosecondArray>()
                 .map(Self::DayTime)
@@ -269,9 +193,6 @@ impl<'a> SparkIntervalArray<'a> {
                         array.data_type()
                     ))
                 }),
-            IntervalUnit::MonthDayNano => exec_err!(
-                "Spark calendar intervals do not use qualified interval string formatting"
-            ),
         }
     }
 
@@ -323,133 +244,45 @@ fn interval_value_to_string_view(
 }
 
 fn format_year_month_interval(value: i32, metadata: SparkIntervalMetadata) -> Result<String> {
-    let magnitude = value.unsigned_abs();
-    let sign = if value < 0 { "-" } else { "" };
-    let body = match (metadata.start_field, metadata.end_field) {
-        (IntervalFieldType::Year, IntervalFieldType::Year) => (magnitude / 12).to_string(),
-        (IntervalFieldType::Year, IntervalFieldType::Month) => {
-            format!("{}-{}", magnitude / 12, magnitude % 12)
+    match metadata {
+        SparkIntervalMetadata::YearMonth {
+            start_field,
+            end_field,
+        } => Ok(SparkYearMonthIntervalFormatter(value, start_field, end_field).to_string()),
+        SparkIntervalMetadata::DayTime { .. } => {
+            exec_err!("year-month interval value has day-time interval metadata")
         }
-        (IntervalFieldType::Month, IntervalFieldType::Month) => magnitude.to_string(),
-        (start, end) => {
-            return exec_err!("invalid Spark year-month interval fields: {start:?} to {end:?}");
-        }
-    };
-    Ok(format_interval_string(sign, &body, metadata))
+    }
 }
 
 fn format_day_time_interval(value: i64, metadata: SparkIntervalMetadata) -> Result<String> {
-    const MICROSECONDS_PER_SECOND: u64 = 1_000_000;
-    const MICROSECONDS_PER_MINUTE: u64 = 60 * MICROSECONDS_PER_SECOND;
-    const MICROSECONDS_PER_HOUR: u64 = 60 * MICROSECONDS_PER_MINUTE;
-    const MICROSECONDS_PER_DAY: u64 = 24 * MICROSECONDS_PER_HOUR;
-
-    if metadata.start_field < IntervalFieldType::Day
-        || metadata.end_field > IntervalFieldType::Second
-        || metadata.start_field > metadata.end_field
-    {
-        return exec_err!(
-            "invalid Spark day-time interval fields: {:?} to {:?}",
-            metadata.start_field,
-            metadata.end_field
-        );
-    }
-
-    let mut magnitude = value.unsigned_abs();
-    let sign = if value < 0 { "-" } else { "" };
-    let leading_unit = match metadata.start_field {
-        IntervalFieldType::Day => MICROSECONDS_PER_DAY,
-        IntervalFieldType::Hour => MICROSECONDS_PER_HOUR,
-        IntervalFieldType::Minute => MICROSECONDS_PER_MINUTE,
-        IntervalFieldType::Second => MICROSECONDS_PER_SECOND,
-        _ => return exec_err!("invalid Spark day-time interval start field"),
-    };
-    let leading = magnitude / leading_unit;
-    magnitude %= leading_unit;
-    let mut body = leading.to_string();
-
-    if metadata.start_field < IntervalFieldType::Hour
-        && metadata.end_field >= IntervalFieldType::Hour
-    {
-        body.push_str(&format!(" {:02}", magnitude / MICROSECONDS_PER_HOUR));
-        magnitude %= MICROSECONDS_PER_HOUR;
-    }
-    if metadata.start_field < IntervalFieldType::Minute
-        && metadata.end_field >= IntervalFieldType::Minute
-    {
-        body.push_str(&format!(":{:02}", magnitude / MICROSECONDS_PER_MINUTE));
-        magnitude %= MICROSECONDS_PER_MINUTE;
-    }
-    if metadata.start_field < IntervalFieldType::Second
-        && metadata.end_field == IntervalFieldType::Second
-    {
-        push_seconds(
-            &mut body,
-            magnitude / MICROSECONDS_PER_SECOND,
-            magnitude % MICROSECONDS_PER_SECOND,
-            true,
-        );
-    } else if metadata.start_field == IntervalFieldType::Second {
-        push_seconds(
-            &mut body,
-            leading,
-            magnitude % MICROSECONDS_PER_SECOND,
-            false,
-        );
-    }
-
-    Ok(format_interval_string(sign, &body, metadata))
-}
-
-fn push_seconds(body: &mut String, seconds: u64, microseconds: u64, prefixed: bool) {
-    if prefixed {
-        body.push_str(&format!(":{seconds:02}"));
-    } else {
-        body.clear();
-        body.push_str(&seconds.to_string());
-    }
-    if microseconds != 0 {
-        let fraction = format!("{microseconds:06}");
-        body.push('.');
-        body.push_str(fraction.trim_end_matches('0'));
-    }
-}
-
-fn format_interval_string(sign: &str, body: &str, metadata: SparkIntervalMetadata) -> String {
-    let start = interval_field_name(metadata.start_field);
-    if metadata.start_field == metadata.end_field {
-        format!("INTERVAL '{sign}{body}' {start}")
-    } else {
-        let end = interval_field_name(metadata.end_field);
-        format!("INTERVAL '{sign}{body}' {start} TO {end}")
-    }
-}
-
-fn interval_field_name(field: IntervalFieldType) -> &'static str {
-    match field {
-        IntervalFieldType::Year => "YEAR",
-        IntervalFieldType::Month => "MONTH",
-        IntervalFieldType::Day => "DAY",
-        IntervalFieldType::Hour => "HOUR",
-        IntervalFieldType::Minute => "MINUTE",
-        IntervalFieldType::Second => "SECOND",
+    match metadata {
+        SparkIntervalMetadata::DayTime {
+            start_field,
+            end_field,
+        } => Ok(SparkDayTimeIntervalFormatter(value, start_field, end_field).to_string()),
+        SparkIntervalMetadata::YearMonth { .. } => {
+            exec_err!("day-time interval value has year-month interval metadata")
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use sail_common::spec::{IntervalFieldType, IntervalUnit};
+
     use super::*;
 
     fn metadata(
         interval_unit: IntervalUnit,
         start_field: IntervalFieldType,
         end_field: IntervalFieldType,
-    ) -> SparkIntervalMetadata {
-        SparkIntervalMetadata {
-            interval_unit,
-            start_field,
-            end_field,
-        }
+    ) -> Result<SparkIntervalMetadata> {
+        SparkIntervalMetadata::try_new(interval_unit, Some(start_field), Some(end_field))
+            .map_err(|error| DataFusionError::Execution(error.to_string()))?
+            .ok_or_else(|| {
+                DataFusionError::Execution("qualified interval metadata is required".to_string())
+            })
     }
 
     #[test]
@@ -461,7 +294,7 @@ mod tests {
                     IntervalUnit::YearMonth,
                     IntervalFieldType::Year,
                     IntervalFieldType::Year,
-                ),
+                )?,
             )?,
             "INTERVAL '2' YEAR"
         );
@@ -472,7 +305,7 @@ mod tests {
                     IntervalUnit::YearMonth,
                     IntervalFieldType::Month,
                     IntervalFieldType::Month,
-                ),
+                )?,
             )?,
             "INTERVAL '-14' MONTH"
         );
@@ -483,7 +316,7 @@ mod tests {
                     IntervalUnit::YearMonth,
                     IntervalFieldType::Year,
                     IntervalFieldType::Month,
-                ),
+                )?,
             )?,
             "INTERVAL '2-3' YEAR TO MONTH"
         );
@@ -557,7 +390,7 @@ mod tests {
 
         for (value, start, end, expected) in cases {
             assert_eq!(
-                format_day_time_interval(value, metadata(IntervalUnit::DayTime, start, end))?,
+                format_day_time_interval(value, metadata(IntervalUnit::DayTime, start, end)?)?,
                 expected
             );
         }

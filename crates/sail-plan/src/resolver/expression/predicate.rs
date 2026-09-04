@@ -1,16 +1,18 @@
 use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{DFSchemaRef, Result as DataFusionResult};
 use datafusion_expr::expr::{BinaryExpr, HigherOrderFunction, InList, Lambda, LambdaVariable};
 use datafusion_expr::{ExprSchemable, HigherOrderUDF, ScalarUDF, cast, expr, lit};
 use datafusion_expr_common::operator::Operator;
 use datafusion_functions::core::get_field;
+use datafusion_functions::core::with_metadata::WithMetadataFunc;
 use sail_common::spec;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
-use sail_function::scalar::spark_to_string::{SparkIntervalToUtf8, SparkToUtf8};
+use sail_function::scalar::spark_to_string::SparkToUtf8;
 use sail_function::scalar::update_struct_field::UpdateStructField;
 
 use crate::config::PlanConfig;
@@ -522,16 +524,19 @@ fn stringify_non_ansi_expression(
     if is_string_type(data_type) || data_type == &DataType::Null {
         return Ok(expression);
     }
-    if let Some(interval) = spark_interval_metadata_for_expression(&expression, schema)? {
-        let metadata = serde_json::to_string(&interval).map_err(|error| {
-            datafusion_common::DataFusionError::Plan(format!(
-                "failed to serialize Spark interval metadata: {error}"
-            ))
-        })?;
-        return Ok(
-            ScalarUDF::from(SparkIntervalToUtf8::new()).call(vec![expression, lit(metadata)])
-        );
-    }
+    let expression =
+        if let Some(interval) = spark_interval_metadata_for_expression(&expression, schema)? {
+            let metadata = interval
+                .to_json()
+                .map_err(|error| datafusion_common::DataFusionError::Plan(error.to_string()))?;
+            ScalarUDF::from(WithMetadataFunc::new()).call(vec![
+                expression,
+                lit(spec::SAIL_SPARK_INTERVAL_METADATA_KEY),
+                lit(metadata),
+            ])
+        } else {
+            expression
+        };
     let expression = localize_timestamp_for_string(expression, data_type, session_timezone);
     Ok(ScalarUDF::from(SparkToUtf8::new()).call(vec![expression]))
 }
@@ -541,13 +546,6 @@ pub(in crate::resolver) fn spark_interval_metadata_for_expression(
     schema: &DFSchemaRef,
 ) -> DataFusionResult<Option<spec::SparkIntervalMetadata>> {
     let field = expression.to_field(schema.as_ref())?.1;
-    if let Some(value) = field.metadata().get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY) {
-        return serde_json::from_str(value).map(Some).map_err(|error| {
-            datafusion_common::DataFusionError::Plan(format!(
-                "invalid Spark interval metadata {value:?}: {error}"
-            ))
-        });
-    }
     if !matches!(
         field.data_type(),
         DataType::Duration(TimeUnit::Microsecond) | DataType::Interval(IntervalUnit::YearMonth)
@@ -555,31 +553,29 @@ pub(in crate::resolver) fn spark_interval_metadata_for_expression(
         return Ok(None);
     }
 
-    let candidates = match expression {
-        expr::Expr::Alias(alias) => vec![alias.expr.as_ref()],
-        expr::Expr::Negative(value)
-        | expr::Expr::Cast(datafusion_expr::expr::Cast { expr: value, .. })
-        | expr::Expr::TryCast(datafusion_expr::expr::TryCast { expr: value, .. }) => {
-            vec![value.as_ref()]
+    let interval_type = field.data_type().clone();
+    let mut combined = None::<spec::SparkIntervalMetadata>;
+    expression.apply(|candidate| {
+        let field = candidate.to_field(schema.as_ref())?.1;
+        if field.data_type() != &interval_type {
+            return Ok(TreeNodeRecursion::Jump);
         }
-        expr::Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
-            vec![left.as_ref(), right.as_ref()]
-        }
-        expr::Expr::ScalarFunction(function) => function.args.iter().collect(),
-        _ => vec![],
-    };
-    candidates.into_iter().try_fold(
-        None::<spec::SparkIntervalMetadata>,
-        |combined, candidate| {
-            let Some(candidate) = spark_interval_metadata_for_expression(candidate, schema)? else {
-                return Ok(combined);
-            };
-            Ok(match combined {
-                None => Some(candidate),
-                Some(current) => current.wider(candidate),
-            })
-        },
-    )
+        let Some(value) = field.metadata().get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY) else {
+            return Ok(TreeNodeRecursion::Continue);
+        };
+        let candidate = spec::SparkIntervalMetadata::from_json(value)
+            .map_err(|error| datafusion_common::DataFusionError::Plan(error.to_string()))?;
+        combined = Some(match combined {
+            None => candidate,
+            Some(current) => current.wider(candidate).ok_or_else(|| {
+                datafusion_common::DataFusionError::Plan(
+                    "incompatible Spark interval metadata in expression".to_string(),
+                )
+            })?,
+        });
+        Ok(TreeNodeRecursion::Jump)
+    })?;
+    Ok(combined)
 }
 
 fn localize_timestamp_for_string(

@@ -202,9 +202,10 @@ fn rename_positionally(arr: &ArrayRef, target_type: &DataType) -> Result<ArrayRe
             )?;
             Ok(Arc::new(renamed))
         }
-        // For leaves and matching-type containers (e.g. primitive arrays under
-        // the same type), nothing to rename — return as-is.
-        _ => Ok(Arc::clone(arr)),
+        (source_type, target_type) if source_type == target_type => Ok(Arc::clone(arr)),
+        (source_type, target_type) => {
+            exec_err!("spark_struct_rename: leaf type mismatch: {source_type} vs {target_type}")
+        }
     }
 }
 
@@ -233,5 +234,11 @@ mod tests {
 
         assert_eq!(renamed.data_type(), &target_type);
         Ok(())
+    }
+
+    #[test]
+    fn test_rename_positionally_rejects_leaf_type_changes() {
+        let source = Arc::new(Int32Array::from(vec![1])) as ArrayRef;
+        assert!(rename_positionally(&source, &DataType::Int64).is_err());
     }
 }

@@ -8,14 +8,14 @@ use datafusion::arrow::array::Array;
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::datatypes::{DataType, TimeUnit, TimestampMicrosecondType};
 use datafusion_common::arrow::array::PrimitiveArray;
-use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::scalar::datetime::format::DateTimeFormat;
-use crate::scalar::json::schema_of_json::{ParsedTimestamp, parse_timestamp_string};
+use crate::scalar::datetime::timestamp_parser::{ParsedTimestamp, parse_timestamp_string};
+use crate::scalar::datetime::utils::string_array_iter;
 
 /// Truncates a DateTime's nanoseconds to microseconds.
 /// This preserves fractional seconds when converting from nanosecond precision to microsecond precision.
@@ -525,57 +525,23 @@ impl ScalarUDFImpl for SparkTimestamp {
             }
             (ColumnarValue::Array(array), format) => {
                 let format = parse_scalar_format(format)?;
-                let array: PrimitiveArray<TimestampMicrosecondType> = match array.data_type() {
-                    DataType::Utf8 => as_string_array(&array)?
-                        .iter()
-                        .map(|x| {
-                            x.map(|v| match &format {
-                                ScalarFormat::Format(format) => self
-                                    .parser
-                                    .formatted_string_to_microseconds(v, format, safe),
-                                ScalarFormat::Omitted => {
-                                    self.parser.string_to_microseconds(v, safe)
-                                }
-                                ScalarFormat::Null => Ok(None),
-                            })
-                            .transpose()
-                            .map(|opt| opt.flatten())
+                let array: PrimitiveArray<TimestampMicrosecondType> =
+                    string_array_iter(array.as_ref())?
+                        .map(|value| {
+                            value
+                                .map(|value| match &format {
+                                    ScalarFormat::Format(format) => self
+                                        .parser
+                                        .formatted_string_to_microseconds(value, format, safe),
+                                    ScalarFormat::Omitted => {
+                                        self.parser.string_to_microseconds(value, safe)
+                                    }
+                                    ScalarFormat::Null => Ok(None),
+                                })
+                                .transpose()
+                                .map(Option::flatten)
                         })
-                        .collect::<Result<_>>()?,
-                    DataType::LargeUtf8 => as_large_string_array(&array)?
-                        .iter()
-                        .map(|x| {
-                            x.map(|v| match &format {
-                                ScalarFormat::Format(format) => self
-                                    .parser
-                                    .formatted_string_to_microseconds(v, format, safe),
-                                ScalarFormat::Omitted => {
-                                    self.parser.string_to_microseconds(v, safe)
-                                }
-                                ScalarFormat::Null => Ok(None),
-                            })
-                            .transpose()
-                            .map(|opt| opt.flatten())
-                        })
-                        .collect::<Result<_>>()?,
-                    DataType::Utf8View => as_string_view_array(&array)?
-                        .iter()
-                        .map(|x| {
-                            x.map(|v| match &format {
-                                ScalarFormat::Format(format) => self
-                                    .parser
-                                    .formatted_string_to_microseconds(v, format, safe),
-                                ScalarFormat::Omitted => {
-                                    self.parser.string_to_microseconds(v, safe)
-                                }
-                                ScalarFormat::Null => Ok(None),
-                            })
-                            .transpose()
-                            .map(|opt| opt.flatten())
-                        })
-                        .collect::<Result<_>>()?,
-                    _ => return exec_err!("expected string array for `timestamp`"),
-                };
+                        .collect::<Result<_>>()?;
                 let array = array.with_timezone_opt(self.timezone.clone());
                 Ok(ColumnarValue::Array(Arc::new(array)))
             }
@@ -635,21 +601,8 @@ impl SparkTimestamp {
             return exec_err!("spark_timestamp value and format arrays must have the same length");
         }
         let mut cache = HashMap::<String, DateTimeFormat>::new();
-        let array = match format_array.data_type() {
-            DataType::Utf8 => {
-                let formats = as_string_array(format_array)?;
-                self.parse_array_with_formats(array, formats.iter(), &mut cache, safe)?
-            }
-            DataType::LargeUtf8 => {
-                let formats = as_large_string_array(format_array)?;
-                self.parse_array_with_formats(array, formats.iter(), &mut cache, safe)?
-            }
-            DataType::Utf8View => {
-                let formats = as_string_view_array(format_array)?;
-                self.parse_array_with_formats(array, formats.iter(), &mut cache, safe)?
-            }
-            _ => return exec_err!("spark_timestamp format argument must be a string array"),
-        };
+        let formats = string_array_iter(format_array.as_ref())?;
+        let array = self.parse_array_with_formats(array, formats, &mut cache, safe)?;
         Ok(ColumnarValue::Array(Arc::new(
             array.with_timezone_opt(self.timezone.clone()),
         )))
@@ -662,24 +615,7 @@ impl SparkTimestamp {
         cache: &mut HashMap<String, DateTimeFormat>,
         safe: bool,
     ) -> Result<PrimitiveArray<TimestampMicrosecondType>> {
-        match array.data_type() {
-            DataType::Utf8 => {
-                self.parse_values_with_formats(as_string_array(array)?.iter(), formats, cache, safe)
-            }
-            DataType::LargeUtf8 => self.parse_values_with_formats(
-                as_large_string_array(array)?.iter(),
-                formats,
-                cache,
-                safe,
-            ),
-            DataType::Utf8View => self.parse_values_with_formats(
-                as_string_view_array(array)?.iter(),
-                formats,
-                cache,
-                safe,
-            ),
-            _ => exec_err!("expected string array for `timestamp`"),
-        }
+        self.parse_values_with_formats(string_array_iter(array.as_ref())?, formats, cache, safe)
     }
 
     fn parse_values_with_formats<'v, 'f>(

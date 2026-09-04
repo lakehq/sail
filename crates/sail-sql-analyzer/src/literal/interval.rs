@@ -504,7 +504,9 @@ fn from_ast_multi_unit_interval(
             }
         }
     }
-    match (months != 0, delta != TimeDelta::zero()) {
+    let has_year_month_fields = year_month_fields.0.is_some();
+    let has_day_time_fields = day_time_fields.0.is_some();
+    match (has_year_month_fields, has_day_time_fields) {
         (true, false) => {
             let n = if negated {
                 months.checked_mul(-1).ok_or_else(error)?
@@ -710,6 +712,43 @@ mod tests {
                 microseconds: 3_602_000_000,
                 start_field: spec::IntervalFieldType::Hour,
                 end_field: Some(spec::IntervalFieldType::Second),
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_zero_multi_unit_interval_preserves_family() -> SqlResult<()> {
+        assert_eq!(
+            parse_unqualified_interval_string("0 year 0 month", false)?,
+            IntervalValue::YearMonth {
+                months: 0,
+                start_field: spec::IntervalFieldType::Year,
+                end_field: Some(spec::IntervalFieldType::Month),
+            }
+        );
+        assert_eq!(
+            parse_unqualified_interval_string("0 day 0 second", false)?,
+            IntervalValue::Microsecond {
+                microseconds: 0,
+                start_field: spec::IntervalFieldType::Day,
+                end_field: Some(spec::IntervalFieldType::Second),
+            }
+        );
+        assert_eq!(
+            parse_unqualified_interval_string("0 year 0 day", false)?,
+            IntervalValue::MonthDayNanosecond {
+                months: 0,
+                days: 0,
+                nanoseconds: 0,
+            }
+        );
+        assert_eq!(
+            parse_unqualified_interval_string("1 month 1 hour", false)?,
+            IntervalValue::MonthDayNanosecond {
+                months: 1,
+                days: 0,
+                nanoseconds: 3_600_000_000_000,
             }
         );
         Ok(())

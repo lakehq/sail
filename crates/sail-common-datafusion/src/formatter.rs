@@ -8,6 +8,7 @@ use datafusion::arrow::temporal_conversions::{
     time32ms_to_time, time32s_to_time, time64ns_to_time, time64us_to_time,
 };
 use datafusion_common::arrow::temporal_conversions::{date32_to_datetime, date64_to_datetime};
+use sail_common::spec::{DayTimeIntervalField, YearMonthIntervalField};
 
 pub struct BinaryFormatter<'a>(pub &'a [u8]);
 
@@ -234,11 +235,45 @@ pub struct IntervalYearMonthFormatter(pub i32);
 
 impl Display for IntervalYearMonthFormatter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let months = self.0;
-        let years = months / 12;
-        let prepend = if years == 0 && months < 0 { "-" } else { "" };
-        let months = (months % 12).abs();
-        write!(f, "INTERVAL '{prepend}{years}-{months}' YEAR TO MONTH")
+        SparkYearMonthIntervalFormatter(
+            self.0,
+            YearMonthIntervalField::Year,
+            YearMonthIntervalField::Month,
+        )
+        .fmt(f)
+    }
+}
+
+pub struct SparkYearMonthIntervalFormatter(
+    pub i32,
+    pub YearMonthIntervalField,
+    pub YearMonthIntervalField,
+);
+
+impl Display for SparkYearMonthIntervalFormatter {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let Self(value, start, end) = *self;
+        let magnitude = value.unsigned_abs();
+        let sign = if value < 0 { "-" } else { "" };
+        let body = match (start, end) {
+            (YearMonthIntervalField::Year, YearMonthIntervalField::Year) => {
+                (magnitude / 12).to_string()
+            }
+            (YearMonthIntervalField::Year, YearMonthIntervalField::Month) => {
+                format!("{}-{}", magnitude / 12, magnitude % 12)
+            }
+            (YearMonthIntervalField::Month, YearMonthIntervalField::Month) => magnitude.to_string(),
+            (YearMonthIntervalField::Month, YearMonthIntervalField::Year) => {
+                return Err(std::fmt::Error);
+            }
+        };
+        write_qualified_interval(
+            f,
+            sign,
+            &body,
+            year_month_field_name(start),
+            year_month_field_name(end),
+        )
     }
 }
 
@@ -357,21 +392,104 @@ pub struct DurationMicrosecondFormatter(pub i64);
 
 impl Display for DurationMicrosecondFormatter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let microseconds = self.0;
-        let days = microseconds / 86_400_000_000;
-        let prepend = if days == 0 && microseconds < 0 {
-            "-"
-        } else {
-            ""
-        };
-        let hours = ((microseconds % 86_400_000_000) / 3_600_000_000).abs();
-        let minutes = ((microseconds % 3_600_000_000) / 60_000_000).abs();
-        let seconds = ((microseconds % 60_000_000) / 1_000_000).abs();
-        let fraction = FractionFormatter::<6>((microseconds % 1_000_000).unsigned_abs() as u32);
-        write!(
-            f,
-            "INTERVAL '{prepend}{days} {hours:02}:{minutes:02}:{seconds:02}{fraction}' DAY TO SECOND",
+        SparkDayTimeIntervalFormatter(
+            self.0,
+            DayTimeIntervalField::Day,
+            DayTimeIntervalField::Second,
         )
+        .fmt(f)
+    }
+}
+
+pub struct SparkDayTimeIntervalFormatter(
+    pub i64,
+    pub DayTimeIntervalField,
+    pub DayTimeIntervalField,
+);
+
+impl Display for SparkDayTimeIntervalFormatter {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        const MICROSECONDS_PER_SECOND: u64 = 1_000_000;
+        const MICROSECONDS_PER_MINUTE: u64 = 60 * MICROSECONDS_PER_SECOND;
+        const MICROSECONDS_PER_HOUR: u64 = 60 * MICROSECONDS_PER_MINUTE;
+        const MICROSECONDS_PER_DAY: u64 = 24 * MICROSECONDS_PER_HOUR;
+
+        let Self(value, start, end) = *self;
+        if start > end {
+            return Err(std::fmt::Error);
+        }
+        let mut magnitude = value.unsigned_abs();
+        let sign = if value < 0 { "-" } else { "" };
+        let leading_unit = match start {
+            DayTimeIntervalField::Day => MICROSECONDS_PER_DAY,
+            DayTimeIntervalField::Hour => MICROSECONDS_PER_HOUR,
+            DayTimeIntervalField::Minute => MICROSECONDS_PER_MINUTE,
+            DayTimeIntervalField::Second => MICROSECONDS_PER_SECOND,
+        };
+        let leading = magnitude / leading_unit;
+        magnitude %= leading_unit;
+        let mut body = leading.to_string();
+
+        if start < DayTimeIntervalField::Hour && end >= DayTimeIntervalField::Hour {
+            write!(body, " {:02}", magnitude / MICROSECONDS_PER_HOUR)?;
+            magnitude %= MICROSECONDS_PER_HOUR;
+        }
+        if start < DayTimeIntervalField::Minute && end >= DayTimeIntervalField::Minute {
+            write!(body, ":{:02}", magnitude / MICROSECONDS_PER_MINUTE)?;
+            magnitude %= MICROSECONDS_PER_MINUTE;
+        }
+        if start < DayTimeIntervalField::Second && end == DayTimeIntervalField::Second {
+            write!(
+                body,
+                ":{:02}{}",
+                magnitude / MICROSECONDS_PER_SECOND,
+                FractionFormatter::<6>((magnitude % MICROSECONDS_PER_SECOND) as u32)
+            )?;
+        } else if start == DayTimeIntervalField::Second {
+            write!(
+                body,
+                "{}",
+                FractionFormatter::<6>((magnitude % MICROSECONDS_PER_SECOND) as u32)
+            )?;
+        }
+
+        write_qualified_interval(
+            f,
+            sign,
+            &body,
+            day_time_field_name(start),
+            day_time_field_name(end),
+        )
+    }
+}
+
+fn write_qualified_interval(
+    f: &mut Formatter<'_>,
+    sign: &str,
+    body: &str,
+    start: &str,
+    end: &str,
+) -> std::fmt::Result {
+    if start == end {
+        write!(f, "INTERVAL '{sign}{body}' {start}")
+    } else {
+        write!(f, "INTERVAL '{sign}{body}' {start} TO {end}")
+    }
+}
+
+fn year_month_field_name(field: YearMonthIntervalField) -> &'static str {
+    match field {
+        YearMonthIntervalField::Year => "YEAR",
+        YearMonthIntervalField::Month => "MONTH",
+    }
+}
+
+fn day_time_field_name(field: DayTimeIntervalField) -> &'static str {
+    match field {
+        DayTimeIntervalField::Day => "DAY",
+        DayTimeIntervalField::Hour => "HOUR",
+        DayTimeIntervalField::Minute => "MINUTE",
+        DayTimeIntervalField::Second => "SECOND",
     }
 }
 

@@ -312,15 +312,11 @@ impl PlanResolver<'_> {
             end_field,
         } = data_type
             && let Some(interval) =
-                spec::SparkIntervalMetadata::new(*interval_unit, *start_field, *end_field)
+                spec::SparkIntervalMetadata::try_new(*interval_unit, *start_field, *end_field)?
         {
             metadata.insert(
                 spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
-                serde_json::to_string(&interval).map_err(|error| {
-                    PlanError::internal(format!(
-                        "failed to serialize Spark interval metadata: {error}"
-                    ))
-                })?,
+                interval.to_json()?,
             );
         }
         let data_type = match data_type {

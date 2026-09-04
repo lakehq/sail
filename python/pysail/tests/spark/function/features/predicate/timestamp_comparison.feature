@@ -253,6 +253,39 @@ Feature: Timestamp and string predicate coercion
         | day_column | day_to_second_column | day_expression | month_column | year_to_month_column |
         | true       | true                 | true           | true         | true                 |
 
+    Scenario: Floating-point literal names use Spark-compatible rendering
+      When query
+        """
+        SELECT 1e18, 1e-7
+        """
+      Then query schema
+        """
+        root
+         |-- 1.0E18: double (nullable = false)
+         |-- 1.0E-7: double (nullable = false)
+        """
+
+    Scenario: Legacy IN preserves interval qualifiers through value expressions
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT
+          (CASE
+            WHEN true THEN INTERVAL '1' DAY
+            ELSE INTERVAL '2' DAY
+          END) IN (
+            CONCAT('INTERVAL ', CHR(39), '1', CHR(39), ' DAY'),
+            TIMESTAMP '2000-01-01 00:00:00'
+          ) AS case_interval,
+          INTERVAL 0 YEAR 0 MONTH IN (
+            CONCAT('INTERVAL ', CHR(39), '0-0', CHR(39), ' YEAR TO MONTH'),
+            TIMESTAMP '2000-01-01 00:00:00'
+          ) AS zero_year_month
+        """
+      Then query result
+        | case_interval | zero_year_month |
+        | true          | true            |
+
     Scenario: Legacy datetime ordering honors datetimeToString configuration
       Given config spark.sql.session.timeZone = UTC
       And config spark.sql.ansi.enabled = false

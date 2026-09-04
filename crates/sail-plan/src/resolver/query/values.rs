@@ -72,15 +72,7 @@ impl PlanResolver<'_> {
                     .metadata
                     .iter()
                     .find(|(key, _)| key == spec::SAIL_SPARK_INTERVAL_METADATA_KEY)
-                    .map(|(_, value)| {
-                        serde_json::from_str::<spec::SparkIntervalMetadata>(value).map_err(
-                            |error| {
-                                PlanError::internal(format!(
-                                    "invalid Spark interval metadata {value:?}: {error}"
-                                ))
-                            },
-                        )
-                    })
+                    .map(|(_, value)| spec::SparkIntervalMetadata::from_json(value))
                     .transpose()?
                     .or(spark_interval_metadata_for_expression(&value.expr, schema)?);
                 let Some(metadata) = metadata else {
@@ -97,11 +89,7 @@ impl PlanResolver<'_> {
             let Some(common_interval) = common_interval else {
                 continue;
             };
-            let serialized = serde_json::to_string(&common_interval).map_err(|error| {
-                PlanError::internal(format!(
-                    "failed to serialize Spark interval metadata: {error}"
-                ))
-            })?;
+            let serialized = common_interval.to_json()?;
             for row in values.iter_mut() {
                 let value = &mut row[column_index];
                 let mut metadata: HashMap<String, String> =

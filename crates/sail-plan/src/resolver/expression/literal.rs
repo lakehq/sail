@@ -24,13 +24,9 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let field_metadata = literal
-            .spark_interval_metadata()
+            .spark_interval_metadata()?
             .map(|metadata| {
-                let metadata = serde_json::to_string(&metadata).map_err(|error| {
-                    crate::error::PlanError::internal(format!(
-                        "failed to serialize Spark interval metadata: {error}"
-                    ))
-                })?;
+                let metadata = metadata.to_json()?;
                 Ok::<_, crate::error::PlanError>(FieldMetadata::from(HashMap::from([(
                     spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
                     metadata,

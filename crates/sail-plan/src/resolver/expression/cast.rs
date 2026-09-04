@@ -72,14 +72,8 @@ impl PlanResolver<'_> {
                 interval_unit,
                 start_field,
                 end_field,
-            } => spec::SparkIntervalMetadata::new(*interval_unit, *start_field, *end_field)
-                .map(|metadata| {
-                    serde_json::to_string(&metadata).map_err(|error| {
-                        PlanError::internal(format!(
-                            "failed to serialize Spark interval metadata: {error}"
-                        ))
-                    })
-                })
+            } => spec::SparkIntervalMetadata::try_new(*interval_unit, *start_field, *end_field)?
+                .map(spec::SparkIntervalMetadata::to_json)
                 .transpose()?,
             _ => None,
         };

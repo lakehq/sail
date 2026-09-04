@@ -205,13 +205,13 @@ pub struct IntervalMonthDayNano {
 }
 
 impl Literal {
-    pub fn spark_interval_metadata(&self) -> Option<spec::SparkIntervalMetadata> {
+    pub fn spark_interval_metadata(&self) -> CommonResult<Option<spec::SparkIntervalMetadata>> {
         match self {
             Literal::IntervalYearMonth {
                 start_field,
                 end_field,
                 ..
-            } => spec::SparkIntervalMetadata::new(
+            } => spec::SparkIntervalMetadata::try_new(
                 spec::IntervalUnit::YearMonth,
                 *start_field,
                 *end_field,
@@ -220,12 +220,12 @@ impl Literal {
                 start_field,
                 end_field,
                 ..
-            } => spec::SparkIntervalMetadata::new(
+            } => spec::SparkIntervalMetadata::try_new(
                 spec::IntervalUnit::DayTime,
                 *start_field,
                 *end_field,
             ),
-            _ => None,
+            _ => Ok(None),
         }
     }
 }

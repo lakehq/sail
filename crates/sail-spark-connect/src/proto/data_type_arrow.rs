@@ -113,7 +113,7 @@ impl TryFrom<adt::Field> for sdt::StructField {
             }
         } else if let Some(metadata) = field.metadata().get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY)
         {
-            let metadata: spec::SparkIntervalMetadata = serde_json::from_str(metadata)?;
+            let metadata = spec::SparkIntervalMetadata::from_json(metadata)?;
             spark_interval_data_type(field.data_type(), metadata)?
         } else {
             field.data_type().clone().try_into()?
@@ -131,45 +131,32 @@ fn spark_interval_data_type(
     arrow_type: &adt::DataType,
     metadata: spec::SparkIntervalMetadata,
 ) -> SparkResult<DataType> {
-    let kind = match metadata.interval_unit {
-        spec::IntervalUnit::YearMonth
-            if arrow_type == &adt::DataType::Interval(adt::IntervalUnit::YearMonth) =>
-        {
-            let field = |field| match field {
-                spec::IntervalFieldType::Year => Ok(0),
-                spec::IntervalFieldType::Month => Ok(1),
-                _ => Err(SparkError::invalid(format!(
-                    "invalid year-month interval field: {field:?}"
-                ))),
-            };
+    let interval_unit = metadata.interval_unit();
+    let kind = match metadata {
+        spec::SparkIntervalMetadata::YearMonth {
+            start_field,
+            end_field,
+        } if arrow_type == &adt::DataType::Interval(adt::IntervalUnit::YearMonth) => {
             sdt::Kind::YearMonthInterval(sdt::YearMonthInterval {
-                start_field: Some(field(metadata.start_field)?),
-                end_field: Some(field(metadata.end_field)?),
+                start_field: Some(start_field as i32),
+                end_field: Some(end_field as i32),
                 type_variation_reference: 0,
             })
         }
-        spec::IntervalUnit::DayTime
-            if arrow_type == &adt::DataType::Duration(adt::TimeUnit::Microsecond) =>
-        {
-            let field = |field| match field {
-                spec::IntervalFieldType::Day => Ok(0),
-                spec::IntervalFieldType::Hour => Ok(1),
-                spec::IntervalFieldType::Minute => Ok(2),
-                spec::IntervalFieldType::Second => Ok(3),
-                _ => Err(SparkError::invalid(format!(
-                    "invalid day-time interval field: {field:?}"
-                ))),
-            };
+        spec::SparkIntervalMetadata::DayTime {
+            start_field,
+            end_field,
+        } if arrow_type == &adt::DataType::Duration(adt::TimeUnit::Microsecond) => {
             sdt::Kind::DayTimeInterval(sdt::DayTimeInterval {
-                start_field: Some(field(metadata.start_field)?),
-                end_field: Some(field(metadata.end_field)?),
+                start_field: Some(start_field as i32),
+                end_field: Some(end_field as i32),
                 type_variation_reference: 0,
             })
         }
         _ => {
             return Err(SparkError::invalid(format!(
                 "Spark interval metadata {:?} does not match Arrow type {arrow_type}",
-                metadata.interval_unit
+                interval_unit
             )));
         }
     };
@@ -566,10 +553,9 @@ mod tests {
 
     #[test]
     fn test_qualified_interval_field_to_proto() -> SparkResult<()> {
-        let interval = spec::SparkIntervalMetadata {
-            interval_unit: spec::IntervalUnit::DayTime,
-            start_field: spec::IntervalFieldType::Hour,
-            end_field: spec::IntervalFieldType::Second,
+        let interval = spec::SparkIntervalMetadata::DayTime {
+            start_field: spec::DayTimeIntervalField::Hour,
+            end_field: spec::DayTimeIntervalField::Second,
         };
         let field = adt::Field::new(
             "duration",
@@ -578,7 +564,7 @@ mod tests {
         )
         .with_metadata(HashMap::from([(
             spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
-            serde_json::to_string(&interval)?,
+            interval.to_json()?,
         )]));
 
         let proto: sdt::StructField = field.try_into()?;
