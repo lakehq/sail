@@ -242,6 +242,8 @@ fn aggregate_from_parquet_metadata(
     parquet_meta: &parquet::file::metadata::ParquetMetaData,
     iceberg_schema: &Schema,
 ) -> Result<AggregatedMetadata, String> {
+    // TODO: Apply `write.metadata.metrics.*` modes and inferred-column limits when
+    // producing Iceberg data-file metrics.
     let row_groups = parquet_meta.row_groups();
     let schema_descr = parquet_meta.file_metadata().schema_descr();
 
