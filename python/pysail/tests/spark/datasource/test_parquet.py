@@ -1,3 +1,4 @@
+import base64
 from collections.abc import Mapping
 from datetime import UTC, datetime
 
@@ -168,6 +169,28 @@ def test_parquet_explicit_schema_allows_missing_fields(spark, tmp_path):
     rows = spark.read.schema("id INT, missing STRING").parquet(path).collect()
 
     assert rows == [Row(id=1, missing=None)]
+
+
+def test_parquet_arrow_second_timestamp_is_bigint(spark, tmp_path):
+    # Parquet has no seconds timestamp logical type: an Arrow `timestamp[s]` is written as a
+    # physical INT64 with the Arrow type kept only in `ARROW:schema`. Spark ignores that hint
+    # and reads the column as long, so Sail must too.
+    path = tmp_path / "arrow_second_timestamp.parquet"
+    encoded_arrow_schema = base64.b64encode(
+        pa.schema([pa.field("ts", pa.timestamp("s"))]).serialize().to_pybytes()
+    ).decode()
+    table = pa.table({"ts": pa.array([1704164645, -1], type=pa.int64())})
+    with pq.ParquetWriter(path, table.schema, store_schema=False) as writer:
+        writer.add_key_value_metadata({"ARROW:schema": encoded_arrow_schema})
+        writer.write_table(table)
+
+    df = spark.read.parquet(str(path))
+
+    assert df.schema.simpleString() == "struct<ts:bigint>"
+    assert df.orderBy("ts").collect() == [
+        Row(ts=-1),
+        Row(ts=1704164645),
+    ]
 
 
 @pytest.mark.parametrize("requested_type", ["TIMESTAMP", "TIMESTAMP_NTZ"])

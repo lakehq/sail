@@ -7,6 +7,7 @@ use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFacto
 use datafusion::datasource::physical_plan::parquet::metadata::{
     DFParquetMetadata, ordering_from_parquet_metadata,
 };
+use datafusion::parquet::arrow::parquet_to_arrow_schema;
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{DataFusionError, Result, plan_err};
@@ -16,6 +17,7 @@ use object_store::{ObjectMeta, ObjectStore};
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 
 use crate::listing::source::{ListingFileMeta, ListingFileSample, ListingScanInput, ReadFormat};
+use crate::listing::utils::try_merge_normalized;
 use crate::options::r#gen::ParquetReadOptions;
 
 #[derive(Debug, Clone)]
@@ -31,6 +33,33 @@ fn fail_for_encryption_factory(options: &TableParquetOptions) -> Result<()> {
     } else {
         Ok(())
     }
+}
+
+/// Reinterprets top-level `Timestamp(Second, _)` fields that are physically stored as `INT64`
+/// back to `Int64`. Parquet has no seconds timestamp logical type: an Arrow writer encodes an
+/// Arrow `timestamp[s]` as an unannotated physical `INT64` and preserves the Arrow type only in
+/// the `ARROW:schema` hint. Spark ignores that hint and exposes the column as a long, so we match
+/// it here rather than widening the hinted seconds to a microsecond timestamp (which would change
+/// both the reported type and the values). Genuine INT96 timestamps are unaffected because they
+/// are handled by the `coerce_int96` option and are not physically `INT64`.
+fn reinterpret_second_timestamps_as_int64(schema: Schema, physical: &Schema) -> Schema {
+    let fields = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            let physical_type = physical
+                .field_with_name(field.name())
+                .ok()
+                .map(|physical_field| physical_field.data_type());
+            match (field.data_type(), physical_type) {
+                (DataType::Timestamp(TimeUnit::Second, _), Some(DataType::Int64)) => {
+                    field.as_ref().clone().with_data_type(DataType::Int64)
+                }
+                _ => field.as_ref().clone(),
+            }
+        })
+        .collect::<Vec<_>>();
+    Schema::new_with_metadata(fields, schema.metadata().clone())
 }
 
 #[async_trait::async_trait]
@@ -70,12 +99,18 @@ impl ReadFormat for ParquetReadFormat {
 
         let mut schemas: Vec<(object_store::path::Path, Schema)> = futures::stream::iter(objects)
             .map(|(store, object)| async {
-                let schema = DFParquetMetadata::new(store.as_ref(), object)
+                let reader = DFParquetMetadata::new(store.as_ref(), object)
                     .with_metadata_size_hint(metadata_size_hint)
                     .with_file_metadata_cache(Some(Arc::clone(&metadata_cache)))
-                    .with_coerce_int96(coerce_int96)
-                    .fetch_schema()
-                    .await?;
+                    .with_coerce_int96(coerce_int96);
+                let schema = reader.fetch_schema().await?;
+                // Compare the Arrow-hinted schema against the metadata-free physical schema so
+                // that Arrow-only `timestamp[s]` hints over physical INT64 are read as long,
+                // matching Spark. The metadata cache above makes this second fetch cheap.
+                let metadata = reader.fetch_metadata().await?;
+                let physical =
+                    parquet_to_arrow_schema(metadata.file_metadata().schema_descr(), None)?;
+                let schema = reinterpret_second_timestamps_as_int64(schema, &physical);
                 Ok::<_, DataFusionError>((object.location.clone(), schema))
             })
             .boxed() // Workaround for https://github.com/rust-lang/rust/issues/64552
@@ -87,12 +122,15 @@ impl ReadFormat for ParquetReadFormat {
         // Ensure deterministic ordering for stable schema inference.
         schemas.sort_unstable_by(|(location1, _), (location2, _)| location1.cmp(location2));
 
+        // TODO: Retag inferred microsecond-only adjusted-to-UTC timestamps with Spark's session
+        // timezone instead of retaining the producer's `ARROW:schema` timezone identifier. Spark
+        // renders such a column in the session zone; Sail currently keeps the producer's label.
         let schemas = schemas.into_iter().map(|(_, schema)| schema);
 
         let merged = if options.global.skip_metadata {
-            Schema::try_merge(schemas.map(clear_metadata))
+            try_merge_normalized(schemas.map(clear_metadata))
         } else {
-            Schema::try_merge(schemas)
+            try_merge_normalized(schemas)
         }?;
 
         let merged = if options.global.binary_as_string {
