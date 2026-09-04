@@ -63,7 +63,8 @@ pub(crate) fn quote_identifier_part(part: &str) -> String {
     format!("`{}`", part.replace('`', "``"))
 }
 
-/// Quotes one part only when it is not a plain identifier, as `QuotingUtils.quoteIfNeeded` does.
+/// Quotes one part unless it is a plain identifier, as `QuotingUtils.quoteIfNeeded` does. This is
+/// the rendering `UnresolvedAttribute.sql` uses, which is the name the suggestion is ordered by.
 fn quote_if_needed(part: &str) -> String {
     let mut characters = part.chars();
     let plain = matches!(characters.next(), Some(x) if x.is_ascii_alphabetic() || x == '_')
@@ -75,12 +76,21 @@ fn quote_if_needed(part: &str) -> String {
     }
 }
 
-/// Renders an attribute the way Spark's `toSQLExpr` does, which is the `sql` of the unresolved
-/// attribute rather than the fully quoted form used for a column name.
+/// Renders an attribute the way `UnresolvedAttribute.name` does, which is what reaches the
+/// message through `toSQLExpr`. Only a part that contains a dot is quoted, since that is the one
+/// case where joining the parts would be ambiguous, and the back quotes it contains are not
+/// doubled. This is a different rule from the fully quoted form used for a column name.
 fn pretty_attribute(name: &spec::ObjectName) -> String {
     name.parts()
         .iter()
-        .map(|x| quote_if_needed(x.as_ref()))
+        .map(|x| {
+            let part = x.as_ref();
+            if part.contains('.') {
+                format!("`{part}`")
+            } else {
+                part.to_string()
+            }
+        })
         .collect::<Vec<_>>()
         .join(".")
 }
@@ -108,6 +118,7 @@ fn edit_distance(left: &str, right: &str) -> usize {
 fn order_candidates_by_similarity(
     name: &spec::ObjectName,
     candidates: Vec<Vec<String>>,
+    sorted_by_name: bool,
 ) -> Vec<String> {
     let parts = name.parts().len();
     let shared = |depth: usize| {
@@ -124,11 +135,19 @@ fn order_candidates_by_similarity(
     } else {
         usize::MAX
     };
-    let base = pretty_attribute(name);
+    let base = name
+        .parts()
+        .iter()
+        .map(|x| quote_if_needed(x.as_ref()))
+        .collect::<Vec<_>>()
+        .join(".");
     let mut candidates = candidates;
-    // The candidates reach the ordering through `AttributeSet.toSeq`, which sorts them by name,
-    // and the sort by distance is stable, so an equal distance is broken by name.
-    candidates.sort_by(|a, b| a.last().cmp(&b.last()));
+    // The analyzer reads its candidates through `AttributeSet.toSeq`, which sorts them by name,
+    // and the sort by distance is stable, so an equal distance is broken by name there. The
+    // candidates of a schema arrive in the order of the plan instead.
+    if sorted_by_name {
+        candidates.sort_by(|a, b| a.last().cmp(&b.last()));
+    }
     let mut candidates = candidates
         .into_iter()
         .map(|parts| {
@@ -170,7 +189,7 @@ pub(in crate::resolver) fn unresolved_column_error(
             Some(parts)
         })
         .collect::<Vec<_>>();
-    let proposal = order_candidates_by_similarity(name, candidates)
+    let proposal = order_candidates_by_similarity(name, candidates, true)
         .into_iter()
         .take(5)
         .collect::<Vec<_>>();
@@ -198,7 +217,7 @@ pub(in crate::resolver) fn unresolved_column_name_error(
         .iter()
         .map(|x| vec![x.to_string()])
         .collect::<Vec<_>>();
-    let proposal = order_candidates_by_similarity(name, candidates)
+    let proposal = order_candidates_by_similarity(name, candidates, false)
         .into_iter()
         .take(5)
         .collect::<Vec<_>>();
@@ -223,13 +242,9 @@ pub(in crate::resolver) fn unresolved_column_fields_error<T: AsRef<str>>(
     name: &spec::ObjectName,
     fields: &[T],
 ) -> PlanError {
+    // Unlike the suggestion of a name written in a query, this one has no sub-condition to fall
+    // back to: it reports an empty list rather than the other condition.
     let name = quote_identifier(name);
-    if fields.is_empty() {
-        return PlanError::AnalysisError(format!(
-            "[UNRESOLVED_COLUMN.WITHOUT_SUGGESTION] A column, variable, or function parameter \
-             with name {name} cannot be resolved."
-        ));
-    }
     let proposal = fields
         .iter()
         .map(|x| quote_identifier_part(x.as_ref()))
@@ -509,7 +524,18 @@ impl PlanResolver<'_> {
         if candidates.len() > 1 {
             let references = candidates
                 .iter()
-                .map(|(reference, _)| vec![reference.clone()])
+                .map(|(reference, expr)| match expr {
+                    expr::Expr::OuterReferenceColumn(_, column) => match &column.relation {
+                        Some(relation) if relation.table() != UNNAMED_TABLE => relation
+                            .to_string()
+                            .split('.')
+                            .map(|x| x.to_string())
+                            .chain(std::iter::once(reference.clone()))
+                            .collect(),
+                        _ => vec![reference.clone()],
+                    },
+                    _ => vec![reference.clone()],
+                })
                 .collect();
             return Err(ambiguous_attribute_error(name, None, references));
         }

@@ -264,11 +264,7 @@ impl PlanResolver<'_> {
                         Err(_) => return Err(error),
                     }
                 }
-                if sorts.len() != 1 {
-                    Err(error)
-                } else {
-                    Ok(sorts.one()?)
-                }
+                Ok(sorts.one()?)
             }
         }
     }

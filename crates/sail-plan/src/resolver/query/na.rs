@@ -13,7 +13,7 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
-use crate::resolver::expression::attribute::unresolved_column_name_error;
+use crate::resolver::expression::attribute::unresolved_column_fields_error;
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
@@ -72,10 +72,15 @@ impl PlanResolver<'_> {
                     Strategy::All { value } => Some(value.clone()),
                     Strategy::Columns { columns, value } => columns
                         .iter()
-                        .any(|col| self.match_field(info, col, None))
+                        .any(|col| {
+                            Self::na_column_name(col)
+                                .is_some_and(|col| self.match_field(info, &col, None))
+                        })
                         .then(|| value.clone()),
                     Strategy::EachColumn { columns } => columns.iter().find_map(|(col, val)| {
-                        self.match_field(info, col, None).then(|| val.clone())
+                        Self::na_column_name(col)
+                            .is_some_and(|col| self.match_field(info, &col, None))
+                            .then(|| val.clone())
                     }),
                 };
                 let column_expr = col((qualifier, field));
@@ -119,6 +124,19 @@ impl PlanResolver<'_> {
         }
     }
 
+    /// The name a subset entry matches a column by. Spark resolves the entry as a column
+    /// reference, so a quoted name matches the part it parses to, while a name that walks into a
+    /// column is not a column and matches nothing.
+    fn na_column_name(name: &str) -> Option<String> {
+        match spec::ObjectName::parse_attribute(name) {
+            Some(object) => match object.parts() {
+                [part] => Some(part.as_ref().to_string()),
+                _ => None,
+            },
+            None => Some(name.to_string()),
+        }
+    }
+
     /// Validates a column name used by the `fillna` and `dropna` subsets. Spark resolves the name
     /// the way a column reference is resolved, so a name that matches nothing is an error, while
     /// a name that resolves to a nested field is simply not a column to fill.
@@ -132,26 +150,24 @@ impl PlanResolver<'_> {
             self.resolve_one_column(schema, name, state)?;
             return Ok(());
         };
-        let [leading, ..] = object.parts() else {
+        let [leading, rest @ ..] = object.parts() else {
             self.resolve_one_column(schema, name, state)?;
             return Ok(());
         };
         // Only the leading part names a column; the rest walks into it, and a nested field that
-        // resolves is dropped rather than filled.
-        if object.parts().len() == 1 {
-            self.resolve_one_column(schema, name, state)?;
+        // resolves is dropped rather than filled. The name is matched as the part it parses to,
+        // so a column whose own name contains a dot is reachable by quoting it.
+        if rest.is_empty() {
+            self.resolve_one_column(schema, leading.as_ref(), state)?;
             return Ok(());
         }
         if self
             .resolve_optional_column(schema, leading.as_ref(), None, state)?
             .is_none()
         {
-            return Err(unresolved_column_name_error(
+            return Err(unresolved_column_fields_error(
                 &object,
-                &Self::get_field_names(schema, state)?
-                    .iter()
-                    .map(|x| x.as_str())
-                    .collect::<Vec<_>>(),
+                &Self::get_field_names(schema, state)?,
             ));
         }
         Ok(())
@@ -176,7 +192,10 @@ impl PlanResolver<'_> {
             .into_iter()
             .filter_map(|column| {
                 (columns.is_empty() || {
-                    let columns: Vec<String> = columns.iter().map(|x| x.as_ref().into()).collect();
+                    let columns = columns
+                        .iter()
+                        .filter_map(|x| Self::na_column_name(x.as_ref()))
+                        .collect::<Vec<_>>();
                     state
                         .get_field_info(column.name())
                         .is_ok_and(|info| columns.iter().any(|c| self.match_field(info, c, None)))

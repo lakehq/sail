@@ -196,10 +196,12 @@ impl PlanResolver<'_> {
 
         // Add anchors to match the entire column name (like Spark does). Spark compiles the
         // pattern case-insensitively unless the analysis is case sensitive.
+        // `String.matches` matches the whole name, so the pattern is grouped before it is
+        // anchored: an alternation would otherwise bind tighter than the anchors.
         let anchored_pattern = if self.config.case_sensitive {
-            format!("^{pattern_str}$")
+            format!("^(?:{pattern_str})$")
         } else {
-            format!("(?i)^{pattern_str}$")
+            format!("(?i)^(?:{pattern_str})$")
         };
 
         // Compile the regex pattern

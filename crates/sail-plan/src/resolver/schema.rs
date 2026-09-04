@@ -298,7 +298,8 @@ impl PlanResolver<'_> {
             .collect::<PlanResult<Vec<Column>>>()
     }
 
-    /// Returns the user-visible field names for a resolved schema.
+    /// Returns the user-visible field names for a resolved schema. A hidden field is not part of
+    /// the output a plan reports, so it never reaches a name that Spark suggests either.
     pub(super) fn get_field_names(
         schema: &DFSchemaRef,
         state: &PlanResolverState,
@@ -306,7 +307,11 @@ impl PlanResolver<'_> {
         schema
             .fields()
             .iter()
-            .map(|field| Ok(state.get_field_info(field.name())?.name().to_string()))
+            .filter_map(|field| match state.get_field_info(field.name()) {
+                Ok(info) if info.is_hidden() => None,
+                Ok(info) => Some(Ok(info.name().to_string())),
+                Err(e) => Some(Err(e)),
+            })
             .collect::<PlanResult<Vec<_>>>()
     }
 }

@@ -747,3 +747,87 @@ def test_col_regex_folds_only_ascii(spark):
 
     assert df.select(df.colRegex("`\u03a3`")).columns == []
     assert df.select(df.colRegex("`\u03c3`")).columns == ["\u03c3"]
+
+
+# `CANNOT_RESOLVE_DATAFRAME_COLUMN` renders the name through `UnresolvedAttribute.name`, which
+# quotes a part only when it contains a dot, unlike the fully quoted form used for a column name.
+# (case, the column of the frame, the name as written by the client, the name in the message)
+_DATAFRAME_COLUMN_NAMES = [
+    ("plain", "plain", "plain", "plain"),
+    ("a space", "`a b`", "a b", "a b"),
+    ("a dot", "`a.b`", "`a.b`", "`a.b`"),
+    ("a back quote", "`a``b`", "`a``b`", "a`b"),
+    ("a leading digit", "`1a`", "1a", "1a"),
+    ("a non ascii letter", "`\u00e4`", "\u00e4", "\u00e4"),
+]
+
+
+@pytest.mark.parametrize(("case", "column", "written", "rendered"), _DATAFRAME_COLUMN_NAMES)
+def test_cannot_resolve_dataframe_column_renders_the_name(spark, case, column, written, rendered):  # noqa: ARG001
+    df = spark.sql(f"SELECT 1 AS {column}")
+    other = spark.sql("SELECT 2 AS c")
+
+    with pytest.raises(
+        Exception,
+        match=re.escape(f'Cannot resolve dataframe column "{rendered}".'),
+    ):
+        other.select(df[written]).collect()
+
+
+def test_na_subset_resolves_a_quoted_name(spark):
+    # The subset entry is resolved as a column reference, so a name that needs quoting is matched
+    # by the part it parses to rather than by the string the client wrote.
+    df = spark.sql("SELECT CAST(NULL AS INT) AS `a b`")
+
+    assert df.fillna(0, subset=["`a b`"]).collect() == [Row(**{"a b": 0})]
+
+
+def test_na_subset_resolves_a_quoted_name_containing_a_dot(spark):
+    # A dot inside back quotes is part of the name, not a separator, so this is a column and not
+    # a walk into one.
+    df = spark.sql("SELECT CAST(NULL AS INT) AS `a.b`")
+
+    assert df.fillna(0, subset=["`a.b`"]).collect() == [Row(**{"a.b": 0})]
+
+
+def test_na_subset_reports_an_empty_suggestion(spark):
+    # This path reports every field of the schema rather than a suggestion, and it has no other
+    # sub-condition to fall back to, so an input with no column reports an empty list.
+    with pytest.raises(
+        Exception,
+        match=re.escape(
+            "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with "
+            "name `nope` cannot be resolved. Did you mean one of the following? []."
+        ),
+    ):
+        spark.range(1).select().dropna(subset=["nope"]).collect()
+
+
+def test_to_schema_suggests_the_columns_in_the_order_of_the_plan(spark):
+    # Unlike the suggestion of a name written in a query, this one is not sorted by name first,
+    # so names at the same distance keep the order of the input.
+    schema = StructType([StructField("nope", IntegerType(), nullable=False)])
+
+    with pytest.raises(
+        Exception,
+        match=re.escape("Did you mean one of the following? [`zz`, `aa`, `mm`]."),
+    ):
+        spark.sql("SELECT 1 AS zz, 2 AS aa, 3 AS mm").to(schema).collect()
+
+
+def test_unresolved_column_suggestion_measures_the_quoted_name(spark):
+    # The distance is measured against the name as the analyzer renders it, which quotes a part
+    # that is not a plain identifier. Measuring the unquoted name would order `ab` before `a b`.
+    with pytest.raises(
+        Exception,
+        match=re.escape("Did you mean one of the following? [`a b`, `abc`, `ab`]."),
+    ):
+        spark.sql("SELECT 1 AS `a b`, 2 AS ab, 3 AS abc").select("`a c`").collect()
+
+
+def test_col_regex_matches_the_whole_name(spark):
+    # Spark matches the pattern against the whole name, so an alternation must not escape the
+    # anchors: `a|b` selects the column named `a`, not the one ending in `b`.
+    df = spark.sql("SELECT 1 AS ab, 2 AS xb, 3 AS a")
+
+    assert df.select(df.colRegex("`a|b`")).columns == ["a"]

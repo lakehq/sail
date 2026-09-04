@@ -331,6 +331,23 @@ Feature: identifier resolution beyond ASCII
         """
       Then query error Did you mean one of the following\? \[`a`, `b`\]\.
 
+    @sail-bug
+    Scenario: the key of a USING join keeps its qualifier in the suggestion
+      # The key is materialised as a column of its own, which loses the qualifier it had. That
+      # also shortens it, so it moves to the front of the order by distance.
+      When query
+        """
+        SELECT nope FROM (SELECT 1 AS id, 2 AS a) l JOIN (SELECT 1 AS id, 3 AS b) r USING (id)
+        """
+      Then query error Did you mean one of the following\? \[`l`\.`a`, `r`\.`b`, `l`\.`id`\]\.
+
+    Scenario: a join on a condition keeps the qualifier of both sides
+      When query
+        """
+        SELECT nope FROM (SELECT 1 AS id, 2 AS a) l JOIN (SELECT 1 AS id, 3 AS b) r ON l.id = r.id
+        """
+      Then query error Did you mean one of the following\? \[`l`\.`a`, `r`\.`b`, `l`\.`id`, `r`\.`id`\]\.
+
     Scenario: a qualifier is kept when the candidates do not share one
       When query
         """
