@@ -256,6 +256,25 @@ pub(in crate::resolver) fn unresolved_column_fields_error<T: AsRef<str>>(
     ))
 }
 
+/// Builds the error Spark reports for a name that the attribute parser rejects. The name is the
+/// one the user wrote, since there is nothing to quote it against yet.
+pub(in crate::resolver) fn invalid_attribute_name_error(name: &str) -> PlanError {
+    PlanError::AnalysisError(format!(
+        "[INVALID_ATTRIBUTE_NAME_SYNTAX] Syntax error in the attribute name: {name}. Check that \
+         backticks appear in pairs, a quoted string is a complete name part and use a backtick \
+         only inside quoted name parts."
+    ))
+}
+
+/// Builds the error Spark reports when `replace` is given a name that walks into a column.
+pub(in crate::resolver) fn replace_nested_column_error(name: &spec::ObjectName) -> PlanError {
+    PlanError::AnalysisError(format!(
+        "[UNSUPPORTED_FEATURE.REPLACE_NESTED_COLUMN] The feature is not supported: The replace \
+         function does not support nested column {}.",
+        quote_identifier(name)
+    ))
+}
+
 impl PlanResolver<'_> {
     pub(super) fn resolve_expression_attribute(
         &self,
@@ -542,7 +561,7 @@ impl PlanResolver<'_> {
         Ok(candidates.pop())
     }
 
-    fn resolve_potentially_nested_field<T: AsRef<str>>(
+    pub(in crate::resolver) fn resolve_potentially_nested_field<T: AsRef<str>>(
         &self,
         expr: expr::Expr,
         data_type: &DataType,

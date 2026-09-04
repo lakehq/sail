@@ -831,3 +831,101 @@ def test_col_regex_matches_the_whole_name(spark):
     df = spark.sql("SELECT 1 AS ab, 2 AS xb, 3 AS a")
 
     assert df.select(df.colRegex("`a|b`")).columns == ["a"]
+
+
+# The subset name of an NA operation is parsed as an attribute name before it is looked up, so a
+# name the parser rejects is a syntax error rather than a column that could not be found. Each
+# entry is one branch of `AttributeNameParser.parseAttributeName`.
+# (case, the name as written by the client)
+_MALFORMED_NAMES = [
+    ("unterminated backtick", "`a"),
+    ("backtick after text", "a`b"),
+    ("backtick then text", "`a`b"),
+    ("leading dot", ".a"),
+    ("trailing dot", "a."),
+    ("double dot", "a..b"),
+    ("only a dot", "."),
+]
+
+
+def _syntax_error(name):
+    return re.escape(f"[INVALID_ATTRIBUTE_NAME_SYNTAX] Syntax error in the attribute name: {name}.")
+
+
+@pytest.mark.parametrize(("case", "name"), _MALFORMED_NAMES)
+def test_fillna_rejects_a_malformed_subset_name(spark, case, name):  # noqa: ARG001
+    df = spark.sql("SELECT CAST(NULL AS INT) AS a, 1 AS b")
+
+    with pytest.raises(Exception, match=_syntax_error(name)):
+        df.fillna(0, subset=[name]).collect()
+
+
+def test_dropna_rejects_a_malformed_subset_name(spark):
+    # The three entry points share the rule, so one spelling is enough for the other two.
+    df = spark.sql("SELECT CAST(NULL AS INT) AS a, 1 AS b")
+
+    with pytest.raises(Exception, match=_syntax_error("a.")):
+        df.dropna(subset=["a."]).collect()
+
+
+def test_replace_rejects_a_malformed_subset_name(spark):
+    df = spark.sql("SELECT CAST(NULL AS INT) AS a, 1 AS b")
+
+    with pytest.raises(Exception, match=_syntax_error("a..b")):
+        df.replace(1, 2, subset=["a..b"]).collect()
+
+
+# `replace` only works on a top-level column, so any name that resolves to something else gets its
+# own condition. (case, the query, the subset name, the name as it reaches the message)
+_NESTED_REPLACE = [
+    ("struct field", "SELECT named_struct('x', 1) AS s, 1 AS a", "s.x", "`s`.`x`"),
+    ("struct field quoted", "SELECT named_struct('x', 1) AS s, 1 AS a", "`s`.`x`", "`s`.`x`"),
+    (
+        "two levels",
+        "SELECT named_struct('t', named_struct('u', 1)) AS s, 1 AS a",
+        "s.t.u",
+        "`s`.`t`.`u`",
+    ),
+    (
+        "intermediate struct",
+        "SELECT named_struct('t', named_struct('u', 1)) AS s, 1 AS a",
+        "s.t",
+        "`s`.`t`",
+    ),
+    ("array of struct", "SELECT array(named_struct('x', 1)) AS s, 1 AS a", "s.x", "`s`.`x`"),
+]
+
+
+@pytest.mark.parametrize(("case", "query", "name", "rendered"), _NESTED_REPLACE)
+def test_replace_rejects_a_nested_subset_name(spark, case, query, name, rendered):  # noqa: ARG001
+    df = spark.sql(query)
+
+    with pytest.raises(
+        Exception,
+        match=re.escape(
+            "[UNSUPPORTED_FEATURE.REPLACE_NESTED_COLUMN] The feature is not supported: The replace "
+            f"function does not support nested column {rendered}."
+        ),
+    ):
+        df.replace(1, 2, subset=[name]).collect()
+
+
+def test_replace_reports_a_missing_root_as_unresolved(spark):
+    # The control: with no column to walk into, the name is unresolved like any other.
+    df = spark.sql("SELECT named_struct('x', 1) AS s, 1 AS a")
+
+    with pytest.raises(
+        Exception,
+        match=re.escape(
+            "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with "
+            "name `nope`.`x` cannot be resolved. Did you mean one of the following? [`s`, `a`]."
+        ),
+    ):
+        df.replace(1, 2, subset=["nope.x"]).collect()
+
+
+def test_replace_resolves_a_quoted_subset_name_containing_a_dot(spark):
+    # A dot inside back quotes is part of the name, so this is a column and not a walk into one.
+    df = spark.sql("SELECT 1 AS `a.b`, 2 AS c")
+
+    assert [list(row) for row in df.replace(1, 9, subset=["`a.b`"]).collect()] == [[9, 2]]

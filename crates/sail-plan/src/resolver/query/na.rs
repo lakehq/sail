@@ -13,7 +13,9 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
-use crate::resolver::expression::attribute::unresolved_column_fields_error;
+use crate::resolver::expression::attribute::{
+    invalid_attribute_name_error, unresolved_column_fields_error,
+};
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
@@ -146,10 +148,10 @@ impl PlanResolver<'_> {
         name: &str,
         state: &PlanResolverState,
     ) -> PlanResult<()> {
-        let Some(object) = spec::ObjectName::parse_attribute(name) else {
-            self.resolve_one_column(schema, name, state)?;
-            return Ok(());
-        };
+        // The name is parsed before it is looked up, so a malformed one is a syntax error rather
+        // than a column that could not be found.
+        let object = spec::ObjectName::parse_attribute(name)
+            .ok_or_else(|| invalid_attribute_name_error(name))?;
         let [leading, rest @ ..] = object.parts() else {
             self.resolve_one_column(schema, name, state)?;
             return Ok(());

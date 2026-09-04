@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use datafusion_common::{Column, DFSchemaRef, ScalarValue};
+use datafusion_common::{Column, DFSchemaRef, ExprSchema, ScalarValue};
 use datafusion_expr::{
     Expr, ExprSchemable, LogicalPlan, Projection, SubqueryAlias, cast, col, lit,
 };
@@ -12,7 +12,8 @@ use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::expression::attribute::{
-    unresolved_column_fields_error, unresolved_column_name_error,
+    invalid_attribute_name_error, replace_nested_column_error, unresolved_column_fields_error,
+    unresolved_column_name_error,
 };
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::explode::ExplodeRewriter;
@@ -368,23 +369,46 @@ impl PlanResolver<'_> {
         // Only a column whose name matches exactly is replaced, though, because the resolver
         // renames the attribute to the requested name, so an attribute resolved from a name that
         // differs in case is no longer equal to the one in the output of the plan.
-        for name in &cols_to_change {
-            if self
-                .resolve_optional_column(schema, name, None, state)?
-                .is_none()
-            {
-                let candidates = existing_cols_info
-                    .iter()
-                    .map(|(_, _, name)| name.as_str())
-                    .collect::<Vec<_>>();
+        let resolved_names = cols_to_change
+            .iter()
+            .map(|name| {
+                // The name is parsed before it is looked up, so a malformed one is a syntax error
+                // rather than a column that could not be found.
                 let object = spec::ObjectName::parse_attribute(name)
-                    .unwrap_or_else(|| spec::ObjectName::bare(name.as_str()));
-                return Err(unresolved_column_fields_error(&object, &candidates));
-            }
-        }
+                    .ok_or_else(|| invalid_attribute_name_error(name))?;
+                let [leading, rest @ ..] = object.parts() else {
+                    return Err(invalid_attribute_name_error(name));
+                };
+                let column = self.resolve_optional_column(schema, leading.as_ref(), None, state)?;
+                // Only a top-level column can be replaced, so a name that walks into one is
+                // rejected on its own condition. A walk that does not resolve falls through, since
+                // reporting the missing field is a separate gap.
+                if let Some(column) = &column
+                    && !rest.is_empty()
+                    && let Ok(field) = schema.field_from_column(column)
+                    && self
+                        .resolve_potentially_nested_field(
+                            Expr::Column(column.clone()),
+                            field.data_type(),
+                            rest,
+                        )?
+                        .is_some()
+                {
+                    return Err(replace_nested_column_error(&object));
+                }
+                if column.is_none() || !rest.is_empty() {
+                    let candidates = existing_cols_info
+                        .iter()
+                        .map(|(_, _, name)| name.as_str())
+                        .collect::<Vec<_>>();
+                    return Err(unresolved_column_fields_error(&object, &candidates));
+                }
+                Ok(leading.as_ref().to_string())
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
 
         let cols_to_change_set: HashSet<&str> =
-            cols_to_change.iter().map(|name| name.as_str()).collect();
+            resolved_names.iter().map(|name| name.as_str()).collect();
 
         let replace_exprs = existing_cols_info
             .into_iter()
