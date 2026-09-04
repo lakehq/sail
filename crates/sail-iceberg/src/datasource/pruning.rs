@@ -173,28 +173,7 @@ impl PruningStatistics for IcebergPruningStats {
         _column: &Column,
         _value: &std::collections::HashSet<datafusion::common::scalar::ScalarValue>,
     ) -> Option<BooleanArray> {
-        let field_id = self.field_id_for(_column)?;
-        let mut result = Vec::with_capacity(self.files.len());
-        for f in &self.files {
-            let lower = f.lower_bounds().get(&field_id);
-            let upper = f.upper_bounds().get(&field_id);
-            if let (Some(lb), Some(ub)) = (lower, upper) {
-                let lb_sv = self.datum_to_scalar_for_field(field_id, lb);
-                let ub_sv = self.datum_to_scalar_for_field(field_id, ub);
-                let mut any_match = false;
-                for v in _value.iter() {
-                    if &lb_sv == v && &ub_sv == v {
-                        any_match = true;
-                        break;
-                    }
-                }
-                result.push(any_match);
-            } else {
-                // If stats are missing, we cannot safely prune the file.
-                result.push(true);
-            }
-        }
-        Some(BooleanArray::from(result))
+        None
     }
 }
 
@@ -368,7 +347,7 @@ fn collect_source_eq_filters(schema: &Schema, filters: &[Expr]) -> Vec<(i32, Pri
                 {
                     let col_name = c.name.clone();
                     if let Some(field) = schema.field_by_name(&col_name)
-                        && let Ok(pl) = scalar_to_primitive_literal(sv)
+                        && let Ok(pl) = scalar_to_primitive_literal(sv, field.field_type.as_ref())
                     {
                         acc.push((field.id, pl));
                         return;
@@ -381,7 +360,7 @@ fn collect_source_eq_filters(schema: &Schema, filters: &[Expr]) -> Vec<(i32, Pri
                 {
                     let col_name = c.name.clone();
                     if let Some(field) = schema.field_by_name(&col_name)
-                        && let Ok(pl) = scalar_to_primitive_literal(sv)
+                        && let Ok(pl) = scalar_to_primitive_literal(sv, field.field_type.as_ref())
                     {
                         acc.push((field.id, pl));
                     }
@@ -425,7 +404,8 @@ fn collect_source_in_filters(
                     let mut vals = Vec::new();
                     for item in &in_list.list {
                         if let Expr::Literal(sv, _) = item
-                            && let Ok(pl) = scalar_to_primitive_literal(sv)
+                            && let Ok(pl) =
+                                scalar_to_primitive_literal(sv, field.field_type.as_ref())
                         {
                             vals.push(pl);
                         }
@@ -544,6 +524,10 @@ fn transform_primitive_literal(
     source_type: &Type,
     literal: PrimitiveLiteral,
 ) -> Option<PrimitiveLiteral> {
+    let literal = source_type
+        .as_primitive_type()?
+        .promote_literal(&literal)?
+        .into_owned();
     match apply_transform(transform, source_type, Some(Literal::Primitive(literal))) {
         Some(Literal::Primitive(value)) => Some(value),
         _ => None,
@@ -753,7 +737,7 @@ fn collect_source_range_filters(
         inclusive: bool,
     ) {
         if let Some(field) = schema.field_by_name(column_name)
-            && let Ok(pl) = scalar_to_primitive_literal(literal)
+            && let Ok(pl) = scalar_to_primitive_literal(literal, field.field_type.as_ref())
         {
             let entry = acc.entry(field.id).or_default();
             tighten_min(&mut entry.min, (pl, inclusive));
@@ -768,7 +752,7 @@ fn collect_source_range_filters(
         inclusive: bool,
     ) {
         if let Some(field) = schema.field_by_name(column_name)
-            && let Ok(pl) = scalar_to_primitive_literal(literal)
+            && let Ok(pl) = scalar_to_primitive_literal(literal, field.field_type.as_ref())
         {
             let entry = acc.entry(field.id).or_default();
             tighten_max(&mut entry.max, (pl, inclusive));

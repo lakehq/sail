@@ -184,27 +184,6 @@ pub async fn find_latest_metadata_file(
 
     log::trace!("Finding latest metadata file");
     let base_path = crate::utils::url_to_object_path(table_url)?;
-    let version_hint_path = base_path.clone().join("metadata").join("version-hint.text");
-    let mut hinted_version: Option<i32> = None;
-    let mut hinted_filename: Option<String> = None;
-    if let Ok(version_hint_data) = object_store.get(&version_hint_path).await
-        && let Ok(version_hint_bytes) = version_hint_data.bytes().await
-        && let Ok(version_hint) = String::from_utf8(version_hint_bytes.to_vec())
-    {
-        let content = version_hint.trim();
-        if let Ok(version) = content.parse::<i32>() {
-            log::trace!("Using numeric version hint: {}", version);
-            hinted_version = Some(version);
-        } else {
-            let fname = if parse_metadata_file_name(content).is_some() {
-                content.to_string()
-            } else {
-                format!("{}.metadata.json", content)
-            };
-            log::trace!("Using filename version hint: {}", fname);
-            hinted_filename = Some(fname);
-        }
-    }
 
     log::trace!("Listing metadata directory");
     let metadata_prefix = base_path.join("metadata");
@@ -233,27 +212,6 @@ pub async fn find_latest_metadata_file(
                     .then_with(|| left.2.cmp(&right.2))
                     .then_with(|| left.1.cmp(&right.1))
             });
-
-            if let Some(fname) = hinted_filename
-                && let Some((version, path, _)) =
-                    files.iter().rev().find(|(_, p, _)| p.ends_with(&fname))
-            {
-                log::trace!(
-                    "find_latest_metadata_file: selected by filename hint version {} path={}",
-                    version,
-                    path
-                );
-                return Ok(path.clone());
-            } else if let Some(hint) = hinted_version
-                && let Some((version, path, _)) = files.iter().rev().find(|(v, _, _)| *v == hint)
-            {
-                log::trace!(
-                    "find_latest_metadata_file: selected by numeric hint version {} path={}",
-                    version,
-                    path
-                );
-                return Ok(path.clone());
-            }
 
             if let Some((version, latest_file, _)) = files.last() {
                 log::trace!(

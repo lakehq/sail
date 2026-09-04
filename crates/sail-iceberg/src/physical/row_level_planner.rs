@@ -12,7 +12,7 @@ use sail_logical_plan::row_level::RowLevelWriteNode;
 
 use crate::lake_source::{
     IcebergLakeSource, catalog_managed_iceberg_from_options, metadata_location_from_options,
-    split_iceberg_write_options_and_table_properties,
+    resolve_iceberg_metadata_location, split_iceberg_write_options_and_table_properties,
 };
 use crate::operations::SnapshotUpdateKind;
 use crate::options::r#gen::IcebergWriteOptions;
@@ -58,9 +58,11 @@ async fn plan_iceberg_merge(
         IcebergLakeSource::parse_table_url(vec![node.target_location().to_string()]).await?;
     let metadata_location = metadata_location_from_options(node.target_options());
     let catalog_managed_table = catalog_managed_iceberg_from_options(node.target_options());
-    let metadata_location_for_load = catalog_managed_table
-        .then_some(metadata_location.clone())
-        .flatten();
+    let metadata_location_for_load = resolve_iceberg_metadata_location(
+        node.target_lakehouse_table(),
+        metadata_location,
+        catalog_managed_table,
+    )?;
     let table =
         Table::load_with_metadata_location(session, table_url.clone(), metadata_location_for_load)
             .await?;
@@ -115,7 +117,11 @@ async fn plan_iceberg_delete(
         IcebergLakeSource::parse_table_url(vec![node.target_location().to_string()]).await?;
     let metadata_location = metadata_location_from_options(node.target_options());
     let catalog_managed_table = catalog_managed_iceberg_from_options(node.target_options());
-    let metadata_location_for_load = catalog_managed_table.then_some(metadata_location).flatten();
+    let metadata_location_for_load = resolve_iceberg_metadata_location(
+        node.target_lakehouse_table(),
+        metadata_location,
+        catalog_managed_table,
+    )?;
     let table =
         Table::load_with_metadata_location(session, table_url.clone(), metadata_location_for_load)
             .await?;

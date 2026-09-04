@@ -544,7 +544,7 @@ impl<'a> SnapshotProducer<'a> {
             join_table_uri(self.tx.table_uri(), &manifest_rel, &self.write_path_mode),
             sequence_number,
             snapshot_id,
-        );
+        )?;
         manifest_file.manifest_length = manifest_len;
         manifest_file.first_row_id = first_row_id;
         store_ctx
@@ -1403,7 +1403,9 @@ mod tests {
             ))
             .expect("existing entry");
 
-        let manifest_file = writer.into_manifest_file("manifest.avro".to_string(), 6, 9);
+        let manifest_file = writer
+            .into_manifest_file("manifest.avro".to_string(), 6, 9)
+            .expect("manifest file");
         assert_eq!(manifest_file.content, ManifestContentType::Deletes);
         assert_eq!(manifest_file.min_sequence_number, 5);
     }
@@ -1474,11 +1476,13 @@ mod tests {
             let affected_bytes = affected_writer
                 .to_avro_bytes_v2()
                 .expect("affected manifest");
-            let mut affected_file = affected_writer.into_manifest_file(
-                "metadata/affected.avro".to_string(),
-                parent_sequence_number,
-                parent_snapshot_id,
-            );
+            let mut affected_file = affected_writer
+                .into_manifest_file(
+                    "metadata/affected.avro".to_string(),
+                    parent_sequence_number,
+                    parent_snapshot_id,
+                )
+                .expect("affected manifest file");
             affected_file.manifest_length = affected_bytes.len() as i64;
             store_ctx
                 .prefixed
@@ -1499,11 +1503,13 @@ mod tests {
             let unaffected_bytes = unaffected_writer
                 .to_avro_bytes_v2()
                 .expect("unaffected manifest");
-            let mut unaffected_file = unaffected_writer.into_manifest_file(
-                "metadata/unaffected.avro".to_string(),
-                parent_sequence_number,
-                parent_snapshot_id,
-            );
+            let mut unaffected_file = unaffected_writer
+                .into_manifest_file(
+                    "metadata/unaffected.avro".to_string(),
+                    parent_sequence_number,
+                    parent_snapshot_id,
+                )
+                .expect("unaffected manifest file");
             unaffected_file.manifest_length = unaffected_bytes.len() as i64;
             store_ctx
                 .prefixed
