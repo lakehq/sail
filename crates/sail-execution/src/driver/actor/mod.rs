@@ -29,6 +29,9 @@ pub struct DriverActor {
     task_assigner: TaskAssigner,
     task_runner: Option<ActorHandle<TaskRunnerActor>>,
     extensions: DriverExtensions,
+    activated: bool,
+    /// Whether launch retries have been exhausted for the current queued worker demand.
+    worker_launch_retries_exhausted: bool,
     /// The sequence number corresponding to the last task status update from the worker.
     /// A different sequence number is tracked for each attempt.
     task_sequences: HashMap<TaskKey, u64>,

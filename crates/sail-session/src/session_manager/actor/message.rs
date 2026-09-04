@@ -16,6 +16,14 @@ pub enum SessionManagerMessage {
         user_id: String,
         result: oneshot::Sender<SessionResult<SessionContext>>,
     },
+    CompleteSessionCreation {
+        session_id: String,
+        user_id: String,
+        context: SessionContext,
+        driver_id: Option<DriverId>,
+        activation: ExecutionResult<()>,
+        result: oneshot::Sender<SessionResult<SessionContext>>,
+    },
     ProbeIdleSession {
         session_id: String,
         /// The time when the session was known to be active.
@@ -41,6 +49,7 @@ impl SpanAssociation for SessionManagerMessage {
     fn name(&self) -> Cow<'static, str> {
         let name = match self {
             SessionManagerMessage::GetOrCreateSession { .. } => "GetOrCreateSession",
+            SessionManagerMessage::CompleteSessionCreation { .. } => "CompleteSessionCreation",
             SessionManagerMessage::ProbeIdleSession { .. } => "ProbeIdleSession",
             SessionManagerMessage::DeleteSession { .. } => "DeleteSession",
             SessionManagerMessage::SetSessionFailure { .. } => "SetSessionFailure",
@@ -56,6 +65,14 @@ impl SpanAssociation for SessionManagerMessage {
             SessionManagerMessage::GetOrCreateSession {
                 session_id,
                 user_id: _,
+                result: _,
+            }
+            | SessionManagerMessage::CompleteSessionCreation {
+                session_id,
+                user_id: _,
+                context: _,
+                driver_id: _,
+                activation: _,
                 result: _,
             }
             | SessionManagerMessage::ProbeIdleSession {

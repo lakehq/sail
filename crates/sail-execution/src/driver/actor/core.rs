@@ -50,6 +50,8 @@ impl Actor for DriverActor {
             task_assigner,
             task_runner: None,
             extensions: Default::default(),
+            activated: false,
+            worker_launch_retries_exhausted: false,
             task_sequences: HashMap::new(),
             shutdown_notifier: None,
         }
@@ -129,7 +131,7 @@ impl Actor for DriverActor {
         message: DriverMessage,
     ) -> ActorAction {
         match message {
-            DriverMessage::Activate => self.handle_activate(ctx),
+            DriverMessage::Activate { result } => self.handle_activate(ctx, result),
             DriverMessage::RegisterWorker {
                 worker_id,
                 host,
@@ -145,6 +147,12 @@ impl Actor for DriverActor {
             } => self.handle_worker_known_peers(ctx, worker_id, peer_worker_ids),
             DriverMessage::ProbePendingWorker { worker_id } => {
                 self.handle_probe_pending_worker(ctx, worker_id)
+            }
+            DriverMessage::WorkerFailedToStart { worker_id, message } => {
+                self.handle_worker_failed_to_start(ctx, worker_id, message)
+            }
+            DriverMessage::RetryWorkerLaunch { worker_id, launch } => {
+                self.handle_retry_worker_launch(ctx, worker_id, launch)
             }
             DriverMessage::ProbeIdleWorker { worker_id, instant } => {
                 self.handle_probe_idle_worker(ctx, worker_id, instant)

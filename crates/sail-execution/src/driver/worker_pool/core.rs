@@ -16,7 +16,7 @@ use tokio::time::Instant;
 use tonic::Code;
 
 use crate::driver::worker_pool::state::WorkerState;
-use crate::driver::worker_pool::{WorkerDescriptor, WorkerPool, WorkerPoolOptions};
+use crate::driver::worker_pool::{WorkerDescriptor, WorkerLaunch, WorkerPool, WorkerPoolOptions};
 use crate::driver::{DriverActor, DriverMessage, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, WorkerId};
@@ -38,14 +38,19 @@ impl WorkerPool {
         Ok(())
     }
 
-    pub fn start_worker(&mut self, ctx: &mut ActorContext<DriverActor>) {
-        let Ok(worker_id) = self.worker_id_generator.generate() else {
-            error!("failed to generate worker ID");
-            ctx.send(DriverMessage::Shutdown { result: None });
-            return;
-        };
+    pub fn start_worker(
+        &mut self,
+        ctx: &mut ActorContext<DriverActor>,
+        launch: WorkerLaunch,
+    ) -> ExecutionResult<WorkerId> {
+        let worker_id = self.worker_id_generator.generate()?;
+        info!(
+            "starting worker {worker_id} (launch attempt {})",
+            launch.attempt
+        );
         let descriptor = WorkerDescriptor {
             state: WorkerState::Pending,
+            launch: Some(launch),
             messages: vec![],
             peers: HashSet::new(),
         };
@@ -93,11 +98,19 @@ impl WorkerPool {
         let task = self
             .worker_manager
             .launch_worker(ctx.children_mut(), worker_id, options);
+        let driver = ctx.handle().clone();
         ctx.spawn(async move {
             if let Err(e) = task.await {
                 error!("failed to start worker {worker_id}: {e}");
+                let _ = driver
+                    .send(DriverMessage::WorkerFailedToStart {
+                        worker_id,
+                        message: e.to_string(),
+                    })
+                    .await;
             }
         });
+        Ok(worker_id)
     }
 
     pub fn register_worker(
@@ -123,6 +136,7 @@ impl WorkerPool {
                     heartbeat_at: Instant::now(),
                     client: None,
                 };
+                worker.launch = None;
                 Self::schedule_lost_worker_probe(ctx, worker_id, worker, &self.options);
                 Self::schedule_idle_worker_probe(ctx, worker_id, worker, &self.options);
                 event_reporter.report(SystemEvent::WorkerUpdated {
@@ -211,20 +225,6 @@ impl WorkerPool {
         }
     }
 
-    /// Returns true if any worker is still launching (pending registration).
-    ///
-    /// A task stuck in `Created` should wait for such a worker rather than
-    /// failing with a scheduling timeout: once the worker registers,
-    /// `handle_register_worker` runs the pending tasks and can assign it. A
-    /// worker that never registers is bounded by `worker_launch_timeout`
-    /// (`fail_worker_if_pending`), after which it leaves the `Pending` state, so
-    /// this cannot keep a task alive forever.
-    pub fn has_pending_workers(&self) -> bool {
-        self.workers
-            .values()
-            .any(|worker| matches!(worker.state, WorkerState::Pending))
-    }
-
     fn list_running_workers(&self) -> Vec<WorkerLocation> {
         self.workers
             .iter()
@@ -269,16 +269,19 @@ impl WorkerPool {
         worker.peers.extend(peer_worker_ids);
     }
 
-    pub fn fail_worker_if_pending(&mut self, worker_id: WorkerId) -> bool {
+    pub fn fail_worker_if_pending(
+        &mut self,
+        worker_id: WorkerId,
+        message: String,
+    ) -> Option<WorkerLaunch> {
         let event_reporter = self.event_reporter.clone();
         let session_id = self.options.session_id.clone();
         let Some(worker) = self.workers.get_mut(&worker_id) else {
             warn!("worker {worker_id} not found");
-            return false;
+            return None;
         };
         if matches!(&worker.state, WorkerState::Pending) {
-            warn!("worker {worker_id} registration timeout");
-            let message = "worker registration timeout".to_string();
+            warn!("worker {worker_id} failed to start: {message}");
             worker.state = WorkerState::Failed;
             worker.messages.push(message);
             event_reporter.report(SystemEvent::WorkerUpdated {
@@ -289,9 +292,9 @@ impl WorkerPool {
                 status: worker.state.status().to_string(),
                 updated_at: Utc::now(),
             });
-            true
+            worker.launch.take()
         } else {
-            false
+            None
         }
     }
 

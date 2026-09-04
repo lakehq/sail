@@ -90,6 +90,7 @@ impl DriverResource {
 #[derive(Debug)]
 /// Represents the current state of a worker's resources as seen by the task assigner.
 pub enum WorkerResource {
+    Pending,
     Active {
         /// The task slots on the worker.
         task_slots: Vec<TaskSlot>,
@@ -122,7 +123,7 @@ impl WorkerResource {
                     warn!("invalid task slot {slot} on worker");
                 }
             }
-            WorkerResource::Inactive => {
+            WorkerResource::Pending | WorkerResource::Inactive => {
                 warn!("cannot add tasks to inactive worker");
             }
         }
@@ -138,7 +139,7 @@ impl WorkerResource {
                     false
                 }
             }
-            WorkerResource::Inactive => {
+            WorkerResource::Pending | WorkerResource::Inactive => {
                 warn!("cannot remove tasks from inactive worker");
                 false
             }
@@ -150,7 +151,7 @@ impl WorkerResource {
             WorkerResource::Active { local_streams, .. } => {
                 local_streams.extend(set.local_streams().cloned());
             }
-            WorkerResource::Inactive => {
+            WorkerResource::Pending | WorkerResource::Inactive => {
                 warn!("cannot track local streams on inactive worker");
             }
         }
@@ -167,7 +168,7 @@ impl WorkerResource {
                 }
                 count != local_streams.len()
             }
-            WorkerResource::Inactive => {
+            WorkerResource::Pending | WorkerResource::Inactive => {
                 warn!("cannot untrack local streams from inactive worker");
                 false
             }
