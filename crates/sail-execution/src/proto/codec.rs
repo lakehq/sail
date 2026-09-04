@@ -24,6 +24,7 @@ use datafusion::datasource::source::{DataSource, DataSourceExec};
 use datafusion::execution::TaskContext;
 use datafusion::functions::core::greatest::GreatestFunc;
 use datafusion::functions::core::least::LeastFunc;
+use datafusion::functions::core::with_metadata::WithMetadataFunc;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::functions_nested::extract::ArrayElement;
 use datafusion::functions_nested::map_extract::MapExtract;
@@ -175,7 +176,6 @@ use sail_function::scalar::datetime::spark_time::SparkTime;
 use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
-use sail_function::scalar::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
 use sail_function::scalar::datetime::spark_year::SparkYear;
@@ -3088,11 +3088,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkDate(r#gen::SparkDateUdf { is_try }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkDate::new(is_try))));
             }
-            UdfKind::SparkTryToTimestamp(r#gen::SparkTryToTimestampUdf { timezone }) => {
-                return Ok(Arc::new(ScalarUDF::from(SparkTryToTimestamp::try_new(
-                    timezone.map(Arc::from),
-                ))));
-            }
             UdfKind::SparkTime(r#gen::SparkTimeUdf { is_try }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkTime::new(is_try))));
             }
@@ -3340,11 +3335,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     "UTC",
                 )))))
             }
-            "spark_try_to_timestamp" | "try_to_timestamp" => {
-                Ok(Arc::new(ScalarUDF::from(SparkTryToTimestamp::new())))
-            }
             "spark_expm1" | "expm1" => Ok(Arc::new(ScalarUDF::from(SparkExpm1::new()))),
             "spark_sqrt" | "sqrt" => Ok(Arc::new(ScalarUDF::from(SparkSqrt::new()))),
+            "with_metadata" => Ok(Arc::new(ScalarUDF::from(WithMetadataFunc::new()))),
             "spark_to_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8::new()))),
             "spark_to_large_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToLargeUtf8::new()))),
             "spark_to_utf8_view" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8View::new()))),
@@ -3467,6 +3460,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkSentences>()
             || node_inner.is::<SparkSplit>()
             || node_inner.is::<SparkToBinary>()
+            || node_inner.is::<WithMetadataFunc>()
             || node_inner.is::<SparkToLargeUtf8>()
             || node_inner.is::<SparkToUtf8>()
             || node_inner.is::<SparkToUtf8View>()
@@ -3620,9 +3614,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<SparkDate>() {
             let is_try = func.is_try();
             UdfKind::SparkDate(r#gen::SparkDateUdf { is_try })
-        } else if let Some(func) = node.inner().downcast_ref::<SparkTryToTimestamp>() {
-            let timezone = func.timezone().map(|x| x.to_string());
-            UdfKind::SparkTryToTimestamp(r#gen::SparkTryToTimestampUdf { timezone })
         } else if let Some(func) = node.inner().downcast_ref::<SparkTime>() {
             let is_try = func.is_try();
             UdfKind::SparkTime(r#gen::SparkTimeUdf { is_try })
@@ -7442,18 +7433,6 @@ mod tests {
     }
 
     #[test]
-    fn test_round_trip_spark_try_to_timestamp_preserves_options() -> Result<()> {
-        let decoded = round_trip_udf(ScalarUDF::from(SparkTryToTimestamp::try_new(Some(
-            Arc::from("America/Los_Angeles"),
-        ))))?;
-
-        let decoded = downcast_udf::<SparkTryToTimestamp>(&decoded, "SparkTryToTimestamp")?;
-        assert_eq!(decoded.timezone(), Some("America/Los_Angeles"));
-
-        Ok(())
-    }
-
-    #[test]
     fn test_round_trip_spark_unix_timestamp_preserves_options() -> Result<()> {
         let decoded = round_trip_udf(ScalarUDF::from(SparkUnixTimestamp::new(
             Arc::from("America/Los_Angeles"),
@@ -7508,6 +7487,15 @@ mod tests {
         let decoded = round_trip_udf(ScalarUDF::from(SparkSqrt::new()))?;
 
         assert!(decoded.inner().downcast_ref::<SparkSqrt>().is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_with_metadata_standard_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(WithMetadataFunc::new()))?;
+
+        downcast_udf::<WithMetadataFunc>(&decoded, "WithMetadataFunc")?;
+        assert_eq!(decoded.name(), "with_metadata");
         Ok(())
     }
 

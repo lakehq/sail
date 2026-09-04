@@ -1,9 +1,10 @@
+use std::collections::HashMap;
 use std::str::FromStr;
 
 use arrow::array::timezone::Tz;
 use arrow::datatypes::Date32Type;
 use chrono::{NaiveTime, Timelike};
-use datafusion_expr::expr;
+use datafusion_expr::expr::{self, FieldMetadata};
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
@@ -22,6 +23,16 @@ impl PlanResolver<'_> {
         literal: spec::Literal,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        let field_metadata = literal
+            .spark_interval_metadata()?
+            .map(|metadata| {
+                let metadata = metadata.to_json()?;
+                Ok::<_, crate::error::PlanError>(FieldMetadata::from(HashMap::from([(
+                    spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+                    metadata,
+                )])))
+            })
+            .transpose()?;
         let literal = self.resolve_literal(literal, state)?;
         let service = self.ctx.extension::<PlanService>()?;
         let name = service
@@ -29,7 +40,7 @@ impl PlanResolver<'_> {
             .literal_to_string(&literal, &self.config.session_timezone)?;
         Ok(NamedExpr::new(
             vec![name],
-            expr::Expr::Literal(literal, None),
+            expr::Expr::Literal(literal, field_metadata),
         ))
     }
 

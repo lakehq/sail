@@ -6,13 +6,13 @@ use chrono::{NaiveTime, Timelike};
 use datafusion::arrow::array::{Array, ArrayRef, Time64MicrosecondArray};
 use datafusion::arrow::compute::{CastOptions, cast_with_options};
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
-use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::{Result, exec_datafusion_err, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions::utils::make_scalar_function;
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 use crate::scalar::datetime::format::DateTimeFormat;
+use crate::scalar::datetime::utils::string_array_iter;
 
 const DEFAULT_TIME_FORMATS: &[&str] = &[
     "%H:%M:%S%.f",
@@ -104,17 +104,8 @@ impl SparkTime {
         Ok(format.as_ref())
     }
 
-    fn string_array_iter(array: &ArrayRef) -> Result<Box<dyn Iterator<Item = Option<&str>> + '_>> {
-        match array.data_type() {
-            DataType::Utf8 => Ok(Box::new(as_string_array(array)?.iter())),
-            DataType::LargeUtf8 => Ok(Box::new(as_large_string_array(array)?.iter())),
-            DataType::Utf8View => Ok(Box::new(as_string_view_array(array)?.iter())),
-            other => exec_err!("expected string array, got {other}"),
-        }
-    }
-
     fn parse_value_array(value_arr: &ArrayRef, is_try: bool) -> Result<ArrayRef> {
-        let out: Time64MicrosecondArray = Self::string_array_iter(value_arr)?
+        let out: Time64MicrosecondArray = string_array_iter(value_arr.as_ref())?
             .map(|v| match v {
                 Some(s) => Self::string_to_time_us_default(s, is_try),
                 None => Ok(None),
@@ -136,8 +127,8 @@ impl SparkTime {
                 format_arr.len()
             );
         }
-        let values = Self::string_array_iter(value_arr)?;
-        let formats = Self::string_array_iter(format_arr)?;
+        let values = string_array_iter(value_arr.as_ref())?;
+        let formats = string_array_iter(format_arr.as_ref())?;
         let mut cache = HashMap::new();
         let out: Time64MicrosecondArray = values
             .zip(formats)

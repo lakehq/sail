@@ -227,15 +227,8 @@ Feature: length() returns character length for strings and byte length for binar
          |-- result: integer (nullable = true)
         """
 
-  Rule: Types whose string form Sail renders differently from Spark
+  Rule: Non-string inputs are measured after Spark-compatible string rendering
 
-    # These measure correctly — they measure the string form Sail produces, and that
-    # string form is what diverges. The root cause is Sail's CAST-to-string formatter,
-    # not the length family: Sail renders a double in scientific notation as `1e18`
-    # where Spark renders `1.0E18`, and a day interval as `INTERVAL '1 00:00:00' DAY TO
-    # SECOND` where Spark renders `INTERVAL '1' DAY`. Fixing the formatter fixes these.
-
-    @sail-bug
     Scenario: a double in scientific notation is measured as Spark renders it
       When query
         """
@@ -245,7 +238,6 @@ Feature: length() returns character length for strings and byte length for binar
         | big | small |
         | 6   | 6     |
 
-    @sail-bug
     Scenario: an interval is measured as Spark renders it
       When query
         """

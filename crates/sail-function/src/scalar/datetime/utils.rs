@@ -1,7 +1,25 @@
 use datafusion::arrow::array::types::{Decimal128Type, Int32Type, Time64MicrosecondType};
-use datafusion::arrow::array::{AsArray, Int32Array, PrimitiveArray};
+use datafusion::arrow::array::{Array, AsArray, Int32Array, PrimitiveArray};
+use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::ColumnarValue;
+
+pub(crate) fn string_array_iter(
+    array: &dyn Array,
+) -> Result<Box<dyn Iterator<Item = Option<&str>> + '_>> {
+    match array.data_type() {
+        datafusion::arrow::datatypes::DataType::Utf8 => {
+            Ok(Box::new(as_string_array(array)?.iter()))
+        }
+        datafusion::arrow::datatypes::DataType::LargeUtf8 => {
+            Ok(Box::new(as_large_string_array(array)?.iter()))
+        }
+        datafusion::arrow::datatypes::DataType::Utf8View => {
+            Ok(Box::new(as_string_view_array(array)?.iter()))
+        }
+        data_type => exec_err!("expected string array, got {data_type}"),
+    }
+}
 
 // Shared array conversion helpers for make_timestamp functions
 

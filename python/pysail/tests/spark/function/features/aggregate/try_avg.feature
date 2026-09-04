@@ -37,9 +37,6 @@ Feature: try_avg
         | #9   | (CAST(1.00 AS DECIMAL(10,2))), (CAST(NULL AS DECIMAL(10,2))), (CAST(2.50 AS DECIMAL(10,2))) | 1.750000   |
         | #10  | (CAST(90000 AS DECIMAL(5,0))), (CAST(20000 AS DECIMAL(5,0)))                                | 55000.0000 |
 
-    # Spark renders doubles with `java.lang.Double.toString` (`4.6116860184273879E18`);
-    # Sail renders `4.611686018427388e18`. Same value, different show-string.
-    @sail-bug
     Scenario Outline: Result values rendering a large double: <case>
       When query
         """
@@ -62,7 +59,6 @@ Feature: try_avg
         | avg_x |
         | NULL  |
 
-    @sail-bug
     Scenario: try_avg doctest #12 (result)
       When query
         """
