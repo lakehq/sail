@@ -347,7 +347,7 @@ fn collect_source_eq_filters(schema: &Schema, filters: &[Expr]) -> Vec<(i32, Pri
                 {
                     let col_name = c.name.clone();
                     if let Some(field) = schema.field_by_name(&col_name)
-                        && let Ok(pl) = scalar_to_primitive_literal(sv)
+                        && let Ok(pl) = scalar_to_primitive_literal(sv, field.field_type.as_ref())
                     {
                         acc.push((field.id, pl));
                         return;
@@ -360,7 +360,7 @@ fn collect_source_eq_filters(schema: &Schema, filters: &[Expr]) -> Vec<(i32, Pri
                 {
                     let col_name = c.name.clone();
                     if let Some(field) = schema.field_by_name(&col_name)
-                        && let Ok(pl) = scalar_to_primitive_literal(sv)
+                        && let Ok(pl) = scalar_to_primitive_literal(sv, field.field_type.as_ref())
                     {
                         acc.push((field.id, pl));
                     }
@@ -404,7 +404,8 @@ fn collect_source_in_filters(
                     let mut vals = Vec::new();
                     for item in &in_list.list {
                         if let Expr::Literal(sv, _) = item
-                            && let Ok(pl) = scalar_to_primitive_literal(sv)
+                            && let Ok(pl) =
+                                scalar_to_primitive_literal(sv, field.field_type.as_ref())
                         {
                             vals.push(pl);
                         }
@@ -736,7 +737,7 @@ fn collect_source_range_filters(
         inclusive: bool,
     ) {
         if let Some(field) = schema.field_by_name(column_name)
-            && let Ok(pl) = scalar_to_primitive_literal(literal)
+            && let Ok(pl) = scalar_to_primitive_literal(literal, field.field_type.as_ref())
         {
             let entry = acc.entry(field.id).or_default();
             tighten_min(&mut entry.min, (pl, inclusive));
@@ -751,7 +752,7 @@ fn collect_source_range_filters(
         inclusive: bool,
     ) {
         if let Some(field) = schema.field_by_name(column_name)
-            && let Ok(pl) = scalar_to_primitive_literal(literal)
+            && let Ok(pl) = scalar_to_primitive_literal(literal, field.field_type.as_ref())
         {
             let entry = acc.entry(field.id).or_default();
             tighten_max(&mut entry.max, (pl, inclusive));
