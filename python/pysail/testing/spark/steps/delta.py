@@ -169,6 +169,7 @@ class _JsonPathNgRequiredError(RuntimeError):
 
 
 _JSONPATH_DQ_KEY_RE = re.compile(r'\["((?:[^"\\]|\\.)*)"\]')
+_CLASSIC_CHECKPOINT_FILE_RE = re.compile(r"^(?P<version>\d{20})\.checkpoint\.parquet$")
 
 
 def _normalize_to_jsonpath(path: str) -> str:
@@ -578,6 +579,60 @@ def _load_checkpoint_parquet(location: Path, filename: str) -> list[dict]:
     assert checkpoint_path.exists(), f"checkpoint parquet not found: {checkpoint_path}"
     table = pq.read_table(checkpoint_path)
     return [_checkpoint_row_to_dict(table, i) for i in range(table.num_rows)]
+
+
+@given(parsers.parse("classic checkpoint parquet file {filename} in {location_var} is split into {parts:d} parts"))
+def classic_checkpoint_parquet_is_split_into_parts(
+    filename: str,
+    location_var: str,
+    parts: int,
+    variables: dict,
+) -> None:
+    """Replace a classic checkpoint with an equivalent complete multipart checkpoint."""
+    try:
+        import pyarrow.parquet as pq  # noqa: PLC0415
+    except ModuleNotFoundError as e:  # pragma: no cover
+        msg = "pyarrow is required for checkpoint parquet mutation"
+        raise RuntimeError(msg) from e
+
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    log_path = Path(location.path)
+    checkpoint_path = log_path / filename
+    assert checkpoint_path.is_file(), f"checkpoint parquet not found: {checkpoint_path}"
+
+    match = _CLASSIC_CHECKPOINT_FILE_RE.fullmatch(filename)
+    assert match is not None, f"expected a classic checkpoint filename, got {filename!r}"
+    assert parts > 1, "a multipart checkpoint must contain at least two parts"
+
+    checkpoint = pq.read_table(checkpoint_path)
+    assert checkpoint.num_rows >= parts, (
+        f"checkpoint has {checkpoint.num_rows} rows, fewer than the requested {parts} non-empty parts"
+    )
+
+    rows_per_part, larger_parts = divmod(checkpoint.num_rows, parts)
+    offset = 0
+    part_paths = []
+    for part in range(1, parts + 1):
+        row_count = rows_per_part + int(part <= larger_parts)
+        part_path = log_path / f"{match.group('version')}.checkpoint.{part:010}.{parts:010}.parquet"
+        pq.write_table(checkpoint.slice(offset, row_count), part_path)
+        part_paths.append(part_path)
+        offset += row_count
+
+    hint_path = log_path / "_last_checkpoint"
+    with hint_path.open(encoding="utf-8") as handle:
+        hint = json.load(handle)
+    assert hint.get("version") == int(match.group("version")), (
+        f"_last_checkpoint version does not match {filename!r}: {hint.get('version')!r}"
+    )
+    hint["parts"] = parts
+    hint["sizeInBytes"] = sum(path.stat().st_size for path in part_paths)
+    hint.pop("checksum", None)
+    with hint_path.open("w", encoding="utf-8") as handle:
+        json.dump(hint, handle, separators=(",", ":"))
+
+    checkpoint_path.unlink()
 
 
 def _physical_name_for_column(location: Path, column: str) -> str:

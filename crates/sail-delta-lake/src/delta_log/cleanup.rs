@@ -8,10 +8,10 @@ use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use uuid::Uuid;
 
 use super::{
-    list_delta_log_entries_from, parse_checkpoint_version_from_location,
-    parse_checksum_version_from_location, parse_commit_version_from_location,
-    parse_compacted_json_versions_from_location, read_last_checkpoint_hint_from_store,
-    resolve_version_timestamp, v2_checkpoint_path_from_hint,
+    complete_checkpoint_file_sets, list_delta_log_entries_from,
+    parse_checkpoint_version_from_location, parse_checksum_version_from_location,
+    parse_commit_version_from_location, parse_compacted_json_versions_from_location,
+    read_last_checkpoint_hint_from_store, resolve_version_timestamp, v2_checkpoint_path_from_hint,
 };
 use crate::checkpoint::{
     inspect_checkpoint_main_file, write_classic_checkpoint_from_v2_checkpoint,
@@ -217,6 +217,7 @@ async fn find_retention_checkpoint_version(
 ) -> DeltaResult<Option<i64>> {
     let mut boundary = RetentionCleanupBoundary::default();
     let mut commit_entries = Vec::new();
+    let mut checkpoint_entries = Vec::new();
     let log_path = delta_log_root_path();
     let mut log_entries = object_store.list(Some(&log_path));
     while let Some(meta) = log_entries.next().await {
@@ -230,13 +231,16 @@ async fn find_retention_checkpoint_version(
             DeltaLogFile::Commit(version) if version <= retention.latest_version => {
                 commit_entries.push((version, meta));
             }
-            DeltaLogFile::Checkpoint(version) => {
-                boundary.observe_checkpoint(version, retention);
+            DeltaLogFile::Checkpoint(_) => {
+                checkpoint_entries.push(meta);
             }
             _ => {}
         }
     }
     commit_entries.sort_by_key(|(version, _)| *version);
+    for checkpoint in complete_checkpoint_file_sets(checkpoint_entries) {
+        boundary.observe_checkpoint(checkpoint.version(), retention);
+    }
 
     for (version, _) in commit_entries {
         let version_timestamp = resolve_version_timestamp(
@@ -305,13 +309,16 @@ async fn collect_referenced_sidecars(
     )
     .await?;
     let mut referenced_sidecars: HashSet<String> = HashSet::new();
-    for checkpoint_meta in checkpoint_metas.into_iter().filter(|meta| {
-        parse_checkpoint_version_from_location(&meta.location)
-            .is_some_and(|version| version >= min_checkpoint_version)
-    }) {
-        let sidecars = inspect_checkpoint_main_file(object_store.clone(), checkpoint_meta).await?;
-        for sidecar in sidecars {
-            referenced_sidecars.insert(sidecar_file_name(&sidecar.path));
+    for checkpoint in complete_checkpoint_file_sets(checkpoint_metas)
+        .into_iter()
+        .filter(|checkpoint| checkpoint.version() >= min_checkpoint_version)
+    {
+        for checkpoint_meta in checkpoint.into_files() {
+            let sidecars =
+                inspect_checkpoint_main_file(object_store.clone(), checkpoint_meta).await?;
+            for sidecar in sidecars {
+                referenced_sidecars.insert(sidecar_file_name(&sidecar.path));
+            }
         }
     }
     Ok(referenced_sidecars)
@@ -562,6 +569,56 @@ mod tests {
                 "_delta_log/00000000000000000000.json".to_string(),
                 "_delta_log/00000000000000000001.json".to_string(),
                 "_delta_log/00000000000000000002.checkpoint.parquet".to_string(),
+                "_delta_log/00000000000000000002.json".to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_does_not_use_incomplete_multi_part_checkpoint_as_boundary() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let protocol = Protocol::new(1, 2, None, None);
+        let metadata = test_metadata([]);
+        put_commit(
+            &store,
+            0,
+            &[
+                Action::CommitInfo(CommitInfo::default()),
+                Action::Protocol(protocol),
+                Action::Metadata(metadata),
+            ],
+        )
+        .await;
+        put_commit(&store, 1, &[Action::CommitInfo(CommitInfo::default())]).await;
+        put_commit(&store, 2, &[Action::CommitInfo(CommitInfo::default())]).await;
+
+        let log_store = test_log_store(store.clone());
+        let snapshot = load_snapshot(&log_store, 2).await;
+        for part in [1, 3] {
+            put_log_file(
+                &store,
+                Path::from(format!(
+                    "_delta_log/00000000000000000001.checkpoint.{part:010}.0000000003.parquet"
+                )),
+            )
+            .await;
+        }
+
+        let deleted =
+            cleanup_expired_delta_log_files(snapshot.as_ref(), log_store.as_ref(), i64::MAX, None)
+                .await
+                .unwrap();
+
+        assert_eq!(deleted, 0);
+        assert_eq!(
+            list_log_file_paths(&store).await,
+            vec![
+                "_delta_log/00000000000000000000.json".to_string(),
+                "_delta_log/00000000000000000001.checkpoint.0000000001.0000000003.parquet"
+                    .to_string(),
+                "_delta_log/00000000000000000001.checkpoint.0000000003.0000000003.parquet"
+                    .to_string(),
+                "_delta_log/00000000000000000001.json".to_string(),
                 "_delta_log/00000000000000000002.json".to_string(),
             ]
         );

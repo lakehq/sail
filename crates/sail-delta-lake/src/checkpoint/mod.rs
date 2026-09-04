@@ -45,8 +45,8 @@ use crate::checkpoint::action_fields::{
 };
 use crate::delta_log::segment_files::ReplayedTableHeader;
 use crate::delta_log::{
-    LogStore, get_actions, list_delta_log_entries_from, parse_checkpoint_version_from_location,
-    parse_commit_version_from_location, read_last_checkpoint_version_from_store,
+    CheckpointFileSet, LogStore, get_actions, list_log_files,
+    parse_checkpoint_version_from_location, read_last_checkpoint_version_from_store,
     resolve_commit_timestamp_from_actions,
 };
 pub(crate) use crate::delta_log::{
@@ -606,32 +606,18 @@ impl<'a> CheckpointManager<'a> {
         let offset_version = offset_version
             .map(|v| v.min(version).saturating_sub(1))
             .unwrap_or(0);
-        let log_entries = list_delta_log_entries_from(store.clone(), offset_version).await?;
-        let mut commit_entries: Vec<(i64, ObjectMeta)> = Vec::new();
-        let mut checkpoint_entries: Vec<(i64, ObjectMeta)> = Vec::new();
-        for meta in log_entries {
-            if let Some(v) = parse_commit_version_from_location(&meta.location) {
-                if v <= version {
-                    commit_entries.push((v, meta));
-                }
-                continue;
-            }
-            if let Some(v) = parse_checkpoint_version_from_location(&meta.location)
-                && v <= version
-            {
-                checkpoint_entries.push((v, meta));
-            }
-        }
-        commit_entries.sort_by_key(|(av, _)| *av);
-        checkpoint_entries.sort_by_key(|(av, _)| *av);
+        let (_, checkpoint, commit_entries, _) =
+            list_log_files(store.clone(), offset_version, version).await?;
 
         let mut state = ReconciledCheckpointState::default();
-        let start_commit_version = if let Some((cp_ver, cp_meta)) = checkpoint_entries.pop() {
-            let rows = read_checkpoint_rows_from_checkpoint_file(store.clone(), cp_meta).await?;
+        let start_commit_version = if let Some(checkpoint) = checkpoint {
+            let checkpoint_version = checkpoint.version();
+            let rows =
+                read_checkpoint_rows_from_checkpoint_files(store.clone(), checkpoint).await?;
             for row in rows {
                 state.apply_checkpoint_row(row)?;
             }
-            cp_ver.saturating_add(1)
+            checkpoint_version.saturating_add(1)
         } else {
             0
         };
@@ -1061,7 +1047,34 @@ pub(crate) async fn read_checkpoint_rows_from_checkpoint_file(
     root_store: std::sync::Arc<dyn ObjectStore>,
     meta: ObjectMeta,
 ) -> DeltaResult<Vec<CheckpointActionRow>> {
-    let mut rows = read_checkpoint_main_rows_from_checkpoint_file(root_store.clone(), meta).await?;
+    read_checkpoint_rows_from_main_files(root_store, vec![meta], None).await
+}
+
+pub(crate) async fn read_checkpoint_rows_from_checkpoint_files(
+    root_store: std::sync::Arc<dyn ObjectStore>,
+    checkpoint: CheckpointFileSet,
+) -> DeltaResult<Vec<CheckpointActionRow>> {
+    let multi_part_version = checkpoint.is_multi_part().then(|| checkpoint.version());
+    read_checkpoint_rows_from_main_files(root_store, checkpoint.into_files(), multi_part_version)
+        .await
+}
+
+async fn read_checkpoint_rows_from_main_files(
+    root_store: std::sync::Arc<dyn ObjectStore>,
+    checkpoint_files: Vec<ObjectMeta>,
+    multi_part_version: Option<i64>,
+) -> DeltaResult<Vec<CheckpointActionRow>> {
+    let mut rows = Vec::new();
+    for checkpoint_file in checkpoint_files {
+        let mut checkpoint_rows =
+            read_checkpoint_main_rows_from_checkpoint_file(root_store.clone(), checkpoint_file)
+                .await?;
+        rows.append(&mut checkpoint_rows);
+    }
+
+    if let Some(version) = multi_part_version {
+        validate_multi_part_checkpoint_rows(version, &rows)?;
+    }
 
     // Collect sidecar descriptors from V2 checkpoint rows and load add/remove
     // payload from the referenced sidecar parquet files.
@@ -1097,6 +1110,21 @@ pub(crate) async fn read_checkpoint_rows_from_checkpoint_file(
     }
 
     Ok(rows)
+}
+
+pub(crate) fn validate_multi_part_checkpoint_rows(
+    version: i64,
+    rows: &[CheckpointActionRow],
+) -> DeltaResult<()> {
+    if rows
+        .iter()
+        .any(|row| row.checkpoint_metadata.is_some() || row.sidecar.is_some())
+    {
+        return Err(DeltaTableError::generic(format!(
+            "Multi-part checkpoint at version {version} must use the V1 checkpoint format"
+        )));
+    }
+    Ok(())
 }
 
 /// UUID-named checkpoints and manifests with sidecar actions require exactly one
@@ -1540,12 +1568,13 @@ mod tests {
         checkpoint_row_action, decode_checkpoint_rows, encode_checkpoint_rows,
         inspect_checkpoint_main_file, read_checkpoint_main_rows_from_checkpoint_file,
         read_checkpoint_rows_from_checkpoint_file, replay_commit_header_actions,
+        validate_multi_part_checkpoint_rows,
     };
     use crate::checkpoint::action_fields::{
         AddAugmentationConfig, normalize_checkpoint_batch_for_decode,
     };
     use crate::delta_log::segment_files::list_log_segment_files;
-    use crate::delta_log::{StorageConfig, default_logstore};
+    use crate::delta_log::{StorageConfig, default_logstore, load_replayed_table_state};
     use crate::spec::{
         Action, Add, CheckpointActionRow, CheckpointMetadata, CommitInfo, DataType,
         DeletionVectorDescriptor, DeltaError as DeltaTableError, DeltaResult, DomainMetadata,
@@ -2111,6 +2140,23 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn multi_part_checkpoint_rejects_v2_actions() {
+        let result = validate_multi_part_checkpoint_rows(
+            2,
+            &[CheckpointActionRow {
+                checkpoint_metadata: Some(CheckpointMetadata {
+                    version: 2,
+                    tags: None,
+                }),
+                ..Default::default()
+            }],
+        );
+        assert!(matches!(result, Err(error) if error
+                .to_string()
+                .contains("must use the V1 checkpoint format")));
+    }
+
     #[tokio::test]
     async fn spark_style_json_v2_checkpoint_loads_sidecar_actions() -> DeltaResult<()> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
@@ -2322,6 +2368,88 @@ mod tests {
         assert_eq!(
             segment.sidecar_files,
             vec![format!("_sidecars/{sidecar_filename}")]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn complete_multi_part_checkpoint_replays_all_parts() -> DeltaResult<()> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let protocol = Protocol::new(1, 2, None, None);
+        let metadata = test_metadata([])?;
+        let first_add = Add {
+            path: "part-001.parquet".to_string(),
+            size: 10,
+            modification_time: 20,
+            data_change: true,
+            ..Default::default()
+        };
+        let second_add = Add {
+            path: "part-002.parquet".to_string(),
+            size: 30,
+            modification_time: 40,
+            data_change: true,
+            ..Default::default()
+        };
+        let part_rows = [
+            vec![CheckpointActionRow {
+                protocol: Some(protocol.clone()),
+                ..Default::default()
+            }],
+            vec![
+                CheckpointActionRow {
+                    metadata: Some(metadata.clone()),
+                    ..Default::default()
+                },
+                CheckpointActionRow {
+                    add: Some(first_add.clone()),
+                    ..Default::default()
+                },
+            ],
+            vec![CheckpointActionRow {
+                add: Some(second_add.clone()),
+                ..Default::default()
+            }],
+        ];
+        for (index, rows) in part_rows.iter().enumerate() {
+            let part = index + 1;
+            let path = Path::from(format!(
+                "_delta_log/00000000000000000002.checkpoint.{part:010}.0000000003.parquet"
+            ));
+            put_parquet_batch(store.clone(), path, encode_rows_for_test(rows)?).await?;
+        }
+        let hint = LastCheckpointHint {
+            version: 2,
+            size: Some(4),
+            parts: Some(3),
+            ..Default::default()
+        };
+        store
+            .put(&last_checkpoint_path(), serde_json::to_vec(&hint)?.into())
+            .await?;
+
+        let table_url = Url::parse("memory:///").map_err(DeltaTableError::generic_err)?;
+        let log_store = default_logstore(store.clone(), store.clone(), &table_url, &StorageConfig);
+        let state = load_replayed_table_state(2, log_store.as_ref(), None).await?;
+        assert_eq!(state.protocol, protocol);
+        assert_eq!(state.metadata, metadata);
+        assert_eq!(
+            state
+                .adds
+                .iter()
+                .map(|add| add.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["part-001.parquet", "part-002.parquet"]
+        );
+
+        let segment = list_log_segment_files(&log_store, 2).await?;
+        assert_eq!(
+            segment.checkpoint_files,
+            vec![
+                "00000000000000000002.checkpoint.0000000001.0000000003.parquet",
+                "00000000000000000002.checkpoint.0000000002.0000000003.parquet",
+                "00000000000000000002.checkpoint.0000000003.0000000003.parquet",
+            ]
         );
         Ok(())
     }
