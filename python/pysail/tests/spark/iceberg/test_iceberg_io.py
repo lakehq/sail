@@ -531,3 +531,27 @@ def test_iceberg_io_multiple_files(spark, sql_catalog):
         assert result_df.count() == 4  # noqa: PLR2004
     finally:
         sql_catalog.drop_table(f"default.{table_name}")
+
+
+def test_iceberg_read_ignores_stale_version_hint(spark, tmp_path):
+    table_path = tmp_path / "iceberg_stale_version_hint"
+    table_location = table_path.as_uri()
+    table_name = "iceberg_stale_version_hint_test"
+
+    spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (id INT, value STRING)
+            USING ICEBERG
+            LOCATION '{escape_sql_string_literal(table_location)}'
+            """
+        )
+        spark.sql(f"INSERT INTO {table_name} VALUES (1, 'first')")  # noqa: S608
+        spark.sql(f"INSERT INTO {table_name} VALUES (2, 'second')")  # noqa: S608
+        (table_path / "metadata" / "version-hint.text").write_text("1", encoding="utf-8")
+
+        rows = spark.read.format("iceberg").load(table_location).orderBy("id").collect()
+        assert [(row.id, row.value) for row in rows] == [(1, "first"), (2, "second")]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")

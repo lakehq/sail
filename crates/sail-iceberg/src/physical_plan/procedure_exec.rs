@@ -14,9 +14,8 @@ use sail_physical_plan::lake_procedure::prepare_lake_procedure_execution;
 
 use crate::operations::SnapshotUpdateKind;
 use crate::physical_plan::commit::commit_exec::IcebergCommitExec;
-use crate::procedure::RewriteDataFilesPlan;
-use crate::procedure::execute_iceberg_procedure;
 use crate::procedure::table::ProcedureTable;
+use crate::procedure::{RewriteDataFilesPlan, execute_iceberg_procedure};
 
 /// Provider-owned leaf implementation of Iceberg procedures.
 ///

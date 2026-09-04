@@ -86,7 +86,7 @@ impl JobScheduler {
                     inputs: stage
                         .inputs
                         .iter()
-                        .map(|input| sail_common_datafusion::system::types::StageInput {
+                        .map(|input| sail_system_store::types::StageInput {
                             stage: input.stage as u64,
                             mode: input.mode.to_string(),
                         })

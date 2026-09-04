@@ -6,9 +6,10 @@ use std::ops::Bound;
 
 use crate::SystemStoreError;
 use crate::model::{
-    JobTable, MetricAttributeIndex, MetricNameIndex, MetricPointOrdinalTable, MetricPointSeries,
-    MetricSeriesIdentityIndex, MetricSeriesTable, NextMetricSeriesIdTable, OptionTable,
-    SessionTable, StageTable, StoreIndex, StoreSeries, StoreTable, TaskTable, WorkerTable,
+    JobTable, MetricAttributeIndex, MetricFloatPointSeries, MetricHistogramPointSeries,
+    MetricIntegerPointSeries, MetricNameIndex, MetricSeriesIdentityTable, MetricSeriesTable,
+    NextMetricSeriesIdTable, OptionTable, SessionTable, StageTable, StoreIndex, StoreSeries,
+    StoreTable, TaskTable, WorkerTable,
 };
 
 /// Primitive reads of one typed table.
@@ -29,7 +30,6 @@ pub trait TableWriter<T: StoreTable, E>: TableReader<T, E> {
 
 /// Primitive reads of one typed multi-value index.
 pub trait IndexReader<T: StoreIndex, E> {
-    fn get(&self, key: &T::Key) -> Result<Vec<T::Value>, E>;
     fn scan(
         &self,
         lower: Bound<T::Key>,
@@ -125,10 +125,6 @@ pub struct Index<'a, T, R, E> {
 }
 
 impl<T: StoreIndex, R: IndexReader<T, E>, E> Index<'_, T, R, E> {
-    pub fn get(&self, key: &T::Key) -> Result<Vec<T::Value>, E> {
-        IndexReader::<T, E>::get(self.reader, key)
-    }
-
     pub fn scan(
         &self,
         lower: Bound<T::Key>,
@@ -196,11 +192,12 @@ pub trait StoreReader:
     + TableReader<WorkerTable, Self::Error>
     + TableReader<NextMetricSeriesIdTable, Self::Error>
     + TableReader<MetricSeriesTable, Self::Error>
-    + TableReader<MetricPointOrdinalTable, Self::Error>
-    + IndexReader<MetricSeriesIdentityIndex, Self::Error>
+    + TableReader<MetricSeriesIdentityTable, Self::Error>
     + IndexReader<MetricNameIndex, Self::Error>
     + IndexReader<MetricAttributeIndex, Self::Error>
-    + SeriesReader<MetricPointSeries, Self::Error>
+    + SeriesReader<MetricIntegerPointSeries, Self::Error>
+    + SeriesReader<MetricFloatPointSeries, Self::Error>
+    + SeriesReader<MetricHistogramPointSeries, Self::Error>
 {
     type Error: Into<SystemStoreError>;
 
@@ -246,11 +243,12 @@ pub trait StoreWriter:
     + TableWriter<WorkerTable, <Self as StoreReader>::Error>
     + TableWriter<NextMetricSeriesIdTable, <Self as StoreReader>::Error>
     + TableWriter<MetricSeriesTable, <Self as StoreReader>::Error>
-    + TableWriter<MetricPointOrdinalTable, <Self as StoreReader>::Error>
-    + IndexWriter<MetricSeriesIdentityIndex, <Self as StoreReader>::Error>
+    + TableWriter<MetricSeriesIdentityTable, <Self as StoreReader>::Error>
     + IndexWriter<MetricNameIndex, <Self as StoreReader>::Error>
     + IndexWriter<MetricAttributeIndex, <Self as StoreReader>::Error>
-    + SeriesWriter<MetricPointSeries, <Self as StoreReader>::Error>
+    + SeriesWriter<MetricIntegerPointSeries, <Self as StoreReader>::Error>
+    + SeriesWriter<MetricFloatPointSeries, <Self as StoreReader>::Error>
+    + SeriesWriter<MetricHistogramPointSeries, <Self as StoreReader>::Error>
 {
     fn table_mut<T: StoreTable>(&mut self) -> TableMut<'_, T, Self, Self::Error>
     where

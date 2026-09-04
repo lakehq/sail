@@ -80,23 +80,19 @@ impl IcebergCatalogCommitMode {
             {
                 return Ok(Self::MetadataLocationCas);
             }
-            return Ok(match context.commit {
-                CommitAuthority::IcebergMetadataLocationCas => Self::MetadataLocationCas,
+            return match context.commit {
+                CommitAuthority::IcebergMetadataLocationCas => Ok(Self::MetadataLocationCas),
                 CommitAuthority::IcebergRestCommit | CommitAuthority::VersionedCatalogCommit => {
-                    Self::CatalogCommit
+                    Ok(Self::CatalogCommit)
                 }
-                CommitAuthority::Filesystem => Self::Filesystem,
-                CommitAuthority::ReadOnly => {
-                    return plan_err!(
-                        "Iceberg metadata commit is forbidden by the resolved read-only catalog authority"
-                    );
-                }
-                CommitAuthority::DeltaRatifiedCommit => {
-                    return plan_err!(
-                        "Delta ratified commit authority cannot be used for an Iceberg metadata commit"
-                    );
-                }
-            });
+                CommitAuthority::Filesystem => Ok(Self::Filesystem),
+                CommitAuthority::ReadOnly => plan_err!(
+                    "Iceberg metadata commit is forbidden by the resolved read-only catalog authority"
+                ),
+                CommitAuthority::DeltaRatifiedCommit => plan_err!(
+                    "Delta ratified commit authority cannot be used for an Iceberg metadata commit"
+                ),
+            };
         }
 
         if catalog_table_info.is_catalog_managed_iceberg_table
@@ -345,32 +341,24 @@ mod tests {
     }
 
     #[test]
-    fn read_only_authority_never_falls_back_to_filesystem_commit() -> Result<()> {
-        let context = iceberg_context(CommitAuthority::ReadOnly);
-        let Err(error) =
-            IcebergCatalogCommitMode::resolve(Some(&context), &CatalogTableInfo::default(), &[])
-        else {
-            return plan_err!("read-only authority unexpectedly allowed metadata commit");
-        };
-
-        assert!(error.to_string().contains("read-only catalog authority"));
-        Ok(())
-    }
-
-    #[test]
-    fn foreign_commit_authority_never_falls_back_to_filesystem_commit() -> Result<()> {
-        let context = iceberg_context(CommitAuthority::DeltaRatifiedCommit);
-        let Err(error) =
-            IcebergCatalogCommitMode::resolve(Some(&context), &CatalogTableInfo::default(), &[])
-        else {
-            return plan_err!("Delta authority unexpectedly allowed Iceberg metadata commit");
-        };
-
-        assert!(
-            error
-                .to_string()
-                .contains("Delta ratified commit authority")
-        );
+    fn incompatible_commit_authorities_never_fall_back_to_filesystem() -> Result<()> {
+        for (authority, expected_message) in [
+            (CommitAuthority::ReadOnly, "read-only catalog authority"),
+            (
+                CommitAuthority::DeltaRatifiedCommit,
+                "Delta ratified commit authority",
+            ),
+        ] {
+            let context = iceberg_context(authority);
+            let Err(error) = IcebergCatalogCommitMode::resolve(
+                Some(&context),
+                &CatalogTableInfo::default(),
+                &[],
+            ) else {
+                return plan_err!("incompatible authority unexpectedly allowed metadata commit");
+            };
+            assert!(error.to_string().contains(expected_message));
+        }
         Ok(())
     }
 }

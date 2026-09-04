@@ -8,9 +8,9 @@ use datafusion::common::runtime::set_join_set_tracer;
 use fastrace::collector::{Config, Reporter, SpanRecord};
 use fastrace_opentelemetry::OpenTelemetryReporter;
 use log::{Log, debug};
+use opentelemetry::InstrumentationScope;
 use opentelemetry::logs::LoggerProvider;
-use opentelemetry::metrics::Meter;
-use opentelemetry::{InstrumentationScope, global};
+use opentelemetry::metrics::{Meter, MeterProvider};
 use opentelemetry_appender_log::OpenTelemetryLogBridge;
 use opentelemetry_otlp::{LogExporter, Protocol, WithExportConfig};
 use opentelemetry_sdk::Resource;
@@ -47,9 +47,6 @@ struct TelemetryState {
     runtime: Option<tokio::runtime::Handle>,
     actor_system: Option<ActorSystem>,
     system_store: Option<SystemStoreHandle>,
-    system_store_reader: Option<SystemStoreReader>,
-    system_event_reporter: Option<SystemEventReporter>,
-    system_metric_reporter: Option<SystemMetricReporter>,
 }
 
 static TELEMETRY_STATUS: Mutex<TelemetryStatus> = Mutex::new(TelemetryStatus::Uninitialized);
@@ -100,6 +97,9 @@ fn init_system_store(
     state: &mut TelemetryState,
     resource: &ResourceOptions,
 ) -> TelemetryResult<()> {
+    state.runtime = Some(tokio::runtime::Handle::try_current().map_err(|error| {
+        TelemetryError::internal(format!("failed to get runtime handle: {error}"))
+    })?);
     // The system catalog is owned by server processes. Workers report telemetry to the driver
     // and must not open the configured store path themselves.
     if resource.kind == ResourceKind::Worker {
@@ -113,7 +113,6 @@ fn init_system_store(
     .map_err(|error| {
         TelemetryError::internal(format!("failed to initialize system store: {error}"))
     })?;
-    state.system_store_reader = Some(handle.reader());
     state.system_store = Some(handle);
     state.actor_system = Some(actor_system);
     Ok(())
@@ -161,9 +160,11 @@ fn init_metrics(
             let target = if resource.kind == ResourceKind::Worker {
                 SystemMetricExporterTarget::Remote
             } else {
-                SystemMetricExporterTarget::Local(state.system_metric_reporter.clone().ok_or_else(
-                    || TelemetryError::internal("system store telemetry is not initialized"),
-                )?)
+                SystemMetricExporterTarget::Local(SystemMetricReporter::new(
+                    state.system_store.clone().ok_or_else(|| {
+                        TelemetryError::internal("system store telemetry is not initialized")
+                    })?,
+                ))
             };
             let system_reader = PeriodicReader::builder(SystemMetricExporter::new(target))
                 .with_interval(Duration::from_secs(config.metrics_export_interval_secs))
@@ -186,8 +187,7 @@ fn init_metrics(
             provider = provider.with_reader(reader);
         }
         let provider = provider.build();
-        global::set_meter_provider(provider.clone());
-        let meter = global::meter_with_scope(get_instrumentation_scope());
+        let meter = provider.meter_with_scope(get_instrumentation_scope());
         state.meter_provider = Some(provider);
         state.metrics = Some(MetricManager {
             registry: Arc::new(MetricRegistry::new(&meter)),
@@ -218,11 +218,7 @@ fn init_logs(
     let max_level = primary.filter();
 
     let mut secondary: Vec<Box<dyn Log>> = vec![];
-    let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
-        TelemetryError::internal(format!("failed to get runtime handle: {error}"))
-    })?;
     let system_store = state.system_store.clone();
-    let system_metric_reporter = system_store.clone().map(SystemMetricReporter::new);
     let mut provider = SdkLoggerProvider::builder().with_resource(get_resource(resource));
     if let Some(store) = system_store {
         provider = provider.with_log_processor(SystemEventLogProcessor::new(store));
@@ -257,11 +253,6 @@ fn init_logs(
     if config.export_logs && config.exporter.otlp.endpoint.is_some() {
         secondary.push(Box::new(OpenTelemetryLogBridge::new(&provider)));
     }
-    state.system_event_reporter = Some(SystemEventReporter::new(
-        provider.logger_with_scope(get_instrumentation_scope()),
-    ));
-    state.system_metric_reporter = system_metric_reporter;
-    state.runtime = Some(runtime);
     state.logger_provider = Some(provider);
     if config.export_traces && config.exporter.otlp.endpoint.is_some() {
         secondary.push(Box::new(SpanEventLogger));
@@ -326,7 +317,9 @@ pub fn global_system_store_reader() -> Option<SystemStoreReader> {
         .lock()
         .ok()
         .and_then(|status| match &*status {
-            TelemetryStatus::Initialized(state) => state.system_store_reader.clone(),
+            TelemetryStatus::Initialized(state) => {
+                state.system_store.as_ref().map(SystemStoreHandle::reader)
+            }
             _ => None,
         })
 }
@@ -336,7 +329,9 @@ pub fn global_system_event_reporter() -> Option<SystemEventReporter> {
         .lock()
         .ok()
         .and_then(|status| match &*status {
-            TelemetryStatus::Initialized(state) => state.system_event_reporter.clone(),
+            TelemetryStatus::Initialized(state) => state.logger_provider.as_ref().map(|provider| {
+                SystemEventReporter::new(provider.logger_with_scope(get_instrumentation_scope()))
+            }),
             _ => None,
         })
 }
@@ -346,7 +341,9 @@ pub fn global_system_metric_reporter() -> Option<SystemMetricReporter> {
         .lock()
         .ok()
         .and_then(|status| match &*status {
-            TelemetryStatus::Initialized(state) => state.system_metric_reporter.clone(),
+            TelemetryStatus::Initialized(state) => {
+                state.system_store.clone().map(SystemMetricReporter::new)
+            }
             _ => None,
         })
 }
@@ -368,7 +365,7 @@ fn get_otlp_protocol(protocol: &OtlpProtocol) -> Protocol {
 
 fn get_resource(resource: &ResourceOptions) -> Resource {
     Resource::builder()
-        .with_service_name(format!("sail-{}", resource.kind.as_str()))
+        .with_service_name(resource.kind.service_name())
         .build()
 }
 

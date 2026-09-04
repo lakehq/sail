@@ -99,6 +99,41 @@ fn manifest_list_schema(include_first_row_id: bool) -> AvroSchema {
     })
 }
 
+fn manifest_list_schema_v1() -> AvroSchema {
+    let fields = vec![
+        record_field("manifest_path", AvroSchema::String, 500, true),
+        record_field("manifest_length", AvroSchema::Long, 501, true),
+        record_field("partition_spec_id", AvroSchema::Int, 502, true),
+        record_field("added_snapshot_id", AvroSchema::Long, 503, true),
+        record_field("added_files_count", AvroSchema::Int, 504, false),
+        record_field("existing_files_count", AvroSchema::Int, 505, false),
+        record_field("deleted_files_count", AvroSchema::Int, 506, false),
+        record_field("added_rows_count", AvroSchema::Long, 512, false),
+        record_field("existing_rows_count", AvroSchema::Long, 513, false),
+        record_field("deleted_rows_count", AvroSchema::Long, 514, false),
+        partitions_field(),
+        record_field("key_metadata", AvroSchema::Bytes, 519, false),
+    ];
+    let lookup = fields
+        .iter()
+        .enumerate()
+        .map(|(index, field)| (field.name.clone(), index))
+        .collect();
+
+    AvroSchema::Record(RecordSchema {
+        #[expect(clippy::unwrap_used)]
+        name: Name::new("manifest_file").unwrap_or_else(|_| Name::new("manifest_file").unwrap()),
+        aliases: None,
+        doc: None,
+        fields,
+        lookup,
+        attributes: Default::default(),
+    })
+}
+
+/// Typed Avro schema for manifest list V1 entries (record name: manifest_file).
+pub static MANIFEST_LIST_AVRO_SCHEMA_V1: Lazy<AvroSchema> = Lazy::new(manifest_list_schema_v1);
+
 /// Typed Avro schema for manifest list V2 entries (record name: manifest_file)
 pub static MANIFEST_LIST_AVRO_SCHEMA_V2: Lazy<AvroSchema> =
     Lazy::new(|| manifest_list_schema(false));
@@ -106,5 +141,3 @@ pub static MANIFEST_LIST_AVRO_SCHEMA_V2: Lazy<AvroSchema> =
 /// Typed Avro schema for manifest list V3 entries (record name: manifest_file)
 pub static MANIFEST_LIST_AVRO_SCHEMA_V3: Lazy<AvroSchema> =
     Lazy::new(|| manifest_list_schema(true));
-
-// TODO(V1): Add MANIFEST_LIST_AVRO_SCHEMA_V1 when implementing typed V1 writer

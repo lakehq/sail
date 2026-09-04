@@ -1,28 +1,24 @@
 //! System store mutations.
 
-use std::ops::Bound;
-
 use chrono::{DateTime, Utc};
-use sail_common_datafusion::system::catalog::{
-    JobRow, OptionRow, SessionRow, StageRow, TaskRow, WorkerRow,
-};
-use sail_common_datafusion::system::predicate::TimestampMicros;
-use sail_common_datafusion::system::types::{MetricValue, StageInput};
 use serde::{Deserialize, Serialize};
 
 use crate::SystemEvent;
 use crate::access::{StoreReader, StoreWriter};
+use crate::catalog::{JobRow, OptionRow, SessionRow, StageRow, TaskRow, WorkerRow};
 use crate::event::{
     is_job_stopped, is_session_deleted, is_stage_stopped, is_task_stopped, is_worker_stopped,
 };
 use crate::model::{
     JobPrimaryKey, JobTable, MetricAttributeIndex, MetricAttributeKey, MetricAttributes,
-    MetricNameIndex, MetricPointKey, MetricPointOrdinalKey, MetricPointOrdinalTable,
-    MetricPointSeries, MetricSeriesIdentityIndex, MetricSeriesKey, MetricSeriesMetadata,
-    MetricSeriesTable, NextMetricSeriesIdTable, OptionPrimaryKey, OptionTable, SessionPrimaryKey,
-    SessionTable, StagePrimaryKey, StageTable, TaskPrimaryKey, TaskTable, WorkerPrimaryKey,
-    WorkerTable,
+    MetricFloatPointSeries, MetricHistogramPointSeries, MetricIntegerPointSeries, MetricNameIndex,
+    MetricPointValue, MetricSeriesIdentityTable, MetricSeriesKey, MetricSeriesKind,
+    MetricSeriesMetadata, MetricSeriesTable, NextMetricSeriesIdTable, OptionPrimaryKey,
+    OptionTable, SessionPrimaryKey, SessionTable, StagePrimaryKey, StageTable, TaskPrimaryKey,
+    TaskTable, WorkerPrimaryKey, WorkerTable,
 };
+use crate::predicate::TimestampMicros;
+use crate::types::{MetricNumber, MetricValue, StageInput};
 
 type WriteResult<W> = Result<(), <W as StoreReader>::Error>;
 
@@ -32,7 +28,18 @@ pub struct MetricSample {
     pub name: String,
     pub attributes: MetricAttributes,
     pub timestamp: TimestampMicros,
+    pub start_timestamp: Option<TimestampMicros>,
     pub value: MetricValue,
+}
+
+fn metric_series_kind(value: &MetricValue) -> MetricSeriesKind {
+    match value {
+        MetricValue::Count(MetricNumber::Integer(_)) => MetricSeriesKind::IntegerCount,
+        MetricValue::Count(MetricNumber::Float(_)) => MetricSeriesKind::FloatCount,
+        MetricValue::Gauge(MetricNumber::Integer(_)) => MetricSeriesKind::IntegerGauge,
+        MetricValue::Gauge(MetricNumber::Float(_)) => MetricSeriesKind::FloatGauge,
+        MetricValue::Histogram(_) => MetricSeriesKind::Histogram,
+    }
 }
 
 /// Writes an event using only the backend-neutral typed writer surface.
@@ -444,16 +451,13 @@ where
     W: StoreWriter,
 {
     for sample in samples {
+        let kind = metric_series_kind(&sample.value);
         let identity = MetricSeriesKey {
             name: sample.name.clone(),
             attributes: sample.attributes.clone(),
+            kind,
         };
-        let id = match writer
-            .index::<MetricSeriesIdentityIndex>()
-            .get(&identity)?
-            .first()
-            .copied()
-        {
+        let id = match writer.table::<MetricSeriesIdentityTable>().get(&identity)? {
             Some(id) => id,
             None => {
                 let next_key = ();
@@ -470,10 +474,11 @@ where
                         id,
                         name: sample.name.clone(),
                         attributes: sample.attributes.clone(),
+                        kind,
                     },
                 )?;
                 writer
-                    .index_mut::<MetricSeriesIdentityIndex>()
+                    .table_mut::<MetricSeriesIdentityTable>()
                     .put(identity, id)?;
                 writer
                     .index_mut::<MetricNameIndex>()
@@ -490,47 +495,40 @@ where
                 id
             }
         };
-        let ordinal_key = MetricPointOrdinalKey {
-            series: id,
-            timestamp: sample.timestamp,
-        };
-        let ordinal = match writer
-            .table::<MetricPointOrdinalTable>()
-            .get(&ordinal_key)?
-        {
-            Some(ordinal) => ordinal,
-            None => {
-                // Initialize the counter from any points written before the counter table existed.
-                let mut ordinal = 0_u64;
-                writer.series::<MetricPointSeries>().scan(
-                    &id,
-                    Bound::Included(MetricPointKey {
-                        timestamp: sample.timestamp,
-                        ordinal: 0,
-                    }),
-                    Bound::Included(MetricPointKey {
-                        timestamp: sample.timestamp,
-                        ordinal: u64::MAX,
-                    }),
-                    &mut |_, _| {
-                        ordinal = ordinal.saturating_add(1);
-                        true
+        match sample.value {
+            MetricValue::Count(MetricNumber::Integer(value))
+            | MetricValue::Gauge(MetricNumber::Integer(value)) => {
+                writer.series_mut::<MetricIntegerPointSeries>().put(
+                    id,
+                    sample.timestamp,
+                    MetricPointValue {
+                        start_timestamp: sample.start_timestamp,
+                        value,
                     },
-                )?;
-                ordinal
+                )?
             }
-        };
-        writer
-            .table_mut::<MetricPointOrdinalTable>()
-            .put(ordinal_key, ordinal.saturating_add(1))?;
-        writer.series_mut::<MetricPointSeries>().put(
-            id,
-            MetricPointKey {
-                timestamp: sample.timestamp,
-                ordinal,
-            },
-            sample.value,
-        )?;
+            MetricValue::Count(MetricNumber::Float(value))
+            | MetricValue::Gauge(MetricNumber::Float(value)) => {
+                writer.series_mut::<MetricFloatPointSeries>().put(
+                    id,
+                    sample.timestamp,
+                    MetricPointValue {
+                        start_timestamp: sample.start_timestamp,
+                        value,
+                    },
+                )?
+            }
+            MetricValue::Histogram(value) => {
+                writer.series_mut::<MetricHistogramPointSeries>().put(
+                    id,
+                    sample.timestamp,
+                    MetricPointValue {
+                        start_timestamp: sample.start_timestamp,
+                        value,
+                    },
+                )?
+            }
+        }
     }
     Ok(())
 }

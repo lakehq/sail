@@ -19,6 +19,7 @@
 
 pub mod values;
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
 use std::ops::Index;
@@ -343,40 +344,22 @@ impl PrimitiveType {
         )
     }
 
-    /// Encode a primitive literal using Iceberg's single-value binary representation.
-    pub fn literal_to_bytes(&self, literal: &PrimitiveLiteral) -> Result<Vec<u8>, String> {
-        if !self.compatible(literal) {
-            return Err(format!(
-                "Literal is not compatible with Iceberg type {self}"
-            ));
-        }
-        let bytes = match literal {
-            PrimitiveLiteral::Boolean(value) => vec![u8::from(*value)],
-            PrimitiveLiteral::Int(value) => value.to_le_bytes().to_vec(),
-            PrimitiveLiteral::Long(value) => value.to_le_bytes().to_vec(),
-            PrimitiveLiteral::Float(value) => value.0.to_le_bytes().to_vec(),
-            PrimitiveLiteral::Double(value) => value.0.to_le_bytes().to_vec(),
-            PrimitiveLiteral::Int128(value) => {
-                let bytes = value.to_be_bytes();
-                let mut start = 0;
-                while start < bytes.len() - 1 {
-                    let current = bytes[start];
-                    let next = bytes[start + 1];
-                    let redundant_positive = current == 0x00 && (next & 0x80) == 0;
-                    let redundant_negative = current == 0xff && (next & 0x80) != 0;
-                    if redundant_positive || redundant_negative {
-                        start += 1;
-                    } else {
-                        break;
-                    }
-                }
-                bytes[start..].to_vec()
+    /// Return a literal that uses this type's representation, applying Iceberg's
+    /// supported primitive promotions when necessary.
+    pub(crate) fn promote_literal<'a>(
+        &self,
+        literal: &'a PrimitiveLiteral,
+    ) -> Option<Cow<'a, PrimitiveLiteral>> {
+        match (self, literal) {
+            (PrimitiveType::Long, PrimitiveLiteral::Int(value)) => {
+                Some(Cow::Owned(PrimitiveLiteral::Long(i64::from(*value))))
             }
-            PrimitiveLiteral::String(value) => value.as_bytes().to_vec(),
-            PrimitiveLiteral::UInt128(value) => value.to_be_bytes().to_vec(),
-            PrimitiveLiteral::Binary(value) => value.clone(),
-        };
-        Ok(bytes)
+            (PrimitiveType::Double, PrimitiveLiteral::Float(value)) => Some(Cow::Owned(
+                PrimitiveLiteral::Double(OrderedFloat(f64::from(value.into_inner()))),
+            )),
+            (_, literal) if self.compatible(literal) => Some(Cow::Borrowed(literal)),
+            _ => None,
+        }
     }
 
     /// Decode a PrimitiveLiteral from the serialized bound bytes that appear in manifests.
@@ -447,11 +430,12 @@ impl PrimitiveType {
                     .to_string();
                 PL::String(val)
             }
-            PrimitiveType::Uuid => PL::UInt128(u128::from_be_bytes(
-                bytes
+            PrimitiveType::Uuid => {
+                let bytes: [u8; 16] = bytes
                     .try_into()
-                    .map_err(|_| "Invalid UUID bytes".to_string())?,
-            )),
+                    .map_err(|_| "Invalid UUID bound bytes".to_string())?;
+                PL::UInt128(u128::from_be_bytes(bytes))
+            }
             PrimitiveType::Fixed(_)
             | PrimitiveType::Binary
             | PrimitiveType::Variant
@@ -459,12 +443,12 @@ impl PrimitiveType {
             | PrimitiveType::Geography { .. } => PL::Binary(bytes.to_vec()),
             PrimitiveType::Decimal { .. } => {
                 if bytes.is_empty() || bytes.len() > 16 {
-                    return Err("Invalid decimal bytes".to_string());
+                    return Err("Invalid decimal bound bytes".to_string());
                 }
-                let fill = if bytes[0] & 0x80 == 0 { 0x00 } else { 0xff };
-                let mut value = [fill; 16];
-                value[16 - bytes.len()..].copy_from_slice(bytes);
-                PL::Int128(i128::from_be_bytes(value))
+                let sign_extension = if bytes[0] & 0x80 == 0 { 0 } else { u8::MAX };
+                let mut extended = [sign_extension; 16];
+                extended[16 - bytes.len()..].copy_from_slice(bytes);
+                PL::Int128(i128::from_be_bytes(extended))
             }
             PrimitiveType::Unknown => {
                 return Err("unknown bound decoding is only valid for null values".to_string());
@@ -472,57 +456,6 @@ impl PrimitiveType {
         };
 
         Ok(literal)
-    }
-}
-
-#[cfg(test)]
-#[expect(clippy::expect_used)]
-mod primitive_literal_binary_tests {
-    use super::{PrimitiveLiteral, PrimitiveType};
-
-    #[test]
-    fn decimal_uses_minimal_signed_big_endian_bytes() {
-        let decimal = PrimitiveType::Decimal {
-            precision: 38,
-            scale: 0,
-        };
-        let cases = [
-            (-129, vec![0xff, 0x7f]),
-            (-128, vec![0x80]),
-            (-1, vec![0xff]),
-            (0, vec![0x00]),
-            (127, vec![0x7f]),
-            (128, vec![0x00, 0x80]),
-        ];
-
-        for (value, expected) in cases {
-            let literal = PrimitiveLiteral::Int128(value);
-            let encoded = decimal.literal_to_bytes(&literal).expect("encode decimal");
-            assert_eq!(encoded, expected);
-            assert_eq!(
-                decimal
-                    .literal_from_bytes(&encoded)
-                    .expect("decode decimal"),
-                literal
-            );
-        }
-    }
-
-    #[test]
-    fn uuid_uses_sixteen_big_endian_bytes() {
-        let value = 0x00112233445566778899aabbccddeeff_u128;
-        let literal = PrimitiveLiteral::UInt128(value);
-        let encoded = PrimitiveType::Uuid
-            .literal_to_bytes(&literal)
-            .expect("encode UUID");
-
-        assert_eq!(encoded, value.to_be_bytes());
-        assert_eq!(
-            PrimitiveType::Uuid
-                .literal_from_bytes(&encoded)
-                .expect("decode UUID"),
-            literal
-        );
     }
 }
 

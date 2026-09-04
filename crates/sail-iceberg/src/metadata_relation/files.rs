@@ -240,10 +240,7 @@ fn bound_map_scalar(
         entries
             .into_iter()
             .map(|(key, datum)| {
-                let bytes = datum
-                    .r#type
-                    .literal_to_bytes(&datum.literal)
-                    .map_err(DataFusionError::Plan)?;
+                let bytes = datum.to_bytes().map_err(DataFusionError::Plan)?;
                 Ok((
                     Literal::Primitive(PrimitiveLiteral::Int(*key)),
                     Some(Literal::Primitive(PrimitiveLiteral::Binary(bytes))),

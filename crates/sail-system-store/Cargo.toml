@@ -12,12 +12,26 @@ sail-common-datafusion = { path = "../sail-common-datafusion" }
 
 chrono = { workspace = true }
 datafusion = { workspace = true }
+datafusion-common = { workspace = true }
+arrow-schema = { workspace = true }
 fjall = { workspace = true }
 log = { workspace = true }
+postcard = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
+smallvec = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+parquet-variant-compute = { workspace = true }
+
+[build-dependencies]
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+syn = { workspace = true }
+prettyplease = { workspace = true }
+regex = { workspace = true }
+quote = { workspace = true }
+proc-macro2 = { workspace = true }
+lazy_static = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

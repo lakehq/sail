@@ -18,7 +18,6 @@
 // [CREDIT]: https://raw.githubusercontent.com/apache/iceberg-rust/dc349284a4204c1a56af47fb3177ace6f9e899a0/crates/iceberg/src/spec/manifest/writer.rs
 
 use std::cmp::Ordering;
-use std::iter;
 use std::sync::Arc;
 
 use apache_avro::{Writer as AvroWriter, to_value};
@@ -28,7 +27,7 @@ use super::{
 };
 use crate::spec::FormatVersion;
 use crate::spec::manifest_list::{FieldSummary, ManifestContentType, ManifestFile};
-use crate::spec::types::{Literal, PrimitiveLiteral, PrimitiveType, Type};
+use crate::spec::types::{Datum, Literal, PrimitiveLiteral, PrimitiveType, Type};
 
 #[derive(Debug, Default)]
 struct PartitionFieldStats {
@@ -38,7 +37,7 @@ struct PartitionFieldStats {
     upper_bound: Option<PrimitiveLiteral>,
 }
 
-fn compare_partition_values(
+fn compare_partition_literals(
     partition_type: &PrimitiveType,
     left: &PrimitiveLiteral,
     right: &PrimitiveLiteral,
@@ -69,14 +68,6 @@ fn compare_partition_values(
     }
 }
 
-fn is_nan(value: &PrimitiveLiteral) -> bool {
-    match value {
-        PrimitiveLiteral::Float(value) => value.0.is_nan(),
-        PrimitiveLiteral::Double(value) => value.0.is_nan(),
-        _ => false,
-    }
-}
-
 fn partition_summaries(
     metadata: &ManifestMetadata,
     entries: &[ManifestEntryRef],
@@ -86,8 +77,9 @@ fn partition_summaries(
         .partition_type(&metadata.schema)
         .map_err(|error| format!("Partition type error: {error}"))?;
     let fields = partition_type.fields();
-    let mut stats = iter::repeat_with(PartitionFieldStats::default)
-        .take(fields.len())
+    let mut stats = fields
+        .iter()
+        .map(|_| PartitionFieldStats::default())
         .collect::<Vec<_>>();
 
     for entry in entries {
@@ -131,29 +123,31 @@ fn partition_summaries(
                     field.name
                 ));
             };
-            if !primitive_type.compatible(value) {
-                return Err(format!(
+            let value = primitive_type.promote_literal(value).ok_or_else(|| {
+                format!(
                     "Iceberg partition field `{}` value is incompatible with type {primitive_type}",
                     field.name
-                ));
-            }
-            if is_nan(value) {
+                )
+            })?;
+            let value = value.as_ref();
+            let is_nan = match value {
+                PrimitiveLiteral::Float(value) => value.0.is_nan(),
+                PrimitiveLiteral::Double(value) => value.0.is_nan(),
+                _ => false,
+            };
+            if is_nan {
                 field_stats.contains_nan = true;
                 continue;
             }
 
-            if field_stats
-                .lower_bound
-                .as_ref()
-                .is_none_or(|lower| compare_partition_values(primitive_type, value, lower).is_lt())
-            {
+            if field_stats.lower_bound.as_ref().is_none_or(|lower| {
+                compare_partition_literals(primitive_type, value, lower).is_lt()
+            }) {
                 field_stats.lower_bound = Some(value.clone());
             }
-            if field_stats
-                .upper_bound
-                .as_ref()
-                .is_none_or(|upper| compare_partition_values(primitive_type, value, upper).is_gt())
-            {
+            if field_stats.upper_bound.as_ref().is_none_or(|upper| {
+                compare_partition_literals(primitive_type, value, upper).is_gt()
+            }) {
                 field_stats.upper_bound = Some(value.clone());
             }
         }
@@ -172,12 +166,14 @@ fn partition_summaries(
             let mut summary =
                 FieldSummary::new(stats.contains_null).with_contains_nan(stats.contains_nan);
             if let Some(lower_bound) = stats.lower_bound {
-                summary =
-                    summary.with_lower_bound_bytes(primitive_type.literal_to_bytes(&lower_bound)?);
+                summary = summary.with_lower_bound_bytes(
+                    Datum::new(primitive_type.clone(), lower_bound).to_bytes()?,
+                );
             }
             if let Some(upper_bound) = stats.upper_bound {
-                summary =
-                    summary.with_upper_bound_bytes(primitive_type.literal_to_bytes(&upper_bound)?);
+                summary = summary.with_upper_bound_bytes(
+                    Datum::new(primitive_type.clone(), upper_bound).to_bytes()?,
+                );
             }
             Ok(summary)
         })
@@ -233,6 +229,10 @@ impl ManifestWriter {
 
     pub fn add(&mut self, file: DataFile) {
         let entry = ManifestEntry::new(ManifestStatus::Added, self.snapshot_id, None, None, file);
+        self.entries.push(Arc::new(entry));
+    }
+
+    pub fn add_entry(&mut self, entry: ManifestEntry) {
         self.entries.push(Arc::new(entry));
     }
 
@@ -306,13 +306,25 @@ impl ManifestWriter {
             .filter(|e| matches!(e.status, ManifestStatus::Deleted))
             .map(|e| e.data_file.record_count as i64)
             .sum();
+        let min_sequence_number = self
+            .entries
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry.status,
+                    ManifestStatus::Added | ManifestStatus::Existing
+                )
+            })
+            .map(|entry| entry.sequence_number.unwrap_or(sequence_number))
+            .min()
+            .unwrap_or(sequence_number);
         Ok(ManifestFile {
             manifest_path,
             manifest_length: 0,
             partition_spec_id: self.metadata.partition_spec.spec_id(),
             content: self.metadata.content,
             sequence_number,
-            min_sequence_number: sequence_number,
+            min_sequence_number,
             added_snapshot_id: snapshot_id,
             added_files_count: Some(added),
             existing_files_count: Some(existing),
@@ -333,8 +345,9 @@ impl ManifestWriter {
             .partition_spec
             .partition_type(&self.metadata.schema)
             .map_err(|e| format!("Partition type error: {e}"))?;
-        let avro_schema = super::schema::manifest_entry_schema_v2(&partition_type);
-        let mut writer = AvroWriter::new(&avro_schema, Vec::new());
+        let (declared_schema, encoding_schema) =
+            super::schema::manifest_entry_schemas(&partition_type, self.metadata.format_version);
+        let mut writer = AvroWriter::new(&encoding_schema, Vec::new());
 
         // Add user metadata per Iceberg spec
         let schema_json = serde_json::to_vec(&self.metadata.schema)
@@ -372,21 +385,29 @@ impl ManifestWriter {
                 .map_err(|e| format!("Avro add_user_metadata error: {e}"))?;
         }
 
-        for e in &self.entries {
-            let serde_entry =
-                super::_serde::ManifestEntryV2::from_entry((*e.clone()).clone(), &partition_type)?;
-            let value = to_value(serde_entry)
-                .map_err(|e| format!("Avro to_value error: {e}"))?
-                .resolve(&avro_schema)
-                .map_err(|e| format!("Avro resolve error: {e}"))?;
+        for entry in &self.entries {
+            let entry = entry.as_ref().clone();
+            let value = match self.metadata.format_version {
+                FormatVersion::V1 => to_value(super::_serde::ManifestEntryV1::from_entry(
+                    entry,
+                    &partition_type,
+                )?),
+                FormatVersion::V2 | FormatVersion::V3 => to_value(
+                    super::_serde::ManifestEntryV2::from_entry(entry, &partition_type)?,
+                ),
+            }
+            .map_err(|e| format!("Avro to_value error: {e}"))?
+            .resolve(&encoding_schema)
+            .map_err(|e| format!("Avro resolve error: {e}"))?;
             writer
                 .append(value)
                 .map_err(|e| format!("Avro append error: {e}"))?;
         }
 
-        writer
+        let encoded = writer
             .into_inner()
-            .map_err(|e| format!("Avro writer finalize error: {e}"))
+            .map_err(|e| format!("Avro writer finalize error: {e}"))?;
+        super::replace_avro_schema_header(&encoded, &declared_schema)
     }
 }
 
@@ -398,7 +419,7 @@ mod tests {
 
     use ordered_float::OrderedFloat;
 
-    use super::{ManifestMetadata, ManifestWriterBuilder, compare_partition_values};
+    use super::{ManifestMetadata, ManifestWriterBuilder, compare_partition_literals};
     use crate::spec::{
         DataContentType, DataFile, DataFileFormat, Datum, FormatVersion, Literal, Manifest,
         ManifestContentType, NestedField, PartitionSpec, PrimitiveLiteral, PrimitiveType, Schema,
@@ -550,7 +571,7 @@ mod tests {
         let positive_high_half = PrimitiveLiteral::UInt128(1_u128 << 126);
 
         assert!(
-            compare_partition_values(&PrimitiveType::Uuid, &signed_high_bit, &positive_high_half)
+            compare_partition_literals(&PrimitiveType::Uuid, &signed_high_bit, &positive_high_half)
                 .is_lt()
         );
     }
@@ -600,5 +621,98 @@ mod tests {
             Some(&Datum::new(PrimitiveType::Long, PrimitiveLiteral::Long(20)))
         );
         assert_eq!(parsed.key_metadata.as_deref(), Some([1, 2, 3].as_slice()));
+    }
+
+    #[test]
+    fn manifest_roundtrip_preserves_fixed_decimal_and_uuid_partitions() {
+        let schema = Schema::builder()
+            .with_fields([
+                Arc::new(NestedField::new(
+                    1,
+                    "fixed_value",
+                    Type::Primitive(PrimitiveType::Fixed(3)),
+                    false,
+                )),
+                Arc::new(NestedField::new(
+                    2,
+                    "decimal_value",
+                    Type::Primitive(PrimitiveType::Decimal {
+                        precision: 9,
+                        scale: 2,
+                    }),
+                    false,
+                )),
+                Arc::new(NestedField::new(
+                    3,
+                    "uuid_value",
+                    Type::Primitive(PrimitiveType::Uuid),
+                    false,
+                )),
+                Arc::new(NestedField::new(
+                    4,
+                    "decimal_copy",
+                    Type::Primitive(PrimitiveType::Decimal {
+                        precision: 9,
+                        scale: 2,
+                    }),
+                    false,
+                )),
+                Arc::new(NestedField::new(
+                    5,
+                    "uuid_copy",
+                    Type::Primitive(PrimitiveType::Uuid),
+                    false,
+                )),
+            ])
+            .build()
+            .expect("table schema");
+        let partition_spec = PartitionSpec::builder()
+            .add_field(1, "fixed_value", Transform::Identity)
+            .add_field(2, "decimal_value", Transform::Identity)
+            .add_field(3, "uuid_value", Transform::Identity)
+            .add_field(4, "decimal_copy", Transform::Identity)
+            .add_field(5, "uuid_copy", Transform::Identity)
+            .build();
+        let metadata = ManifestMetadata::new(
+            Arc::new(schema),
+            0,
+            partition_spec,
+            FormatVersion::V2,
+            ManifestContentType::Data,
+        );
+        let expected_partition = vec![
+            Some(Literal::Primitive(PrimitiveLiteral::Binary(vec![1, 2, 3]))),
+            Some(Literal::Primitive(PrimitiveLiteral::Int128(1_234))),
+            Some(Literal::Primitive(PrimitiveLiteral::UInt128(
+                0x00112233_4455_6677_8899_aabbccddeeff,
+            ))),
+            Some(Literal::Primitive(PrimitiveLiteral::Int128(-1_234))),
+            Some(Literal::Primitive(PrimitiveLiteral::UInt128(
+                0xffeeddcc_bbaa_9988_7766_554433221100,
+            ))),
+        ];
+        let mut file = partitioned_file("data.parquet", expected_partition.clone());
+        file.content = DataContentType::Data;
+        let mut writer = ManifestWriterBuilder::new(Some(7), None, metadata).build();
+        writer.add(file);
+
+        let bytes = writer.to_avro_bytes_v2().expect("manifest bytes");
+        let header = super::super::parse_avro_object_header(&bytes).expect("Avro header");
+        let declared_schema = std::str::from_utf8(
+            header
+                .metadata
+                .get("avro.schema")
+                .expect("Avro schema header metadata"),
+        )
+        .expect("UTF-8 Avro schema");
+        assert!(declared_schema.contains("\"name\":\"fixed_3\""));
+        assert!(declared_schema.contains("\"name\":\"decimal_9_2\""));
+        assert!(declared_schema.contains("\"logicalType\":\"uuid\""));
+
+        let manifest = Manifest::parse_avro(&bytes).expect("parsed manifest");
+        assert_eq!(
+            manifest.entries()[0].data_file.partition,
+            expected_partition
+        );
     }
 }

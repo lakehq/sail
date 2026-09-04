@@ -173,9 +173,8 @@ mod tests {
     use std::collections::BTreeSet;
     use std::ops::Bound;
 
-    use sail_common_datafusion::system::predicate::ValueDomain;
-
     use super::{CandidateSet, ValueOrd};
+    use crate::predicate::ValueDomain;
 
     #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
     struct TestKey {
