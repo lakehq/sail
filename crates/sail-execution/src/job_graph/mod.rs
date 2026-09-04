@@ -92,7 +92,9 @@ impl fmt::Display for JobGraph {
             )?;
             writeln!(f, "distribution={}", stage.distribution)?;
             writeln!(f, "placement={}", stage.placement)?;
-            writeln!(f, "retry={}", stage.retry_policy)?;
+            if stage.retry_policy == TaskRetryPolicy::Never {
+                writeln!(f, "retry={}", stage.retry_policy)?;
+            }
             writeln!(f, "{}", displayable.indent(true))?;
         }
         Ok(())

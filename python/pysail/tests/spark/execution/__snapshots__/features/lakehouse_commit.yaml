@@ -356,7 +356,6 @@ data:
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     DeltaWriterExec(table_path=file://<tmp>/distributed_delta_commit/)
       RangeExec
   
@@ -366,7 +365,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Driver
-    retry=Default
     DeltaCommitExec(table_path=file://<tmp>/distributed_delta_commit/)
       StageInputExec: input=0, partitioning=UnknownPartitioning(1)
   
@@ -376,7 +374,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     StageInputExec: input=0, partitioning=UnknownPartitioning(1)
 ---
 name: "test_iceberg_commit_runs_on_the_driver_after_parallel_file_writing"
@@ -716,7 +713,6 @@ data:
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     IcebergWriterExec(table_path=file://<tmp>/distributed_iceberg_commit/)
       RangeExec
   
@@ -726,7 +722,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Driver
-    retry=Default
     IcebergCommitExec(table_path=file://<tmp>/distributed_iceberg_commit/)
       StageInputExec: input=0, partitioning=UnknownPartitioning(1)
   
@@ -736,5 +731,4 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     StageInputExec: input=0, partitioning=UnknownPartitioning(1)

@@ -1421,6 +1421,20 @@ mod tests {
     }
 
     #[test]
+    fn job_graph_display_only_includes_non_default_retry_policy() {
+        let default_graph = JobGraph::try_new(empty_plan(), flight_shuffle_options())
+            .unwrap()
+            .to_string();
+        let non_retryable_graph =
+            JobGraph::try_new(mutating_procedure_plan(), flight_shuffle_options())
+                .unwrap()
+                .to_string();
+
+        assert!(!default_graph.contains("retry="));
+        assert!(non_retryable_graph.contains("\nretry=Never\n"));
+    }
+
+    #[test]
     fn coordinator_procedure_rejects_a_multi_partition_root() {
         let input = Arc::new(
             RepartitionExec::try_new(

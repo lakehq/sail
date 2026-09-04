@@ -588,7 +588,6 @@ data:
     partitions=1
     distribution=Hash(keys=[#2@0, #3@1], channels=4)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
       DataSourceExec: partitions=1, partition_sizes=[1]
   
@@ -598,7 +597,6 @@ data:
     partitions=1
     distribution=Hash(keys=[#6@0], channels=4)
     placement=Worker
-    retry=Default
     AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
       ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
         DataSourceExec: partitions=1, partition_sizes=[1]
@@ -609,7 +607,6 @@ data:
     partitions=4
     distribution=Hash(keys=[#6@1, #8@0], channels=4)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
       AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
         StageInputExec: input=0, partitioning=Hash([#6@0], 4)
@@ -620,7 +617,6 @@ data:
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[#2@0 as #9, #3@1 as #10]
       SortExec: expr=[#2@0 ASC], preserve_partitioning=[true]
         HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#2@0, #6@1), (#3@1, #8@0)]
@@ -633,7 +629,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[#9@0 as k, #10@1 as v]
       SortPreservingMergeExec: [#9@0 ASC]
         StageInputExec: input=0, partitioning=Hash([#9@0, #10@1], 4)
@@ -1104,7 +1099,6 @@ data:
     partitions=1
     distribution=Hash(keys=[#2@0], channels=4)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
       DataSourceExec: partitions=1, partition_sizes=[1]
   
@@ -1114,7 +1108,6 @@ data:
     partitions=1
     distribution=Hash(keys=[#6@0], channels=4)
     placement=Worker
-    retry=Default
     AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
       ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
         DataSourceExec: partitions=1, partition_sizes=[1]
@@ -1125,7 +1118,6 @@ data:
     partitions=4
     distribution=Hash(keys=[#6@1], channels=4)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
       AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
         StageInputExec: input=0, partitioning=Hash([#6@0], 4)
@@ -1136,7 +1128,6 @@ data:
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     SortExec: expr=[#9@0 ASC, #10@1 ASC], preserve_partitioning=[true]
       ProjectionExec: expr=[#2@0 as #9, #3@1 as #10, #8@2 as #11]
         HashJoinExec: mode=Partitioned, join_type=Left, on=[(#2@0, #6@1)], projection=[#2@0, #3@1, #8@2]
@@ -1149,7 +1140,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[#9@0 as k, #10@1 as v, #11@2 as mx]
       SortPreservingMergeExec: [#9@0 ASC, #10@1 ASC]
         StageInputExec: input=0, partitioning=Hash([#9@0], 4)
@@ -1620,7 +1610,6 @@ data:
     partitions=1
     distribution=Hash(keys=[#2@0], channels=4)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
       DataSourceExec: partitions=1, partition_sizes=[1]
   
@@ -1630,7 +1619,6 @@ data:
     partitions=1
     distribution=Hash(keys=[#6@0], channels=4)
     placement=Worker
-    retry=Default
     AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
       ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
         DataSourceExec: partitions=1, partition_sizes=[1]
@@ -1641,7 +1629,6 @@ data:
     partitions=4
     distribution=Hash(keys=[#6@1], channels=4)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
       AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
         StageInputExec: input=0, partitioning=Hash([#6@0], 4)
@@ -1652,7 +1639,6 @@ data:
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     SortExec: expr=[#9@0 ASC], preserve_partitioning=[true]
       ProjectionExec: expr=[#2@0 as #9, #3@1 as #10, #8@2 as #11]
         HashJoinExec: mode=Partitioned, join_type=Left, on=[(#2@0, #6@1)], projection=[#2@0, #3@1, #8@2]
@@ -1665,7 +1651,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[#9@0 as k, #10@1 as v, #11@2 as mx]
       SortPreservingMergeExec: [#9@0 ASC]
         StageInputExec: input=0, partitioning=Hash([#9@0], 4)
@@ -2393,7 +2378,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[min(u.#9)@0 as #10]
       AggregateExec: mode=Single, gby=[], aggr=[min(u.#9)]
         ProjectionExec: expr=[column1@0 as #9]
@@ -2405,7 +2389,6 @@ data:
     partitions=1
     distribution=Hash(keys=[#2@0, #3@1], channels=4)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
       DataSourceExec: partitions=1, partition_sizes=[1]
   
@@ -2415,7 +2398,6 @@ data:
     partitions=1
     distribution=Hash(keys=[#6@0], channels=4)
     placement=Worker
-    retry=Default
     AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
       ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
         DataSourceExec: partitions=1, partition_sizes=[1]
@@ -2426,7 +2408,6 @@ data:
     partitions=4
     distribution=Hash(keys=[#6@1, #11@0], channels=4)
     placement=Worker
-    retry=Default
     ScalarSubqueryExec: subqueries=1
       ProjectionExec: expr=[max(inner_t.#7)@1 + scalar_subquery(<pending>) as #11, #6@0 as #6]
         AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
@@ -2439,7 +2420,6 @@ data:
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[#2@0 as #12, #3@1 as #13]
       SortExec: expr=[#2@0 ASC], preserve_partitioning=[true]
         HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#2@0, #6@1), (#3@1, #11@0)]
@@ -2452,7 +2432,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[#12@0 as k, #13@1 as v]
       SortPreservingMergeExec: [#12@0 ASC]
         StageInputExec: input=0, partitioning=Hash([#12@0, #13@1], 4)
@@ -3037,7 +3016,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[min(u.#9)@0 as #10]
       AggregateExec: mode=Single, gby=[], aggr=[min(u.#9)]
         ProjectionExec: expr=[column1@0 as #9]
@@ -3049,7 +3027,6 @@ data:
     partitions=1
     distribution=Hash(keys=[#2@0], channels=4)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
       DataSourceExec: partitions=1, partition_sizes=[1]
   
@@ -3059,7 +3036,6 @@ data:
     partitions=1
     distribution=Hash(keys=[#6@0], channels=4)
     placement=Worker
-    retry=Default
     AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
       ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
         DataSourceExec: partitions=1, partition_sizes=[1]
@@ -3070,7 +3046,6 @@ data:
     partitions=4
     distribution=Hash(keys=[#6@1], channels=4)
     placement=Worker
-    retry=Default
     ScalarSubqueryExec: subqueries=1
       ProjectionExec: expr=[max(inner_t.#7)@1 + scalar_subquery(<pending>) as #11, #6@0 as #6]
         AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
@@ -3083,7 +3058,6 @@ data:
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     SortExec: expr=[#12@0 ASC, #13@1 ASC], preserve_partitioning=[true]
       ProjectionExec: expr=[#2@0 as #12, #3@1 as #13, #11@2 as #14]
         HashJoinExec: mode=Partitioned, join_type=Left, on=[(#2@0, #6@1)], projection=[#2@0, #3@1, #11@2]
@@ -3096,7 +3070,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[#12@0 as k, #13@1 as v, #14@2 as shifted]
       SortPreservingMergeExec: [#12@0 ASC, #13@1 ASC]
         StageInputExec: input=0, partitioning=Hash([#12@0], 4)
@@ -3486,7 +3459,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[id@0 as #2]
       RangeExec
   
@@ -3496,7 +3468,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=4)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[id@0 as #0]
       RangeExec
   
@@ -3506,7 +3477,6 @@ data:
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ScalarSubqueryExec: subqueries=1
       SortExec: expr=[#3@0 ASC], preserve_partitioning=[true]
         ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4]
@@ -3519,7 +3489,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[#3@0 as v, #4@1 as shifted]
       SortPreservingMergeExec: [#3@0 ASC]
         StageInputExec: input=0, partitioning=RoundRobinBatch(4)
@@ -3930,7 +3899,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=4)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[column1@0 as #3]
       FilterExec: column1@0 > 100
         DataSourceExec: partitions=1, partition_sizes=[1]
@@ -3941,7 +3909,6 @@ data:
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[CAST(#3@0 AS Int64) as #4]
       StageInputExec: input=0, partitioning=RoundRobinBatch(4)
   
@@ -3951,7 +3918,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[#5@0 as v, #6@1 as shifted]
       ScalarSubqueryExec: subqueries=1
         SortExec: expr=[#5@0 ASC], preserve_partitioning=[false]
@@ -4405,7 +4371,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[min(s.#3)@0 as #4]
       AggregateExec: mode=Single, gby=[], aggr=[min(s.#3)]
         ProjectionExec: expr=[column1@0 as #3]
@@ -4417,7 +4382,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[max(u.#6)@0 as #7]
       AggregateExec: mode=Single, gby=[], aggr=[max(u.#6)]
         ProjectionExec: expr=[column1@0 as #6]
@@ -4429,7 +4393,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[#8@0 as total]
       ScalarSubqueryExec: subqueries=2
         ProjectionExec: expr=[sum(t.#1 + #4 + #7)@0 as #8]
@@ -4919,7 +4882,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[min(u.#5)@0 as #6]
       AggregateExec: mode=Single, gby=[], aggr=[min(u.#5)]
         ProjectionExec: expr=[column1@0 as #5]
@@ -4931,7 +4893,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ScalarSubqueryExec: subqueries=1
       ProjectionExec: expr=[CAST(min(s.#3)@0 + scalar_subquery(<pending>) AS Int64) as #7]
         AggregateExec: mode=Single, gby=[], aggr=[min(s.#3)]
@@ -4945,7 +4906,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[#8@0 as v, #9@1 as shifted]
       ScalarSubqueryExec: subqueries=1
         SortExec: expr=[#8@0 ASC], preserve_partitioning=[false]
@@ -5358,7 +5318,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[min(s.#3)@0 as #4]
       AggregateExec: mode=Single, gby=[], aggr=[min(s.#3)]
         ProjectionExec: expr=[column1@0 as #3]
@@ -5370,7 +5329,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[#5@0 as v, #6@1 as maybe_shifted]
       ScalarSubqueryExec: subqueries=1
         SortExec: expr=[#5@0 ASC], preserve_partitioning=[false]
@@ -5790,7 +5748,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[min(s.#5)@0 as #6]
       AggregateExec: mode=Single, gby=[], aggr=[min(s.#5)]
         ProjectionExec: expr=[column1@0 as #5]
@@ -5802,7 +5759,6 @@ data:
     partitions=1
     distribution=Hash(keys=[#2@0], channels=4)
     placement=Worker
-    retry=Default
     ScalarSubqueryExec: subqueries=1
       AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1)) FILTER (WHERE t.#3 > (<subquery>))]
         ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
@@ -5815,7 +5771,6 @@ data:
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[#7@0 as k, #8@1 as n]
       ScalarSubqueryExec: subqueries=1
         ProjectionExec: expr=[#2@0 as #7, count(Int64(1)) FILTER (WHERE t.#3 > (<subquery>))@1 as #8]
@@ -6279,7 +6234,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[min(s.#5)@0 as #6]
       AggregateExec: mode=Single, gby=[], aggr=[min(s.#5)]
         ProjectionExec: expr=[column1@0 as #5]
@@ -6291,7 +6245,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[#7@0 as joined]
       ScalarSubqueryExec: subqueries=1
         ProjectionExec: expr=[CASE WHEN __common_expr_1@0 IS NOT NULL THEN __common_expr_1@0 END as #7]
@@ -6757,7 +6710,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[max(s.#5)@0 as #6]
       AggregateExec: mode=Single, gby=[], aggr=[max(s.#5)]
         ProjectionExec: expr=[column1@0 as #5]
@@ -6769,7 +6721,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=4)
     placement=Worker
-    retry=Default
     ScalarSubqueryExec: subqueries=1
       ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
         FilterExec: column2@1 > scalar_subquery(<pending>)
@@ -6782,7 +6733,6 @@ data:
     partitions=4
     distribution=Hash(keys=[#2@0], channels=4)
     placement=Worker
-    retry=Default
     AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)]
       StageInputExec: input=0, partitioning=RoundRobinBatch(4)
   
@@ -6792,7 +6742,6 @@ data:
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[#7@0 as k, #8@1 as total]
       ProjectionExec: expr=[#2@0 as #7, sum(t.#3)@1 as #8]
         AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(t.#3)]
@@ -7210,7 +7159,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[min(s.#3)@0 as #4]
       AggregateExec: mode=Single, gby=[], aggr=[min(s.#3)]
         ProjectionExec: expr=[column1@0 as #3]
@@ -7222,7 +7170,6 @@ data:
     partitions=1
     distribution=Hash(keys=[g@0], channels=4)
     placement=Worker
-    retry=Default
     ScalarSubqueryExec: subqueries=1
       AggregateExec: mode=Partial, gby=[CAST(#1@0 AS Int64) + scalar_subquery(<pending>) as g], aggr=[count(Int64(1))]
         ProjectionExec: expr=[column1@0 as #1]
@@ -7235,7 +7182,6 @@ data:
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[#5@0 as g, #6@1 as n]
       ProjectionExec: expr=[g@0 as #5, count(Int64(1))@1 as #6]
         AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[count(Int64(1))]
@@ -7653,7 +7599,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[min(s.#5)@0 as #6]
       AggregateExec: mode=Single, gby=[], aggr=[min(s.#5)]
         ProjectionExec: expr=[column1@0 as #5]
@@ -7665,7 +7610,6 @@ data:
     partitions=1
     distribution=Hash(keys=[#2@0], channels=4)
     placement=Worker
-    retry=Default
     ScalarSubqueryExec: subqueries=1
       AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3 + #6)]
         ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
@@ -7678,7 +7622,6 @@ data:
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[#7@0 as k, #8@1 as total]
       ScalarSubqueryExec: subqueries=1
         ProjectionExec: expr=[#2@0 as #7, sum(t.#3 + #6)@1 as #8]
@@ -8123,7 +8066,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[CAST(min(s.#5)@0 AS Int64) as #6]
       AggregateExec: mode=Single, gby=[], aggr=[min(s.#5)]
         ProjectionExec: expr=[column1@0 as #5]
@@ -8135,7 +8077,6 @@ data:
     partitions=1
     distribution=Hash(keys=[#2@0], channels=4)
     placement=Worker
-    retry=Default
     AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)]
       ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
         DataSourceExec: partitions=1, partition_sizes=[1]
@@ -8146,7 +8087,6 @@ data:
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[#7@0 as k, #8@1 as total]
       ScalarSubqueryExec: subqueries=1
         ProjectionExec: expr=[#2@0 as #7, sum(t.#3)@1 as #8]
@@ -8658,7 +8598,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[min(s.#5)@0 as #6]
       AggregateExec: mode=Single, gby=[], aggr=[min(s.#5)]
         ProjectionExec: expr=[column1@0 as #5]
@@ -8670,7 +8609,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[#7@0 as v, #8@1 as w]
       ScalarSubqueryExec: subqueries=1
         SortExec: expr=[#7@0 ASC], preserve_partitioning=[false]
@@ -9149,7 +9087,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[min(s.#5)@0 as #6]
       AggregateExec: mode=Single, gby=[], aggr=[min(s.#5)]
         ProjectionExec: expr=[column1@0 as #5]
@@ -9161,7 +9098,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[#7@0 as v, #8@1 as w]
       ScalarSubqueryExec: subqueries=1
         ProjectionExec: expr=[#1@0 as #7, #3@1 as #8]
@@ -9610,7 +9546,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[min(s.#5)@0 as #6]
       AggregateExec: mode=Single, gby=[], aggr=[min(s.#5)]
         ProjectionExec: expr=[column1@0 as #5]
@@ -9622,7 +9557,6 @@ data:
     partitions=1
     distribution=Hash(keys=[#7@0], channels=4)
     placement=Worker
-    retry=Default
     ScalarSubqueryExec: subqueries=1
       AggregateExec: mode=Partial, gby=[#7@0 as #7], aggr=[sum(p.#8)]
         ProjectionExec: expr=[column1@0 as #7, CAST(column2@1 AS Int64) + scalar_subquery(<pending>) as #8]
@@ -9635,7 +9569,6 @@ data:
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[#9@0 as k, #10@1 as total]
       ProjectionExec: expr=[#7@0 as #9, sum(p.#8)@1 as #10]
         AggregateExec: mode=FinalPartitioned, gby=[#7@0 as #7], aggr=[sum(p.#8)]
@@ -10046,7 +9979,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[min(s.#4)@0 as #5]
       AggregateExec: mode=Single, gby=[], aggr=[min(s.#4)]
         ProjectionExec: expr=[column1@0 as #4]
@@ -10058,7 +9990,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[#2@0 as v]
       ScalarSubqueryExec: subqueries=1
         SortExec: expr=[CASE WHEN scalar_subquery(<pending>) = 2 THEN #2@0 ELSE negative(#2@0) END DESC NULLS LAST], preserve_partitioning=[false]
@@ -10457,7 +10388,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[min(s.#3)@0 as #4]
       AggregateExec: mode=Single, gby=[], aggr=[min(s.#3)]
         ProjectionExec: expr=[column1@0 as #3]
@@ -10469,7 +10399,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[#5@0 as total]
       ScalarSubqueryExec: subqueries=1
         ProjectionExec: expr=[sum(t.#1 + #4)@0 as #5]
@@ -10888,7 +10817,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[min(s.#3)@0 as #4]
       AggregateExec: mode=Single, gby=[], aggr=[min(s.#3)]
         ProjectionExec: expr=[column1@0 as #3]
@@ -10900,7 +10828,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[#6@0 as v, #7@1 as total]
       ScalarSubqueryExec: subqueries=1
         ProjectionExec: expr=[#1@0 as #6, sum(t.#1 + #4) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as #7]
@@ -11333,7 +11260,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[min(s.#3)@0 as #4]
       AggregateExec: mode=Single, gby=[], aggr=[min(s.#3)]
         ProjectionExec: expr=[column1@0 as #3]
@@ -11345,7 +11271,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[#6@0 as v, #7@1 as rn]
       ScalarSubqueryExec: subqueries=1
         ProjectionExec: expr=[#1@0 as #6, CAST(row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 AS Int32) as #7]
@@ -11796,7 +11721,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[min(s.#3)@0 as #4]
       AggregateExec: mode=Single, gby=[], aggr=[min(s.#3)]
         ProjectionExec: expr=[column1@0 as #3]
@@ -11808,7 +11732,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     ProjectionExec: expr=[#6@0 as v, #7@1 as n]
       ScalarSubqueryExec: subqueries=1
         ProjectionExec: expr=[#1@0 as #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as #7]

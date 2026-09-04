@@ -10,7 +10,9 @@ use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_expr::{
     LexOrdering, LexRequirement, PhysicalSortRequirement, create_physical_sort_exprs,
 };
-use datafusion_common::{Constraints, DFSchema, DFSchemaRef, Result, plan_err};
+use datafusion_common::{
+    Constraints, DFSchema, DFSchemaRef, Result, not_impl_datafusion_err, plan_err,
+};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{Expr, TableSource};
@@ -460,6 +462,10 @@ pub trait DataSource: Send + Sync {
     /// Returns the name of the data source.
     fn name(&self) -> &str;
 
+    /// Returns this data source's lake capability, if supported.
+    ///
+    /// The owned receiver keeps the source alive while callers use the
+    /// capability across asynchronous operations.
     fn as_lake_source(self: Arc<Self>) -> Option<Arc<dyn LakeSource>> {
         None
     }
@@ -498,7 +504,8 @@ impl DataSourceRegistry {
             .sources
             .write()
             .map_err(|_| plan_datafusion_err!("data source registry poisoned"))?;
-        sources.insert(source.name().to_lowercase(), source);
+        let name = source.name().to_lowercase();
+        sources.insert(name, source);
         Ok(())
     }
 
@@ -514,13 +521,22 @@ impl DataSourceRegistry {
     }
 
     pub fn get_lake_source(&self, name: &str) -> Result<Arc<dyn LakeSource>> {
-        self.get_data_source(name)?.as_lake_source().ok_or_else(|| {
-            datafusion_common::not_impl_datafusion_err!(
-                "Data source '{name}' does not support lake operations"
-            )
+        let source = {
+            let sources = self
+                .sources
+                .read()
+                .map_err(|_| plan_datafusion_err!("data source registry poisoned"))?;
+            sources
+                .get(&name.to_lowercase())
+                .cloned()
+                .ok_or_else(|| missing_lake_source_error(name))?
+        };
+        source.as_lake_source().ok_or_else(|| {
+            not_impl_datafusion_err!("Data source '{name}' does not support lake operations")
         })
     }
 
+    /// Returns the optional lakehouse capability for a registered data source.
     pub fn get_lake_source_if_supported(&self, name: &str) -> Result<Option<Arc<dyn LakeSource>>> {
         let sources = self
             .sources
@@ -562,6 +578,10 @@ fn missing_data_source_error(name: &str) -> datafusion::common::DataFusionError 
     } else {
         plan_datafusion_err!("No data source found for: {name}")
     }
+}
+
+fn missing_lake_source_error(name: &str) -> datafusion::common::DataFusionError {
+    plan_datafusion_err!("No lake source found for: {name}")
 }
 
 impl SessionExtension for DataSourceRegistry {
@@ -685,13 +705,70 @@ mod tests {
         }
     }
 
+    struct TestLakeSource;
+
+    #[async_trait]
+    impl DataSource for TestLakeSource {
+        fn name(&self) -> &str {
+            "test"
+        }
+
+        fn as_lake_source(self: Arc<Self>) -> Option<Arc<dyn LakeSource>> {
+            Some(self)
+        }
+
+        async fn create_source(
+            &self,
+            _ctx: &dyn Session,
+            _info: SourceInfo,
+        ) -> Result<Arc<dyn TableSource>> {
+            plan_err!("test source does not create tables")
+        }
+
+        async fn create_writer(&self, _ctx: &dyn Session, _info: SinkInfo) -> Result<LogicalPlan> {
+            plan_err!("test source does not create writers")
+        }
+    }
+
+    impl LakeSource for TestLakeSource {}
+
     #[test]
-    fn registration_replaces_an_existing_source() -> Result<()> {
+    fn lake_source_registration_replaces_an_ordinary_source() -> Result<()> {
         let registry = DataSourceRegistry::new();
 
         registry.register_data_source(Arc::new(TestDataSource))?;
+        assert!(registry.get_data_source("test").is_ok());
+        assert!(registry.get_lake_source("test").is_err());
+
+        registry.register_data_source(Arc::new(TestLakeSource))?;
+        assert!(registry.get_data_source("test").is_ok());
+        assert!(registry.get_lake_source("test").is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn ordinary_data_source_registration_replaces_a_lake_source() -> Result<()> {
+        let registry = DataSourceRegistry::new();
+        registry.register_data_source(Arc::new(TestLakeSource))?;
+        assert!(registry.get_lake_source("test").is_ok());
+
         registry.register_data_source(Arc::new(TestDataSource))?;
-        assert!(registry.get_data_source("TEST").is_ok());
+        assert!(registry.get_data_source("test").is_ok());
+        assert!(registry.get_lake_source("test").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn ordinary_data_source_has_no_lake_capability() -> Result<()> {
+        let registry = DataSourceRegistry::new();
+        registry.register_data_source(Arc::new(TestDataSource))?;
+
+        assert!(registry.get_data_source("test").is_ok());
+        assert!(registry.get_lake_source_if_supported("test")?.is_none());
+        assert!(matches!(
+            registry.get_lake_source("test"),
+            Err(datafusion_common::DataFusionError::NotImplemented(_))
+        ));
         Ok(())
     }
 
@@ -721,6 +798,21 @@ mod tests {
         assert_eq!(
             error,
             "Error during planning: No data source found for: unknown"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn missing_lake_source_error_stays_generic() -> std::result::Result<(), String> {
+        let registry = DataSourceRegistry::new();
+        let error = match registry.get_lake_source("unknown") {
+            Ok(_) => return Err("expected missing unknown lake source error".to_string()),
+            Err(error) => error.to_string(),
+        };
+
+        assert_eq!(
+            error,
+            "Error during planning: No lake source found for: unknown"
         );
         Ok(())
     }

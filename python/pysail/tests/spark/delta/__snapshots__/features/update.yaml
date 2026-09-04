@@ -701,7 +701,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=4)
     placement=Worker
-    retry=Default
     DataSourceExec: file_groups={1 group: [[<tmp>/delta_update/part-<id>.snappy.parquet]]}, projection=[id, __sail_file_path], file_type=parquet, predicate=id@0 = 2 AND id@0 = 2, pruning_predicate=id_null_count@2 != row_count@3 AND id_min@0 <= 2 AND 2 <= id_max@1 AND id_null_count@2 != row_count@3 AND id_min@0 <= 2 AND 2 <= id_max@1, required_guarantees=[id in (2)]
 
     === stage 1 ===
@@ -710,7 +709,6 @@ data:
     partitions=4
     distribution=Hash(keys=[__sail_file_path@0], channels=4)
     placement=Worker
-    retry=Default
     AggregateExec: mode=Partial, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
       FilterExec: id@0 = 2, projection=[__sail_file_path@1]
         StageInputExec: input=0, partitioning=RoundRobinBatch(4)
@@ -721,7 +719,6 @@ data:
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
       StageInputExec: input=0, partitioning=Hash([__sail_file_path@0], 4)
 
@@ -731,7 +728,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=4)
     placement=Worker
-    retry=Default
     HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@4)], projection=[id@1, value@2, previous_value@3, label@4, __sail_operation_type@6]
       StageInputExec: input=0, partitioning=UnknownPartitioning(1)
       ProjectionExec: expr=[id@1 as id, CASE WHEN __common_expr_1@0 THEN value@2 + 1 ELSE value@2 END as value, previous_value@3 as previous_value, label@4 as label, __sail_file_path@5 as __sail_file_path, CASE WHEN __common_expr_1@0 THEN 2 ELSE 0 END as __sail_operation_type]
@@ -743,7 +739,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=4)
     placement=Worker
-    retry=Default
     DataSourceExec: file_groups={1 group: [[<tmp>/delta_update/part-<id>.snappy.parquet]]}, projection=[id, __sail_file_path], file_type=parquet, predicate=id@0 = 2 AND id@0 = 2, pruning_predicate=id_null_count@2 != row_count@3 AND id_min@0 <= 2 AND 2 <= id_max@1 AND id_null_count@2 != row_count@3 AND id_min@0 <= 2 AND 2 <= id_max@1, required_guarantees=[id in (2)]
 
     === stage 5 ===
@@ -752,7 +747,6 @@ data:
     partitions=4
     distribution=Hash(keys=[__sail_file_path@0], channels=4)
     placement=Worker
-    retry=Default
     AggregateExec: mode=Partial, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
       FilterExec: id@0 = 2, projection=[__sail_file_path@1]
         StageInputExec: input=0, partitioning=RoundRobinBatch(4)
@@ -763,7 +757,6 @@ data:
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
       StageInputExec: input=0, partitioning=Hash([__sail_file_path@0], 4)
 
@@ -773,7 +766,6 @@ data:
     partitions=2
     distribution=Hash(keys=[CASE WHEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END ELSE CASE WHEN remove@1 IS NOT NULL THEN concat(CAST(octet_length(get_field(remove@1, path)) AS Utf8), :, get_field(remove@1, path), :, CASE WHEN remove@1 IS NOT NULL AND get_field(remove@1, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(remove@1, deletionVector, storageType), get_field(remove@1, deletionVector, pathOrInlineDv), CASE WHEN get_field(remove@1, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(remove@1, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END END], channels=4)
     placement=Worker
-    retry=Default
     DataSourceExec: file_groups={2 groups: [[<tmp>/delta_update/_delta_log/00000000000000000000.json], [<tmp>/delta_update/_delta_log/00000000000000000001.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
 
     === stage 8 ===
@@ -782,7 +774,6 @@ data:
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     DeltaDiscoveryExec(table_path=file://<tmp>/delta_update/)
       HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, deletionVector@7]
         StageInputExec: input=0, partitioning=UnknownPartitioning(1)
@@ -797,7 +788,6 @@ data:
     partitions=5
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     UnionExec
       DeltaWriterExec(table_path=file://<tmp>/delta_update/)
         StageInputExec: input=0, partitioning=RoundRobinBatch(4)
@@ -810,7 +800,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Driver
-    retry=Default
     DeltaCommitExec(table_path=file://<tmp>/delta_update/)
       StageInputExec: input=0, partitioning=UnknownPartitioning(1)
 
@@ -820,7 +809,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    retry=Default
     StageInputExec: input=0, partitioning=UnknownPartitioning(1)
 ---
 name: "test_explain_update_on_a_dvenabled_table_writes_changed_rows_and_deletion_vectors"

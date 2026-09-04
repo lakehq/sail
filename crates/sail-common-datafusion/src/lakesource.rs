@@ -94,8 +94,7 @@ pub enum LakeSourceAlterTableOperation {
     AddCheckConstraint { name: String, expression: String },
 }
 
-/// A lakehouse data source with table metadata, DML, DDL, and optional
-/// relation/procedure capabilities.
+/// A lakehouse data source with table metadata, DML, and DDL semantics.
 #[async_trait]
 pub trait LakeSource: DataSource {
     fn relation_provider(self: Arc<Self>) -> Option<Arc<dyn LakeRelationProvider>> {
