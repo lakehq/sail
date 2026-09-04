@@ -80,9 +80,11 @@ def _delete_pre_checkpoint_history(table_path: Path) -> None:
     for path in log_path.iterdir():
         json_match = _JSON_FILE_RE.fullmatch(path.name)
         checksum_match = _CHECKSUM_FILE_RE.fullmatch(path.name)
-        if json_match is not None and int(json_match.group("version")) < _CHECKPOINT_VERSION:
-            _delete_file_and_local_checksum(path)
-        elif checksum_match is not None and int(checksum_match.group("version")) <= _CHECKPOINT_VERSION:
+        is_pre_checkpoint_json = json_match is not None and int(json_match.group("version")) < _CHECKPOINT_VERSION
+        is_checkpoint_checksum = (
+            checksum_match is not None and int(checksum_match.group("version")) <= _CHECKPOINT_VERSION
+        )
+        if is_pre_checkpoint_json or is_checkpoint_checksum:
             _delete_file_and_local_checksum(path)
 
 
@@ -145,12 +147,9 @@ def test_delta_spark_writes_complete_multipart_checkpoint(
     delta_jvm_spark: SparkSession,
     delta_spark_multipart_table: DeltaSparkMultipartTable,
 ) -> None:
-    _, artifact, version = delta_spark_maven_coordinate(pyspark.__version__).split(":")
-    expected_jar = f"{artifact}-{version}.jar"
-    class_loader = delta_jvm_spark._jvm.java.lang.Thread.currentThread().getContextClassLoader()
-    delta_log_class = class_loader.loadClass("org.apache.spark.sql.delta.DeltaLog")
-    delta_jar = str(delta_log_class.getProtectionDomain().getCodeSource().getLocation())
-    assert expected_jar in delta_jar
+    expected_coordinate = delta_spark_maven_coordinate(pyspark.__version__)
+    configured_packages = delta_jvm_spark.sparkContext.getConf().get("spark.jars.packages", "")
+    assert expected_coordinate in configured_packages.split(",")
 
     expected_names = [
         f"{_CHECKPOINT_VERSION:020d}.checkpoint.{part:010d}.{_EXPECTED_CHECKPOINT_PARTS:010d}.parquet"
