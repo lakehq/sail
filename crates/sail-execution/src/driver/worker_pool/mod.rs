@@ -7,7 +7,6 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 pub use options::WorkerPoolOptions;
 use sail_telemetry::events::SystemEventReporter;
-pub(crate) use state::{WorkerLaunch, WorkerLaunchReason};
 
 use crate::driver::worker_pool::state::WorkerDescriptor;
 use crate::id::{IdGenerator, WorkerId};

@@ -12,7 +12,7 @@ use crate::task::scheduling::{
 };
 
 impl TaskAssigner {
-    pub fn request_workers(&self) -> usize {
+    pub fn count_worker_demands(&self) -> usize {
         let enqueued_slots = self.enqueued_worker_slots();
         let vacant_slots = self
             .workers
@@ -21,18 +21,10 @@ impl TaskAssigner {
                 WorkerResource::Active { task_slots, .. } => {
                     task_slots.iter().filter(|x| x.is_vacant()).count()
                 }
-                WorkerResource::Pending | WorkerResource::Inactive => 0,
+                WorkerResource::Inactive => 0,
             })
             .sum::<usize>();
-        let pending_workers = self
-            .workers
-            .values()
-            .filter(|worker| matches!(worker, WorkerResource::Pending))
-            .count();
-        let pending_slots = pending_workers.saturating_mul(self.options.worker_task_slots);
-        let required_slots = enqueued_slots
-            .saturating_sub(vacant_slots)
-            .saturating_sub(pending_slots);
+        let required_slots = enqueued_slots.saturating_sub(vacant_slots);
         let active_workers = self
             .workers
             .values()
@@ -41,78 +33,24 @@ impl TaskAssigner {
         let allowed_workers = if self.options.worker_max_count == 0 {
             usize::MAX
         } else {
-            self.options
-                .worker_max_count
-                .saturating_sub(pending_workers)
-                .saturating_sub(active_workers)
+            self.options.worker_max_count.saturating_sub(active_workers)
         };
-        if self.options.worker_task_slots == 0 {
-            error!("worker task slots must be greater than zero");
-            return 0;
-        }
         required_slots
             .div_ceil(self.options.worker_task_slots)
             .min(allowed_workers)
     }
 
-    pub fn has_worker_demand(&self) -> bool {
-        self.enqueued_worker_slots() > 0
-    }
-
-    pub fn has_pending_workers(&self) -> bool {
-        self.workers
-            .values()
-            .any(|worker| matches!(worker, WorkerResource::Pending))
-    }
-
     pub fn request_initial_workers(&self, worker_initial_count: usize) -> usize {
-        let live_workers = self
+        let active_workers = self
             .workers
             .values()
-            .filter(|worker| {
-                matches!(
-                    worker,
-                    WorkerResource::Pending | WorkerResource::Active { .. }
-                )
-            })
+            .filter(|worker| matches!(worker, WorkerResource::Active { .. }))
             .count();
-        let requested_workers = worker_initial_count.saturating_sub(live_workers);
+        let requested_workers = worker_initial_count.saturating_sub(active_workers);
         if self.options.worker_max_count == 0 {
             requested_workers
         } else {
-            requested_workers.min(self.options.worker_max_count.saturating_sub(live_workers))
-        }
-    }
-
-    pub fn track_pending_worker(&mut self, worker_id: WorkerId) {
-        match self.workers.entry(worker_id) {
-            indexmap::map::Entry::Vacant(entry) => {
-                entry.insert(WorkerResource::Pending);
-            }
-            indexmap::map::Entry::Occupied(_) => {
-                warn!("worker {worker_id} is already tracked");
-            }
-        }
-    }
-
-    pub fn track_worker_failed_to_start(&mut self, worker_id: WorkerId) -> bool {
-        let Some(worker) = self.workers.get_mut(&worker_id) else {
-            warn!("worker {worker_id} not found");
-            return false;
-        };
-        match worker {
-            WorkerResource::Pending => {
-                *worker = WorkerResource::Inactive;
-                true
-            }
-            WorkerResource::Active { .. } => {
-                warn!("worker {worker_id} is already active");
-                false
-            }
-            WorkerResource::Inactive => {
-                warn!("worker {worker_id} is already inactive");
-                false
-            }
+            requested_workers.min(self.options.worker_max_count.saturating_sub(active_workers))
         }
     }
 
@@ -127,11 +65,11 @@ impl TaskAssigner {
                 entry.insert(resource);
             }
             indexmap::map::Entry::Occupied(mut entry) => match entry.get() {
-                WorkerResource::Pending => {
+                WorkerResource::Active { .. } => warn!("worker {worker_id} is already active"),
+                WorkerResource::Inactive => {
+                    warn!("worker {worker_id} was inactive");
                     entry.insert(resource);
                 }
-                WorkerResource::Active { .. } => warn!("worker {worker_id} is already active"),
-                WorkerResource::Inactive => warn!("worker {worker_id} is inactive"),
             },
         }
     }
@@ -142,7 +80,7 @@ impl TaskAssigner {
             return;
         };
         match worker {
-            WorkerResource::Pending | WorkerResource::Active { .. } => {
+            WorkerResource::Active { .. } => {
                 *worker = WorkerResource::Inactive;
             }
             WorkerResource::Inactive => {
@@ -293,7 +231,7 @@ impl TaskAssigner {
                 task_slots: slots,
                 local_streams: streams,
             } => slots.iter().all(|s| s.is_vacant()) && streams.is_empty(),
-            WorkerResource::Pending | WorkerResource::Inactive => false,
+            WorkerResource::Inactive => false,
         }
     }
 
@@ -309,7 +247,7 @@ impl TaskAssigner {
                 .iter()
                 .flat_map(|x| x.list_tasks().cloned().collect::<Vec<_>>())
                 .collect(),
-            WorkerResource::Pending | WorkerResource::Inactive => vec![],
+            WorkerResource::Inactive => vec![],
         }
     }
 
@@ -333,7 +271,7 @@ impl TaskAssigner {
             .iter()
             .filter_map(|(id, worker)| {
                 let slots = match worker {
-                    WorkerResource::Pending | WorkerResource::Inactive => vec![],
+                    WorkerResource::Inactive => vec![],
                     WorkerResource::Active {
                         task_slots: slots, ..
                     } => slots
@@ -432,50 +370,29 @@ mod tests {
     }
 
     #[test]
-    fn pending_worker_capacity_prevents_duplicate_requests() {
+    fn worker_demand_accounts_for_vacant_slots() {
         let mut assigner = task_assigner(8, 4);
         assigner.enqueue_tasks(worker_region(8));
 
-        assert_eq!(assigner.request_workers(), 1);
-        assigner.track_pending_worker(WorkerId::from(1));
-        assert_eq!(assigner.request_workers(), 0);
-
-        assigner.track_worker_failed_to_start(WorkerId::from(1));
-        assert_eq!(assigner.request_workers(), 1);
+        assert_eq!(assigner.count_worker_demands(), 1);
+        assigner.activate_worker(WorkerId::from(1));
+        assert_eq!(assigner.count_worker_demands(), 0);
     }
 
     #[test]
-    fn worker_requests_respect_pending_and_active_worker_limit() {
+    fn worker_demand_respects_active_worker_limit() {
         let mut assigner = task_assigner(1, 2);
         assigner.enqueue_tasks(worker_region(4));
-        assigner.track_pending_worker(WorkerId::from(1));
-        assigner.track_pending_worker(WorkerId::from(2));
-
-        assert_eq!(assigner.request_workers(), 0);
-
         assigner.activate_worker(WorkerId::from(1));
-        assigner.track_worker_failed_to_start(WorkerId::from(2));
-        assert_eq!(assigner.request_workers(), 1);
+
+        assert_eq!(assigner.count_worker_demands(), 1);
     }
 
     #[test]
-    fn initial_workers_share_the_worker_limit() {
+    fn initial_workers_respect_the_worker_limit() {
         let mut assigner = task_assigner(8, 4);
-        assigner.track_pending_worker(WorkerId::from(1));
+        assigner.activate_worker(WorkerId::from(1));
 
         assert_eq!(assigner.request_initial_workers(4), 3);
-
-        assigner.track_pending_worker(WorkerId::from(2));
-        assigner.track_pending_worker(WorkerId::from(3));
-        assigner.track_pending_worker(WorkerId::from(4));
-        assert_eq!(assigner.request_initial_workers(4), 0);
-    }
-
-    #[test]
-    fn zero_worker_task_slots_does_not_panic() {
-        let mut assigner = task_assigner(0, 1);
-        assigner.enqueue_tasks(worker_region(1));
-
-        assert_eq!(assigner.request_workers(), 0);
     }
 }

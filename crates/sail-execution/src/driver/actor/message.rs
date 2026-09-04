@@ -14,7 +14,7 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use crate::driver::r#gen;
-use crate::driver::worker_pool::WorkerLaunch;
+use crate::driver::worker_scaler::WorkerRetryRequest;
 use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
 use crate::stream::reader::TaskStreamSource;
@@ -43,10 +43,8 @@ pub enum DriverMessage {
         worker_id: WorkerId,
         message: String,
     },
-    RetryWorkerLaunch {
-        /// The failed worker whose reserved capacity this retry replaces.
-        worker_id: WorkerId,
-        launch: WorkerLaunch,
+    RetryWorkerDemand {
+        request: WorkerRetryRequest,
     },
     ProbeIdleWorker {
         worker_id: WorkerId,
@@ -145,7 +143,7 @@ impl SpanAssociation for DriverMessage {
             DriverMessage::WorkerKnownPeers { .. } => "WorkerKnownPeers",
             DriverMessage::ProbePendingWorker { .. } => "ProbePendingWorker",
             DriverMessage::WorkerFailedToStart { .. } => "WorkerFailedToStart",
-            DriverMessage::RetryWorkerLaunch { .. } => "RetryWorkerLaunch",
+            DriverMessage::RetryWorkerDemand { .. } => "RetryWorkerDemand",
             DriverMessage::ProbeIdleWorker { .. } => "ProbeIdleWorker",
             DriverMessage::ProbeLostWorker { .. } => "ProbeLostWorker",
             DriverMessage::ExecuteJob { .. } => "ExecuteJob",
@@ -194,9 +192,8 @@ impl SpanAssociation for DriverMessage {
             } => {
                 p.push((SpanAttribute::CLUSTER_WORKER_ID, worker_id.to_string()));
             }
-            DriverMessage::RetryWorkerLaunch { worker_id, launch } => {
-                p.push((SpanAttribute::CLUSTER_WORKER_ID, worker_id.to_string()));
-                p.push((SpanAttribute::RETRY_ATTEMPT, launch.attempt.to_string()));
+            DriverMessage::RetryWorkerDemand { request } => {
+                p.push((SpanAttribute::RETRY_ATTEMPT, request.attempt.to_string()));
             }
             DriverMessage::ExecuteJob {
                 plan: _,

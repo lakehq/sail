@@ -94,9 +94,8 @@ impl Actor for SessionManagerActor {
                 context,
                 driver_id,
                 activation,
-                result,
             } => self.handle_complete_session_creation(
-                ctx, session_id, user_id, context, driver_id, activation, result,
+                ctx, session_id, user_id, context, driver_id, activation,
             ),
             SessionManagerMessage::ProbeIdleSession {
                 session_id,

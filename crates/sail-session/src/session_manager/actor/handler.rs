@@ -39,18 +39,23 @@ impl SessionManagerActor {
         user_id: String,
         result: oneshot::Sender<SessionResult<SessionContext>>,
     ) -> ActorAction {
-        if let Some(session) = self.sessions.get(&session_id) {
-            let context = if let ServerSessionState::Running { context, .. } = &session.state {
-                Ok(context.clone())
-            } else {
-                Err(SessionError::invalid(format!(
-                    "session {session_id} is not running"
-                )))
+        if let Some(session) = self.sessions.get_mut(&session_id) {
+            let context = match &mut session.state {
+                ServerSessionState::Running { context, .. } => Some(context.clone()),
+                ServerSessionState::Creating { waiters, .. } => {
+                    waiters.push(result);
+                    return ActorAction::Continue;
+                }
+                ServerSessionState::Deleted | ServerSessionState::Failed => None,
             };
-            if let Ok(context) = &context {
-                self.schedule_idle_session_probe(ctx, session_id, context);
+            if let Some(context) = context {
+                self.schedule_idle_session_probe(ctx, session_id, &context);
+                let _ = result.send(Ok(context));
+            } else {
+                let _ = result.send(Err(SessionError::invalid(format!(
+                    "session {session_id} is not running"
+                ))));
             }
-            let _ = result.send(context);
             return ActorAction::Continue;
         }
 
@@ -83,7 +88,7 @@ impl SessionManagerActor {
         ) {
             Ok(runner) => runner,
             Err(e) => {
-                let _ = result.send(Err(e.into()));
+                let _ = result.send(Err(e));
                 return ActorAction::Continue;
             }
         };
@@ -150,6 +155,7 @@ impl SessionManagerActor {
             ServerSession {
                 state: ServerSessionState::Creating {
                     driver_id: registered_driver_id,
+                    waiters: vec![result],
                 },
             },
         );
@@ -159,7 +165,6 @@ impl SessionManagerActor {
             context,
             driver_id: registered_driver_id,
             activation,
-            result,
         };
         if let Some(driver) = driver {
             let session_manager = ctx.handle().clone();
@@ -183,32 +188,37 @@ impl SessionManagerActor {
         context: SessionContext,
         driver_id: Option<DriverId>,
         activation: ExecutionResult<()>,
-        result: oneshot::Sender<SessionResult<SessionContext>>,
     ) -> ActorAction {
         let Some(session) = self.sessions.get_mut(&session_id) else {
-            let _ = result.send(Err(SessionError::internal(format!(
-                "session {session_id} disappeared during creation"
-            ))));
+            warn!("session {session_id} disappeared during creation");
             return ActorAction::Continue;
         };
-        if !matches!(
-            session.state,
+        let waiters = match &mut session.state {
             ServerSessionState::Creating {
-                driver_id: creating_driver_id
-            } if creating_driver_id == driver_id
-        ) {
-            let _ = result.send(Err(SessionError::internal(format!(
-                "session {session_id} creation is no longer pending"
-            ))));
-            return ActorAction::Continue;
-        }
-        let output = match activation {
+                driver_id: creating_driver_id,
+                waiters,
+            } if *creating_driver_id == driver_id => std::mem::take(waiters),
+            _ => {
+                warn!("session {session_id} creation is no longer pending");
+                return ActorAction::Continue;
+            }
+        };
+        match activation {
             Ok(()) => {
                 session.state = ServerSessionState::Running {
                     context: context.clone(),
                     driver_id,
                 };
-                Ok(context)
+                self.event_reporter.report(SystemEvent::SessionCreated {
+                    session_id: session_id.clone(),
+                    user_id,
+                    status: session.state.status().to_string(),
+                    created_at: Utc::now(),
+                });
+                self.schedule_idle_session_probe(ctx, session_id, &context);
+                for waiter in waiters {
+                    let _ = waiter.send(Ok(context.clone()));
+                }
             }
             Err(e) => {
                 if let Some(driver_id) = driver_id
@@ -221,19 +231,18 @@ impl SessionManagerActor {
                     });
                 }
                 session.state = ServerSessionState::Failed;
-                Err(e.into())
+                self.event_reporter.report(SystemEvent::SessionCreated {
+                    session_id,
+                    user_id,
+                    status: session.state.status().to_string(),
+                    created_at: Utc::now(),
+                });
+                let message = e.to_string();
+                for waiter in waiters {
+                    let _ = waiter.send(Err(SessionError::internal(message.clone())));
+                }
             }
-        };
-        self.event_reporter.report(SystemEvent::SessionCreated {
-            session_id: session_id.clone(),
-            user_id,
-            status: session.state.status().to_string(),
-            created_at: Utc::now(),
-        });
-        if let Ok(context) = &output {
-            self.schedule_idle_session_probe(ctx, session_id, context);
         }
-        let _ = result.send(output);
         ActorAction::Continue
     }
 
@@ -330,10 +339,12 @@ impl SessionManagerActor {
             warn!("session not found: {session_id}");
             return ActorAction::Continue;
         };
-        let driver_id = match &session.state {
-            ServerSessionState::Creating { driver_id }
-            | ServerSessionState::Running { driver_id, .. } => *driver_id,
-            ServerSessionState::Deleted | ServerSessionState::Failed => None,
+        let (driver_id, waiters) = match &mut session.state {
+            ServerSessionState::Creating { driver_id, waiters } => {
+                (*driver_id, std::mem::take(waiters))
+            }
+            ServerSessionState::Running { driver_id, .. } => (*driver_id, vec![]),
+            ServerSessionState::Deleted | ServerSessionState::Failed => (None, vec![]),
         };
         if let Some(driver_id) = driver_id
             && let Some(driver) = self.drivers.remove(driver_id)
@@ -351,6 +362,11 @@ impl SessionManagerActor {
             status,
             updated_at: Utc::now(),
         });
+        for waiter in waiters {
+            let _ = waiter.send(Err(SessionError::internal(
+                "session failed during creation",
+            )));
+        }
         ActorAction::Continue
     }
 

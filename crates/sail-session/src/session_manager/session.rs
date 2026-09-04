@@ -1,5 +1,8 @@
 use datafusion::prelude::SessionContext;
 use sail_execution::DriverId;
+use tokio::sync::oneshot;
+
+use crate::error::SessionResult;
 
 pub struct ServerSession {
     pub state: ServerSessionState,
@@ -8,6 +11,7 @@ pub struct ServerSession {
 pub enum ServerSessionState {
     Creating {
         driver_id: Option<DriverId>,
+        waiters: Vec<oneshot::Sender<SessionResult<SessionContext>>>,
     },
     Running {
         context: SessionContext,

@@ -22,7 +22,6 @@ pub enum SessionManagerMessage {
         context: SessionContext,
         driver_id: Option<DriverId>,
         activation: ExecutionResult<()>,
-        result: oneshot::Sender<SessionResult<SessionContext>>,
     },
     ProbeIdleSession {
         session_id: String,
@@ -73,7 +72,6 @@ impl SpanAssociation for SessionManagerMessage {
                 context: _,
                 driver_id: _,
                 activation: _,
-                result: _,
             }
             | SessionManagerMessage::ProbeIdleSession {
                 session_id,

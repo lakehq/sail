@@ -16,7 +16,7 @@ use tokio::time::Instant;
 use tonic::Code;
 
 use crate::driver::worker_pool::state::WorkerState;
-use crate::driver::worker_pool::{WorkerDescriptor, WorkerLaunch, WorkerPool, WorkerPoolOptions};
+use crate::driver::worker_pool::{WorkerDescriptor, WorkerPool, WorkerPoolOptions};
 use crate::driver::{DriverActor, DriverMessage, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, WorkerId};
@@ -41,16 +41,11 @@ impl WorkerPool {
     pub fn start_worker(
         &mut self,
         ctx: &mut ActorContext<DriverActor>,
-        launch: WorkerLaunch,
     ) -> ExecutionResult<WorkerId> {
         let worker_id = self.worker_id_generator.generate()?;
-        info!(
-            "starting worker {worker_id} (launch attempt {})",
-            launch.attempt
-        );
+        info!("starting worker {worker_id}");
         let descriptor = WorkerDescriptor {
             state: WorkerState::Pending,
-            launch: Some(launch),
             messages: vec![],
             peers: HashSet::new(),
         };
@@ -136,7 +131,6 @@ impl WorkerPool {
                     heartbeat_at: Instant::now(),
                     client: None,
                 };
-                worker.launch = None;
                 Self::schedule_lost_worker_probe(ctx, worker_id, worker, &self.options);
                 Self::schedule_idle_worker_probe(ctx, worker_id, worker, &self.options);
                 event_reporter.report(SystemEvent::WorkerUpdated {
@@ -269,16 +263,12 @@ impl WorkerPool {
         worker.peers.extend(peer_worker_ids);
     }
 
-    pub fn fail_worker_if_pending(
-        &mut self,
-        worker_id: WorkerId,
-        message: String,
-    ) -> Option<WorkerLaunch> {
+    pub fn fail_worker_if_pending(&mut self, worker_id: WorkerId, message: String) -> bool {
         let event_reporter = self.event_reporter.clone();
         let session_id = self.options.session_id.clone();
         let Some(worker) = self.workers.get_mut(&worker_id) else {
             warn!("worker {worker_id} not found");
-            return None;
+            return false;
         };
         if matches!(&worker.state, WorkerState::Pending) {
             warn!("worker {worker_id} failed to start: {message}");
@@ -292,9 +282,9 @@ impl WorkerPool {
                 status: worker.state.status().to_string(),
                 updated_at: Utc::now(),
             });
-            worker.launch.take()
+            true
         } else {
-            None
+            false
         }
     }
 

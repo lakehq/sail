@@ -14,6 +14,7 @@ use tokio::sync::oneshot;
 use crate::driver::job_scheduler::JobScheduler;
 use crate::driver::task_assigner::TaskAssigner;
 use crate::driver::worker_pool::WorkerPool;
+use crate::driver::worker_scaler::WorkerScaler;
 use crate::id::TaskKey;
 use crate::task_runner::TaskRunnerActor;
 
@@ -27,11 +28,10 @@ pub struct DriverActor {
     worker_pool: WorkerPool,
     job_scheduler: JobScheduler,
     task_assigner: TaskAssigner,
+    worker_scaler: WorkerScaler,
     task_runner: Option<ActorHandle<TaskRunnerActor>>,
     extensions: DriverExtensions,
     activated: bool,
-    /// Whether launch retries have been exhausted for the current queued worker demand.
-    worker_launch_retries_exhausted: bool,
     /// The sequence number corresponding to the last task status update from the worker.
     /// A different sequence number is tracked for each attempt.
     task_sequences: HashMap<TaskKey, u64>,
