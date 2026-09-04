@@ -199,6 +199,15 @@ fn validate_scoped_overwrite_format(
     Ok(())
 }
 
+fn empty_rewrite_is_noop(
+    snapshot_update_kind: SnapshotUpdateKind,
+    dynamic_partition_overwrite: bool,
+) -> bool {
+    matches!(snapshot_update_kind, SnapshotUpdateKind::RewriteDataFiles)
+        || (matches!(snapshot_update_kind, SnapshotUpdateKind::CopyOnWrite)
+            && dynamic_partition_overwrite)
+}
+
 #[derive(Debug)]
 pub struct IcebergCommitExec {
     input: Arc<dyn ExecutionPlan>,
@@ -1039,7 +1048,7 @@ impl ExecutionPlan for IcebergCommitExec {
                         current_schema,
                     )?;
                 }
-                if snapshot_update_kind.is_targeted_rewrite()
+                if empty_rewrite_is_noop(snapshot_update_kind, dynamic_partition_overwrite)
                     && commit_info.data_files.is_empty()
                     && commit_info.delete_files.is_empty()
                     && removed_data_file_paths.is_empty()
@@ -1894,6 +1903,19 @@ mod tests {
         )
         .expect("empty dynamic overwrite");
         assert!(paths.is_empty());
+    }
+
+    #[test]
+    fn empty_predicate_overwrite_keeps_delete_intent() {
+        assert!(!empty_rewrite_is_noop(
+            SnapshotUpdateKind::CopyOnWrite,
+            false
+        ));
+        assert!(empty_rewrite_is_noop(SnapshotUpdateKind::CopyOnWrite, true));
+        assert!(empty_rewrite_is_noop(
+            SnapshotUpdateKind::RewriteDataFiles,
+            false
+        ));
     }
 
     #[derive(Debug)]

@@ -801,6 +801,7 @@ mod tests {
             view_cache_ttl_secs: Some(60),
         };
         let provider = CachingCatalogProvider::new(mock.clone(), config, None);
+
         // First call - should hit mock
         let dbs = provider.list_databases(None).await.unwrap();
         assert_eq!(dbs.len(), 1);

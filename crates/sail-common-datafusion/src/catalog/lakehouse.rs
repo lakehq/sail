@@ -284,6 +284,18 @@ impl LakehouseTableBinding {
     pub fn matches_execution(&self, context: &LakehouseExecutionContext) -> bool {
         self == &Self::from_execution(context)
     }
+
+    /// Matches a context returned by an operation-scoped access session.
+    ///
+    /// Access acquisition may specialize scan routing and extend the capability
+    /// fingerprint with session state. The remaining fields must still match the
+    /// stable table binding captured before access was acquired.
+    pub fn matches_access_context(&self, context: &LakehouseExecutionContext) -> bool {
+        let mut access_binding = Self::from_execution(context);
+        access_binding.scan = self.scan;
+        access_binding.capability_fingerprint = self.capability_fingerprint.clone();
+        self == &access_binding
+    }
 }
 
 impl LakehouseExecutionContext {
@@ -400,8 +412,13 @@ mod tests {
         });
         assert!(binding.matches_execution(&context));
 
+        context.scan = ScanAuthority::IcebergRestServerSide;
         context.capability_fingerprint = CapabilityFingerprint("changed".to_string());
         assert!(!binding.matches_execution(&context));
+        assert!(binding.matches_access_context(&context));
+
+        context.table_identity.table_id = Some("other-id".to_string());
+        assert!(!binding.matches_access_context(&context));
     }
 
     #[test]

@@ -69,7 +69,7 @@ impl ProcedureTable {
         let Some(context) = self.lakehouse_table.as_ref() else {
             return plan_err!("Iceberg procedure table is missing its lakehouse context");
         };
-        if !target.binding.matches_execution(context) {
+        if !target.binding.matches_access_context(context) {
             return plan_err!("Iceberg procedure table does not match its bound call target");
         }
         if let Some(identity_location) = context.table_identity.table_uri.as_deref()
