@@ -122,6 +122,9 @@ impl ReadFormat for ParquetReadFormat {
         // Ensure deterministic ordering for stable schema inference.
         schemas.sort_unstable_by(|(location1, _), (location2, _)| location1.cmp(location2));
 
+        // TODO: Retag inferred microsecond-only adjusted-to-UTC timestamps with Spark's session
+        // timezone instead of retaining the producer's `ARROW:schema` timezone identifier. Spark
+        // renders such a column in the session zone; Sail currently keeps the producer's label.
         let schemas = schemas.into_iter().map(|(_, schema)| schema);
 
         let merged = if options.global.skip_metadata {
