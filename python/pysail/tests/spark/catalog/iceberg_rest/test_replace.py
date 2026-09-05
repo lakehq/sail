@@ -143,7 +143,7 @@ def test_replace_resets_current_snapshot(
     assert created["metadata"]["snapshots"] == []
 
     # A real INSERT produces a committed data snapshot in the fixture.
-    spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a'), (2, 'b')")
+    spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a'), (2, 'b')")  # noqa: S608
     with_data = _load_table(iceberg_rest_endpoint, table_name)
     live_snapshot_id = with_data["metadata"]["current-snapshot-id"]
     assert live_snapshot_id not in (-1, None), "INSERT must produce a live current snapshot"
