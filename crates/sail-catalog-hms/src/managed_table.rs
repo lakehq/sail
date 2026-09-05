@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use sail_catalog::error::{CatalogError, CatalogResult};
@@ -15,7 +15,7 @@ use sail_common_hms::hms::{
 };
 use volo_thrift::MaybeException;
 
-use crate::provider::{apply_alter_table_options, hms_metadata_location, HmsCatalogProvider};
+use crate::provider::{HmsCatalogProvider, apply_alter_table_options, hms_metadata_location};
 
 const HMS_LOCK_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(30);
 const HMS_LOCK_CHECK_INTERVAL: Duration = Duration::from_millis(200);
@@ -569,7 +569,7 @@ mod tests {
     use sail_common_hms::hms::{FieldSchema, StorageDescriptor, Table};
 
     use super::{
-        validate_replacement_table, HMS_LOCK_ACQUIRE_TIMEOUT, HMS_LOCK_HEARTBEAT_INTERVAL,
+        HMS_LOCK_ACQUIRE_TIMEOUT, HMS_LOCK_HEARTBEAT_INTERVAL, validate_replacement_table,
     };
 
     #[test]
