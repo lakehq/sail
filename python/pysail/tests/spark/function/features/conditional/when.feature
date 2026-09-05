@@ -1,5 +1,106 @@
 Feature: when output schema
 
+  Rule: Numeric CASE branches share a type before downstream planning
+
+    Scenario Outline: CASE widens numeric branches in either order with ANSI <ansi>: <type>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT result, reversed, typeof(result) AS result_type, typeof(reversed) AS reversed_type
+        FROM (
+          SELECT CASE WHEN p THEN a ELSE b END AS result,
+                 CASE WHEN p THEN b ELSE a END AS reversed
+          FROM VALUES (true, <left>, <right>), (false, <left>, <right>), (NULL, NULL, NULL) AS t(p, a, b)
+        )
+        """
+      Then query result collected
+        | result        | reversed      | result_type | reversed_type |
+        | <left_value>  | <right_value> | <type>      | <type>        |
+        | <right_value> | <left_value>  | <type>      | <type>        |
+        | NULL          | NULL          | <type>      | <type>        |
+      And query schema
+        """
+        root
+         |-- result: <schema_type> (nullable = true)
+         |-- reversed: <schema_type> (nullable = true)
+         |-- result_type: string (nullable = false)
+         |-- reversed_type: string (nullable = false)
+        """
+
+      Examples:
+        | ansi  | left   | right       | left_value | right_value | type          | schema_type   |
+        | false | 1      | 4294967296L | 1          | 4294967296  | bigint        | long          |
+        | true  | 1      | 4294967296L | 1          | 4294967296  | bigint        | long          |
+        | false | 1      | 1.5D        | 1.0        | 1.5         | double        | double        |
+        | true  | 1      | 1.5D        | 1.0        | 1.5         | double        | double        |
+        | false | 1      | 1.5BD       | 1.0        | 1.5         | decimal(11,1) | decimal(11,1) |
+        | true  | 1      | 1.5BD       | 1.0        | 1.5         | decimal(11,1) | decimal(11,1) |
+        | false | 1      | 1.5F        | 1.0        | 1.5         | float         | float         |
+        | true  | 1      | 1.5F        | 1.0        | 1.5         | double        | double        |
+        | false | 1.25BD | 1.5D        | 1.25       | 1.5         | double        | double        |
+        | true  | 1.25BD | 1.5D        | 1.25       | 1.5         | double        | double        |
+        | false | 1.25BD | 1.5F        | 1.25       | 1.5         | double        | double        |
+        | true  | 1.25BD | 1.5F        | 1.25       | 1.5         | double        | double        |
+
+    Scenario Outline: CASE considers every numeric result branch and preserves nulls with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT
+          CASE WHEN id = 0 THEN 1 WHEN id = 1 THEN 4294967296L WHEN id = 2 THEN 2 ELSE NULL END AS multiple,
+          CASE WHEN id = 0 THEN 1 WHEN id = 1 THEN 4294967296L END AS omitted,
+          CASE WHEN id = 0 THEN NULL WHEN id = 1 THEN 1 ELSE 4294967296L END AS null_first,
+          CASE id WHEN 0 THEN 1 WHEN 1 THEN if(id = 1, 4294967296L, 2) ELSE NULL END AS nested
+        FROM VALUES (0), (1), (2), (3) AS t(id)
+        """
+      Then query result collected
+        | multiple   | omitted    | null_first | nested     |
+        | 1          | 1          | NULL       | 1          |
+        | 4294967296 | 4294967296 | 1          | 4294967296 |
+        | 2          | NULL       | 4294967296 | NULL       |
+        | NULL       | NULL       | 4294967296 | NULL       |
+      And query schema
+        """
+        root
+         |-- multiple: long (nullable = true)
+         |-- omitted: long (nullable = true)
+         |-- null_first: long (nullable = true)
+         |-- nested: long (nullable = true)
+        """
+
+      Examples:
+        | ansi  |
+        | false |
+        | true  |
+
+    Scenario Outline: Generators collect sequences with widened conditional bounds: <generator>, <stop>, ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT c, i FROM (
+          SELECT c, <generator>(sequence(0, <stop>)) AS <aliases>
+          FROM VALUES (-1L), (1L), (3L) AS t(c)
+        )
+        """
+      Then query result collected
+        | c  | i |
+        | -1 | 0 |
+        | 1  | 0 |
+        | 3  | 0 |
+        | 3  | 1 |
+        | 3  | 2 |
+
+      Examples:
+        | ansi  | generator     | stop                                      | aliases  |
+        | false | explode       | CASE WHEN c <= 0 THEN 1 ELSE c END - 1     | i        |
+        | true  | explode       | CASE WHEN c <= 0 THEN 1 ELSE c END - 1     | i        |
+        | false | posexplode    | CASE WHEN c <= 0 THEN 1 ELSE c END - 1     | (pos, i) |
+        | true  | posexplode    | CASE WHEN c <= 0 THEN 1 ELSE c END - 1     | (pos, i) |
+        | false | explode_outer | if(c <= 0, 1, c) - 1                      | i        |
+        | true  | explode_outer | if(c <= 0, 1, c) - 1                      | i        |
+        | false | explode       | CASE WHEN c <= 0 THEN 0 ELSE c - 1 END     | i        |
+        | true  | explode       | CASE WHEN c <= 0 THEN 0 ELSE c - 1 END     | i        |
+
   Rule: Spark-compatible coercion for mixed string and temporal branches
 
     Scenario: CASE coerces date branches to string and remains usable by to_date when ANSI is disabled
@@ -70,6 +171,7 @@ Feature: when output schema
   @function(nullability)
   Rule: Output schema
 
+    # TODO: Fix pre-existing CASE nullability: ELSE is encoded as WHEN true with no else_expr.
     @sail-bug
     Scenario: a non-null literal input to when yields the schema Spark declares
       When query

@@ -1,5 +1,45 @@
 Feature: if output schema
 
+  Rule: Numeric IF branches share a type before downstream planning
+
+    Scenario Outline: IF widens numeric branches in either order with ANSI <ansi>: <type>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT result, reversed, typeof(result) AS result_type, typeof(reversed) AS reversed_type
+        FROM (
+          SELECT if(p, <left>, <right>) AS result, if(p, <right>, <left>) AS reversed
+          FROM VALUES (true), (false) AS t(p)
+        )
+        """
+      Then query result collected
+        | result        | reversed      | result_type | reversed_type |
+        | <left_value>  | <right_value> | <type>      | <type>        |
+        | <right_value> | <left_value>  | <type>      | <type>        |
+      And query schema
+        """
+        root
+         |-- result: <schema_type> (nullable = false)
+         |-- reversed: <schema_type> (nullable = false)
+         |-- result_type: string (nullable = false)
+         |-- reversed_type: string (nullable = false)
+        """
+
+      Examples:
+        | ansi  | left   | right       | left_value | right_value | type          | schema_type   |
+        | false | 1      | 4294967296L | 1          | 4294967296  | bigint        | long          |
+        | true  | 1      | 4294967296L | 1          | 4294967296  | bigint        | long          |
+        | false | 1      | 1.5D        | 1.0        | 1.5         | double        | double        |
+        | true  | 1      | 1.5D        | 1.0        | 1.5         | double        | double        |
+        | false | 1      | 1.5BD       | 1.0        | 1.5         | decimal(11,1) | decimal(11,1) |
+        | true  | 1      | 1.5BD       | 1.0        | 1.5         | decimal(11,1) | decimal(11,1) |
+        | false | 1      | 1.5F        | 1.0        | 1.5         | float         | float         |
+        | true  | 1      | 1.5F        | 1.0        | 1.5         | double        | double        |
+        | false | 1.25BD | 1.5D        | 1.25       | 1.5         | double        | double        |
+        | true  | 1.25BD | 1.5D        | 1.25       | 1.5         | double        | double        |
+        | false | 1.25BD | 1.5F        | 1.25       | 1.5         | double        | double        |
+        | true  | 1.25BD | 1.5F        | 1.25       | 1.5         | double        | double        |
+
   Rule: Spark-compatible coercion for mixed string and temporal branches
 
     Scenario: IF coerces date branches to string and keeps downstream parsing valid when ANSI is disabled
