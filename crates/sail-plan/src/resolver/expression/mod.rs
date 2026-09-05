@@ -1,6 +1,7 @@
 use std::fmt::Debug;
 
 use async_recursion::async_recursion;
+pub(crate) use cast::build_rename_target_type;
 use datafusion_common::DFSchemaRef;
 use datafusion_expr::expr;
 use sail_common::spec;

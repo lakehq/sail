@@ -1,25 +1,37 @@
 use std::sync::Arc;
 
+use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, TimeUnit};
-use datafusion::functions::core::coalesce::CoalesceFunc;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::nested_struct::{
+    requires_nested_struct_cast, validate_data_type_compatibility,
+};
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_expr::type_coercion::other::get_coerce_type_for_case_expression;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::spark_case::{SparkCase, SparkCaseCast};
 use sail_function::scalar::spark_to_string::SparkToUtf8;
 
-use crate::error::PlanResult;
+use crate::error::{PlanError, PlanResult};
 use crate::function::common::{FunctionContextInput, ScalarFunction, ScalarFunctionInput};
+
+mod coercion;
+mod nullability;
 
 fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
         arguments,
         function_context,
     } = input;
+    if arguments.len() < 2 {
+        return Err(PlanError::invalid(
+            "CASE requires a WHEN condition and result",
+        ));
+    }
     let mut conditions = Vec::new();
     let mut branch_values = Vec::new();
     let mut iter = arguments.into_iter();
@@ -36,156 +48,66 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             }
         }
     }
-    let mut branch_values = coerce_conditional_values(branch_values, &function_context)?;
-    if let Some(index) = conditions.iter().position(|condition| {
+    // Spark resolves every result and validates every condition, including those
+    // after a literal TRUE. Keep the full tree for child-expression validation.
+    let (mut branch_values, branch_nullable) =
+        coercion::coerce_case_values(branch_values, &function_context)?;
+    for condition in &conditions {
+        let data_type = condition.get_type(function_context.schema)?;
+        if data_type != DataType::Boolean {
+            return Err(PlanError::analysis(format!(
+                "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] CASE WHEN condition must be BOOLEAN, got {data_type}"
+            )));
+        }
+    }
+    let prefix = conditions.iter().position(|condition| {
         matches!(
             condition,
             expr::Expr::Literal(ScalarValue::Boolean(Some(true)), _)
         )
-    }) {
-        let value_types = branch_values
-            .iter()
-            .map(|value| value.get_type(function_context.schema))
-            .collect::<datafusion_common::Result<Vec<_>>>()?;
-        let condition_types = conditions
-            .iter()
-            .map(|condition| condition.get_type(function_context.schema))
-            .collect::<datafusion_common::Result<Vec<_>>>()?;
-        // Spark includes all values in coercion, but only the prefix through the
-        // first literal TRUE in nullability. Keep later analyzer checks intact
-        // when result coercion or condition validation is still outstanding.
-        // TODO: Reject non-Boolean WHEN conditions as Spark does; DataFusion may
-        // implicitly cast them. Leave that existing validation path unchanged.
-        if value_types.windows(2).all(|pair| pair[0] == pair[1])
-            && condition_types
-                .iter()
-                .all(|data_type| *data_type == DataType::Boolean)
-        {
-            conditions.truncate(index);
-            branch_values.truncate(index + 1);
-        }
+    });
+    let mut nullable = prefix.is_none() && branch_values.len() == conditions.len();
+    for value in branch_nullable
+        .iter()
+        .take(prefix.map_or(branch_values.len(), |i| i + 1))
+    {
+        nullable |= value;
     }
     let else_expr = if branch_values.len() > conditions.len() {
-        let mut nullable = false;
-        for value in &branch_values {
-            if conditional_value_is_nullable(value, &function_context)? {
-                nullable = true;
-                break;
-            }
-        }
-        if nullable {
-            // Spark retains nullable result branches even when predicates exclude
-            // their NULLs. Preserve the old fallback to avoid DataFusion narrowing
-            // the schema.
-            conditions.push(lit(true));
-            None
-        } else {
-            let else_expr = branch_values.pop().map(Box::new);
-            if conditions.is_empty() {
-                // Retain CASE's empty field metadata instead of inheriting the
-                // selected column's metadata. DataFusion ignores this NULL branch.
-                conditions.push(lit(false));
-                branch_values.push(lit(ScalarValue::Null));
-            }
-            else_expr
-        }
+        branch_values.pop().map(Box::new)
     } else {
         None
     };
-    let when_then_expr = conditions
-        .into_iter()
-        .zip(branch_values)
-        .map(|(condition, value)| (Box::new(condition), Box::new(value)))
-        .collect();
-    Ok(expr::Expr::Case(expr::Case {
-        expr: None, // Expr::Case in from_ast_expression incorporates into when_then_expr
-        when_then_expr,
+    let case = expr::Expr::Case(expr::Case {
+        expr: None,
+        when_then_expr: conditions
+            .into_iter()
+            .zip(branch_values)
+            .map(|(condition, value)| (Box::new(condition), Box::new(value)))
+            .collect(),
         else_expr,
-    }))
-}
-
-fn conditional_value_is_nullable(
-    value: &expr::Expr,
-    function_context: &FunctionContextInput<'_>,
-) -> datafusion_common::Result<bool> {
-    if value.nullable(function_context.schema)? {
-        return Ok(true);
-    }
-    let mut nullable = false;
-    value.apply(|value| {
-        if let expr::Expr::ScalarFunction(function) = value
-            && function
-                .func
-                .inner()
-                .downcast_ref::<CoalesceFunc>()
-                .is_some()
-            && !value.nullable(function_context.schema)?
-        {
-            let data_types = function
-                .args
-                .iter()
-                .map(|arg| arg.get_type(function_context.schema))
-                .collect::<datafusion_common::Result<Vec<_>>>()?;
-            // Only prune after argument types agree: a later implicit cast can
-            // add nullability even when its original argument is non-nullable.
-            if data_types.windows(2).all(|pair| pair[0] == pair[1]) {
-                for arg in &function.args {
-                    if !conditional_value_is_nullable(arg, function_context)? {
-                        return Ok(TreeNodeRecursion::Jump);
-                    }
-                }
-                nullable = true;
-                return Ok(TreeNodeRecursion::Stop);
+    });
+    let case = case
+        .transform_up(|value| {
+            let expr::Expr::Cast(cast) = value else {
+                return Ok(Transformed::no(value));
+            };
+            let from = cast.expr.get_type(function_context.schema)?;
+            let to = cast.field.data_type();
+            if requires_nested_struct_cast(&from, to) {
+                validate_data_type_compatibility("", &from, to)?;
+            } else if !can_cast_types(&from, to) {
+                return datafusion_common::plan_err!("Unsupported CAST from {from} to {to}");
             }
-        }
-        nullable = match value {
-            expr::Expr::Cast(cast) => !cast_preserves_nullability(
-                &cast.expr.get_type(function_context.schema)?,
-                cast.field.data_type(),
-            ),
-            expr::Expr::BinaryExpr(binary) => {
-                !function_context.plan_config.ansi_mode
-                    && binary.op.is_numerical_operators()
-                    && value.get_type(function_context.schema)?.is_decimal()
-            }
-            _ => false,
-        };
-        Ok(if nullable {
-            TreeNodeRecursion::Stop
-        } else {
-            TreeNodeRecursion::Continue
-        })
-    })?;
-    Ok(nullable)
-}
-
-// Casts whose nullability is already represented correctly by DataFusion. Other
-// casts retain the baseline nullable CASE schema without changing cast behavior.
-fn cast_preserves_nullability(from: &DataType, to: &DataType) -> bool {
-    if from.is_null()
-        || from == to
-        || (from.is_integer() && to.is_integer())
-        || (from.is_numeric() && to.is_floating())
-    {
-        return true;
-    }
-    let DataType::Decimal128(to_precision, to_scale) = to else {
-        return false;
-    };
-    let (precision, scale) = match from {
-        DataType::Int8 => (3, 0),
-        DataType::Int16 => (5, 0),
-        DataType::Int32 => (10, 0),
-        DataType::Int64 => (20, 0),
-        DataType::Decimal128(precision, scale) => (*precision, *scale),
-        _ => return false,
-    };
-    let from_digits = i16::from(precision) - i16::from(scale);
-    let to_digits = i16::from(*to_precision) - i16::from(*to_scale);
-    // Spark's Cast.canNullSafeCastToDecimal also allows reducing a decimal's
-    // scale when the target has an extra integral digit for rounding.
-    (to_scale >= &scale && to_digits >= from_digits)
-        || (from.is_decimal() && to_digits > from_digits)
+            Ok(Transformed::yes(
+                ScalarUDF::from(SparkCaseCast::new())
+                    .call(vec![*cast.expr, lit(ScalarValue::try_from(to)?)]),
+            ))
+        })?
+        .data;
+    // DataFusion narrows CASE nullability using predicates, unlike Spark. Keep
+    // Spark's schema independent of later simplification and selected-column metadata.
+    Ok(ScalarUDF::from(SparkCase::new(nullable)).call(vec![case]))
 }
 
 fn if_expr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {

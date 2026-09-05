@@ -1,3 +1,4 @@
+import pytest
 from pyspark.sql import Row
 from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql import types as T  # noqa: N812
@@ -45,3 +46,34 @@ def test_when_literal_true_does_not_inherit_column_metadata(spark):
         Row(source=0, dynamic=0, explicit=0, omitted=0, cast_explicit=0, cast_omitted=0),
         Row(source=1, dynamic=2, explicit=1, omitted=1, cast_explicit=1, cast_omitted=1),
     ]
+
+
+@pytest.mark.parametrize("ansi", [False, True])
+def test_chained_when_coerces_all_array_results(spark, ansi):
+    original = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", str(ansi).lower())
+    try:
+        result = spark.range(3).select(
+            "id",
+            F.when(F.col("id") == 0, F.array(F.lit("1")))
+            .when(F.col("id") == 1, F.array(F.lit(2)))
+            .otherwise(F.array(F.lit(3)))
+            .alias("values"),
+        )
+        element_type = T.LongType() if ansi else T.StringType()
+        assert result.schema == T.StructType(
+            [
+                T.StructField("id", T.LongType(), False),
+                T.StructField("values", T.ArrayType(element_type, containsNull=ansi), False),
+            ]
+        )
+        values = [1, 2, 3] if ansi else ["1", "2", "3"]
+        assert result.orderBy("id").collect() == [Row(id=index, values=[value]) for index, value in enumerate(values)]
+
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", original)
+
+
+def test_when_rejects_non_boolean_condition_after_true(spark):
+    with pytest.raises(Exception, match="(?i)(boolean|bool|unexpected_input_type)"):
+        spark.range(1).select(F.when(F.lit(True), 1).when(F.lit(42), 2).otherwise(3).alias("value")).collect()

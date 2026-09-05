@@ -343,9 +343,6 @@ Feature: CASE ELSE values and nullability
         | constant_condition | simple_case |
         | 1                  | 1           |
 
-    # TODO: Reject non-Boolean WHEN conditions as Spark does. Sail's existing
-    # analyzer accepts this integer condition; prefix pruning leaves it intact.
-    @sail-bug
     Scenario: CASE literal true still validates later conditions
       When query
         """

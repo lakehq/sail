@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::prelude::SessionContext;
+pub(crate) use expression::build_rename_target_type;
 
 use crate::config::PlanConfig;
 
