@@ -1286,12 +1286,14 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                         partition_spec.clone(),
                         write_order.clone(),
                         props,
-                        &existing_props,
                         location.as_deref(),
-                        existing_current_schema.as_ref(),
-                        existing_current_snapshot_id.is_some(),
-                        existing_is_partitioned,
-                        existing_is_sorted,
+                        ReplaceExisting {
+                            props: &existing_props,
+                            current_schema: existing_current_schema.as_ref(),
+                            has_current_snapshot: existing_current_snapshot_id.is_some(),
+                            is_partitioned: existing_is_partitioned,
+                            is_sorted: existing_is_sorted,
+                        },
                     );
 
                     // UUID is stable across a concurrent replace/data commit, so also assert the
@@ -1885,6 +1887,15 @@ impl CatalogProvider for IcebergRestCatalogProvider {
     }
 }
 
+/// Existing-table state a replace commits against.
+struct ReplaceExisting<'a> {
+    props: &'a HashMap<String, String>,
+    current_schema: Option<&'a crate::r#gen::Schema>,
+    has_current_snapshot: bool,
+    is_partitioned: bool,
+    is_sorted: bool,
+}
+
 /// Builds the `TableUpdate` vector for an atomic REPLACE, mirroring Spark's `replaceTransaction`.
 ///
 /// With a live current snapshot, removes the `main` ref so the replaced table starts empty
@@ -1896,17 +1907,13 @@ fn build_replace_updates(
     partition_spec: Option<Box<crate::r#gen::PartitionSpec>>,
     write_order: Option<Box<crate::r#gen::SortOrder>>,
     new_props: HashMap<String, String>,
-    existing_props: &HashMap<String, String>,
     location: Option<&str>,
-    existing_current_schema: Option<&crate::r#gen::Schema>,
-    has_current_snapshot: bool,
-    existing_is_partitioned: bool,
-    existing_is_sorted: bool,
+    existing: ReplaceExisting<'_>,
 ) -> Vec<crate::r#gen::TableUpdate> {
     let mut updates: Vec<crate::r#gen::TableUpdate> = Vec::new();
 
     // Only when a live snapshot exists: removing a non-existent `main` ref would be rejected.
-    if has_current_snapshot {
+    if existing.has_current_snapshot {
         updates.push(crate::r#gen::TableUpdate::RemoveSnapshotRef {
             ref_name: MAIN_BRANCH_REF.to_string(),
         });
@@ -1914,7 +1921,7 @@ fn build_replace_updates(
 
     // Skip AddSchema for an unchanged schema: Java dedups it, then SetCurrentSchema{-1} fails
     // because no schema was actually added.
-    let schema_changed = match existing_current_schema {
+    let schema_changed = match existing.current_schema {
         None => true,
         Some(existing) => {
             serde_json::to_value(&existing.fields).unwrap_or_default()
@@ -1939,7 +1946,7 @@ fn build_replace_updates(
         // Reset a previously-partitioned table to unpartitioned: add the empty spec (a genuinely
         // new spec, so the server's "last added" `-1` resolves) and make it the default. The REST
         // parser requires `spec-id`; 0 is the reserved unpartitioned id, reassigned on add.
-        None if existing_is_partitioned => {
+        None if existing.is_partitioned => {
             updates.push(crate::r#gen::TableUpdate::AddSpec {
                 spec: Box::new(crate::r#gen::PartitionSpec {
                     spec_id: Some(0),
@@ -1961,7 +1968,7 @@ fn build_replace_updates(
         // Reset a previously-sorted table to unsorted. A table created with a sort order does not
         // carry the unsorted order (id 0), so add it (a genuinely new order → `-1` resolves) and
         // default to it. Setting the default to 0 directly would NPE on the missing order.
-        None if existing_is_sorted => {
+        None if existing.is_sorted => {
             updates.push(crate::r#gen::TableUpdate::AddSortOrder {
                 sort_order: Box::new(crate::r#gen::SortOrder {
                     order_id: 0,
@@ -1982,7 +1989,8 @@ fn build_replace_updates(
     }
 
     // Stale user props: present before, absent from the new set. Catalog-managed keys kept.
-    let removals: Vec<String> = existing_props
+    let removals: Vec<String> = existing
+        .props
         .keys()
         .filter(|key| !new_props.contains_key(*key) && !is_catalog_managed_key(key))
         .cloned()
@@ -4620,12 +4628,14 @@ mod tests {
             None,
             None,
             new_props,
-            &existing_props,
             None,
-            Some(&schema),
-            false,
-            false,
-            false,
+            ReplaceExisting {
+                props: &existing_props,
+                current_schema: Some(&schema),
+                has_current_snapshot: false,
+                is_partitioned: false,
+                is_sorted: false,
+            },
         );
 
         let removals: Vec<String> = updates
@@ -4661,12 +4671,14 @@ mod tests {
                 None,
                 None,
                 HashMap::new(),
-                &HashMap::new(),
                 None,
-                Some(&schema),
-                has_current_snapshot,
-                false,
-                false,
+                ReplaceExisting {
+                    props: &HashMap::new(),
+                    current_schema: Some(&schema),
+                    has_current_snapshot,
+                    is_partitioned: false,
+                    is_sorted: false,
+                },
             )
             .into_iter()
             .any(|u| {
@@ -4696,12 +4708,14 @@ mod tests {
                 None,
                 None,
                 HashMap::new(),
-                &HashMap::new(),
                 None,
-                Some(&schema),
-                false,
-                existing_is_partitioned,
-                existing_is_sorted,
+                ReplaceExisting {
+                    props: &HashMap::new(),
+                    current_schema: Some(&schema),
+                    has_current_snapshot: false,
+                    is_partitioned: existing_is_partitioned,
+                    is_sorted: existing_is_sorted,
+                },
             )
         };
         let has_add_spec = |u: &[crate::r#gen::TableUpdate]| {
