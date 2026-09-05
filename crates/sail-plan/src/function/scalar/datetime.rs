@@ -478,9 +478,11 @@ fn to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 input.function_context.schema,
             );
         }
+        // Spark implicitly casts atomic inputs to string before formatted parsing.
+        // Leave nested inputs to the parser's existing type rejection.
         let expr = match expr_type {
-            Ok(_other) => expr,
-            Err(_) => cast(expr, DataType::Utf8), // In case of error, cast to string
+            Ok(data_type) if data_type.is_string() || data_type.is_nested() => expr,
+            _ => cast(expr, DataType::Utf8),
         };
         Ok(ScalarUDF::from(SparkDate::new(null_on_error)).call(vec![expr, format]))
     } else {
