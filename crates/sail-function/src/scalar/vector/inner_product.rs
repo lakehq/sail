@@ -8,6 +8,7 @@ use datafusion::arrow::datatypes::{DataType, Float32Type};
 use datafusion_common::{Result, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
+use super::is_float_vector;
 use crate::functions_nested_utils::make_scalar_function;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -50,14 +51,6 @@ impl ScalarUDFImpl for VectorInnerProduct {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(vector_inner_product_inner)(&args.args)
     }
-}
-
-fn is_float_vector(data_type: &DataType) -> bool {
-    matches!(
-        data_type,
-        DataType::List(field) | DataType::LargeList(field)
-            if field.data_type() == &DataType::Float32
-    )
 }
 
 fn vector_inner_product_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
