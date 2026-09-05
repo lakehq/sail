@@ -1,5 +1,26 @@
 Feature: Iceberg Query Optimization
 
+  Rule: Verify procedure planning
+    Background:
+      Given variable location for temporary directory iceberg_explain_procedure
+      Given statement template
+        """
+        CREATE TABLE procedure_plan_table (id INT)
+        USING iceberg
+        LOCATION {{ location.uri }}
+        """
+      Given final statement
+        """
+        DROP TABLE IF EXISTS procedure_plan_table
+        """
+
+    Scenario: EXPLAIN shows provider-planned procedure boundary
+      When query
+        """
+        EXPLAIN EXTENDED CALL sail.system.ancestors_of(table => 'procedure_plan_table')
+        """
+      Then query plan matches snapshot
+
   Rule: Verify EXPLAIN output for partition pruning
     Background:
       Given variable location for temporary directory iceberg_explain_prune

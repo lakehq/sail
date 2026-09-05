@@ -9,6 +9,8 @@ use datafusion_common::{Result, not_impl_err};
 
 use crate::catalog::{CatalogPartitionField, LakehouseExecutionContext};
 use crate::datasource::{DataSource, DeleteInfo, MergeInfo, SourceInfo, UpdateInfo};
+use crate::lakeprocedure::LakeProcedureProvider;
+use crate::lakerelation::LakeRelationProvider;
 
 /// Metadata about an existing lake source needed during logical planning.
 #[derive(Debug, Clone)]
@@ -95,6 +97,14 @@ pub enum LakeSourceAlterTableOperation {
 /// A lakehouse data source with table metadata, DML, and DDL semantics.
 #[async_trait]
 pub trait LakeSource: DataSource {
+    fn relation_provider(self: Arc<Self>) -> Option<Arc<dyn LakeRelationProvider>> {
+        None
+    }
+
+    fn procedure_provider(self: Arc<Self>) -> Option<Arc<dyn LakeProcedureProvider>> {
+        None
+    }
+
     /// Infers table metadata for planning without requiring callers to construct a read source.
     async fn infer_metadata(
         &self,

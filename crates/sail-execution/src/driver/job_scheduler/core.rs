@@ -252,7 +252,11 @@ impl JobScheduler {
                 let attempts = &job.stages[t.stage].tasks[t.partition].attempts;
                 if let Some(attempt) = attempts.last()
                     && matches!(attempt.state, TaskState::Failed | TaskState::Canceled)
-                    && attempts.len() >= options.task_max_attempts
+                    && attempts.len()
+                        >= task_max_attempts(
+                            job.graph.stages()[t.stage].retry_policy,
+                            options.task_max_attempts,
+                        )
                 {
                     return true;
                 }
@@ -469,7 +473,7 @@ impl JobScheduler {
                     OutputMode::Blocking => match job.graph.shuffle_backend() {
                         ShuffleBackendKind::Storage { .. } => TaskOutputKind::Storage,
                         ShuffleBackendKind::Celeborn { .. } => TaskOutputKind::External,
-                        ShuffleBackendKind::Flight => unreachable!(),
+                        ShuffleBackendKind::Flight => TaskOutputKind::Local,
                     },
                 };
                 let key = StageGroupKey {
@@ -783,7 +787,10 @@ impl<'a> TaskInputBuilder<'a> {
             OutputMode::Blocking => match self.job.graph.shuffle_backend() {
                 ShuffleBackendKind::Storage { .. } => self.build_storage_locator()?,
                 ShuffleBackendKind::Celeborn { .. } => self.build_shuffle_service_locator()?,
-                ShuffleBackendKind::Flight => self.build_storage_locator()?,
+                ShuffleBackendKind::Flight => match self.producer.placement {
+                    TaskPlacement::Driver => self.build_driver_locator()?,
+                    TaskPlacement::Worker => self.build_worker_locator()?,
+                },
             },
         };
         Ok(TaskInput {
@@ -1023,7 +1030,14 @@ impl<'a> TaskOutputBuilder<'a> {
             OutputMode::Pipelined => TaskOutputLocator::Pipelined {
                 replicas: self.job.graph.replicas(self.key.stage),
             },
-            OutputMode::Blocking => TaskOutputLocator::Blocking,
+            OutputMode::Blocking => match self.job.graph.shuffle_backend() {
+                ShuffleBackendKind::Flight => TaskOutputLocator::Buffered {
+                    replicas: self.job.graph.replicas(self.key.stage),
+                },
+                ShuffleBackendKind::Storage { .. } | ShuffleBackendKind::Celeborn { .. } => {
+                    TaskOutputLocator::Blocking
+                }
+            },
         };
         Ok(TaskOutput {
             distribution,
@@ -1042,4 +1056,26 @@ struct StageGroupKey {
 struct StageGroup {
     stages: IndexSet<usize>,
     buckets: Vec<Vec<TaskSetEntry>>,
+}
+
+fn task_max_attempts(
+    policy: crate::job_graph::TaskRetryPolicy,
+    configured_max_attempts: usize,
+) -> usize {
+    match policy {
+        crate::job_graph::TaskRetryPolicy::Default => configured_max_attempts,
+        crate::job_graph::TaskRetryPolicy::Never => 1,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::task_max_attempts;
+    use crate::job_graph::TaskRetryPolicy;
+
+    #[test]
+    fn never_retry_policy_allows_only_the_initial_attempt() {
+        assert_eq!(task_max_attempts(TaskRetryPolicy::Never, 5), 1);
+        assert_eq!(task_max_attempts(TaskRetryPolicy::Default, 5), 5);
+    }
 }

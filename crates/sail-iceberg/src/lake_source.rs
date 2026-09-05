@@ -34,6 +34,11 @@ use sail_common_datafusion::datasource::{
     BucketBy, DataSource, DeleteInfo, OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode,
     SourceInfo, create_sort_order, find_path_in_options,
 };
+use sail_common_datafusion::lakeprocedure::LakeProcedureProvider;
+use sail_common_datafusion::lakerelation::{
+    LakeRelation, LakeRelationAccess, LakeRelationProvider, LakeRelationResolution,
+    LakeRelationTimeTravel,
+};
 use sail_common_datafusion::lakesource::{
     LakeSource, LakeSourceAlterTableOperation, LakeSourceCreateTableColumn,
     LakeSourceCreateTableInfo, LakeSourceCreateTableResult, LakeSourceMetadata, RowLevelOperation,
@@ -50,6 +55,7 @@ use crate::datasource::provider::IcebergTableProvider;
 use crate::datasource::type_converter::{ICEBERG_ARROW_FIELD_DOC_KEY, arrow_schema_to_iceberg};
 use crate::io::StoreContext;
 use crate::logical::IcebergTableSource;
+use crate::metadata_relation::{IcebergMetadataRelationType, metadata_relation_provider};
 use crate::operations::bootstrap::{
     NewTableMetadataStyle, bootstrap_empty_table_metadata, replace_empty_table_metadata,
 };
@@ -63,7 +69,8 @@ use crate::schema_evolution::SchemaEvolver;
 use crate::spec::{FormatVersion, MetadataLog, PartitionSpec, Schema, Snapshot, TableMetadata};
 use crate::table::metadata_loader::{
     encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
-    metadata_file_version_from_path, metadata_location_to_object_path_string, write_version_hint,
+    metadata_file_version_from_path, metadata_location_to_object_path_string,
+    table_metadata_location, write_version_hint,
 };
 use crate::table::{Table, find_latest_metadata_file};
 use crate::utils::metadata::metadata_files_for_version;
@@ -133,6 +140,9 @@ impl DataSource for IcebergLakeSource {
                     sort_order,
                     options,
                     lakehouse_table,
+                    defer_commit: false,
+                    target_file_size: None,
+                    write_partitions: None,
                 },
             )),
         }))
@@ -140,7 +150,58 @@ impl DataSource for IcebergLakeSource {
 }
 
 #[async_trait]
+impl LakeRelationProvider for IcebergLakeSource {
+    fn resolve_relation(&self, name: &str) -> LakeRelationResolution {
+        let Some(relation_type) = IcebergMetadataRelationType::parse(name) else {
+            return LakeRelationResolution::Unrecognized;
+        };
+        if relation_type.is_supported() {
+            LakeRelationResolution::Supported(LakeRelation::new(
+                relation_type.name(),
+                LakeRelationAccess::MetadataRead,
+                LakeRelationTimeTravel::Unsupported,
+            ))
+        } else {
+            LakeRelationResolution::Unsupported {
+                reason: relation_type.unsupported_reason(),
+            }
+        }
+    }
+
+    async fn create_relation(
+        &self,
+        ctx: &dyn Session,
+        info: SourceInfo,
+        relation: LakeRelation,
+    ) -> Result<Arc<dyn TableSource>> {
+        let relation_type =
+            IcebergMetadataRelationType::parse(relation.name()).ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "Unknown Iceberg metadata table: {}",
+                    relation.name()
+                ))
+            })?;
+        if !relation_type.is_supported() {
+            return not_impl_err!("{}", relation_type.unsupported_reason());
+        }
+        let read = resolve_iceberg_read(ctx, info, IcebergReadPurpose::MetadataRelation).await?;
+        Ok(datafusion::datasource::provider_as_source(
+            metadata_relation_provider(ctx, read.table_url, read.metadata_location, relation_type)
+                .await?,
+        ))
+    }
+}
+
+#[async_trait]
 impl LakeSource for IcebergLakeSource {
+    fn relation_provider(self: Arc<Self>) -> Option<Arc<dyn LakeRelationProvider>> {
+        Some(self)
+    }
+
+    fn procedure_provider(self: Arc<Self>) -> Option<Arc<dyn LakeProcedureProvider>> {
+        Some(self)
+    }
+
     async fn infer_metadata(
         &self,
         ctx: &dyn Session,
@@ -396,6 +457,12 @@ pub struct IcebergWriteNodeOptions {
     pub sort_order: Vec<Sort>,
     pub options: Vec<OptionLayer>,
     pub lakehouse_table: Option<LakehouseExecutionContext>,
+    /// Leaves the writer action stream uncommitted for a coordinator-owned operation.
+    pub defer_commit: bool,
+    /// Operation-specific Parquet target size. Ordinary writes use the writer default.
+    pub target_file_size: Option<u64>,
+    /// Operation-specific writer parallelism. Ordinary writes use the builder default.
+    pub write_partitions: Option<usize>,
 }
 
 #[derive(Clone, Debug, Educe)]
@@ -475,6 +542,9 @@ pub(crate) async fn plan_iceberg_write(
         sort_order,
         options,
         lakehouse_table,
+        defer_commit,
+        target_file_size,
+        write_partitions,
     } = node.options().clone();
 
     let mode = match mode {
@@ -609,7 +679,13 @@ pub(crate) async fn plan_iceberg_write(
     let mut options = IcebergWriterExecOptions::from(iceberg_options);
     options.apply_variant_shredding_option_presence(variant_shredding_option_presence);
     options.table_properties = table_properties;
-    options.lakehouse_table = lakehouse_table;
+    // A deferred coordinator commit must use the execution-time access session rather than the
+    // planning session serialized into worker commit metadata.
+    options.lakehouse_table = if defer_commit { None } else { lakehouse_table };
+    if let Some(target_file_size) = target_file_size {
+        options.target_file_size = target_file_size;
+    }
+    options.fixed_write_partitions = write_partitions;
     let logical_input_schema = Arc::new(logical_input.schema().as_arrow().clone());
     let writer_input_schema =
         input_schema_with_logical_metadata(physical_input.schema(), Some(&logical_input_schema));
@@ -636,6 +712,9 @@ pub(crate) async fn plan_iceberg_write(
         physical_sort,
         ctx,
     );
+    if let Some(write_partitions) = write_partitions {
+        builder = builder.with_write_partitions(write_partitions)?;
+    }
     if matches!(mode, PhysicalSinkMode::OverwriteIf { .. }) {
         builder = builder
             .with_expected_snapshot_id(expected_snapshot_id)
@@ -645,7 +724,11 @@ pub(crate) async fn plan_iceberg_write(
             .with_expected_snapshot_id(expected_snapshot_id)
             .with_dynamic_partition_overwrite(true);
     }
-    builder.build().await
+    if defer_commit {
+        builder.build_writer().await
+    } else {
+        builder.build().await
+    }
 }
 
 impl IcebergLakeSource {
@@ -797,6 +880,39 @@ async fn build_iceberg_provider(
     ctx: &dyn Session,
     info: SourceInfo,
 ) -> Result<Arc<IcebergTableProvider>> {
+    let (table, iceberg_options) =
+        load_iceberg_read_table(ctx, info, IcebergReadPurpose::DataScan).await?;
+    Ok(Arc::new(table.to_provider(&iceberg_options)?))
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum IcebergReadPurpose {
+    DataScan,
+    MetadataRelation,
+}
+
+pub(crate) async fn load_iceberg_read_table(
+    ctx: &dyn Session,
+    info: SourceInfo,
+    read_purpose: IcebergReadPurpose,
+) -> Result<(Table, IcebergReadOptions)> {
+    let read = resolve_iceberg_read(ctx, info, read_purpose).await?;
+    let table =
+        Table::load_with_metadata_location(ctx, read.table_url, read.metadata_location).await?;
+    Ok((table, read.options))
+}
+
+struct IcebergResolvedRead {
+    table_url: Url,
+    metadata_location: Option<String>,
+    options: IcebergReadOptions,
+}
+
+async fn resolve_iceberg_read(
+    ctx: &dyn Session,
+    info: SourceInfo,
+    read_purpose: IcebergReadPurpose,
+) -> Result<IcebergResolvedRead> {
     let SourceInfo {
         paths,
         lakehouse_table,
@@ -809,7 +925,14 @@ async fn build_iceberg_provider(
         read_case_sensitive: _,
     } = info;
 
-    validate_iceberg_read_lakehouse_context(lakehouse_table.as_ref())?;
+    match read_purpose {
+        IcebergReadPurpose::DataScan => {
+            validate_iceberg_read_lakehouse_context(lakehouse_table.as_ref())?
+        }
+        IcebergReadPurpose::MetadataRelation => {
+            validate_iceberg_lakehouse_storage_access(lakehouse_table.as_ref())?
+        }
+    }
     let table_url = IcebergLakeSource::parse_table_url(paths).await?;
     let metadata_location = metadata_location_from_options(&options);
     let catalog_managed_table = catalog_managed_iceberg_from_options(&options);
@@ -819,8 +942,11 @@ async fn build_iceberg_provider(
         metadata_location,
         catalog_managed_table,
     )?;
-    let table = Table::load_with_metadata_location(ctx, table_url, metadata_location).await?;
-    Ok(Arc::new(table.to_provider(&iceberg_options)?))
+    Ok(IcebergResolvedRead {
+        table_url,
+        metadata_location,
+        options: iceberg_options,
+    })
 }
 
 fn validate_iceberg_read_lakehouse_context(
@@ -841,7 +967,7 @@ fn validate_iceberg_read_lakehouse_context(
     Ok(())
 }
 
-fn validate_iceberg_lakehouse_storage_access(
+pub(crate) fn validate_iceberg_lakehouse_storage_access(
     lakehouse_table: Option<&LakehouseExecutionContext>,
 ) -> Result<()> {
     let Some(context) = lakehouse_table else {
@@ -1063,51 +1189,6 @@ fn next_partition_spec_id(metadata: &TableMetadata) -> i32 {
         + 1
 }
 
-pub(crate) fn table_metadata_location(table_url: &Url, metadata_file: &str) -> Result<String> {
-    if crate::utils::parse_absolute_url(metadata_file).is_some() {
-        return Ok(metadata_file.to_string());
-    }
-
-    let relative_metadata_file = relative_metadata_file(table_url, metadata_file)?;
-    Ok(table_url
-        .join(&relative_metadata_file)
-        .map_err(|e| DataFusionError::External(Box::new(e)))?
-        .to_string())
-}
-
-fn relative_metadata_file(table_url: &Url, metadata_file: &str) -> Result<String> {
-    let base_path = crate::utils::url_to_object_path(table_url)?.to_string();
-    let metadata_file = metadata_file.trim_start_matches('/');
-
-    if let Some(relative) = strip_path_prefix(metadata_file, &base_path) {
-        return Ok(relative.to_string());
-    }
-    if table_url.scheme() == "file"
-        && let Some(base_without_drive) = strip_windows_drive_prefix(&base_path)
-        && let Some(relative) = strip_path_prefix(metadata_file, base_without_drive)
-    {
-        return Ok(relative.to_string());
-    }
-    Ok(metadata_file.to_string())
-}
-
-fn strip_path_prefix<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
-    let prefix = prefix.trim_matches('/');
-    if prefix.is_empty() {
-        return None;
-    }
-    path.strip_prefix(prefix)?.strip_prefix('/')
-}
-
-fn strip_windows_drive_prefix(path: &str) -> Option<&str> {
-    let bytes = path.as_bytes();
-    if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/' {
-        Some(&path[3..])
-    } else {
-        None
-    }
-}
-
 fn iceberg_table_properties_from_catalog_create(
     properties: Vec<(String, String)>,
 ) -> Result<Vec<(String, String)>> {
@@ -1261,6 +1342,41 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn metadata_relation_capability_distinguishes_resolution_outcomes() -> Result<()> {
+        let relation_provider = IcebergLakeSource;
+
+        assert_eq!(
+            relation_provider.resolve_relation("SNAPSHOTS"),
+            LakeRelationResolution::Supported(LakeRelation::new(
+                "snapshots",
+                LakeRelationAccess::MetadataRead,
+                LakeRelationTimeTravel::Unsupported,
+            ))
+        );
+        assert_eq!(
+            relation_provider.resolve_relation("manifests"),
+            LakeRelationResolution::Supported(LakeRelation::new(
+                "manifests",
+                LakeRelationAccess::MetadataRead,
+                LakeRelationTimeTravel::Unsupported,
+            ))
+        );
+        assert_eq!(
+            relation_provider.resolve_relation("files"),
+            LakeRelationResolution::Supported(LakeRelation::new(
+                "files",
+                LakeRelationAccess::MetadataRead,
+                LakeRelationTimeTravel::Unsupported,
+            ))
+        );
+        assert_eq!(
+            relation_provider.resolve_relation("unknown_relation"),
+            LakeRelationResolution::Unrecognized
+        );
+        Ok(())
+    }
 
     #[test]
     fn dynamic_partition_overwrite_missing_table_is_a_plan_error() -> Result<()> {
@@ -1424,33 +1540,6 @@ mod tests {
         assert_eq!(
             url.as_str(),
             "file:///C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn table_metadata_location_preserves_file_uri_drive() -> Result<()> {
-        let table_url =
-            Url::parse("file:///C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/")
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        assert_eq!(
-            table_metadata_location(&table_url, "metadata/v1.metadata.json")?,
-            "file:///C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/metadata/v1.metadata.json"
-        );
-        assert_eq!(
-            table_metadata_location(
-                &table_url,
-                "C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/metadata/v1.metadata.json",
-            )?,
-            "file:///C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/metadata/v1.metadata.json"
-        );
-        assert_eq!(
-            table_metadata_location(
-                &table_url,
-                "Users/runneradmin/AppData/Local/Temp/iceberg_table/metadata/v1.metadata.json",
-            )?,
-            "file:///C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/metadata/v1.metadata.json"
         );
         Ok(())
     }

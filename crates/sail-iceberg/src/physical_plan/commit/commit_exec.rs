@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use datafusion::arrow::array::Int64Array;
+use datafusion::arrow::array::{Int32Array, Int64Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::tree_node::TreeNodeRecursion;
@@ -125,6 +125,48 @@ fn commit_count_batch(schema: SchemaRef, row_count: u64) -> Result<RecordBatch> 
         .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
 }
 
+#[derive(Debug, Clone)]
+enum CommitOutput {
+    RowCount,
+    RewriteDataFiles {
+        rewritten_data_files_count: i32,
+        rewritten_bytes_count: i64,
+    },
+}
+
+fn commit_output_batch(
+    schema: SchemaRef,
+    output: &CommitOutput,
+    row_count: u64,
+    added_data_files_count: usize,
+) -> Result<RecordBatch> {
+    match output {
+        CommitOutput::RowCount => commit_count_batch(schema, row_count),
+        CommitOutput::RewriteDataFiles {
+            rewritten_data_files_count,
+            rewritten_bytes_count,
+        } => {
+            let added_data_files_count =
+                i32::try_from(added_data_files_count).map_err(|error| {
+                    DataFusionError::Execution(format!(
+                        "rewrite_data_files added file count overflow: {error}"
+                    ))
+                })?;
+            RecordBatch::try_new(
+                schema,
+                vec![
+                    Arc::new(Int32Array::from(vec![*rewritten_data_files_count])),
+                    Arc::new(Int32Array::from(vec![added_data_files_count])),
+                    Arc::new(Int64Array::from(vec![*rewritten_bytes_count])),
+                    Arc::new(Int32Array::from(vec![0])),
+                    Arc::new(Int32Array::from(vec![0])),
+                ],
+            )
+            .map_err(|error| DataFusionError::ArrowError(Box::new(error), None))
+        }
+    }
+}
+
 fn expected_snapshot_requirement(
     expected_snapshot_id: Option<Option<i64>>,
 ) -> Option<TableRequirement> {
@@ -134,19 +176,36 @@ fn expected_snapshot_requirement(
     })
 }
 
+fn initializes_catalog_metadata_pointer(
+    expected_snapshot_id: Option<Option<i64>>,
+    commit_mode: IcebergCatalogCommitMode,
+    catalog_metadata_location: Option<&str>,
+) -> bool {
+    expected_snapshot_id.is_none()
+        && catalog_metadata_location.is_none()
+        && commit_mode.uses_metadata_location_update()
+}
+
 fn validate_scoped_overwrite_format(
     snapshot_update_kind: SnapshotUpdateKind,
     format_version: FormatVersion,
 ) -> Result<()> {
-    if matches!(snapshot_update_kind, SnapshotUpdateKind::CopyOnWrite)
-        && matches!(format_version, FormatVersion::V3)
-    {
+    if snapshot_update_kind.is_targeted_rewrite() && matches!(format_version, FormatVersion::V3) {
         return Err(DataFusionError::NotImplemented(
             "Iceberg v3 scoped overwrite is not supported until row lineage is preserved"
                 .to_string(),
         ));
     }
     Ok(())
+}
+
+fn empty_rewrite_is_noop(
+    snapshot_update_kind: SnapshotUpdateKind,
+    dynamic_partition_overwrite: bool,
+) -> bool {
+    matches!(snapshot_update_kind, SnapshotUpdateKind::RewriteDataFiles)
+        || (matches!(snapshot_update_kind, SnapshotUpdateKind::CopyOnWrite)
+            && dynamic_partition_overwrite)
 }
 
 #[derive(Debug)]
@@ -158,6 +217,7 @@ pub struct IcebergCommitExec {
     expected_snapshot_id: Option<Option<i64>>,
     removed_data_file_paths: Vec<String>,
     dynamic_partition_overwrite: bool,
+    output: CommitOutput,
     cache: Arc<PlanProperties>,
 }
 
@@ -187,6 +247,7 @@ impl IcebergCommitExec {
             expected_snapshot_id: None,
             removed_data_file_paths: Vec::new(),
             dynamic_partition_overwrite: false,
+            output: CommitOutput::RowCount,
             cache,
         }
     }
@@ -203,6 +264,25 @@ impl IcebergCommitExec {
 
     pub fn with_dynamic_partition_overwrite(mut self, enabled: bool) -> Self {
         self.dynamic_partition_overwrite = enabled;
+        self
+    }
+
+    pub fn with_rewrite_data_files_output(
+        mut self,
+        schema: SchemaRef,
+        rewritten_data_files_count: i32,
+        rewritten_bytes_count: i64,
+    ) -> Self {
+        self.output = CommitOutput::RewriteDataFiles {
+            rewritten_data_files_count,
+            rewritten_bytes_count,
+        };
+        self.cache = Arc::new(PlanProperties::new(
+            EquivalenceProperties::new(schema),
+            Partitioning::UnknownPartitioning(1),
+            EmissionType::Final,
+            Boundedness::Bounded,
+        ));
         self
     }
 
@@ -660,17 +740,27 @@ impl ExecutionPlan for IcebergCommitExec {
         if children.len() != 1 {
             return internal_err!("IcebergCommitExec requires exactly one child");
         }
-        Ok(Arc::new(
-            Self::new(
-                Arc::clone(&children[0]),
-                self.table_url.clone(),
-                self.lakehouse_table.clone(),
-                self.snapshot_update_kind,
-            )
-            .with_expected_snapshot_id(self.expected_snapshot_id)
-            .with_removed_data_file_paths(self.removed_data_file_paths.clone())
-            .with_dynamic_partition_overwrite(self.dynamic_partition_overwrite),
-        ))
+        let mut commit = Self::new(
+            Arc::clone(&children[0]),
+            self.table_url.clone(),
+            self.lakehouse_table.clone(),
+            self.snapshot_update_kind,
+        )
+        .with_expected_snapshot_id(self.expected_snapshot_id)
+        .with_removed_data_file_paths(self.removed_data_file_paths.clone())
+        .with_dynamic_partition_overwrite(self.dynamic_partition_overwrite);
+        if let CommitOutput::RewriteDataFiles {
+            rewritten_data_files_count,
+            rewritten_bytes_count,
+        } = &self.output
+        {
+            commit = commit.with_rewrite_data_files_output(
+                self.schema(),
+                *rewritten_data_files_count,
+                *rewritten_bytes_count,
+            );
+        }
+        Ok(Arc::new(commit))
     }
 
     fn execute(
@@ -697,6 +787,7 @@ impl ExecutionPlan for IcebergCommitExec {
         let expected_snapshot_id = self.expected_snapshot_id;
         let planned_removed_data_file_paths = self.removed_data_file_paths.clone();
         let dynamic_partition_overwrite = self.dynamic_partition_overwrite;
+        let output = self.output.clone();
         let schema = self.schema();
         let future = async move {
             let object_store = get_object_store_from_context(&context, &table_url)?;
@@ -730,6 +821,7 @@ impl ExecutionPlan for IcebergCommitExec {
             }
 
             let task_file_paths = task_file_paths(&added_data_files, &added_delete_files);
+            let added_data_files_count = added_data_files.len();
             let mut task_files_may_be_committed = false;
             // FIXME: Move task-file cleanup to the job terminal state. Attempt-local cleanup is
             // unsafe when blocking-shuffle retries replay these actions.
@@ -738,7 +830,7 @@ impl ExecutionPlan for IcebergCommitExec {
             // No-op path (e.g. IgnoreIfExists on existing table): no rows, no meta.
             if commit_meta.is_none() && added_data_files.is_empty() && added_delete_files.is_empty()
             {
-                return commit_count_batch(schema, 0);
+                return commit_output_batch(schema, &output, 0, 0);
             }
 
             let commit_meta = commit_meta.ok_or_else(|| {
@@ -767,7 +859,7 @@ impl ExecutionPlan for IcebergCommitExec {
             {
                 commit_info.requirements.push(requirement);
             }
-            if !matches!(snapshot_update_kind, SnapshotUpdateKind::CopyOnWrite)
+            if !snapshot_update_kind.is_targeted_rewrite()
                 && (dynamic_partition_overwrite || !planned_removed_data_file_paths.is_empty())
             {
                 return Err(DataFusionError::Internal(
@@ -806,9 +898,11 @@ impl ExecutionPlan for IcebergCommitExec {
                     .or_else(|| catalog_table_info.metadata_location.clone());
             // A catalog entry can precede the first metadata commit for a write planned without
             // a base table. Only that plan may initialize the catalog pointer with a CAS update.
-            let initializes_catalog_metadata_pointer = expected_snapshot_id.is_none()
-                && catalog_recorded_metadata_location.is_none()
-                && catalog_commit_mode.uses_metadata_location_update();
+            let initializes_catalog_metadata_pointer = initializes_catalog_metadata_pointer(
+                expected_snapshot_id,
+                catalog_commit_mode,
+                catalog_recorded_metadata_location.as_deref(),
+            );
             let catalog_metadata_location = if initializes_catalog_metadata_pointer {
                 None
             } else {
@@ -905,7 +999,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     }
                 }
 
-                return commit_count_batch(schema, commit_info.row_count);
+                return commit_output_batch(schema, &output, commit_info.row_count, added_data_files_count);
             };
 
             let mut attempt = 0;
@@ -954,13 +1048,12 @@ impl ExecutionPlan for IcebergCommitExec {
                         current_schema,
                     )?;
                 }
-                if matches!(snapshot_update_kind, SnapshotUpdateKind::CopyOnWrite)
-                    && dynamic_partition_overwrite
+                if empty_rewrite_is_noop(snapshot_update_kind, dynamic_partition_overwrite)
                     && commit_info.data_files.is_empty()
                     && commit_info.delete_files.is_empty()
                     && removed_data_file_paths.is_empty()
                 {
-                    return commit_count_batch(schema, commit_info.row_count);
+                    return commit_output_batch(schema, &output, commit_info.row_count, 0);
                 }
                 let original_format_version = table_meta.format_version;
                 let mut metadata_updates = Vec::new();
@@ -1095,7 +1188,12 @@ impl ExecutionPlan for IcebergCommitExec {
                                     log::trace!("Iceberg catalog commit returned a payload");
                                 }
                                 prepared_snapshot.commit_succeeded();
-                                return commit_count_batch(schema, commit_info.row_count);
+                                return commit_output_batch(
+                                    schema,
+                                    &output,
+                                    commit_info.row_count,
+                                    added_data_files_count,
+                                );
                             }
                             CatalogCommitOutcome::NotSupported => {
                                 task_files_may_be_committed = false;
@@ -1173,7 +1271,7 @@ impl ExecutionPlan for IcebergCommitExec {
                         .await?;
                     }
 
-                    return commit_count_batch(schema, commit_info.row_count);
+                    return commit_output_batch(schema, &output, commit_info.row_count, added_data_files_count);
                 }
 
                 let snapshot = maybe_snapshot.ok_or_else(|| {
@@ -1275,7 +1373,12 @@ impl ExecutionPlan for IcebergCommitExec {
                                 log::trace!("Iceberg catalog commit returned a payload");
                             }
                             prepared_snapshot.commit_succeeded();
-                            return commit_count_batch(schema, commit_info.row_count);
+                            return commit_output_batch(
+                                schema,
+                                &output,
+                                commit_info.row_count,
+                                added_data_files_count,
+                            );
                         }
                         CatalogCommitOutcome::NotSupported
                             if matches!(
@@ -1478,7 +1581,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     .await?;
                 }
 
-                return commit_count_batch(schema, commit_info.row_count);
+                return commit_output_batch(schema, &output, commit_info.row_count, added_data_files_count);
             }
             }
             .await;
@@ -1546,6 +1649,46 @@ mod tests {
         DataContentType, DataFileFormat, FormatVersion, Operation, SnapshotBuilder,
         SnapshotReference, SnapshotRetention,
     };
+
+    #[test]
+    fn catalog_pointer_initialization_requires_a_planned_new_table_and_cas_commit() {
+        for commit_mode in [
+            IcebergCatalogCommitMode::MetadataLocationCas,
+            IcebergCatalogCommitMode::CompatibilityCatalogCommit,
+        ] {
+            assert!(initializes_catalog_metadata_pointer(
+                None,
+                commit_mode,
+                None
+            ));
+            assert!(!initializes_catalog_metadata_pointer(
+                Some(None),
+                commit_mode,
+                None
+            ));
+            assert!(!initializes_catalog_metadata_pointer(
+                Some(Some(42)),
+                commit_mode,
+                None
+            ));
+            assert!(!initializes_catalog_metadata_pointer(
+                None,
+                commit_mode,
+                Some("s3://bucket/table/metadata/00000.metadata.json")
+            ));
+        }
+
+        assert!(!initializes_catalog_metadata_pointer(
+            None,
+            IcebergCatalogCommitMode::Filesystem,
+            None
+        ));
+        assert!(!initializes_catalog_metadata_pointer(
+            None,
+            IcebergCatalogCommitMode::CatalogCommit,
+            None
+        ));
+    }
 
     #[test]
     fn scoped_overwrite_rejects_effective_v3_after_schema_evolution() {
@@ -1760,6 +1903,19 @@ mod tests {
         )
         .expect("empty dynamic overwrite");
         assert!(paths.is_empty());
+    }
+
+    #[test]
+    fn empty_predicate_overwrite_keeps_delete_intent() {
+        assert!(!empty_rewrite_is_noop(
+            SnapshotUpdateKind::CopyOnWrite,
+            false
+        ));
+        assert!(empty_rewrite_is_noop(SnapshotUpdateKind::CopyOnWrite, true));
+        assert!(empty_rewrite_is_noop(
+            SnapshotUpdateKind::RewriteDataFiles,
+            false
+        ));
     }
 
     #[derive(Debug)]

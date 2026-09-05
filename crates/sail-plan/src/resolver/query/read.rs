@@ -9,11 +9,16 @@ use datafusion_expr::{
     Expr, LogicalPlan, SubqueryAlias, TableScanBuilder, TableSource, UNNAMED_TABLE,
 };
 use rand::{RngExt, rng};
+use sail_catalog::error::CatalogError;
+use sail_catalog::lakehouse::TableAccessPurpose;
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::{LakehouseOperation, TableColumnStatus, TableKind};
 use sail_common_datafusion::datasource::{DataSourceRegistry, OptionLayer, SourceInfo};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::lakerelation::{
+    LakeRelationAccess, LakeRelationResolution, LakeRelationTimeTravel,
+};
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_common_datafusion::rename::table_provider::RenameTableProvider;
@@ -68,8 +73,10 @@ impl PlanResolver<'_> {
             }
         }
 
-        let table_reference = self.resolve_table_reference(&name)?;
-        if let Some(cte) = state.get_cte(&table_reference) {
+        let table_reference = self.resolve_table_reference(&name);
+        if let Ok(table_reference) = &table_reference
+            && let Some(cte) = state.get_cte(table_reference)
+        {
             if temporal.is_some() {
                 return Err(PlanError::unsupported(
                     "SQL time travel is not supported for CTEs",
@@ -84,11 +91,56 @@ impl PlanResolver<'_> {
         }
 
         let reference: Vec<String> = name.clone().into();
-        let status = self
-            .ctx
-            .extension::<CatalogManager>()?
-            .get_table_or_view(&reference)
-            .await?;
+        let manager = self.ctx.extension::<CatalogManager>()?;
+        let data_source_registry = self.ctx.extension::<DataSourceRegistry>()?;
+        let (status, catalog_reference, lake_relation) =
+            match manager.get_table_or_view(&reference).await {
+                Ok(status) => (status, reference.clone(), None),
+                Err(error @ CatalogError::NotFound(_, _))
+                | Err(error @ CatalogError::NotSupported(_)) => {
+                    let Some((candidate_name, base_reference)) = reference.split_last() else {
+                        return Err(error.into());
+                    };
+                    if base_reference.is_empty() {
+                        return Err(error.into());
+                    }
+                    let base_status = match manager.get_table_or_view(base_reference).await {
+                        Ok(status) => status,
+                        Err(CatalogError::NotFound(_, _) | CatalogError::NotSupported(_)) => {
+                            return Err(error.into());
+                        }
+                        Err(base_error) => return Err(base_error.into()),
+                    };
+                    let TableKind::Table { format, .. } = &base_status.kind else {
+                        return Err(error.into());
+                    };
+                    let Some(lake_source) =
+                        data_source_registry.get_lake_source_if_supported(format)?
+                    else {
+                        return Err(error.into());
+                    };
+                    let Some(relation_provider) = lake_source.relation_provider() else {
+                        return Err(error.into());
+                    };
+                    match relation_provider.resolve_relation(candidate_name) {
+                        LakeRelationResolution::Unrecognized => return Err(error.into()),
+                        LakeRelationResolution::Unsupported { reason } => {
+                            return Err(PlanError::unsupported(reason));
+                        }
+                        LakeRelationResolution::Supported(relation) => (
+                            base_status,
+                            base_reference.to_vec(),
+                            Some((relation_provider, relation)),
+                        ),
+                    }
+                }
+                Err(error) => return Err(error.into()),
+            };
+        let table_reference = match table_reference {
+            Ok(table_reference) => table_reference,
+            Err(_) if lake_relation.is_some() => lake_relation_table_reference(&reference)?,
+            Err(error) => return Err(error),
+        };
         let plan = match status.kind {
             TableKind::Table {
                 columns,
@@ -102,22 +154,41 @@ impl PlanResolver<'_> {
                 properties,
                 is_external: _,
             } => {
+                if let Some((_, relation)) = lake_relation.as_ref()
+                    && relation.time_travel() == LakeRelationTimeTravel::Unsupported
+                    && temporal.is_some()
+                {
+                    return Err(PlanError::unsupported(format!(
+                        "SQL time travel is not supported for lake relation '{}'",
+                        relation.name()
+                    )));
+                }
                 let schema = Schema::new(columns.iter().map(|x| x.field()).collect::<Vec<_>>());
                 let constraints = self.resolve_catalog_table_constraints(constraints, &schema)?;
                 let temporal_options = self
                     .resolve_time_travel_options(&format, temporal, state)
                     .await?;
+                let lakehouse_table = if let Some((_, relation)) = lake_relation.as_ref() {
+                    self.resolve_lakehouse_table_context_for_access(
+                        &catalog_reference,
+                        LakehouseOperation::Read,
+                        Some(&format),
+                        vec![],
+                        lake_relation_access_purpose(relation.access()),
+                    )
+                    .await?
+                } else {
+                    self.resolve_lakehouse_table_context(
+                        &catalog_reference,
+                        LakehouseOperation::Read,
+                        Some(&format),
+                        vec![],
+                    )
+                    .await?
+                };
                 let info = SourceInfo {
                     paths: location.map(|x| vec![x]).unwrap_or_default(),
-                    lakehouse_table: Some(
-                        self.resolve_lakehouse_table_context(
-                            &reference,
-                            LakehouseOperation::Read,
-                            Some(&format),
-                            vec![],
-                        )
-                        .await?,
-                    ),
+                    lakehouse_table: Some(lakehouse_table),
                     schema: Some(schema),
                     constraints,
                     partition_by: partition_by.into_iter().map(|field| field.column).collect(),
@@ -133,11 +204,19 @@ impl PlanResolver<'_> {
                     ],
                     read_case_sensitive: self.config.case_sensitive,
                 };
-                let registry = self.ctx.extension::<DataSourceRegistry>()?;
-                let table_source = registry
-                    .get_data_source(&format)?
-                    .create_source(&self.ctx.state(), info)
-                    .await?;
+                let table_source = match lake_relation {
+                    Some((relation_provider, relation)) => {
+                        relation_provider
+                            .create_relation(&self.ctx.state(), info, relation)
+                            .await?
+                    }
+                    None => {
+                        data_source_registry
+                            .get_data_source(&format)?
+                            .create_source(&self.ctx.state(), info)
+                            .await?
+                    }
+                };
                 self.resolve_table_source_with_rename(
                     table_source,
                     table_reference,
@@ -560,5 +639,30 @@ impl PlanResolver<'_> {
         } else {
             Ok(table_scan)
         }
+    }
+}
+
+fn lake_relation_table_reference(reference: &[String]) -> PlanResult<TableReference> {
+    match reference {
+        [prefix @ .., schema, table] => match prefix.last() {
+            Some(catalog) => Ok(TableReference::Full {
+                catalog: Arc::from(catalog.as_str()),
+                schema: Arc::from(schema.as_str()),
+                table: Arc::from(table.as_str()),
+            }),
+            None => Err(PlanError::invalid(format!(
+                "lake relation reference: {reference:?}"
+            ))),
+        },
+        _ => Err(PlanError::invalid(format!(
+            "lake relation reference: {reference:?}"
+        ))),
+    }
+}
+
+fn lake_relation_access_purpose(access: LakeRelationAccess) -> TableAccessPurpose {
+    match access {
+        LakeRelationAccess::MetadataRead => TableAccessPurpose::MetadataRead,
+        LakeRelationAccess::DataRead => TableAccessPurpose::DataRead,
     }
 }

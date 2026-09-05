@@ -22,6 +22,7 @@ pub(crate) mod merge_row_projection;
 pub mod partition_transform_expr;
 pub mod plan_builder;
 mod position_delete_writer;
+pub mod procedure_exec;
 pub mod scan_by_data_files_exec;
 pub(crate) mod write_context;
 mod write_location;
@@ -36,6 +37,7 @@ pub use manifest_scan_exec::IcebergManifestScanExec;
 pub use merge_metadata_exec::IcebergMergeMetadataExec;
 pub use partition_transform_expr::IcebergPartitionTransformExpr;
 pub use plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
+pub use procedure_exec::{IcebergProcedureExec, validate_iceberg_procedure_call_identity};
 pub use scan_by_data_files_exec::IcebergScanByDataFilesExec;
 pub use write_context::{
     IcebergBaseWriteContext, IcebergWriteContext, prepare_iceberg_write_context,

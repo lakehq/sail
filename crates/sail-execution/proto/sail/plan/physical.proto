@@ -71,6 +71,8 @@ message ExtendedPhysicalPlanNode {
     IcebergMergeMetadataExecNode iceberg_merge_metadata = 56;
     IcebergEqualityDeleteWriterExecNode iceberg_equality_delete_writer = 57;
     PartitionedTopKExecNode partitioned_top_k = 58;
+    LakeProcedureExecNode lake_procedure = 59;
+    IcebergProcedureExecNode iceberg_procedure = 60;
   }
 }
 
@@ -1010,6 +1012,7 @@ enum IcebergSnapshotUpdateKind {
   ICEBERG_SNAPSHOT_UPDATE_KIND_FULL_OVERWRITE = 2;
   ICEBERG_SNAPSHOT_UPDATE_KIND_ROW_DELTA = 3;
   ICEBERG_SNAPSHOT_UPDATE_KIND_COPY_ON_WRITE = 4;
+  ICEBERG_SNAPSHOT_UPDATE_KIND_REWRITE_DATA_FILES = 5;
 }
 
 message IcebergCommitExecNode {
@@ -1029,6 +1032,9 @@ message IcebergManifestScanExecNode {
   string table_url = 1;
   // Iceberg Snapshot serialized as JSON.
   string snapshot_json = 2;
+  // Whether selected_data_file_paths is an allowlist. False means scan all live data files.
+  bool filter_data_files = 3;
+  repeated string selected_data_file_paths = 4;
 }
 
 message IcebergDiscoveryExecNode {
@@ -1157,6 +1163,29 @@ message CatalogCommandExecNode {
   bytes schema = 1;
   // JSON-encoded CatalogCommand.
   string command = 2;
+}
+
+message LakeProcedureExecNode {
+  // Schema for the procedure output.
+  bytes schema = 1;
+  // JSON-encoded LakeProcedureCall.
+  string call = 2;
+  // Provider-planned procedure implementation.
+  bytes input = 3;
+  // 0 = coordinator, 1 = distributed.
+  uint32 root_placement = 4;
+}
+
+message IcebergProcedureExecNode {
+  // JSON-encoded LakeProcedureCall.
+  string call = 1;
+  // JSON-encoded table state for a worker-side metadata read. Empty for coordinator commits,
+  // which reacquire the table immediately before execution.
+  string planned_table = 2;
+  // Worker-side writer action stream for rewrite_data_files. Empty for leaf procedures.
+  bytes input = 3;
+  // JSON-encoded RewriteDataFilesPlan. Empty for other procedures.
+  string rewrite_data_files = 4;
 }
 
 message BarrierExecNode {

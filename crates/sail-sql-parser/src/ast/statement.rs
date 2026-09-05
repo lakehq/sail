@@ -3,10 +3,10 @@ use sail_sql_macro::{TreeParser, TreeSyntax, TreeText};
 
 use crate::ast;
 use crate::ast::data_type::DataType;
-use crate::ast::expression::{BooleanLiteral, Expr, OrderDirection};
+use crate::ast::expression::{BooleanLiteral, Expr, FunctionArgumentList, OrderDirection};
 use crate::ast::identifier::{Ident, ObjectName, table_ident};
 use crate::ast::keywords::{
-    Add, After, All, Alter, Always, Analyze, And, As, Buckets, By, Cache, Cascade, Catalog,
+    Add, After, All, Alter, Always, Analyze, And, As, Buckets, By, Cache, Call, Cascade, Catalog,
     Catalogs, Change, Check, Clear, Cluster, Clustered, Codegen, Collection, Column, Columns,
     Comment, Compute, Constraint, Cost, Create, Data, Database, Databases, Dbproperties, Default,
     Defined, Delete, Delimited, Desc, Describe, Directory, Distributed, Drop, Escaped, Evolution,
@@ -36,6 +36,12 @@ use crate::token::TokenLabel;
 #[parser(dependency = "(Statement, Query, Expr, DataType)", label = TokenLabel::Statement)]
 pub enum Statement {
     Query(#[parser(function = |(_, q, _, _), _| q)] Query),
+    CallProcedure {
+        call: Call,
+        name: ObjectName,
+        #[parser(function = |(_, _, e, _), o| compose(e, o))]
+        arguments: FunctionArgumentList,
+    },
     SetCatalog {
         set: Set,
         catalog: Catalog,

@@ -86,6 +86,7 @@ pub enum TaskOutputDistribution {
 #[derive(Debug, Clone)]
 pub enum TaskOutputLocator {
     Pipelined { replicas: usize },
+    Buffered { replicas: usize },
     Blocking,
 }
 
@@ -511,6 +512,11 @@ impl From<TaskOutputLocator> for r#gen::TaskOutputLocator {
             TaskOutputLocator::Blocking => {
                 r#gen::task_output_locator::Kind::Blocking(r#gen::TaskOutputBlockingLocator {})
             }
+            TaskOutputLocator::Buffered { replicas } => {
+                r#gen::task_output_locator::Kind::Buffered(r#gen::TaskOutputBufferedLocator {
+                    replicas: replicas as u64,
+                })
+            }
         };
         r#gen::TaskOutputLocator { kind: Some(kind) }
     }
@@ -527,6 +533,11 @@ impl TryFrom<r#gen::TaskOutputLocator> for TaskOutputLocator {
                 replicas: replicas as usize,
             }),
             Some(r#gen::task_output_locator::Kind::Blocking(_)) => Ok(TaskOutputLocator::Blocking),
+            Some(r#gen::task_output_locator::Kind::Buffered(
+                r#gen::TaskOutputBufferedLocator { replicas },
+            )) => Ok(TaskOutputLocator::Buffered {
+                replicas: replicas as usize,
+            }),
             None => Err(ExecutionError::InvalidArgument(
                 "cannot decode empty task output locator".to_string(),
             )),
@@ -591,5 +602,22 @@ impl TaskOutput {
                 Ok(ShufflePartitioning::RoundRobinRow(*channels))
             }
         }
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::expect_used)]
+mod tests {
+    use super::{TaskOutputLocator, r#gen};
+
+    #[test]
+    fn buffered_output_locator_round_trips_through_protobuf() {
+        let encoded: r#gen::TaskOutputLocator = TaskOutputLocator::Buffered { replicas: 3 }.into();
+        let decoded = TaskOutputLocator::try_from(encoded).expect("valid buffered locator");
+
+        assert!(matches!(
+            decoded,
+            TaskOutputLocator::Buffered { replicas: 3 }
+        ));
     }
 }
