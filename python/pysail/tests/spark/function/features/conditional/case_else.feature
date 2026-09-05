@@ -184,9 +184,6 @@ Feature: CASE ELSE values and nullability
         | false | true     |
         | true  | false    |
 
-    # TODO: Retain baseline CASE nullability until nullable cast and arithmetic
-    # results propagate through enclosing expressions such as coalesce.
-    @sail-bug
     Scenario: CASE ELSE recognizes non-null coalesce results enclosing nullable expressions
       Given config spark.sql.ansi.enabled = false
       When query
@@ -207,6 +204,37 @@ Feature: CASE ELSE values and nullability
         | cast_result | arithmetic_result |
         | 1           | 2                 |
         | 0           | 0                 |
+
+    Scenario Outline: CASE ELSE follows nested coalesce nullability with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT CASE WHEN p THEN coalesce(CAST(s AS BIGINT), 0L) ELSE 0L END AS cast_then,
+               CASE WHEN p THEN 0L ELSE coalesce(CAST(s AS BIGINT), 0L) END AS cast_else,
+               CASE WHEN p THEN coalesce(CAST(NULL AS BIGINT), coalesce(CAST(s AS BIGINT), 0L))
+                    ELSE 0L END AS nested,
+               CASE WHEN p THEN coalesce(CAST(s AS BIGINT), CAST('4' AS BIGINT))
+                    ELSE 0L END AS nullable_inputs
+        FROM VALUES (true, '1'), (true, CAST(NULL AS STRING)), (false, '2') AS t(p, s)
+        """
+      Then query schema
+        """
+        root
+         |-- cast_then: long (nullable = false)
+         |-- cast_else: long (nullable = false)
+         |-- nested: long (nullable = false)
+         |-- nullable_inputs: long (nullable = true)
+        """
+      And query result collected
+        | cast_then | cast_else | nested | nullable_inputs |
+        | 1         | 0         | 1      | 1               |
+        | 0         | 0         | 0      | 4               |
+        | 0         | 2         | 0      | 0               |
+
+      Examples:
+        | ansi  |
+        | false |
+        | true  |
 
     Scenario: CASE ELSE keeps all-null branches nullable with their common type
       When query
@@ -236,9 +264,6 @@ Feature: CASE ELSE values and nullability
         | NULL  |
         | NULL  |
 
-    # TODO: Match Spark's literal-TRUE prefix rule: ignore all later result
-    # branches and ELSE when determining nullability after WHEN true.
-    @sail-bug
     Scenario: CASE ELSE schema ignores branches after a literal true condition
       When query
         """
@@ -256,6 +281,77 @@ Feature: CASE ELSE values and nullability
       And query result collected
         | omitted | explicit | later |
         | 1       | 1        | 1     |
+
+    Scenario: CASE literal true retains nullable values within its reachable prefix
+      When query
+        """
+        SELECT CASE WHEN n IS NOT NULL THEN n WHEN true THEN 0
+                    ELSE CAST(NULL AS INT) END AS guarded_prefix,
+               CASE WHEN false THEN CAST(NULL AS INT) WHEN true THEN 1
+                    ELSE 2 END AS nullable_prefix,
+               CASE WHEN true THEN CAST(NULL AS INT) WHEN true THEN 1
+                    ELSE 2 END AS nullable_true,
+               CASE WHEN p THEN 1 WHEN true THEN 2 WHEN true THEN CAST(NULL AS INT)
+                    ELSE CAST(NULL AS INT) END AS first_true
+        FROM VALUES (CAST(NULL AS INT), true), (1, false) AS t(n, p)
+        """
+      Then query schema
+        """
+        root
+         |-- guarded_prefix: integer (nullable = true)
+         |-- nullable_prefix: integer (nullable = true)
+         |-- nullable_true: integer (nullable = true)
+         |-- first_true: integer (nullable = false)
+        """
+      And query result collected
+        | guarded_prefix | nullable_prefix | nullable_true | first_true |
+        | 0              | 1               | NULL          | 1          |
+        | 1              | 1               | NULL          | 2          |
+
+    Scenario: CASE literal true still widens with all unreachable result branches
+      When query
+        """
+        SELECT CASE WHEN true THEN 1 WHEN false THEN 4294967296L ELSE 2 END AS later_bigint,
+               CASE WHEN true THEN 1 ELSE 1.5D END AS else_double,
+               CASE WHEN true THEN 1 WHEN false THEN CAST(NULL AS DECIMAL(20,2))
+                    ELSE 2 END AS later_decimal
+        """
+      Then query schema
+        """
+        root
+         |-- later_bigint: long (nullable = false)
+         |-- else_double: double (nullable = false)
+         |-- later_decimal: decimal(20,2) (nullable = false)
+        """
+      And query result collected
+        | later_bigint | else_double | later_decimal |
+        | 1            | 1.0         | 1.00          |
+
+    Scenario: CASE schema does not treat other constant conditions as literal true
+      When query
+        """
+        SELECT CASE WHEN 1 = 1 THEN 1 END AS constant_condition,
+               CASE true WHEN true THEN 1 END AS simple_case
+        """
+      Then query schema
+        """
+        root
+         |-- constant_condition: integer (nullable = true)
+         |-- simple_case: integer (nullable = true)
+        """
+      And query result collected
+        | constant_condition | simple_case |
+        | 1                  | 1           |
+
+    # TODO: Reject non-Boolean WHEN conditions as Spark does. Sail's existing
+    # analyzer accepts this integer condition; prefix pruning leaves it intact.
+    @sail-bug
+    Scenario: CASE literal true still validates later conditions
+      When query
+        """
+        SELECT CASE WHEN true THEN 1 WHEN 42 THEN 2 ELSE 3 END
+        """
+      Then query error (?i)(boolean|bool|unexpected_input_type)
 
   Rule: Explicit ELSE preserves conditional execution
 
