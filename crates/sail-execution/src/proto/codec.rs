@@ -256,6 +256,7 @@ use sail_function::scalar::variant::spark_to_variant_object::SparkToVariantObjec
 use sail_function::scalar::variant::spark_variant_explode::SparkVariantExplodeUdf;
 use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
 use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
+use sail_function::scalar::vector::cosine_similarity::VectorCosineSimilarity;
 use sail_function::scalar::vector::inner_product::VectorInnerProduct;
 use sail_function::scalar::xml::from_xml::SparkFromXml;
 use sail_function::scalar::xml::to_xml::SparkToXml;
@@ -3195,6 +3196,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_cast_string_to_int32" => {
                 Ok(Arc::new(ScalarUDF::from(SparkCastStringToInt32::new())))
             }
+            "vector_cosine_similarity" => {
+                Ok(Arc::new(ScalarUDF::from(VectorCosineSimilarity::new())))
+            }
             "vector_inner_product" => Ok(Arc::new(ScalarUDF::from(VectorInnerProduct::new()))),
             "bitmap_count" => Ok(Arc::new(ScalarUDF::from(BitmapCount::new()))),
             "format_string" => Ok(Arc::new(ScalarUDF::from(FormatStringFunc::new()))),
@@ -3387,6 +3391,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkArrayPosition>()
             || node_inner.is::<SparkArrayCompact>()
             || node_inner.is::<SparkCastStringToInt32>()
+            || node_inner.is::<VectorCosineSimilarity>()
             || node_inner.is::<VectorInnerProduct>()
             || node_inner.is::<BitmapCount>()
             || node_inner.is::<FormatStringFunc>()
@@ -6177,6 +6182,21 @@ mod tests {
                 .is_some()
         );
         assert_eq!(decoded.name(), "vector_inner_product");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_vector_cosine_similarity_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(VectorCosineSimilarity::new()))?;
+
+        assert!(
+            decoded
+                .inner()
+                .downcast_ref::<VectorCosineSimilarity>()
+                .is_some()
+        );
+        assert_eq!(decoded.name(), "vector_cosine_similarity");
 
         Ok(())
     }
