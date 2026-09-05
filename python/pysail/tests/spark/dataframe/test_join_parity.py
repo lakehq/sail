@@ -1,9 +1,12 @@
 """Parity of `JOIN` with every join type, criteria and key shape.
 
 The join type, the criteria (`ON` / `USING` / `NATURAL`) and the shape of the key are independent
-axes, and Spark resolves the key name with the analyzer resolver, so every case runs under both
-values of `spark.sql.caseSensitive`. The analyzer itself is pinned for the same reason it is pinned
-in `test_dataframe_columns.py`: a default that moves would quietly change what these assert.
+axes. Spark resolves the key name with the analyzer resolver, so the cases that spell the key
+differently on the two sides -- `key/key differing in case` for `USING` and
+`key/natural key differing in case` for `NATURAL` -- are the ones that separate the two values of
+`spark.sql.caseSensitive`; the rest run under both to pin that the setting leaves them alone. The
+analyzer itself is pinned for the same reason it is pinned in `test_dataframe_columns.py`: a
+default that moves would quietly change what these assert.
 
 Every expectation was measured against Spark before it was written down.
 """
@@ -41,6 +44,7 @@ QUERIES = {
     "key/two keys": "SELECT * FROM (SELECT 1 AS a, 2 AS b, 3 AS c) AS l JOIN (SELECT 1 AS a, 2 AS b, 4 AS d) AS r USING (a, b)",
     "key/key repeated in the clause": "SELECT * FROM (SELECT * FROM VALUES (1,'x'),(2,'y'),(NULL,'z') AS t(k, lv)) AS l JOIN (SELECT * FROM VALUES (1,'p'),(3,'q'),(NULL,'r') AS t(k, rv)) AS r USING (k, k)",
     "key/key differing in case": "SELECT * FROM (SELECT 1 AS a, 'p' AS b) AS l JOIN (SELECT 1 AS A, 'q' AS c) AS r USING (A)",
+    "key/natural key differing in case": "SELECT * FROM (SELECT 1 AS a, 'p' AS b) AS l NATURAL JOIN (SELECT 1 AS A, 'q' AS c) AS r",
     "key/key duplicated on the left": "SELECT * FROM (SELECT 1 AS a, 1 AS a) AS l JOIN (SELECT 1 AS a) AS r USING (a)",
     "key/key duplicated on the right": "SELECT * FROM (SELECT 1 AS a) AS l JOIN (SELECT 1 AS a, 1 AS a) AS r USING (a)",
     "key/key missing on the right": "SELECT * FROM (SELECT 1 AS a) AS l JOIN (SELECT 1 AS b) AS r USING (a)",
@@ -284,6 +288,20 @@ RESULTS = [
     ),
     ("on/LEFT SEMI", "false", ["k", "lv"], "struct<k:int,lv:string>", ["{'k': 1, 'lv': 'x'}"]),
     ("on/LEFT SEMI", "true", ["k", "lv"], "struct<k:int,lv:string>", ["{'k': 1, 'lv': 'x'}"]),
+    (
+        "key/natural key differing in case",
+        "false",
+        ["a", "b", "c"],
+        "struct<a:int,b:string,c:string>",
+        ["{'a': 1, 'b': 'p', 'c': 'q'}"],
+    ),
+    (
+        "key/natural key differing in case",
+        "true",
+        ["a", "b", "A", "c"],
+        "struct<a:int,b:string,A:int,c:string>",
+        ["{'a': 1, 'b': 'p', 'A': 1, 'c': 'q'}"],
+    ),
     ("using/LEFT SEMI", "false", ["k", "lv"], "struct<k:int,lv:string>", ["{'k': 1, 'lv': 'x'}"]),
     ("using/LEFT SEMI", "true", ["k", "lv"], "struct<k:int,lv:string>", ["{'k': 1, 'lv': 'x'}"]),
     (
@@ -556,6 +574,8 @@ ERRORS = [
     pytest.param(*("natural/CROSS", "false", "INCOMPATIBLE_JOIN_TYPES"), marks=_SAIL_BUG),
     pytest.param(*("natural/CROSS", "true", "INCOMPATIBLE_JOIN_TYPES"), marks=_SAIL_BUG),
     ("key/key differing in case", "true", "UNRESOLVED_USING_COLUMN_FOR_JOIN"),
+    # `NATURAL` does not fail when it finds no common name: it degrades to a cross join, which is
+    # the divergence this file was written for, so the two settings differ in the column list.
     ("key/key missing on the right", "false", "UNRESOLVED_USING_COLUMN_FOR_JOIN"),
     ("key/key missing on the right", "true", "UNRESOLVED_USING_COLUMN_FOR_JOIN"),
     ("key/key missing on both", "false", "UNRESOLVED_USING_COLUMN_FOR_JOIN"),

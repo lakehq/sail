@@ -296,25 +296,37 @@ def test_a_rename_keeps_the_qualifier_of_the_columns_it_did_not_touch(spark):
 
 
 @pytest.mark.parametrize(
-    ("expression", "data_type", "nullable"),
+    ("expression", "data_type", "nullable", "inner"),
     [
         # The two that agree, as the controls: a fix that made every added column nullable, or
         # none of them, would still have to pass these.
-        ("1", "int", False),
-        ("a", "int", False),
-        pytest.param("CAST(1 AS DECIMAL(10,2))", "decimal(10,2)", True, marks=_SAIL_BUG),
-        pytest.param("map('k', 1)", "map<string,int>", False, marks=_SAIL_BUG),
-        pytest.param("CASE WHEN a > 1 THEN 'big' ELSE 'small' END", "string", False, marks=_SAIL_BUG),
+        ("1", "int", False, None),
+        ("a", "int", False, None),
+        pytest.param("CAST(1 AS DECIMAL(10,2))", "decimal(10,2)", True, None, marks=_SAIL_BUG),
+        pytest.param("map('k', 1)", "map<string,int>", False, None, marks=_SAIL_BUG),
+        pytest.param("CASE WHEN a > 1 THEN 'big' ELSE 'small' END", "string", False, None, marks=_SAIL_BUG),
+        # The containers, whose inner flag `simpleString()` hides as well: the array agrees on both
+        # flags, the struct disagrees on both.
+        ("array(1, 2)", "array<int>", False, False),
+        pytest.param("named_struct('n', 1)", "struct<n:int>", False, False, marks=_SAIL_BUG),
     ],
 )
-def test_an_added_column_reports_the_nullability_of_its_expression(spark, expression, data_type, nullable):
+def test_an_added_column_reports_the_nullability_of_its_expression(spark, expression, data_type, nullable, inner):
     # The matrices above compare `schema.simpleString()`, which renders neither `nullable` nor the
-    # nullability inside a container, so this is the only place the flag is asserted.
-    df = spark.sql(f"SELECT *, {expression} AS c FROM VALUES (1, 'x'), (2, 'y') AS t(a, b)")  # noqa: S608
+    # nullability inside a container, so this is the only place the flag is asserted. The column is
+    # added with `withColumn`, so what is measured is the alias `UnresolvedStarWithColumns` builds
+    # rather than a projection that never reaches it.
+    df = spark.sql("SELECT * FROM VALUES (1, 'x'), (2, 'y') AS t(a, b)").withColumn("c", F.expr(expression))
     field = df.schema["c"]
 
     assert field.dataType.simpleString() == data_type
     assert field.nullable == nullable
+    if inner is not None:
+        # A container carries a second flag, for its element or its field, that the type string
+        # renders no more than the root one.
+        fields = getattr(field.dataType, "fields", None)
+        actual = [x.nullable for x in fields] if fields else [field.dataType.containsNull]
+        assert actual == [inner] * len(actual)
 
 
 def _annotated(spark):

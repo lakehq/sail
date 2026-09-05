@@ -21,17 +21,19 @@ def test_udf_as_function(spark):
 def test_udf_return_type_as_ddl_string(spark):
     df = spark.sql(QUERY)
 
-    out = df.withColumn("C", udf(lambda x: len(x), "int")(df.c))
+    # The value differs per row, so a UDF that ignored its argument would not pass, and it comes
+    # back as an `int` rather than the default string, which is what the return type decides.
+    out = df.withColumn("C", udf(lambda x: x * 2, "int")(df.a))
     assert out.columns == ["a", "b", "C"]
-    assert [r.C for r in out.orderBy("a").collect()] == [1, 1, 1]
+    assert [r.C for r in out.orderBy("a").collect()] == [2, 4, 6]
 
 
 def test_udf_return_type_as_data_type(spark):
     df = spark.sql(QUERY)
 
-    out = df.withColumn("C", udf(lambda x: len(x), IntegerType())(df.c))
+    out = df.withColumn("C", udf(lambda x: x * 2, IntegerType())(df.a))
     assert out.columns == ["a", "b", "C"]
-    assert [r.C for r in out.orderBy("a").collect()] == [1, 1, 1]
+    assert [r.C for r in out.orderBy("a").collect()] == [2, 4, 6]
 
 
 def test_udf_as_decorator(spark):
@@ -53,7 +55,8 @@ def test_udtf_call_and_register(spark):
             yield y, y + 1
 
     fun = udtf(TestUDTF, returnType="a: int, b: int")
-    assert sorted(tuple(r) for r in fun(lit(1), lit(1)).collect()) == [(1, 2), (1, 2)]
+    # The two arguments differ, so a UDTF that only ever read `x` would not pass.
+    assert sorted(tuple(r) for r in fun(lit(1), lit(2)).collect()) == [(1, 2), (2, 3)]
 
     spark.udtf.register("test_udtf", fun)
     rows = spark.sql("SELECT * FROM test_udtf(1, 2)").collect()

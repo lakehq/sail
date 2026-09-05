@@ -795,6 +795,15 @@ def test_col_regex_folds_only_ascii(spark):
     assert df.select(df.colRegex("`\u03a3`")).columns == []
     assert df.select(df.colRegex("`\u03c3`")).columns == ["\u03c3"]
 
+    # A metacharacter in the pattern does not exempt it from the rule, which is what makes the gap
+    # reachable: `.*` is the shape a pattern is usually written in.
+    latin = spark.sql("SELECT 1 AS `\u00e4x`")
+
+    assert latin.select(latin.colRegex("`\u00c4X`")).columns == []
+    assert latin.select(latin.colRegex("`\u00c4.*`")).columns == []
+    assert latin.select(latin.colRegex("`\u00e4X`")).columns == ["\u00e4x"]
+    assert latin.select(latin.colRegex("`\u00e4.*`")).columns == ["\u00e4x"]
+
 
 # `CANNOT_RESOLVE_DATAFRAME_COLUMN` renders the name through `UnresolvedAttribute.name`, which
 # quotes a part only when it contains a dot, unlike the fully quoted form used for a column name.
