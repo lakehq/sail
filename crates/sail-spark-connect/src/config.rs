@@ -268,14 +268,6 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             output.ansi_mode = value;
         }
 
-        if let Some(value) = config
-            .get_option(SparkConfigKey::SPARK_SQL_LEGACY_SIZE_OF_NULL)
-            .map(|x| x.trim_matches(|c| c <= ' ').to_lowercase().parse::<bool>())
-            .transpose()?
-        {
-            output.legacy_size_of_null = value;
-        }
-
         if let Some(value) = config.get_option(SparkConfigKey::SPARK_SQL_STORE_ASSIGNMENT_POLICY) {
             output.store_assignment_policy = match value.trim().to_ascii_uppercase().as_str() {
                 "ANSI" => StoreAssignmentPolicy::Ansi,
@@ -339,6 +331,14 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             .transpose()?
         {
             output.legacy_allow_parameterless_count = value;
+        }
+
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_LEGACY_SIZE_OF_NULL)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.legacy_size_of_null = value;
         }
 
         output.pyspark_udf_config = Arc::new(PySparkUdfConfig::try_from(config)?);
