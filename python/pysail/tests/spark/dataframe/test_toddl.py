@@ -344,3 +344,12 @@ def test_toddl_rejects_an_interval_whose_fields_are_inverted(spark):  # noqa: AR
 
     with pytest.raises(Exception, match="INVALID_JSON_DATA_TYPE"):
         schema.toDDL()
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_toddl_renders_a_field_comment(spark):  # noqa: ARG001
+    # `StructField.toDDL` appends the comment carried in the field metadata. The rendering ignores
+    # the metadata, so a commented field comes back indistinguishable from a plain one.
+    schema = T.StructType([T.StructField("c", T.IntegerType(), True, {"comment": "hi"})])
+
+    assert schema.toDDL() == "c INT COMMENT 'hi'"

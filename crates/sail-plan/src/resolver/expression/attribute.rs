@@ -127,8 +127,13 @@ fn edit_distance(left: &str, right: &str) -> usize {
 /// Orders the names Spark suggests for an unresolved column, as
 /// `StringUtils.orderSuggestedIdentifiersBySimilarity` does. A qualifier that every candidate
 /// shares is stripped, since it is not what tells them apart.
+///
+/// The base the distance is measured against is passed in rather than derived from the name,
+/// because Spark measures against a different string per call site: the analyzer renders the name
+/// first, while `Project.reorderFields` uses the raw field name.
 fn order_candidates_by_similarity(
     name: &spec::ObjectName,
+    base: &str,
     candidates: Vec<Vec<String>>,
     sorted_by_name: bool,
 ) -> Vec<String> {
@@ -147,12 +152,6 @@ fn order_candidates_by_similarity(
     } else {
         usize::MAX
     };
-    let base = name
-        .parts()
-        .iter()
-        .map(|x| quote_if_needed(x.as_ref()))
-        .collect::<Vec<_>>()
-        .join(".");
     let mut candidates = candidates;
     // The analyzer reads its candidates through `AttributeSet.toSeq`, which sorts them by name,
     // and the sort by distance is stable, so an equal distance is broken by name there. The
@@ -167,7 +166,7 @@ fn order_candidates_by_similarity(
             quote_identifier_parts(parts[start..].iter().map(|x| x.as_str()))
         })
         .collect::<Vec<_>>();
-    candidates.sort_by_key(|x| edit_distance(x, &base));
+    candidates.sort_by_key(|x| edit_distance(x, base));
     candidates
 }
 
@@ -201,7 +200,14 @@ pub(in crate::resolver) fn unresolved_column_error(
             Some(parts)
         })
         .collect::<Vec<_>>();
-    let proposal = order_candidates_by_similarity(name, candidates, true)
+    // The analyzer measures the distance against `a.sql`, the name rendered with `quoteIfNeeded`.
+    let base = name
+        .parts()
+        .iter()
+        .map(|x| quote_if_needed(x.as_ref()))
+        .collect::<Vec<_>>()
+        .join(".");
+    let proposal = order_candidates_by_similarity(name, &base, candidates, true)
         .into_iter()
         .take(5)
         .collect::<Vec<_>>();
@@ -229,7 +235,15 @@ pub(in crate::resolver) fn unresolved_column_name_error(
         .iter()
         .map(|x| vec![x.to_string()])
         .collect::<Vec<_>>();
-    let proposal = order_candidates_by_similarity(name, candidates, false)
+    // `Project.reorderFields` measures the distance against the raw field name instead, so the
+    // back quotes of a name that would need them do not count towards it.
+    let base = name
+        .parts()
+        .iter()
+        .map(|x| x.as_ref())
+        .collect::<Vec<&str>>()
+        .join(".");
+    let proposal = order_candidates_by_similarity(name, &base, candidates, false)
         .into_iter()
         .take(5)
         .collect::<Vec<_>>();

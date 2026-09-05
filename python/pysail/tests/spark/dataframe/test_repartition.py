@@ -1,3 +1,5 @@
+import re
+
 import pandas as pd
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
@@ -178,11 +180,12 @@ def test_coalesce_hint(spark):
     assert_frame_equal(actual, expected)
 
 
-@pytest.mark.skipif(
-    is_jvm_spark(), reason="The assertion is about Sail's own plan and partitioning, which Spark does not share"
-)
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_coalesce_hint_rejects_zero_partitions(spark):
-    with pytest.raises(Exception, match="COALESCE hint requires at least one partition"):
+    # Spark rejects this too, so it is a wording divergence rather than something Spark does not
+    # share: `ResolveHints.createRepartition` builds a `Repartition`, whose `require(numPartitions
+    # > 0, ...)` raises `Number of partitions (0) must be positive.`
+    with pytest.raises(Exception, match=re.escape("Number of partitions (0) must be positive.")):
         partition_count(spark.range(0, 10, 1, 2).hint("COALESCE", 0))
 
 

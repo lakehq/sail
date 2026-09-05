@@ -47,11 +47,11 @@ Feature: DataFrame joins
 
     Scenario: join on a name equality selecting the duplicated name
       When dataframe for join on a name equality selecting the duplicated name
-      Then dataframe error \[AMBIGUOUS_REFERENCE\]
+      Then dataframe error \[AMBIGUOUS_REFERENCE\] Reference `name` is ambiguous, could be: \[`name`, `name`\]\.
 
     Scenario: outer self join selecting the ambiguous name
       When dataframe for outer self join selecting the ambiguous name
-      Then dataframe error AMBIGUOUS_COLUMN_REFERENCE
+      Then dataframe error (?s)\[AMBIGUOUS_COLUMN_REFERENCE\] Column "name" is ambiguous\..*Please alias the DataFrames with different names via `DataFrame\.alias` before joining them,
 
     Scenario: outer self join of two aliases
       When dataframe for outer self join of two aliases

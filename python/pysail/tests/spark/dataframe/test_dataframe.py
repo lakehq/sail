@@ -408,6 +408,27 @@ def test_to_schema_rejects_ambiguous_name(spark):
         src.to(target).collect()
 
 
+def test_to_schema_suggests_by_distance_to_the_raw_field_name(spark):
+    # `Project.reorderFields` measures the edit distance against the raw `StructField.name`, unlike
+    # the analyzer, which measures it against the name it renders. A target name that needs quoting
+    # is what tells the two apart: counting the back quotes moves `c` away from the name asked for.
+    src = spark.sql("SELECT 1 AS c, 2 AS abc, 3 AS aaa, 4 AS zzzz, 5 AS cc, 6 AS ccc")
+    target = StructType([StructField("a b", IntegerType(), nullable=False)])
+
+    with pytest.raises(Exception, match=re.escape("[`c`, `abc`, `aaa`, `cc`, `ccc`]")):
+        src.to(target).collect()
+
+
+def test_to_schema_suggests_the_same_order_for_a_plain_name(spark):
+    # The control for the case above: a plain identifier renders to itself, so both bases agree and
+    # the order must come out the same whichever one is measured against.
+    src = spark.sql("SELECT 1 AS c, 2 AS abc, 3 AS aaa, 4 AS zzzz, 5 AS cc, 6 AS ccc")
+    target = StructType([StructField("abd", IntegerType(), nullable=False)])
+
+    with pytest.raises(Exception, match=re.escape("[`c`, `abc`, `aaa`, `cc`, `ccc`]")):
+        src.to(target).collect()
+
+
 @pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_to_schema_reorders_nested_struct_fields(spark):
     # The reconciliation recurses into structs, so the nested fields are matched by name, not by
@@ -512,6 +533,14 @@ def test_drop_duplicates_matches_name_with_the_resolver(spark):
     # which folds `ı` to `I` even though the lowercase forms differ.
     assert spark.sql("SELECT 1 AS `ıd`").dropDuplicates(["Id"]).columns == ["ıd"]
     assert spark.sql("SELECT 1 AS `ς`").dropDuplicates(["Σ"]).columns == ["ς"]
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_drop_duplicates_reports_the_connect_condition_for_a_missing_name(spark):
+    # The Connect planner validates the subset itself, so it reports the wrapped condition, unlike
+    # `unionByName`, whose identical failure comes from the analyzer and keeps the bare one.
+    with pytest.raises(Exception, match=re.escape("CONNECT_INVALID_PLAN.UNRESOLVED_COLUMN_AMONG_FIELD_NAMES")):
+        spark.sql("SELECT 1 AS a, 2 AS b").dropDuplicates(["Z"]).collect()
 
 
 @pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
