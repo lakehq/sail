@@ -3,6 +3,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
+use datafusion_expr::type_coercion::other::get_coerce_type_for_case_expression;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::spark_date::SparkDate;
@@ -26,14 +27,19 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
                 conditions.push(condition);
                 branch_values.push(result);
             }
-            _ => {
-                conditions.push(lit(true));
+            None => {
+                // The unpaired final argument is ELSE.
                 branch_values.push(condition);
                 break;
             }
         }
     }
-    let branch_values = coerce_string_temporal_values(branch_values, &function_context)?;
+    let mut branch_values = coerce_conditional_values(branch_values, &function_context)?;
+    let else_expr = if branch_values.len() > conditions.len() {
+        branch_values.pop().map(Box::new)
+    } else {
+        None
+    };
     let when_then_expr = conditions
         .into_iter()
         .zip(branch_values)
@@ -42,7 +48,7 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr::Expr::Case(expr::Case {
         expr: None, // Expr::Case in from_ast_expression incorporates into when_then_expr
         when_then_expr,
-        else_expr: None,
+        else_expr,
     }))
 }
 
@@ -53,7 +59,7 @@ fn if_expr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     let (when_expr, then_expr, else_expr) = arguments.three()?;
     let (then_expr, else_expr) =
-        coerce_string_temporal_values(vec![then_expr, else_expr], &function_context)?.two()?;
+        coerce_conditional_values(vec![then_expr, else_expr], &function_context)?.two()?;
     Ok(expr::Expr::Case(expr::Case {
         expr: None,
         when_then_expr: vec![(Box::new(when_expr), Box::new(then_expr))],
@@ -68,6 +74,46 @@ fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     let arguments = coerce_string_temporal_values(arguments, &function_context)?;
     Ok(expr_fn::coalesce(arguments))
+}
+
+fn coerce_conditional_values(
+    arguments: Vec<expr::Expr>,
+    function_context: &FunctionContextInput<'_>,
+) -> PlanResult<Vec<expr::Expr>> {
+    let arguments = coerce_string_temporal_values(arguments, function_context)?;
+    let data_types = arguments
+        .iter()
+        .map(|arg| arg.get_type(function_context.schema))
+        .collect::<Result<Vec<_>, _>>()?;
+    if !data_types
+        .iter()
+        .all(|data_type| data_type.is_numeric() || data_type.is_null())
+    {
+        return Ok(arguments);
+    }
+
+    // Spark's CaseWhen/If coercion casts every result branch before its type is
+    // consumed. DataFusion's uncoerced CASE reports the first non-null branch,
+    // which is too early for Sail's schema, typeof, and sequence resolution.
+    let has_float = data_types.iter().any(DataType::is_floating);
+    let target_type = if has_float
+        && (data_types.iter().any(DataType::is_decimal)
+            || (function_context.plan_config.ansi_mode
+                && data_types.iter().any(DataType::is_integer)))
+    {
+        // Spark promotes decimal/floating branches, and ANSI integral/floating
+        // branches, to DOUBLE instead of DataFusion's decimal/float choice.
+        Some(DataType::Float64)
+    } else {
+        get_coerce_type_for_case_expression(&data_types, None)
+    };
+    let Some(target_type) = target_type else {
+        return Ok(arguments);
+    };
+    arguments
+        .into_iter()
+        .map(|arg| Ok(arg.cast_to(&target_type, function_context.schema)?))
+        .collect()
 }
 
 fn coerce_string_temporal_values(
