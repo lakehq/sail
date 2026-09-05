@@ -136,8 +136,9 @@ def normalize_plan_text(plan_text: str) -> str:
         text,
     )
 
-    # Normalize file_groups ordering: group ordering is not guaranteed (e.g. parallel listing / async head).
-    # TODO: consider sorting the file groups during planner.
+    # Normalize file_groups ordering when it is not part of a declared range
+    # partitioning. Range partition indexes identify specific key intervals, so
+    # reordering those groups would make the snapshot describe a false contract.
 
     # Normalize IcebergManifestScanExec metadata:
     # - table_url with temp paths
@@ -153,8 +154,7 @@ def normalize_plan_text(plan_text: str) -> str:
         text,
     )
 
-    def _normalize_file_groups_block(match: re.Match[str]) -> str:
-        block = match.group(0)  # e.g. "file_groups={2 groups: [[...], [...]]}"
+    def _normalize_file_groups_block(block: str, *, preserve_group_order: bool) -> str:
         # Extract the group list between the first "[" and the last "]"
         start = block.find("[")
         end = block.rfind("]")
@@ -197,9 +197,11 @@ def normalize_plan_text(plan_text: str) -> str:
         if not groups:
             return block
 
+        ordered_groups = groups if preserve_group_order else sorted(groups)
+
         normalized_groups: list[str] = []
         next_seq = 0
-        for group in sorted(groups):
+        for group in ordered_groups:
             inner = group[1:-1].strip()
             if not inner:
                 normalized_groups.append(group)
@@ -219,7 +221,19 @@ def normalize_plan_text(plan_text: str) -> str:
         normalized_groups_list = "[" + ", ".join(normalized_groups) + "]"
         return block[:start] + normalized_groups_list + block[end + 1 :]
 
-    text = re.sub(r"file_groups=\{[^}]+\}", _normalize_file_groups_block, text)
+    def _normalize_file_groups_line(match: re.Match[str]) -> str:
+        line = match.group(0)
+        file_groups_match = re.search(r"file_groups=\{[^}]+\}", line)
+        if file_groups_match is None:
+            return line
+        block = file_groups_match.group(0)
+        normalized = _normalize_file_groups_block(
+            block,
+            preserve_group_order="output_partitioning=Range(" in line,
+        )
+        return line[: file_groups_match.start()] + normalized + line[file_groups_match.end() :]
+
+    text = re.sub(r"(?m)^.*file_groups=\{[^}]+\}.*$", _normalize_file_groups_line, text)
 
     text = re.sub(r"Bytes=Exact\(\d+\)", r"Bytes=Exact(<bytes>)", text)
     return re.sub(r"Bytes=Inexact\(\d+\)", r"Bytes=Inexact(<bytes>)", text)

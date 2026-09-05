@@ -40,10 +40,11 @@ use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::GlobalLimitExec;
 use datafusion::physical_plan::projection::ProjectionExec;
-use datafusion::physical_plan::union::UnionExec;
+use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_datasource::file_scan_config::output_partitioning_from_partition_fields;
 use object_store::ObjectMeta;
+use sail_common_datafusion::datasource::should_preserve_file_partitions;
 use sail_common_datafusion::schema_evolution::{
     SchemaEvolutionPhysicalExprAdapterFactoryWithMatching, StructFieldMatching,
 };
@@ -53,6 +54,7 @@ use crate::datasource::expressions::simplify_expr;
 use crate::datasource::pruning::{
     prune_data_files_by_partition_values, prune_files, prune_manifests_by_partition_summaries,
 };
+use crate::datasource::scan_partitioning::IcebergScanRangeLayout;
 use crate::datasource::type_converter::{iceberg_field_id, iceberg_schema_to_arrow};
 use crate::io::{
     StoreContext, load_manifest as io_load_manifest, load_manifest_list as io_load_manifest_list,
@@ -701,6 +703,36 @@ impl IcebergTableProvider {
         file_groups.into_values().map(FileGroup::from).collect()
     }
 
+    fn create_range_file_groups(
+        &self,
+        store_ctx: &StoreContext,
+        data_files: Vec<DataFile>,
+        layout: &IcebergScanRangeLayout,
+    ) -> Result<Vec<FileGroup>> {
+        let file_paths = data_files
+            .iter()
+            .map(|data_file| data_file.file_path.clone())
+            .collect::<Vec<_>>();
+        let partitioned_files = self.create_partitioned_files(store_ctx, data_files)?;
+        let mut file_groups = (0..layout.partition_count())
+            .map(|_| Vec::new())
+            .collect::<Vec<Vec<PartitionedFile>>>();
+        for (file_path, partitioned_file) in file_paths.into_iter().zip(partitioned_files) {
+            let partition = layout.partition_index_for_file(&file_path).ok_or_else(|| {
+                datafusion::common::DataFusionError::Internal(format!(
+                    "Iceberg file {file_path} is missing from its scan range layout"
+                ))
+            })?;
+            let group = file_groups.get_mut(partition).ok_or_else(|| {
+                datafusion::common::DataFusionError::Internal(format!(
+                    "Iceberg file {file_path} maps to invalid scan partition {partition}"
+                ))
+            })?;
+            group.push(partitioned_file);
+        }
+        Ok(file_groups.into_iter().map(FileGroup::from).collect())
+    }
+
     /// Compute the object-store URL for this table, to be passed to
     /// `FileScanConfigBuilder`.
     fn object_store_url(&self) -> Result<ObjectStoreUrl> {
@@ -1023,6 +1055,32 @@ impl TableProvider for IcebergTableProvider {
             );
         }
 
+        // Derive one stable layout from all live files before separating files by
+        // delete applicability. File-group indexes are part of the Range contract.
+        let all_data_files = data_files_with_seq
+            .iter()
+            .map(|(data_file, _)| data_file.clone())
+            .collect::<Vec<_>>();
+        let preserve_threshold = session
+            .config()
+            .options()
+            .optimizer
+            .preserve_file_partitions;
+        let scan_range_layout = if preserve_threshold == 0 {
+            None
+        } else {
+            IcebergScanRangeLayout::try_new(
+                &self.schema,
+                &self.arrow_schema,
+                &self.partition_specs,
+                &all_data_files,
+                session.config().target_partitions(),
+            )?
+            .filter(|layout| {
+                should_preserve_file_partitions(preserve_threshold, layout.partition_count())
+            })
+        };
+
         // Build the delete-file index for this snapshot. Rejects v3 deletion vectors.
         log::trace!("Building delete file index...");
         let delete_index = self
@@ -1049,20 +1107,24 @@ impl TableProvider for IcebergTableProvider {
         );
 
         // Aggregate stats over ALL files (before split) for the planner.
-        let all_data_files: Vec<DataFile> = data_files_with_seq
-            .iter()
-            .map(|(df, _)| df.clone())
-            .collect();
         let table_stats = self.aggregate_statistics(&all_data_files);
 
         // Object-store URL shared by all branches.
         let object_store_url = self.object_store_url()?;
 
         if dirty_units.is_empty() {
-            // Fast path: no deletes apply. Emit the single-DataSourceExec plan that
-            // is identical to the pre-delete-integration behavior.
-            let partitioned_files = self.create_partitioned_files(&store_ctx, all_data_files)?;
-            let file_groups = self.create_file_groups(partitioned_files);
+            // Fast path: no deletes apply, so one DataSourceExec can scan every file.
+            let (file_groups, output_partitioning) = match &scan_range_layout {
+                Some(layout) => (
+                    self.create_range_file_groups(&store_ctx, all_data_files, layout)?,
+                    Some(layout.output_partitioning()),
+                ),
+                None => {
+                    let partitioned_files =
+                        self.create_partitioned_files(&store_ctx, all_data_files)?;
+                    (self.create_file_groups(partitioned_files), None)
+                }
+            };
             let parquet_source = self.build_parquet_source(
                 session,
                 projection,
@@ -1077,6 +1139,7 @@ impl TableProvider for IcebergTableProvider {
                 } else {
                     file_groups
                 })
+                .with_output_partitioning(output_partitioning)
                 .with_statistics(table_stats)
                 .with_projection_indices(expanded_projection)?
                 .with_limit(limit)
@@ -1086,7 +1149,7 @@ impl TableProvider for IcebergTableProvider {
         }
 
         // Delete-aware path: build clean + per-dirty-file branches. We apply
-        // predicates, projection, and limit ABOVE the Union so that positional
+        // predicates, projection, and limit above the combined branches so positional
         // row offsets inside `IcebergDeleteApplyExec` remain aligned with the
         // unfiltered Parquet read of each dirty file.
 
@@ -1096,8 +1159,17 @@ impl TableProvider for IcebergTableProvider {
         // predicate is pushed down at this level because the upper layers will apply
         // them uniformly across branches.
         if !clean_files.is_empty() {
-            let partitioned_files = self.create_partitioned_files(&store_ctx, clean_files)?;
-            let file_groups = self.create_file_groups(partitioned_files);
+            let (file_groups, output_partitioning) = match &scan_range_layout {
+                Some(layout) => (
+                    self.create_range_file_groups(&store_ctx, clean_files, layout)?,
+                    Some(layout.output_partitioning()),
+                ),
+                None => {
+                    let partitioned_files =
+                        self.create_partitioned_files(&store_ctx, clean_files)?;
+                    (self.create_file_groups(partitioned_files), None)
+                }
+            };
             let parquet_source = self.build_parquet_source(
                 session,
                 projection,
@@ -1108,6 +1180,7 @@ impl TableProvider for IcebergTableProvider {
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(file_groups)
+                    .with_output_partitioning(output_partitioning)
                     .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                     .build();
             branches.push(DataSourceExec::from_data_source(file_scan_config));
@@ -1115,14 +1188,26 @@ impl TableProvider for IcebergTableProvider {
 
         // Branch B: one branch per dirty file.
         for (df, pos_deletes, eq_deletes) in dirty_units {
-            let partitioned = self.create_partitioned_files(&store_ctx, vec![df.clone()])?;
-            // Single-file, single-partition scan — preserves row order for positional deletes.
+            let (file_groups, output_partitioning) = match &scan_range_layout {
+                Some(layout) => (
+                    self.create_range_file_groups(&store_ctx, vec![df.clone()], layout)?,
+                    Some(layout.output_partitioning()),
+                ),
+                None => (
+                    vec![FileGroup::from(
+                        self.create_partitioned_files(&store_ctx, vec![df.clone()])?,
+                    )],
+                    Some(Partitioning::UnknownPartitioning(1)),
+                ),
+            };
+            // The target file remains whole in one file group, preserving absolute
+            // row offsets for position deletes. Range layouts leave other groups empty.
             let parquet_source = self.build_parquet_source(session, None, &[], &[], false)?;
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
-                    .with_file_groups(vec![FileGroup::from(partitioned)])
+                    .with_file_groups(file_groups)
                     // Position deletes require the original file order and absolute offsets.
-                    .with_output_partitioning(Some(Partitioning::UnknownPartitioning(1)))
+                    .with_output_partitioning(output_partitioning)
                     .with_preserve_order(true)
                     .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                     .build();
@@ -1130,25 +1215,27 @@ impl TableProvider for IcebergTableProvider {
                 DataSourceExec::from_data_source(file_scan_config);
             let data_file_raw_path = df.file_path().to_string();
             // Wrap with DeleteApply.
-            let apply: Arc<dyn ExecutionPlan> = Arc::new(IcebergDeleteApplyExec::new(
+            let apply = IcebergDeleteApplyExec::new(
                 data_scan,
                 data_file_raw_path,
                 pos_deletes,
                 eq_deletes,
                 self.table_uri.clone(),
                 self.schema.clone(),
-            ));
-            branches.push(apply);
+            );
+            branches.push(Arc::new(apply));
         }
 
-        // Union the branches.
-        let unioned: Arc<dyn ExecutionPlan> = if branches.len() == 1 {
+        // Preserve the shared file-partition layout whenever it was safe to derive.
+        let combined_branches: Arc<dyn ExecutionPlan> = if branches.len() == 1 {
             // SAFETY: length was just checked above.
             branches.into_iter().next().ok_or_else(|| {
                 datafusion::common::DataFusionError::Internal(
                     "unreachable: branches.len() == 1 but next() returned None".to_string(),
                 )
             })?
+        } else if scan_range_layout.is_some() {
+            Arc::new(InterleaveExec::try_new(branches)?)
         } else {
             UnionExec::try_new(branches)?
         };
@@ -1162,9 +1249,9 @@ impl TableProvider for IcebergTableProvider {
                 )
             })?;
             let simplified = simplify_expr(session, &df_schema, pushdown_expr)?;
-            Arc::new(FilterExec::try_new(simplified, unioned)?)
+            Arc::new(FilterExec::try_new(simplified, combined_branches)?)
         } else {
-            unioned
+            combined_branches
         };
 
         // Apply projection above.

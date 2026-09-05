@@ -581,6 +581,19 @@ Feature: Iceberg MERGE
       Then iceberg current manifest list matches snapshot
       Then iceberg current snapshot summary matches snapshot
       Then iceberg snapshot count is 2
+      Given final statement
+        """
+        SET datafusion.optimizer.preserve_file_partitions = 0
+        """
+      Given statement
+        """
+        SET datafusion.optimizer.preserve_file_partitions = 1
+        """
+      When query
+        """
+        EXPLAIN SELECT id, event_time, value FROM merge_partitioned_plan_table
+        """
+      Then query plan matches snapshot
       When query
         """
         SELECT id, value FROM merge_partitioned_plan_table ORDER BY id

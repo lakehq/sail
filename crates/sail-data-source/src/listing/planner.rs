@@ -30,7 +30,7 @@ use datafusion_datasource::file_scan_config::{
 use datafusion_datasource::source::DataSourceExec;
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use object_store::ObjectStore;
-use sail_common_datafusion::datasource::create_sort_order;
+use sail_common_datafusion::datasource::{create_sort_order, should_preserve_file_partitions};
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_physical_plan::barrier::BarrierExec;
 
@@ -412,7 +412,7 @@ async fn list_files_for_scan<'a>(
 
     let (file_groups, grouped_by_partition) = if threshold > 0 && !partition_cols.is_empty() {
         let grouped = file_group.group_by_partition_values(source.config().target_partitions);
-        if grouped.len() >= threshold {
+        if should_preserve_file_partitions(threshold, grouped.len()) {
             (grouped, true)
         } else {
             let all_files: Vec<_> = grouped.into_iter().flat_map(|g| g.into_inner()).collect();

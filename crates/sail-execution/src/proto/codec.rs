@@ -6106,6 +6106,75 @@ mod tests {
     }
 
     #[test]
+    fn test_round_trip_iceberg_delete_apply_inherits_file_scan_range() -> Result<()> {
+        use datafusion::datasource::physical_plan::FileGroup;
+        use datafusion::physical_expr::{RangePartitioning, SplitPoint};
+        use datafusion::physical_plan::ExecutionPlanProperties;
+        use sail_iceberg::spec::{NestedField, PrimitiveType, Schema as IcebergSchema, Type};
+
+        let arrow_schema = Arc::new(Schema::new(vec![Field::new(
+            "event_time",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        )]));
+        let transform = Arc::new(IcebergPartitionTransformExpr::new(
+            Arc::new(Column::new("event_time", 0)),
+            IcebergTransform::Day,
+        )) as Arc<dyn PhysicalExpr>;
+        let ordering = LexOrdering::new([PhysicalSortExpr::new_default(transform)])
+            .ok_or_else(|| plan_datafusion_err!("expected non-empty Iceberg range ordering"))?;
+        let expected = RangePartitioning::try_new(
+            ordering,
+            vec![SplitPoint::new(vec![ScalarValue::Int32(Some(1))])],
+        )?;
+        let file_scan = FileScanConfigBuilder::new(
+            datafusion::execution::object_store::ObjectStoreUrl::local_filesystem(),
+            Arc::new(ParquetSource::new(Arc::clone(&arrow_schema))),
+        )
+        .with_file_groups(vec![FileGroup::default(), FileGroup::default()])
+        .with_output_partitioning(Some(Partitioning::Range(expected.clone())))
+        .with_preserve_order(true)
+        .build();
+        let iceberg_schema = IcebergSchema::builder()
+            .with_fields([Arc::new(NestedField::optional(
+                1,
+                "event_time",
+                Type::Primitive(PrimitiveType::Timestamp),
+            ))])
+            .build()
+            .map_err(|error| plan_datafusion_err!("invalid test Iceberg schema: {error}"))?;
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(IcebergDeleteApplyExec::new(
+            DataSourceExec::from_data_source(file_scan),
+            "data/event-day-one.parquet".to_string(),
+            vec![],
+            vec![],
+            "file:///tmp/iceberg-output-partitioning".to_string(),
+            iceberg_schema,
+        ));
+
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, plan)?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let delete_apply = decoded
+            .downcast_ref::<IcebergDeleteApplyExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not IcebergDeleteApplyExec"))?;
+        let plan: &dyn ExecutionPlan = delete_apply;
+        let Partitioning::Range(actual) = plan.output_partitioning() else {
+            return plan_err!("expected decoded Iceberg range partitioning");
+        };
+
+        assert_eq!(actual, &expected);
+        let transform = actual.ordering()[0]
+            .expr
+            .downcast_ref::<IcebergPartitionTransformExpr>()
+            .ok_or_else(|| {
+                plan_datafusion_err!("decoded range key is not an Iceberg partition transform")
+            })?;
+        assert_eq!(transform.transform(), IcebergTransform::Day);
+        Ok(())
+    }
+
+    #[test]
     fn test_reject_unknown_iceberg_partition_transform_expr() -> Result<()> {
         let node = ExtendedPhysicalExprNode {
             expr_kind: Some(ExprKind::IcebergPartitionTransform(

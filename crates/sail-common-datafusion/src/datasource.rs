@@ -169,6 +169,14 @@ pub fn is_lakehouse_format(format: &str) -> bool {
     format.eq_ignore_ascii_case("delta") || format.eq_ignore_ascii_case("iceberg")
 }
 
+/// Returns whether a file scan should preserve its metadata partition layout.
+///
+/// A threshold of zero disables preservation. Otherwise the candidate layout
+/// must expose at least the configured number of partitions.
+pub fn should_preserve_file_partitions(threshold: usize, partition_count: usize) -> bool {
+    threshold > 0 && partition_count >= threshold
+}
+
 /// Implemented by [`TableSource`]s that can expose a per-row file path column
 /// for row-level modifications (MERGE targeted rewrite).
 pub trait MergeCapableSource: Send + Sync {
