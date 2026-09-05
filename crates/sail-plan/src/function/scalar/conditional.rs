@@ -3,6 +3,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
+use datafusion_common::tree_node::TreeNode;
 use datafusion_expr::type_coercion::other::get_coerce_type_for_case_expression;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit};
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -36,7 +37,35 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     }
     let mut branch_values = coerce_conditional_values(branch_values, &function_context)?;
     let else_expr = if branch_values.len() > conditions.len() {
-        branch_values.pop().map(Box::new)
+        let mut nullable = false;
+        for value in &branch_values {
+            if value.nullable(function_context.schema)?
+                || value.exists(|value| match value {
+                    expr::Expr::Cast(cast) => Ok(!cast_preserves_nullability(
+                        &cast.expr.get_type(function_context.schema)?,
+                        cast.field.data_type(),
+                    )),
+                    expr::Expr::BinaryExpr(binary) => Ok(!function_context.plan_config.ansi_mode
+                        && binary.op.is_numerical_operators()
+                        && value.get_type(function_context.schema)?.is_decimal()),
+                    _ => Ok(false),
+                })?
+            {
+                nullable = true;
+                break;
+            }
+        }
+        if nullable {
+            // Spark retains nullable result branches even when predicates exclude
+            // their NULLs. Preserve the old fallback to avoid DataFusion narrowing
+            // the schema. FIXME: Handle Spark's literal-TRUE branch prefix rule.
+            // TODO: Use Spark-compatible expression nullability instead of scanning
+            // casts and decimal arithmetic; enclosing coalesce may eliminate NULLs.
+            conditions.push(lit(true));
+            None
+        } else {
+            branch_values.pop().map(Box::new)
+        }
     } else {
         None
     };
@@ -50,6 +79,35 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         when_then_expr,
         else_expr,
     }))
+}
+
+// Casts whose nullability is already represented correctly by DataFusion. Other
+// casts retain the baseline nullable CASE schema without changing cast behavior.
+fn cast_preserves_nullability(from: &DataType, to: &DataType) -> bool {
+    if from.is_null()
+        || from == to
+        || (from.is_integer() && to.is_integer())
+        || (from.is_numeric() && to.is_floating())
+    {
+        return true;
+    }
+    let DataType::Decimal128(to_precision, to_scale) = to else {
+        return false;
+    };
+    let (precision, scale) = match from {
+        DataType::Int8 => (3, 0),
+        DataType::Int16 => (5, 0),
+        DataType::Int32 => (10, 0),
+        DataType::Int64 => (20, 0),
+        DataType::Decimal128(precision, scale) => (*precision, *scale),
+        _ => return false,
+    };
+    let from_digits = i16::from(precision) - i16::from(scale);
+    let to_digits = i16::from(*to_precision) - i16::from(*to_scale);
+    // Spark's Cast.canNullSafeCastToDecimal also allows reducing a decimal's
+    // scale when the target has an extra integral digit for rounding.
+    (to_scale >= &scale && to_digits >= from_digits)
+        || (from.is_decimal() && to_digits > from_digits)
 }
 
 fn if_expr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
