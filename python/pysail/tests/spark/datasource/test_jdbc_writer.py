@@ -1,0 +1,111 @@
+import sys
+import types
+
+import pyarrow as pa
+import pytest
+
+from pysail.testing.spark.utils.common import pyspark_version
+
+if pyspark_version() < (4, 1):
+    pytest.skip("Python data source requires Spark 4.1+", allow_module_level=True)
+
+from pysail.spark.datasource.jdbc import JdbcDataSource
+
+
+@pytest.mark.parametrize("mode", ["errorifexists", "ignore"])
+def test_postgres_writer_requires_explicit_append(mode):
+    datasource = JdbcDataSource(
+        options={
+            "url": "jdbc:postgresql://localhost:5432/db",
+            "dbtable": "events",
+            "__sail_save_mode": mode,
+        }
+    )
+
+    with pytest.raises(ValueError, match="only explicit append mode"):
+        datasource.writer(pa.schema({"id": pa.int64()}), overwrite=False)
+
+
+def test_postgres_writer_streams_arrow_batches(monkeypatch):
+    calls = []
+
+    class Resource:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):
+            return self
+
+        def adbc_ingest(self, table, values, **options):
+            calls.append((table, values.column("id").to_pylist(), options))
+
+        def commit(self):
+            calls.append("commit")
+
+    dbapi = types.ModuleType("adbc_driver_postgresql.dbapi")
+    dbapi.connect = lambda dsn: calls.append(("connect", dsn)) or Resource()
+    package = types.ModuleType("adbc_driver_postgresql")
+    package.dbapi = dbapi
+    monkeypatch.setitem(sys.modules, "adbc_driver_postgresql", package)
+    monkeypatch.setitem(sys.modules, "adbc_driver_postgresql.dbapi", dbapi)
+
+    datasource = JdbcDataSource(
+        options={
+            "url": "jdbc:postgresql://localhost:5432/db",
+            "dbtable": "analytics.events",
+        }
+    )
+    writer = datasource.writer(pa.schema({"id": pa.int64()}), overwrite=False)
+
+    assert writer.write(iter([pa.record_batch({"id": [1]}), pa.record_batch({"id": [2]})])) is None
+    assert calls == [
+        ("connect", "postgresql://localhost:5432/db"),
+        ("events", [1], {"mode": "append", "db_schema_name": "analytics"}),
+        ("events", [2], {"mode": "append", "db_schema_name": "analytics"}),
+        "commit",
+    ]
+
+    calls.clear()
+    assert writer.write(iter([])) is None
+    assert calls == [
+        ("connect", "postgresql://localhost:5432/db"),
+        ("events", [], {"mode": "append", "db_schema_name": "analytics"}),
+        "commit",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("dbtable", "expected"),
+    [
+        ("Events", (None, "events")),
+        ('"events.log"', (None, "events.log")),
+        ('"analytics.data"."events""log"', ("analytics.data", 'events"log')),
+    ],
+)
+def test_postgres_writer_parses_dbtable(dbtable, expected):
+    datasource = JdbcDataSource(
+        options={
+            "url": "jdbc:postgresql://localhost:5432/db",
+            "dbtable": dbtable,
+        }
+    )
+
+    writer = datasource.writer(pa.schema({"id": pa.int64()}), overwrite=False)
+
+    assert (writer.schema, writer.table) == expected
+
+
+@pytest.mark.parametrize("dbtable", ["analytics.events.extra", '"unterminated'])
+def test_postgres_writer_rejects_invalid_dbtable(dbtable):
+    datasource = JdbcDataSource(
+        options={
+            "url": "jdbc:postgresql://localhost:5432/db",
+            "dbtable": dbtable,
+        }
+    )
+
+    with pytest.raises(ValueError, match=r"PostgreSQL.*identifier"):
+        datasource.writer(pa.schema({"id": pa.int64()}), overwrite=False)
