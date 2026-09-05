@@ -13,7 +13,7 @@ use sail_function::scalar::multi_expr::MultiExpr;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
-use crate::resolver::expression::attribute::qualifier_matches;
+use crate::resolver::expression::attribute::quote_identifier_name;
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
@@ -33,8 +33,17 @@ impl PlanResolver<'_> {
                 self.resolve_wildcard_or_nested_field_wildcard(&target, schema, state)
             }
             _ => {
+                // The expansion compares the qualifier literally here as well, so the one the
+                // user wrote is replaced with the matching one in the schema.
                 let qualifier = target
-                    .map(|x| self.resolve_table_reference(&x))
+                    .map(|x| {
+                        let written = self.resolve_table_reference(&x)?;
+                        let matched = schema.iter().find_map(|(qualifier, _)| {
+                            self.match_wildcard_qualifier(Some(&written), qualifier)
+                                .then(|| qualifier.cloned())
+                        });
+                        Ok::<_, PlanError>(matched.flatten().unwrap_or(written))
+                    })
                     .transpose()?;
                 let options = self
                     .resolve_wildcard_options(wildcard_options, schema, state)
@@ -59,20 +68,22 @@ impl PlanResolver<'_> {
     ) -> PlanResult<NamedExpr> {
         for (q, remaining) in Self::generate_qualified_wildcard_candidates(name.parts()) {
             if remaining.is_empty() {
-                let in_input = schema
-                    .iter()
-                    .any(|(qualifier, _)| qualifier_matches(q.as_ref(), qualifier));
-                let in_outer = state.get_outer_query_schema().is_some_and(|outer_schema| {
-                    outer_schema
-                        .iter()
-                        .any(|(qualifier, _)| qualifier_matches(q.as_ref(), qualifier))
-                });
-                if in_input || in_outer {
+                // The expansion of the wildcard compares the qualifier literally, so the one
+                // that the user wrote is replaced with the matching one in the schema.
+                let matched = |s: &DFSchemaRef| {
+                    s.iter().find_map(|(qualifier, _)| {
+                        self.match_wildcard_qualifier(q.as_ref(), qualifier)
+                            .then(|| qualifier.cloned())
+                    })
+                };
+                if let Some(qualifier) =
+                    matched(schema).or_else(|| state.get_outer_query_schema().and_then(matched))
+                {
                     return Ok(NamedExpr::new(
                         vec!["*".to_string()],
                         #[expect(deprecated)]
                         expr::Expr::Wildcard {
-                            qualifier: q,
+                            qualifier,
                             options: Default::default(),
                         },
                     ));
@@ -90,33 +101,64 @@ impl PlanResolver<'_> {
                         let Ok(info) = state.get_field_info(field.name()) else {
                             return None;
                         };
-                        if qualifier_matches(q.as_ref(), qualifier)
-                            && info.matches(column.as_ref(), None)
+                        // A wildcard target that is not a qualifier is resolved as an attribute
+                        // reference to the struct that it expands.
+                        if self.match_attribute_qualifier(q.as_ref(), qualifier)
+                            && self.match_field(info, column.as_ref(), None)
                         {
-                            Self::resolve_nested_field_wildcard(
-                                col((q.as_ref(), field)),
+                            self.resolve_nested_field_wildcard(
+                                // The expansion compares the qualifier literally, so the column
+                                // refers to the qualifier in the schema rather than the one that
+                                // the user wrote.
+                                col((qualifier, field)),
                                 field.data_type(),
                                 inner,
                             )
+                            .transpose()
                         } else {
                             None
                         }
                     })
                     .collect(),
             })
-            .collect::<Vec<_>>();
-        candidates
-            .one()
-            .map_err(|_| PlanError::AnalysisError(format!("cannot resolve wildcard: {name:?}")))
+            .collect::<PlanResult<Vec<_>>>()?;
+        candidates.one().map_err(|_| {
+            let target = quote_identifier_name(
+                &name
+                    .parts()
+                    .iter()
+                    .map(|x| x.as_ref())
+                    .collect::<Vec<_>>()
+                    .join("."),
+            );
+            // The columns come from `AttributeSet.toSeq`, which sorts them by name.
+            let columns = match Self::get_field_names(schema, state) {
+                Ok(mut names) => {
+                    names.sort();
+                    names
+                        .iter()
+                        .map(|x| quote_identifier_name(x))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                }
+                Err(_) => String::new(),
+            };
+            PlanError::AnalysisError(format!(
+                "[CANNOT_RESOLVE_STAR_EXPAND] Cannot resolve {target}.* given input columns \
+                 {columns}. Please check that the specified table or struct exists and is \
+                 accessible in the input columns."
+            ))
+        })
     }
 
     fn resolve_nested_field_wildcard<T: AsRef<str>>(
+        &self,
         expr: expr::Expr,
         data_type: &DataType,
         inner: &[T],
-    ) -> Option<NamedExpr> {
+    ) -> PlanResult<Option<NamedExpr>> {
         let DataType::Struct(fields) = data_type else {
-            return None;
+            return Ok(None);
         };
         match inner {
             [] => {
@@ -131,20 +173,19 @@ impl PlanResolver<'_> {
                         )
                     })
                     .unzip();
-                Some(NamedExpr::new(
+                Ok(Some(NamedExpr::new(
                     names,
                     ScalarUDF::from(MultiExpr::new()).call(exprs),
-                ))
+                )))
             }
-            [name, remaining @ ..] => fields
-                .iter()
-                .find(|x| x.name().eq_ignore_ascii_case(name.as_ref()))
-                .and_then(|field| {
-                    let args = vec![expr, lit(field.name().to_string())];
-                    let expr =
-                        expr::Expr::ScalarFunction(ScalarFunction::new_udf(get_field(), args));
-                    Self::resolve_nested_field_wildcard(expr, field.data_type(), remaining)
-                }),
+            [name, remaining @ ..] => {
+                let Some(field) = self.resolve_struct_field(fields, name.as_ref())? else {
+                    return Ok(None);
+                };
+                let args = vec![expr, lit(field.name().to_string())];
+                let expr = expr::Expr::ScalarFunction(ScalarFunction::new_udf(get_field(), args));
+                self.resolve_nested_field_wildcard(expr, field.data_type(), remaining)
+            }
         }
     }
 

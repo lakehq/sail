@@ -1145,7 +1145,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: attribute ObjectName([Identifier(\"dimension_col\")]) is missing from the schema: cannot resolve attribute"
+        "failure": "analysis error: [UNRESOLVED_COLUMN.WITHOUT_SUGGESTION] A column, variable, or function parameter with name `dimension_col` cannot be resolved."
       }
     },
     {

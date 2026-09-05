@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion_common::{Column, JoinType, NullEquality};
+use datafusion_common::{Column, HashMap, JoinType, NullEquality};
 use datafusion_expr::utils::split_conjunction;
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, build_join_schema};
 use sail_common::spec;
@@ -10,6 +10,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::function::common::{FunctionContextInput, ScalarFunctionInput};
 use crate::function::get_built_in_function;
 use crate::resolver::PlanResolver;
+use crate::resolver::expression::attribute::quote_identifier_name;
 use crate::resolver::state::PlanResolverState;
 
 /// Returns `true` if the expression is itself a top-level Python scalar UDF call.
@@ -144,9 +145,24 @@ impl PlanResolver<'_> {
             (Some(join_type), Some(spec::JoinCriteria::Natural)) => {
                 let left_names = Self::get_field_names(left.schema(), state)?;
                 let right_names = Self::get_field_names(right.schema(), state)?;
+                // The common names are the intersection of the two sides as multisets of
+                // folded names, so a name of the right side is used by at most one name of the
+                // left side. Spark folds the names here instead of using the resolver.
+                let mut right_counts: HashMap<String, usize> = HashMap::new();
+                for name in &right_names {
+                    *right_counts.entry(self.fold_identifier(name)).or_default() += 1;
+                }
                 let using = left_names
                     .iter()
-                    .filter(|name| right_names.contains(name))
+                    .filter(
+                        |name| match right_counts.get_mut(&self.fold_identifier(name)) {
+                            Some(count) if *count > 0 => {
+                                *count -= 1;
+                                true
+                            }
+                            _ => false,
+                        },
+                    )
                     .map(|x| x.clone().into())
                     .collect::<Vec<_>>();
                 // We let the column resolver return errors when either plan contains
@@ -173,11 +189,53 @@ impl PlanResolver<'_> {
         using
             .into_iter()
             .map(|name| {
-                let left_column = self.resolve_one_column(left.schema(), name.as_ref(), state)?;
-                let right_column = self.resolve_one_column(right.schema(), name.as_ref(), state)?;
+                let left_column = self.resolve_join_key(left, name.as_ref(), "left", state)?;
+                let right_column = self.resolve_join_key(right, name.as_ref(), "right", state)?;
                 Ok((name.into(), (left_column, right_column)))
             })
             .collect()
+    }
+
+    /// Resolves one side of a natural or `USING` join key. Spark matches the name with the
+    /// resolver alone rather than the stricter rule it uses for an attribute reference, and it
+    /// takes the first match instead of rejecting a name that matches more than one column.
+    fn resolve_join_key(
+        &self,
+        plan: &LogicalPlan,
+        name: &str,
+        side: &str,
+        state: &PlanResolverState,
+    ) -> PlanResult<Column> {
+        let schema = plan.schema();
+        if let Some(column) = self
+            .resolve_column_candidates_by_resolver(schema, name, state)
+            .into_iter()
+            .next()
+        {
+            return Ok(column);
+        }
+        // The names are sorted before they are quoted, so a name that is a prefix of another one
+        // keeps its place: a back quote sorts above every character a name can start with.
+        let mut names = Self::get_field_names(schema, state)?;
+        names.sort();
+        let suggestion = names
+            .iter()
+            .map(|x| quote_identifier_name(x))
+            .collect::<Vec<_>>();
+        let name = quote_identifier_name(name);
+        Err(PlanError::AnalysisError(format!(
+            "[UNRESOLVED_USING_COLUMN_FOR_JOIN] USING column {name} cannot be resolved on the \
+             {side} side of the join. The {side}-side columns: [{}].",
+            suggestion.join(", ")
+        )))
+    }
+
+    /// Returns the name of the join key in the output of a natural or `USING` join.
+    /// Spark names it after the attribute it matched on the side that supplies the value, not
+    /// after the name the user wrote, so a key whose name differs from the written one only by
+    /// case keeps the name the column already had.
+    fn joined_column_name(column: &Column, state: &PlanResolverState) -> PlanResult<String> {
+        Ok(state.get_field_info(&column.name)?.name().to_string())
     }
 
     fn resolve_query_join_using(
@@ -226,19 +284,23 @@ impl PlanResolver<'_> {
                 let uses_right = matches!(join_type, JoinType::Right);
                 let projections = join_columns
                     .into_iter()
-                    .map(|(name, (left, right))| {
+                    .map(|(_, (left, right))| {
                         let column = if uses_right { right } else { left };
-                        Expr::Column(column).alias(state.register_field_name(name))
+                        let name = Self::joined_column_name(&column, state)?;
+                        Ok(Expr::Column(column).alias(state.register_field_name(name)))
                     })
-                    .chain(hidden_columns);
-                builder.project(projections)?
+                    .collect::<PlanResult<Vec<_>>>()?;
+                builder.project(projections.into_iter().chain(hidden_columns))?
             }
             JoinType::Full => {
                 let join_schema = builder.schema().clone();
                 let coalesce_function = get_built_in_function("coalesce")?;
                 let projections = join_columns
                     .into_iter()
-                    .map(|(name, (left, right))| {
+                    .map(|(_, (left, right))| {
+                        // The output is a coalesce of both sides, but Spark still names it after
+                        // the left one.
+                        let name = Self::joined_column_name(&left, state)?;
                         let expression = coalesce_function(ScalarFunctionInput {
                             arguments: vec![Expr::Column(left), Expr::Column(right)],
                             function_context: FunctionContextInput {
@@ -265,12 +327,13 @@ impl PlanResolver<'_> {
                 );
                 let projections = join_columns
                     .into_iter()
-                    .map(|(name, (left, right))| {
-                        let col = if uses_right { right } else { left };
-                        Expr::Column(col).alias(state.register_field_name(name))
+                    .map(|(_, (left, right))| {
+                        let column = if uses_right { right } else { left };
+                        let name = Self::joined_column_name(&column, state)?;
+                        Ok(Expr::Column(column).alias(state.register_field_name(name)))
                     })
-                    .chain(hidden_columns);
-                builder.project(projections)?
+                    .collect::<PlanResult<Vec<_>>>()?;
+                builder.project(projections.into_iter().chain(hidden_columns))?
             }
         };
         Ok(builder.build()?)

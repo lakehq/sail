@@ -1,17 +1,20 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
-use datafusion_common::Column;
+use datafusion_common::{Column, DFSchemaRef, ExprSchema, ScalarValue};
 use datafusion_expr::{
     Expr, ExprSchemable, LogicalPlan, Projection, SubqueryAlias, cast, col, lit,
 };
-use indexmap::IndexMap;
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
+use crate::resolver::expression::attribute::{
+    invalid_attribute_name_error, quote_identifier_name, replace_nested_column_error,
+    unresolved_column_fields_error, unresolved_column_name_error,
+};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
@@ -59,21 +62,44 @@ impl PlanResolver<'_> {
         let mut projected_exprs = Vec::new();
         for target_field in target_schema.fields() {
             let target_name = target_field.name();
-            let input_idx = input_names
+            let mut matches = input_names
                 .iter()
-                .position(|input_name| input_name.eq_ignore_ascii_case(target_name))
-                .ok_or_else(|| {
-                    PlanError::invalid(format!("field not found in input schema: {target_name}"))
-                })?;
+                .enumerate()
+                .filter(|(_, input_name)| self.match_identifier(input_name, target_name));
+            let Some((input_idx, _)) = matches.next() else {
+                // A target field that matches no input column is filled with NULL when it is
+                // nullable, and is only rejected otherwise.
+                if !target_field.is_nullable() {
+                    let candidates = input_names.iter().map(|x| x.as_str()).collect::<Vec<_>>();
+                    return Err(unresolved_column_name_error(
+                        &spec::ObjectName::bare(target_name.as_str()),
+                        &candidates,
+                    ));
+                }
+                let field_id = state.register_field_name(target_name.clone());
+                projected_exprs.push(
+                    cast(lit(ScalarValue::Null), target_field.data_type().clone()).alias(field_id),
+                );
+                continue;
+            };
+            if matches.next().is_some() {
+                return Err(PlanError::AnalysisError(format!(
+                    "[AMBIGUOUS_COLUMN_OR_FIELD] Column or field `{}` is ambiguous and has {} \
+                     matches.",
+                    target_name.replace('`', "``"),
+                    2 + matches.count()
+                )));
+            }
             let (input_qualifier, input_field) = input.schema().qualified_field(input_idx);
             let expr = Expr::Column(Column::from((input_qualifier, input_field)));
             let expr = if input_field.data_type() == target_field.data_type() {
                 expr
             } else {
                 expr.cast_to(target_field.data_type(), &input.schema())?
-                    .alias_qualified(input_qualifier.cloned(), input_field.name())
             };
-            projected_exprs.push(expr);
+            // The column takes the name of the target field rather than the one it matched.
+            let field_id = state.register_field_name(target_name.clone());
+            projected_exprs.push(expr.alias(field_id));
         }
         let projected_plan =
             LogicalPlan::Projection(Projection::try_new(projected_exprs, Arc::new(input))?);
@@ -87,34 +113,23 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
-
-        let mut inverse_map: HashMap<String, HashSet<String>> = HashMap::new();
-        for (from, to) in rename_columns_map
-            .iter()
-            .map(|(a, b)| (a.as_ref().to_string(), b.as_ref().to_string()))
-        {
-            let from_froms = inverse_map.remove(&from).unwrap_or_default(); //.unwrap_or_else(|| HashSet::new());
-            let to_froms = inverse_map.entry(to.clone()).or_default();
-            to_froms.extend(from_froms);
-            to_froms.insert(from);
-        }
-
-        let rename_columns_map: HashMap<String, String> = inverse_map
-            .into_iter()
-            .flat_map(|(to, froms)| froms.into_iter().map(move |from| (from, to.clone())))
-            .collect();
-        let schema = input.schema();
-        let expr = schema
-            .columns()
-            .into_iter()
-            .map(|column| {
-                let name = state.get_field_info(column.name())?.name();
-                match rename_columns_map.get(name) {
-                    Some(n) => Ok(NamedExpr::new(vec![n.clone()], Expr::Column(column))),
-                    None => Ok(NamedExpr::new(vec![name.to_string()], Expr::Column(column))),
+        let columns = input.schema().columns();
+        let mut names = Self::get_field_names(input.schema(), state)?;
+        // Each rename is applied to the output of the previous one. A name that matches no
+        // column is ignored.
+        for (from, to) in rename_columns_map {
+            let (from, to) = (from.as_ref(), to.as_ref());
+            for name in names.iter_mut() {
+                if self.match_identifier(name, from) {
+                    *name = to.to_string();
                 }
-            })
-            .collect::<PlanResult<Vec<_>>>()?;
+            }
+        }
+        let expr = columns
+            .into_iter()
+            .zip(names)
+            .map(|(column, name)| NamedExpr::new(vec![name], Expr::Column(column)))
+            .collect::<Vec<_>>();
         let expr = self.rewrite_named_expressions(expr, state)?;
         Ok(LogicalPlan::Projection(Projection::try_new(
             expr,
@@ -158,8 +173,10 @@ impl PlanResolver<'_> {
             .chain(column_names.into_iter().flat_map(|name| {
                 let name: String = name.into();
                 // The excluded column names are allow to refer to ambiguous columns,
-                // so we just check the column name here.
-                self.resolve_column_candidates(schema, &name, None, state)
+                // so we just check the column name here. The name is matched with the resolver
+                // alone, unlike an attribute reference, which Spark also looks up in a map
+                // keyed by the lowercased name.
+                self.resolve_column_candidates_by_resolver(schema, &name, state)
                     .into_iter()
             }))
             .collect::<Vec<_>>();
@@ -181,10 +198,10 @@ impl PlanResolver<'_> {
         aliases: Vec<spec::Expr>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        // `AliasEntry` is `(resolved_expr, seen, explicit_metadata)` where `explicit_metadata` is
-        // `Some(meta)` when the user explicitly provided metadata via `withMetadata` (even empty),
-        // and `None` when no metadata was specified on the alias.
-        type AliasEntry = (Expr, bool, Option<Vec<(String, String)>>);
+        // `AliasEntry` is `(name, resolved_expr, explicit_metadata)` where `explicit_metadata`
+        // is `Some(meta)` when the user explicitly provided metadata via `withMetadata`, and
+        // `None` when no metadata was specified on the alias.
+        type AliasEntry = (String, Expr, Option<Vec<(String, String)>>);
 
         let input = self.resolve_query_plan(input, state).await?;
         // If the input is a SubqueryAlias, save the alias and re-apply it after building the
@@ -195,61 +212,83 @@ impl PlanResolver<'_> {
             _ => None,
         };
         let schema = input.schema();
-        // We use `IndexMap` to ensure the result schema has a deterministic column order.
-        let mut aliases: IndexMap<String, AliasEntry> = async {
-            let mut results = IndexMap::new();
-            for alias in aliases {
-                let (name, expr, metadata) = match alias {
-                    spec::Expr::Alias {
-                        name,
-                        expr,
-                        metadata,
-                    } => {
-                        let name = name
-                            .one()
-                            .map_err(|_| PlanError::invalid("multi-alias for column"))?;
-                        (name, *expr, metadata)
-                    }
-                    _ => return Err(PlanError::invalid("alias expression expected for column")),
-                };
-                let expr = self.resolve_expression(expr, schema, state).await?;
-                results.insert(name.into(), (expr, false, metadata));
-            }
-            Ok(results) as PlanResult<_>
+        // The alias names are collected first so that duplicates are rejected before the
+        // expressions are resolved, which is the order in which Spark reports the errors.
+        let aliases = aliases
+            .into_iter()
+            .map(|alias| match alias {
+                spec::Expr::Alias {
+                    name,
+                    expr,
+                    metadata,
+                } => {
+                    let name: String = name
+                        .one()
+                        .map_err(|_| PlanError::invalid("multi-alias for column"))?
+                        .into();
+                    Ok((name, *expr, metadata))
+                }
+                _ => Err(PlanError::invalid("alias expression expected for column")),
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+        // Names that differ only in case are duplicates, and the first one in alphabetical
+        // order is reported.
+        let mut folded = aliases
+            .iter()
+            .map(|(name, _, _)| self.fold_identifier(name))
+            .collect::<Vec<_>>();
+        folded.sort();
+        let duplicate = folded.windows(2).find_map(|names| match names {
+            [a, b] if a == b => Some(a),
+            _ => None,
+        });
+        if let Some(name) = duplicate {
+            return Err(PlanError::AnalysisError(format!(
+                "[COLUMN_ALREADY_EXISTS] The column {} already exists. \
+                 Choose another name or rename the existing column.",
+                quote_identifier_name(name)
+            )));
         }
-        .await?;
+        let aliases = {
+            let mut results: Vec<AliasEntry> = Vec::with_capacity(aliases.len());
+            for (name, expr, metadata) in aliases {
+                let expr = self.resolve_expression(expr, schema, state).await?;
+                results.push((name, expr, metadata));
+            }
+            results
+        };
+        let names = Self::get_field_names(schema, state)?;
+        // An alias is appended only when it matches no existing column, which is not the same as
+        // the alias not having replaced one: when two aliases match the same column, the first
+        // one replaces it and the other one is discarded instead of being appended.
+        let matched = aliases
+            .iter()
+            .map(|(name, ..)| {
+                names
+                    .iter()
+                    .any(|column| self.match_identifier(name, column))
+            })
+            .collect::<Vec<_>>();
         let mut expr = schema
             .columns()
             .into_iter()
-            .map(|column| {
-                let name = state.get_field_info(column.name())?.name();
-                match aliases.get_mut(name) {
-                    Some((e, exists, metadata)) => {
-                        *exists = true;
-                        match metadata {
-                            Some(m) if !m.is_empty() => {
-                                Ok(NamedExpr::new(vec![name.to_string()], e.clone())
-                                    .with_metadata(m.clone()))
-                            }
-                            _ => Ok(NamedExpr::new(vec![name.to_string()], e.clone())),
-                        }
+            .zip(names)
+            .map(|(column, name)| {
+                // The alias name replaces the name of the column that it matches.
+                match aliases
+                    .iter()
+                    .find(|(alias, ..)| self.match_identifier(alias, &name))
+                {
+                    Some((alias, expr, metadata)) => {
+                        self.added_column(alias, expr, metadata, schema)
                     }
-                    None => Ok(NamedExpr::new(vec![name.to_string()], Expr::Column(column))),
+                    None => Ok(NamedExpr::new(vec![name], Expr::Column(column))),
                 }
             })
             .collect::<PlanResult<Vec<_>>>()?;
-        for (name, (e, exists, metadata)) in &aliases {
-            if !exists {
-                match metadata {
-                    Some(m) if !m.is_empty() => {
-                        expr.push(
-                            NamedExpr::new(vec![name.clone()], e.clone()).with_metadata(m.clone()),
-                        );
-                    }
-                    _ => {
-                        expr.push(NamedExpr::new(vec![name.clone()], e.clone()));
-                    }
-                }
+        for ((name, e, metadata), matched) in aliases.iter().zip(matched) {
+            if !matched {
+                expr.push(self.added_column(name, e, metadata, schema)?);
             }
         }
         let (input, expr) = self.rewrite_projection::<MonotonicIdRewriter>(input, expr, state)?;
@@ -270,6 +309,27 @@ impl PlanResolver<'_> {
         }
     }
 
+    /// Builds the named expression for a column added or replaced by `withColumn`.
+    /// Spark always sets explicit metadata for such columns, defaulting to empty metadata, so the
+    /// metadata of the expression is never inherited. Empty metadata is only attached when there
+    /// is something to override, since metadata that the physical schema does not have would
+    /// otherwise make it differ from the logical one.
+    fn added_column(
+        &self,
+        name: &str,
+        expr: &Expr,
+        metadata: &Option<Vec<(String, String)>>,
+        schema: &DFSchemaRef,
+    ) -> PlanResult<NamedExpr> {
+        let named = NamedExpr::new(vec![name.to_string()], expr.clone());
+        let metadata = match metadata {
+            Some(metadata) if !metadata.is_empty() => metadata.clone(),
+            _ if expr.metadata(schema)?.is_empty() => return Ok(named),
+            _ => vec![(spec::SPARK_METADATA_JSON_KEY.to_string(), "{}".to_string())],
+        };
+        Ok(named.with_metadata(metadata))
+    }
+
     pub(super) async fn resolve_query_replace(
         &self,
         input: spec::QueryPlan,
@@ -281,7 +341,7 @@ impl PlanResolver<'_> {
         let schema = input.schema();
         let cols_to_change: Vec<String> = columns
             .into_iter()
-            .map(|ident| ident.as_ref().to_ascii_lowercase())
+            .map(|ident| ident.as_ref().to_string())
             .collect();
         let replacements: Vec<(Expr, Expr)> = replacements
             .into_iter()
@@ -300,36 +360,61 @@ impl PlanResolver<'_> {
                 Ok::<_, PlanError>((
                     col((qualifier, field)),
                     field.data_type(),
-                    field_info.name().to_ascii_lowercase(),
+                    field_info.name().to_string(),
                 ))
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        let existing_cols_set: HashSet<_> =
-            existing_cols_info.iter().map(|(_, _, name)| name).collect();
-
-        if let Some(missing_colname) = cols_to_change
+        // The column name is resolved as an attribute reference, so an ambiguous name is an error.
+        // Only a column whose name matches exactly is replaced, though, because the resolver
+        // renames the attribute to the requested name, so an attribute resolved from a name that
+        // differs in case is no longer equal to the one in the output of the plan.
+        let resolved_names = cols_to_change
             .iter()
-            .find(|col| !existing_cols_set.contains(*col))
-        {
-            let existing_cols = existing_cols_info
-                .iter()
-                .map(|(_, _, name)| name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
+            .map(|name| {
+                // The name is parsed before it is looked up, so a malformed one is a syntax error
+                // rather than a column that could not be found.
+                let object = spec::ObjectName::parse_attribute(name)
+                    .ok_or_else(|| invalid_attribute_name_error(name))?;
+                let [leading, rest @ ..] = object.parts() else {
+                    return Err(invalid_attribute_name_error(name));
+                };
+                let column = self.resolve_optional_column(schema, leading.as_ref(), None, state)?;
+                // Only a top-level column can be replaced, so a name that walks into one is
+                // rejected on its own condition. A walk that does not resolve falls through, since
+                // reporting the missing field is a separate gap.
+                if let Some(column) = &column
+                    && !rest.is_empty()
+                    && let Ok(field) = schema.field_from_column(column)
+                    && self
+                        .resolve_potentially_nested_field(
+                            Expr::Column(column.clone()),
+                            field.data_type(),
+                            rest,
+                        )?
+                        .is_some()
+                {
+                    return Err(replace_nested_column_error(&object));
+                }
+                if column.is_none() || !rest.is_empty() {
+                    let candidates = existing_cols_info
+                        .iter()
+                        .map(|(_, _, name)| name.as_str())
+                        .collect::<Vec<_>>();
+                    return Err(unresolved_column_fields_error(&object, &candidates));
+                }
+                Ok(leading.as_ref().to_string())
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
 
-            return Err(PlanError::AnalysisError(format!(
-                "Cannot resolve column name \"{}\" among ({})",
-                missing_colname, existing_cols
-            )));
-        }
-
-        let cols_to_change_set: HashSet<_> = cols_to_change.iter().collect();
+        let cols_to_change_set: HashSet<&str> =
+            resolved_names.iter().map(|name| name.as_str()).collect();
 
         let replace_exprs = existing_cols_info
             .into_iter()
             .map(|(column_expr, column_type, column_name)| {
-                let expr = if cols_to_change.is_empty() || cols_to_change_set.contains(&column_name)
+                let expr = if cols_to_change.is_empty()
+                    || cols_to_change_set.contains(column_name.as_str())
                 {
                     let when_then_expr = replacements
                         .iter()

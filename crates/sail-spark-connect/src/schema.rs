@@ -256,11 +256,11 @@ fn format_ddl_type(buf: &mut String, data_type: Option<&sc::DataType>) -> SparkR
         _ => return Err(SparkError::invalid("missing data type")),
     };
     match kind {
-        Kind::Null(_) => buf.push_str("NULL"),
+        Kind::Null(_) => buf.push_str("VOID"),
         Kind::Binary(_) => buf.push_str("BINARY"),
         Kind::Boolean(_) => buf.push_str("BOOLEAN"),
         Kind::Byte(_) => buf.push_str("TINYINT"),
-        Kind::Short(_) => buf.push_str("SHORT"),
+        Kind::Short(_) => buf.push_str("SMALLINT"),
         Kind::Integer(_) => buf.push_str("INT"),
         Kind::Long(_) => buf.push_str("BIGINT"),
         Kind::Float(_) => buf.push_str("FLOAT"),
@@ -365,13 +365,11 @@ fn format_ddl_type(buf: &mut String, data_type: Option<&sc::DataType>) -> SparkR
             buf.push('>');
         }
         Kind::Variant(_) => buf.push_str("VARIANT"),
-        Kind::Udt(udt) => {
-            if udt.jvm_class.is_none() && udt.python_class.is_some() {
-                buf.push_str("PYTHONUSERDEFINED");
-            } else {
-                buf.push_str("USERDEFINED");
-            }
-        }
+        Kind::Udt(udt) => match udt.sql_type.as_deref() {
+            // A user defined type is rendered as the type it is stored as.
+            Some(sql_type) => format_ddl_type(buf, Some(sql_type))?,
+            None => buf.push_str("USERDEFINED"),
+        },
         Kind::Geometry(_) => buf.push_str("GEOMETRY"),
         Kind::Geography(_) => buf.push_str("GEOGRAPHY"),
         Kind::Unparsed(unparsed) => {
@@ -400,7 +398,9 @@ pub(crate) fn to_ddl_string(data_type: &sc::DataType) -> SparkResult<String> {
         Kind::Struct(r#struct) => {
             for (i, field) in r#struct.fields.iter().enumerate() {
                 if i > 0 {
-                    buf.push_str(", ");
+                    // `StructType.toDDL` joins the fields with a bare comma, unlike the nested
+                    // renderings, which separate them with a comma and a space.
+                    buf.push(',');
                 }
                 buf.push_str(&quote_field_name(&field.name));
                 buf.push(' ');

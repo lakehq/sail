@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
+use datafusion_common::DFSchemaRef;
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{
     Expr, ExprSchemable, Filter, LogicalPlan, Projection, TryCast, cast, col, is_false, lit, when,
@@ -12,6 +13,9 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
+use crate::resolver::expression::attribute::{
+    invalid_attribute_name_error, unresolved_column_fields_error,
+};
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
@@ -32,6 +36,12 @@ impl PlanResolver<'_> {
         let schema = input.schema();
         let values = self.resolve_expressions(values, schema, state).await?;
         let columns: Vec<String> = columns.into_iter().map(|x| x.into()).collect();
+        // The names are resolved as attribute references, so a name that matches no column is an
+        // error rather than being ignored. A name that resolves to a nested field is not a
+        // column, and Spark discards it instead of filling it.
+        for name in &columns {
+            self.validate_na_column(schema, name, state)?;
+        }
 
         if values.is_empty() {
             return Err(PlanError::invalid("missing fill na values"));
@@ -64,11 +74,16 @@ impl PlanResolver<'_> {
                     Strategy::All { value } => Some(value.clone()),
                     Strategy::Columns { columns, value } => columns
                         .iter()
-                        .any(|col| info.matches(col, None))
+                        .any(|col| {
+                            Self::na_column_name(col)
+                                .is_some_and(|col| self.match_field(info, &col, None))
+                        })
                         .then(|| value.clone()),
-                    Strategy::EachColumn { columns } => columns
-                        .iter()
-                        .find_map(|(col, val)| info.matches(col, None).then(|| val.clone())),
+                    Strategy::EachColumn { columns } => columns.iter().find_map(|(col, val)| {
+                        Self::na_column_name(col)
+                            .is_some_and(|col| self.match_field(info, &col, None))
+                            .then(|| val.clone())
+                    }),
                 };
                 let column_expr = col((qualifier, field));
                 let expr = if let Some(value) = value {
@@ -111,6 +126,55 @@ impl PlanResolver<'_> {
         }
     }
 
+    /// The name a subset entry matches a column by. Spark resolves the entry as a column
+    /// reference, so a quoted name matches the part it parses to, while a name that walks into a
+    /// column is not a column and matches nothing.
+    fn na_column_name(name: &str) -> Option<String> {
+        match spec::ObjectName::parse_attribute(name) {
+            Some(object) => match object.parts() {
+                [part] => Some(part.as_ref().to_string()),
+                _ => None,
+            },
+            None => Some(name.to_string()),
+        }
+    }
+
+    /// Validates a column name used by the `fillna` and `dropna` subsets. Spark resolves the name
+    /// the way a column reference is resolved, so a name that matches nothing is an error, while
+    /// a name that resolves to a nested field is simply not a column to fill.
+    fn validate_na_column(
+        &self,
+        schema: &DFSchemaRef,
+        name: &str,
+        state: &PlanResolverState,
+    ) -> PlanResult<()> {
+        // The name is parsed before it is looked up, so a malformed one is a syntax error rather
+        // than a column that could not be found.
+        let object = spec::ObjectName::parse_attribute(name)
+            .ok_or_else(|| invalid_attribute_name_error(name))?;
+        let [leading, rest @ ..] = object.parts() else {
+            self.resolve_one_column(schema, name, state)?;
+            return Ok(());
+        };
+        // Only the leading part names a column; the rest walks into it, and a nested field that
+        // resolves is dropped rather than filled. The name is matched as the part it parses to,
+        // so a column whose own name contains a dot is reachable by quoting it.
+        if rest.is_empty() {
+            self.resolve_one_column(schema, leading.as_ref(), state)?;
+            return Ok(());
+        }
+        if self
+            .resolve_optional_column(schema, leading.as_ref(), None, state)?
+            .is_none()
+        {
+            return Err(unresolved_column_fields_error(
+                &object,
+                &Self::get_field_names(schema, state)?,
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) async fn resolve_query_drop_na(
         &self,
         input: spec::QueryPlan,
@@ -120,15 +184,23 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
         let schema = input.schema();
+        // The names are resolved as attribute references, so a name that matches no column is an
+        // error rather than being ignored.
+        for name in &columns {
+            self.validate_na_column(schema, name.as_ref(), state)?;
+        }
         let not_null_exprs = schema
             .columns()
             .into_iter()
             .filter_map(|column| {
                 (columns.is_empty() || {
-                    let columns: Vec<String> = columns.iter().map(|x| x.as_ref().into()).collect();
+                    let columns = columns
+                        .iter()
+                        .filter_map(|x| Self::na_column_name(x.as_ref()))
+                        .collect::<Vec<_>>();
                     state
                         .get_field_info(column.name())
-                        .is_ok_and(|info| columns.iter().any(|c| info.matches(c, None)))
+                        .is_ok_and(|info| columns.iter().any(|c| self.match_field(info, c, None)))
                 })
                 .then(|| {
                     col(column.clone()).get_type(schema).ok().map(|col_type| {
