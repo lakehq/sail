@@ -53,7 +53,7 @@ impl DriverActor {
                 .request_initial_workers(self.options.worker_initial_count);
             self.worker_scaler
                 .request_initial_workers(count)
-                .and_then(|requests| self.launch_worker_requests(ctx, requests))
+                .and_then(|requests| self.start_worker_launch(ctx, requests))
                 .inspect(|_| {
                     self.activated = true;
                 })
@@ -111,7 +111,7 @@ impl DriverActor {
         ctx: &mut ActorContext<Self>,
         worker_id: WorkerId,
     ) -> ActorAction {
-        self.handle_worker_launch_failure(
+        self.fail_worker_launch_if_pending(
             ctx,
             worker_id,
             "worker registration timeout".to_string(),
@@ -125,7 +125,7 @@ impl DriverActor {
         worker_id: WorkerId,
         message: String,
     ) -> ActorAction {
-        self.handle_worker_launch_failure(ctx, worker_id, message);
+        self.fail_worker_launch_if_pending(ctx, worker_id, message);
         ActorAction::Continue
     }
 
@@ -135,7 +135,7 @@ impl DriverActor {
         request: WorkerRetryRequest,
     ) -> ActorAction {
         if let Some(request) = self.worker_scaler.retry(request)
-            && let Err(e) = self.launch_worker_request(ctx, request)
+            && let Err(e) = self.start_worker_launch(ctx, vec![request])
         {
             error!("failed to retry worker launch: {e}");
             ctx.send(DriverMessage::Shutdown { result: None });
@@ -611,45 +611,36 @@ impl DriverActor {
         let output = self
             .worker_scaler
             .reconcile(self.task_assigner.count_worker_demands())
-            .and_then(|requests| self.launch_worker_requests(ctx, requests));
+            .and_then(|requests| self.start_worker_launch(ctx, requests));
         if let Err(e) = output {
             error!("failed to request workers: {e}");
             ctx.send(DriverMessage::Shutdown { result: None });
         }
     }
 
-    fn launch_worker_request(
-        &mut self,
-        ctx: &mut ActorContext<Self>,
-        request: WorkerLaunchRequest,
-    ) -> ExecutionResult<()> {
-        info!(
-            "launching worker demand {} attempt {}",
-            request.demand_id, request.attempt
-        );
-        let worker_id = self.worker_pool.start_worker(ctx)?;
-        if self.worker_scaler.bind_worker(request, worker_id) {
-            Ok(())
-        } else {
-            Err(ExecutionError::InternalError(format!(
-                "failed to bind worker {worker_id} to demand {}",
-                request.demand_id
-            )))
-        }
-    }
-
-    fn launch_worker_requests(
+    fn start_worker_launch(
         &mut self,
         ctx: &mut ActorContext<Self>,
         requests: Vec<WorkerLaunchRequest>,
     ) -> ExecutionResult<()> {
         for request in requests {
-            self.launch_worker_request(ctx, request)?;
+            let demand_id = request.demand_id;
+            debug!(
+                "launching worker demand {} attempt {}",
+                demand_id, request.attempt
+            );
+            let worker_id = self.worker_pool.start_worker(ctx)?;
+            if !self.worker_scaler.bind_worker(request, worker_id) {
+                return Err(ExecutionError::InternalError(format!(
+                    "failed to bind worker {worker_id} to demand {}",
+                    demand_id
+                )));
+            }
         }
         Ok(())
     }
 
-    fn handle_worker_launch_failure(
+    fn fail_worker_launch_if_pending(
         &mut self,
         ctx: &mut ActorContext<Self>,
         worker_id: WorkerId,
