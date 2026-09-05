@@ -1201,24 +1201,23 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         if mode.is_replace() {
             // Atomic replace via update_table (no drop), so UUID/location/history are preserved.
             // `Replace` requires an existing table; `CreateOrReplace` falls through to create.
-            let existing = match client
-                .catalog_api_api()
-                .load_table(
-                    &catalog_config.namespace_string(database)?,
-                    table,
-                    None,
-                    None,
-                    None,
-                    catalog_config.prefix(),
-                )
-                .await
+            let prefix = catalog_config.prefix().map(ToOwned::to_owned);
+            let namespace = catalog_config.namespace_string(database)?;
+            let existing = match self
+                .with_auth_retry(|client| {
+                    let prefix = prefix.clone();
+                    let namespace = namespace.clone();
+                    let table = table.to_string();
+                    async move {
+                        client
+                            .load_table(prefix, namespace, table, None, None, None)
+                            .await
+                    }
+                })
+                .await?
             {
-                Ok(result) => Some(result),
-                Err(apis::Error::ResponseError(apis::ResponseContent { status, .. }))
-                    if status == reqwest::StatusCode::NOT_FOUND =>
-                {
-                    None
-                }
+                Ok(result) => Some(result.inner),
+                Err(e) if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => None,
                 Err(e) => {
                     return Err(CatalogError::External(format!(
                         "Failed to load table for replace: {e}"
@@ -1311,31 +1310,31 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                         });
                     }
 
-                    let commit_request =
-                        crate::r#gen::CommitTableRequest::new(requirements, updates);
+                    let commit_request = crate::r#gen::CommitTableRequest {
+                        identifier: None,
+                        requirements,
+                        updates,
+                    };
 
-                    let commit_response = client
-                        .catalog_api_api()
-                        .update_table(
-                            &catalog_config.namespace_string(database)?,
-                            table,
-                            commit_request,
-                            catalog_config.prefix(),
-                        )
-                        .await
-                        .map_err(|e| match e {
-                            apis::Error::ResponseError(apis::ResponseContent {
-                                status,
-                                content,
-                                ..
-                            }) => CatalogError::External(format!(
-                                "Failed to atomically replace table: status {status}: {}",
-                                redact_rest_error_body(&content)
-                            )),
-                            other => CatalogError::External(format!(
-                                "Failed to atomically replace table: {other}"
-                            )),
-                        })?;
+                    let commit_response = self
+                        .with_auth_retry(|client| {
+                            let prefix = prefix.clone();
+                            let namespace = namespace.clone();
+                            let table = table.to_string();
+                            let commit_request = commit_request.clone();
+                            async move {
+                                client
+                                    .update_table(prefix, namespace, table, commit_request)
+                                    .await
+                            }
+                        })
+                        .await?
+                        .map_err(|e| {
+                            CatalogError::External(redact_rest_error_body(&format!(
+                                "Failed to atomically replace table: {e}"
+                            )))
+                        })?
+                        .inner;
 
                     let load_result = crate::r#gen::LoadTableResult {
                         metadata_location: Some(commit_response.metadata_location),
@@ -1894,22 +1893,22 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 /// `RemoveSchemasUpdate` is omitted by design — some REST catalogs reject it while a snapshot
 /// still references the schema, and Spark omits it too.
 fn build_replace_updates(
-    schema: &crate::models::Schema,
-    partition_spec: Option<Box<crate::models::PartitionSpec>>,
-    write_order: Option<Box<crate::models::SortOrder>>,
+    schema: &crate::r#gen::Schema,
+    partition_spec: Option<Box<crate::r#gen::PartitionSpec>>,
+    write_order: Option<Box<crate::r#gen::SortOrder>>,
     new_props: HashMap<String, String>,
     existing_props: &HashMap<String, String>,
     location: Option<&str>,
-    existing_current_schema: Option<&crate::models::Schema>,
+    existing_current_schema: Option<&crate::r#gen::Schema>,
     has_current_snapshot: bool,
     existing_is_partitioned: bool,
     existing_is_sorted: bool,
-) -> Vec<crate::models::TableUpdate> {
-    let mut updates: Vec<crate::models::TableUpdate> = Vec::new();
+) -> Vec<crate::r#gen::TableUpdate> {
+    let mut updates: Vec<crate::r#gen::TableUpdate> = Vec::new();
 
     // Only when a live snapshot exists: removing a non-existent `main` ref would be rejected.
     if has_current_snapshot {
-        updates.push(crate::models::TableUpdate::RemoveSnapshotRefUpdate {
+        updates.push(crate::r#gen::TableUpdate::RemoveSnapshotRef {
             ref_name: MAIN_BRANCH_REF.to_string(),
         });
     }
@@ -1918,34 +1917,37 @@ fn build_replace_updates(
     // because no schema was actually added.
     let schema_changed = match existing_current_schema {
         None => true,
-        Some(existing) => existing.fields != schema.fields,
+        Some(existing) => {
+            serde_json::to_value(&existing.fields).unwrap_or_default()
+                != serde_json::to_value(&schema.fields).unwrap_or_default()
+        }
     };
     if schema_changed {
-        updates.push(crate::models::TableUpdate::AddSchemaUpdate {
+        updates.push(crate::r#gen::TableUpdate::AddSchema {
             schema: Box::new(schema.clone()),
             last_column_id: None,
         });
-        updates.push(crate::models::TableUpdate::SetCurrentSchemaUpdate { schema_id: -1 });
+        updates.push(crate::r#gen::TableUpdate::SetCurrentSchema { schema_id: -1 });
     }
 
     // REPLACE is a full redefinition, not a merge: when the new table omits `PARTITIONED BY`
     // or a sort clause, reset to unpartitioned / unsorted instead of inheriting the old table's.
     match partition_spec {
         Some(spec) => {
-            updates.push(crate::models::TableUpdate::AddPartitionSpecUpdate { spec });
-            updates.push(crate::models::TableUpdate::SetDefaultSpecUpdate { spec_id: -1 });
+            updates.push(crate::r#gen::TableUpdate::AddSpec { spec });
+            updates.push(crate::r#gen::TableUpdate::SetDefaultSpec { spec_id: -1 });
         }
         // Reset a previously-partitioned table to unpartitioned: add the empty spec (a genuinely
         // new spec, so the server's "last added" `-1` resolves) and make it the default. The REST
         // parser requires `spec-id`; 0 is the reserved unpartitioned id, reassigned on add.
         None if existing_is_partitioned => {
-            updates.push(crate::models::TableUpdate::AddPartitionSpecUpdate {
-                spec: Box::new(crate::models::PartitionSpec {
+            updates.push(crate::r#gen::TableUpdate::AddSpec {
+                spec: Box::new(crate::r#gen::PartitionSpec {
                     spec_id: Some(0),
                     fields: Vec::new(),
                 }),
             });
-            updates.push(crate::models::TableUpdate::SetDefaultSpecUpdate { spec_id: -1 });
+            updates.push(crate::r#gen::TableUpdate::SetDefaultSpec { spec_id: -1 });
         }
         // Already unpartitioned: adding the empty spec would dedup, leaving `-1` with nothing to
         // point at ("no partition spec has been added"), so emit no partition update.
@@ -1954,22 +1956,22 @@ fn build_replace_updates(
 
     match write_order {
         Some(order) => {
-            updates.push(crate::models::TableUpdate::AddSortOrderUpdate { sort_order: order });
+            updates.push(crate::r#gen::TableUpdate::AddSortOrder { sort_order: order });
             updates
-                .push(crate::models::TableUpdate::SetDefaultSortOrderUpdate { sort_order_id: -1 });
+                .push(crate::r#gen::TableUpdate::SetDefaultSortOrder { sort_order_id: -1 });
         }
         // Reset a previously-sorted table to unsorted. A table created with a sort order does not
         // carry the unsorted order (id 0), so add it (a genuinely new order → `-1` resolves) and
         // default to it. Setting the default to 0 directly would NPE on the missing order.
         None if existing_is_sorted => {
-            updates.push(crate::models::TableUpdate::AddSortOrderUpdate {
-                sort_order: Box::new(crate::models::SortOrder {
+            updates.push(crate::r#gen::TableUpdate::AddSortOrder {
+                sort_order: Box::new(crate::r#gen::SortOrder {
                     order_id: 0,
                     fields: Vec::new(),
                 }),
             });
             updates
-                .push(crate::models::TableUpdate::SetDefaultSortOrderUpdate { sort_order_id: -1 });
+                .push(crate::r#gen::TableUpdate::SetDefaultSortOrder { sort_order_id: -1 });
         }
         // Already unsorted: adding the unsorted order would dedup, leaving `-1` with nothing to
         // point at ("no sort order has been added"), so emit no sort update.
@@ -1977,7 +1979,7 @@ fn build_replace_updates(
     }
 
     if let Some(loc) = location {
-        updates.push(crate::models::TableUpdate::SetLocationUpdate {
+        updates.push(crate::r#gen::TableUpdate::SetLocation {
             location: loc.to_string(),
         });
     }
@@ -1990,11 +1992,11 @@ fn build_replace_updates(
         .collect();
 
     if !new_props.is_empty() {
-        updates.push(crate::models::TableUpdate::SetPropertiesUpdate { updates: new_props });
+        updates.push(crate::r#gen::TableUpdate::SetProperties { updates: new_props });
     }
 
     if !removals.is_empty() {
-        updates.push(crate::models::TableUpdate::RemovePropertiesUpdate { removals });
+        updates.push(crate::r#gen::TableUpdate::RemoveProperties { removals });
     }
 
     updates
@@ -4575,7 +4577,7 @@ mod tests {
 
     fn empty_schema() -> crate::r#gen::Schema {
         crate::r#gen::Schema {
-            r#type: crate::r#gen::schema::Type::Struct,
+            r#type: "struct".to_string(),
             fields: Vec::new(),
             schema_id: Some(0),
             identifier_field_ids: None,
@@ -4632,7 +4634,7 @@ mod tests {
         let removals: Vec<String> = updates
             .iter()
             .filter_map(|update| match update {
-                crate::r#gen::TableUpdate::RemovePropertiesUpdate { removals } => {
+                crate::r#gen::TableUpdate::RemoveProperties { removals } => {
                     Some(removals.clone())
                 }
                 _ => None,
@@ -4675,7 +4677,7 @@ mod tests {
             .any(|u| {
                 matches!(
                     u,
-                    crate::r#gen::TableUpdate::RemoveSnapshotRefUpdate { ref_name } if ref_name == "main"
+                    crate::r#gen::TableUpdate::RemoveSnapshotRef { ref_name } if ref_name == "main"
                 )
             })
         };
@@ -4707,31 +4709,31 @@ mod tests {
                 existing_is_sorted,
             )
         };
-        let has_add_spec = |u: &[crate::models::TableUpdate]| {
+        let has_add_spec = |u: &[crate::r#gen::TableUpdate]| {
             u.iter().find_map(|u| match u {
-                crate::models::TableUpdate::AddPartitionSpecUpdate { spec } => Some(spec.clone()),
+                crate::r#gen::TableUpdate::AddSpec { spec } => Some(spec.clone()),
                 _ => None,
             })
         };
-        let has_add_order = |u: &[crate::models::TableUpdate]| {
+        let has_add_order = |u: &[crate::r#gen::TableUpdate]| {
             u.iter().find_map(|u| match u {
-                crate::models::TableUpdate::AddSortOrderUpdate { sort_order } => {
+                crate::r#gen::TableUpdate::AddSortOrder { sort_order } => {
                     Some(sort_order.clone())
                 }
                 _ => None,
             })
         };
         let has_set_default_spec =
-            |u: &[crate::models::TableUpdate]| {
+            |u: &[crate::r#gen::TableUpdate]| {
                 u.iter().any(|u| matches!(
                 u,
-                crate::models::TableUpdate::SetDefaultSpecUpdate { spec_id } if *spec_id == -1
+                crate::r#gen::TableUpdate::SetDefaultSpec { spec_id } if *spec_id == -1
             ))
             };
-        let has_set_default_order = |u: &[crate::models::TableUpdate]| {
+        let has_set_default_order = |u: &[crate::r#gen::TableUpdate]| {
             u.iter().any(|u| matches!(
                 u,
-                crate::models::TableUpdate::SetDefaultSortOrderUpdate { sort_order_id } if *sort_order_id == -1
+                crate::r#gen::TableUpdate::SetDefaultSortOrder { sort_order_id } if *sort_order_id == -1
             ))
         };
 
@@ -4758,8 +4760,8 @@ mod tests {
         assert!(
             !neither.iter().any(|u| matches!(
                 u,
-                crate::models::TableUpdate::SetDefaultSpecUpdate { .. }
-                    | crate::models::TableUpdate::SetDefaultSortOrderUpdate { .. }
+                crate::r#gen::TableUpdate::SetDefaultSpec { .. }
+                    | crate::r#gen::TableUpdate::SetDefaultSortOrder { .. }
             )),
             "an already unpartitioned/unsorted table must emit no SetDefault update"
         );
