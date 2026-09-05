@@ -29,7 +29,7 @@ use sail_catalog::provider::{
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
 use sail_common::utils::http::SAIL_USER_AGENT;
-use sail_common_datafusion::catalog::managed::{is_metadata_location_key, METADATA_LOCATION_KEY};
+use sail_common_datafusion::catalog::managed::{METADATA_LOCATION_KEY, is_metadata_location_key};
 use sail_common_datafusion::catalog::{
     CapabilityFingerprint, CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
     DatabaseStatus, IcebergRestTableSessionRef, ScanAuthority, TableAccessSessionRef,
@@ -1221,7 +1221,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                 Err(e) => {
                     return Err(CatalogError::External(format!(
                         "Failed to load table for replace: {e}"
-                    )))
+                    )));
                 }
             };
 
@@ -1255,13 +1255,12 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                         existing_metadata.properties.unwrap_or_default();
 
                     // Current schema, so build_replace_updates can skip an unchanged one.
-                    let existing_current_schema: Option<crate::r#gen::Schema> =
-                        find_by_id_or_last(
-                            existing_metadata.schemas.as_ref(),
-                            existing_current_schema_id,
-                            |s| s.schema_id,
-                        )
-                        .cloned();
+                    let existing_current_schema: Option<crate::r#gen::Schema> = find_by_id_or_last(
+                        existing_metadata.schemas.as_ref(),
+                        existing_current_schema_id,
+                        |s| s.schema_id,
+                    )
+                    .cloned();
 
                     // Whether the existing table carries a real (non-empty) partition spec, so a
                     // REPLACE that drops partitioning knows to reset it rather than emit a dedup'd
@@ -1957,8 +1956,7 @@ fn build_replace_updates(
     match write_order {
         Some(order) => {
             updates.push(crate::r#gen::TableUpdate::AddSortOrder { sort_order: order });
-            updates
-                .push(crate::r#gen::TableUpdate::SetDefaultSortOrder { sort_order_id: -1 });
+            updates.push(crate::r#gen::TableUpdate::SetDefaultSortOrder { sort_order_id: -1 });
         }
         // Reset a previously-sorted table to unsorted. A table created with a sort order does not
         // carry the unsorted order (id 0), so add it (a genuinely new order → `-1` resolves) and
@@ -1970,8 +1968,7 @@ fn build_replace_updates(
                     fields: Vec::new(),
                 }),
             });
-            updates
-                .push(crate::r#gen::TableUpdate::SetDefaultSortOrder { sort_order_id: -1 });
+            updates.push(crate::r#gen::TableUpdate::SetDefaultSortOrder { sort_order_id: -1 });
         }
         // Already unsorted: adding the unsorted order would dedup, leaving `-1` with nothing to
         // point at ("no sort order has been added"), so emit no sort update.
@@ -4634,9 +4631,7 @@ mod tests {
         let removals: Vec<String> = updates
             .iter()
             .filter_map(|update| match update {
-                crate::r#gen::TableUpdate::RemoveProperties { removals } => {
-                    Some(removals.clone())
-                }
+                crate::r#gen::TableUpdate::RemoveProperties { removals } => Some(removals.clone()),
                 _ => None,
             })
             .flatten()
@@ -4717,19 +4712,18 @@ mod tests {
         };
         let has_add_order = |u: &[crate::r#gen::TableUpdate]| {
             u.iter().find_map(|u| match u {
-                crate::r#gen::TableUpdate::AddSortOrder { sort_order } => {
-                    Some(sort_order.clone())
-                }
+                crate::r#gen::TableUpdate::AddSortOrder { sort_order } => Some(sort_order.clone()),
                 _ => None,
             })
         };
-        let has_set_default_spec =
-            |u: &[crate::r#gen::TableUpdate]| {
-                u.iter().any(|u| matches!(
-                u,
-                crate::r#gen::TableUpdate::SetDefaultSpec { spec_id } if *spec_id == -1
-            ))
-            };
+        let has_set_default_spec = |u: &[crate::r#gen::TableUpdate]| {
+            u.iter().any(|u| {
+                matches!(
+                    u,
+                    crate::r#gen::TableUpdate::SetDefaultSpec { spec_id } if *spec_id == -1
+                )
+            })
+        };
         let has_set_default_order = |u: &[crate::r#gen::TableUpdate]| {
             u.iter().any(|u| matches!(
                 u,
