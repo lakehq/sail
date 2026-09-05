@@ -10,7 +10,7 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::attribute::{
-    quote_identifier_part, unresolved_column_fields_error,
+    quote_identifier_name, quote_identifier_part, unresolved_column_fields_error,
 };
 use crate::resolver::state::{FieldInfo, PlanResolverState};
 
@@ -129,9 +129,9 @@ impl PlanResolver<'_> {
         let count = 1 + matched.count();
         if count > 1 {
             return Err(PlanError::AnalysisError(format!(
-                "[AMBIGUOUS_REFERENCE_TO_FIELDS] Ambiguous reference to the field `{}`. \
+                "[AMBIGUOUS_REFERENCE_TO_FIELDS] Ambiguous reference to the field {}. \
                  It appears {count} times in the schema.",
-                name.replace('`', "``")
+                quote_identifier_name(name)
             )));
         }
         Ok(Some(field))

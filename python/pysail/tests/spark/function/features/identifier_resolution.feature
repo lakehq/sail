@@ -123,6 +123,14 @@ Feature: identifier resolution beyond ASCII
         """
       Then query error AMBIGUOUS_REFERENCE_TO_FIELDS
 
+    # The name reaches the message as one string, so it is parsed again before it is quoted.
+    Scenario: an ambiguous field whose name contains a dot is reported as several quoted parts
+      When query
+        """
+        SELECT s.`x.y` FROM (SELECT named_struct('x.y', 1, 'X.Y', 2) AS s)
+        """
+      Then query error Ambiguous reference to the field `x`\.`y`\. It appears 2 times in the schema\.
+
     Scenario: expanding a struct does not reject the fields that differ only in case
       When query
         """
@@ -197,19 +205,30 @@ Feature: identifier resolution beyond ASCII
         """
         SELECT a, count(*) AS `ä` FROM (SELECT 1 AS a) GROUP BY a HAVING `Ä` > 0
         """
-      Then query error UNRESOLVED_COLUMN\.WITH_SUGGESTION
+      Then query error with name `Ä` cannot be resolved\.
 
     Scenario Outline: an alias that only the resolver would match is rejected: <case>
       When query
         """
         SELECT a, count(*) AS <alias> FROM (SELECT 1 AS a) GROUP BY a HAVING <probe> > 0
         """
-      Then query error UNRESOLVED_COLUMN\.WITH_SUGGESTION
+      Then query error with name <probe> cannot be resolved\.
 
       Examples:
         | case              | alias | probe |
         | dotless i         | `ıd`  | `Id`  |
         | Greek final sigma | `ς`   | `Σ`   |
+
+    # The alias belongs to the output of the aggregate, which is the input of the filter that
+    # carries the `HAVING`, so Spark offers it. Sail builds the candidates from the input of the
+    # aggregate instead and loses it.
+    @sail-bug
+    Scenario: the suggestion for an unresolved alias offers the alias itself
+      When query
+        """
+        SELECT a, count(*) AS `ıd` FROM (SELECT 1 AS a) GROUP BY a HAVING `Id` > 0
+        """
+      Then query error name `Id` cannot be resolved\. Did you mean one of the following\? \[`ıd`, `a`\]\.
 
     Scenario: a case sensitive analysis does not match the alias
       Given config spark.sql.caseSensitive = true
@@ -217,7 +236,7 @@ Feature: identifier resolution beyond ASCII
         """
         SELECT a, count(*) AS c FROM (SELECT 1 AS a) GROUP BY a HAVING C
         """
-      Then query error UNRESOLVED_COLUMN\.WITH_SUGGESTION
+      Then query error with name `C` cannot be resolved\.
 
     Scenario: a case sensitive analysis does not match the alias of a sort
       Given config spark.sql.caseSensitive = true
@@ -225,7 +244,7 @@ Feature: identifier resolution beyond ASCII
         """
         SELECT a, count(*) AS c FROM (SELECT 1 AS a) GROUP BY a ORDER BY C
         """
-      Then query error UNRESOLVED_COLUMN\.WITH_SUGGESTION
+      Then query error with name `C` cannot be resolved\.
 
   Rule: An unresolved name is reported the way the analyzer reports it
 
@@ -275,6 +294,15 @@ Feature: identifier resolution beyond ASCII
         """
       Then query error \[CANNOT_RESOLVE_STAR_EXPAND\] Cannot resolve `nope`\.\* given input columns `a`\. Please check that the specified table or struct exists and is accessible in the input columns\.
 
+    # The target is joined back into one string before it is quoted, so the name the user wrote as
+    # a single quoted part is split again.
+    Scenario: a wildcard target whose name contains a dot is reported as several quoted parts
+      When query
+        """
+        SELECT `x.y`.* FROM (SELECT 1 AS a)
+        """
+      Then query error Cannot resolve `x`\.`y`\.\* given input columns `a`\.
+
   Rule: An unresolved join key is reported the way the analyzer reports it
 
     Scenario: the left-side columns are sorted before they are quoted
@@ -291,6 +319,13 @@ Feature: identifier resolution beyond ASCII
         SELECT * FROM (SELECT 1 AS a) t1 JOIN (SELECT 1 AS a) t2 USING (`x.y`)
         """
       Then query error USING column `x`\.`y` cannot be resolved on the left side of the join\.
+
+    Scenario: a dotted column of the joined side is suggested as several quoted parts
+      When query
+        """
+        SELECT * FROM (SELECT 1 AS `x.y`) t1 JOIN (SELECT 1 AS a) t2 USING (nope)
+        """
+      Then query error The left-side columns: \[`x`\.`y`\]\.
 
   Rule: The names suggested for an unresolved column are ordered the way the analyzer orders them
 
@@ -403,3 +438,11 @@ Feature: identifier resolution beyond ASCII
         SELECT nope.* FROM (SELECT 1 AS zz, 2 AS aa, 3 AS mm)
         """
       Then query error given input columns `aa`, `mm`, `zz`\.
+
+    # Each name reaches the message as one string, so it is parsed again before it is quoted.
+    Scenario: an input column whose name contains a dot is listed as several quoted parts
+      When query
+        """
+        SELECT nope.* FROM (SELECT 1 AS `x.y`)
+        """
+      Then query error given input columns `x`\.`y`\.

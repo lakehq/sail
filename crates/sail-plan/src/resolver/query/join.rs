@@ -10,7 +10,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::function::common::{FunctionContextInput, ScalarFunctionInput};
 use crate::function::get_built_in_function;
 use crate::resolver::PlanResolver;
-use crate::resolver::expression::attribute::quote_identifier_part;
+use crate::resolver::expression::attribute::quote_identifier_name;
 use crate::resolver::state::PlanResolverState;
 
 /// Returns `true` if the expression is itself a top-level Python scalar UDF call.
@@ -220,17 +220,9 @@ impl PlanResolver<'_> {
         names.sort();
         let suggestion = names
             .iter()
-            .map(|x| quote_identifier_part(x))
+            .map(|x| quote_identifier_name(x))
             .collect::<Vec<_>>();
-        let name = spec::ObjectName::parse_attribute(name)
-            .map(|x| {
-                x.parts()
-                    .iter()
-                    .map(|x| quote_identifier_part(x.as_ref()))
-                    .collect::<Vec<_>>()
-                    .join(".")
-            })
-            .unwrap_or_else(|| quote_identifier_part(name));
+        let name = quote_identifier_name(name);
         Err(PlanError::AnalysisError(format!(
             "[UNRESOLVED_USING_COLUMN_FOR_JOIN] USING column {name} cannot be resolved on the \
              {side} side of the join. The {side}-side columns: [{}].",

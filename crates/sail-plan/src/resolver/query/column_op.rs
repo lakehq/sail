@@ -12,8 +12,8 @@ use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::expression::attribute::{
-    invalid_attribute_name_error, replace_nested_column_error, unresolved_column_fields_error,
-    unresolved_column_name_error,
+    invalid_attribute_name_error, quote_identifier_name, replace_nested_column_error,
+    unresolved_column_fields_error, unresolved_column_name_error,
 };
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::explode::ExplodeRewriter;
@@ -243,10 +243,10 @@ impl PlanResolver<'_> {
             _ => None,
         });
         if let Some(name) = duplicate {
-            let name = name.replace('`', "``");
             return Err(PlanError::AnalysisError(format!(
-                "[COLUMN_ALREADY_EXISTS] The column `{name}` already exists. \
-                 Choose another name or rename the existing column."
+                "[COLUMN_ALREADY_EXISTS] The column {} already exists. \
+                 Choose another name or rename the existing column.",
+                quote_identifier_name(name)
             )));
         }
         let aliases = {

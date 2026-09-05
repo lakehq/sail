@@ -136,12 +136,12 @@ Feature: NATURAL and USING joins
         """
         SELECT * FROM (SELECT 1 AS k) AS l NATURAL <join type> JOIN (SELECT 1 AS k) AS r
         """
-      Then query error Unsupported natural join type
+      Then query error Unsupported natural join type <name>
 
       Examples:
-        | join type |
-        | LEFT SEMI |
-        | LEFT ANTI |
+        | join type | name     |
+        | LEFT SEMI | LeftSemi |
+        | LEFT ANTI | LeftAnti |
 
   Rule: OUTER alone is not a natural join type
 

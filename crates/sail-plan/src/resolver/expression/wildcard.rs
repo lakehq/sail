@@ -13,7 +13,7 @@ use sail_function::scalar::multi_expr::MultiExpr;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
-use crate::resolver::expression::attribute::quote_identifier_part;
+use crate::resolver::expression::attribute::quote_identifier_name;
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
@@ -123,19 +123,21 @@ impl PlanResolver<'_> {
             })
             .collect::<PlanResult<Vec<_>>>()?;
         candidates.one().map_err(|_| {
-            let target = name
-                .parts()
-                .iter()
-                .map(|x| quote_identifier_part(x.as_ref()))
-                .collect::<Vec<_>>()
-                .join(".");
+            let target = quote_identifier_name(
+                &name
+                    .parts()
+                    .iter()
+                    .map(|x| x.as_ref())
+                    .collect::<Vec<_>>()
+                    .join("."),
+            );
             // The columns come from `AttributeSet.toSeq`, which sorts them by name.
             let columns = match Self::get_field_names(schema, state) {
                 Ok(mut names) => {
                     names.sort();
                     names
                         .iter()
-                        .map(|x| quote_identifier_part(x))
+                        .map(|x| quote_identifier_name(x))
                         .collect::<Vec<_>>()
                         .join(", ")
                 }

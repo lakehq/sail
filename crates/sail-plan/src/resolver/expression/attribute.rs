@@ -57,6 +57,18 @@ fn quote_identifier_parts<'a>(parts: impl Iterator<Item = &'a str>) -> String {
         .join(".")
 }
 
+/// Renders a name that reaches a message as a single string the way Spark's
+/// `toSQLId(parts: String)` does, which parses the name before quoting each part
+/// (`DataTypeErrorsBase.scala:27`). A part of the name that contains a dot is therefore reported
+/// as several quoted parts, and a name that is already quoted keeps its back quotes single. A
+/// name the parser rejects is quoted whole, since its syntax has an error condition of its own.
+pub(in crate::resolver) fn quote_identifier_name(name: &str) -> String {
+    match spec::ObjectName::parse_attribute(name) {
+        Some(object) => quote_identifier(&object),
+        None => quote_identifier_part(name),
+    }
+}
+
 /// Quotes one part of an identifier as Spark's `QuotingUtils.quoteIdentifier` does, doubling the
 /// back quotes it contains.
 pub(crate) fn quote_identifier_part(part: &str) -> String {
@@ -247,7 +259,7 @@ pub(in crate::resolver) fn unresolved_column_fields_error<T: AsRef<str>>(
     let name = quote_identifier(name);
     let proposal = fields
         .iter()
-        .map(|x| quote_identifier_part(x.as_ref()))
+        .map(|x| quote_identifier_name(x.as_ref()))
         .collect::<Vec<_>>()
         .join(", ");
     PlanError::AnalysisError(format!(

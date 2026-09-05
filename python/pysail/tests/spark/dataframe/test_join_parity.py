@@ -537,10 +537,22 @@ RESULTS = [
 
 # (case, caseSensitive, error condition)
 ERRORS = [
-    pytest.param(*("natural/LEFT SEMI", "false", "IllegalArgumentException"), marks=_SAIL_BUG),
-    pytest.param(*("natural/LEFT SEMI", "true", "IllegalArgumentException"), marks=_SAIL_BUG),
-    pytest.param(*("natural/LEFT ANTI", "false", "IllegalArgumentException"), marks=_SAIL_BUG),
-    pytest.param(*("natural/LEFT ANTI", "true", "IllegalArgumentException"), marks=_SAIL_BUG),
+    pytest.param(
+        *("natural/LEFT SEMI", "false", r"Unsupported natural join type LeftSemi"),
+        marks=_SAIL_BUG,
+    ),
+    pytest.param(
+        *("natural/LEFT SEMI", "true", r"Unsupported natural join type LeftSemi"),
+        marks=_SAIL_BUG,
+    ),
+    pytest.param(
+        *("natural/LEFT ANTI", "false", r"Unsupported natural join type LeftAnti"),
+        marks=_SAIL_BUG,
+    ),
+    pytest.param(
+        *("natural/LEFT ANTI", "true", r"Unsupported natural join type LeftAnti"),
+        marks=_SAIL_BUG,
+    ),
     pytest.param(*("natural/CROSS", "false", "INCOMPATIBLE_JOIN_TYPES"), marks=_SAIL_BUG),
     pytest.param(*("natural/CROSS", "true", "INCOMPATIBLE_JOIN_TYPES"), marks=_SAIL_BUG),
     ("key/key differing in case", "true", "UNRESOLVED_USING_COLUMN_FOR_JOIN"),

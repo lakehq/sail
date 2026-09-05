@@ -599,7 +599,9 @@ COMPOSITION_ERRORS = [
     # `CANNOT_RESOLVE_DATAFRAME_COLUMN` instead.
     pytest.param(
         *("renamed_then_group_by", "true", "UNRESOLVED_COLUMN.WITH_SUGGESTION"),
-        marks=pytest.mark.skipif(pyspark_version() < (4, 1), reason="The client sends a plan id from PySpark 4.1 on"),
+        marks=pytest.mark.skipif(
+            pyspark_version() < (4, 1), reason="The client stops sending a plan ID for `groupBy` from PySpark 4.1 on"
+        ),
     ),
     ("renamed_twice_then_select", "true", "UNRESOLVED_COLUMN.WITH_SUGGESTION"),
     ("metadata_then_select", "true", "UNRESOLVED_COLUMN.WITH_SUGGESTION"),

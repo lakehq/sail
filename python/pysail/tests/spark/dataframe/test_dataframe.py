@@ -8,7 +8,7 @@ from pyspark.sql.functions import col, lit, row_number
 from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 from pyspark.sql.window import Window
 
-from pysail.testing.spark.utils.common import is_jvm_spark
+from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
 # `ıd` and `ς` are deliberately confusable with ASCII names: they are what tells the resolver rule
 # apart from the lowercasing one.
@@ -140,6 +140,19 @@ def test_with_column_matches_name_case_insensitively(spark):
     # The first duplicate in alphabetical order is the one reported.
     with pytest.raises(Exception, match="The column `a` already exists"):
         _ = df.withColumns({"z": lit(1), "a": lit(2), "Z": lit(3), "A": lit(4)}).columns
+
+
+def test_with_columns_reports_a_duplicate_name_the_way_the_analyzer_quotes_it(spark):
+    # The name reaches the message as one string, so it is parsed again before each of its parts is
+    # quoted: a name that contains a dot is reported as several parts, and a name the user already
+    # quoted keeps its back quotes single rather than having them doubled.
+    df = spark.createDataFrame([(1,)], ["a"])
+
+    with pytest.raises(Exception, match=r"The column `x`\.`y` already exists"):
+        _ = df.withColumns({"x.y": lit(1), "X.Y": lit(2)}).columns
+
+    with pytest.raises(Exception, match=r"The column `x\.y` already exists"):
+        _ = df.withColumns({"`x.y`": lit(1), "`X.Y`": lit(2)}).columns
 
 
 def test_with_columns_renamed_matches_name_case_insensitively(spark):
@@ -307,12 +320,15 @@ def test_column_resolution_is_case_sensitive_when_configured(spark):
         df = spark.createDataFrame([(1, 10)], ["a", "b"])
 
         assert df.select(col("a")).columns == ["a"]
-        # The name no longer matches, so the column cannot be resolved at all.
-        with pytest.raises(Exception, match=r"[\"`]A[\"`]"):
+        # The name no longer matches, so the column cannot be resolved at all. The condition and
+        # the name are both asserted, since the suggestion list mentions every column and would
+        # satisfy a pattern that only looks for the name.
+        unresolved = r"UNRESOLVED_COLUMN\.WITH_SUGGESTION.*name `A` cannot be resolved"
+        with pytest.raises(Exception, match=unresolved):
             df.select(col("A")).collect()
-        with pytest.raises(Exception, match=r"[\"`]A[\"`]"):
+        with pytest.raises(Exception, match=unresolved):
             df.filter(col("A") > 0).collect()
-        with pytest.raises(Exception, match=r"[\"`]A[\"`]"):
+        with pytest.raises(Exception, match=r'CANNOT_RESOLVE_DATAFRAME_COLUMN.*dataframe column "A"'):
             df.withMetadata("A", {"m": "x"}).collect()
 
         # A name that matches no column is ignored by `drop`.
@@ -327,12 +343,12 @@ def test_attribute_reference_does_not_use_the_resolver_alone(spark):
     # then filtered with the resolver, so a name matches only when it matches both ways.
     # `İ` and `i` match the resolver but their lowercase forms differ, so they do not match.
     df = spark.sql("SELECT 1 AS `İ`")
-    for reference in (lambda: df.select("i"), lambda: df.filter(col("i") > 0), lambda: df.groupBy("i").count()):
-        with pytest.raises(Exception, match=r"[\"`]i[\"`]"):
+    for reference in (lambda: df.select("i"), lambda: df.filter(col("i") > 0)):
+        with pytest.raises(Exception, match=r"UNRESOLVED_COLUMN\.WITH_SUGGESTION.*name `i` cannot be resolved"):
             reference().collect()
 
     dotless = spark.sql("SELECT 1 AS `\u0131d`")
-    with pytest.raises(Exception, match=r"[\"`]Id[\"`]"):
+    with pytest.raises(Exception, match=r"UNRESOLVED_COLUMN\.WITH_SUGGESTION.*name `Id` cannot be resolved"):
         dotless.select("Id").collect()
 
     # The operations that select the output columns by name use the resolver alone, so the very
@@ -343,6 +359,24 @@ def test_attribute_reference_does_not_use_the_resolver_alone(spark):
 
     # The lowercase forms agree for ASCII, so both rules accept it.
     assert spark.sql("SELECT 1 AS a").select("A").collect() == [Row(A=1)]
+
+
+# `groupBy(str)` looks the name up through `DataFrame.__getitem__` until PySpark 4.1, so the name
+# reaches the server carrying a plan ID, and a plan ID is what selects
+# `CANNOT_RESOLVE_DATAFRAME_COLUMN` over `UNRESOLVED_COLUMN`. The condition therefore depends on
+# the client rather than on the engine, which is why only this one is gated.
+@pytest.mark.skipif(
+    pyspark_version() < (4, 1),
+    reason="The client stops attaching a plan ID to the name of `groupBy` from PySpark 4.1 on",
+)
+def test_group_by_does_not_use_the_resolver_alone(spark):
+    df = spark.sql("SELECT 1 AS `\u0130`")
+
+    with pytest.raises(Exception, match=r"UNRESOLVED_COLUMN\.WITH_SUGGESTION.*name `i` cannot be resolved"):
+        df.groupBy("i").count().collect()
+
+    # The very same name does match where the resolver is used alone.
+    assert spark.sql("SELECT 1 AS a").groupBy("A").count().columns == ["A", "count"]
 
 
 def test_to_schema_matches_name_like_the_analyzer(spark):
@@ -494,6 +528,19 @@ def test_fillna_rejects_a_subset_name_that_matches_nothing(spark):
         df.fillna(0, subset=["nope"]).collect()
     with pytest.raises(Exception, match="UNRESOLVED_COLUMN"):
         df.dropna(subset=["nope"]).collect()
+
+
+def test_na_subset_suggests_a_dotted_column_as_several_quoted_parts(spark):
+    # Unlike the suggestion the analyzer orders, which quotes a name only when it needs one, this
+    # one parses each field name before quoting it, so a dot inside a name separates two parts.
+    df = spark.sql("SELECT 1 AS `x.y`, 2 AS plain")
+
+    for reference in (lambda: df.fillna(0, subset=["nope"]), lambda: df.replace(1, 9, subset=["nope"])):
+        with pytest.raises(
+            Exception,
+            match=r"name `nope` cannot be resolved\. Did you mean one of the following\? \[`x`\.`y`, `plain`\]\.",
+        ):
+            reference().collect()
 
 
 def test_names_are_folded_with_the_case_mappings_of_the_jvm(spark):
