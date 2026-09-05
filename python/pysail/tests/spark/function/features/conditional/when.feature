@@ -171,6 +171,34 @@ Feature: when output schema
   @function(nullability)
   Rule: Output schema
 
+    # TODO: Match Spark's decimal cast nullability without changing native CASE execution.
+    @sail-bug
+    Scenario: CASE retains nullable metadata from a decimal cast
+      When query
+        """
+        SELECT CASE WHEN id % 2 = 0 THEN CAST(id AS DECIMAL(10,0)) ELSE CAST(id AS FLOAT) END AS result
+        FROM range(2)
+        """
+      Then query schema
+        """
+        root
+         |-- result: double (nullable = true)
+        """
+
+    # TODO: Preserve Spark's non-null element metadata through sequence and explode.
+    @sail-bug
+    Scenario: Exploded conditional sequences expose non-null element metadata
+      When query
+        """
+        SELECT explode(sequence(0, CASE WHEN c <= 0 THEN 1 ELSE c END - 1)) AS i
+        FROM VALUES (3L) AS t(c)
+        """
+      Then query schema
+        """
+        root
+         |-- i: long (nullable = false)
+        """
+
     Scenario: a non-null literal input to when yields the schema Spark declares
       When query
         """
