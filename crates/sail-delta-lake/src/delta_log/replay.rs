@@ -8,62 +8,71 @@ use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
 use super::{
-    LogSegmentResolver, ReplayedTableHeader, ResolvedLogSegment, list_delta_log_entries_from,
-    parse_checkpoint_version_from_location, parse_commit_version_from_location,
-    parse_compacted_json_versions_from_location, read_last_checkpoint_version_from_store,
+    CheckpointFileSet, LogSegmentResolver, ReplayedTableHeader, ResolvedLogSegment,
+    latest_version_from_listing,
 };
 use crate::checkpoint::{
     ReconciledCheckpointState, ReconciledHeaderState, ReplayedTableState, decode_checkpoint_rows,
-    read_checkpoint_main_rows_from_checkpoint_file, read_checkpoint_rows_from_checkpoint_file,
+    read_checkpoint_main_rows_from_checkpoint_file, read_checkpoint_rows_from_checkpoint_files,
     replay_commit_actions_with_compactions, replay_commit_header_actions_with_compactions,
+    validate_multi_part_checkpoint_rows,
 };
 use crate::delta_log::LogStore;
 use crate::snapshot::CatalogManagedCommitSet;
-use crate::spec::{
-    CheckpointActionRow, DeltaError as DeltaTableError, DeltaResult, is_json_checkpoint_filename,
-};
+use crate::spec::{DeltaError as DeltaTableError, DeltaResult, is_json_checkpoint_filename};
 
-async fn read_checkpoint_header_from_checkpoint_file(
+async fn read_checkpoint_header_from_checkpoint_files(
     root_store: Arc<dyn ObjectStore>,
-    meta: ObjectMeta,
+    checkpoint: CheckpointFileSet,
 ) -> DeltaResult<ReconciledHeaderState> {
-    if is_json_checkpoint_location(&meta) {
-        let rows = read_checkpoint_main_rows_from_checkpoint_file(root_store, meta).await?;
-        let mut state = ReconciledHeaderState::default();
+    let checkpoint_version = checkpoint.version();
+    let multi_part = checkpoint.is_multi_part();
+    let mut state = ReconciledHeaderState::default();
+    for meta in checkpoint.into_files() {
+        let rows = if is_json_checkpoint_location(&meta) {
+            read_checkpoint_main_rows_from_checkpoint_file(root_store.clone(), meta).await?
+        } else {
+            let bytes = root_store.get(&meta.location).await?.bytes().await?;
+            SpawnedTask::spawn_blocking(move || {
+                let builder = ParquetRecordBatchReaderBuilder::try_new(bytes)
+                    .map_err(DeltaTableError::generic_err)?;
+
+                let parquet_schema = builder.parquet_schema();
+                let mask = ProjectionMask::columns(
+                    parquet_schema,
+                    [
+                        "metaData",
+                        "protocol",
+                        "txn",
+                        "domainMetadata",
+                        "checkpointMetadata",
+                        "sidecar",
+                    ],
+                );
+
+                let mut batches = builder
+                    .with_projection(mask)
+                    .build()
+                    .map_err(DeltaTableError::generic_err)?;
+
+                let mut rows = Vec::new();
+                for batch_result in &mut batches {
+                    let batch = batch_result.map_err(DeltaTableError::generic_err)?;
+                    rows.extend(decode_checkpoint_rows(&batch)?);
+                }
+                Ok::<_, DeltaTableError>(rows)
+            })
+            .await
+            .map_err(DeltaTableError::generic_err)??
+        };
+        if multi_part {
+            validate_multi_part_checkpoint_rows(checkpoint_version, &rows)?;
+        }
         for row in rows {
             state.apply_checkpoint_row(row)?;
         }
-        return Ok(state);
     }
-
-    let bytes = root_store.get(&meta.location).await?.bytes().await?;
-    SpawnedTask::spawn_blocking(move || {
-        let builder = ParquetRecordBatchReaderBuilder::try_new(bytes)
-            .map_err(DeltaTableError::generic_err)?;
-
-        let parquet_schema = builder.parquet_schema();
-        let mask = ProjectionMask::columns(
-            parquet_schema,
-            ["metaData", "protocol", "txn", "domainMetadata"],
-        );
-
-        let mut batches = builder
-            .with_projection(mask)
-            .build()
-            .map_err(DeltaTableError::generic_err)?;
-
-        let mut state = ReconciledHeaderState::default();
-        for batch_result in &mut batches {
-            let batch = batch_result.map_err(DeltaTableError::generic_err)?;
-            let rows: Vec<CheckpointActionRow> = decode_checkpoint_rows(&batch)?;
-            for row in rows {
-                state.apply_checkpoint_row(row)?;
-            }
-        }
-        Ok::<_, DeltaTableError>(state)
-    })
-    .await
-    .map_err(DeltaTableError::generic_err)?
+    Ok(state)
 }
 
 fn is_json_checkpoint_location(meta: &ObjectMeta) -> bool {
@@ -103,8 +112,9 @@ pub(crate) async fn load_replayed_table_state(
 
     let store = log_store.object_store(None);
     let mut state = ReconciledCheckpointState::default();
-    let start_commit_version = if let Some(cp_meta) = checkpoint {
-        let rows = read_checkpoint_rows_from_checkpoint_file(store.clone(), cp_meta).await?;
+    let start_commit_version = if let Some(checkpoint_files) = checkpoint {
+        let rows =
+            read_checkpoint_rows_from_checkpoint_files(store.clone(), checkpoint_files).await?;
         for row in rows {
             state.apply_checkpoint_row(row)?;
         }
@@ -192,15 +202,18 @@ pub(crate) async fn load_replayed_table_header(
             let store = log_store.object_store(None);
 
             let (mut state, start_commit_version, mut commit_timestamps) = match checkpoint {
-                Some(cp_meta) => {
-                    let cp_state =
-                        read_checkpoint_header_from_checkpoint_file(store.clone(), cp_meta).await?;
+                Some(checkpoint_files) => {
+                    let checkpoint_state = read_checkpoint_header_from_checkpoint_files(
+                        store.clone(),
+                        checkpoint_files,
+                    )
+                    .await?;
                     let next_v = commit_files
                         .first()
                         .map(|(v, _)| *v)
                         .or_else(|| compaction_files.first().map(|((s, _), _)| *s))
                         .unwrap_or(target_version.saturating_add(1));
-                    (cp_state, next_v, BTreeMap::new())
+                    (checkpoint_state, next_v, BTreeMap::new())
                 }
                 None => {
                     let start = base.version.saturating_add(1);
@@ -249,22 +262,7 @@ pub(crate) async fn load_replayed_table_header(
 
 pub(crate) async fn latest_replayable_version(log_store: &dyn LogStore) -> DeltaResult<i64> {
     let store = log_store.object_store(None);
-    let offset_version = read_last_checkpoint_version_from_store(store.clone())
-        .await
-        .map(|v| v.saturating_sub(1))
-        .unwrap_or(0);
-    let log_entries = list_delta_log_entries_from(store, offset_version).await?;
-
-    let latest = log_entries
-        .iter()
-        .filter_map(|meta| {
-            parse_commit_version_from_location(&meta.location)
-                .or_else(|| parse_checkpoint_version_from_location(&meta.location))
-                .or_else(|| {
-                    parse_compacted_json_versions_from_location(&meta.location).map(|(_, end)| end)
-                })
-        })
-        .max();
-
-    latest.ok_or(crate::spec::DeltaError::MissingVersion)
+    latest_version_from_listing(store)
+        .await?
+        .ok_or(crate::spec::DeltaError::MissingVersion)
 }
