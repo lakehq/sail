@@ -60,6 +60,14 @@ pub enum JobOutputItem {
     },
 }
 
+/// Why the job output stopped being consumed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobOutputOutcome {
+    Completed,
+    Failed,
+    Canceled,
+}
+
 impl JobOutputItem {
     const CHANNEL_SIZE: usize = 32;
 }
@@ -91,32 +99,13 @@ pub fn build_job_output(
     let (tx, rx) = mpsc::channel(1);
     let handle = ctx.handle().clone();
     ctx.spawn(async move {
-        let mut stream = JobOutputStream::new(receiver);
-        loop {
-            let next = tokio::select! {
-                biased;
-                x = stream.next() => x,
-                _ = tx.closed() => break,
-            };
-            let Some(batch) = next else {
-                break;
-            };
-            if tx.send(batch).await.is_err() {
-                break;
-            }
-        }
-        // When we reach here, the job output stream has ended, which means the job output manager
-        // has been dropped (otherwise the job output stream would still be active waiting for
-        // new streams to be added). Since the job output manager is dropped, we know that the job
-        // is no longer in the running state, which means all tasks have reached a terminal state
-        // via prior task status updates.
-        // Therefore, it is safe to clean up the job. The job can reach a terminal state and all
-        // its streams can be removed.
-        // When `tx` is dropped at the end of this async block, the job output stream built around
-        // `rx` will also end, signaling to the consumer that the job has completed.
-        // This is how we ensure the data plane event (output stream termination) is consistent
-        // with the control plane event (job termination).
-        let _ = handle.send(DriverMessage::CleanUpJob { job_id }).await;
+        let outcome = forward_job_output(JobOutputStream::new(receiver), &tx).await;
+        // Output errors and consumer cancellation can precede terminal task updates.
+        // Tell the scheduler why output ended so cleanup records the correct job status.
+        // Keep `tx` alive until cleanup has been sent, before signaling EOF to the client.
+        let _ = handle
+            .send(DriverMessage::CleanUpJob { job_id, outcome })
+            .await;
     });
     (
         JobOutputManager { sender },
@@ -125,6 +114,32 @@ pub fn build_job_output(
             ReceiverStream::new(rx),
         )),
     )
+}
+
+async fn forward_job_output(
+    mut stream: JobOutputStream,
+    sender: &mpsc::Sender<Result<RecordBatch>>,
+) -> JobOutputOutcome {
+    loop {
+        let next = tokio::select! {
+            biased;
+            x = stream.next() => x,
+            _ = sender.closed() => return JobOutputOutcome::Canceled,
+        };
+        let Some(batch) = next else {
+            return JobOutputOutcome::Completed;
+        };
+        // Preserve an observed failure even if the consumer disconnects before
+        // receiving the error. No more output can be delivered after a failure.
+        let failed = batch.is_err();
+        let sent = sender.send(batch).await.is_ok();
+        if failed {
+            return JobOutputOutcome::Failed;
+        }
+        if !sent {
+            return JobOutputOutcome::Canceled;
+        }
+    }
 }
 
 enum JobOutputState {
@@ -289,6 +304,7 @@ mod tests {
     use futures::task::{ArcWake, waker};
 
     use super::*;
+    use crate::driver::job_scheduler::JobState;
 
     #[derive(Default)]
     struct WakeCounter(AtomicUsize);
@@ -341,16 +357,143 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn output_conflict_fails_running_and_draining_jobs() {
+        for disconnected in [false, true] {
+            for mut state in active_job_states() {
+                let (sender, receiver) = mpsc::channel(1);
+                let key = TaskStreamKey {
+                    attempt: 1,
+                    ..stream_key()
+                };
+                let mut stream = JobOutputStream::new(receiver);
+                // An earlier attempt has already emitted output for this partition.
+                stream.emitted.insert(OutputPartition::from(&key));
+                assert!(
+                    sender
+                        .try_send(JobOutputItem::Stream {
+                            key,
+                            stream: Box::pin(futures::stream::empty()),
+                        })
+                        .is_ok()
+                );
+                let (tx, mut rx) = mpsc::channel(1);
+                if disconnected {
+                    rx.close();
+                }
+
+                let outcome = forward_job_output(stream, &tx).await;
+                state.finish_output(outcome);
+
+                assert_eq!(outcome, JobOutputOutcome::Failed);
+                assert_eq!(state.status(), "FAILED");
+                if !disconnected {
+                    assert!(matches!(
+                        rx.recv().await,
+                        Some(Err(error)) if error.to_string().contains(
+                            "a different attempt has already produced job output"
+                        )
+                    ));
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn task_stream_error_fails_running_and_draining_jobs() {
+        for mut state in active_job_states() {
+            let (sender, receiver) = mpsc::channel(1);
+            assert!(
+                sender
+                    .try_send(JobOutputItem::Stream {
+                        key: stream_key(),
+                        stream: Box::pin(futures::stream::iter([Err(TaskStreamError::Unknown(
+                            "test stream failure".to_string(),
+                        ))])),
+                    })
+                    .is_ok()
+            );
+            let (tx, mut rx) = mpsc::channel(1);
+
+            let outcome = forward_job_output(JobOutputStream::new(receiver), &tx).await;
+            state.finish_output(outcome);
+
+            assert_eq!(state.status(), "FAILED");
+            assert!(matches!(
+                rx.recv().await,
+                Some(Err(error)) if error.to_string().contains("test stream failure")
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn consumer_disconnection_cancels_running_and_draining_jobs() {
+        for mut state in active_job_states() {
+            let (_sender, receiver) = mpsc::channel(1);
+            let (tx, rx) = mpsc::channel(1);
+            drop(rx);
+
+            let outcome = forward_job_output(JobOutputStream::new(receiver), &tx).await;
+            state.finish_output(outcome);
+
+            assert_eq!(outcome, JobOutputOutcome::Canceled);
+            assert_eq!(state.status(), "CANCELED");
+        }
+    }
+
+    #[tokio::test]
+    async fn drained_output_completes_job() {
+        let (sender, receiver) = mpsc::channel(1);
+        drop(sender);
+        let (tx, _rx) = mpsc::channel(1);
+        let mut state = JobState::Draining;
+
+        let outcome = forward_job_output(JobOutputStream::new(receiver), &tx).await;
+        state.finish_output(outcome);
+
+        assert_eq!(outcome, JobOutputOutcome::Completed);
+        assert_eq!(state.status(), "SUCCEEDED");
+    }
+
+    #[test]
+    fn output_cleanup_preserves_terminal_job_states() {
+        for mut state in [JobState::Failed, JobState::Canceled, JobState::Succeeded] {
+            let status = state.status();
+            for outcome in [
+                JobOutputOutcome::Completed,
+                JobOutputOutcome::Failed,
+                JobOutputOutcome::Canceled,
+            ] {
+                state.finish_output(outcome);
+                assert_eq!(state.status(), status);
+            }
+        }
+    }
+
+    fn active_job_states() -> [JobState; 2] {
+        let (sender, _receiver) = mpsc::channel(1);
+        [
+            JobState::Running {
+                output: JobOutputManager { sender },
+            },
+            JobState::Draining,
+        ]
+    }
+
     fn empty_stream() -> JobOutputItem {
         JobOutputItem::Stream {
-            key: TaskStreamKey {
-                job_id: JobId::from(1),
-                stage: 0,
-                partition: 0,
-                attempt: 0,
-                channel: 0,
-            },
+            key: stream_key(),
             stream: Box::pin(futures::stream::empty()),
+        }
+    }
+
+    fn stream_key() -> TaskStreamKey {
+        TaskStreamKey {
+            job_id: JobId::from(1),
+            stage: 0,
+            partition: 0,
+            attempt: 0,
+            channel: 0,
         }
     }
 }

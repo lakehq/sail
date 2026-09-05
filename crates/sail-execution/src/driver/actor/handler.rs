@@ -15,7 +15,7 @@ use tokio::time::Instant;
 
 use crate::driver::actor::DriverActor;
 use crate::driver::job_scheduler::{JobAction, TaskState};
-use crate::driver::output::JobOutputItem;
+use crate::driver::output::{JobOutputItem, JobOutputOutcome};
 use crate::driver::worker_scaler::{WorkerLaunchRequest, WorkerRetryRequest};
 use crate::driver::{DriverMessage, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
@@ -225,8 +225,9 @@ impl DriverActor {
         &mut self,
         ctx: &mut ActorContext<Self>,
         job_id: JobId,
+        outcome: JobOutputOutcome,
     ) -> ActorAction {
-        self.clean_up_job(ctx, job_id);
+        self.clean_up_job(ctx, job_id, outcome);
         self.run_tasks(ctx);
         self.reconcile_worker_demands(ctx);
         ActorAction::Continue
@@ -391,8 +392,13 @@ impl DriverActor {
         }
     }
 
-    fn clean_up_job(&mut self, ctx: &mut ActorContext<Self>, job_id: JobId) {
-        for action in self.job_scheduler.clean_up_job(job_id) {
+    fn clean_up_job(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        job_id: JobId,
+        outcome: JobOutputOutcome,
+    ) {
+        for action in self.job_scheduler.clean_up_job(job_id, outcome) {
             self.run_job_action(ctx, action);
         }
     }

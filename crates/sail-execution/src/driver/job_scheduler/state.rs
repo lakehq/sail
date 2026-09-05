@@ -5,7 +5,7 @@ use datafusion::physical_plan::ExecutionPlanProperties;
 use sail_common_datafusion::error::CommonErrorCause;
 
 use crate::driver::job_scheduler::topology::JobTopology;
-use crate::driver::output::JobOutputManager;
+use crate::driver::output::{JobOutputManager, JobOutputOutcome};
 use crate::error::ExecutionResult;
 use crate::job_graph::JobGraph;
 
@@ -28,6 +28,19 @@ pub enum JobState {
 }
 
 impl JobState {
+    pub fn finish_output(&mut self, outcome: JobOutputOutcome) {
+        match self {
+            JobState::Running { .. } | JobState::Draining => {
+                *self = match outcome {
+                    JobOutputOutcome::Completed => JobState::Succeeded,
+                    JobOutputOutcome::Failed => JobState::Failed,
+                    JobOutputOutcome::Canceled => JobState::Canceled,
+                };
+            }
+            JobState::Succeeded | JobState::Failed | JobState::Canceled => {}
+        }
+    }
+
     pub fn status(&self) -> &'static str {
         match self {
             JobState::Running { .. } => "RUNNING",

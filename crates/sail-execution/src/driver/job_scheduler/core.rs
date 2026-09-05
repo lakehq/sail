@@ -17,11 +17,11 @@ use sail_telemetry::events::SystemEventReporter;
 
 use crate::driver::DriverActor;
 use crate::driver::job_scheduler::state::{
-    JobDescriptor, JobState, StageState, TaskAttemptDescriptor, TaskRegionState, TaskState,
+    JobDescriptor, StageState, TaskAttemptDescriptor, TaskRegionState, TaskState,
 };
 use crate::driver::job_scheduler::topology::TaskRegionTopology;
-use crate::driver::job_scheduler::{JobAction, JobScheduler, JobSchedulerOptions};
-use crate::driver::output::build_job_output;
+use crate::driver::job_scheduler::{JobAction, JobScheduler, JobSchedulerOptions, JobState};
+use crate::driver::output::{JobOutputOutcome, build_job_output};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey};
 use crate::job_graph::{
@@ -584,7 +584,7 @@ impl JobScheduler {
     /// Determine the actions needed in the driver to clean up the job.
     /// The method cancels all the task attempts that are not in terminal states
     /// and removes all the job output streams.
-    pub fn clean_up_job(&mut self, job_id: JobId) -> Vec<JobAction> {
+    pub fn clean_up_job(&mut self, job_id: JobId, outcome: JobOutputOutcome) -> Vec<JobAction> {
         let event_reporter = self.event_reporter.clone();
         let session_id = self.options.session_id.clone();
         let Some(job) = self.jobs.get_mut(&job_id) else {
@@ -628,11 +628,7 @@ impl JobScheduler {
             stage: None,
             context: job.context.clone(),
         });
-        match job.state {
-            JobState::Draining => job.state = JobState::Succeeded,
-            JobState::Running { .. } => job.state = JobState::Canceled,
-            JobState::Succeeded | JobState::Failed | JobState::Canceled => {}
-        }
+        job.state.finish_output(outcome);
         event_reporter.report(SystemEvent::JobUpdated {
             session_id,
             job_id: u64::from(job_id),

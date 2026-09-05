@@ -14,6 +14,7 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use crate::driver::r#gen;
+use crate::driver::output::JobOutputOutcome;
 use crate::driver::worker_scaler::WorkerRetryRequest;
 use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
@@ -61,6 +62,7 @@ pub enum DriverMessage {
     },
     CleanUpJob {
         job_id: JobId,
+        outcome: JobOutputOutcome,
     },
     UpdateTask {
         key: TaskKey,
@@ -200,7 +202,7 @@ impl SpanAssociation for DriverMessage {
                 context: _,
                 result: _,
             } => {}
-            DriverMessage::CleanUpJob { job_id } => {
+            DriverMessage::CleanUpJob { job_id, .. } => {
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
             }
             DriverMessage::UpdateTask {
