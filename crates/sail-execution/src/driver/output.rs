@@ -301,6 +301,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use datafusion::arrow::array::{ArrayRef, Int32Array};
     use futures::task::{ArcWake, waker};
 
     use super::*;
@@ -355,6 +356,57 @@ mod tests {
             Pin::new(&mut output).poll_next(&mut cx),
             Poll::Ready(Some(Err(_)))
         ));
+    }
+
+    #[test]
+    fn completed_attempt_output_rejects_retry() -> Result<()> {
+        let batch = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(Int32Array::from(vec![42])) as ArrayRef,
+        )])?;
+        let (sender, receiver) = mpsc::channel(1);
+        let mut output = JobOutputStream::new(receiver);
+        let waker = futures::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        assert!(
+            sender
+                .try_send(JobOutputItem::Stream {
+                    key: stream_key(),
+                    stream: Box::pin(futures::stream::iter([Ok(batch.clone())])),
+                })
+                .is_ok()
+        );
+        assert!(matches!(
+            Pin::new(&mut output).poll_next(&mut cx),
+            Poll::Ready(Some(Ok(actual))) if actual == batch
+        ));
+
+        // Poll through EOF so the first attempt's wrapper is removed before retrying.
+        assert!(Pin::new(&mut output).poll_next(&mut cx).is_pending());
+        assert!(matches!(
+            &output.state,
+            JobOutputState::Active { inner, .. } if inner.is_empty()
+        ));
+
+        assert!(
+            sender
+                .try_send(JobOutputItem::Stream {
+                    key: TaskStreamKey {
+                        attempt: 1,
+                        ..stream_key()
+                    },
+                    stream: Box::pin(futures::stream::iter([Ok(batch)])),
+                })
+                .is_ok()
+        );
+        assert!(matches!(
+            Pin::new(&mut output).poll_next(&mut cx),
+            Poll::Ready(Some(Err(error))) if error.to_string().contains(
+                "a different attempt has already produced job output"
+            )
+        ));
+        Ok(())
     }
 
     #[tokio::test]
