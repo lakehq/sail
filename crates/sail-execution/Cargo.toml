@@ -18,6 +18,7 @@ sail-function = { path = "../sail-function" }
 sail-logical-plan = { path = "../sail-logical-plan" }
 sail-physical-plan = { path = "../sail-physical-plan" }
 sail-telemetry = { path = "../sail-telemetry" }
+sail-system-store = { path = "../sail-system-store" }
 sail-catalog-system = { path = "../sail-catalog-system" }
 sail-object-store = { path = "../sail-object-store" }
 sail-celeborn = { path = "../sail-celeborn" }
@@ -31,6 +32,7 @@ tonic-prost = { workspace = true }
 fastrace = { workspace = true }
 tower = { workspace = true }
 prost = { workspace = true }
+opentelemetry-proto = { workspace = true }
 datafusion = { workspace = true }
 datafusion-proto = { workspace = true }
 datafusion-spark = { workspace = true }

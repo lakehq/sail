@@ -102,6 +102,27 @@ Feature: System catalog queries
       | session_id |
 
   @sail-only
+  Scenario: Metrics table schema
+    When query
+      """
+      SELECT timestamp, name, attributes, value
+      FROM system.telemetry.metrics
+      LIMIT 0
+      """
+    Then query result
+      | timestamp | name | attributes | value |
+
+    When query
+      """
+      SELECT count(*) AS count
+      FROM system.telemetry.metrics
+      WHERE attributes['execution.job.id'] = '__missing_job__'
+      """
+    Then query result
+      | count |
+      | 0     |
+
+  @sail-only
   Scenario: Filter and limit pushdown for system.session.options
     When query
       """

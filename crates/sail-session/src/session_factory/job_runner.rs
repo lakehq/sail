@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use datafusion::common::{Result, internal_err};
 use sail_common::actor::ActorSystem;
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
@@ -11,8 +10,9 @@ use sail_execution::job_runner::{ClusterJobRunner, LocalJobRunner};
 use sail_execution::worker_manager::{
     KubernetesWorkerManager, KubernetesWorkerManagerOptions, LocalWorkerManager,
 };
-use sail_telemetry::system_event::SystemEventReporter;
+use sail_telemetry::events::SystemEventReporter;
 
+use crate::error::{SessionError, SessionResult};
 use crate::session_factory::{SessionFactory, WorkerSessionFactory};
 
 pub struct SessionJobRunner {
@@ -53,7 +53,7 @@ pub trait SessionJobRunnerFactory: Send {
         &mut self,
         system: &mut ActorSystem,
         info: SessionJobRunnerInfo,
-    ) -> Result<SessionJobRunner>;
+    ) -> SessionResult<SessionJobRunner>;
 }
 
 pub struct ServerSessionJobRunnerFactory {
@@ -71,17 +71,17 @@ impl ServerSessionJobRunnerFactory {
         system: &mut ActorSystem,
         info: SessionJobRunnerInfo,
         worker_manager: Box<dyn sail_execution::worker_manager::WorkerManager>,
-    ) -> Result<SessionJobRunner> {
+    ) -> SessionResult<SessionJobRunner> {
         let Some(port) = info.driver_server_port else {
-            return internal_err!("driver gateway is not available");
+            return Err(SessionError::internal("driver gateway is not available"));
         };
-        let options = DriverOptions::new(
+        let options = DriverOptions::try_new(
             &self.config,
             self.runtime.clone(),
             info.session_id,
             info.driver_id,
             port,
-        );
+        )?;
         let components = DriverComponents {
             worker_manager,
             event_reporter: info.event_reporter,
@@ -97,9 +97,11 @@ impl SessionJobRunnerFactory for ServerSessionJobRunnerFactory {
         &mut self,
         system: &mut ActorSystem,
         info: SessionJobRunnerInfo,
-    ) -> Result<SessionJobRunner> {
+    ) -> SessionResult<SessionJobRunner> {
         match self.config.mode {
-            ExecutionMode::Local => Ok(SessionJobRunner::local(LocalJobRunner::new())),
+            ExecutionMode::Local => Ok(SessionJobRunner::local(LocalJobRunner::new(
+                info.session_id,
+            ))),
             ExecutionMode::LocalCluster => {
                 let worker_session =
                     WorkerSessionFactory::new(self.config.clone(), self.runtime.clone())

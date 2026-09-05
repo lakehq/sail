@@ -194,7 +194,7 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
                 for add in adds {
                     num_removed_bytes = num_removed_bytes
                         .saturating_add(u64::try_from(add.size).unwrap_or_default());
-                    accumulate_touched_rows(&mut num_touched_rows_accum, add.stats.as_deref());
+                    accumulate_touched_rows(&mut num_touched_rows_accum, &add);
                     adds_to_remove.push(add);
                 }
             }
@@ -238,21 +238,56 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
     }
 }
 
-/// Sum `stats.numRecords` into `accum`, poisoning to `None` if stats are missing or invalid.
-fn accumulate_touched_rows(accum: &mut Option<u64>, stats_json: Option<&str>) {
+/// Sum logical rows into `accum`, poisoning to `None` if row metadata is unavailable or invalid.
+fn accumulate_touched_rows(accum: &mut Option<u64>, add: &Add) {
     let Some(current) = *accum else {
         return;
     };
-    let Some(json) = stats_json else {
-        *accum = None;
-        return;
-    };
-    match Stats::from_json_str(json) {
-        Ok(stats) if let Ok(n) = u64::try_from(stats.num_records) => {
-            *accum = Some(current.saturating_add(n));
-        }
-        Ok(_) | Err(_) => {
-            *accum = None;
-        }
+    let deletion_vector_cardinality = add
+        .deletion_vector
+        .as_ref()
+        .map(|deletion_vector| deletion_vector.cardinality);
+    *accum = logical_touched_rows(add.stats.as_deref(), deletion_vector_cardinality)
+        .map(|rows| current.saturating_add(rows));
+}
+
+fn logical_touched_rows(
+    stats_json: Option<&str>,
+    deletion_vector_cardinality: Option<i64>,
+) -> Option<u64> {
+    let stats = Stats::from_json_str(stats_json?).ok()?;
+    let physical_rows = u64::try_from(stats.num_records).ok()?;
+    let deleted_rows = deletion_vector_cardinality
+        .map(u64::try_from)
+        .transpose()
+        .ok()?
+        .unwrap_or_default();
+    physical_rows.checked_sub(deleted_rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn touched_rows_exclude_existing_deletion_vector_rows() {
+        assert_eq!(
+            logical_touched_rows(Some(r#"{"numRecords":5}"#), Some(2)),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn touched_rows_reject_invalid_row_metadata() {
+        assert_eq!(logical_touched_rows(None, None), None);
+        assert_eq!(logical_touched_rows(Some("not-json"), None), None);
+        assert_eq!(
+            logical_touched_rows(Some(r#"{"numRecords":2}"#), Some(-1)),
+            None
+        );
+        assert_eq!(
+            logical_touched_rows(Some(r#"{"numRecords":2}"#), Some(3)),
+            None
+        );
     }
 }

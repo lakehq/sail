@@ -1,38 +1,244 @@
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
-use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
+use datafusion::functions::core::expr_ext::FieldAccessor;
+use datafusion_common::arrow::datatypes::{DataType, Field};
+use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::{
+    Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, plan_err,
+};
+use datafusion_expr::{
+    Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF, UserDefinedLogicalNodeCore, cast, col, lit,
+    when,
+};
 use educe::Educe;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::datasource::{
-    MergeIntoOptions, OptionLayer, RowLevelCommand, RowLevelTarget,
+    DeltaCheckConstraintExpr, MergeIntoOptions, OPERATION_COLUMN, OptionLayer, RowLevelCommand,
+    RowLevelOperationType, RowLevelTarget, RowLevelWriteMode, UpdateAssignment, UpdateInfo,
 };
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::struct_function::StructFunction;
 
-/// A logical effect produced by a row-level operation.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd)]
-pub enum RowLevelEffect {
-    WriteRows(Arc<LogicalPlan>),
-    TouchFiles(Arc<LogicalPlan>),
-    DeleteRows(Arc<LogicalPlan>),
+use crate::check_constraints::apply_delta_check_constraint_filter;
+
+/// Format-selected auxiliary effects for a row-level expansion.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RowLevelEffectRequirements {
+    pub touched_files: bool,
+    pub row_index_deletes: bool,
 }
 
-impl RowLevelEffect {
-    fn plan(&self) -> &Arc<LogicalPlan> {
-        match self {
-            Self::WriteRows(plan) | Self::TouchFiles(plan) | Self::DeleteRows(plan) => plan,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StructFieldAlignment {
+    Exact,
+    FillMissingWithNull,
+}
+
+pub fn align_row_level_value(
+    value: Expr,
+    source_type: &DataType,
+    target_type: &DataType,
+    case_sensitive: bool,
+    alignment: StructFieldAlignment,
+) -> Result<Expr> {
+    if source_type == target_type {
+        return Ok(value);
+    }
+
+    let (DataType::Struct(source_fields), DataType::Struct(target_fields)) =
+        (source_type, target_type)
+    else {
+        return Ok(cast(value, target_type.clone()));
+    };
+
+    let names_equal = |left: &str, right: &str| {
+        if case_sensitive {
+            left == right
+        } else {
+            left.eq_ignore_ascii_case(right)
+        }
+    };
+    let mut child_values = Vec::with_capacity(target_fields.len());
+    for target_field in target_fields {
+        let mut matching_fields = source_fields
+            .iter()
+            .filter(|source_field| names_equal(source_field.name(), target_field.name()));
+        let source_field = matching_fields.next();
+        if matching_fields.next().is_some() {
+            return plan_err!(
+                "ambiguous source struct field '{}' during row-level assignment",
+                target_field.name()
+            );
+        }
+        let child_value = match source_field {
+            Some(source_field) => align_row_level_value(
+                value.clone().field(source_field.name().clone()),
+                source_field.data_type(),
+                target_field.data_type(),
+                case_sensitive,
+                alignment,
+            )?,
+            None if alignment == StructFieldAlignment::FillMissingWithNull => {
+                lit(ScalarValue::try_new_null(target_field.data_type())?)
+            }
+            None => {
+                return plan_err!(
+                    "source struct is missing target field '{}' during row-level assignment",
+                    target_field.name()
+                );
+            }
+        };
+        child_values.push(child_value);
+    }
+
+    let field_names = target_fields
+        .iter()
+        .map(|field| field.name().clone())
+        .collect();
+    let rebuilt = ScalarUDF::from(StructFunction::new(field_names)).call(child_values);
+    let rebuilt = cast(rebuilt, target_type.clone());
+    when(
+        value.is_null(),
+        lit(ScalarValue::try_new_null(target_type)?),
+    )
+    .otherwise(rebuilt)
+}
+
+pub fn evolve_row_level_field(
+    target_field: &Field,
+    source_field: &Field,
+    case_sensitive: bool,
+) -> Field {
+    fn evolve_data_type(
+        target_type: &DataType,
+        source_type: &DataType,
+        case_sensitive: bool,
+    ) -> DataType {
+        let (DataType::Struct(target_fields), DataType::Struct(source_fields)) =
+            (target_type, source_type)
+        else {
+            return target_type.clone();
+        };
+        let names_equal = |left: &str, right: &str| {
+            if case_sensitive {
+                left == right
+            } else {
+                left.eq_ignore_ascii_case(right)
+            }
+        };
+        let mut evolved_fields = target_fields
+            .iter()
+            .map(|field| field.as_ref().clone())
+            .collect::<Vec<_>>();
+        for source_child in source_fields {
+            if let Some(index) = evolved_fields
+                .iter()
+                .position(|target_child| names_equal(target_child.name(), source_child.name()))
+            {
+                evolved_fields[index] = evolve_row_level_field(
+                    &evolved_fields[index],
+                    source_child.as_ref(),
+                    case_sensitive,
+                );
+            } else {
+                evolved_fields.push(source_child.as_ref().clone().with_nullable(true));
+            }
+        }
+        DataType::Struct(evolved_fields.into())
+    }
+
+    target_field.clone().with_data_type(evolve_data_type(
+        target_field.data_type(),
+        source_field.data_type(),
+        case_sensitive,
+    ))
+}
+
+/// Sparse logical plans required to materialize a row-level write.
+///
+/// The slots are ordered for DataFusion extension planning as write rows,
+/// touched files, then row-index deletes. A missing slot means the selected
+/// write mode does not require that effect.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd)]
+pub struct RowLevelEffectPlans {
+    write_rows: Option<Arc<LogicalPlan>>,
+    touched_files: Option<Arc<LogicalPlan>>,
+    row_index_deletes: Option<Arc<LogicalPlan>>,
+}
+
+impl RowLevelEffectPlans {
+    pub fn new(
+        write_rows: Option<Arc<LogicalPlan>>,
+        touched_files: Option<Arc<LogicalPlan>>,
+        row_index_deletes: Option<Arc<LogicalPlan>>,
+    ) -> Self {
+        Self {
+            write_rows,
+            touched_files,
+            row_index_deletes,
         }
     }
 
-    fn replace_plan(&self, plan: LogicalPlan) -> Self {
-        match self {
-            Self::WriteRows(_) => Self::WriteRows(Arc::new(plan)),
-            Self::TouchFiles(_) => Self::TouchFiles(Arc::new(plan)),
-            Self::DeleteRows(_) => Self::DeleteRows(Arc::new(plan)),
+    pub fn write_rows(&self) -> Option<&Arc<LogicalPlan>> {
+        self.write_rows.as_ref()
+    }
+
+    pub fn touched_files(&self) -> Option<&Arc<LogicalPlan>> {
+        self.touched_files.as_ref()
+    }
+
+    pub fn row_index_deletes(&self) -> Option<&Arc<LogicalPlan>> {
+        self.row_index_deletes.as_ref()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn len(&self) -> usize {
+        usize::from(self.write_rows.is_some())
+            + usize::from(self.touched_files.is_some())
+            + usize::from(self.row_index_deletes.is_some())
+    }
+
+    fn plans(&self) -> impl Iterator<Item = &LogicalPlan> {
+        [
+            self.write_rows.as_deref(),
+            self.touched_files.as_deref(),
+            self.row_index_deletes.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+    }
+
+    fn replace_plans(&self, plans: Vec<LogicalPlan>) -> Result<Self> {
+        if plans.len() != self.len() {
+            return Err(DataFusionError::Internal(format!(
+                "RowLevelEffectPlans expected {} plans, got {}",
+                self.len(),
+                plans.len()
+            )));
         }
+        let mut plans = plans.into_iter();
+        let mut replace = |present: bool| -> Result<Option<Arc<LogicalPlan>>> {
+            if !present {
+                return Ok(None);
+            }
+            plans.next().map(Arc::new).map(Some).ok_or_else(|| {
+                DataFusionError::Internal(
+                    "RowLevelEffectPlans replacement plan is missing".to_string(),
+                )
+            })
+        };
+        Ok(Self {
+            write_rows: replace(self.write_rows.is_some())?,
+            touched_files: replace(self.touched_files.is_some())?,
+            row_index_deletes: replace(self.row_index_deletes.is_some())?,
+        })
     }
 }
 
@@ -74,16 +280,14 @@ impl RowLevelCommitInfo {
 pub struct RowLevelWriteNode {
     target: RowLevelTarget,
     raw_target: Arc<LogicalPlan>,
-    raw_source: Option<Arc<LogicalPlan>>,
+    mode: RowLevelWriteMode,
+    effects: RowLevelEffectPlans,
     #[educe(PartialOrd(method(partial_cmp_by_equality), rank = 0))]
-    raw_input_schema: DFSchemaRef,
-    effects: Vec<RowLevelEffect>,
-    #[educe(PartialOrd(method(partial_cmp_by_equality), rank = 1))]
     commit: RowLevelCommitInfo,
     /// `Some` means the target scan must still match at commit time. The inner
     /// value is `None` when the table had no current snapshot when it was read.
     expected_snapshot_id: Option<Option<i64>>,
-    #[educe(PartialOrd(method(partial_cmp_by_equality), rank = 2))]
+    #[educe(PartialOrd(method(partial_cmp_by_equality), rank = 1))]
     schema: DFSchemaRef,
 }
 
@@ -94,26 +298,15 @@ fn partial_cmp_by_equality<T: PartialEq>(left: &T, right: &T) -> Option<Ordering
 impl RowLevelWriteNode {
     pub fn new_merge(
         raw_target: Arc<LogicalPlan>,
-        raw_source: Arc<LogicalPlan>,
-        raw_input_schema: DFSchemaRef,
-        write_plan: Arc<LogicalPlan>,
-        touched_files_plan: Arc<LogicalPlan>,
-        row_index_delete_plan: Option<Arc<LogicalPlan>>,
+        mode: RowLevelWriteMode,
+        effects: RowLevelEffectPlans,
         options: MergeIntoOptions,
         schema: DFSchemaRef,
     ) -> Self {
-        let mut effects = vec![
-            RowLevelEffect::WriteRows(write_plan),
-            RowLevelEffect::TouchFiles(touched_files_plan),
-        ];
-        if let Some(plan) = row_index_delete_plan {
-            effects.push(RowLevelEffect::DeleteRows(plan));
-        }
         Self {
             target: options.target.clone(),
             raw_target,
-            raw_source: Some(raw_source),
-            raw_input_schema,
+            mode,
             effects,
             commit: RowLevelCommitInfo::Merge {
                 options: Box::new(options),
@@ -125,16 +318,15 @@ impl RowLevelWriteNode {
 
     pub fn new_delete(
         raw_target: Arc<LogicalPlan>,
-        raw_input_schema: DFSchemaRef,
+        mode: RowLevelWriteMode,
         condition: Option<ExprWithSource>,
         target: RowLevelTarget,
     ) -> Self {
         Self {
             target,
             raw_target,
-            raw_source: None,
-            raw_input_schema,
-            effects: vec![],
+            mode,
+            effects: RowLevelEffectPlans::default(),
             commit: RowLevelCommitInfo::Delete {
                 predicate: condition,
             },
@@ -145,26 +337,16 @@ impl RowLevelWriteNode {
 
     pub fn new_update(
         raw_target: Arc<LogicalPlan>,
-        raw_input_schema: DFSchemaRef,
-        write_plan: Arc<LogicalPlan>,
-        touched_files_plan: Arc<LogicalPlan>,
-        row_index_delete_plan: Option<Arc<LogicalPlan>>,
+        mode: RowLevelWriteMode,
+        effects: RowLevelEffectPlans,
         condition: Option<ExprWithSource>,
         target: RowLevelTarget,
         schema: DFSchemaRef,
     ) -> Self {
-        let mut effects = vec![
-            RowLevelEffect::WriteRows(write_plan),
-            RowLevelEffect::TouchFiles(touched_files_plan),
-        ];
-        if let Some(plan) = row_index_delete_plan {
-            effects.push(RowLevelEffect::DeleteRows(plan));
-        }
         Self {
             target,
             raw_target,
-            raw_source: None,
-            raw_input_schema,
+            mode,
             effects,
             commit: RowLevelCommitInfo::Update {
                 predicate: condition,
@@ -187,49 +369,20 @@ impl RowLevelWriteNode {
         &self.target
     }
 
-    pub fn effects(&self) -> &[RowLevelEffect] {
-        &self.effects
+    pub fn mode(&self) -> RowLevelWriteMode {
+        self.mode
     }
 
-    pub fn commit(&self) -> &RowLevelCommitInfo {
-        &self.commit
+    pub fn effects(&self) -> &RowLevelEffectPlans {
+        &self.effects
     }
 
     pub fn merge_options(&self) -> Option<&MergeIntoOptions> {
         self.commit.merge_options()
     }
 
-    pub fn write_plan(&self) -> Option<&Arc<LogicalPlan>> {
-        self.effects.iter().find_map(|effect| match effect {
-            RowLevelEffect::WriteRows(plan) => Some(plan),
-            RowLevelEffect::TouchFiles(_) | RowLevelEffect::DeleteRows(_) => None,
-        })
-    }
-
     pub fn raw_target(&self) -> &Arc<LogicalPlan> {
         &self.raw_target
-    }
-
-    pub fn raw_source(&self) -> Option<&Arc<LogicalPlan>> {
-        self.raw_source.as_ref()
-    }
-
-    pub fn raw_input_schema(&self) -> &DFSchemaRef {
-        &self.raw_input_schema
-    }
-
-    pub fn touched_files_plan(&self) -> Option<&Arc<LogicalPlan>> {
-        self.effects.iter().find_map(|effect| match effect {
-            RowLevelEffect::TouchFiles(plan) => Some(plan),
-            RowLevelEffect::WriteRows(_) | RowLevelEffect::DeleteRows(_) => None,
-        })
-    }
-
-    pub fn row_index_delete_plan(&self) -> Option<&Arc<LogicalPlan>> {
-        self.effects.iter().find_map(|effect| match effect {
-            RowLevelEffect::DeleteRows(plan) => Some(plan),
-            RowLevelEffect::WriteRows(_) | RowLevelEffect::TouchFiles(_) => None,
-        })
     }
 
     pub fn condition(&self) -> Option<&ExprWithSource> {
@@ -242,14 +395,6 @@ impl RowLevelWriteNode {
 
     pub fn target_location(&self) -> &str {
         &self.target.location
-    }
-
-    pub fn target_table_name(&self) -> &[String] {
-        &self.target.table_name
-    }
-
-    pub fn target_partition_by(&self) -> &[String] {
-        &self.target.partition_by
     }
 
     pub fn target_options(&self) -> &[OptionLayer] {
@@ -276,10 +421,7 @@ impl UserDefinedLogicalNodeCore for RowLevelWriteNode {
     }
 
     fn inputs(&self) -> Vec<&LogicalPlan> {
-        self.effects
-            .iter()
-            .map(|effect| effect.plan().as_ref())
-            .collect()
+        self.effects.plans().collect()
     }
 
     fn schema(&self) -> &DFSchemaRef {
@@ -299,8 +441,9 @@ impl UserDefinedLogicalNodeCore for RowLevelWriteNode {
             .unwrap_or(&self.target.location);
         write!(
             f,
-            "RowLevelWrite: command={:?}, target={}, format={}",
+            "RowLevelWrite: command={:?}, mode={:?}, target={}, format={}",
             self.command(),
+            self.mode,
             table,
             self.target.format
         )?;
@@ -325,24 +468,11 @@ impl UserDefinedLogicalNodeCore for RowLevelWriteNode {
 
     fn with_exprs_and_inputs(&self, exprs: Vec<Expr>, inputs: Vec<LogicalPlan>) -> Result<Self> {
         exprs.zero()?;
-        if inputs.len() != self.effects.len() {
-            return Err(DataFusionError::Internal(format!(
-                "RowLevelWriteNode expected {} inputs, got {}",
-                self.effects.len(),
-                inputs.len()
-            )));
-        }
-        let effects = self
-            .effects
-            .iter()
-            .zip(inputs)
-            .map(|(effect, plan)| effect.replace_plan(plan))
-            .collect();
+        let effects = self.effects.replace_plans(inputs)?;
         Ok(Self {
             target: self.target.clone(),
             raw_target: self.raw_target.clone(),
-            raw_source: self.raw_source.clone(),
-            raw_input_schema: self.raw_input_schema.clone(),
+            mode: self.mode,
             effects,
             commit: self.commit.clone(),
             expected_snapshot_id: self.expected_snapshot_id,
@@ -355,11 +485,477 @@ impl UserDefinedLogicalNodeCore for RowLevelWriteNode {
     }
 }
 
+struct NormalizedRowLevelTarget {
+    plan: LogicalPlan,
+    field_names: Vec<String>,
+    rename_map: HashMap<String, String>,
+}
+
+fn normalize_row_level_target(
+    plan: LogicalPlan,
+    input_schema: &DFSchemaRef,
+    resolved_field_names: &[String],
+    path_column: &str,
+    row_index_column: Option<&str>,
+) -> Result<NormalizedRowLevelTarget> {
+    let rename_map =
+        row_level_target_rename_map(input_schema, plan.schema(), resolved_field_names)?;
+    let mut projections = Vec::with_capacity(
+        resolved_field_names.len() + 1 + usize::from(row_index_column.is_some()),
+    );
+    for (plan_field, resolved_name) in plan.schema().fields().iter().zip(resolved_field_names) {
+        projections.push(
+            Expr::Column(Column::from_name(plan_field.name().clone())).alias(resolved_name.clone()),
+        );
+    }
+
+    append_metadata_projection(&plan, &mut projections, path_column)?;
+    if let Some(row_index_column) = row_index_column {
+        append_metadata_projection(&plan, &mut projections, row_index_column)?;
+    }
+
+    let plan = LogicalPlanBuilder::from(plan)
+        .project(projections)?
+        .build()?;
+    Ok(NormalizedRowLevelTarget {
+        plan,
+        field_names: resolved_field_names.to_vec(),
+        rename_map,
+    })
+}
+
+fn row_level_target_rename_map(
+    input_schema: &DFSchemaRef,
+    plan_schema: &DFSchemaRef,
+    resolved_field_names: &[String],
+) -> Result<HashMap<String, String>> {
+    if input_schema.fields().len() != resolved_field_names.len() {
+        return plan_err!(
+            "row-level target schema has {} fields but {} resolved names",
+            input_schema.fields().len(),
+            resolved_field_names.len()
+        );
+    }
+    if plan_schema.fields().len() < resolved_field_names.len() {
+        return plan_err!(
+            "row-level target plan has {} fields but {} data columns are required",
+            plan_schema.fields().len(),
+            resolved_field_names.len()
+        );
+    }
+
+    let mut rename_map = HashMap::new();
+    for ((input_field, plan_field), resolved_name) in input_schema
+        .fields()
+        .iter()
+        .zip(plan_schema.fields())
+        .zip(resolved_field_names)
+    {
+        rename_map.insert(input_field.name().clone(), resolved_name.clone());
+        rename_map.insert(plan_field.name().clone(), resolved_name.clone());
+        rename_map.insert(resolved_name.clone(), resolved_name.clone());
+    }
+    Ok(rename_map)
+}
+
+fn append_metadata_projection(
+    plan: &LogicalPlan,
+    projections: &mut Vec<Expr>,
+    column: &str,
+) -> Result<()> {
+    if plan
+        .schema()
+        .index_of_column_by_name(None, column)
+        .is_none()
+    {
+        return plan_err!("row-level target plan is missing required metadata column {column}");
+    }
+    projections.push(col(column).alias(column));
+    Ok(())
+}
+
+fn rewrite_target_expr(expr: Expr, rename_map: &HashMap<String, String>) -> Result<Expr> {
+    expr.transform(|expr| {
+        if let Expr::Column(column) = &expr
+            && let Some(name) = rename_map.get(&column.name)
+        {
+            return Ok(Transformed::yes(Expr::Column(Column {
+                relation: None,
+                name: name.clone(),
+                spans: column.spans.clone(),
+            })));
+        }
+        Ok(Transformed::no(expr))
+    })
+    .map(|transformed| transformed.data)
+}
+
+pub fn rewrite_row_level_target_condition(
+    condition: Option<ExprWithSource>,
+    input_schema: &DFSchemaRef,
+    plan_schema: &DFSchemaRef,
+    resolved_field_names: &[String],
+) -> Result<Option<ExprWithSource>> {
+    let rename_map = row_level_target_rename_map(input_schema, plan_schema, resolved_field_names)?;
+    condition
+        .map(|condition| {
+            Ok(ExprWithSource::new(
+                rewrite_target_expr(condition.expr, &rename_map)?,
+                condition.source,
+            ))
+        })
+        .transpose()
+}
+
+pub fn expand_update(
+    info: UpdateInfo,
+    mode: RowLevelWriteMode,
+    requirements: RowLevelEffectRequirements,
+    path_column: &str,
+    row_index_column: Option<&str>,
+) -> Result<RowLevelWriteNode> {
+    let UpdateInfo {
+        target_plan,
+        target,
+        condition,
+        assignments,
+        input_schema,
+        resolved_target_field_names,
+        case_sensitive,
+        generated_column_exprs,
+        check_constraint_exprs,
+    } = info;
+    validate_row_level_internal_columns(
+        &input_schema,
+        &resolved_target_field_names,
+        path_column,
+        row_index_column,
+        case_sensitive,
+    )?;
+    let normalized = normalize_row_level_target(
+        target_plan.as_ref().clone(),
+        &input_schema,
+        &resolved_target_field_names,
+        path_column,
+        row_index_column,
+    )?;
+    let condition = condition
+        .map(|condition| -> Result<_> {
+            Ok(ExprWithSource::new(
+                rewrite_target_expr(condition.expr, &normalized.rename_map)?,
+                condition.source,
+            ))
+        })
+        .transpose()?;
+    let predicate = condition
+        .as_ref()
+        .map(|condition| condition.expr.clone())
+        .unwrap_or_else(|| lit(true));
+
+    let assignments = rewrite_assignments(
+        assignments,
+        &normalized.rename_map,
+        &normalized.field_names,
+        case_sensitive,
+    )?;
+    let assigned_columns = assignments
+        .iter()
+        .map(|assignment| row_level_name_key(&assignment.column, case_sensitive))
+        .collect::<std::collections::HashSet<_>>();
+    let assignment_map = assignments
+        .into_iter()
+        .map(|assignment| {
+            (
+                row_level_name_key(&assignment.column, case_sensitive),
+                assignment.value,
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let mut write_projection = Vec::with_capacity(normalized.field_names.len() + 2);
+    for (index, name) in normalized.field_names.iter().enumerate() {
+        let current = col(name);
+        let value = assignment_map
+            .get(&row_level_name_key(name, case_sensitive))
+            .map(|value| {
+                let target_type = input_schema
+                    .fields()
+                    .get(index)
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "UPDATE target field is missing during projection".to_string(),
+                        )
+                    })?
+                    .data_type()
+                    .clone();
+                when(predicate.clone(), cast(value.clone(), target_type))
+                    .otherwise(current.clone())
+                    .map(|expr| expr.alias(name))
+            })
+            .transpose()?
+            .unwrap_or_else(|| current.alias(name));
+        write_projection.push(value);
+    }
+    write_projection.push(col(path_column).alias(path_column));
+    write_projection.push(
+        when(
+            predicate.clone(),
+            lit(RowLevelOperationType::Update.as_i32()),
+        )
+        .otherwise(lit(RowLevelOperationType::Copy.as_i32()))?
+        .alias(OPERATION_COLUMN),
+    );
+    let write_rows = LogicalPlanBuilder::from(normalized.plan.clone())
+        .project(write_projection)?
+        .build()?;
+
+    let generated_column_exprs = generated_column_exprs
+        .into_iter()
+        .map(|(name, expression)| {
+            Ok((
+                name,
+                rewrite_target_expr(expression, &normalized.rename_map)?,
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let write_rows = apply_update_generation(
+        write_rows,
+        &generated_column_exprs,
+        &assigned_columns,
+        case_sensitive,
+    )?;
+    let constraints = check_constraint_exprs
+        .into_iter()
+        .map(|constraint| {
+            Ok(DeltaCheckConstraintExpr {
+                name: constraint.name,
+                expression: constraint.expression,
+                expr: rewrite_target_expr(constraint.expr, &normalized.rename_map)?,
+                violation: constraint.violation,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let write_rows = apply_delta_check_constraint_filter(
+        write_rows,
+        &constraints,
+        Some(col(OPERATION_COLUMN).eq(lit(RowLevelOperationType::Update.as_i32()))),
+    )?;
+
+    let touched_files = requirements
+        .touched_files
+        .then(|| {
+            LogicalPlanBuilder::from(normalized.plan.clone())
+                .filter(predicate.clone())?
+                .aggregate(vec![col(path_column)], Vec::<Expr>::new())?
+                .project(vec![col(path_column).alias(path_column)])?
+                .build()
+        })
+        .transpose()?
+        .map(Arc::new);
+    let row_index_deletes = if let (true, Some(row_index_column)) =
+        (requirements.row_index_deletes, row_index_column)
+    {
+        Some(Arc::new(
+            LogicalPlanBuilder::from(normalized.plan)
+                .filter(predicate)?
+                .project(vec![
+                    col(path_column).alias(path_column),
+                    col(row_index_column).alias(row_index_column),
+                ])?
+                .build()?,
+        ))
+    } else {
+        None
+    };
+    let effects =
+        RowLevelEffectPlans::new(Some(Arc::new(write_rows)), touched_files, row_index_deletes);
+
+    Ok(RowLevelWriteNode::new_update(
+        target_plan,
+        mode,
+        effects,
+        condition,
+        target,
+        Arc::new(DFSchema::empty()),
+    ))
+}
+
+fn rewrite_assignments(
+    assignments: Vec<UpdateAssignment>,
+    rename_map: &HashMap<String, String>,
+    field_names: &[String],
+    case_sensitive: bool,
+) -> Result<Vec<UpdateAssignment>> {
+    assignments
+        .into_iter()
+        .map(|assignment| {
+            let UpdateAssignment { column, value } = assignment;
+            let column = rename_map.get(&column).cloned().unwrap_or(column);
+            let column =
+                resolve_assignment_column(&column, field_names, case_sensitive)?.to_string();
+            Ok(UpdateAssignment {
+                column,
+                value: rewrite_target_expr(value, rename_map)?,
+            })
+        })
+        .collect()
+}
+
+pub fn validate_row_level_internal_columns(
+    input_schema: &DFSchemaRef,
+    resolved_field_names: &[String],
+    path_column: &str,
+    row_index_column: Option<&str>,
+    case_sensitive: bool,
+) -> Result<()> {
+    let reserved = [OPERATION_COLUMN, path_column]
+        .into_iter()
+        .chain(row_index_column);
+    for reserved_name in reserved {
+        if resolved_field_names.iter().any(|name| {
+            if case_sensitive {
+                name == reserved_name
+            } else {
+                name.eq_ignore_ascii_case(reserved_name)
+            }
+        }) || input_schema.fields().iter().any(|field| {
+            if case_sensitive {
+                field.name() == reserved_name
+            } else {
+                field.name().eq_ignore_ascii_case(reserved_name)
+            }
+        }) {
+            return plan_err!(
+                "row-level target column '{reserved_name}' uses a reserved internal column name"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn apply_update_generation(
+    plan: LogicalPlan,
+    generated_column_exprs: &[(String, Expr)],
+    assigned_columns: &std::collections::HashSet<String>,
+    case_sensitive: bool,
+) -> Result<LogicalPlan> {
+    if generated_column_exprs.is_empty() {
+        return Ok(plan);
+    }
+    let generated = generated_column_exprs
+        .iter()
+        .map(|(name, expression)| (row_level_name_key(name, case_sensitive), expression))
+        .collect::<HashMap<_, _>>();
+    let update_row = col(OPERATION_COLUMN).eq(lit(RowLevelOperationType::Update.as_i32()));
+    let projection = plan
+        .schema()
+        .fields()
+        .iter()
+        .map(|field| {
+            let name = field.name();
+            if let Some(generation_expr) = generated.get(&row_level_name_key(name, case_sensitive))
+            {
+                let generated_value = if assigned_columns
+                    .contains(&row_level_name_key(name, case_sensitive))
+                {
+                    let current_value = col(name);
+                    let matches_generation = Expr::BinaryExpr(
+                        datafusion_expr::expr::BinaryExpr::new(
+                            Box::new(current_value.clone()),
+                            datafusion_expr::Operator::IsNotDistinctFrom,
+                            Box::new((*generation_expr).clone()),
+                        ),
+                    );
+                    let message = format!(
+                        "[DELTA_GENERATED_COLUMNS_VALUE_MISMATCH] CHECK constraint for generated column `{name}` violated: user-provided value does not match the generation expression."
+                    );
+                    let raise = datafusion_expr::ScalarUDF::from(
+                        sail_function::scalar::misc::raise_error::RaiseError::new(),
+                    )
+                    .call(vec![lit(message)]);
+                    when(matches_generation, current_value).otherwise(raise)?
+                } else {
+                    (*generation_expr).clone()
+                };
+                when(update_row.clone(), generated_value)
+                    .otherwise(col(name))
+                    .map(|expr| expr.alias(name))
+            } else {
+                Ok(col(name))
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+    LogicalPlanBuilder::from(plan).project(projection)?.build()
+}
+
+fn resolve_assignment_column<'a>(
+    column: &str,
+    field_names: &'a [String],
+    case_sensitive: bool,
+) -> Result<&'a str> {
+    let matches = field_names
+        .iter()
+        .filter(|field| {
+            if case_sensitive {
+                field.as_str() == column
+            } else {
+                field.eq_ignore_ascii_case(column)
+            }
+        })
+        .collect::<Vec<_>>();
+    if matches.len() != 1 {
+        return plan_err!("unable to resolve column {column} in UPDATE target projection");
+    }
+    Ok(matches[0])
+}
+
+fn row_level_name_key(name: &str, case_sensitive: bool) -> String {
+    if case_sensitive {
+        name.to_string()
+    } else {
+        name.to_ascii_lowercase()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use datafusion_expr::{LogicalPlanBuilder, UserDefinedLogicalNode, lit};
 
     use super::*;
+
+    fn named_plan(name: &str) -> Result<Arc<LogicalPlan>> {
+        Ok(Arc::new(
+            LogicalPlanBuilder::empty(false)
+                .project(vec![lit(1_i32).alias(name)])?
+                .build()?,
+        ))
+    }
+
+    #[test]
+    fn sparse_effect_plans_preserve_slots_when_replaced() -> Result<()> {
+        let write_rows = named_plan("write_rows")?;
+        let row_index_deletes = named_plan("row_index_deletes")?;
+        let effects = RowLevelEffectPlans::new(Some(write_rows), None, Some(row_index_deletes));
+
+        assert_eq!(effects.len(), 2);
+        assert!(effects.write_rows().is_some());
+        assert!(effects.touched_files().is_none());
+        assert!(effects.row_index_deletes().is_some());
+
+        let replacement_write_rows = named_plan("replacement_write_rows")?;
+        let replacement_row_index_deletes = named_plan("replacement_row_index_deletes")?;
+        let replaced = effects.replace_plans(vec![
+            replacement_write_rows.as_ref().clone(),
+            replacement_row_index_deletes.as_ref().clone(),
+        ])?;
+
+        assert_eq!(replaced.write_rows(), Some(&replacement_write_rows));
+        assert!(replaced.touched_files().is_none());
+        assert_eq!(
+            replaced.row_index_deletes(),
+            Some(&replacement_row_index_deletes)
+        );
+        Ok(())
+    }
 
     #[test]
     fn delete_node_preserves_empty_snapshot_requirement() -> Result<()> {
@@ -372,10 +968,12 @@ mod tests {
             options: vec![],
             lakehouse_table: None,
         };
-        let node = RowLevelWriteNode::new_delete(plan, Arc::new(DFSchema::empty()), None, target)
-            .with_expected_snapshot_id(Some(None));
+        let node =
+            RowLevelWriteNode::new_delete(plan, RowLevelWriteMode::MergeOnRead, None, target)
+                .with_expected_snapshot_id(Some(None));
 
         assert_eq!(node.command(), RowLevelCommand::Delete);
+        assert_eq!(node.mode(), RowLevelWriteMode::MergeOnRead);
         assert!(node.effects().is_empty());
         assert_eq!(node.expected_snapshot_id(), Some(None));
 
@@ -396,13 +994,17 @@ mod tests {
             options: vec![],
             lakehouse_table: None,
         };
-        let node = RowLevelWriteNode::new_delete(plan, Arc::new(DFSchema::empty()), None, target);
+        let node =
+            RowLevelWriteNode::new_delete(plan, RowLevelWriteMode::CopyOnWrite, None, target);
         let mut distinct_commit = node.clone();
         distinct_commit.commit = RowLevelCommitInfo::Delete {
             predicate: Some(ExprWithSource::new(lit(true), Some("true".into()))),
         };
+        let mut distinct_mode = node.clone();
+        distinct_mode.mode = RowLevelWriteMode::MergeOnRead;
 
         assert_ne!(node, distinct_commit);
+        assert_ne!(node, distinct_mode);
         assert_eq!(node.partial_cmp(&node), Some(Ordering::Equal));
         assert_ne!(node.partial_cmp(&distinct_commit), Some(Ordering::Equal));
         assert_ne!(distinct_commit.partial_cmp(&node), Some(Ordering::Equal));

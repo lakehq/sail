@@ -55,7 +55,7 @@ use crate::datasource::pruning::{
     prune_data_files_by_partition_values, prune_files, prune_manifests_by_partition_summaries,
 };
 use crate::datasource::scan_partitioning::IcebergScanRangeLayout;
-use crate::datasource::type_converter::iceberg_schema_to_arrow;
+use crate::datasource::type_converter::{iceberg_field_id, iceberg_schema_to_arrow};
 use crate::io::{
     StoreContext, load_manifest as io_load_manifest, load_manifest_list as io_load_manifest_list,
 };
@@ -68,7 +68,7 @@ use crate::row_level_metadata::{
 };
 use crate::spec::delete_index::{DeleteFileIndex, DeleteFileRef};
 use crate::spec::transform::Transform;
-use crate::spec::types::values::Literal;
+use crate::spec::types::values::{Datum, Literal};
 use crate::spec::{
     DataFile, ManifestContentType, ManifestList, ManifestStatus, PartitionSpec, Schema, Snapshot,
 };
@@ -107,6 +107,20 @@ pub struct IcebergTableProvider {
 }
 
 impl IcebergTableProvider {
+    fn statistic_scalar(&self, field_id: i32, datum: &Datum) -> Option<ScalarValue> {
+        let field = self.schema.field_by_id(field_id)?;
+        to_scalar(
+            &Literal::Primitive(datum.literal.clone()),
+            field.field_type.as_ref(),
+        )
+        .inspect_err(|error| {
+            log::debug!(
+                "Ignoring Iceberg statistic for field ID {field_id} because it cannot be converted: {error}"
+            );
+        })
+        .ok()
+    }
+
     /// Create a new Iceberg table provider
     pub fn new(
         table_uri: impl ToString,
@@ -808,8 +822,12 @@ impl IcebergTableProvider {
         let mut total_rows: usize = 0;
         let mut total_bytes: usize = 0;
 
-        // Pre-compute field id per column index
-        let field_ids: Vec<i32> = self.schema.fields().iter().map(|f| f.id).collect();
+        let field_ids: Vec<Option<i32>> = self
+            .arrow_schema
+            .fields()
+            .iter()
+            .map(|field| iceberg_field_id(field).unwrap_or_default())
+            .collect();
 
         // Initialize accumulators per column
         let mut min_scalars: Vec<Option<ScalarValue>> =
@@ -823,14 +841,18 @@ impl IcebergTableProvider {
             total_bytes = total_bytes.saturating_add(df.file_size_in_bytes() as usize);
 
             for (col_idx, field_id) in field_ids.iter().enumerate() {
+                let Some(field_id) = field_id else {
+                    continue;
+                };
                 // null counts
                 if let Some(c) = df.null_value_counts().get(field_id) {
                     null_counts[col_idx] = null_counts[col_idx].saturating_add(*c as usize);
                 }
 
                 // min
-                if let Some(d) = df.lower_bounds().get(field_id) {
-                    let sv = primitive_to_scalar_default(&d.literal);
+                if let Some(d) = df.lower_bounds().get(field_id)
+                    && let Some(sv) = self.statistic_scalar(*field_id, d)
+                {
                     min_scalars[col_idx] = match (&min_scalars[col_idx], &sv) {
                         (None, s) => Some(s.clone()),
                         (Some(existing), s) => Some(if s < existing {
@@ -842,8 +864,9 @@ impl IcebergTableProvider {
                 }
 
                 // max
-                if let Some(d) = df.upper_bounds().get(field_id) {
-                    let sv = primitive_to_scalar_default(&d.literal);
+                if let Some(d) = df.upper_bounds().get(field_id)
+                    && let Some(sv) = self.statistic_scalar(*field_id, d)
+                {
                     max_scalars[col_idx] = match (&max_scalars[col_idx], &sv) {
                         (None, s) => Some(s.clone()),
                         (Some(existing), s) => Some(if s > existing {
@@ -890,14 +913,10 @@ impl IcebergTableProvider {
             .arrow_schema
             .fields()
             .iter()
-            .enumerate()
-            .map(|(i, _field)| {
-                let field_id = self
-                    .schema
-                    .fields()
-                    .get(i)
-                    .map(|f| f.id)
-                    .unwrap_or(i as i32 + 1);
+            .map(|field| {
+                let Some(field_id) = iceberg_field_id(field).unwrap_or_default() else {
+                    return ColumnStatistics::new_unknown();
+                };
 
                 let null_count = data_file
                     .null_value_counts()
@@ -910,14 +929,14 @@ impl IcebergTableProvider {
                 let min_value = data_file
                     .lower_bounds()
                     .get(&field_id)
-                    .map(|datum| primitive_to_scalar_default(&datum.literal))
+                    .and_then(|datum| self.statistic_scalar(field_id, datum))
                     .map(Precision::Exact)
                     .unwrap_or(Precision::Absent);
 
                 let max_value = data_file
                     .upper_bounds()
                     .get(&field_id)
-                    .map(|datum| primitive_to_scalar_default(&datum.literal))
+                    .and_then(|datum| self.statistic_scalar(field_id, datum))
                     .map(Precision::Exact)
                     .unwrap_or(Precision::Absent);
 

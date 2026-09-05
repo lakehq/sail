@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use sail_common::runtime::RuntimeHandle;
 use sail_execution::driver::DriverGateway;
-use sail_telemetry::system_event::SystemEventReporter;
+use sail_telemetry::events::SystemEventReporter;
 
 use crate::session_factory::{ServerSessionInfo, SessionFactory, SessionJobRunnerFactory};
 

@@ -12,6 +12,7 @@ use sail_common::actor::{Actor, ActorAction, ActorContext};
 use crate::driver::job_scheduler::{JobScheduler, JobSchedulerOptions};
 use crate::driver::task_assigner::{TaskAssigner, TaskAssignerOptions};
 use crate::driver::worker_pool::{WorkerPool, WorkerPoolOptions};
+use crate::driver::worker_scaler::{WorkerScaler, WorkerScalerOptions};
 use crate::driver::{DriverActor, DriverComponents, DriverMessage, DriverOptions};
 use crate::shuffle::{ShuffleBackendKind, celeborn_application_id};
 use crate::stream::celeborn::CelebornStreamManager;
@@ -22,7 +23,6 @@ use crate::task_runner::{
     TaskRunnerPlacement,
 };
 
-#[tonic::async_trait]
 impl Actor for DriverActor {
     type Message = DriverMessage;
     type Options = (DriverOptions, DriverComponents);
@@ -44,13 +44,16 @@ impl Actor for DriverActor {
         );
         let job_scheduler = JobScheduler::new(JobSchedulerOptions::from(&options), event_reporter);
         let task_assigner = TaskAssigner::new(TaskAssignerOptions::from(&options));
+        let worker_scaler = WorkerScaler::new(WorkerScalerOptions::from(&options));
         Self {
             options,
             worker_pool,
             job_scheduler,
             task_assigner,
+            worker_scaler,
             task_runner: None,
             extensions: Default::default(),
+            activated: false,
             task_sequences: HashMap::new(),
             shutdown_notifier: None,
         }
@@ -113,6 +116,7 @@ impl Actor for DriverActor {
         };
         self.task_runner = Some(ctx.children_mut().spawn::<TaskRunnerActor>(
             TaskRunnerComponents {
+                session_id: self.options.session_id.clone(),
                 extensions: TaskRunnerExtensions {
                     local_streams,
                     storage_streams,
@@ -123,9 +127,13 @@ impl Actor for DriverActor {
         ));
     }
 
-    fn receive(&mut self, ctx: &mut ActorContext<Self>, message: DriverMessage) -> ActorAction {
+    async fn receive(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        message: DriverMessage,
+    ) -> ActorAction {
         match message {
-            DriverMessage::Activate => self.handle_activate(ctx),
+            DriverMessage::Activate { result } => self.handle_activate(ctx, result),
             DriverMessage::RegisterWorker {
                 worker_id,
                 host,
@@ -141,6 +149,12 @@ impl Actor for DriverActor {
             } => self.handle_worker_known_peers(ctx, worker_id, peer_worker_ids),
             DriverMessage::ProbePendingWorker { worker_id } => {
                 self.handle_probe_pending_worker(ctx, worker_id)
+            }
+            DriverMessage::WorkerFailedToStart { worker_id, message } => {
+                self.handle_worker_failed_to_start(ctx, worker_id, message)
+            }
+            DriverMessage::RetryWorkerDemand { request } => {
+                self.handle_retry_worker_demand(ctx, request)
             }
             DriverMessage::ProbeIdleWorker { worker_id, instant } => {
                 self.handle_probe_idle_worker(ctx, worker_id, instant)

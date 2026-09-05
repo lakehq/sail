@@ -171,6 +171,50 @@
   default: "120"
   description: The timeout in seconds for launching a worker.
 
+- key: cluster.worker_launch_retry_strategy.type
+  type: string
+  default: "exponential_backoff"
+  description: |
+    The retry strategy for failed worker launches.
+    Valid values are `fixed` and `exponential_backoff`.
+  experimental: true
+
+- key: cluster.worker_launch_retry_strategy.fixed.max_count
+  type: number
+  default: "3"
+  description: The maximum number of worker launch retries using a fixed delay.
+  experimental: true
+
+- key: cluster.worker_launch_retry_strategy.fixed.delay_secs
+  type: number
+  default: "5"
+  description: The delay in seconds between worker launch retries using a fixed delay.
+  experimental: true
+
+- key: cluster.worker_launch_retry_strategy.exponential_backoff.max_count
+  type: number
+  default: "5"
+  description: The maximum number of worker launch retries using exponential backoff.
+  experimental: true
+
+- key: cluster.worker_launch_retry_strategy.exponential_backoff.initial_delay_secs
+  type: number
+  default: "1"
+  description: The initial delay in seconds before retrying a worker launch.
+  experimental: true
+
+- key: cluster.worker_launch_retry_strategy.exponential_backoff.max_delay_secs
+  type: number
+  default: "30"
+  description: The maximum delay in seconds before retrying a worker launch.
+  experimental: true
+
+- key: cluster.worker_launch_retry_strategy.exponential_backoff.factor
+  type: number
+  default: "2"
+  description: The factor by which the worker launch retry delay increases.
+  experimental: true
+
 - key: cluster.worker_task_slots
   type: number
   default: "8"
@@ -905,6 +949,18 @@
     Sessions that have been inactive for longer than this duration will be cleaned up.
   experimental: true
 
+- key: catalog.system.store
+  type: string
+  default: "memory"
+  description: The system catalog store backend. Valid values are `memory` and `disk`.
+  experimental: true
+
+- key: catalog.system.disk.path
+  type: string
+  default: ""
+  description: The existing directory used by the disk-backed system catalog store.
+  experimental: true
+
 - key: telemetry.export_traces
   type: boolean
   default: "false"
@@ -943,6 +999,12 @@
   type: number
   default: "10"
   description: The timeout in seconds for OTLP telemetry data export.
+  experimental: true
+
+- key: telemetry.exporter.system.enabled
+  type: boolean
+  default: "false"
+  description: Whether metrics are written to the system catalog store.
   experimental: true
 
 - key: telemetry.traces_export_interval_secs

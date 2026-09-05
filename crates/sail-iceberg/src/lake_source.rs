@@ -16,9 +16,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion::arrow::datatypes::{Field as ArrowField, Schema as ArrowSchema};
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::{
-    DataFusionError, Result, TableReference, ToDFSchema, not_impl_err, plan_err,
-};
+use datafusion::common::{DataFusionError, Result, TableReference, not_impl_err, plan_err};
 use datafusion::logical_expr::{LogicalPlan, TableScanBuilder, TableSource};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_expr::expr::Sort;
@@ -30,7 +28,7 @@ use sail_common_datafusion::catalog::iceberg::is_iceberg_table_marker;
 use sail_common_datafusion::catalog::managed::metadata_location_value;
 use sail_common_datafusion::catalog::{
     CatalogPartitionField, CommitAuthority, LakehouseExecutionContext, LakehouseOperation,
-    ScanAuthority,
+    MetadataPointerAuthority, ScanAuthority,
 };
 use sail_common_datafusion::datasource::{
     BucketBy, DataSource, DeleteInfo, OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode,
@@ -40,6 +38,9 @@ use sail_common_datafusion::lakesource::{
     LakeSource, LakeSourceAlterTableOperation, LakeSourceCreateTableColumn,
     LakeSourceCreateTableInfo, LakeSourceCreateTableResult, LakeSourceMetadata, RowLevelOperation,
 };
+use sail_common_datafusion::logical_expr::ExprWithSource;
+use sail_common_datafusion::rename::expression::expression_before_rename;
+use sail_common_datafusion::rename::schema::rename_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
 use sail_data_source::options::ResolveOptions;
@@ -156,7 +157,13 @@ impl LakeSource for IcebergLakeSource {
         ctx: &dyn Session,
         operation: RowLevelOperation,
     ) -> Result<LogicalPlan> {
-        let DeleteInfo { target, condition } = match operation {
+        let DeleteInfo {
+            target,
+            condition,
+            input_schema,
+            resolved_target_field_names,
+            ..
+        } = match operation {
             RowLevelOperation::Delete(info) => *info,
             RowLevelOperation::Update(_) => {
                 return not_impl_err!("UPDATE is not yet implemented for Iceberg");
@@ -192,14 +199,33 @@ impl LakeSource for IcebergLakeSource {
                 .map(|snapshot| snapshot.snapshot_id()),
         );
         let table_source: Arc<dyn TableSource> = Arc::new(IcebergTableSource::new(provider));
-        let raw_input_schema = table_source.schema().to_dfschema_ref()?;
+        let resolved_input_schema =
+            rename_schema(input_schema.as_arrow(), &resolved_target_field_names)?;
+        let input_field_names = input_schema
+            .fields()
+            .iter()
+            .map(|field| field.name().clone())
+            .collect::<Vec<_>>();
+        let condition = condition
+            .map(|condition| -> Result<_> {
+                Ok(ExprWithSource::new(
+                    expression_before_rename(
+                        &condition.expr,
+                        &input_field_names,
+                        &resolved_input_schema,
+                        true,
+                    )?,
+                    condition.source,
+                ))
+            })
+            .transpose()?;
         let target_scan = LogicalPlan::TableScan(
             TableScanBuilder::new(table_reference_from_parts(&table_name), table_source).build()?,
         );
 
         let write_node = sail_logical_plan::row_level::RowLevelWriteNode::new_delete(
             Arc::new(target_scan),
-            raw_input_schema,
+            sail_common_datafusion::datasource::RowLevelWriteMode::MergeOnRead,
             condition,
             target,
         )
@@ -760,7 +786,8 @@ pub async fn create_iceberg_provider_concrete(
     metadata_location: Option<String>,
     catalog_managed_table: bool,
 ) -> Result<Arc<IcebergTableProvider>> {
-    let metadata_location = catalog_managed_table.then_some(metadata_location).flatten();
+    let metadata_location =
+        resolve_iceberg_metadata_location(None, metadata_location, catalog_managed_table)?;
     let table = Table::load_with_metadata_location(ctx, table_url, metadata_location).await?;
     let provider = table.to_provider(&options)?;
     Ok(Arc::new(provider))
@@ -787,14 +814,13 @@ async fn build_iceberg_provider(
     let metadata_location = metadata_location_from_options(&options);
     let catalog_managed_table = catalog_managed_iceberg_from_options(&options);
     let iceberg_options = IcebergReadOptions::resolve(ctx, options)?;
-    create_iceberg_provider_concrete(
-        ctx,
-        table_url,
-        iceberg_options,
+    let metadata_location = resolve_iceberg_metadata_location(
+        lakehouse_table.as_ref(),
         metadata_location,
         catalog_managed_table,
-    )
-    .await
+    )?;
+    let table = Table::load_with_metadata_location(ctx, table_url, metadata_location).await?;
+    Ok(Arc::new(table.to_provider(&iceberg_options)?))
 }
 
 fn validate_iceberg_read_lakehouse_context(
@@ -1118,6 +1144,44 @@ pub fn metadata_location_from_options(options: &[OptionLayer]) -> Option<String>
     })
 }
 
+/// Resolves the authoritative Iceberg metadata pointer without downgrading a
+/// catalog-owned pointer to storage discovery.
+pub(crate) fn resolve_iceberg_metadata_location(
+    context: Option<&LakehouseExecutionContext>,
+    catalog_metadata_location: Option<String>,
+    catalog_managed_table: bool,
+) -> Result<Option<String>> {
+    let requires_catalog_pointer = match context.map(|context| context.pointer) {
+        Some(MetadataPointerAuthority::StorageDiscovery) => catalog_managed_table,
+        Some(
+            MetadataPointerAuthority::CatalogPropertyCas
+            | MetadataPointerAuthority::IcebergRest
+            | MetadataPointerAuthority::VersionedCatalog
+            | MetadataPointerAuthority::ReadOnlyVirtual,
+        ) => true,
+        Some(MetadataPointerAuthority::DeltaRatifiedCommits) => {
+            return plan_err!(
+                "Delta ratified metadata pointer authority cannot be used for an Iceberg table"
+            );
+        }
+        None => catalog_managed_table,
+    };
+    if !requires_catalog_pointer {
+        return Ok(None);
+    }
+
+    let metadata_location = context
+        .filter(|context| context.pointer == MetadataPointerAuthority::ReadOnlyVirtual)
+        .and_then(|context| context.cross_format.as_ref())
+        .and_then(|metadata| metadata.generated_metadata_location.clone())
+        .or(catalog_metadata_location);
+    metadata_location.map(Some).ok_or_else(|| {
+        DataFusionError::Plan(
+            "catalog-authoritative Iceberg table has no metadata location".to_string(),
+        )
+    })
+}
+
 pub(crate) fn catalog_managed_iceberg_from_properties(properties: &[(String, String)]) -> bool {
     properties.iter().any(|(key, value)| {
         let key = key.trim();
@@ -1307,6 +1371,37 @@ mod tests {
             "metadata.table-uuid".to_string(),
             "9f7c2fc5-2e7d-4a6a-b3f9-0f6a47a3522c".to_string(),
         )]));
+    }
+
+    #[test]
+    fn catalog_metadata_pointer_never_downgrades_to_storage_discovery() -> Result<()> {
+        let context = LakehouseExecutionContext::catalog_table_context(
+            CatalogProviderId("rest".to_string()),
+            vec!["rest".to_string(), "db".to_string(), "tbl".to_string()],
+            CatalogTableIdentity {
+                table_id: Some("12345678-1234-1234-1234-123456789012".to_string()),
+                table_uri: Some("s3://bucket/table".to_string()),
+            },
+            LakehouseOperation::Read,
+            LakehouseFormat::Iceberg,
+            LakehouseAuthority::CatalogAuthoritative {
+                lifecycle: TableLifecycle::External,
+                pointer: MetadataPointerAuthority::IcebergRest,
+                commit: CommitAuthority::IcebergRestCommit,
+            },
+            ScanAuthority::ClientLakeSource,
+        );
+
+        assert!(resolve_iceberg_metadata_location(Some(&context), None, false).is_err());
+        assert_eq!(
+            resolve_iceberg_metadata_location(
+                Some(&context),
+                Some("s3://bucket/table/metadata/v1.metadata.json".to_string()),
+                false,
+            )?,
+            Some("s3://bucket/table/metadata/v1.metadata.json".to_string())
+        );
+        Ok(())
     }
 
     #[test]

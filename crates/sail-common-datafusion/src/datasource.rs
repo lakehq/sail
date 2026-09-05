@@ -119,19 +119,48 @@ pub enum RowLevelOperationType {
 }
 
 impl RowLevelOperationType {
-    pub fn as_i32(self) -> i32 {
+    pub const fn as_i32(self) -> i32 {
         self as i32
     }
 }
 
-/// Materialization strategy for row-level modifications.
+impl TryFrom<i32> for RowLevelOperationType {
+    type Error = i32;
+
+    fn try_from(value: i32) -> std::result::Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Copy),
+            1 => Ok(Self::Delete),
+            2 => Ok(Self::Update),
+            3 => Ok(Self::Insert),
+            4 => Ok(Self::Noop),
+            5 => Ok(Self::MatchedDelete),
+            6 => Ok(Self::MatchedUpdate),
+            7 => Ok(Self::NotMatchedBySourceDelete),
+            8 => Ok(Self::NotMatchedBySourceUpdate),
+            9 => Ok(Self::SourceMetric),
+            value => Err(value),
+        }
+    }
+}
+
+impl TryFrom<i64> for RowLevelOperationType {
+    type Error = i64;
+
+    fn try_from(value: i64) -> std::result::Result<Self, Self::Error> {
+        let value_i32 = i32::try_from(value).map_err(|_| value)?;
+        Self::try_from(value_i32).map_err(i64::from)
+    }
+}
+
+/// Storage mode selected by a lake source for a row-level write.
 ///
-/// - `Eager`: rewrite affected files (Copy-on-Write).
-/// - `MergeOnRead`: write delete files at write time, merge at read time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum MergeStrategy {
-    #[default]
-    Eager,
+/// Metadata-only optimizations may bypass row materialization in either mode.
+/// When rows must be materialized, `CopyOnWrite` rewrites affected data files,
+/// while `MergeOnRead` writes row-level delete artifacts alongside new data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd)]
+pub enum RowLevelWriteMode {
+    CopyOnWrite,
     MergeOnRead,
 }
 
@@ -251,10 +280,14 @@ impl SinkInfo {
 }
 
 /// Information required to create a logical DELETE plan for a lake source.
-#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct DeleteInfo {
+    pub target_plan: Arc<LogicalPlan>,
     pub target: RowLevelTarget,
     pub condition: Option<ExprWithSource>,
+    pub input_schema: DFSchemaRef,
+    pub resolved_target_field_names: Vec<String>,
+    pub case_sensitive: bool,
 }
 
 /// Information required to create a logical UPDATE plan for a lake source.
@@ -266,6 +299,7 @@ pub struct UpdateInfo {
     pub assignments: Vec<UpdateAssignment>,
     pub input_schema: DFSchemaRef,
     pub resolved_target_field_names: Vec<String>,
+    pub case_sensitive: bool,
     pub generated_column_exprs: Vec<(String, Expr)>,
     pub check_constraint_exprs: Vec<DeltaCheckConstraintExpr>,
 }
@@ -610,6 +644,35 @@ mod tests {
     use async_trait::async_trait;
 
     use super::*;
+
+    #[test]
+    fn row_level_operation_type_decodes_typed_values() {
+        let operations = [
+            RowLevelOperationType::Copy,
+            RowLevelOperationType::Delete,
+            RowLevelOperationType::Update,
+            RowLevelOperationType::Insert,
+            RowLevelOperationType::Noop,
+            RowLevelOperationType::MatchedDelete,
+            RowLevelOperationType::MatchedUpdate,
+            RowLevelOperationType::NotMatchedBySourceDelete,
+            RowLevelOperationType::NotMatchedBySourceUpdate,
+            RowLevelOperationType::SourceMetric,
+        ];
+
+        for operation in operations {
+            assert_eq!(
+                RowLevelOperationType::try_from(operation.as_i32()),
+                Ok(operation)
+            );
+            assert_eq!(
+                RowLevelOperationType::try_from(i64::from(operation.as_i32())),
+                Ok(operation)
+            );
+        }
+        assert_eq!(RowLevelOperationType::try_from(10_i32), Err(10));
+        assert_eq!(RowLevelOperationType::try_from(i64::MAX), Err(i64::MAX));
+    }
 
     struct TestDataSource;
 
