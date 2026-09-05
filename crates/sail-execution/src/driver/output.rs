@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{fmt, mem};
@@ -65,6 +66,8 @@ impl JobOutputItem {
 
 struct JobOutputStream {
     state: JobOutputState,
+    /// Keep output history after completed streams have been removed from `SelectAll`.
+    emitted: HashSet<OutputPartition>,
 }
 
 impl JobOutputStream {
@@ -74,6 +77,7 @@ impl JobOutputStream {
                 receiver,
                 inner: Box::pin(SelectAll::new()),
             },
+            emitted: HashSet::new(),
         }
     }
 }
@@ -162,7 +166,7 @@ impl Stream for JobOutputStream {
                     )))));
                 }
                 Poll::Ready(Some(JobOutputItem::Stream { key, stream })) => {
-                    if inner.iter().any(|s| s.conflicts_with(&key)) {
+                    if self.emitted.contains(&OutputPartition::from(&key)) {
                         self.state = JobOutputState::Failed;
                         return Poll::Ready(Some(Err(DataFusionError::External(Box::new(
                             TaskStreamError::Unknown(format!(
@@ -174,6 +178,10 @@ impl Stream for JobOutputStream {
                     inner.iter_mut().for_each(|s| s.mute_if_needed(&key));
                     inner.push(TaskStreamWrapper::new(key, stream));
                     self.state = JobOutputState::Active { receiver, inner };
+                    // Receiving an item does not register the receiver's waker. Even if
+                    // the new stream is immediately empty, poll again for queued items
+                    // or channel closure before waiting for further notifications.
+                    cx.waker().wake_by_ref();
                 }
                 Poll::Ready(None) => {
                     self.state = JobOutputState::Draining { inner };
@@ -183,7 +191,7 @@ impl Stream for JobOutputStream {
                 self.state = state;
             }
         }
-        match &mut self.state {
+        let poll = match &mut self.state {
             JobOutputState::Active { inner, receiver: _ } => {
                 match inner.as_mut().poll_next(cx) {
                     Poll::Pending => Poll::Pending,
@@ -192,9 +200,7 @@ impl Stream for JobOutputStream {
                         // because new streams may still be added.
                         Poll::Pending
                     }
-                    Poll::Ready(Some(result)) => Poll::Ready(Some(
-                        result.map_err(|e| DataFusionError::External(Box::new(e))),
-                    )),
+                    Poll::Ready(Some(result)) => Poll::Ready(Some(result)),
                 }
             }
             JobOutputState::Modifying => Poll::Pending,
@@ -204,11 +210,37 @@ impl Stream for JobOutputStream {
                     self.state = JobOutputState::Completed;
                     Poll::Ready(None)
                 }
-                Poll::Ready(Some(result)) => Poll::Ready(Some(
-                    result.map_err(|e| DataFusionError::External(Box::new(e))),
-                )),
+                Poll::Ready(Some(result)) => Poll::Ready(Some(result)),
             },
             JobOutputState::Completed | JobOutputState::Failed => Poll::Ready(None),
+        };
+        poll.map(|item| {
+            item.map(|(partition, result)| {
+                if result.as_ref().is_ok_and(|batch| batch.num_rows() > 0) {
+                    self.emitted.insert(partition);
+                }
+                result.map_err(|e| DataFusionError::External(Box::new(e)))
+            })
+        })
+    }
+}
+
+/// Identifies an output channel across task attempts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct OutputPartition {
+    job_id: JobId,
+    stage: usize,
+    partition: usize,
+    channel: usize,
+}
+
+impl From<&TaskStreamKey> for OutputPartition {
+    fn from(key: &TaskStreamKey) -> Self {
+        Self {
+            job_id: key.job_id,
+            stage: key.stage,
+            partition: key.partition,
+            channel: key.channel,
         }
     }
 }
@@ -216,7 +248,6 @@ impl Stream for JobOutputStream {
 struct TaskStreamWrapper {
     key: TaskStreamKey,
     inner: Option<TaskStreamSource>,
-    count: usize,
 }
 
 impl TaskStreamWrapper {
@@ -224,16 +255,7 @@ impl TaskStreamWrapper {
         Self {
             key,
             inner: Some(inner),
-            count: 0,
         }
-    }
-
-    fn conflicts_with(&self, key: &TaskStreamKey) -> bool {
-        self.key.job_id == key.job_id
-            && self.key.stage == key.stage
-            && self.key.partition == key.partition
-            && self.key.channel == key.channel
-            && self.count > 0
     }
 
     fn mute_if_needed(&mut self, key: &TaskStreamKey) {
@@ -248,16 +270,87 @@ impl TaskStreamWrapper {
 }
 
 impl Stream for TaskStreamWrapper {
-    type Item = TaskStreamResult<RecordBatch>;
+    type Item = (OutputPartition, TaskStreamResult<RecordBatch>);
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let Some(inner) = &mut self.inner else {
             return Poll::Ready(None);
         };
         let poll = inner.as_mut().poll_next(cx);
-        if let Poll::Ready(Some(Ok(ref batch))) = poll {
-            self.count += batch.num_rows();
+        poll.map(|item| item.map(|result| (OutputPartition::from(&self.key), result)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use futures::task::{ArcWake, waker};
+
+    use super::*;
+
+    #[derive(Default)]
+    struct WakeCounter(AtomicUsize);
+
+    impl ArcWake for WakeCounter {
+        fn wake_by_ref(arc_self: &Arc<Self>) {
+            arc_self.0.fetch_add(1, Ordering::Relaxed);
         }
-        poll
+    }
+
+    #[test]
+    fn empty_stream_does_not_hide_channel_closure() {
+        let (sender, receiver) = mpsc::channel(2);
+        assert!(sender.try_send(empty_stream()).is_ok());
+        drop(sender);
+        let mut output = JobOutputStream::new(receiver);
+        let counter = Arc::new(WakeCounter::default());
+        let waker = waker(counter.clone());
+        let mut cx = Context::from_waker(&waker);
+
+        assert!(Pin::new(&mut output).poll_next(&mut cx).is_pending());
+        assert!(counter.0.load(Ordering::Relaxed) > 0);
+        assert!(matches!(
+            Pin::new(&mut output).poll_next(&mut cx),
+            Poll::Ready(None)
+        ));
+    }
+
+    #[test]
+    fn empty_stream_does_not_hide_queued_failure() {
+        let (sender, receiver) = mpsc::channel(2);
+        assert!(sender.try_send(empty_stream()).is_ok());
+        assert!(
+            sender
+                .try_send(JobOutputItem::Error {
+                    cause: CommonErrorCause::Execution("test failure".to_string()),
+                })
+                .is_ok()
+        );
+        let mut output = JobOutputStream::new(receiver);
+        let counter = Arc::new(WakeCounter::default());
+        let waker = waker(counter.clone());
+        let mut cx = Context::from_waker(&waker);
+
+        assert!(Pin::new(&mut output).poll_next(&mut cx).is_pending());
+        assert!(counter.0.load(Ordering::Relaxed) > 0);
+        assert!(matches!(
+            Pin::new(&mut output).poll_next(&mut cx),
+            Poll::Ready(Some(Err(_)))
+        ));
+    }
+
+    fn empty_stream() -> JobOutputItem {
+        JobOutputItem::Stream {
+            key: TaskStreamKey {
+                job_id: JobId::from(1),
+                stage: 0,
+                partition: 0,
+                attempt: 0,
+                channel: 0,
+            },
+            stream: Box::pin(futures::stream::empty()),
+        }
     }
 }

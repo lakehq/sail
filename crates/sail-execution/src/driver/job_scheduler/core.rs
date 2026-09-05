@@ -494,7 +494,12 @@ impl JobScheduler {
 
         let mut tasks: Vec<(TaskPlacement, TaskSet)> = vec![];
         for (key, value) in stage_groups {
-            for entries in value.buckets {
+            // A region may contain only some stage partitions. Empty buckets need no task slots.
+            for entries in value
+                .buckets
+                .into_iter()
+                .filter(|entries| !entries.is_empty())
+            {
                 tasks.push((key.placement, TaskSet { entries }));
             }
         }
@@ -623,10 +628,10 @@ impl JobScheduler {
             stage: None,
             context: job.context.clone(),
         });
-        if matches!(job.state, JobState::Draining) {
-            job.state = JobState::Succeeded;
-        } else {
-            job.state = JobState::Canceled;
+        match job.state {
+            JobState::Draining => job.state = JobState::Succeeded,
+            JobState::Running { .. } => job.state = JobState::Canceled,
+            JobState::Succeeded | JobState::Failed | JobState::Canceled => {}
         }
         event_reporter.report(SystemEvent::JobUpdated {
             session_id,

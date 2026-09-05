@@ -288,6 +288,15 @@ impl WorkerPool {
         }
     }
 
+    pub fn mark_worker_idle(&mut self, ctx: &mut ActorContext<DriverActor>, worker_id: WorkerId) {
+        if let Some(worker) = self.workers.get_mut(&worker_id)
+            && let WorkerState::Running { updated_at, .. } = &mut worker.state
+        {
+            *updated_at = Instant::now();
+            Self::schedule_idle_worker_probe(ctx, worker_id, worker, &self.options);
+        }
+    }
+
     pub fn get_worker_last_update(&mut self, worker_id: WorkerId) -> Option<Instant> {
         let Some(worker) = self.workers.get_mut(&worker_id) else {
             warn!("worker {worker_id} not found");
