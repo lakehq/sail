@@ -171,8 +171,6 @@ Feature: when output schema
   @function(nullability)
   Rule: Output schema
 
-    # TODO: Fix pre-existing CASE nullability: ELSE is encoded as WHEN true with no else_expr.
-    @sail-bug
     Scenario: a non-null literal input to when yields the schema Spark declares
       When query
         """

@@ -27,16 +27,19 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
                 conditions.push(condition);
                 branch_values.push(result);
             }
-            _ => {
-                // FIXME: Preserve ELSE explicitly to match Spark's nullability.
-                // WHEN true leaves an implicit NULL fallback in DataFusion's schema.
-                conditions.push(lit(true));
+            None => {
+                // The unpaired final argument is ELSE.
                 branch_values.push(condition);
                 break;
             }
         }
     }
-    let branch_values = coerce_conditional_values(branch_values, &function_context)?;
+    let mut branch_values = coerce_conditional_values(branch_values, &function_context)?;
+    let else_expr = if branch_values.len() > conditions.len() {
+        branch_values.pop().map(Box::new)
+    } else {
+        None
+    };
     let when_then_expr = conditions
         .into_iter()
         .zip(branch_values)
@@ -45,7 +48,7 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr::Expr::Case(expr::Case {
         expr: None, // Expr::Case in from_ast_expression incorporates into when_then_expr
         when_then_expr,
-        else_expr: None,
+        else_expr,
     }))
 }
 
