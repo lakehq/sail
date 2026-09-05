@@ -214,11 +214,6 @@ impl PlanResolver<'_> {
         let mut matching_names = Vec::new();
 
         for (qualifier, field) in schema.iter() {
-            // Skip qualified columns if no qualifier is expected
-            if qualifier.is_some() {
-                continue;
-            }
-
             // Get field info
             let Ok(info) = state.get_field_info(field.name()) else {
                 continue;
@@ -232,7 +227,10 @@ impl PlanResolver<'_> {
             // Check if the field name matches the pattern and plan_id
             let field_name = info.name();
             if pattern.is_match(field_name) && info.has_plan_id(plan_id) {
-                matching_columns.push(expr::Expr::Column(Column::new_unqualified(field.name())));
+                matching_columns.push(expr::Expr::Column(Column::new(
+                    qualifier.cloned(),
+                    field.name(),
+                )));
                 matching_names.push(field_name.to_string());
             }
         }

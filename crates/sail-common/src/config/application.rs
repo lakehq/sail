@@ -209,6 +209,7 @@ pub struct ClusterConfig {
     pub worker_heartbeat_interval_secs: u64,
     pub worker_heartbeat_timeout_secs: u64,
     pub worker_launch_timeout_secs: u64,
+    pub worker_launch_retry_strategy: RetryStrategy,
     pub worker_task_slots: usize,
     pub task_launch_timeout_secs: u64,
     pub task_stream_buffer: usize,
