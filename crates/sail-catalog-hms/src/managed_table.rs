@@ -101,12 +101,12 @@ fn validate_replacement_table(
         .flatten();
     let partitions = replacement.partition_keys.as_deref().into_iter().flatten();
     for field in columns.chain(partitions) {
-        if let Some(name) = field.name.as_deref() {
-            if !seen.insert(name.to_ascii_lowercase()) {
-                return Err(CatalogError::InvalidArgument(format!(
-                    "Cannot replace table '{db_name}.{table_name}': duplicate column name '{name}'"
-                )));
-            }
+        if let Some(name) = field.name.as_deref()
+            && !seen.insert(name.to_ascii_lowercase())
+        {
+            return Err(CatalogError::InvalidArgument(format!(
+                "Cannot replace table '{db_name}.{table_name}': duplicate column name '{name}'"
+            )));
         }
     }
     Ok(())

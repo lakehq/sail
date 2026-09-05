@@ -94,7 +94,7 @@ def test_invalid_replacement_preserves_original_partitioning(
     )
     spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'eu'), (2, 'us')")
 
-    with pytest.raises(Exception, match="(?i)duplicate|already exists|COLUMN_ALREADY_EXISTS"):
+    with pytest.raises(Exception, match=r"(?i)duplicate|already exists|COLUMN_ALREADY_EXISTS"):
         spark.sql(
             f"""
             CREATE OR REPLACE TABLE {table_fqn} (id INT, id INT) USING PARQUET
