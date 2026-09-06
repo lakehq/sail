@@ -1,5 +1,72 @@
 Feature: when output schema
 
+  Rule: Preserve collected values when conditional types resolve during analysis
+
+    Scenario Outline: Nested CASE and IF preserve string branches containing <text>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT
+          CASE WHEN p THEN CASE WHEN q THEN 1 ELSE '<text>' END ELSE 2L END AS case_case,
+          CASE WHEN p THEN if(q, 1, '<text>') ELSE 2L END AS case_if,
+          if(p, CASE WHEN q THEN 1 ELSE '<text>' END, 2L) AS if_case,
+          if(p, if(q, 1, '<text>'), 2L) AS if_if
+        FROM VALUES (true, false), (false, false) AS t(p, q)
+        """
+      Then query result collected
+        | case_case | case_if | if_case | if_if  |
+        | <text>    | <text>  | <text>  | <text> |
+        | 2         | 2       | 2       | 2      |
+
+      Examples:
+        | text |
+        | a    |
+        | 03   |
+
+    Scenario Outline: Projected CASE and IF preserve string branches containing <text>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT
+          CASE WHEN p THEN c ELSE 2L END AS case_result,
+          if(p, i, 2L) AS if_result
+        FROM (
+          SELECT p,
+                 CASE WHEN q THEN 1 ELSE '<text>' END AS c,
+                 if(q, 1, '<text>') AS i
+          FROM VALUES (true, false), (false, false) AS t(p, q)
+        ) AS s
+        """
+      Then query result collected
+        | case_result | if_result |
+        | <text>      | <text>    |
+        | 2           | 2         |
+
+      Examples:
+        | text |
+        | a    |
+        | 03   |
+
+    @spark-4
+    Scenario Outline: Decimal conditional typeof preserves integral capacity with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT
+          typeof(CASE WHEN true THEN CAST(1 AS DECIMAL(38,0))
+                      ELSE CAST(0.5 AS DECIMAL(38,1)) END) AS case_type,
+          typeof(if(true, CAST(1 AS DECIMAL(38,0)),
+                          CAST(0.5 AS DECIMAL(38,1)))) AS if_type
+        """
+      Then query result collected
+        | case_type     | if_type       |
+        | decimal(38,0) | decimal(38,0) |
+
+      Examples:
+        | ansi  |
+        | false |
+        | true  |
+
   Rule: Spark-compatible coercion for mixed string and temporal branches
 
     Scenario: CASE coerces date branches to string and remains usable by to_date when ANSI is disabled
