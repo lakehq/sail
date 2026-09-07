@@ -5,6 +5,7 @@ use datafusion::prelude::SessionContext;
 use crate::config::PlanConfig;
 
 mod command;
+pub(crate) mod conditional;
 mod constraint;
 mod data_type;
 mod expression;
@@ -15,6 +16,7 @@ pub mod plan;
 mod query;
 mod schema;
 mod state;
+pub(crate) use state::ConditionalTypeContext;
 mod tree;
 
 pub struct PlanResolver<'a> {

@@ -92,6 +92,7 @@ use sail_common_datafusion::array::record_batch::{read_record_batches, write_rec
 use sail_common_datafusion::catalog::{
     CatalogPartitionField, LakehouseExecutionContext, PartitionTransform,
 };
+use sail_common_datafusion::conditional_type_hint::SparkConditionalTypeHint;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::schema_evolution::{
     SchemaEvolutionCastColumnExpr, SchemaEvolutionPhysicalExprAdapterFactoryWithMatching,
@@ -3195,6 +3196,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_cast_string_to_int32" => {
                 Ok(Arc::new(ScalarUDF::from(SparkCastStringToInt32::new())))
             }
+            "spark_conditional_type_hint" => {
+                Ok(Arc::new(ScalarUDF::from(SparkConditionalTypeHint::new())))
+            }
             "vector_inner_product" => Ok(Arc::new(ScalarUDF::from(VectorInnerProduct::new()))),
             "bitmap_count" => Ok(Arc::new(ScalarUDF::from(BitmapCount::new()))),
             "format_string" => Ok(Arc::new(ScalarUDF::from(FormatStringFunc::new()))),
@@ -3387,6 +3391,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkArrayPosition>()
             || node_inner.is::<SparkArrayCompact>()
             || node_inner.is::<SparkCastStringToInt32>()
+            || node_inner.is::<SparkConditionalTypeHint>()
             || node_inner.is::<VectorInnerProduct>()
             || node_inner.is::<BitmapCount>()
             || node_inner.is::<FormatStringFunc>()
@@ -6162,6 +6167,40 @@ mod tests {
 
         downcast_udf::<SparkCastStringToInt32>(&decoded, "SparkCastStringToInt32")?;
         assert_eq!(decoded.name(), "spark_cast_string_to_int32");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_conditional_type_hint_udf() -> Result<()> {
+        use datafusion::logical_expr::ReturnFieldArgs;
+
+        let decoded = round_trip_udf(ScalarUDF::from(SparkConditionalTypeHint::new()))?;
+        downcast_udf::<SparkConditionalTypeHint>(&decoded, "SparkConditionalTypeHint")?;
+        assert_eq!(decoded.name(), "spark_conditional_type_hint");
+
+        let value = Arc::new(
+            Field::new("value", DataType::Decimal128(38, 0), false)
+                .with_metadata(HashMap::from([("source".to_string(), "case".to_string())])),
+        );
+        // Field inference virtually coerces the marker even before actual analysis.
+        let fields = [
+            Arc::clone(&value),
+            Arc::new(Field::new("phase", DataType::Boolean, true)),
+            Arc::new(Field::new("hint", DataType::Float64, true)),
+        ];
+        let hint = ScalarValue::Float64(None);
+        for marker in [ScalarValue::Null, ScalarValue::Boolean(None)] {
+            let field = decoded.return_field_from_args(ReturnFieldArgs {
+                arg_fields: &fields,
+                scalar_arguments: &[None, Some(&marker), Some(&hint)],
+            })?;
+            assert_eq!(
+                field.as_ref(),
+                value.as_ref(),
+                "marker {marker:?} must preserve the original value field"
+            );
+        }
 
         Ok(())
     }

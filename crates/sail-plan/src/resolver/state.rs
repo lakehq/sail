@@ -7,6 +7,7 @@ use datafusion_expr::LogicalPlan;
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
+use crate::function::ConditionalTypeObservation;
 use crate::resolver::expression::NamedExpr;
 
 /// The field information for fields in the logical plan.
@@ -74,6 +75,8 @@ pub(super) struct PlanResolverState {
     fields: HashMap<String, FieldInfo>,
     /// The outer query schema for the current subquery.
     outer_query_schema: Option<DFSchemaRef>,
+    /// Relational inputs available only while observing conditional expression types.
+    conditional_type_context: ConditionalTypeContext,
     /// The aggregate state for the current query.
     aggregate_state: AggregateState,
     /// The CTEs for the current query.
@@ -109,6 +112,7 @@ impl PlanResolverState {
             next_id: 0,
             fields: HashMap::new(),
             outer_query_schema: None,
+            conditional_type_context: ConditionalTypeContext::default(),
             aggregate_state: AggregateState::default(),
             ctes: HashMap::new(),
             subquery_references: HashMap::new(),
@@ -228,6 +232,21 @@ impl PlanResolverState {
         QueryScope::new(self, schema)
     }
 
+    pub fn conditional_type_context(&self) -> &ConditionalTypeContext {
+        &self.conditional_type_context
+    }
+
+    pub fn enter_conditional_input_scope(
+        &mut self,
+        inputs: Vec<Arc<LogicalPlan>>,
+    ) -> ConditionalInputScope<'_> {
+        let previous_inputs = std::mem::replace(&mut self.conditional_type_context.inputs, inputs);
+        ConditionalInputScope {
+            state: self,
+            previous_inputs,
+        }
+    }
+
     pub fn enter_aggregate_scope(&mut self, aggregate_state: AggregateState) -> AggregateScope<'_> {
         AggregateScope::new(self, aggregate_state)
     }
@@ -309,8 +328,9 @@ impl PlanResolverState {
     pub fn enter_lambda_scope(
         &mut self,
         params: Vec<(String, Option<FieldRef>)>,
+        observations: Vec<(String, Option<ConditionalTypeObservation>)>,
     ) -> LambdaScope<'_> {
-        LambdaScope::new(self, params)
+        LambdaScope::new(self, params, observations)
     }
 
     /// Resolves a name against the in-scope lambda parameters, innermost first.
@@ -376,17 +396,50 @@ impl Drop for ParamValuesScope<'_> {
     }
 }
 
+/// Producing plans visible while observing conditional types in one expression scope.
+/// An outer context retains the scope of correlated producers without publishing provenance.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub(crate) struct ConditionalTypeContext {
+    pub inputs: Vec<Arc<LogicalPlan>>,
+    pub outer: Option<Arc<ConditionalTypeContext>>,
+    /// Mirrors lexical lambda frames without changing their execution fields.
+    /// An unknown inner parameter still shadows a known outer parameter.
+    pub lambda_parameters: Vec<Vec<(String, Option<ConditionalTypeObservation>)>>,
+}
+
+pub(crate) struct ConditionalInputScope<'a> {
+    state: &'a mut PlanResolverState,
+    previous_inputs: Vec<Arc<LogicalPlan>>,
+}
+
+impl ConditionalInputScope<'_> {
+    pub(crate) fn state(&mut self) -> &mut PlanResolverState {
+        self.state
+    }
+}
+
+impl Drop for ConditionalInputScope<'_> {
+    fn drop(&mut self) {
+        self.state.conditional_type_context.inputs = std::mem::take(&mut self.previous_inputs);
+    }
+}
+
 pub(crate) struct QueryScope<'a> {
     state: &'a mut PlanResolverState,
     previous_outer_query_schema: Option<DFSchemaRef>,
+    previous_conditional_type_context: ConditionalTypeContext,
 }
 
 impl<'a> QueryScope<'a> {
     fn new(state: &'a mut PlanResolverState, schema: DFSchemaRef) -> Self {
         let previous_outer_query_schema = state.outer_query_schema.replace(schema);
+        let previous_conditional_type_context = std::mem::take(&mut state.conditional_type_context);
+        state.conditional_type_context.outer =
+            Some(Arc::new(previous_conditional_type_context.clone()));
         Self {
             state,
             previous_outer_query_schema,
+            previous_conditional_type_context,
         }
     }
 
@@ -398,6 +451,8 @@ impl<'a> QueryScope<'a> {
 impl Drop for QueryScope<'_> {
     fn drop(&mut self) {
         self.state.outer_query_schema = self.previous_outer_query_schema.take();
+        self.state.conditional_type_context =
+            std::mem::take(&mut self.previous_conditional_type_context);
     }
 }
 
@@ -483,8 +538,16 @@ pub(crate) struct LambdaScope<'a> {
 }
 
 impl<'a> LambdaScope<'a> {
-    fn new(state: &'a mut PlanResolverState, params: Vec<(String, Option<FieldRef>)>) -> Self {
+    fn new(
+        state: &'a mut PlanResolverState,
+        params: Vec<(String, Option<FieldRef>)>,
+        observations: Vec<(String, Option<ConditionalTypeObservation>)>,
+    ) -> Self {
         state.lambda_param_scopes.push(params);
+        state
+            .conditional_type_context
+            .lambda_parameters
+            .push(observations);
         Self { state }
     }
 
@@ -496,6 +559,7 @@ impl<'a> LambdaScope<'a> {
 impl Drop for LambdaScope<'_> {
     fn drop(&mut self) {
         self.state.lambda_param_scopes.pop();
+        self.state.conditional_type_context.lambda_parameters.pop();
     }
 }
 

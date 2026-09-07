@@ -27,6 +27,9 @@ impl PlanResolver<'_> {
         // Resolve the right side in a new query scope so that column references
         // to the left side are treated as outer references (OuterReferenceColumn).
         let right = {
+            let mut conditional_scope =
+                state.enter_conditional_input_scope(vec![Arc::new(left.clone())]);
+            let state = conditional_scope.state();
             let mut scope = state.enter_query_scope(left.schema().clone());
             self.resolve_query_plan(right, scope.state()).await?
         };
@@ -68,6 +71,11 @@ impl PlanResolver<'_> {
         )?);
 
         let condition = if let Some(cond) = join_condition {
+            let mut conditional_scope = state.enter_conditional_input_scope(vec![
+                Arc::new(left.clone()),
+                Arc::new(right.clone()),
+            ]);
+            let state = conditional_scope.state();
             Some(
                 self.resolve_expression(cond, &join_schema, state)
                     .await?

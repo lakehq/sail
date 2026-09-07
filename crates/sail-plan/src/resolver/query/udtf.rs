@@ -39,6 +39,9 @@ impl PlanResolver<'_> {
         let function_name: String = function_name.into();
         let function = self.resolve_python_udtf(function, state)?;
         let input = self.resolve_query_empty(true)?;
+        let mut conditional_scope =
+            state.enter_conditional_input_scope(vec![Arc::new(input.clone())]);
+        let state = conditional_scope.state();
         let (arguments, kwargs) = Self::extract_kwargs(arguments);
         let arguments = self
             .resolve_named_expressions(arguments, input.schema(), state)

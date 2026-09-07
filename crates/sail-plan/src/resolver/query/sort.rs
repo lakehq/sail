@@ -239,6 +239,9 @@ impl PlanResolver<'_> {
         sort: &spec::SortOrder,
         state: &mut PlanResolverState,
     ) -> PlanResult<Sort> {
+        let mut conditional_scope =
+            state.enter_conditional_input_scope(vec![Arc::new(plan.clone())]);
+        let state = conditional_scope.state();
         let sort_expr = self
             .resolve_sort_order(sort.clone(), true, plan.schema(), state)
             .await;

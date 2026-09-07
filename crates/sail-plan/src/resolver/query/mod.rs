@@ -67,6 +67,8 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         use spec::QueryNode;
 
+        let mut conditional_scope = state.enter_conditional_input_scope(vec![]);
+        let state = conditional_scope.state();
         let plan_id = plan.plan_id;
         let plan = match plan.node {
             QueryNode::Read {

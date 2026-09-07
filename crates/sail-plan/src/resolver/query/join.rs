@@ -99,6 +99,11 @@ impl PlanResolver<'_> {
                     right.schema(),
                     &JoinType::Inner,
                 )?);
+                let mut conditional_scope = state.enter_conditional_input_scope(vec![
+                    Arc::new(left.clone()),
+                    Arc::new(right.clone()),
+                ]);
+                let state = conditional_scope.state();
                 let condition = self
                     .resolve_expression(condition, &join_schema, state)
                     .await?
@@ -246,6 +251,8 @@ impl PlanResolver<'_> {
                                 plan_config: &self.config,
                                 session_context: self.ctx,
                                 schema: &join_schema,
+                                conditional_type_context:
+                                    &crate::resolver::state::ConditionalTypeContext::default(),
                             },
                         })?;
                         Ok(expression.alias(state.register_field_name(name)))

@@ -153,6 +153,9 @@ impl PlanResolver<'_> {
             .await?;
 
         if name.eq_ignore_ascii_case("COALESCE") {
+            let mut conditional_scope =
+                state.enter_conditional_input_scope(vec![Arc::new(input.clone())]);
+            let state = conditional_scope.state();
             let num_partitions = self
                 .resolve_hint_partition_count(&name, &parameters, input.schema(), state)
                 .await?;

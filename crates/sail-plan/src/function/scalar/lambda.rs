@@ -1,7 +1,8 @@
+use std::any::Any;
 use std::sync::{Arc, LazyLock};
 
 use datafusion_common::ScalarValue;
-use datafusion_common::arrow::datatypes::FieldRef;
+use datafusion_common::arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_expr::expr::{HigherOrderFunction, Lambda, LambdaVariable};
 use datafusion_expr::{HigherOrderUDF, LambdaParametersProgress, ValueOrLambda, expr, lit};
@@ -14,6 +15,7 @@ use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
 use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 
+use super::conditional::{ConditionalTypeObservation, contains_native_type};
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
@@ -64,14 +66,7 @@ pub(crate) fn is_higher_order_function(name: &str) -> bool {
     )
 }
 
-/// Returns the lambda parameter fields of a built-in higher-order function, one
-/// set per lambda argument, given the fields of its arguments (`None` for the
-/// lambda arguments themselves). Used by the resolver to type lambda variables
-/// before resolving lambda bodies.
-pub(crate) fn get_lambda_parameters(
-    function_name: &str,
-    fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
-) -> PlanResult<Vec<Vec<FieldRef>>> {
+pub(crate) fn get_lambda_udf(function_name: &str) -> PlanResult<&'static Arc<HigherOrderUDF>> {
     let udf = match function_name.trim().to_lowercase().as_str() {
         "aggregate" | "reduce" => &SPARK_ARRAY_AGGREGATE_UDF,
         "filter" => &SPARK_ARRAY_FILTER_UDF,
@@ -85,12 +80,117 @@ pub(crate) fn get_lambda_parameters(
             )));
         }
     };
+    Ok(udf)
+}
+
+/// Returns the lambda parameter fields of a built-in higher-order function, one
+/// set per lambda argument, given the fields of its arguments (`None` for the
+/// lambda arguments themselves). Used by the resolver to type lambda variables
+/// before resolving lambda bodies.
+pub(crate) fn get_lambda_parameters(
+    function_name: &str,
+    fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
+) -> PlanResult<Vec<Vec<FieldRef>>> {
+    let udf = get_lambda_udf(function_name)?;
     match udf.lambda_parameters(0, fields)? {
         LambdaParametersProgress::Complete(params) => Ok(params),
         LambdaParametersProgress::Partial(_) => Err(PlanError::internal(format!(
             "unresolved lambda parameters for function: {function_name}"
         ))),
     }
+}
+
+/// Derives conditional observation frames without replacing execution fields.
+/// Completed plans can contain reordered lambda parameters, so use their actual
+/// UDF instance rather than reconstructing one from its SQL name.
+pub(crate) fn conditional_lambda_parameter_observations(
+    udf: &HigherOrderUDF,
+    fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
+    observations: &[Option<ConditionalTypeObservation>],
+) -> PlanResult<Vec<Vec<ConditionalTypeObservation>>> {
+    let inner: &dyn Any = udf.inner().as_ref();
+    if !(inner.is::<SparkArrayTransform>()
+        || inner.is::<SparkArrayFilter>()
+        || inner.is::<SparkArrayAggregate>()
+        || inner.is::<SparkArrayExists>()
+        || inner.is::<SparkArrayForall>()
+        || inner.is::<SparkArraySort>())
+    {
+        return Err(PlanError::internal(format!(
+            "conditional parameter observations are unavailable for {}",
+            udf.name()
+        )));
+    }
+    let parameters = |view: fn(&ConditionalTypeObservation) -> &DataType| {
+        let observed_fields = fields
+            .iter()
+            .zip(observations)
+            .map(|(field, observation)| match (field, observation) {
+                (ValueOrLambda::Value(field), Some(observation)) => ValueOrLambda::Value(Arc::new(
+                    field
+                        .as_ref()
+                        .clone()
+                        .with_data_type(view(observation).clone()),
+                )),
+                _ => field.clone(),
+            })
+            .collect::<Vec<_>>();
+        match udf.lambda_parameters(0, &observed_fields)? {
+            LambdaParametersProgress::Complete(params) => Ok(params),
+            LambdaParametersProgress::Partial(_) => Err(PlanError::internal(format!(
+                "unresolved conditional observation parameters for {}",
+                udf.name()
+            ))),
+        }
+    };
+    let arrow_params = parameters(|value| &value.arrow)?;
+    let spark_params = parameters(|value| &value.spark)?;
+    let without_opaque_casts_params = parameters(|value| &value.spark_without_opaque_casts)?;
+    let source = |lambda_index: usize, param_index: usize| {
+        if let Some(function) = inner.downcast_ref::<SparkArrayTransform>() {
+            (param_index == usize::from(function.is_index_first())).then_some(0)
+        } else if let Some(function) = inner.downcast_ref::<SparkArrayFilter>() {
+            (param_index == usize::from(function.is_index_first())).then_some(0)
+        } else if let Some(function) = inner.downcast_ref::<SparkArrayAggregate>() {
+            Some(
+                if lambda_index == 0 && param_index == usize::from(!function.is_element_first()) {
+                    0
+                } else {
+                    1
+                },
+            )
+        } else {
+            // EXISTS/FORALL and both sort parameters follow the array element.
+            // Sort's swapped variant changes which element, not its type origin.
+            Some(0)
+        }
+    };
+    Ok(arrow_params
+        .into_iter()
+        .zip(spark_params)
+        .zip(without_opaque_casts_params)
+        .enumerate()
+        .map(|(lambda_index, ((arrow, spark), without_opaque_casts))| {
+            arrow
+                .into_iter()
+                .zip(spark)
+                .zip(without_opaque_casts)
+                .enumerate()
+                .map(|(param_index, ((arrow, spark), without_opaque_casts))| {
+                    ConditionalTypeObservation {
+                        arrow: arrow.data_type().clone(),
+                        spark: spark.data_type().clone(),
+                        spark_without_opaque_casts: without_opaque_casts.data_type().clone(),
+                        contains_native: contains_native_type(arrow.data_type())
+                            || source(lambda_index, param_index)
+                                .and_then(|index| observations.get(index))
+                                .and_then(Option::as_ref)
+                                .is_some_and(|observation| observation.contains_native),
+                    }
+                })
+                .collect()
+        })
+        .collect())
 }
 
 /// Returns whether the lambda body references the given lambda parameter,

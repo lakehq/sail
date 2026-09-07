@@ -76,6 +76,9 @@ impl PlanResolver<'_> {
             .resolve_query_plan_with_hidden_fields(*input, state)
             .await?;
         let schema = input.schema();
+        let mut conditional_scope =
+            state.enter_conditional_input_scope(vec![Arc::new(input.clone())]);
+        let state = conditional_scope.state();
 
         // Resolve the projections, deferring any that reference a grouping output
         // until the grouping is materialized below.
@@ -96,6 +99,9 @@ impl PlanResolver<'_> {
         let (input, grouping, generator_replacements) =
             self.expand_grouping_generators(input, grouping, state)?;
         let schema = input.schema();
+        let mut conditional_scope =
+            state.enter_conditional_input_scope(vec![Arc::new(input.clone())]);
+        let state = conditional_scope.state();
 
         // Resolve the deferred projections (grouping columns are now in scope) and
         // inline any re-used generator expressions.

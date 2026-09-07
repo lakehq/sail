@@ -902,6 +902,7 @@ mod tests {
                     plan_config: &plan_config,
                     session_context: &session_context,
                     schema: &schema,
+                    conditional_type_context: &crate::resolver::ConditionalTypeContext::default(),
                 },
             })?;
 

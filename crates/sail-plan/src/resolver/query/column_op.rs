@@ -195,6 +195,9 @@ impl PlanResolver<'_> {
             _ => None,
         };
         let schema = input.schema();
+        let mut conditional_scope =
+            state.enter_conditional_input_scope(vec![Arc::new(input.clone())]);
+        let state = conditional_scope.state();
         // We use `IndexMap` to ensure the result schema has a deterministic column order.
         let mut aliases: IndexMap<String, AliasEntry> = async {
             let mut results = IndexMap::new();

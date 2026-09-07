@@ -30,6 +30,9 @@ impl PlanResolver<'_> {
             target_plan = self.apply_row_level_table_alias(target_plan, alias.as_ref())?;
         }
         let input_schema = target_plan.schema().clone();
+        let mut conditional_scope =
+            state.enter_conditional_input_scope(vec![Arc::new(target_plan.clone())]);
+        let state = conditional_scope.state();
         let resolved_target_field_names = Self::get_field_names(&input_schema, state)?;
         let condition = match condition {
             Some(condition) => {

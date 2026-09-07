@@ -96,7 +96,18 @@ fn type_of(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         function_context,
     } = input;
     let expr = arguments.one()?;
-    let data_type = expr.get_type(function_context.schema)?;
+    // TODO: Projected conditional columns need their producing expression to
+    // expose a corrected type here; preserve existing column typing until then.
+    let original_type = expr.get_type(function_context.schema)?;
+    let view = super::conditional::conditional_type_view(
+        expr,
+        function_context.schema,
+        function_context.plan_config.ansi_mode,
+        function_context.conditional_type_context,
+    );
+    let data_type = view
+        .and_then(|view| Ok(view.get_type(function_context.schema)?))
+        .unwrap_or(original_type);
     let service = function_context
         .session_context
         .extension::<PlanService>()?;

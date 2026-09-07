@@ -166,6 +166,7 @@ impl PlanResolver<'_> {
                                 plan_config: &self.config,
                                 session_context: self.ctx,
                                 schema,
+                                conditional_type_context: state.conditional_type_context(),
                             },
                         };
                         func(input)?
@@ -225,6 +226,7 @@ impl PlanResolver<'_> {
                                         plan_config: &self.config,
                                         session_context: self.ctx,
                                         schema,
+                                        conditional_type_context: state.conditional_type_context(),
                                     },
                                 };
                                 func(input)?

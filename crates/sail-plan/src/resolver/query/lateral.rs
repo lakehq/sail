@@ -48,6 +48,9 @@ impl PlanResolver<'_> {
             None => self.resolve_query_empty(true)?,
         };
         let schema = input.schema().clone();
+        let mut conditional_scope =
+            state.enter_conditional_input_scope(vec![Arc::new(input.clone())]);
+        let state = conditional_scope.state();
 
         if let Some(f) = catalog_manager.get_function(&canonical_function_name)?
             && let Some(f) = f.inner().downcast_ref::<PySparkUnresolvedUDF>()

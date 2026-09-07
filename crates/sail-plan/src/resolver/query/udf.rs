@@ -201,6 +201,9 @@ impl PlanResolver<'_> {
         );
         let input = self.resolve_query_plan(*input, state).await?;
         let schema = input.schema();
+        let mut conditional_scope =
+            state.enter_conditional_input_scope(vec![Arc::new(input.clone())]);
+        let state = conditional_scope.state();
         let args = self
             .resolve_named_expressions(arguments, schema, state)
             .await?;
@@ -401,6 +404,9 @@ impl PlanResolver<'_> {
     ) -> PlanResult<CoGroupMapData> {
         let plan = self.resolve_query_plan(plan, state).await?;
         let schema = plan.schema();
+        let mut conditional_scope =
+            state.enter_conditional_input_scope(vec![Arc::new(plan.clone())]);
+        let state = conditional_scope.state();
         let grouping = self
             .resolve_named_expressions(grouping, schema, state)
             .await?;

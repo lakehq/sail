@@ -7,7 +7,10 @@ use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::get_lambda_parameters;
+use crate::function::{
+    ConditionalTypeObservation, conditional_lambda_parameter_observations,
+    conditional_type_observation, get_lambda_parameters, get_lambda_udf,
+};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
@@ -81,6 +84,30 @@ impl PlanResolver<'_> {
             })
             .collect::<PlanResult<Vec<_>>>()?;
         let mut lambda_params = get_lambda_parameters(function_name, &fields)?.into_iter();
+        // Infer observation fields separately. The original fields above remain
+        // authoritative for lambda execution and type-dispatching builders.
+        let observation_params = (|| -> PlanResult<Vec<Vec<ConditionalTypeObservation>>> {
+            let observations = slots
+                .iter()
+                .map(|slot| match slot {
+                    Slot::Resolved(named) => conditional_type_observation(
+                        &named.expr,
+                        schema,
+                        self.config.ansi_mode,
+                        state.conditional_type_context(),
+                    )
+                    .map(Some),
+                    Slot::Lambda(..) => Ok(None),
+                })
+                .collect::<PlanResult<Vec<_>>>()?;
+            conditional_lambda_parameter_observations(
+                get_lambda_udf(function_name)?.as_ref(),
+                &fields,
+                &observations,
+            )
+        })()
+        .ok();
+        let mut observation_params = observation_params.into_iter().flatten();
 
         let mut names: Vec<String> = Vec::with_capacity(slots.len());
         let mut exprs: Vec<expr::Expr> = Vec::with_capacity(slots.len());
@@ -97,6 +124,7 @@ impl PlanResolver<'_> {
                         function,
                         arguments,
                         Some(&param_fields),
+                        observation_params.next().as_deref(),
                         schema,
                         state,
                     )
@@ -114,6 +142,7 @@ impl PlanResolver<'_> {
         function: spec::Expr,
         arguments: Vec<spec::UnresolvedNamedLambdaVariable>,
         param_fields: Option<&[FieldRef]>,
+        param_observations: Option<&[ConditionalTypeObservation]>,
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
@@ -159,8 +188,20 @@ impl PlanResolver<'_> {
             }
             None => params.iter().map(|param| (param.clone(), None)).collect(),
         };
+        let observation_frame = params
+            .iter()
+            .enumerate()
+            .map(|(index, param)| {
+                (
+                    param.clone(),
+                    param_observations
+                        .and_then(|values| values.get(index))
+                        .cloned(),
+                )
+            })
+            .collect();
         let body = {
-            let mut scope = state.enter_lambda_scope(frame);
+            let mut scope = state.enter_lambda_scope(frame, observation_frame);
             self.resolve_named_expression(function, schema, scope.state())
                 .await?
         };

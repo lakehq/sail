@@ -79,6 +79,11 @@ impl PlanResolver<'_> {
 
         let target_schema = target_plan.schema();
         let source_schema = source_plan.schema();
+        let mut conditional_scope = state.enter_conditional_input_scope(vec![
+            Arc::new(target_plan.clone()),
+            Arc::new(source_plan.clone()),
+        ]);
+        let state = conditional_scope.state();
         if target_schema.fields().iter().any(|field| {
             ColumnFeatures::from_map(field.metadata())
                 .identity()

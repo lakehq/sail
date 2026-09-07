@@ -34,6 +34,8 @@ pub struct FunctionContextInput<'a> {
     pub plan_config: &'a Arc<PlanConfig>,
     pub session_context: &'a SessionContext,
     pub schema: &'a DFSchemaRef,
+    /// Input plans used only to observe conditional types, never to alter execution.
+    pub(crate) conditional_type_context: &'a crate::resolver::ConditionalTypeContext,
 }
 
 pub struct ScalarFunctionInput<'a> {

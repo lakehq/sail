@@ -21,7 +21,11 @@ mod table;
 mod window;
 
 pub(crate) use aggregate::get_built_in_aggregate_function;
-pub(crate) use scalar::{get_lambda_parameters, is_higher_order_function};
+pub(crate) use scalar::{
+    ConditionalTypeObservation, conditional_lambda_parameter_observations,
+    conditional_type_observation, conditional_type_observation_with_cache, conditional_type_view,
+    get_lambda_parameters, get_lambda_udf, is_higher_order_function,
+};
 pub(crate) use window::get_built_in_window_function;
 
 lazy_static! {

@@ -24,6 +24,9 @@ impl PlanResolver<'_> {
         let input = self
             .resolve_query_plan_with_hidden_fields(input, state)
             .await?;
+        let mut conditional_scope =
+            state.enter_conditional_input_scope(vec![Arc::new(input.clone())]);
+        let state = conditional_scope.state();
         let skip = if let Some(skip) = skip {
             Some(self.resolve_expression(skip, input.schema(), state).await?)
         } else {
@@ -53,6 +56,9 @@ impl PlanResolver<'_> {
         let input = self
             .resolve_query_plan_with_hidden_fields(input, state)
             .await?;
+        let mut conditional_scope =
+            state.enter_conditional_input_scope(vec![Arc::new(input.clone())]);
+        let state = conditional_scope.state();
         let limit = self
             .resolve_expression(limit, input.schema(), state)
             .await?;

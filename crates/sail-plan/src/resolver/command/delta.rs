@@ -282,6 +282,9 @@ impl PlanResolver<'_> {
             )
             .await?;
         let schema = scan.schema().clone();
+        let mut conditional_scope =
+            state.enter_conditional_input_scope(vec![Arc::new(scan.clone())]);
+        let state = conditional_scope.state();
         let resolved_expr = self.resolve_expression(expr, &schema, state).await?;
         let data_type = resolved_expr.get_type(&schema)?;
         if data_type != DataType::Boolean {
@@ -466,6 +469,9 @@ impl PlanResolver<'_> {
         let intermediate = LogicalPlanBuilder::new(input)
             .project(intermediate_exprs)?
             .build()?;
+        let mut conditional_scope =
+            state.enter_conditional_input_scope(vec![Arc::new(intermediate.clone())]);
+        let state = conditional_scope.state();
         let constraints = self
             .resolve_delta_check_constraints(constraints, intermediate.schema(), state)
             .await?;

@@ -30,6 +30,9 @@ impl PlanResolver<'_> {
 
         let input = self.resolve_query_plan(input, state).await?;
         let schema = input.schema();
+        let mut conditional_scope =
+            state.enter_conditional_input_scope(vec![Arc::new(input.clone())]);
+        let state = conditional_scope.state();
         let values = self.resolve_expressions(values, schema, state).await?;
         let columns: Vec<String> = columns.into_iter().map(|x| x.into()).collect();
 

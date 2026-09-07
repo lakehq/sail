@@ -40,6 +40,8 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         use spec::CommandNode;
 
+        let mut conditional_scope = state.enter_conditional_input_scope(vec![]);
+        let state = conditional_scope.state();
         match plan.node {
             CommandNode::ShowString(show) => self.resolve_command_show_string(show, state).await,
             CommandNode::HtmlString(html) => self.resolve_command_html_string(html, state).await,

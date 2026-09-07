@@ -40,6 +40,9 @@ impl PlanResolver<'_> {
 
         let input = self.resolve_query_plan(*input, state).await?;
         let schema = input.schema().clone();
+        let mut conditional_scope =
+            state.enter_conditional_input_scope(vec![Arc::new(input.clone())]);
+        let state = conditional_scope.state();
 
         let mut pivot_columns = self.resolve_expressions(columns, &schema, state).await?;
         let column_arity = pivot_columns.len();
@@ -295,6 +298,9 @@ impl PlanResolver<'_> {
         let input = self
             .resolve_query_plan(unpivot.input.as_ref().clone(), state)
             .await?;
+        let mut conditional_scope =
+            state.enter_conditional_input_scope(vec![Arc::new(input.clone())]);
+        let state = conditional_scope.state();
 
         let input_names = Self::get_field_names(input.schema(), state)?;
         let columns = Self::resolve_columns(self, input.schema(), &input_names, state)?;

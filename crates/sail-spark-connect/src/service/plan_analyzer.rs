@@ -39,6 +39,7 @@ async fn analyze_schema(ctx: &SessionContext, plan: sc::Plan) -> SparkResult<sc:
     let NamedPlan { plan, fields } = resolver
         .resolve_named_plan(spec::Plan::Query(plan.try_into()?))
         .await?;
+    let plan = resolver.conditional_schema_view(plan);
     let schema = if let Some(fields) = fields {
         rename_schema(plan.schema().inner(), fields.as_slice())?
     } else {

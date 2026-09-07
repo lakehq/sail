@@ -45,6 +45,9 @@ impl PlanResolver<'_> {
             .resolve_query_plan_with_hidden_fields(input, state)
             .await?;
         let schema = input.schema();
+        let mut conditional_scope =
+            state.enter_conditional_input_scope(vec![Arc::new(input.clone())]);
+        let state = conditional_scope.state();
         let expr = self
             .resolve_expressions(partition_expressions, schema, state)
             .await?;

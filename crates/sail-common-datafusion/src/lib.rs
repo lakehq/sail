@@ -1,6 +1,7 @@
 pub mod array;
 pub mod catalog;
 pub mod column_features;
+pub mod conditional_type_hint;
 pub mod datasource;
 pub mod display;
 pub mod error;

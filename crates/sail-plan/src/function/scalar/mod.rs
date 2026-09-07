@@ -1,4 +1,11 @@
-pub(crate) use lambda::{get_lambda_parameters, is_higher_order_function};
+pub(crate) use conditional::{
+    ConditionalTypeObservation, conditional_type_observation,
+    conditional_type_observation_with_cache, conditional_type_view,
+};
+pub(crate) use lambda::{
+    conditional_lambda_parameter_observations, get_lambda_parameters, get_lambda_udf,
+    is_higher_order_function,
+};
 
 use crate::function::common::ScalarFunction;
 

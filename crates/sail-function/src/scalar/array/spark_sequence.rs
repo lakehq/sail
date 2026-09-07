@@ -104,6 +104,51 @@ impl SparkSequenceLazy {
     pub fn ansi_mode(&self) -> bool {
         self.sequence.ansi_mode()
     }
+
+    fn coerce_integral_fields(&self, fields: Vec<FieldRef>) -> Result<Vec<FieldRef>> {
+        let types = fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        if !types
+            .iter()
+            .all(|data_type| integral_rank(data_type).is_some())
+        {
+            return Ok(fields);
+        }
+        let types = self.sequence.coerce_types(&types)?;
+        Ok(fields
+            .into_iter()
+            .zip(types)
+            .map(|(field, data_type)| {
+                if field.data_type() == &data_type {
+                    field
+                } else {
+                    Arc::new(field.as_ref().clone().with_data_type(data_type))
+                }
+            })
+            .collect())
+    }
+
+    fn invoke_sequence(&self, mut args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let fields = self.coerce_integral_fields(args.arg_fields.clone())?;
+        // Lambda analysis can widen a conditional after the resolver coerces the
+        // endpoints. Widen only active integral values, preserving lazy evaluation.
+        args.args = args
+            .args
+            .into_iter()
+            .zip(fields.iter().zip(&args.arg_fields))
+            .map(|(value, (field, original))| {
+                if field.data_type() == original.data_type() {
+                    Ok(value)
+                } else {
+                    value.cast_to(field.data_type(), None)
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+        args.arg_fields = fields;
+        ScalarUDFImpl::invoke_with_args(&self.sequence, args)
+    }
 }
 
 impl HigherOrderUDFImpl for SparkSequenceLazy {
@@ -141,6 +186,7 @@ impl HigherOrderUDFImpl for SparkSequenceLazy {
                 ValueOrLambda::Value(_) => exec_err!("spark_sequence expected lambda arguments"),
             })
             .collect::<Result<Vec<_>>>()?;
+        let fields = self.coerce_integral_fields(fields)?;
 
         ScalarUDFImpl::return_field_from_args(
             &self.sequence,
@@ -180,17 +226,15 @@ impl HigherOrderUDFImpl for SparkSequenceLazy {
                         args.number_rows,
                     )));
                 }
-                let value = ScalarUDFImpl::invoke_with_args(
-                    &self.sequence,
-                    ScalarFunctionArgs {
+                let value = self
+                    .invoke_sequence(ScalarFunctionArgs {
                         args: values.into_iter().map(ColumnarValue::Array).collect(),
                         arg_fields: arg_fields.clone(),
                         number_rows: active_rows.len(),
                         return_field: Arc::clone(&args.return_field),
                         config_options: Arc::clone(&args.config_options),
-                    },
-                )?
-                .into_array(active_rows.len())?;
+                    })?
+                    .into_array(active_rows.len())?;
                 return Ok(ColumnarValue::Array(scatter_active_rows(
                     value,
                     &active_rows,
@@ -222,16 +266,13 @@ impl HigherOrderUDFImpl for SparkSequenceLazy {
             }
 
             if !is_null {
-                ScalarUDFImpl::invoke_with_args(
-                    &self.sequence,
-                    ScalarFunctionArgs {
-                        args: values,
-                        arg_fields: arg_fields.clone(),
-                        number_rows: 1,
-                        return_field: Arc::clone(&args.return_field),
-                        config_options: Arc::clone(&args.config_options),
-                    },
-                )?
+                self.invoke_sequence(ScalarFunctionArgs {
+                    args: values,
+                    arg_fields: arg_fields.clone(),
+                    number_rows: 1,
+                    return_field: Arc::clone(&args.return_field),
+                    config_options: Arc::clone(&args.config_options),
+                })?
                 .into_array(1)?;
             }
         }

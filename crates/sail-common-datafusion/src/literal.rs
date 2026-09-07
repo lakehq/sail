@@ -5,6 +5,8 @@ use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{ColumnarValue, Expr};
 
+use crate::conditional_type_hint::erase_conditional_type_hints;
+
 pub struct LiteralEvaluator {
     schema: DFSchema,
     input: RecordBatch,
@@ -35,8 +37,11 @@ impl LiteralEvaluator {
     }
 
     pub fn evaluate(&self, expr: &Expr) -> Result<ScalarValue> {
+        // Literal evaluation precedes analysis. Remove only the conditional's
+        // provisional type wrapper so this path evaluates the original CASE.
+        let expr = erase_conditional_type_hints(expr.clone())?;
         let expr = create_physical_expr(
-            expr,
+            &expr,
             &self.schema,
             &self.props,
             &PhysicalPlanningContext::default(),

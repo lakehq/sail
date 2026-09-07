@@ -231,6 +231,9 @@ impl PlanResolver<'_> {
             return Err(PlanError::todo("CLUSTER BY for write"));
         }
         let input_schema = input.schema().inner().clone();
+        let mut conditional_scope =
+            state.enter_conditional_input_scope(vec![Arc::new(input.clone())]);
+        let state = conditional_scope.state();
         let mut write_format = format.unwrap_or_default();
         let mut sink_info = SinkInfo {
             input: input.clone(),
@@ -573,6 +576,8 @@ impl PlanResolver<'_> {
                 let names = state.register_fields(schema.fields());
                 let schema = rename_schema(schema, &names)?;
                 let schema = Arc::new(DFSchema::try_from(schema)?);
+                let mut conditional_scope = state.enter_conditional_input_scope(vec![]);
+                let state = conditional_scope.state();
                 let expr = self
                     .resolve_expression(condition.expr, &schema, state)
                     .await?;
@@ -1044,6 +1049,9 @@ impl PlanResolver<'_> {
             intermediate
         };
         let intermediate_schema = plan_for_final_projection.schema().clone();
+        let mut conditional_scope =
+            state.enter_conditional_input_scope(vec![Arc::new(plan_for_final_projection.clone())]);
+        let state = conditional_scope.state();
 
         // Resolve each generation expression against the intermediate schema.
         let mut gen_exprs: HashMap<String, Expr> = HashMap::new();
@@ -1340,7 +1348,8 @@ impl PlanResolver<'_> {
         } else {
             spec_expr
         };
-        self.resolve_expression(spec_expr, empty_schema, state)
+        let mut conditional_scope = state.enter_conditional_input_scope(vec![]);
+        self.resolve_expression(spec_expr, empty_schema, conditional_scope.state())
             .await
     }
 
