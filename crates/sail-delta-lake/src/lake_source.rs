@@ -5,8 +5,9 @@ use async_trait::async_trait;
 use chrono::Utc;
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
-use datafusion::common::{DFSchema, DataFusionError, Result, not_impl_err, plan_err};
-use datafusion::datasource::listing::ListingTableUrl;
+use datafusion::common::{
+    DFSchema, DataFusionError, Result, not_impl_err, plan_datafusion_err, plan_err,
+};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::{LogicalPlan, TableSource};
 use datafusion::physical_plan::ExecutionPlan;
@@ -35,7 +36,7 @@ use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
 use sail_data_source::options::ResolveOptions;
-use sail_data_source::resolve_listing_urls;
+use sail_data_source::resolve_listing_writer_url;
 use url::Url;
 
 use crate::catalog_managed::{metadata_with_catalog_managed, protocol_with_catalog_managed};
@@ -96,7 +97,7 @@ impl DataSource for DeltaLakeSource {
             options,
             read_case_sensitive: _,
         } = info;
-        let table_url = Self::parse_table_url(ctx, paths).await?;
+        let table_url = Self::parse_table_url(paths)?;
         let options = DeltaReadOptions::resolve(ctx, options)?;
         create_delta_source(ctx, table_url, schema, options, lakehouse_table).await
     }
@@ -113,7 +114,7 @@ impl DataSource for DeltaLakeSource {
             options,
             read_case_sensitive: _,
         } = info;
-        let table_url = Self::parse_table_url(ctx, paths).await?;
+        let table_url = Self::parse_table_url(paths)?;
         let options = DeltaReadOptions::resolve(ctx, options)?;
         infer_delta_logical_schema(ctx, table_url, schema, options, lakehouse_table).await
     }
@@ -172,7 +173,7 @@ impl LakeSource for DeltaLakeSource {
             options,
             read_case_sensitive: _,
         } = info;
-        let table_url = Self::parse_table_url(ctx, paths).await?;
+        let table_url = Self::parse_table_url(paths)?;
         let options = DeltaReadOptions::resolve(ctx, options)?;
         let (schema, properties) =
             infer_delta_logical_metadata(ctx, table_url, schema, options, lakehouse_table).await?;
@@ -193,6 +194,13 @@ impl LakeSource for DeltaLakeSource {
             replace,
             lakehouse_table,
         } = info;
+        let runtime_env = match lakehouse_table
+            .as_ref()
+            .and_then(|table| table.storage_access.as_deref())
+        {
+            Some(spec) => sail_object_store::access::storage_runtime(&runtime_env, spec)?,
+            None => runtime_env,
+        };
         let catalog_table = lakehouse_table
             .as_ref()
             .map(|context| context.catalog_table().to_vec());
@@ -440,6 +448,13 @@ impl LakeSource for DeltaLakeSource {
         lakehouse_table: Option<LakehouseExecutionContext>,
     ) -> Result<()> {
         reject_catalog_managed_delta_alter(lakehouse_table.as_ref(), &operation)?;
+        let runtime_env = match lakehouse_table
+            .as_ref()
+            .and_then(|table| table.storage_access.as_deref())
+        {
+            Some(spec) => sail_object_store::access::storage_runtime(&runtime_env, spec)?,
+            None => runtime_env,
+        };
         match operation {
             LakeSourceAlterTableOperation::SetTableProperties { changes, if_exists } => {
                 self.alter_table_properties(runtime_env, path, changes, if_exists)
@@ -579,6 +594,19 @@ pub(crate) async fn plan_delta_write(
         lakehouse_table,
     } = node.options().clone();
 
+    let storage_access = lakehouse_table
+        .as_ref()
+        .and_then(|table| table.storage_access.clone());
+    let storage_session = storage_access
+        .as_deref()
+        .map(|spec| sail_object_store::access::storage_session(ctx, spec))
+        .transpose()?;
+    let ctx: &dyn Session = storage_session
+        .as_ref()
+        .map(|session| session as &dyn Session)
+        .unwrap_or(ctx);
+    let source_input = physical_input.clone();
+
     if is_flow_event_schema(logical_input.schema().as_arrow()) {
         return not_impl_err!("writing streaming data to Delta table");
     }
@@ -605,7 +633,7 @@ pub(crate) async fn plan_delta_write(
         .map(|field| field.column)
         .collect::<Vec<_>>();
 
-    let table_url = DeltaLakeSource::parse_table_url(ctx, vec![path]).await?;
+    let table_url = DeltaLakeSource::parse_table_url(vec![path])?;
     let (options, table_properties) = split_delta_write_options_and_table_properties(options)?;
     let delta_options = DeltaWriteOptions::resolve(ctx, options)?;
 
@@ -743,9 +771,15 @@ pub(crate) async fn plan_delta_write(
     .with_lakehouse_table(lakehouse_table);
     let planner_ctx = PlannerContext::new(ctx, table_config);
     let planner = DeltaPhysicalPlanner::new(planner_ctx);
-    planner
+    let plan = planner
         .create_plan(physical_input, mode, physical_sort)
-        .await
+        .await?;
+    match storage_access.as_deref() {
+        Some(spec) => {
+            crate::storage_access::bind_storage(plan, spec, ctx.runtime_env(), &[source_input])
+        }
+        None => Ok(plan),
+    }
 }
 
 async fn open_delta_write_planning_table(
@@ -1500,12 +1534,12 @@ pub(crate) fn parse_location_to_url(path: &str) -> Result<Url> {
 }
 
 impl DeltaLakeSource {
-    pub async fn parse_table_url(ctx: &dyn Session, paths: Vec<String>) -> Result<Url> {
-        let mut urls = resolve_listing_urls(ctx, paths.clone()).await?;
-        match (urls.pop(), urls.is_empty()) {
-            (Some(path), true) => Ok(<ListingTableUrl as AsRef<Url>>::as_ref(&path).clone()),
-            _ => plan_err!("expected a single path for Delta table sink: {paths:?}"),
-        }
+    pub fn parse_table_url(paths: Vec<String>) -> Result<Url> {
+        let path = paths
+            .one()
+            .map_err(|_| plan_datafusion_err!("expected a single path for Delta table"))?;
+        // Delta roots are directories; a HEAD probe would precede their storage scope.
+        resolve_listing_writer_url(path)
     }
 }
 

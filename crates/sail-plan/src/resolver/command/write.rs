@@ -631,7 +631,7 @@ impl PlanResolver<'_> {
                 let lakehouse_table = self
                     .resolve_lakehouse_table_context(
                         &catalog_table,
-                        LakehouseOperation::Read,
+                        LakehouseOperation::Write,
                         Some(&format),
                         vec![],
                     )

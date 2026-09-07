@@ -72,18 +72,45 @@ impl CatalogManager {
         status: &TableStatus,
         operation: sail_common_datafusion::catalog::LakehouseOperation,
     ) -> CatalogResult<LakehouseResolvedTable> {
-        let (provider, _, _) = self.resolve_object(table)?;
+        let (provider, database, name) = self.resolve_object(table)?;
         let catalog_table = table
             .iter()
             .map(|part| part.as_ref().to_string())
             .collect::<Vec<_>>();
-        Ok(resolve_lakehouse_table_status(
+        let mut resolved = resolve_lakehouse_table_status(
             provider.get_name(),
             catalog_table,
             status,
             operation,
             &provider.lakehouse_capabilities(),
-        ))
+        );
+        if provider
+            .lakehouse_capabilities()
+            .contains(&crate::lakehouse::LakehouseCapability::TableAccessSessions)
+        {
+            let purpose = if operation == sail_common_datafusion::catalog::LakehouseOperation::Read
+            {
+                crate::lakehouse::TableAccessPurpose::DataRead
+            } else {
+                crate::lakehouse::TableAccessPurpose::DataWrite
+            };
+            match provider
+                .begin_table_access(
+                    &database,
+                    &name,
+                    BeginTableAccessRequest {
+                        context: resolved.execution.clone(),
+                        purpose,
+                    },
+                )
+                .await
+            {
+                Ok(access) => resolved.execution = access.context,
+                Err(CatalogError::NotSupported(_) | CatalogError::UnsupportedCapability(_)) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(resolved)
     }
 
     pub async fn plan_lakehouse_create<T: AsRef<str>>(

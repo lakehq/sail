@@ -492,7 +492,7 @@ impl IcebergRestCatalogProvider {
         result: &crate::r#gen::LoadTableResult,
     ) -> CatalogResult<Option<Box<sail_common::storage::StorageAccessSpec>>> {
         use sail_common::storage::{
-            CatalogCredentialSource, IcebergCredentialSource, StorageAccessSpec, StorageSecret,
+            CatalogCredentialSource, StorageAccessSpec, StorageCredentialSource, StorageSecret,
         };
         use sail_object_store::access::iceberg::{
             IcebergStorageCredential, boolean_property, iceberg_storage_credentials,
@@ -597,7 +597,8 @@ impl IcebergRestCatalogProvider {
                     }
                 }
             }
-            credential.refresh = Some(IcebergCredentialSource {
+            credential.refresh = Some(StorageCredentialSource {
+                request: sail_common::storage::StorageCredentialRequest::Iceberg,
                 endpoint: endpoint.to_string(),
                 authentication,
                 headers,

@@ -1,5 +1,6 @@
 pub mod iceberg;
 mod router;
+pub mod unity;
 
 use std::collections::HashMap;
 use std::fmt;
@@ -16,8 +17,8 @@ use datafusion_common::{Result, plan_datafusion_err};
 use object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey, AwsCredential};
 use object_store::{CredentialProvider, ObjectStore};
 use sail_common::storage::{
-    CatalogCredentialSource, IcebergCredentialSource, S3StorageConnection, ScopedStorageCredential,
-    StorageAccessSpec,
+    CatalogCredentialSource, S3StorageConnection, ScopedStorageCredential, StorageAccessSpec,
+    StorageCredentialRequest, StorageCredentialSource,
 };
 use sail_common::utils::oauth::{OAuth2Client, OAuth2Error};
 use tokio::sync::Mutex;
@@ -36,8 +37,12 @@ struct CredentialState {
 }
 
 struct CredentialSession {
-    source: Option<IcebergCredentialSource>,
+    source: Option<StorageCredentialSource>,
     state: Mutex<CredentialState>,
+    client: CredentialClient,
+}
+
+struct CredentialClient {
     client: reqwest::Client,
     oauth: Option<OAuth2Client>,
 }
@@ -101,17 +106,11 @@ fn access_error(message: &'static str) -> object_store::Error {
     }
 }
 
-impl CredentialSession {
-    fn new(credentials: Vec<ScopedStorageCredential>) -> Result<Arc<Self>> {
-        let source = credentials.first().and_then(|entry| entry.refresh.clone());
-        if credentials.is_empty() || credentials.iter().any(|entry| entry.refresh != source) {
-            return Err(plan_datafusion_err!(
-                "Storage credentials require one refresh source per session"
-            ));
-        }
+impl CredentialClient {
+    fn new(source: Option<&StorageCredentialSource>) -> Result<Self> {
         let mut headers = reqwest::header::HeaderMap::new();
         let mut oauth = None;
-        if let Some(source) = &source {
+        if let Some(source) = source {
             validate_http_endpoint(&source.endpoint)?;
             for (name, value) in &source.headers {
                 let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
@@ -137,23 +136,13 @@ impl CredentialSession {
             .default_headers(headers)
             .build()
             .map_err(|_| plan_datafusion_err!("Cannot create storage credentials client"))?;
-        Ok(Arc::new(Self {
-            state: Mutex::new(CredentialState {
-                refresh_at_ms: refresh_at(&credentials, now_ms()),
-                credentials,
-                failures: 0,
-                failure: None,
-            }),
-            source,
-            client,
-            oauth,
-        }))
+        Ok(Self { client, oauth })
     }
 
     async fn fetch(
         &self,
-        source: &IcebergCredentialSource,
-    ) -> std::result::Result<LoadCredentialsResponse, RefreshError> {
+        source: &StorageCredentialSource,
+    ) -> std::result::Result<reqwest::Response, RefreshError> {
         for attempt in 0..2 {
             let token = match &source.authentication {
                 CatalogCredentialSource::None => None,
@@ -166,10 +155,23 @@ impl CredentialSession {
                         .await?,
                 ),
             };
-            let mut request = self
-                .client
-                .get(&source.endpoint)
-                .header("X-Iceberg-Access-Delegation", "vended-credentials");
+            let mut request = match &source.request {
+                StorageCredentialRequest::Iceberg => self
+                    .client
+                    .get(&source.endpoint)
+                    .header("X-Iceberg-Access-Delegation", "vended-credentials"),
+                StorageCredentialRequest::UnityTable {
+                    table_id,
+                    operation,
+                } => self
+                    .client
+                    .post(&source.endpoint)
+                    .json(&serde_json::json!({"table_id": table_id, "operation": operation})),
+                StorageCredentialRequest::UnityPath { url, operation } => self
+                    .client
+                    .post(&source.endpoint)
+                    .json(&serde_json::json!({"url": url, "operation": operation})),
+            };
             if let Some(token) = &token {
                 request = request.bearer_auth(token.expose());
             }
@@ -184,9 +186,67 @@ impl CredentialSession {
             if !response.status().is_success() {
                 return Err(RefreshError::Status(response.status().as_u16()));
             }
-            return response.json().await.map_err(|_| RefreshError::Response);
+            return Ok(response);
         }
         Err(RefreshError::Status(401))
+    }
+}
+
+impl CredentialSession {
+    fn new(credentials: Vec<ScopedStorageCredential>) -> Result<Arc<Self>> {
+        let source = credentials.first().and_then(|entry| entry.refresh.clone());
+        if credentials.is_empty() || credentials.iter().any(|entry| entry.refresh != source) {
+            return Err(plan_datafusion_err!(
+                "Storage credentials require one refresh source per session"
+            ));
+        }
+        let client = CredentialClient::new(source.as_ref())?;
+        Ok(Arc::new(Self {
+            source,
+            client,
+            state: Mutex::new(CredentialState {
+                refresh_at_ms: refresh_at(&credentials, now_ms()),
+                credentials,
+                failures: 0,
+                failure: None,
+            }),
+        }))
+    }
+
+    async fn refresh(
+        &self,
+        source: &StorageCredentialSource,
+        previous: &[ScopedStorageCredential],
+    ) -> std::result::Result<Vec<ScopedStorageCredential>, RefreshError> {
+        let response = self.client.fetch(source).await?;
+        match &source.request {
+            StorageCredentialRequest::Iceberg => {
+                let response = response.json().await.map_err(|_| RefreshError::Response)?;
+                Self::refreshed_credentials(previous, response)
+            }
+            StorageCredentialRequest::UnityTable { .. }
+            | StorageCredentialRequest::UnityPath { .. } => {
+                let [previous] = previous else {
+                    return Err(RefreshError::Routing);
+                };
+                let response = response.json().await.map_err(|_| RefreshError::Response)?;
+                let mut credential = unity::parse_credentials(
+                    &previous.prefix,
+                    previous.s3.connection.clone(),
+                    response,
+                )
+                .map_err(|_| RefreshError::Response)?;
+                if credential
+                    .s3
+                    .expires_at_ms
+                    .is_some_and(|expiry| expiry <= now_ms())
+                {
+                    return Err(RefreshError::Expired);
+                }
+                credential.refresh = Some(source.clone());
+                Ok(vec![credential])
+            }
+        }
     }
 
     fn refreshed_credentials(
@@ -247,10 +307,7 @@ impl CredentialSession {
                 .as_ref()
                 .is_none_or(|failure| now_ms() >= failure.retry_at_ms)
         {
-            let result = self
-                .fetch(source)
-                .await
-                .and_then(|response| Self::refreshed_credentials(&state.credentials, response));
+            let result = self.refresh(source, &state.credentials).await;
             match result {
                 Ok(credentials) => {
                     state.refresh_at_ms = refresh_at(&credentials, now_ms());
@@ -384,7 +441,7 @@ pub fn storage_runtime(
     base: &Arc<RuntimeEnv>,
     spec: &StorageAccessSpec,
 ) -> Result<Arc<RuntimeEnv>> {
-    let mut groups: HashMap<Option<IcebergCredentialSource>, Vec<ScopedStorageCredential>> =
+    let mut groups: HashMap<Option<StorageCredentialSource>, Vec<ScopedStorageCredential>> =
         HashMap::new();
     for entry in &spec.credentials {
         groups

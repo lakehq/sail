@@ -25,6 +25,7 @@ use reqwest::header::{ACCEPT, HeaderValue};
 use reqwest::{Client, Method, Response};
 use sail_catalog::credentials::CatalogCredentials;
 use sail_catalog::error::{CatalogError, CatalogResult};
+use sail_common::storage::{CatalogCredentialSource, OAuth2ClientCredentials, StorageSecret};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
@@ -56,12 +57,17 @@ pub mod authority_hosts {
 /// Trait for providing authorization tokens for catalog requests
 #[async_trait::async_trait]
 pub trait TokenCredential: std::fmt::Debug + Send + Sync + 'static {
+    fn export_for_execution(&self) -> CatalogResult<CatalogCredentialSource> {
+        Err(CatalogError::UnsupportedCapability(
+            "Unity worker refresh requires transferable catalog authentication".to_string(),
+        ))
+    }
+
     /// get the token
     async fn fetch_token(&self, client: &Client) -> CatalogResult<TemporaryToken<String>>;
 }
 
 /// Provides credentials for use when signing requests
-#[derive(Debug)]
 pub enum CredentialProvider {
     /// static bearer token
     BearerToken(String),
@@ -70,8 +76,23 @@ pub enum CredentialProvider {
     TokenCredential(TokenCache<String>, Box<dyn TokenCredential>),
 }
 
+impl std::fmt::Debug for CredentialProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("UnityCatalogCredentials [REDACTED]")
+    }
+}
+
 #[async_trait::async_trait]
 impl CatalogCredentials for CredentialProvider {
+    async fn export_for_execution(&self) -> CatalogResult<CatalogCredentialSource> {
+        match self {
+            Self::BearerToken(token) => Ok(CatalogCredentialSource::Bearer(StorageSecret::new(
+                token.clone(),
+            ))),
+            Self::TokenCredential(_, provider) => provider.export_for_execution(),
+        }
+    }
+
     async fn retrieve(&self) -> CatalogResult<Option<String>> {
         match self {
             CredentialProvider::BearerToken(token) => Ok(Some(token.clone())),
@@ -133,6 +154,15 @@ impl WorkspaceOAuthProvider {
 
 #[async_trait::async_trait]
 impl TokenCredential for WorkspaceOAuthProvider {
+    fn export_for_execution(&self) -> CatalogResult<CatalogCredentialSource> {
+        Ok(CatalogCredentialSource::OAuth2(OAuth2ClientCredentials {
+            endpoint: self.token_url.clone(),
+            client_id: self.client_id.clone(),
+            client_secret: StorageSecret::new(self.client_secret.clone()),
+            scope: Some(DATABRICKS_WORKSPACE_SCOPE.to_string()),
+        }))
+    }
+
     async fn fetch_token(&self, client: &Client) -> CatalogResult<TemporaryToken<String>> {
         let response = client
             .request(Method::POST, &self.token_url)
@@ -189,6 +219,15 @@ impl ClientSecretOAuthProvider {
 
 #[async_trait::async_trait]
 impl TokenCredential for ClientSecretOAuthProvider {
+    fn export_for_execution(&self) -> CatalogResult<CatalogCredentialSource> {
+        Ok(CatalogCredentialSource::OAuth2(OAuth2ClientCredentials {
+            endpoint: self.token_url.clone(),
+            client_id: self.client_id.clone(),
+            client_secret: StorageSecret::new(self.client_secret.clone()),
+            scope: Some(format!("{DATABRICKS_RESOURCE_SCOPE}/.default")),
+        }))
+    }
+
     /// Fetch a token
     async fn fetch_token(&self, client: &Client) -> CatalogResult<TemporaryToken<String>> {
         let response = client
@@ -511,6 +550,45 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
+
+    #[test]
+    fn renewable_authentication_preserves_provider_endpoint_and_scope() {
+        let providers: Vec<(Box<dyn TokenCredential>, &str, &str)> = vec![
+            (
+                Box::new(WorkspaceOAuthProvider::new(
+                    "client",
+                    "secret",
+                    "https://workspace",
+                )),
+                "https://workspace/oidc/v1/token",
+                "all-apis",
+            ),
+            (
+                Box::new(ClientSecretOAuthProvider::new(
+                    "client",
+                    "secret",
+                    "tenant",
+                    Some("https://authority"),
+                )),
+                "https://authority/tenant/oauth2/v2.0/token",
+                "2ff814a6-3304-4ab8-85cb-cd0e6f879c1d/.default",
+            ),
+        ];
+        for (provider, endpoint, scope) in providers {
+            let source = provider.export_for_execution().unwrap();
+            let transported: CatalogCredentialSource =
+                serde_json::from_slice(&serde_json::to_vec(&source).unwrap()).unwrap();
+            assert_eq!(source, transported);
+            let CatalogCredentialSource::OAuth2(credentials) = transported else {
+                unreachable!("expected renewable OAuth authentication")
+            };
+            assert_eq!(credentials.endpoint, endpoint);
+            assert_eq!(credentials.scope.as_deref(), Some(scope));
+            assert_eq!(credentials.client_id, "client");
+            assert_eq!(credentials.client_secret.expose(), "secret");
+            assert!(!format!("{source:?}").contains("secret"));
+        }
+    }
 
     #[tokio::test]
     async fn test_managed_identity() {

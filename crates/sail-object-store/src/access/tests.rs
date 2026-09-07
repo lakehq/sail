@@ -5,7 +5,7 @@ use datafusion::prelude::SessionContext;
 use futures::TryStreamExt;
 use object_store::ObjectStoreExt;
 use object_store::path::Path;
-use sail_common::storage::{IcebergCredentialSource, StorageAccessSpec, StorageSecret};
+use sail_common::storage::{StorageAccessSpec, StorageCredentialSource, StorageSecret};
 use serde_json::json;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -33,6 +33,123 @@ fn entry(prefix: &str, endpoint: &str, expiry: Option<i64>) -> IcebergStorageCre
     }
 }
 
+#[tokio::test]
+async fn unity_table_and_path_credentials_refresh_after_transport() {
+    use sail_common::storage::{StorageCredentialRequest, UnityPathOperation, UnityTableOperation};
+    use wiremock::matchers::body_json;
+    for (request, body) in [
+        (
+            StorageCredentialRequest::UnityTable {
+                table_id: "table-id".to_string(),
+                operation: UnityTableOperation::Read,
+            },
+            json!({"table_id": "table-id", "operation": "READ"}),
+        ),
+        (
+            StorageCredentialRequest::UnityTable {
+                table_id: "table-id".to_string(),
+                operation: UnityTableOperation::ReadWrite,
+            },
+            json!({"table_id": "table-id", "operation": "READ_WRITE"}),
+        ),
+        (
+            StorageCredentialRequest::UnityPath {
+                url: "s3://bucket/table".to_string(),
+                operation: UnityPathOperation::PathCreateTable,
+            },
+            json!({"url": "s3://bucket/table", "operation": "PATH_CREATE_TABLE"}),
+        ),
+    ] {
+        let server = MockServer::start().await;
+        let count = std::sync::atomic::AtomicUsize::new(0);
+        Mock::given(method("POST")).and(path("/credentials")).and(body_json(body))
+            .and(header("authorization", "Bearer catalog-token"))
+            .respond_with(move |_: &wiremock::Request| {
+                let bootstrap = count.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "aws_temp_credentials": {"access_key_id": if bootstrap {"invalid-key"} else {"refreshed-key"}, "secret_access_key": "private-secret", "session_token": "unity-token"},
+                    "expiration_time": if bootstrap {0} else {now_ms() + 600_000},
+                }))
+            }).expect(2).mount(&server).await;
+        let source = StorageCredentialSource {
+            endpoint: format!("{}/credentials", server.uri()),
+            authentication: CatalogCredentialSource::Bearer(StorageSecret::new(
+                "catalog-token".to_string(),
+            )),
+            headers: Default::default(),
+            request,
+        };
+        let mut spec = unity::storage_access("s3a://bucket/table", source)
+            .await
+            .unwrap();
+        assert_eq!(spec.credentials[0].prefix, "s3://bucket/table/");
+        spec.credentials[0].s3.connection.endpoint = Some(server.uri());
+        spec.credentials[0].s3.connection.path_style_access = true;
+        let spec = serde_json::from_slice(&serde_json::to_vec(&spec).unwrap()).unwrap();
+        Mock::given(method("GET"))
+            .and(path("/bucket/table/file"))
+            .and(header("x-amz-security-token", "unity-token"))
+            .and(wiremock::matchers::header_regex(
+                "authorization",
+                "Credential=refreshed-key/",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_string("vended"))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let runtime = storage_runtime(&SessionContext::new().runtime_env(), &spec).unwrap();
+        let store = runtime
+            .object_store_registry
+            .get_store(&Url::parse("s3://bucket").unwrap())
+            .unwrap();
+        for _ in 0..2 {
+            assert_eq!(
+                store
+                    .get(&Path::from("table/file"))
+                    .await
+                    .unwrap()
+                    .bytes()
+                    .await
+                    .unwrap(),
+                "vended"
+            );
+        }
+        assert!(store.get(&Path::from("table-other/file")).await.is_err());
+        assert!(!format!("{spec:?}").contains("private-secret"));
+    }
+}
+
+#[test]
+fn unity_requires_complete_identity_and_preserves_optional_expiry() {
+    let connection = spec("http://localhost:1", None).credentials[0]
+        .s3
+        .connection
+        .clone();
+    for response in [
+        json!({}),
+        json!({"aws_temp_credentials": {"access_key_id": "only-key"}}),
+    ] {
+        assert!(
+            serde_json::from_value::<unity::TemporaryCredentials>(response)
+                .map_err(|_| ())
+                .and_then(|response| unity::parse_credentials(
+                    "s3://bucket/table/",
+                    connection.clone(),
+                    response
+                )
+                .map_err(|_| ()))
+                .is_err()
+        );
+    }
+    let response = serde_json::from_value(
+        json!({"aws_temp_credentials": {"access_key_id": "key", "secret_access_key": "secret"}}),
+    )
+    .unwrap();
+    let credential = unity::parse_credentials("s3://bucket/table/", connection, response).unwrap();
+    assert_eq!(credential.s3.expires_at_ms, None);
+    assert!(credential.s3.session_token.is_none());
+}
+
 fn spec(endpoint: &str, expiry: Option<i64>) -> StorageAccessSpec {
     let mut credentials = iceberg_storage_credentials(
         "",
@@ -40,7 +157,8 @@ fn spec(endpoint: &str, expiry: Option<i64>) -> StorageAccessSpec {
         &[entry("s3://bucket/table", endpoint, expiry)],
     )
     .unwrap();
-    credentials[0].refresh = Some(IcebergCredentialSource {
+    credentials[0].refresh = Some(StorageCredentialSource {
+        request: sail_common::storage::StorageCredentialRequest::Iceberg,
         endpoint: format!("{endpoint}/credentials"),
         authentication: CatalogCredentialSource::Bearer(StorageSecret::new(
             "catalog-token".to_string(),

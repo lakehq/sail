@@ -7578,12 +7578,14 @@ dependencies = [
  "sail-catalog",
  "sail-common",
  "sail-common-datafusion",
+ "sail-object-store",
  "secrecy",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "url",
  "wiremock",
 ]
 
@@ -7775,6 +7777,7 @@ dependencies = [
  "sail-common-datafusion",
  "sail-data-source",
  "sail-logical-plan",
+ "sail-object-store",
  "sail-physical-plan",
  "serde",
  "serde_arrow",

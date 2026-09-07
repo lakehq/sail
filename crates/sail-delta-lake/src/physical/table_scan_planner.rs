@@ -85,6 +85,15 @@ impl ExtensionPlanner for DeltaPhysicalPlanner {
             return Ok(None);
         };
 
+        let storage_session = source
+            .storage_access
+            .as_deref()
+            .map(|spec| sail_object_store::access::storage_session(session, spec))
+            .transpose()?;
+        let session: &dyn Session = storage_session
+            .as_ref()
+            .map(|session| session as &dyn Session)
+            .unwrap_or(session);
         let snapshot = source.snapshot();
         let log_store = source.log_store();
         let config = source.config();
@@ -127,6 +136,12 @@ impl ExtensionPlanner for DeltaPhysicalPlanner {
         )
         .await?;
 
+        let plan = match source.storage_access.as_deref() {
+            Some(spec) => {
+                crate::storage_access::bind_storage(plan, spec, session.runtime_env(), &[])?
+            }
+            None => plan,
+        };
         Ok(Some(plan))
     }
 }
