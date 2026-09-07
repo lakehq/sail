@@ -29,11 +29,15 @@ async fn read_checkpoint_header_from_checkpoint_files(
     let multi_part = checkpoint.is_multi_part();
     let mut state = ReconciledHeaderState::default();
     for meta in checkpoint.into_files() {
-        let rows = if is_json_checkpoint_location(&meta) {
-            read_checkpoint_main_rows_from_checkpoint_file(root_store.clone(), meta).await?
+        if is_json_checkpoint_location(&meta) {
+            let rows =
+                read_checkpoint_main_rows_from_checkpoint_file(root_store.clone(), meta).await?;
+            for row in rows {
+                state.apply_checkpoint_row(row)?;
+            }
         } else {
             let bytes = root_store.get(&meta.location).await?.bytes().await?;
-            SpawnedTask::spawn_blocking(move || {
+            state = SpawnedTask::spawn_blocking(move || {
                 let builder = ParquetRecordBatchReaderBuilder::try_new(bytes)
                     .map_err(DeltaTableError::generic_err)?;
 
@@ -55,21 +59,20 @@ async fn read_checkpoint_header_from_checkpoint_files(
                     .build()
                     .map_err(DeltaTableError::generic_err)?;
 
-                let mut rows = Vec::new();
                 for batch_result in &mut batches {
                     let batch = batch_result.map_err(DeltaTableError::generic_err)?;
-                    rows.extend(decode_checkpoint_rows(&batch)?);
+                    let rows = decode_checkpoint_rows(&batch)?;
+                    if multi_part {
+                        validate_multi_part_checkpoint_rows(checkpoint_version, &rows)?;
+                    }
+                    for row in rows {
+                        state.apply_checkpoint_row(row)?;
+                    }
                 }
-                Ok::<_, DeltaTableError>(rows)
+                Ok::<_, DeltaTableError>(state)
             })
             .await
-            .map_err(DeltaTableError::generic_err)??
-        };
-        if multi_part {
-            validate_multi_part_checkpoint_rows(checkpoint_version, &rows)?;
-        }
-        for row in rows {
-            state.apply_checkpoint_row(row)?;
+            .map_err(DeltaTableError::generic_err)??;
         }
     }
     Ok(state)

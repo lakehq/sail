@@ -1574,7 +1574,10 @@ mod tests {
         AddAugmentationConfig, normalize_checkpoint_batch_for_decode,
     };
     use crate::delta_log::segment_files::list_log_segment_files;
-    use crate::delta_log::{StorageConfig, default_logstore, load_replayed_table_state};
+    use crate::delta_log::{
+        ReplayedTableHeader, StorageConfig, default_logstore, load_replayed_table_header,
+        load_replayed_table_state,
+    };
     use crate::spec::{
         Action, Add, CheckpointActionRow, CheckpointMetadata, CommitInfo, DataType,
         DeletionVectorDescriptor, DeltaError as DeltaTableError, DeltaResult, DomainMetadata,
@@ -2450,6 +2453,79 @@ mod tests {
                 "00000000000000000002.checkpoint.0000000002.0000000003.parquet",
                 "00000000000000000002.checkpoint.0000000003.0000000003.parquet",
             ]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn checkpoint_header_replay_preserves_actions_across_batches_and_parts() -> DeltaResult<()>
+    {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let protocol = Protocol::new(1, 2, None, None);
+        let metadata = test_metadata([])?;
+        let transactions = [1, 2].map(|part| Transaction {
+            app_id: format!("writer-{part}"),
+            version: part,
+            last_updated: Some(10),
+        });
+        for (index, transaction) in transactions.iter().enumerate() {
+            let part = index + 1;
+            let mut rows = (0..2_048)
+                .map(|file| CheckpointActionRow {
+                    add: Some(Add {
+                        path: format!("part-{part}-{file:05}.parquet"),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>();
+            if part == 1 {
+                rows.insert(
+                    0,
+                    CheckpointActionRow {
+                        protocol: Some(protocol.clone()),
+                        ..Default::default()
+                    },
+                );
+            } else {
+                rows.push(CheckpointActionRow {
+                    metadata: Some(metadata.clone()),
+                    ..Default::default()
+                });
+            }
+            rows.push(CheckpointActionRow {
+                txn: Some(transaction.clone()),
+                ..Default::default()
+            });
+            let path = Path::from(format!(
+                "_delta_log/00000000000000000002.checkpoint.{part:010}.0000000002.parquet"
+            ));
+            put_parquet_batch(store.clone(), path, encode_rows_for_test(&rows)?).await?;
+        }
+
+        let base = ReplayedTableHeader {
+            version: 0,
+            protocol: Protocol::new(1, 1, None, None),
+            metadata: test_metadata([])?,
+            txns: Arc::default(),
+            domain_metadata: Arc::default(),
+            commit_timestamps: Arc::default(),
+        };
+        let table_url = Url::parse("memory:///").map_err(DeltaTableError::generic_err)?;
+        let log_store = default_logstore(store.clone(), store, &table_url, &StorageConfig);
+        let header = load_replayed_table_header(2, log_store.as_ref(), Some(&base), None)
+            .await?
+            .ok_or_else(|| DeltaTableError::generic("checkpoint must produce a table header"))?;
+
+        assert_eq!(header.version, 2);
+        assert_eq!(header.protocol, protocol);
+        assert_eq!(header.metadata, metadata);
+        assert_eq!(
+            header.txns.as_ref(),
+            &transactions
+                .into_iter()
+                .map(|transaction| (transaction.app_id.clone(), transaction))
+                .collect::<HashMap<_, _>>()
         );
         Ok(())
     }
