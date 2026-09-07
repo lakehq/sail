@@ -9,8 +9,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
 use datafusion_proto::physical_plan::from_proto::parse_protobuf_partitioning;
 use datafusion_proto::physical_plan::{
-    PhysicalExtensionCodec, PhysicalPlanDecodeContext, PhysicalPlanNodeExt,
-    PhysicalProtoConverterExtension,
+    PhysicalExtensionCodec, PhysicalPlanDecodeContext, PhysicalProtoConverterExtension,
 };
 use datafusion_proto::protobuf::{
     Partitioning as ProtoPartitioning, PhysicalExprNode, PhysicalPlanNode,
@@ -120,7 +119,7 @@ pub(super) fn proto_to_physical_plan_with_converter(
     proto_converter: &dyn PhysicalProtoConverterExtension,
     plan: &PhysicalPlanNode,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    plan.try_into_physical_plan_with_converter(ctx, codec, proto_converter)
+    proto_converter.proto_to_execution_plan(plan, &PhysicalPlanDecodeContext::new(ctx, codec))
 }
 
 pub(super) fn try_decode_physical_expr(

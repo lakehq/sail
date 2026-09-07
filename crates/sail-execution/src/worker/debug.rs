@@ -1,7 +1,5 @@
 use std::fmt::{Debug, Formatter};
 
-use sail_common::utils::debug::DebugBinary;
-
 use crate::worker::r#gen::RunTaskRequest;
 
 impl Debug for RunTaskRequest {
@@ -19,7 +17,7 @@ impl Debug for RunTaskRequest {
             .field("stage", stage)
             .field("partition", partition)
             .field("attempt", attempt)
-            .field("definition", &DebugBinary::from(definition))
+            .field("definition_bytes", &definition.len())
             .field("peers", peers)
             .finish()
     }

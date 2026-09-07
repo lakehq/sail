@@ -10,6 +10,8 @@ workspace = true
 sail-common = { path = "../sail-common" }
 
 object_store = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 aws-config = { workspace = true }
 aws-credential-types = { workspace = true }
 aws-smithy-runtime-api = { workspace = true }
@@ -40,3 +42,6 @@ fastrace-futures = { workspace = true }
 [features]
 hdfs = ["dep:hdfs-native-object-store"]
 default = ["hdfs"]
+
+[dev-dependencies]
+wiremock = { workspace = true }

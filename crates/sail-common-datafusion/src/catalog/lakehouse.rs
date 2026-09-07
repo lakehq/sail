@@ -141,6 +141,8 @@ pub struct TableAccessSessionRef {
 pub struct IcebergRestTableSessionRef {
     pub fingerprint: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata_location: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scan_planning_mode: Option<String>,
     #[serde(default)]
     pub storage_credential_count: usize,
@@ -225,6 +227,9 @@ pub struct LakehouseExecutionContext {
     pub pointer: MetadataPointerAuthority,
     pub commit: CommitAuthority,
     pub scan: ScanAuthority,
+    /// Execution-only material is encoded by the physical storage-access node.
+    #[serde(skip)]
+    pub storage_access: Option<Box<sail_common::storage::StorageAccessSpec>>,
     pub access_session: Option<TableAccessSessionRef>,
     pub rest_session: Option<IcebergRestTableSessionRef>,
     pub versioned_catalog: Option<VersionedCatalogContext>,
@@ -274,6 +279,7 @@ impl LakehouseExecutionContext {
             pointer,
             commit,
             scan,
+            storage_access: None,
             access_session: None,
             rest_session: None,
             versioned_catalog: None,

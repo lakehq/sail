@@ -23,6 +23,24 @@ impl CatalogManager {
         provider.create_table(&database, &table, options).await
     }
 
+    pub async fn create_table_for_write(
+        &self,
+        table: &[String],
+        options: CreateTableOptions,
+    ) -> CatalogResult<LakehouseResolvedTable> {
+        let (provider, database, name) = self.resolve_object(table)?;
+        provider
+            .create_table_for_write(
+                &database,
+                &name,
+                LakehouseCreateRequest {
+                    catalog_table: table.to_vec(),
+                    options,
+                },
+            )
+            .await
+    }
+
     pub fn create_table_metadata_requirement<T: AsRef<str>>(
         &self,
         table: &[T],

@@ -20,7 +20,8 @@ use sail_catalog::credentials::CatalogCredentials;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::lakehouse::{
     BeginTableAccessRequest, LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest,
-    TableAccessSession,
+    LakehouseResolvedTable, ResolveLakehouseTableRequest, TableAccessSession,
+    resolve_lakehouse_table_status,
 };
 use sail_catalog::provider::{
     AlterTableOptions, CatalogPartitionField, CatalogProvider, CreateDatabaseOptions,
@@ -305,6 +306,259 @@ impl IcebergRestCatalogProvider {
         })
     }
 
+    async fn create_table_result(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: CreateTableOptions,
+    ) -> CatalogResult<crate::r#gen::LoadTableResult> {
+        let CreateTableOptions {
+            columns,
+            comment,
+            constraints,
+            location,
+            format,
+            partition_by,
+            sort_by,
+            bucket_by,
+            mode,
+            properties,
+            is_external: _,
+            is_write_precondition,
+        } = options;
+
+        if !format.eq_ignore_ascii_case("iceberg") {
+            return Err(CatalogError::NotSupported(format!(
+                "Iceberg REST catalog cannot create '{format}' tables"
+            )));
+        }
+
+        let catalog_config = self.resolved_catalog_config().await?;
+
+        if mode.ignore_if_exists()
+            && let Ok(existing) = self
+                .load_table_result(
+                    database,
+                    table,
+                    Some(REST_ACCESS_DELEGATION_VENDED_CREDENTIALS),
+                )
+                .await
+        {
+            return Ok(existing);
+        }
+
+        if mode.is_replace() {
+            return Err(CatalogError::NotSupported(
+                "Replace table is not supported yet".to_string(),
+            ));
+        }
+
+        let format_version = requested_iceberg_format_version(&properties)?;
+        let fields = columns_to_nested_fields(&columns, format_version)?;
+
+        let struct_type = StructType::new(fields.clone());
+
+        let (name_to_id, _id_to_name) =
+            sail_iceberg::spec::SchemaBuilder::build_name_indexes(&struct_type);
+
+        let identifier_field_ids = constraints
+            .iter()
+            .filter_map(|c| match c {
+                CatalogTableConstraint::PrimaryKey { columns, .. } => Some(
+                    columns
+                        .iter()
+                        .filter_map(|col_name| name_to_id.get(col_name).copied())
+                        .collect::<Vec<_>>(),
+                ),
+                CatalogTableConstraint::Unique { .. } => None,
+            })
+            .flatten()
+            .collect::<Vec<_>>();
+
+        let schema = sail_iceberg::spec::Schema::builder()
+            .with_fields(fields)
+            .with_identifier_field_ids(identifier_field_ids.clone())
+            .build()
+            .map_err(|e| CatalogError::External(format!("Failed to build schema: {e}")))?;
+        let schema = crate::r#gen::Schema::try_from(schema)?;
+
+        let partition_spec = build_partition_spec(&partition_by, bucket_by.as_ref(), &name_to_id)?;
+        let write_order = build_sort_order(&sort_by, &name_to_id)?;
+
+        let mut props = HashMap::new();
+        if let Some(c) = comment {
+            props.insert("comment".to_string(), c);
+        }
+        for (k, v) in properties {
+            props.insert(k, v);
+        }
+
+        let request = crate::r#gen::CreateTableRequest {
+            name: table.to_string(),
+            location,
+            schema: Box::new(schema),
+            partition_spec,
+            write_order,
+            stage_create: Some(false),
+            properties: if props.is_empty() { None } else { Some(props) },
+        };
+
+        let prefix = catalog_config.prefix().map(ToOwned::to_owned);
+        let namespace = catalog_config.namespace_string(database)?;
+        let result = self
+            .with_auth_retry(|client| {
+                let prefix = prefix.clone();
+                let namespace = namespace.clone();
+                let request = request.clone();
+                async move {
+                    client
+                        .create_table(
+                            prefix,
+                            namespace,
+                            Some(REST_ACCESS_DELEGATION_VENDED_CREDENTIALS.to_string()),
+                            request,
+                        )
+                        .await
+                }
+            })
+            .await?
+            .map(|response| response.inner)
+            .map_err(|e| CatalogError::External(format!("Failed to create table: {e}")))?;
+
+        if is_write_precondition {
+            Self::validate_create_table_access_session_requirements(
+                &self.name,
+                database,
+                table,
+                catalog_config,
+                &result,
+            )?;
+        }
+        Ok(result)
+    }
+
+    async fn resolve_table_result(
+        &self,
+        database: &Namespace,
+        table: &str,
+        catalog_table: Vec<String>,
+        operation: sail_common_datafusion::catalog::LakehouseOperation,
+        result: crate::r#gen::LoadTableResult,
+    ) -> CatalogResult<LakehouseResolvedTable> {
+        let storage_access = self.storage_access(database, table, &result).await?;
+        let rest_session = Self::rest_table_session_ref(
+            &self.name,
+            database,
+            table,
+            self.resolved_catalog_config().await?,
+            &result,
+        )?;
+        let status = Self::load_table_result_to_status(&self.name, database, table, result)?;
+        let mut resolved = resolve_lakehouse_table_status(
+            &self.name,
+            catalog_table,
+            &status,
+            operation,
+            &self.lakehouse_capabilities(),
+        );
+        resolved.execution.storage_access = storage_access;
+        resolved.execution.access_session = Some(TableAccessSessionRef {
+            fingerprint: rest_session.fingerprint.clone(),
+        });
+        if rest_session.scan_planning_mode.as_deref() == Some("server") {
+            resolved.execution.scan = ScanAuthority::IcebergRestServerSide;
+        }
+        resolved.execution.rest_session = Some(rest_session);
+        Ok(resolved)
+    }
+    async fn storage_access(
+        &self,
+        database: &Namespace,
+        table: &str,
+        result: &crate::r#gen::LoadTableResult,
+    ) -> CatalogResult<Option<Box<sail_common::storage::StorageAccessSpec>>> {
+        use sail_common::storage::{IcebergCredentialSource, StorageAccessSpec};
+        use sail_object_store::access::iceberg::{
+            IcebergStorageCredential, iceberg_storage_credentials,
+        };
+
+        let catalog_config = self.resolved_catalog_config().await?;
+        let mut config = catalog_config.properties.as_ref().clone();
+        config.extend(result.config.clone().unwrap_or_default());
+        let entries = result
+            .storage_credentials
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(|entry| IcebergStorageCredential {
+                prefix: entry.prefix.clone(),
+                config: entry.config.clone(),
+            })
+            .collect::<Vec<_>>();
+        let credentials = iceberg_storage_credentials(
+            result.metadata.location.as_deref().unwrap_or_default(),
+            &config,
+            &entries,
+        )
+        .map_err(|error| CatalogError::InvalidArgument(error.to_string()))?;
+        if credentials.is_empty() {
+            if Self::remote_signing_enabled(result.config.as_ref(), catalog_config) {
+                return Err(CatalogError::UnsupportedCapability(
+                    "Iceberg REST remote signing without vended credentials".to_string(),
+                ));
+            }
+            return Ok(None);
+        }
+        let uri = catalog_config
+            .uri()
+            .ok_or_else(|| CatalogError::InvalidArgument("Missing REST catalog URI".to_string()))?;
+        let base = url::Url::parse(&format!("{uri}/"))
+            .map_err(|_| CatalogError::InvalidArgument("Invalid REST catalog URI".to_string()))?;
+        let endpoint = if let Some(endpoint) = entries
+            .iter()
+            .find_map(|entry| entry.config.get("client.refresh-credentials-endpoint"))
+            .or_else(|| config.get("client.refresh-credentials-endpoint"))
+        {
+            base.join(endpoint).map_err(|_| {
+                CatalogError::InvalidArgument("Invalid credentials refresh endpoint".to_string())
+            })?
+        } else {
+            let mut endpoint = base;
+            let mut segments = endpoint.path_segments_mut().map_err(|_| {
+                CatalogError::InvalidArgument("Invalid REST catalog URI".to_string())
+            })?;
+            segments.pop_if_empty().push("v1");
+            if let Some(prefix) = catalog_config.prefix() {
+                for segment in prefix.split('/') {
+                    segments.push(segment);
+                }
+            }
+            segments
+                .push("namespaces")
+                .push(&catalog_config.namespace_string(database)?)
+                .push("tables")
+                .push(table)
+                .push("credentials");
+            drop(segments);
+            endpoint
+        };
+        let bearer_token = match result
+            .config
+            .as_ref()
+            .and_then(|config| config.get("token"))
+        {
+            Some(token) => Some(sail_common::storage::StorageSecret::new(token.clone())),
+            None => self.options.credentials.export_for_execution().await?,
+        };
+        Ok(Some(Box::new(StorageAccessSpec {
+            credentials,
+            refresh: Some(IcebergCredentialSource {
+                endpoint: endpoint.to_string(),
+                bearer_token,
+            }),
+        })))
+    }
+
     fn normalize_scan_planning_mode(value: &str) -> CatalogResult<String> {
         match value.trim().to_ascii_lowercase().as_str() {
             "client" => Ok("client".to_string()),
@@ -414,6 +668,7 @@ impl IcebergRestCatalogProvider {
         );
         Ok(IcebergRestTableSessionRef {
             fingerprint,
+            metadata_location: result.metadata_location.clone(),
             scan_planning_mode,
             storage_credential_count: credentials
                 .map(|credentials| credentials.len())
@@ -423,9 +678,9 @@ impl IcebergRestCatalogProvider {
     }
 
     fn validate_create_table_access_session_requirements(
-        catalog: &str,
-        database: &Namespace,
-        table: &str,
+        _catalog: &str,
+        _database: &Namespace,
+        _table: &str,
         catalog_config: &CatalogConfig<'_>,
         result: &crate::r#gen::LoadTableResult,
     ) -> CatalogResult<()> {
@@ -435,27 +690,6 @@ impl IcebergRestCatalogProvider {
             return Err(CatalogError::UnsupportedCapability(
                 "Iceberg REST access session requirements returned by create_table are not supported for create+write yet: server-side scan planning".to_string(),
             ));
-        }
-
-        let mut configured_storage_fallbacks = Vec::new();
-        if Self::remote_signing_enabled(result.config.as_ref(), catalog_config) {
-            configured_storage_fallbacks.push("remote signing");
-        }
-        if result
-            .storage_credentials
-            .as_ref()
-            .is_some_and(|credentials| !credentials.is_empty())
-        {
-            configured_storage_fallbacks.push("vended credentials");
-        }
-        if !configured_storage_fallbacks.is_empty() {
-            log::warn!(
-                "Iceberg REST catalog {} create_table for {}.{} returned {}; using configured object-store credentials for create+write",
-                catalog,
-                quote_namespace_if_needed(database),
-                quote_name_if_needed(table),
-                configured_storage_fallbacks.join(", "),
-            );
         }
 
         Ok(())
@@ -1122,114 +1356,27 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         table: &str,
         options: CreateTableOptions,
     ) -> CatalogResult<TableStatus> {
-        let CreateTableOptions {
-            columns,
-            comment,
-            constraints,
-            location,
-            format,
-            partition_by,
-            sort_by,
-            bucket_by,
-            mode,
-            properties,
-            is_external: _,
-            is_write_precondition,
-        } = options;
-
-        if !format.eq_ignore_ascii_case("iceberg") {
-            return Err(CatalogError::NotSupported(format!(
-                "Iceberg REST catalog cannot create '{format}' tables"
-            )));
-        }
-
-        let catalog_config = self.resolved_catalog_config().await?;
-
-        if mode.ignore_if_exists()
-            && let Ok(existing) = self.get_table(database, table).await
-        {
-            return Ok(existing);
-        }
-
-        if mode.is_replace() {
-            return Err(CatalogError::NotSupported(
-                "Replace table is not supported yet".to_string(),
-            ));
-        }
-
-        let format_version = requested_iceberg_format_version(&properties)?;
-        let fields = columns_to_nested_fields(&columns, format_version)?;
-
-        let struct_type = StructType::new(fields.clone());
-
-        let (name_to_id, _id_to_name) =
-            sail_iceberg::spec::SchemaBuilder::build_name_indexes(&struct_type);
-
-        let identifier_field_ids = constraints
-            .iter()
-            .filter_map(|c| match c {
-                CatalogTableConstraint::PrimaryKey { columns, .. } => Some(
-                    columns
-                        .iter()
-                        .filter_map(|col_name| name_to_id.get(col_name).copied())
-                        .collect::<Vec<_>>(),
-                ),
-                CatalogTableConstraint::Unique { .. } => None,
-            })
-            .flatten()
-            .collect::<Vec<_>>();
-
-        let schema = sail_iceberg::spec::Schema::builder()
-            .with_fields(fields)
-            .with_identifier_field_ids(identifier_field_ids.clone())
-            .build()
-            .map_err(|e| CatalogError::External(format!("Failed to build schema: {e}")))?;
-        let schema = crate::r#gen::Schema::try_from(schema)?;
-
-        let partition_spec = build_partition_spec(&partition_by, bucket_by.as_ref(), &name_to_id)?;
-        let write_order = build_sort_order(&sort_by, &name_to_id)?;
-
-        let mut props = HashMap::new();
-        if let Some(c) = comment {
-            props.insert("comment".to_string(), c);
-        }
-        for (k, v) in properties {
-            props.insert(k, v);
-        }
-
-        let request = crate::r#gen::CreateTableRequest {
-            name: table.to_string(),
-            location,
-            schema: Box::new(schema),
-            partition_spec,
-            write_order,
-            stage_create: Some(false),
-            properties: if props.is_empty() { None } else { Some(props) },
-        };
-
-        let prefix = catalog_config.prefix().map(ToOwned::to_owned);
-        let namespace = catalog_config.namespace_string(database)?;
-        let result = self
-            .with_auth_retry(|client| {
-                let prefix = prefix.clone();
-                let namespace = namespace.clone();
-                let request = request.clone();
-                async move { client.create_table(prefix, namespace, None, request).await }
-            })
-            .await?
-            .map(|response| response.inner)
-            .map_err(|e| CatalogError::External(format!("Failed to create table: {e}")))?;
-
-        if is_write_precondition {
-            Self::validate_create_table_access_session_requirements(
-                &self.name,
-                database,
-                table,
-                catalog_config,
-                &result,
-            )?;
-        }
+        let result = self.create_table_result(database, table, options).await?;
         Self::load_table_result_to_status(&self.name, database, table, result)
+    }
+
+    async fn create_table_for_write(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: sail_catalog::lakehouse::LakehouseCreateRequest,
+    ) -> CatalogResult<LakehouseResolvedTable> {
+        let result = self
+            .create_table_result(database, table, request.options)
+            .await?;
+        self.resolve_table_result(
+            database,
+            table,
+            request.catalog_table,
+            sail_common_datafusion::catalog::LakehouseOperation::Write,
+            result,
+        )
+        .await
     }
 
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
@@ -1431,6 +1578,29 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         Ok(LakehouseCommitOutcome::Committed { context, payload })
     }
 
+    async fn resolve_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: ResolveLakehouseTableRequest,
+    ) -> CatalogResult<LakehouseResolvedTable> {
+        let result = self
+            .load_table_result(
+                database,
+                table,
+                Some(REST_ACCESS_DELEGATION_VENDED_CREDENTIALS),
+            )
+            .await?;
+        self.resolve_table_result(
+            database,
+            table,
+            request.catalog_table,
+            request.operation,
+            result,
+        )
+        .await
+    }
+
     async fn begin_table_access(
         &self,
         database: &Namespace,
@@ -1449,8 +1619,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                 Some(REST_ACCESS_DELEGATION_VENDED_CREDENTIALS),
             )
             .await?;
-        // TODO: Convert preserved REST table-session credentials into operation-scoped
-        // FileIO/object-store access instead of only fingerprinting the session.
+        context.storage_access = self.storage_access(database, table, &result).await?;
         let rest_session =
             Self::rest_table_session_ref(&self.name, database, table, catalog_config, &result)?;
         if rest_session.scan_planning_mode.as_deref() == Some("server") {
@@ -3669,7 +3838,7 @@ mod tests {
         assert_eq!(session.reference.fingerprint, rest_session.fingerprint);
 
         let serialized = serde_json::to_string(&session.context).unwrap();
-        assert!(!serialized.contains("s3://bucket/table/metadata/v1.metadata.json"));
+        assert!(serialized.contains("s3://bucket/table/metadata/v1.metadata.json"));
         assert!(!serialized.contains("s3://credential-bucket/private-prefix"));
         assert!(!serialized.contains("s3.remote-signing-enabled"));
         assert!(!serialized.contains("s3.access-key-id"));
@@ -4266,6 +4435,72 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&token_path).unwrap(),
             "token-b".to_string()
+        );
+    }
+    #[tokio::test]
+    async fn create_for_write_preserves_initial_credentials_and_pointer() {
+        let ctx = TestContext::new(Some("test")).await;
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+        Mock::given(method("POST"))
+            .and(path(ctx.path("/namespaces/db1/tables")))
+            .and(header("X-Iceberg-Access-Delegation", "vended-credentials"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(create_table_response_with_access_session_hints()),
+            )
+            .expect(1)
+            .mount(&ctx.server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(ctx.path("/namespaces/db1/tables/table1")))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&ctx.server)
+            .await;
+        let provider = sail_catalog::provider::RuntimeAwareCatalogProvider::try_new(
+            || Ok(ctx.catalog),
+            tokio::runtime::Handle::current(),
+        )
+        .unwrap();
+        let provider = sail_catalog::provider::CachingCatalogProvider::new(
+            Arc::new(provider),
+            Default::default(),
+            None,
+        );
+        let resolved = provider
+            .create_table_for_write(
+                &namespace,
+                "table1",
+                sail_catalog::lakehouse::LakehouseCreateRequest {
+                    catalog_table: vec![
+                        "test".to_string(),
+                        "db1".to_string(),
+                        "table1".to_string(),
+                    ],
+                    options: simple_create_table_options(),
+                },
+            )
+            .await
+            .unwrap();
+        let access = resolved.execution.storage_access.as_ref().unwrap();
+        assert_eq!(
+            access.credentials[0].s3.access_key_id.expose(),
+            "AKIA-SECRET"
+        );
+        assert_eq!(
+            resolved
+                .execution
+                .rest_session
+                .as_ref()
+                .unwrap()
+                .metadata_location
+                .as_deref(),
+            Some("s3://bucket/table/metadata/v1.metadata.json")
+        );
+        assert!(
+            !serde_json::to_string(&resolved)
+                .unwrap()
+                .contains("storage-secret")
         );
     }
 }

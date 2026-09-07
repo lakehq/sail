@@ -6,6 +6,14 @@ use crate::error::{CatalogError, CatalogResult};
 #[async_trait::async_trait]
 pub trait CatalogCredentials: Debug + Send + Sync + 'static {
     async fn retrieve(&self) -> CatalogResult<Option<String>>;
+
+    async fn export_for_execution(
+        &self,
+    ) -> CatalogResult<Option<sail_common::storage::StorageSecret>> {
+        Err(CatalogError::UnsupportedCapability(
+            "worker credential refresh requires transferable catalog authentication; driver-local token sources are unsupported".to_string(),
+        ))
+    }
 }
 
 #[derive(Debug, Default)]
@@ -13,12 +21,17 @@ pub struct EmptyCatalogCredentials;
 
 #[async_trait::async_trait]
 impl CatalogCredentials for EmptyCatalogCredentials {
+    async fn export_for_execution(
+        &self,
+    ) -> CatalogResult<Option<sail_common::storage::StorageSecret>> {
+        Ok(None)
+    }
+
     async fn retrieve(&self) -> CatalogResult<Option<String>> {
         Ok(None)
     }
 }
 
-#[derive(Debug)]
 pub struct StaticCatalogCredentials {
     credential: String,
 }
@@ -31,6 +44,14 @@ impl StaticCatalogCredentials {
 
 #[async_trait::async_trait]
 impl CatalogCredentials for StaticCatalogCredentials {
+    async fn export_for_execution(
+        &self,
+    ) -> CatalogResult<Option<sail_common::storage::StorageSecret>> {
+        Ok(Some(sail_common::storage::StorageSecret::new(
+            self.credential.clone(),
+        )))
+    }
+
     async fn retrieve(&self) -> CatalogResult<Option<String>> {
         Ok(Some(self.credential.clone()))
     }
@@ -72,6 +93,12 @@ impl CatalogCredentials for FileCatalogCredentials {
             )));
         }
         Ok(Some(credential))
+    }
+}
+
+impl Debug for StaticCatalogCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("StaticCatalogCredentials([REDACTED])")
     }
 }
 

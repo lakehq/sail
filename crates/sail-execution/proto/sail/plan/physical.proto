@@ -71,6 +71,7 @@ message ExtendedPhysicalPlanNode {
     IcebergMergeMetadataExecNode iceberg_merge_metadata = 56;
     IcebergEqualityDeleteWriterExecNode iceberg_equality_delete_writer = 57;
     PartitionedTopKExecNode partitioned_top_k = 58;
+    StorageAccessExecNode storage_access = 59;
   }
 }
 
@@ -1165,4 +1166,9 @@ message BarrierExecNode {
   repeated bytes preconditions = 1;
   // The main plan to execute after all preconditions are exhausted.
   bytes plan = 2;
+}
+
+// Credentials are carried only by this trusted execution payload.
+message StorageAccessExecNode {
+  bytes access = 1;
 }

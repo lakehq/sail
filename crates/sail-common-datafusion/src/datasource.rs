@@ -248,7 +248,7 @@ impl SourceInfo {
 }
 
 /// Information required to create a data writer.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd)]
 pub struct SinkInfo {
     pub input: LogicalPlan,
     pub mode: SinkMode,
