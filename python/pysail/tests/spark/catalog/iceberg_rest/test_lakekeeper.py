@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING
@@ -31,21 +32,69 @@ INVALID_SECRET_ACCESS_KEY = "sail-invalid-secret-key"  # noqa: S105
 INVALID_SESSION_TOKEN = "sail-invalid-session-token"  # noqa: S105
 
 
-@pytest.fixture(scope="module", params=[False, True], ids=["bootstrap", "refresh"])
-def catalog_endpoint(request: pytest.FixtureRequest, lakekeeper_endpoint: str) -> Generator[str, None, None]:
+@pytest.fixture(scope="module", params=["bootstrap", "refresh", "oauth-refresh"])
+def credential_mode(request: pytest.FixtureRequest) -> str:
+    return request.param
+
+
+@pytest.fixture(scope="module")
+def catalog_endpoint(credential_mode: str, lakekeeper_endpoint: str) -> Generator[str, None, None]:
     """Force expired bootstrap credentials while leaving the real refresh API intact."""
-    if not request.param:
+    if credential_mode == "bootstrap":
         yield lakekeeper_endpoint
         return
 
     refresh_requests = []
+    issued_tokens: dict[str, float] = {}
+    rejected_requests: set[str] = set()
+    auth_lock = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args: object) -> None:
             pass
 
+        def respond_json(self, status: int, payload: dict) -> None:
+            content = json.dumps(payload).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+
         def forward(self) -> None:
             body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            if credential_mode == "oauth-refresh":
+                if self.path == "/oauth/token":
+                    form = urllib.parse.parse_qs(body.decode())
+                    if form != {
+                        "grant_type": ["client_credentials"],
+                        "client_id": ["sail-test-client"],
+                        "client_secret": ["sail-test-client-secret"],
+                        "scope": ["catalog"],
+                    }:
+                        self.respond_json(400, {"error": "invalid_client"})
+                        return
+                    with auth_lock:
+                        token = f"test-oauth-token-{len(issued_tokens)}"
+                        issued_tokens[token] = time.monotonic() + 2
+                    self.respond_json(200, {"access_token": token, "token_type": "Bearer", "expires_in": 2})
+                    return
+                bearer = self.headers.get("Authorization", "").removeprefix("Bearer ")
+                request_path = urllib.parse.urlsplit(self.path).path
+                with auth_lock:
+                    valid_token = issued_tokens.get(bearer, 0) > time.monotonic()
+                    reject_once = (
+                        request_path.endswith(("/config", "/credentials")) and request_path not in rejected_requests
+                    )
+                    if reject_once:
+                        rejected_requests.add(request_path)
+                        if valid_token:
+                            issued_tokens[bearer] = 0
+                if not valid_token or reject_once:
+                    self.respond_json(
+                        401, {"error": {"message": "token rejected", "type": "NotAuthorizedException", "code": 401}}
+                    )
+                    return
             response = requests.request(
                 self.command,
                 f"{lakekeeper_endpoint}{self.path}",
@@ -87,6 +136,10 @@ def catalog_endpoint(request: pytest.FixtureRequest, lakekeeper_endpoint: str) -
     try:
         yield f"http://127.0.0.1:{server.server_port}"
         assert refresh_requests
+        if credential_mode == "oauth-refresh":
+            assert len(issued_tokens) > 1
+            assert any(path.endswith("/config") for path in rejected_requests)
+            assert any(path.endswith("/credentials") for path in rejected_requests)
     finally:
         server.shutdown()
         server.server_close()
@@ -142,13 +195,22 @@ def seeded_lakekeeper_table(
 @pytest.fixture(scope="module")
 def remote(
     catalog_endpoint: str,
+    credential_mode: str,
     seeded_lakekeeper_table: None,
     seaweedfs_shared_endpoint: str,
     tmp_path_factory: pytest.TempPathFactory,
 ) -> Generator[str, None, None]:
     """Start a local cluster whose ambient S3 credentials cannot access the table."""
     del seeded_lakekeeper_table
-    catalog_config = f'[{{name="sail", type="iceberg-rest", uri="{catalog_endpoint}/catalog", warehouse="demo"}}]'
+    authentication = ""
+    if credential_mode == "oauth-refresh":
+        authentication = (
+            f', oauth_client_credentials={{token_endpoint="{catalog_endpoint}/oauth/token", '
+            'client_id="sail-test-client", client_secret="sail-test-client-secret", scope="catalog"}'
+        )
+    catalog_config = (
+        f'[{{name="sail", type="iceberg-rest", uri="{catalog_endpoint}/catalog", warehouse="demo"{authentication}}}]'
+    )
     aws_config_dir = tmp_path_factory.mktemp("lakekeeper-empty-aws-config")
     shared_credentials_file = aws_config_dir / "credentials"
     config_file = aws_config_dir / "config"

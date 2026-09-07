@@ -34,6 +34,7 @@ log = { workspace = true }
 url = { workspace = true }
 chrono = { workspace = true }
 reqwest = { workspace = true }
+rand = { workspace = true }
 dashmap = { workspace = true }
 hf-hub = { workspace = true }
 fastrace = { workspace = true }

@@ -39,16 +39,6 @@ pub fn iceberg_storage_credentials(
             .iter()
             .map(|entry| {
                 let mut properties = config.clone();
-                // A scoped entry must supply its own identity, even when table config has one.
-                for key in [
-                    "s3.access-key-id",
-                    "s3.secret-access-key",
-                    "s3.session-token",
-                    "s3.session-token-expires-at-ms",
-                    "expiration-time",
-                ] {
-                    properties.remove(key);
-                }
                 properties.extend(entry.config.clone());
                 IcebergStorageCredential {
                     prefix: entry.prefix.clone(),
@@ -88,15 +78,7 @@ pub fn iceberg_storage_credentials(
         .into_iter()
         .flatten()
         .min();
-        let path_style_access = properties
-            .get("s3.path-style-access")
-            .map(|value| {
-                value
-                    .parse::<bool>()
-                    .map_err(|_| plan_datafusion_err!("Invalid s3.path-style-access"))
-            })
-            .transpose()?
-            .unwrap_or(false);
+        let path_style_access = boolean_property(properties, "s3.path-style-access", false)?;
         let endpoint = properties.get("s3.endpoint").cloned();
         if let Some(endpoint) = &endpoint {
             validate_http_endpoint(endpoint)?;
@@ -119,6 +101,7 @@ pub fn iceberg_storage_credentials(
         }
         parsed.push(ScopedStorageCredential {
             prefix,
+            refresh: None,
             s3: S3StorageCredential {
                 connection: S3StorageConnection {
                     region: properties
@@ -144,7 +127,7 @@ pub fn iceberg_storage_credentials(
     Ok(parsed)
 }
 
-pub(super) fn normalize_prefix(raw: &str) -> Result<String> {
+pub fn normalize_prefix(raw: &str) -> Result<String> {
     let mut prefix =
         Url::parse(raw).map_err(|_| plan_datafusion_err!("Invalid storage credential prefix"))?;
     if !matches!(prefix.scheme(), "s3" | "s3a" | "s3n") {
@@ -161,7 +144,23 @@ pub(super) fn normalize_prefix(raw: &str) -> Result<String> {
     prefix
         .set_scheme("s3")
         .map_err(|_| plan_datafusion_err!("Invalid S3 scheme"))?;
-    Ok(prefix.as_str().trim_end_matches('/').to_string())
+    if prefix.path() == "/" {
+        prefix.set_path("");
+    }
+    Ok(prefix.to_string())
+}
+
+pub fn boolean_property(
+    properties: &HashMap<String, String>,
+    key: &str,
+    default: bool,
+) -> Result<bool> {
+    match properties.get(key) {
+        None => Ok(default),
+        Some(value) if value.eq_ignore_ascii_case("true") => Ok(true),
+        Some(value) if value.eq_ignore_ascii_case("false") => Ok(false),
+        Some(_) => plan_err!("Invalid Iceberg boolean property {key}"),
+    }
 }
 
 pub fn validate_http_endpoint(endpoint: &str) -> Result<Url> {

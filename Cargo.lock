@@ -7457,6 +7457,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "wiremock",
 ]
 
 [[package]]
@@ -7643,6 +7644,7 @@ dependencies = [
  "num-traits",
  "num_enum",
  "pin-project-lite",
+ "reqwest 0.12.28",
  "secrecy",
  "serde",
  "serde_json",
@@ -8014,6 +8016,7 @@ dependencies = [
  "lazy_static",
  "log",
  "object_store",
+ "rand 0.10.2",
  "regex",
  "reqwest 0.12.28",
  "sail-common",
@@ -8200,6 +8203,7 @@ dependencies = [
  "sail-system-store",
  "sail-telemetry",
  "secrecy",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",

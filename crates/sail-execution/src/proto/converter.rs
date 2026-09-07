@@ -29,6 +29,12 @@ use crate::proto::encode::{try_encode_field_ref, try_encode_higher_order_udf};
 #[derive(Default)]
 pub(super) struct RemotePhysicalProtoConverter {
     decoded_expressions: RefCell<HashMap<u64, Arc<dyn PhysicalExpr>>>,
+    storage_runtimes: RefCell<
+        HashMap<
+            sail_common::storage::StorageAccessSpec,
+            Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        >,
+    >,
 }
 
 impl Debug for RemotePhysicalProtoConverter {
@@ -57,12 +63,18 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
                 let [input] = extension.inputs.as_slice() else {
                     return plan_err!("StorageAccessExec requires one encoded input");
                 };
-                let spec = serde_json::from_slice(&access.access)
-                    .map_err(|_| plan_datafusion_err!("Invalid storage access payload"))?;
-                let runtime = sail_object_store::access::storage_runtime(
-                    &ctx.task_ctx().runtime_env(),
-                    &spec,
-                )?;
+                let spec: sail_common::storage::StorageAccessSpec =
+                    serde_json::from_slice(&access.access)
+                        .map_err(|_| plan_datafusion_err!("Invalid storage access payload"))?;
+                let runtime = match self.storage_runtimes.borrow_mut().entry(spec.clone()) {
+                    std::collections::hash_map::Entry::Occupied(entry) => entry.get().clone(),
+                    std::collections::hash_map::Entry::Vacant(entry) => entry
+                        .insert(sail_object_store::access::storage_runtime(
+                            &ctx.task_ctx().runtime_env(),
+                            &spec,
+                        )?)
+                        .clone(),
+                };
                 let task = sail_object_store::access::storage_task_context(
                     ctx.task_ctx(),
                     runtime.clone(),

@@ -7544,7 +7544,6 @@ mod tests {
         ]);
         let spec = sail_common::storage::StorageAccessSpec {
             credentials: iceberg_storage_credentials("s3://bucket/table", &config, &[])?,
-            refresh: None,
         };
         let context = TaskContext::default();
         assert!(
@@ -7609,6 +7608,60 @@ mod tests {
                     .is_err()
             );
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_storage_access_runtime_reuse_is_limited_to_one_decoded_plan_and_identity()
+    -> Result<()> {
+        use sail_common::storage::{StorageAccessSpec, StorageSecret};
+        use sail_object_store::access::iceberg::iceberg_storage_credentials;
+        use sail_object_store::access::storage_runtime;
+        use sail_physical_plan::storage_access::StorageAccessExec;
+        let properties = std::collections::HashMap::from([
+            ("s3.access-key-id".to_string(), "key".to_string()),
+            ("s3.secret-access-key".to_string(), "secret-a".to_string()),
+        ]);
+        let a = StorageAccessSpec {
+            credentials: iceberg_storage_credentials("s3://bucket/table", &properties, &[])?,
+        };
+        let mut b = a.clone();
+        b.credentials[0].s3.secret_access_key = StorageSecret::new("secret-b".to_string());
+        let context = TaskContext::default();
+        let schema = Arc::new(Schema::empty());
+        let mut inputs = Vec::new();
+        for spec in [a.clone(), a, b] {
+            let runtime = storage_runtime(&context.runtime_env(), &spec)?;
+            inputs.push(Arc::new(StorageAccessExec::new(
+                Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
+                    schema.clone(),
+                )),
+                spec,
+                runtime,
+            )) as Arc<dyn ExecutionPlan>);
+        }
+        let plan = datafusion::physical_plan::union::UnionExec::try_new(inputs)?;
+        let bytes = crate::proto::encode_remote_physical_plan(&RemoteExecutionCodec, plan)?;
+        let first =
+            crate::proto::decode_remote_physical_plan(&context, &RemoteExecutionCodec, &bytes)?;
+        let second =
+            crate::proto::decode_remote_physical_plan(&context, &RemoteExecutionCodec, &bytes)?;
+        let runtimes = |plan: &Arc<dyn ExecutionPlan>| -> Result<Vec<_>> {
+            plan.children()
+                .iter()
+                .map(|child| {
+                    child
+                        .downcast_ref::<StorageAccessExec>()
+                        .map(|owner| owner.runtime().clone())
+                        .ok_or_else(|| plan_datafusion_err!("Missing storage access owner"))
+                })
+                .collect()
+        };
+        let first = runtimes(&first)?;
+        let second = runtimes(&second)?;
+        assert!(Arc::ptr_eq(&first[0], &first[1]));
+        assert!(!Arc::ptr_eq(&first[0], &first[2]));
+        assert!(!Arc::ptr_eq(&first[0], &second[0]));
         Ok(())
     }
 }

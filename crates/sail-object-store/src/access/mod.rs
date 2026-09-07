@@ -15,7 +15,11 @@ use datafusion::execution::session_state::{SessionState, SessionStateBuilder};
 use datafusion_common::{Result, plan_datafusion_err};
 use object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey, AwsCredential};
 use object_store::{CredentialProvider, ObjectStore};
-use sail_common::storage::{S3StorageConnection, ScopedStorageCredential, StorageAccessSpec};
+use sail_common::storage::{
+    CatalogCredentialSource, IcebergCredentialSource, S3StorageConnection, ScopedStorageCredential,
+    StorageAccessSpec,
+};
+use sail_common::utils::oauth::{OAuth2Client, OAuth2Error};
 use tokio::sync::Mutex;
 use url::Url;
 
@@ -26,26 +30,68 @@ use self::router::{CredentialRoutingStore, StorageRoute};
 
 struct CredentialState {
     credentials: Vec<ScopedStorageCredential>,
-    refresh_at_ms: i64,
+    refresh_at_ms: Option<i64>,
+    failures: u32,
+    failure: Option<RefreshFailure>,
 }
 
 struct CredentialSession {
-    spec: StorageAccessSpec,
+    source: Option<IcebergCredentialSource>,
     state: Mutex<CredentialState>,
     client: reqwest::Client,
+    oauth: Option<OAuth2Client>,
+}
+
+#[derive(Debug, Clone, thiserror::Error)]
+enum RefreshError {
+    #[error("Storage credential refresh request failed")]
+    Transport,
+    #[error("Storage credential refresh returned HTTP {0}")]
+    Status(u16),
+    #[error("Storage credential refresh authentication failed: {0}")]
+    Authentication(#[from] OAuth2Error),
+    #[error("Invalid storage credential refresh response")]
+    Response,
+    #[error("Storage credential refresh changed routing or connection configuration")]
+    Routing,
+    #[error("Storage credential refresh returned expired credentials")]
+    Expired,
+}
+
+impl RefreshError {
+    fn is_transient(&self) -> bool {
+        match self {
+            Self::Transport | Self::Authentication(OAuth2Error::Transport) => true,
+            Self::Status(status) | Self::Authentication(OAuth2Error::Status(status)) => {
+                matches!(status, 408 | 429 | 500..=599)
+            }
+            _ => false,
+        }
+    }
+
+    fn into_store_error(self) -> object_store::Error {
+        object_store::Error::Generic {
+            store: "credential vending",
+            source: Box::new(self),
+        }
+    }
+}
+
+struct RefreshFailure {
+    error: RefreshError,
+    retry_at_ms: i64,
 }
 
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
-fn refresh_at(credentials: &[ScopedStorageCredential], now: i64) -> i64 {
+fn refresh_at(credentials: &[ScopedStorageCredential], now: i64) -> Option<i64> {
     credentials
         .iter()
         .filter_map(|entry| entry.s3.expires_at_ms)
-        .map(|expiry| expiry - ((expiry - now).max(0) / 5).min(60_000))
+        .map(|expiry| expiry.saturating_sub((expiry.saturating_sub(now).max(0) / 5).min(300_000)))
         .min()
-        .unwrap_or_else(|| now.saturating_add(300_000))
 }
 
 fn access_error(message: &'static str) -> object_store::Error {
@@ -56,23 +102,134 @@ fn access_error(message: &'static str) -> object_store::Error {
 }
 
 impl CredentialSession {
-    fn new(spec: StorageAccessSpec) -> Result<Arc<Self>> {
-        if let Some(source) = &spec.refresh {
+    fn new(credentials: Vec<ScopedStorageCredential>) -> Result<Arc<Self>> {
+        let source = credentials.first().and_then(|entry| entry.refresh.clone());
+        if credentials.is_empty() || credentials.iter().any(|entry| entry.refresh != source) {
+            return Err(plan_datafusion_err!(
+                "Storage credentials require one refresh source per session"
+            ));
+        }
+        let mut headers = reqwest::header::HeaderMap::new();
+        let mut oauth = None;
+        if let Some(source) = &source {
             validate_http_endpoint(&source.endpoint)?;
+            for (name, value) in &source.headers {
+                let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+                    .map_err(|_| plan_datafusion_err!("Invalid credential refresh header"))?;
+                let mut value = reqwest::header::HeaderValue::from_str(value.expose())
+                    .map_err(|_| plan_datafusion_err!("Invalid credential refresh header"))?;
+                value.set_sensitive(true);
+                headers.insert(name, value);
+            }
+            if let CatalogCredentialSource::OAuth2(credential) = &source.authentication {
+                oauth = Some(OAuth2Client::new(credential.clone()).map_err(|_| {
+                    plan_datafusion_err!("Invalid credential refresh OAuth2 configuration")
+                })?);
+            }
+            if let CatalogCredentialSource::Bearer(token) = &source.authentication {
+                reqwest::header::HeaderValue::from_str(&format!("Bearer {}", token.expose()))
+                    .map_err(|_| plan_datafusion_err!("Invalid credential refresh bearer token"))?;
+            }
         }
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(30))
+            .default_headers(headers)
             .build()
             .map_err(|_| plan_datafusion_err!("Cannot create storage credentials client"))?;
         Ok(Arc::new(Self {
             state: Mutex::new(CredentialState {
-                refresh_at_ms: refresh_at(&spec.credentials, now_ms()),
-                credentials: spec.credentials.clone(),
+                refresh_at_ms: refresh_at(&credentials, now_ms()),
+                credentials,
+                failures: 0,
+                failure: None,
             }),
-            spec,
+            source,
             client,
+            oauth,
         }))
+    }
+
+    async fn fetch(
+        &self,
+        source: &IcebergCredentialSource,
+    ) -> std::result::Result<LoadCredentialsResponse, RefreshError> {
+        for attempt in 0..2 {
+            let token = match &source.authentication {
+                CatalogCredentialSource::None => None,
+                CatalogCredentialSource::Bearer(token) => Some(token.clone()),
+                CatalogCredentialSource::OAuth2(_) => Some(
+                    self.oauth
+                        .as_ref()
+                        .ok_or(RefreshError::Response)?
+                        .token()
+                        .await?,
+                ),
+            };
+            let mut request = self
+                .client
+                .get(&source.endpoint)
+                .header("X-Iceberg-Access-Delegation", "vended-credentials");
+            if let Some(token) = &token {
+                request = request.bearer_auth(token.expose());
+            }
+            let response = request.send().await.map_err(|_| RefreshError::Transport)?;
+            if response.status() == reqwest::StatusCode::UNAUTHORIZED
+                && attempt == 0
+                && let (Some(oauth), Some(token)) = (&self.oauth, &token)
+            {
+                oauth.reject(token.expose()).await;
+                continue;
+            }
+            if !response.status().is_success() {
+                return Err(RefreshError::Status(response.status().as_u16()));
+            }
+            return response.json().await.map_err(|_| RefreshError::Response);
+        }
+        Err(RefreshError::Status(401))
+    }
+
+    fn refreshed_credentials(
+        previous: &[ScopedStorageCredential],
+        response: LoadCredentialsResponse,
+    ) -> std::result::Result<Vec<ScopedStorageCredential>, RefreshError> {
+        let mut credentials = Vec::new();
+        for mut entry in response.credentials {
+            entry.prefix = normalize_prefix(&entry.prefix).map_err(|_| RefreshError::Response)?;
+            let Some(previous) = previous
+                .iter()
+                .find(|previous| previous.prefix == entry.prefix)
+            else {
+                // A table endpoint may also return credentials owned by another refresh source.
+                continue;
+            };
+            if credentials
+                .iter()
+                .any(|credential: &ScopedStorageCredential| credential.prefix == entry.prefix)
+            {
+                return Err(RefreshError::Routing);
+            }
+            let config = connection_properties(&previous.s3.connection);
+            let mut parsed = iceberg_storage_credentials("", &config, &[entry])
+                .map_err(|_| RefreshError::Response)?;
+            let credential = parsed.first_mut().ok_or(RefreshError::Response)?;
+            if credential.s3.connection != previous.s3.connection {
+                return Err(RefreshError::Routing);
+            }
+            if credential
+                .s3
+                .expires_at_ms
+                .is_some_and(|expiry| expiry <= now_ms())
+            {
+                return Err(RefreshError::Expired);
+            }
+            credential.refresh = previous.refresh.clone();
+            credentials.extend(parsed);
+        }
+        if credentials.len() != previous.len() {
+            return Err(RefreshError::Routing);
+        }
+        Ok(credentials)
     }
 
     async fn credential(
@@ -81,71 +238,51 @@ impl CredentialSession {
         connection: &S3StorageConnection,
     ) -> object_store::Result<Arc<AwsCredential>> {
         let mut state = self.state.lock().await;
-        if now_ms() >= state.refresh_at_ms
-            && let Some(source) = &self.spec.refresh
+        if state
+            .refresh_at_ms
+            .is_some_and(|refresh_at| now_ms() >= refresh_at)
+            && let Some(source) = &self.source
+            && state
+                .failure
+                .as_ref()
+                .is_none_or(|failure| now_ms() >= failure.retry_at_ms)
         {
-            let mut request = self
-                .client
-                .get(&source.endpoint)
-                .header("X-Iceberg-Access-Delegation", "vended-credentials");
-            if let Some(token) = &source.bearer_token {
-                request = request.bearer_auth(token.expose());
-            }
-            let response = request
-                .send()
+            let result = self
+                .fetch(source)
                 .await
-                .map_err(|_| access_error("Storage credential refresh request failed"))?;
-            if !response.status().is_success() {
-                return Err(object_store::Error::Generic {
-                    store: "credential vending",
-                    source: Box::new(std::io::Error::other(format!(
-                        "Storage credential refresh returned HTTP {}",
-                        response.status().as_u16()
-                    ))),
-                });
+                .and_then(|response| Self::refreshed_credentials(&state.credentials, response));
+            match result {
+                Ok(credentials) => {
+                    state.refresh_at_ms = refresh_at(&credentials, now_ms());
+                    state.credentials = credentials;
+                    state.failures = 0;
+                    state.failure = None;
+                }
+                Err(error) => {
+                    state.failures = state.failures.saturating_add(1);
+                    let delay = (500_i64 << state.failures.min(6)).min(30_000);
+                    let jitter = rand::random_range(0..=delay / 4);
+                    state.failure = Some(RefreshFailure {
+                        error,
+                        retry_at_ms: now_ms().saturating_add(delay + jitter),
+                    });
+                }
             }
-            let response: LoadCredentialsResponse = response
-                .json()
-                .await
-                .map_err(|_| access_error("Invalid storage credential refresh response"))?;
-            // Refresh responses may omit connection hints already supplied by load-table.
-            let mut credentials = Vec::new();
-            for mut entry in response.credentials {
-                entry.prefix = normalize_prefix(&entry.prefix)
-                    .map_err(|_| access_error("Invalid refreshed storage credential prefix"))?;
-                let previous = state
-                    .credentials
-                    .iter()
-                    .find(|previous| previous.prefix == entry.prefix)
-                    .ok_or_else(|| {
-                        access_error("Storage credential refresh changed prefix routing")
-                    })?;
-                let config = connection_properties(&previous.s3.connection);
-                credentials.extend(
-                    iceberg_storage_credentials("", &config, &[entry])
-                        .map_err(|_| access_error("Invalid refreshed storage credentials"))?,
-                );
-            }
-            if credentials.len() != state.credentials.len()
-                || state.credentials.iter().any(|previous| {
-                    !credentials.iter().any(|entry| {
-                        previous.prefix == entry.prefix
-                            && previous.s3.connection == entry.s3.connection
-                    })
-                })
-            {
-                return Err(access_error(
-                    "Storage credential refresh changed routing or connection configuration",
-                ));
-            }
-            state.refresh_at_ms = refresh_at(&credentials, now_ms());
-            state.credentials = credentials;
         }
         let credential = state
             .credentials
             .iter()
             .find(|entry| entry.prefix == prefix && &entry.s3.connection == connection)
             .ok_or_else(|| access_error("Storage credential route is unavailable"))?;
+        if let Some(failure) = &state.failure
+            && (!failure.error.is_transient()
+                || credential
+                    .s3
+                    .expires_at_ms
+                    .is_none_or(|expiry| expiry <= now_ms()))
+        {
+            return Err(failure.error.clone().into_store_error());
+        }
         if credential
             .s3
             .expires_at_ms
@@ -247,7 +384,18 @@ pub fn storage_runtime(
     base: &Arc<RuntimeEnv>,
     spec: &StorageAccessSpec,
 ) -> Result<Arc<RuntimeEnv>> {
-    let session = CredentialSession::new(spec.clone())?;
+    let mut groups: HashMap<Option<IcebergCredentialSource>, Vec<ScopedStorageCredential>> =
+        HashMap::new();
+    for entry in &spec.credentials {
+        groups
+            .entry(entry.refresh.clone())
+            .or_default()
+            .push(entry.clone());
+    }
+    let sessions = groups
+        .into_iter()
+        .map(|(source, credentials)| Ok((source, CredentialSession::new(credentials)?)))
+        .collect::<Result<HashMap<_, _>>>()?;
     let mut routes: HashMap<String, Vec<StorageRoute>> = HashMap::new();
     for entry in &spec.credentials {
         let url = Url::parse(&entry.prefix)
@@ -261,7 +409,10 @@ pub fn storage_runtime(
             .with_region(&connection.region)
             .with_virtual_hosted_style_request(!connection.path_style_access)
             .with_credentials(Arc::new(VendedS3CredentialProvider {
-                session: session.clone(),
+                session: sessions
+                    .get(&entry.refresh)
+                    .ok_or_else(|| plan_datafusion_err!("Missing storage credential session"))?
+                    .clone(),
                 prefix: entry.prefix.clone(),
                 connection: connection.clone(),
             }));
@@ -289,10 +440,14 @@ pub fn storage_runtime(
         let store = builder
             .build()
             .map_err(|_| plan_datafusion_err!("Invalid delegated S3 configuration"))?;
-        routes.entry(origin(&url)).or_default().push((
-            object_store::path::Path::from_url_path(url.path())?,
-            Arc::new(store),
-        ));
+        let mut prefix = object_store::path::Path::from_url_path(url.path())?.to_string();
+        if !prefix.is_empty() && url.path().ends_with('/') {
+            prefix.push('/');
+        }
+        routes
+            .entry(origin(&url))
+            .or_default()
+            .push((prefix, Arc::new(store)));
     }
     let stores = routes
         .into_iter()

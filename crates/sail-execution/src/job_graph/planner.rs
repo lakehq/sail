@@ -1510,7 +1510,6 @@ mod tests {
         use sail_physical_plan::storage_access::StorageAccessExec;
         let spec = sail_common::storage::StorageAccessSpec {
             credentials: vec![],
-            refresh: None,
         };
         let runtime = datafusion::execution::TaskContext::default().runtime_env();
         let input = Arc::new(

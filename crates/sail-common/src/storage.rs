@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -26,13 +27,13 @@ impl fmt::Debug for StorageSecret {
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct StorageAccessSpec {
     pub credentials: Vec<ScopedStorageCredential>,
-    pub refresh: Option<IcebergCredentialSource>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct ScopedStorageCredential {
     pub prefix: String,
     pub s3: S3StorageCredential,
+    pub refresh: Option<IcebergCredentialSource>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
@@ -56,7 +57,29 @@ pub struct S3StorageConnection {
 #[derive(Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct IcebergCredentialSource {
     pub endpoint: String,
-    pub bearer_token: Option<StorageSecret>,
+    pub authentication: CatalogCredentialSource,
+    pub headers: BTreeMap<String, StorageSecret>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+pub enum CatalogCredentialSource {
+    None,
+    Bearer(StorageSecret),
+    OAuth2(OAuth2ClientCredentials),
+}
+
+#[derive(Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+pub struct OAuth2ClientCredentials {
+    pub endpoint: String,
+    pub client_id: String,
+    pub client_secret: StorageSecret,
+    pub scope: Option<String>,
+}
+
+impl fmt::Debug for OAuth2ClientCredentials {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("OAuth2ClientCredentials [REDACTED]")
+    }
 }
 
 impl fmt::Debug for IcebergCredentialSource {

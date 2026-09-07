@@ -203,8 +203,16 @@ impl IcebergRestCatalogProvider {
         Fut: std::future::Future<Output = Result<T, ApiError<E>>>,
     {
         let client = self.bootstrap_client().await?;
+        let headers = client.headers.clone();
         let result = call(client).await;
         if matches!(&result, Err(e) if e.status() == Some(reqwest::StatusCode::UNAUTHORIZED)) {
+            if let Some(token) = headers
+                .get(reqwest::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.strip_prefix("Bearer "))
+            {
+                self.options.credentials.reject(token).await;
+            }
             let client = self.bootstrap_client().await?;
             return Ok(call(client).await);
         }
@@ -224,8 +232,16 @@ impl IcebergRestCatalogProvider {
         Fut: std::future::Future<Output = Result<T, ApiError<E>>>,
     {
         let client = self.client().await?;
+        let headers = client.headers.clone();
         let result = call(client).await;
         if matches!(&result, Err(e) if e.status() == Some(reqwest::StatusCode::UNAUTHORIZED)) {
+            if let Some(token) = headers
+                .get(reqwest::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.strip_prefix("Bearer "))
+            {
+                self.options.credentials.reject(token).await;
+            }
             let client = self.client().await?;
             return Ok(call(client).await);
         }
@@ -445,7 +461,7 @@ impl IcebergRestCatalogProvider {
         operation: sail_common_datafusion::catalog::LakehouseOperation,
         result: crate::r#gen::LoadTableResult,
     ) -> CatalogResult<LakehouseResolvedTable> {
-        let storage_access = self.storage_access(database, table, &result).await?;
+        let storage_access = self.storage_access(&result).await?;
         let rest_session = Self::rest_table_session_ref(
             &self.name,
             database,
@@ -473,13 +489,14 @@ impl IcebergRestCatalogProvider {
     }
     async fn storage_access(
         &self,
-        database: &Namespace,
-        table: &str,
         result: &crate::r#gen::LoadTableResult,
     ) -> CatalogResult<Option<Box<sail_common::storage::StorageAccessSpec>>> {
-        use sail_common::storage::{IcebergCredentialSource, StorageAccessSpec};
+        use sail_common::storage::{
+            CatalogCredentialSource, IcebergCredentialSource, StorageAccessSpec, StorageSecret,
+        };
         use sail_object_store::access::iceberg::{
-            IcebergStorageCredential, iceberg_storage_credentials,
+            IcebergStorageCredential, boolean_property, iceberg_storage_credentials,
+            normalize_prefix, validate_http_endpoint,
         };
 
         let catalog_config = self.resolved_catalog_config().await?;
@@ -495,7 +512,7 @@ impl IcebergRestCatalogProvider {
                 config: entry.config.clone(),
             })
             .collect::<Vec<_>>();
-        let credentials = iceberg_storage_credentials(
+        let mut credentials = iceberg_storage_credentials(
             result.metadata.location.as_deref().unwrap_or_default(),
             &config,
             &entries,
@@ -514,49 +531,79 @@ impl IcebergRestCatalogProvider {
             .ok_or_else(|| CatalogError::InvalidArgument("Missing REST catalog URI".to_string()))?;
         let base = url::Url::parse(&format!("{uri}/"))
             .map_err(|_| CatalogError::InvalidArgument("Invalid REST catalog URI".to_string()))?;
-        let endpoint = if let Some(endpoint) = entries
+        let entry_configs = entries
             .iter()
-            .find_map(|entry| entry.config.get("client.refresh-credentials-endpoint"))
-            .or_else(|| config.get("client.refresh-credentials-endpoint"))
-        {
-            base.join(endpoint).map_err(|_| {
+            .map(|entry| normalize_prefix(&entry.prefix).map(|prefix| (prefix, &entry.config)))
+            .collect::<Result<HashMap<_, _>, _>>()
+            .map_err(|error| CatalogError::InvalidArgument(error.to_string()))?;
+        let mut exported_authentication: Option<CatalogCredentialSource> = None;
+        for credential in &mut credentials {
+            let mut properties = config.clone();
+            if let Some(entry) = entry_configs.get(&credential.prefix) {
+                properties.extend((*entry).clone());
+            }
+            if !boolean_property(&properties, "client.refresh-credentials-enabled", true)
+                .map_err(|error| CatalogError::InvalidArgument(error.to_string()))?
+            {
+                continue;
+            }
+            let Some(endpoint) = properties
+                .get("client.refresh-credentials-endpoint")
+                .filter(|endpoint| !endpoint.is_empty())
+            else {
+                continue;
+            };
+            let endpoint = base.join(endpoint).map_err(|_| {
                 CatalogError::InvalidArgument("Invalid credentials refresh endpoint".to_string())
-            })?
-        } else {
-            let mut endpoint = base;
-            let mut segments = endpoint.path_segments_mut().map_err(|_| {
-                CatalogError::InvalidArgument("Invalid REST catalog URI".to_string())
             })?;
-            segments.pop_if_empty().push("v1");
-            if let Some(prefix) = catalog_config.prefix() {
-                for segment in prefix.split('/') {
-                    segments.push(segment);
+            validate_http_endpoint(endpoint.as_str())
+                .map_err(|error| CatalogError::InvalidArgument(error.to_string()))?;
+            let authentication = if let Some(token) = properties.get("token") {
+                CatalogCredentialSource::Bearer(StorageSecret::new(token.clone()))
+            } else {
+                match &exported_authentication {
+                    Some(authentication) => authentication.clone(),
+                    None => {
+                        let authentication =
+                            self.options.credentials.export_for_execution().await?;
+                        exported_authentication = Some(authentication.clone());
+                        authentication
+                    }
+                }
+            };
+            let mut headers = std::collections::BTreeMap::new();
+            for layer in [
+                Some(catalog_config.properties.as_ref()),
+                result.config.as_ref(),
+                entry_configs.get(&credential.prefix).copied(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                for (name, value) in layer {
+                    if let Some(name) = name.strip_prefix("header.") {
+                        let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+                            .map_err(|_| {
+                                CatalogError::InvalidArgument(
+                                    "Invalid credential refresh header".to_string(),
+                                )
+                            })?;
+                        reqwest::header::HeaderValue::from_str(value).map_err(|_| {
+                            CatalogError::InvalidArgument(
+                                "Invalid credential refresh header".to_string(),
+                            )
+                        })?;
+                        headers.insert(name.to_string(), StorageSecret::new(value.clone()));
+                    }
                 }
             }
-            segments
-                .push("namespaces")
-                .push(&catalog_config.namespace_string(database)?)
-                .push("tables")
-                .push(table)
-                .push("credentials");
-            drop(segments);
-            endpoint
-        };
-        let bearer_token = match result
-            .config
-            .as_ref()
-            .and_then(|config| config.get("token"))
-        {
-            Some(token) => Some(sail_common::storage::StorageSecret::new(token.clone())),
-            None => self.options.credentials.export_for_execution().await?,
-        };
-        Ok(Some(Box::new(StorageAccessSpec {
-            credentials,
-            refresh: Some(IcebergCredentialSource {
+            credential.refresh = Some(IcebergCredentialSource {
                 endpoint: endpoint.to_string(),
-                bearer_token,
-            }),
-        })))
+                authentication,
+                headers,
+            });
+        }
+        Ok(Some(Box::new(StorageAccessSpec { credentials })))
     }
 
     fn normalize_scan_planning_mode(value: &str) -> CatalogResult<String> {
@@ -1619,7 +1666,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                 Some(REST_ACCESS_DELEGATION_VENDED_CREDENTIALS),
             )
             .await?;
-        context.storage_access = self.storage_access(database, table, &result).await?;
+        context.storage_access = self.storage_access(&result).await?;
         let rest_session =
             Self::rest_table_session_ref(&self.name, database, table, catalog_config, &result)?;
         if rest_session.scan_planning_mode.as_deref() == Some("server") {
@@ -4501,6 +4548,165 @@ mod tests {
             !serde_json::to_string(&resolved)
                 .unwrap()
                 .contains("storage-secret")
+        );
+    }
+
+    #[tokio::test]
+    async fn storage_refresh_requires_an_enabled_advertised_endpoint() {
+        let mut ctx = TestContext::new(Some("test")).await;
+        let directory = tempfile::TempDir::new().unwrap();
+        let token = directory.path().join("token");
+        std::fs::write(&token, "driver-token").unwrap();
+        ctx.catalog.options.credentials = Arc::new(FileCatalogCredentials::new(token));
+        for properties in [
+            serde_json::json!({}),
+            serde_json::json!({"client.refresh-credentials-endpoint": ""}),
+            serde_json::json!({"client.refresh-credentials-enabled": "FaLsE", "client.refresh-credentials-endpoint": "invalid://endpoint"}),
+        ] {
+            let mut payload = create_table_response_with_access_session_hints();
+            payload["config"] = properties;
+            let response = serde_json::from_value(payload).unwrap();
+            let access = ctx
+                .catalog
+                .storage_access(&response)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(access.credentials.len(), 1);
+            assert!(access.credentials[0].refresh.is_none());
+        }
+        let mut payload = create_table_response_with_access_session_hints();
+        payload["config"]["client.refresh-credentials-endpoint"] = serde_json::json!("credentials");
+        let response = serde_json::from_value(payload.clone()).unwrap();
+        assert!(matches!(
+            ctx.catalog.storage_access(&response).await,
+            Err(CatalogError::UnsupportedCapability(_))
+        ));
+        payload["config"]["client.refresh-credentials-enabled"] = serde_json::json!("invalid");
+        let response = serde_json::from_value(payload).unwrap();
+        assert!(matches!(
+            ctx.catalog.storage_access(&response).await,
+            Err(CatalogError::InvalidArgument(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn storage_refresh_preserves_each_sources_endpoint_authentication_and_headers() {
+        use sail_common::storage::CatalogCredentialSource;
+        let ctx = TestContext::new(Some("test")).await;
+        let mut payload = create_table_response_with_access_session_hints();
+        payload["config"] = serde_json::json!({
+            "token": "table-token",
+            "header.x-catalog-context": "table-context",
+            "client.refresh-credentials-endpoint": "/shared/credentials"
+        });
+        let mut first = payload["storage-credentials"][0].clone();
+        first["config"]["client.refresh-credentials-endpoint"] =
+            serde_json::json!("relative/credentials?referenced-by=db.view");
+        first["config"]["token"] = serde_json::json!("entry-token");
+        first["config"]["header.X-Catalog-Context"] = serde_json::json!("entry-context");
+        let mut second = payload["storage-credentials"][0].clone();
+        second["prefix"] = serde_json::json!("s3://bucket/second/");
+        let mut third = second.clone();
+        third["prefix"] = serde_json::json!("s3://bucket/third");
+        third["config"]["client.refresh-credentials-enabled"] = serde_json::json!("false");
+        payload["storage-credentials"] = serde_json::json!([first, second, third]);
+        let response = serde_json::from_value(payload).unwrap();
+        let access = ctx
+            .catalog
+            .storage_access(&response)
+            .await
+            .unwrap()
+            .unwrap();
+        let first = access.credentials[0].refresh.as_ref().unwrap();
+        assert_eq!(
+            first.endpoint,
+            format!(
+                "{}/relative/credentials?referenced-by=db.view",
+                ctx.server.uri()
+            )
+        );
+        assert!(
+            matches!(&first.authentication, CatalogCredentialSource::Bearer(token) if token.expose() == "entry-token")
+        );
+        assert_eq!(first.headers["x-catalog-context"].expose(), "entry-context");
+        let second = access.credentials[1].refresh.as_ref().unwrap();
+        assert_eq!(
+            second.endpoint,
+            format!("{}/shared/credentials", ctx.server.uri())
+        );
+        assert!(
+            matches!(&second.authentication, CatalogCredentialSource::Bearer(token) if token.expose() == "table-token")
+        );
+        assert_eq!(access.credentials[1].prefix, "s3://bucket/second/");
+        assert!(access.credentials[2].refresh.is_none());
+        let debug = format!("{access:?}");
+        for secret in [
+            "table-token",
+            "entry-token",
+            "entry-context",
+            "storage-secret",
+        ] {
+            assert!(!debug.contains(secret));
+        }
+    }
+
+    #[tokio::test]
+    async fn catalog_oauth_recovers_from_unauthorized_and_exports_renewable_authentication() {
+        use sail_catalog::credentials::OAuthCatalogCredentials;
+        use sail_common::storage::{
+            CatalogCredentialSource, OAuth2ClientCredentials, StorageSecret,
+        };
+        let server = MockServer::start().await;
+        let token_requests = AtomicUsize::new(0);
+        Mock::given(method("POST")).and(path("/oauth/token"))
+            .respond_with(move |_request: &Request| {
+                let token = if token_requests.fetch_add(1, Ordering::SeqCst) == 0 { "old-token" } else { "new-token" };
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"access_token": token, "token_type": "Bearer", "expires_in": 3600}))
+            }).expect(2).mount(&server).await;
+        Mock::given(method("GET")).and(path("/v1/config"))
+            .and(header("authorization", "Bearer old-token"))
+            .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({"error": {"message": "expired", "type": "NotAuthorizedException", "code": 401}})))
+            .expect(1).mount(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/v1/config"))
+            .and(header("authorization", "Bearer new-token"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"defaults": {}, "overrides": {}})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let oauth = OAuth2ClientCredentials {
+            endpoint: format!("{}/oauth/token", server.uri()),
+            client_id: "catalog-client".to_string(),
+            client_secret: StorageSecret::new("catalog-secret".to_string()),
+            scope: Some("catalog".to_string()),
+        };
+        let catalog = IcebergRestCatalogProvider::new(
+            "oauth".to_string(),
+            IcebergRestCatalogOptions {
+                credentials: Arc::new(OAuthCatalogCredentials::try_new(oauth.clone()).unwrap()),
+                properties: HashMap::from([("uri".to_string(), server.uri())]),
+            },
+        );
+        let mut payload = create_table_response_with_access_session_hints();
+        payload["config"]["client.refresh-credentials-endpoint"] = serde_json::json!("credentials");
+        let response = serde_json::from_value(payload).unwrap();
+        let access = catalog.storage_access(&response).await.unwrap().unwrap();
+        assert_eq!(
+            access.credentials[0]
+                .refresh
+                .as_ref()
+                .unwrap()
+                .authentication,
+            CatalogCredentialSource::OAuth2(oauth)
+        );
+        assert!(
+            !serde_json::to_string(&access)
+                .unwrap()
+                .contains("new-token")
         );
     }
 }

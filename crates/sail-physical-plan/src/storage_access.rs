@@ -42,6 +42,10 @@ impl StorageAccessExec {
         &self.spec
     }
 
+    pub fn runtime(&self) -> &Arc<RuntimeEnv> {
+        &self.runtime
+    }
+
     fn bind_input(&self, input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
         Arc::new(Self::new(input, self.spec.clone(), self.runtime.clone()))
     }
