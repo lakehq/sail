@@ -19,6 +19,16 @@ def safe_sort_key(row):
     return tuple((v is not None, v) for v in row)
 
 
+def test_parquet_binary_column_collects_as_binary(spark, tmp_path):
+    # collect() is the honest probe (unlike toArrow(), which casts view types away): a binary
+    # column read as BinaryView must still reach the client as Spark binary.
+    path = str(tmp_path / "parquet_binary_collect.parquet")
+    pq.write_table(pa.table({"b": pa.array([b"\x00\x01", None], type=pa.binary())}), path)
+    df = spark.read.parquet(path)
+    assert df.schema.simpleString() == "struct<b:binary>"
+    assert {bytes(r.b) if r.b is not None else None for r in df.collect()} == {b"\x00\x01", None}
+
+
 def test_parquet_read_write_basic(spark, sample_df, tmp_path):
     path = str(tmp_path / "parquet_basic")
     sample_df.write.parquet(path, mode="overwrite")

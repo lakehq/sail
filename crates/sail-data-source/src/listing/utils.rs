@@ -53,8 +53,12 @@ fn normalize_unsupported_fields(schema: &Schema) -> Schema {
         .fields()
         .iter()
         .map(|field| match field.data_type() {
-            // TODO: Spark doesn't support Utf8View
+            // Spark has neither Utf8View nor BinaryView, so coerce view types to their plain
+            // counterparts. This also lets a directory that mixes a view file with a plain one
+            // (e.g. a raw write followed by an INSERT) merge, since `Schema::try_merge` rejects
+            // Utf8View-vs-Utf8 and BinaryView-vs-Binary.
             DataType::Utf8View => field.as_ref().clone().with_data_type(DataType::Utf8),
+            DataType::BinaryView => field.as_ref().clone().with_data_type(DataType::Binary),
             // Spark timestamps are microseconds, so second and millisecond timestamps are
             // widened here; the conversion would otherwise reject them even though the
             // widening is lossless. Nanoseconds are left alone so that they are still
@@ -359,6 +363,7 @@ mod tests {
         let schema = Arc::new(
             Schema::new(vec![
                 Field::new("view", DataType::Utf8View, true),
+                Field::new("binview", DataType::BinaryView, true),
                 Field::new(
                     "ms",
                     DataType::Timestamp(TimeUnit::Millisecond, None),
@@ -380,8 +385,9 @@ mod tests {
         let schema = rewrite_unsupported_fields(schema);
         let field = |name: &str| schema.field_with_name(name).unwrap().clone();
 
-        // Spark has no `Utf8View` type.
+        // Spark has neither `Utf8View` nor `BinaryView`; both coerce to their plain forms.
         assert_eq!(field("view").data_type(), &DataType::Utf8);
+        assert_eq!(field("binview").data_type(), &DataType::Binary);
 
         // Second and millisecond timestamps widen to microseconds, keeping the time zone.
         let us = DataType::Timestamp(TimeUnit::Microsecond, None);
