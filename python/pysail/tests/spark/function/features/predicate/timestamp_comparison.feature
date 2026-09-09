@@ -32,7 +32,7 @@ Feature: Timestamp and string predicate coercion
         """
         SELECT COUNT(*) AS matched
         FROM VALUES (TIMESTAMP '2024-05-01 12:00:00.123456') AS t(event_time)
-        WHERE event_time IN (SELECT '2024-05-01 12:00:00.123456789')
+        WHERE event_time IN (SELECT '2024-05-01 12:00:00.123456789' AS candidate)
         """
       Then query result
         | matched |
@@ -50,11 +50,64 @@ Feature: Timestamp and string predicate coercion
         """
         SELECT COUNT(*) AS matched
         FROM VALUES (TIMESTAMP '2024-05-01 12:00:00.123456') AS t(event_time)
-        WHERE event_time IN (SELECT '2024-05-01 12:00:00.123456789')
+        WHERE event_time IN (SELECT '2024-05-01 12:00:00.123456789' AS candidate)
         """
       Then query result
         | matched |
         | 1       |
+
+    @sail-bug
+    Scenario: An unaliased string literal in an IN subquery is a PARSE error
+      # Spark's `SELECT` is not a reserved keyword, so inside `IN (...)` the ANTLR grammar
+      # resolves `SELECT '<string>'` through the `inList` alternative and reads the two
+      # tokens as a typed literal (`identifier stringLit`, AstBuilder.visitTypeConstructor)
+      # rather than as a subquery projection. The result is a parse-time
+      # UNSUPPORTED_TYPED_LITERAL naming "SELECT" as the type.
+      #
+      # Sail's parser instead accepts it and evaluates it as a real subquery, returning 0 —
+      # so Sail is a strict superset of Spark's grammar here, and any test written against
+      # Sail alone reads as green.
+      #
+      # The three scenarios below are what make this discriminate. Only the FIRST is
+      # rejected: `IN (SELECT 1)` proves IN-subqueries are supported at all, and the
+      # aliased form proves the projection itself is fine — so a blanket "IN subqueries are
+      # broken" reading is ruled out, and the defect is pinned to the bare string literal.
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT COUNT(*) AS matched
+        FROM VALUES (TIMESTAMP '2024-05-01 12:00:00.123456') AS t(event_time)
+        WHERE event_time IN (SELECT '2024-05-01 12:00:00.123456789')
+        """
+      Then query error Literals of the type "SELECT" are not supported
+
+    Scenario: An IN subquery over a non-string literal parses fine
+      # Control for the scenario above: an integer literal has no `identifier stringLit`
+      # reading, so the same shape parses and runs.
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT COUNT(*) AS matched
+        FROM VALUES (1) AS t(x)
+        WHERE x IN (SELECT 1)
+        """
+      Then query result
+        | matched |
+        | 1       |
+
+    Scenario: Aliasing the string literal makes the IN subquery parse
+      # The fix, and the other control: adding the alias removes the
+      # `identifier stringLit` reading and the query behaves exactly like the in-list form.
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT COUNT(*) AS matched
+        FROM VALUES (TIMESTAMP '2024-05-01 12:00:00.123456') AS t(event_time)
+        WHERE event_time IN (SELECT '2024-05-01 12:00:00.123456789' AS candidate)
+        """
+      Then query result
+        | matched |
+        | 0       |
 
     Scenario: ANSI IN chooses one recursive datetime common type
       Given config spark.sql.session.timeZone = Asia/Shanghai

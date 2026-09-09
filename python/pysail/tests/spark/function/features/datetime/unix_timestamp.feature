@@ -283,3 +283,109 @@ Feature: unix_timestamp with an argument coming from a column
         root
          |-- result: long (nullable = true)
         """
+
+  Rule: unix_seconds FLOORS while unix_timestamp TRUNCATES toward zero
+    # Spark uses two different divisions for what looks like the same conversion:
+    #
+    #   unix_timestamp / to_unix_timestamp : `micros / 1000000`   (Java `/`, toward zero)
+    #   unix_seconds / unix_millis         : `Math.floorDiv(...)` (toward negative infinity)
+    #
+    # They therefore disagree by one second for EVERY negative-micros timestamp whose
+    # sub-second part is non-zero — and by nothing at all elsewhere. Spark's own doc for
+    # unix_seconds says "Truncates higher levels of precision", which is wrong; the code is
+    # authoritative. Spark's own test suite never catches this either: it uses
+    # `new Timestamp(-1000000)`, an exact second boundary.
+    #
+    # The pair below is the whole point. A shared helper makes both functions agree, which
+    # is exactly the bug: Sail floors nothing and truncates both. Asserting only the
+    # unix_timestamp half would look green under either rule.
+    # Measured on Spark JVM 4.2.0, session time zone UTC.
+
+    Scenario Outline: unix_timestamp truncates toward zero: <case>
+      When query
+        """
+        SELECT <fn>(<input>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                                    | fn                | input                                     | result      |
+        | pre-epoch half second rounds up to 0    | unix_timestamp    | TIMESTAMP '1969-12-31 23:59:59.5'         | 0           |
+        | post-epoch half second rounds down to 0 | unix_timestamp    | TIMESTAMP '1970-01-01 00:00:00.5'         | 0           |
+        | exact second boundary is unambiguous    | unix_timestamp    | TIMESTAMP '1969-12-31 23:59:59'           | -1          |
+        | deep pre-epoch fraction                 | unix_timestamp    | TIMESTAMP '1900-01-01 00:00:00.000001'    | -2208988799 |
+        | the twin behaves identically            | to_unix_timestamp | TIMESTAMP '1969-12-31 23:59:59.5'         | 0           |
+        | twin, deep pre-epoch fraction           | to_unix_timestamp | TIMESTAMP '1900-01-01 00:00:00.000001'    | -2208988799 |
+
+    @sail-bug
+    Scenario Outline: unix_seconds and unix_millis floor instead: <case>
+      When query
+        """
+        SELECT <fn>(<input>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                                  | fn           | input                                  | result         |
+        | pre-epoch half second floors to -1    | unix_seconds | TIMESTAMP '1969-12-31 23:59:59.5'      | -1             |
+        | deep pre-epoch fraction floors        | unix_seconds | TIMESTAMP '1900-01-01 00:00:00.000001' | -2208988800    |
+        | millis floors the same way            | unix_millis  | TIMESTAMP '1900-01-01 00:00:00.000001' | -2208988800000 |
+
+    Scenario Outline: where the two rules agree, so does everything: <case>
+      # The guard-rail half: these inputs give the same answer under flooring and under
+      # truncation, so they must stay green whichever way the bug above is fixed.
+      When query
+        """
+        SELECT <fn>(<input>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                        | fn           | input                             | result           |
+        | exact second, unix_seconds  | unix_seconds | TIMESTAMP '1969-12-31 23:59:59'   | -1               |
+        | post-epoch, unix_seconds    | unix_seconds | TIMESTAMP '1970-01-01 00:00:00.5' | 0                |
+        | micros are the identity     | unix_micros  | TIMESTAMP '1969-12-31 23:59:59.5' | -500000          |
+
+  Rule: unix_seconds / unix_millis / unix_micros accept TIMESTAMP only
+    # These three mix in ExpectsInputTypes with inputTypes = Seq(TimestampType) and NO
+    # implicit cast, so DATE and TIMESTAMP_NTZ are ANALYSIS errors — even though
+    # unix_timestamp accepts both. Sail accepts them, which is the divergence.
+    # The unix_timestamp half is asserted alongside because it is what discriminates a
+    # genuinely narrower signature from a blanket rejection.
+
+    Scenario Outline: unix_timestamp does accept DATE and TIMESTAMP_NTZ: <case>
+      When query
+        """
+        SELECT unix_timestamp(<input>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case          | input                                 | result     |
+        | DATE          | DATE '2020-01-01'                     | 1577836800 |
+        | TIMESTAMP_NTZ | TIMESTAMP_NTZ '2020-01-01 00:00:00'   | 1577836800 |
+
+    @sail-bug
+    Scenario Outline: the unix_* trio rejects them: <case>
+      When query
+        """
+        SELECT <fn>(<input>) AS result
+        """
+      Then query error due to data type mismatch
+
+      Examples:
+        | case                | fn           | input                               |
+        | unix_seconds, DATE  | unix_seconds | DATE '2020-01-01'                   |
+        | unix_seconds, NTZ   | unix_seconds | TIMESTAMP_NTZ '2020-01-01 00:00:00' |
+        | unix_millis, DATE   | unix_millis  | DATE '2020-01-01'                   |
+        | unix_millis, NTZ    | unix_millis  | TIMESTAMP_NTZ '2020-01-01 00:00:00' |
+        | unix_micros, DATE   | unix_micros  | DATE '2020-01-01'                   |
+        | unix_micros, NTZ    | unix_micros  | TIMESTAMP_NTZ '2020-01-01 00:00:00' |
