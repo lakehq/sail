@@ -5,7 +5,7 @@ use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::ExecutionPlan;
 use futures::TryStreamExt;
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use sail_celeborn::lifecycle::{LifecycleManagerActor, LocalLifecycleManager};
 use sail_common::actor::{ActorAction, ActorContext, ActorHandle};
 use sail_common_datafusion::error::CommonErrorCause;
@@ -15,7 +15,8 @@ use tokio::time::Instant;
 
 use crate::driver::actor::DriverActor;
 use crate::driver::job_scheduler::{JobAction, TaskState};
-use crate::driver::output::JobOutputItem;
+use crate::driver::output::{JobOutputItem, JobOutputOutcome};
+use crate::driver::worker_scaler::{WorkerLaunchRequest, WorkerRetryRequest};
 use crate::driver::{DriverMessage, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, TaskStreamKeyDisplay, WorkerId};
@@ -38,10 +39,27 @@ impl DriverActor {
         ActorAction::Continue
     }
 
-    pub(super) fn handle_activate(&mut self, ctx: &mut ActorContext<Self>) -> ActorAction {
-        info!("activating driver {}", self.options.driver_id);
-        for _ in 0..self.options.worker_initial_count {
-            self.worker_pool.start_worker(ctx);
+    pub(super) fn handle_activate(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        result: oneshot::Sender<ExecutionResult<()>>,
+    ) -> ActorAction {
+        let output = if self.activated {
+            Ok(())
+        } else {
+            info!("activating driver {}", self.options.driver_id);
+            let count = self
+                .task_assigner
+                .request_initial_workers(self.options.worker_initial_count);
+            self.worker_scaler
+                .request_initial_workers(count)
+                .and_then(|requests| self.start_worker_launch(ctx, requests))
+                .inspect(|_| {
+                    self.activated = true;
+                })
+        };
+        if result.send(output).is_err() {
+            warn!("failed to send driver activation result");
         }
         ActorAction::Continue
     }
@@ -57,8 +75,10 @@ impl DriverActor {
         info!("worker {worker_id} is available at {host}:{port}");
         let out = self.worker_pool.register_worker(ctx, worker_id, host, port);
         if out.is_ok() {
+            self.worker_scaler.worker_registered(worker_id);
             self.task_assigner.activate_worker(worker_id);
             self.run_tasks(ctx);
+            self.reconcile_worker_demands(ctx);
         }
         if result.send(out).is_err() {
             warn!("failed to send worker registration result");
@@ -91,9 +111,34 @@ impl DriverActor {
         ctx: &mut ActorContext<Self>,
         worker_id: WorkerId,
     ) -> ActorAction {
-        if self.worker_pool.fail_worker_if_pending(worker_id) {
-            self.task_assigner.track_worker_failed_to_start();
-            self.scale_up_workers(ctx);
+        self.fail_worker_launch_if_pending(
+            ctx,
+            worker_id,
+            "worker registration timeout".to_string(),
+        );
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_worker_failed_to_start(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        worker_id: WorkerId,
+        message: String,
+    ) -> ActorAction {
+        self.fail_worker_launch_if_pending(ctx, worker_id, message);
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_retry_worker_demand(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        request: WorkerRetryRequest,
+    ) -> ActorAction {
+        if let Some(request) = self.worker_scaler.retry(request)
+            && let Err(e) = self.start_worker_launch(ctx, vec![request])
+        {
+            error!("failed to retry worker launch: {e}");
+            ctx.send(DriverMessage::Shutdown { result: None });
         }
         ActorAction::Continue
     }
@@ -153,7 +198,7 @@ impl DriverActor {
             for job_id in job_ids {
                 self.refresh_job(ctx, job_id);
                 self.run_tasks(ctx);
-                self.scale_up_workers(ctx);
+                self.reconcile_worker_demands(ctx);
             }
         }
         ActorAction::Continue
@@ -170,7 +215,7 @@ impl DriverActor {
         if let Ok((job_id, _)) = &out {
             self.refresh_job(ctx, *job_id);
             self.run_tasks(ctx);
-            self.scale_up_workers(ctx);
+            self.reconcile_worker_demands(ctx);
         }
         let _ = result.send(out.map(|(_, stream)| stream));
         ActorAction::Continue
@@ -180,8 +225,11 @@ impl DriverActor {
         &mut self,
         ctx: &mut ActorContext<Self>,
         job_id: JobId,
+        outcome: JobOutputOutcome,
     ) -> ActorAction {
-        self.clean_up_job(ctx, job_id);
+        self.clean_up_job(ctx, job_id, outcome);
+        self.run_tasks(ctx);
+        self.reconcile_worker_demands(ctx);
         ActorAction::Continue
     }
 
@@ -215,20 +263,20 @@ impl DriverActor {
             TaskStatus::Succeeded => {
                 self.job_scheduler
                     .update_task(&key, TaskState::Succeeded, message, cause);
-                self.task_assigner.unassign_task(&key);
+                self.unassign_task(ctx, &key);
                 self.refresh_job(ctx, key.job_id);
                 self.run_tasks(ctx);
-                self.scale_up_workers(ctx);
+                self.reconcile_worker_demands(ctx);
             }
             TaskStatus::Failed => {
                 // Some canceled tasks may report failed status due to closed streams,
                 // but it is fine to handle them as failed tasks again.
                 self.job_scheduler
                     .update_task(&key, TaskState::Failed, message, cause);
-                self.task_assigner.unassign_task(&key);
+                self.unassign_task(ctx, &key);
                 self.refresh_job(ctx, key.job_id);
                 self.run_tasks(ctx);
-                self.scale_up_workers(ctx);
+                self.reconcile_worker_demands(ctx);
             }
             TaskStatus::Canceled => {
                 // The task attempt state should already be "canceled" but we update it
@@ -257,16 +305,16 @@ impl DriverActor {
             // once one registers (`handle_register_worker` runs pending tasks),
             // so reschedule the probe instead of failing. This keeps long,
             // many-stage jobs alive while the worker pool scales between stages.
-            // It cannot loop forever: a pending worker that never registers is
-            // failed at `worker_launch_timeout`, after which there are no pending
-            // workers and the task fails below.
+            // It cannot loop forever: each worker launch has a finite retry
+            // schedule. A worker demand remains pending while waiting for its
+            // retry so the replacement capacity is not requested twice.
             //
             // Re-probe at `worker_launch_timeout` (capped by `task_launch_timeout`)
             // rather than a full `task_launch_timeout`: that is the window a
             // pending worker takes to register or be failed, so once the last
             // pending worker resolves the task fails promptly instead of waiting
             // another full launch window.
-            if self.worker_pool.has_pending_workers() {
+            if self.worker_scaler.has_pending_worker_demands() {
                 let delay = self
                     .options
                     .worker_launch_timeout
@@ -344,8 +392,13 @@ impl DriverActor {
         }
     }
 
-    fn clean_up_job(&mut self, ctx: &mut ActorContext<Self>, job_id: JobId) {
-        for action in self.job_scheduler.clean_up_job(job_id) {
+    fn clean_up_job(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        job_id: JobId,
+        outcome: JobOutputOutcome,
+    ) {
+        for action in self.job_scheduler.clean_up_job(job_id, outcome) {
             self.run_job_action(ctx, action);
         }
     }
@@ -368,7 +421,7 @@ impl DriverActor {
             }
             JobAction::CancelTask { key } => {
                 self.task_assigner.exclude_task(&key);
-                if let Some(assignment) = self.task_assigner.unassign_task(&key) {
+                if let Some(assignment) = self.unassign_task(ctx, &key) {
                     match assignment {
                         TaskAssignment::Driver => {
                             if let Some(task_runner) = self.task_runner.clone() {
@@ -500,6 +553,22 @@ impl DriverActor {
         }
     }
 
+    fn unassign_task(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        key: &TaskKey,
+    ) -> Option<TaskAssignment> {
+        let assignment = self.task_assigner.unassign_task(key)?;
+        if let TaskAssignment::Worker { worker_id, .. } = &assignment
+            && self.task_assigner.is_worker_idle(*worker_id)
+        {
+            // A long-running task may outlive every previously scheduled idle probe.
+            // Start a fresh idle window when its worker has no remaining work or streams.
+            self.worker_pool.mark_worker_idle(ctx, *worker_id);
+        }
+        Some(assignment)
+    }
+
     /// Assigns pending tasks to available workers and dispatches them for execution.
     ///
     /// Gets task assignments from the task assigner, builds task definitions from the job
@@ -561,9 +630,55 @@ impl DriverActor {
         }
     }
 
-    fn scale_up_workers(&mut self, ctx: &mut ActorContext<Self>) {
-        for _ in 0..self.task_assigner.request_workers() {
-            self.worker_pool.start_worker(ctx);
+    fn reconcile_worker_demands(&mut self, ctx: &mut ActorContext<Self>) {
+        let output = self
+            .worker_scaler
+            .reconcile(self.task_assigner.count_worker_demands())
+            .and_then(|requests| self.start_worker_launch(ctx, requests));
+        if let Err(e) = output {
+            error!("failed to request workers: {e}");
+            ctx.send(DriverMessage::Shutdown { result: None });
         }
+    }
+
+    fn start_worker_launch(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        requests: Vec<WorkerLaunchRequest>,
+    ) -> ExecutionResult<()> {
+        for request in requests {
+            let demand_id = request.demand_id;
+            debug!(
+                "launching worker demand {} attempt {}",
+                demand_id, request.attempt
+            );
+            let worker_id = self.worker_pool.start_worker(ctx)?;
+            if !self.worker_scaler.bind_worker(request, worker_id) {
+                return Err(ExecutionError::InternalError(format!(
+                    "failed to bind worker {worker_id} to demand {}",
+                    demand_id
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn fail_worker_launch_if_pending(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        worker_id: WorkerId,
+        message: String,
+    ) {
+        if !self.worker_pool.fail_worker_if_pending(worker_id, message) {
+            return;
+        }
+        if let Some(request) = self.worker_scaler.worker_failed(worker_id) {
+            warn!(
+                "scheduling worker demand {} launch retry {} in {:?}",
+                request.demand_id, request.attempt, request.delay,
+            );
+            ctx.send_with_delay(DriverMessage::RetryWorkerDemand { request }, request.delay);
+        }
+        self.reconcile_worker_demands(ctx);
     }
 }

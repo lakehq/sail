@@ -12,6 +12,7 @@ use sail_common::actor::{Actor, ActorAction, ActorContext};
 use crate::driver::job_scheduler::{JobScheduler, JobSchedulerOptions};
 use crate::driver::task_assigner::{TaskAssigner, TaskAssignerOptions};
 use crate::driver::worker_pool::{WorkerPool, WorkerPoolOptions};
+use crate::driver::worker_scaler::{WorkerScaler, WorkerScalerOptions};
 use crate::driver::{DriverActor, DriverComponents, DriverMessage, DriverOptions};
 use crate::shuffle::{ShuffleBackendKind, celeborn_application_id};
 use crate::stream::celeborn::CelebornStreamManager;
@@ -43,13 +44,16 @@ impl Actor for DriverActor {
         );
         let job_scheduler = JobScheduler::new(JobSchedulerOptions::from(&options), event_reporter);
         let task_assigner = TaskAssigner::new(TaskAssignerOptions::from(&options));
+        let worker_scaler = WorkerScaler::new(WorkerScalerOptions::from(&options));
         Self {
             options,
             worker_pool,
             job_scheduler,
             task_assigner,
+            worker_scaler,
             task_runner: None,
             extensions: Default::default(),
+            activated: false,
             task_sequences: HashMap::new(),
             shutdown_notifier: None,
         }
@@ -129,7 +133,7 @@ impl Actor for DriverActor {
         message: DriverMessage,
     ) -> ActorAction {
         match message {
-            DriverMessage::Activate => self.handle_activate(ctx),
+            DriverMessage::Activate { result } => self.handle_activate(ctx, result),
             DriverMessage::RegisterWorker {
                 worker_id,
                 host,
@@ -146,6 +150,12 @@ impl Actor for DriverActor {
             DriverMessage::ProbePendingWorker { worker_id } => {
                 self.handle_probe_pending_worker(ctx, worker_id)
             }
+            DriverMessage::WorkerFailedToStart { worker_id, message } => {
+                self.handle_worker_failed_to_start(ctx, worker_id, message)
+            }
+            DriverMessage::RetryWorkerDemand { request } => {
+                self.handle_retry_worker_demand(ctx, request)
+            }
             DriverMessage::ProbeIdleWorker { worker_id, instant } => {
                 self.handle_probe_idle_worker(ctx, worker_id, instant)
             }
@@ -157,7 +167,9 @@ impl Actor for DriverActor {
                 context,
                 result,
             } => self.handle_execute_job(ctx, plan, context, result),
-            DriverMessage::CleanUpJob { job_id } => self.handle_clean_up_job(ctx, job_id),
+            DriverMessage::CleanUpJob { job_id, outcome } => {
+                self.handle_clean_up_job(ctx, job_id, outcome)
+            }
             DriverMessage::UpdateTask {
                 key,
                 status,

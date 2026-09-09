@@ -66,6 +66,7 @@ macro_rules! define_id_type {
 define_id_type!(JobId, u64);
 define_id_type!(DriverId, u64);
 define_id_type!(WorkerId, u64);
+define_id_type!(WorkerDemandId, u64);
 
 #[derive(Debug)]
 pub struct IdGenerator<T: IdType> {

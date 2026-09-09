@@ -5,6 +5,7 @@ use sail_common::runtime::RuntimeHandle;
 use sail_common::utils::retry::RetryStrategy;
 use sail_telemetry::events::SystemEventReporter;
 
+use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::DriverId;
 use crate::shuffle::ShuffleBackendKind;
 use crate::worker_manager::WorkerManager;
@@ -24,6 +25,7 @@ pub struct DriverOptions {
     pub worker_heartbeat_interval: Duration,
     pub worker_heartbeat_timeout: Duration,
     pub worker_launch_timeout: Duration,
+    pub worker_launch_retry_strategy: RetryStrategy,
     pub task_launch_timeout: Duration,
     pub task_stream_buffer: usize,
     pub task_stream_creation_timeout: Duration,
@@ -39,14 +41,19 @@ pub struct DriverComponents {
 }
 
 impl DriverOptions {
-    pub fn new(
+    pub fn try_new(
         config: &AppConfig,
         runtime: RuntimeHandle,
         session_id: String,
         driver_id: DriverId,
         driver_server_port: u16,
-    ) -> Self {
-        Self {
+    ) -> ExecutionResult<Self> {
+        if config.cluster.worker_task_slots == 0 {
+            return Err(ExecutionError::InvalidArgument(
+                "worker task slots must be greater than zero".to_string(),
+            ));
+        }
+        Ok(Self {
             enable_tls: config.cluster.enable_tls,
             session_id,
             driver_id,
@@ -64,6 +71,7 @@ impl DriverOptions {
                 config.cluster.worker_heartbeat_timeout_secs,
             ),
             worker_launch_timeout: Duration::from_secs(config.cluster.worker_launch_timeout_secs),
+            worker_launch_retry_strategy: (&config.cluster.worker_launch_retry_strategy).into(),
             rpc_retry_strategy: (&config.cluster.rpc_retry_strategy).into(),
             task_launch_timeout: Duration::from_secs(config.cluster.task_launch_timeout_secs),
             task_stream_buffer: config.cluster.task_stream_buffer,
@@ -73,6 +81,6 @@ impl DriverOptions {
             task_max_attempts: config.cluster.task_max_attempts,
             shuffle_backend: (&config.cluster.shuffle_backend).into(),
             runtime,
-        }
+        })
     }
 }

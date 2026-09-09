@@ -43,9 +43,11 @@ impl DriverHandle {
     }
 
     pub async fn activate(&self) -> ExecutionResult<()> {
-        self.send(DriverMessage::Activate)
+        let (result, receiver) = oneshot::channel();
+        self.send(DriverMessage::Activate { result })
             .await
-            .map_err(ExecutionError::from)
+            .map_err(ExecutionError::from)?;
+        receiver.await.map_err(ExecutionError::from)?
     }
 
     pub async fn shutdown(&self) -> ExecutionResult<()> {

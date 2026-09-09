@@ -46,6 +46,8 @@ pub struct PlanConfig {
     pub ansi_mode: bool,
     /// Whether legacy non-ANSI ordering comparisons cast date/timestamp values to strings.
     pub legacy_type_coercion_datetime_to_string: bool,
+    /// Whether size/cardinality return -1 for null input when ANSI mode is disabled.
+    pub legacy_size_of_null: bool,
     /// Type coercion policy for values written into table columns.
     pub store_assignment_policy: StoreAssignmentPolicy,
     /// Policy for duplicate keys created by map functions.
@@ -89,6 +91,7 @@ impl Default for PlanConfig {
             session_user_id: "".to_string(),
             ansi_mode: true,
             legacy_type_coercion_datetime_to_string: false,
+            legacy_size_of_null: true,
             store_assignment_policy: StoreAssignmentPolicy::Ansi,
             map_key_dedup_policy: MapKeyDedupPolicy::Exception,
             cross_join_enabled: true,
