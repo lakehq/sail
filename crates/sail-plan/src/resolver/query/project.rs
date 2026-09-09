@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use datafusion_common::Column;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter};
-use datafusion_common::{Column, DFSchemaRef, TableReference};
 use datafusion_expr::expr::{FieldMetadata, ScalarFunction};
 use datafusion_expr::expr_rewriter::normalize_col;
-use datafusion_expr::utils::{columnize_expr, expand_qualified_wildcard, expand_wildcard};
+use datafusion_expr::utils::columnize_expr;
 use datafusion_expr::{Expr, LogicalPlan, Projection};
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -34,7 +34,7 @@ impl PlanResolver<'_> {
         };
         let schema = input.schema();
         let expr = self.resolve_named_expressions(expr, schema, state).await?;
-        let (input, expr) = self.rewrite_wildcard(input, expr, state)?;
+        let expr = self.normalize_projection_expressions(expr, &input)?;
         let (input, expr) = self.rewrite_projection::<MonotonicIdRewriter>(input, expr, state)?;
         let (input, expr) =
             self.rewrite_projection::<SparkPartitionIdRewriter>(input, expr, state)?;
@@ -60,111 +60,25 @@ impl PlanResolver<'_> {
         }
     }
 
-    pub(super) fn rewrite_wildcard(
+    pub(super) fn normalize_projection_expressions(
         &self,
-        input: LogicalPlan,
         expr: Vec<NamedExpr>,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<(LogicalPlan, Vec<NamedExpr>)> {
-        fn to_named_expr(expr: Expr, state: &PlanResolverState) -> PlanResult<Option<NamedExpr>> {
-            let Expr::Column(column) = expr else {
-                return Err(PlanError::invalid(
-                    "column expected for expanded wildcard expression",
-                ));
-            };
-            let info = state.get_field_info(column.name())?;
-            if info.is_hidden() {
-                return Ok(None);
-            }
-            Ok(Some(NamedExpr::new(
-                vec![info.name().to_string()],
-                Expr::Column(column),
-            )))
-        }
-
-        fn expand_outer_wildcard(
-            qualifier_filter: Option<&TableReference>,
-            input_schema: &DFSchemaRef,
-            state: &PlanResolverState,
-            projected: &mut Vec<NamedExpr>,
-        ) -> PlanResult<()> {
-            if qualifier_filter.is_none() && !input_schema.fields().is_empty() {
-                return Ok(());
-            }
-
-            if let Some(expected) = qualifier_filter {
-                let qualifier_in_input = input_schema
-                    .iter()
-                    .any(|(q, _)| q.is_some_and(|q| *q == *expected));
-                if qualifier_in_input {
-                    return Ok(());
-                }
-            }
-
-            if let Some(outer_schema) = state.get_outer_query_schema() {
-                for (qualifier, field) in outer_schema.iter() {
-                    if let Some(expected) = qualifier_filter
-                        && qualifier.is_none_or(|q| expected != q)
-                    {
-                        continue;
-                    }
-                    let info = state.get_field_info(field.name())?;
-                    if info.is_hidden() {
-                        continue;
-                    }
-                    let outer_col = Expr::OuterReferenceColumn(
-                        field.clone(),
-                        Column::new(qualifier.cloned(), field.name()),
-                    );
-                    projected.push(NamedExpr::new(vec![info.name().to_string()], outer_col));
-                }
-            }
-            Ok(())
-        }
-
-        let schema = input.schema();
-        let mut projected = vec![];
-        for e in expr {
-            let NamedExpr {
-                name,
-                expr,
-                metadata,
-            } = e;
-            // FIXME: wildcard options do not take into account opaque field IDs
-            match expr {
-                #[expect(deprecated)]
-                Expr::Wildcard {
-                    qualifier: None,
-                    options,
-                } => {
-                    for e in expand_wildcard(schema, &input, Some(&options))? {
-                        projected.extend(to_named_expr(e, state)?)
-                    }
-                    expand_outer_wildcard(None, schema, state, &mut projected)?;
-                }
-                #[expect(deprecated)]
-                Expr::Wildcard {
-                    qualifier: Some(qualifier),
-                    options,
-                } => {
-                    let qualifier_in_input = schema
-                        .iter()
-                        .any(|(q, _)| q.is_some_and(|q| *q == qualifier));
-                    if qualifier_in_input {
-                        for e in expand_qualified_wildcard(&qualifier, schema, Some(&options))? {
-                            projected.extend(to_named_expr(e, state)?)
-                        }
-                    }
-                    expand_outer_wildcard(Some(&qualifier), schema, state, &mut projected)?;
-                }
-                _ => projected.push(NamedExpr {
+        input: &LogicalPlan,
+    ) -> PlanResult<Vec<NamedExpr>> {
+        expr.into_iter()
+            .map(|e| {
+                let NamedExpr {
                     name,
-                    expr: columnize_expr(normalize_col(expr, &input)?, &input)?,
+                    expr,
                     metadata,
-                }),
-            }
-        }
-        Ok((input, projected))
+                } = e;
+                Ok(NamedExpr {
+                    name,
+                    expr: columnize_expr(normalize_col(expr, input)?, input)?,
+                    metadata,
+                })
+            })
+            .collect()
     }
 
     pub(super) fn rewrite_projection<'s, T>(
@@ -195,7 +109,10 @@ impl PlanResolver<'_> {
         Ok((rewriter.into_plan(), expr))
     }
 
-    pub(super) fn rewrite_multi_expr(&self, expr: Vec<NamedExpr>) -> PlanResult<Vec<NamedExpr>> {
+    pub(in crate::resolver) fn rewrite_multi_expr(
+        &self,
+        expr: Vec<NamedExpr>,
+    ) -> PlanResult<Vec<NamedExpr>> {
         let mut out = vec![];
         for e in expr {
             let NamedExpr {

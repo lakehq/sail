@@ -1,10 +1,11 @@
 use std::collections::VecDeque;
 
 use arrow::datatypes::DataType;
-use datafusion_common::{DFSchemaRef, TableReference};
+use datafusion_common::{Column, DFSchemaRef, TableReference};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::sql::{Ident, ObjectName, ObjectNamePart};
-use datafusion_expr::{ScalarUDF, col, expr, lit};
+use datafusion_expr::utils::{expand_qualified_wildcard, expand_wildcard};
+use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, ScalarUDF, col, expr, lit};
 use datafusion_functions::core::get_field;
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -39,14 +40,7 @@ impl PlanResolver<'_> {
                 let options = self
                     .resolve_wildcard_options(wildcard_options, schema, state)
                     .await?;
-                Ok(NamedExpr::new(
-                    vec!["*".to_string()],
-                    #[expect(deprecated)]
-                    expr::Expr::Wildcard {
-                        qualifier,
-                        options: Box::new(options),
-                    },
-                ))
+                self.expand_schema_wildcard(qualifier.as_ref(), &options, schema, state)
             }
         }
     }
@@ -68,14 +62,12 @@ impl PlanResolver<'_> {
                         .any(|(qualifier, _)| qualifier_matches(q.as_ref(), qualifier))
                 });
                 if in_input || in_outer {
-                    return Ok(NamedExpr::new(
-                        vec!["*".to_string()],
-                        #[expect(deprecated)]
-                        expr::Expr::Wildcard {
-                            qualifier: q,
-                            options: Default::default(),
-                        },
-                    ));
+                    return self.expand_schema_wildcard(
+                        q.as_ref(),
+                        &Default::default(),
+                        schema,
+                        state,
+                    );
                 }
             }
         }
@@ -108,6 +100,69 @@ impl PlanResolver<'_> {
         candidates
             .one()
             .map_err(|_| PlanError::AnalysisError(format!("cannot resolve wildcard: {name:?}")))
+    }
+
+    fn expand_schema_wildcard(
+        &self,
+        qualifier: Option<&TableReference>,
+        options: &expr::WildcardOptions,
+        schema: &DFSchemaRef,
+        state: &PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let in_input = match qualifier {
+            Some(expected) => schema.iter().any(|(q, _)| q == Some(expected)),
+            None => !schema.fields().is_empty(),
+        };
+        // Sail represents duplicate USING join keys as hidden fields, so wildcard
+        // expansion only needs the schema and field visibility from the resolver.
+        // FIXME: wildcard options do not take into account opaque field IDs.
+        let expanded = match qualifier {
+            Some(qualifier) if in_input => {
+                expand_qualified_wildcard(qualifier, schema, Some(options))?
+            }
+            Some(_) => vec![],
+            None => expand_wildcard(
+                schema,
+                &LogicalPlan::EmptyRelation(EmptyRelation {
+                    produce_one_row: false,
+                    schema: schema.clone(),
+                }),
+                Some(options),
+            )?,
+        };
+        let mut names = vec![];
+        let mut expressions = vec![];
+        for expression in expanded {
+            let Expr::Column(column) = expression else {
+                return Err(PlanError::invalid(
+                    "column expected for expanded wildcard expression",
+                ));
+            };
+            let info = state.get_field_info(column.name())?;
+            if !info.is_hidden() {
+                names.push(info.name().to_string());
+                expressions.push(Expr::Column(column));
+            }
+        }
+        if !in_input && let Some(outer_schema) = state.get_outer_query_schema() {
+            for (q, field) in outer_schema.iter() {
+                if qualifier.is_some_and(|expected| q != Some(expected)) {
+                    continue;
+                }
+                let info = state.get_field_info(field.name())?;
+                if !info.is_hidden() {
+                    names.push(info.name().to_string());
+                    expressions.push(Expr::OuterReferenceColumn(
+                        field.clone(),
+                        Column::new(q.cloned(), field.name()),
+                    ));
+                }
+            }
+        }
+        Ok(NamedExpr::new(
+            names,
+            ScalarUDF::from(MultiExpr::new()).call(expressions),
+        ))
     }
 
     fn resolve_nested_field_wildcard<T: AsRef<str>>(

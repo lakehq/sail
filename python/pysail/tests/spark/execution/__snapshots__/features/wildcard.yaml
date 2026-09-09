@@ -1,0 +1,1541 @@
+# serializer version: 1
+---
+name: "test_count_wildcards_resolve_to_row_counting_and_visible_distinct_keys"
+data:
+  |-
+    == Codegen ==
+    Whole-stage codegen is not supported; showing physical plan instead.
+
+    == Plan Steps ==
+    initial_logical_plan:
+    Projection: count(Int64(1)) AS rows AS #7, count(DISTINCT #6) AS distinct_rows AS #8
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1)), count(DISTINCT #6)]]
+        Projection: coalesce(l.#1, r.#3) AS #6, l.#1 AS #4, r.#3 AS #5
+          Full Join: l.#1 = r.#3
+            SubqueryAlias: l
+              Projection: #0 AS #1
+                Projection: column1 AS #0
+                  Values: (Int32(1)), (Int32(2))
+            SubqueryAlias: r
+              Projection: #2 AS #3
+                Projection: column1 AS #2
+                  Values: (Int32(2)), (Int32(3))
+
+    logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+
+    logical_plan after resolve_grouping_function:
+    SAME TEXT AS ABOVE
+
+    logical_plan after type_coercion:
+    SAME TEXT AS ABOVE
+
+    analyzed_logical_plan:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_lateral_projection:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_set_comparison:
+    SAME TEXT AS ABOVE
+
+    logical_plan after optimize_unions:
+    SAME TEXT AS ABOVE
+
+    logical_plan after unions_to_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after simplify_expressions:
+    Projection: count(Int64(1)) AS rows AS #7, count(DISTINCT #6) AS distinct_rows AS #8
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1)), count(DISTINCT #6)]]
+        Projection: CASE WHEN l.#1 IS NOT NULL THEN l.#1 ELSE r.#3 END AS #6, l.#1 AS #4, r.#3 AS #5
+          Full Join: l.#1 = r.#3
+            SubqueryAlias: l
+              Projection: #0 AS #1
+                Projection: column1 AS #0
+                  Values: (Int32(1)), (Int32(2))
+            SubqueryAlias: r
+              Projection: #2 AS #3
+                Projection: column1 AS #2
+                  Values: (Int32(2)), (Int32(3))
+
+    logical_plan after replace_distinct_aggregate:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after scalar_subquery_to_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_lateral_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after extract_equijoin_predicate:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_duplicated_expr:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_cross_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after propagate_empty_relation:
+    SAME TEXT AS ABOVE
+
+    logical_plan after filter_null_join_keys:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_outer_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after push_down_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after push_down_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after single_distinct_aggregation_to_group_by:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_group_by_constant:
+    SAME TEXT AS ABOVE
+
+    logical_plan after common_sub_expression_eliminate:
+    SAME TEXT AS ABOVE
+
+    logical_plan after extract_leaf_expressions:
+    SAME TEXT AS ABOVE
+
+    logical_plan after optimize_projections:
+    Projection: count(Int64(1)) AS rows AS #7, count(DISTINCT #6) AS distinct_rows AS #8
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1)), count(DISTINCT #6)]]
+        Projection: CASE WHEN l.#1 IS NOT NULL THEN l.#1 ELSE r.#3 END AS #6
+          Full Join: l.#1 = r.#3
+            SubqueryAlias: l
+              Projection: column1 AS #1
+                Values: (Int32(1)), (Int32(2))
+            SubqueryAlias: r
+              Projection: column1 AS #3
+                Values: (Int32(2)), (Int32(3))
+
+    logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_lateral_projection:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_set_comparison:
+    SAME TEXT AS ABOVE
+
+    logical_plan after optimize_unions:
+    SAME TEXT AS ABOVE
+
+    logical_plan after unions_to_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after simplify_expressions:
+    SAME TEXT AS ABOVE
+
+    logical_plan after replace_distinct_aggregate:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after scalar_subquery_to_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_lateral_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after extract_equijoin_predicate:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_duplicated_expr:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_cross_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after propagate_empty_relation:
+    SAME TEXT AS ABOVE
+
+    logical_plan after filter_null_join_keys:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_outer_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after push_down_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after push_down_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after single_distinct_aggregation_to_group_by:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_group_by_constant:
+    SAME TEXT AS ABOVE
+
+    logical_plan after common_sub_expression_eliminate:
+    SAME TEXT AS ABOVE
+
+    logical_plan after extract_leaf_expressions:
+    SAME TEXT AS ABOVE
+
+    logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+
+    logical_plan:
+    Projection: count(Int64(1)) AS rows AS #7, count(DISTINCT #6) AS distinct_rows AS #8
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1)), count(DISTINCT #6)]]
+        Projection: CASE WHEN l.#1 IS NOT NULL THEN l.#1 ELSE r.#3 END AS #6
+          Full Join: l.#1 = r.#3
+            SubqueryAlias: l
+              Projection: column1 AS #1
+                Values: (Int32(1)), (Int32(2))
+            SubqueryAlias: r
+              Projection: column1 AS #3
+                Values: (Int32(2)), (Int32(3))
+
+    initial_physical_plan:
+    ProjectionExec: expr=[count(Int64(1))@0 as #7, count(DISTINCT #6)@1 as #8]
+      AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1)), count(DISTINCT #6)]
+        AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1)), count(DISTINCT #6)]
+          ProjectionExec: expr=[CASE WHEN #1@0 IS NOT NULL THEN #1@0 ELSE #3@1 END as #6]
+            HashJoinExec: mode=Auto, join_type=Full, on=[(#1@0, #3@0)]
+              ProjectionExec: expr=[column1@0 as #1]
+                DataSourceExec: partitions=1, partition_sizes=[1]
+              ProjectionExec: expr=[column1@0 as #3]
+                DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+    initial_physical_plan_with_stats:
+    ProjectionExec: expr=[count(Int64(1))@0 as #7, count(DISTINCT #6)@1 as #8], statistics=[Rows=Exact(1), Bytes=Exact(<bytes>), [(Col[0]:),(Col[1]:)]]
+      AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1)), count(DISTINCT #6)], statistics=[Rows=Exact(1), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
+        AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1)), count(DISTINCT #6)], statistics=[Rows=Exact(1), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
+          ProjectionExec: expr=[CASE WHEN #1@0 IS NOT NULL THEN #1@0 ELSE #3@1 END as #6], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:)]]
+            HashJoinExec: mode=Auto, join_type=Full, on=[(#1@0, #3@0)], statistics=[Rows=Inexact(2), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
+              ProjectionExec: expr=[column1@0 as #1], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
+                DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
+              ProjectionExec: expr=[column1@0 as #3], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
+                DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
+
+
+    initial_physical_plan_with_schema:
+    ProjectionExec: expr=[count(Int64(1))@0 as #7, count(DISTINCT #6)@1 as #8], schema=[#7:Int64, #8:Int64]
+      AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1)), count(DISTINCT #6)], schema=[count(Int64(1)):Int64, count(DISTINCT #6):Int64]
+        AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1)), count(DISTINCT #6)], schema=[count(Int64(1))[count]:Int64, count(DISTINCT #6)[count distinct]:List(Int32)]
+          ProjectionExec: expr=[CASE WHEN #1@0 IS NOT NULL THEN #1@0 ELSE #3@1 END as #6], schema=[#6:Int32;N]
+            HashJoinExec: mode=Auto, join_type=Full, on=[(#1@0, #3@0)], schema=[#1:Int32;N, #3:Int32;N]
+              ProjectionExec: expr=[column1@0 as #1], schema=[#1:Int32]
+                DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32]
+              ProjectionExec: expr=[column1@0 as #3], schema=[#3:Int32]
+                DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32]
+
+
+    physical_plan after OutputRequirements:
+    OutputRequirementExec: order_by=[], dist_by=Unspecified
+      ProjectionExec: expr=[count(Int64(1))@0 as #7, count(DISTINCT #6)@1 as #8]
+        AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1)), count(DISTINCT #6)]
+          AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1)), count(DISTINCT #6)]
+            ProjectionExec: expr=[CASE WHEN #1@0 IS NOT NULL THEN #1@0 ELSE #3@1 END as #6]
+              HashJoinExec: mode=Auto, join_type=Full, on=[(#1@0, #3@0)]
+                ProjectionExec: expr=[column1@0 as #1]
+                  DataSourceExec: partitions=1, partition_sizes=[1]
+                ProjectionExec: expr=[column1@0 as #3]
+                  DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+    physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after join_selection:
+    OutputRequirementExec: order_by=[], dist_by=Unspecified
+      ProjectionExec: expr=[count(Int64(1))@0 as #7, count(DISTINCT #6)@1 as #8]
+        AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1)), count(DISTINCT #6)]
+          AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1)), count(DISTINCT #6)]
+            ProjectionExec: expr=[CASE WHEN #1@0 IS NOT NULL THEN #1@0 ELSE #3@1 END as #6]
+              HashJoinExec: mode=CollectLeft, join_type=Full, on=[(#1@0, #3@0)]
+                ProjectionExec: expr=[column1@0 as #1]
+                  DataSourceExec: partitions=1, partition_sizes=[1]
+                ProjectionExec: expr=[column1@0 as #3]
+                  DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+    physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after FilterPushdown:
+    SAME TEXT AS ABOVE
+
+    physical_plan after WindowTopN:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EnsureRequirements:
+    OutputRequirementExec: order_by=[], dist_by=Unspecified
+      ProjectionExec: expr=[count(Int64(1))@0 as #7, count(DISTINCT #6)@1 as #8]
+        AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1)), count(DISTINCT #6)]
+          CoalescePartitionsExec
+            AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1)), count(DISTINCT #6)]
+              ProjectionExec: expr=[CASE WHEN #1@0 IS NOT NULL THEN #1@0 ELSE #3@1 END as #6]
+                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                  HashJoinExec: mode=CollectLeft, join_type=Full, on=[(#1@0, #3@0)]
+                    ProjectionExec: expr=[column1@0 as #1]
+                      DataSourceExec: partitions=1, partition_sizes=[1]
+                    ProjectionExec: expr=[column1@0 as #3]
+                      DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+    physical_plan after CombinePartialFinalAggregate:
+    SAME TEXT AS ABOVE
+
+    physical_plan after OptimizeAggregateOrder:
+    SAME TEXT AS ABOVE
+
+    physical_plan after ProjectionPushdown:
+    SAME TEXT AS ABOVE
+
+    physical_plan after OutputRequirements:
+    ProjectionExec: expr=[count(Int64(1))@0 as #7, count(DISTINCT #6)@1 as #8]
+      AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1)), count(DISTINCT #6)]
+        CoalescePartitionsExec
+          AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1)), count(DISTINCT #6)]
+            ProjectionExec: expr=[CASE WHEN #1@0 IS NOT NULL THEN #1@0 ELSE #3@1 END as #6]
+              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                HashJoinExec: mode=CollectLeft, join_type=Full, on=[(#1@0, #3@0)]
+                  ProjectionExec: expr=[column1@0 as #1]
+                    DataSourceExec: partitions=1, partition_sizes=[1]
+                  ProjectionExec: expr=[column1@0 as #3]
+                    DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+    physical_plan after LimitAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after LimitPushPastWindows:
+    SAME TEXT AS ABOVE
+
+    physical_plan after HashJoinBuffering:
+    SAME TEXT AS ABOVE
+
+    physical_plan after LimitPushdown:
+    SAME TEXT AS ABOVE
+
+    physical_plan after TopKRepartition:
+    SAME TEXT AS ABOVE
+
+    physical_plan after ProjectionPushdown:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushdownSort:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EnsureCooperative:
+    SAME TEXT AS ABOVE
+
+    physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteExplicitRepartition:
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteCollectLeftHashJoin:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EnforceBarrierPartitioning:
+    SAME TEXT AS ABOVE
+
+    physical_plan after SanityCheckPlan:
+    SAME TEXT AS ABOVE
+
+    physical_plan:
+    ProjectionExec: expr=[#7@0 as rows, #8@1 as distinct_rows]
+      ProjectionExec: expr=[count(Int64(1))@0 as #7, count(DISTINCT #6)@1 as #8]
+        AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1)), count(DISTINCT #6)]
+          CoalescePartitionsExec
+            AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1)), count(DISTINCT #6)]
+              ProjectionExec: expr=[CASE WHEN #1@0 IS NOT NULL THEN #1@0 ELSE #3@1 END as #6]
+                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                  HashJoinExec: mode=CollectLeft, join_type=Full, on=[(#1@0, #3@0)]
+                    ProjectionExec: expr=[column1@0 as #1]
+                      DataSourceExec: partitions=1, partition_sizes=[1]
+                    ProjectionExec: expr=[column1@0 as #3]
+                      DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+    == Physical Plan ==
+    ProjectionExec: expr=[#7@0 as rows, #8@1 as distinct_rows]
+      ProjectionExec: expr=[count(Int64(1))@0 as #7, count(DISTINCT #6)@1 as #8]
+        AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1)), count(DISTINCT #6)]
+          CoalescePartitionsExec
+            AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1)), count(DISTINCT #6)]
+              ProjectionExec: expr=[CASE WHEN #1@0 IS NOT NULL THEN #1@0 ELSE #3@1 END as #6]
+                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                  HashJoinExec: mode=CollectLeft, join_type=Full, on=[(#1@0, #3@0)]
+                    ProjectionExec: expr=[column1@0 as #1]
+                      DataSourceExec: partitions=1, partition_sizes=[1]
+                    ProjectionExec: expr=[column1@0 as #3]
+                      DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+    == Distributed Plan ==
+    === stage 0 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=Hash(keys=[#1@0], channels=1)
+    placement=Worker
+    ProjectionExec: expr=[column1@0 as #1]
+      DataSourceExec: partitions=1, partition_sizes=[1]
+
+    === stage 1 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=Hash(keys=[#3@0], channels=1)
+    placement=Worker
+    ProjectionExec: expr=[column1@0 as #3]
+      DataSourceExec: partitions=1, partition_sizes=[1]
+
+    === stage 2 ===
+    inputs=[StageInput(stage=0, mode=Shuffle), StageInput(stage=1, mode=Shuffle)]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=4)
+    placement=Worker
+    HashJoinExec: mode=Partitioned, join_type=Full, on=[(#1@0, #3@0)]
+      StageInputExec: input=0, partitioning=Hash([#1@0], 1)
+      StageInputExec: input=1, partitioning=Hash([#3@0], 1)
+
+    === stage 3 ===
+    inputs=[StageInput(stage=2, mode=Shuffle)]
+    mode=Pipelined
+    partitions=4
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1)), count(DISTINCT #6)]
+      ProjectionExec: expr=[CASE WHEN #1@0 IS NOT NULL THEN #1@0 ELSE #3@1 END as #6]
+        StageInputExec: input=0, partitioning=RoundRobinBatch(4)
+
+    === stage 4 ===
+    inputs=[StageInput(stage=3, mode=Shuffle)]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    ProjectionExec: expr=[#7@0 as rows, #8@1 as distinct_rows]
+      ProjectionExec: expr=[count(Int64(1))@0 as #7, count(DISTINCT #6)@1 as #8]
+        AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1)), count(DISTINCT #6)]
+          StageInputExec: input=0, partitioning=UnknownPartitioning(1)
+---
+name: "test_qualified_outer_wildcard_resolves_with_an_inner_input"
+data:
+  |-
+    == Codegen ==
+    Whole-stage codegen is not supported; showing physical plan instead.
+
+    == Plan Steps ==
+    initial_logical_plan:
+    Sort: #5 ASC NULLS FIRST
+      Projection: q.#4 AS #5
+        Projection: t.#1, q.#4
+          Cross Join:
+            SubqueryAlias: t
+              Projection: #0 AS #1
+                Projection: column1 AS #0
+                  Values: (Int32(1)), (Int32(2))
+            Subquery:
+              SubqueryAlias: q
+                Projection: outer_ref(t.#1) AS #4
+                  SubqueryAlias: u
+                    Projection: column1 AS #3
+                      Values: (Int32(9))
+
+    logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+
+    logical_plan after resolve_grouping_function:
+    SAME TEXT AS ABOVE
+
+    logical_plan after type_coercion:
+    SAME TEXT AS ABOVE
+
+    analyzed_logical_plan:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_lateral_projection:
+    Sort: #5 ASC NULLS FIRST
+      Projection: q.#4 AS #5
+        Projection: t.#1, q.#4
+          Projection: t.#1, t.#1 AS #4
+            Cross Join:
+              SubqueryAlias: t
+                Projection: #0 AS #1
+                  Projection: column1 AS #0
+                    Values: (Int32(1)), (Int32(2))
+              SubqueryAlias: u
+                Projection: column1 AS #3
+                  Values: (Int32(9))
+
+    logical_plan after rewrite_set_comparison:
+    SAME TEXT AS ABOVE
+
+    logical_plan after optimize_unions:
+    SAME TEXT AS ABOVE
+
+    logical_plan after unions_to_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after simplify_expressions:
+    SAME TEXT AS ABOVE
+
+    logical_plan after replace_distinct_aggregate:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after scalar_subquery_to_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_lateral_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after extract_equijoin_predicate:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_duplicated_expr:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_cross_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after propagate_empty_relation:
+    SAME TEXT AS ABOVE
+
+    logical_plan after filter_null_join_keys:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_outer_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after push_down_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after push_down_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after single_distinct_aggregation_to_group_by:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_group_by_constant:
+    SAME TEXT AS ABOVE
+
+    logical_plan after common_sub_expression_eliminate:
+    SAME TEXT AS ABOVE
+
+    logical_plan after extract_leaf_expressions:
+    SAME TEXT AS ABOVE
+
+    logical_plan after optimize_projections:
+    Sort: #5 ASC NULLS FIRST
+      Projection: t.#1 AS #5
+        Cross Join:
+          SubqueryAlias: t
+            Projection: column1 AS #1
+              Values: (Int32(1)), (Int32(2))
+          SubqueryAlias: u
+            Projection:
+              Values: (Int32(9))
+
+    logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_lateral_projection:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_set_comparison:
+    SAME TEXT AS ABOVE
+
+    logical_plan after optimize_unions:
+    SAME TEXT AS ABOVE
+
+    logical_plan after unions_to_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after simplify_expressions:
+    SAME TEXT AS ABOVE
+
+    logical_plan after replace_distinct_aggregate:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after scalar_subquery_to_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_lateral_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after extract_equijoin_predicate:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_duplicated_expr:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_cross_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after propagate_empty_relation:
+    SAME TEXT AS ABOVE
+
+    logical_plan after filter_null_join_keys:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_outer_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after push_down_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after push_down_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after single_distinct_aggregation_to_group_by:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_group_by_constant:
+    SAME TEXT AS ABOVE
+
+    logical_plan after common_sub_expression_eliminate:
+    SAME TEXT AS ABOVE
+
+    logical_plan after extract_leaf_expressions:
+    SAME TEXT AS ABOVE
+
+    logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+
+    logical_plan:
+    Sort: #5 ASC NULLS FIRST
+      Projection: t.#1 AS #5
+        Cross Join:
+          SubqueryAlias: t
+            Projection: column1 AS #1
+              Values: (Int32(1)), (Int32(2))
+          SubqueryAlias: u
+            Projection:
+              Values: (Int32(9))
+
+    initial_physical_plan:
+    SortExec: expr=[#5@0 ASC], preserve_partitioning=[false]
+      ProjectionExec: expr=[#1@0 as #5]
+        CrossJoinExec
+          ProjectionExec: expr=[column1@0 as #1]
+            DataSourceExec: partitions=1, partition_sizes=[1]
+          ProjectionExec: expr=[]
+            DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+    initial_physical_plan_with_stats:
+    SortExec: expr=[#5@0 ASC], preserve_partitioning=[false], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
+      ProjectionExec: expr=[#1@0 as #5], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
+        CrossJoinExec, statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
+          ProjectionExec: expr=[column1@0 as #1], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
+            DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
+          ProjectionExec: expr=[], statistics=[Rows=Exact(1), Bytes=Exact(<bytes>), []]
+            DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(1), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
+
+
+    initial_physical_plan_with_schema:
+    SortExec: expr=[#5@0 ASC], preserve_partitioning=[false], schema=[#5:Int32]
+      ProjectionExec: expr=[#1@0 as #5], schema=[#5:Int32]
+        CrossJoinExec, schema=[#1:Int32]
+          ProjectionExec: expr=[column1@0 as #1], schema=[#1:Int32]
+            DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32]
+          ProjectionExec: expr=[], schema=[]
+            DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32]
+
+
+    physical_plan after OutputRequirements:
+    OutputRequirementExec: order_by=[(#5@0, asc)], dist_by=SinglePartition
+      SortExec: expr=[#5@0 ASC], preserve_partitioning=[false]
+        ProjectionExec: expr=[#1@0 as #5]
+          CrossJoinExec
+            ProjectionExec: expr=[column1@0 as #1]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+            ProjectionExec: expr=[]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+    physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after join_selection:
+    OutputRequirementExec: order_by=[(#5@0, asc)], dist_by=SinglePartition
+      SortExec: expr=[#5@0 ASC], preserve_partitioning=[false]
+        ProjectionExec: expr=[#1@0 as #5]
+          ProjectionExec: expr=[#1@0 as #1]
+            CrossJoinExec
+              ProjectionExec: expr=[]
+                DataSourceExec: partitions=1, partition_sizes=[1]
+              ProjectionExec: expr=[column1@0 as #1]
+                DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+    physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after FilterPushdown:
+    SAME TEXT AS ABOVE
+
+    physical_plan after WindowTopN:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EnsureRequirements:
+    OutputRequirementExec: order_by=[(#5@0, asc)], dist_by=SinglePartition
+      ProjectionExec: expr=[#1@0 as #5]
+        ProjectionExec: expr=[#1@0 as #1]
+          SortExec: expr=[#1@0 ASC], preserve_partitioning=[false]
+            CrossJoinExec
+              ProjectionExec: expr=[]
+                DataSourceExec: partitions=1, partition_sizes=[1]
+              ProjectionExec: expr=[column1@0 as #1]
+                DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+    physical_plan after CombinePartialFinalAggregate:
+    SAME TEXT AS ABOVE
+
+    physical_plan after OptimizeAggregateOrder:
+    SAME TEXT AS ABOVE
+
+    physical_plan after ProjectionPushdown:
+    OutputRequirementExec: order_by=[(#5@0, asc)], dist_by=SinglePartition
+      ProjectionExec: expr=[#1@0 as #5]
+        SortExec: expr=[#1@0 ASC], preserve_partitioning=[false]
+          CrossJoinExec
+            DataSourceExec: partitions=1, partition_sizes=[1]
+            ProjectionExec: expr=[column1@0 as #1]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+    physical_plan after OutputRequirements:
+    ProjectionExec: expr=[#1@0 as #5]
+      SortExec: expr=[#1@0 ASC], preserve_partitioning=[false]
+        CrossJoinExec
+          DataSourceExec: partitions=1, partition_sizes=[1]
+          ProjectionExec: expr=[column1@0 as #1]
+            DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+    physical_plan after LimitAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after LimitPushPastWindows:
+    SAME TEXT AS ABOVE
+
+    physical_plan after HashJoinBuffering:
+    SAME TEXT AS ABOVE
+
+    physical_plan after LimitPushdown:
+    SAME TEXT AS ABOVE
+
+    physical_plan after TopKRepartition:
+    SAME TEXT AS ABOVE
+
+    physical_plan after ProjectionPushdown:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushdownSort:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EnsureCooperative:
+    SAME TEXT AS ABOVE
+
+    physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteExplicitRepartition:
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteCollectLeftHashJoin:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EnforceBarrierPartitioning:
+    SAME TEXT AS ABOVE
+
+    physical_plan after SanityCheckPlan:
+    SAME TEXT AS ABOVE
+
+    physical_plan:
+    ProjectionExec: expr=[#5@0 as id]
+      ProjectionExec: expr=[#1@0 as #5]
+        SortExec: expr=[#1@0 ASC], preserve_partitioning=[false]
+          CrossJoinExec
+            DataSourceExec: partitions=1, partition_sizes=[1]
+            ProjectionExec: expr=[column1@0 as #1]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+    == Physical Plan ==
+    ProjectionExec: expr=[#5@0 as id]
+      ProjectionExec: expr=[#1@0 as #5]
+        SortExec: expr=[#1@0 ASC], preserve_partitioning=[false]
+          CrossJoinExec
+            DataSourceExec: partitions=1, partition_sizes=[1]
+            ProjectionExec: expr=[column1@0 as #1]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+    == Distributed Plan ==
+    === stage 0 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    ProjectionExec: expr=[#5@0 as id]
+      ProjectionExec: expr=[#1@0 as #5]
+        SortExec: expr=[#1@0 ASC], preserve_partitioning=[false]
+          CrossJoinExec
+            DataSourceExec: partitions=1, partition_sizes=[1]
+            ProjectionExec: expr=[column1@0 as #1]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_struct_and_window_count_wildcards_resolve_to_concrete_arguments"
+data:
+  |-
+    == Codegen ==
+    Whole-stage codegen is not supported; showing physical plan instead.
+
+    == Plan Steps ==
+    initial_logical_plan:
+    Projection: struct(t.#2 AS g, t.#3 AS value) AS record AS #5, count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS #4 AS rows AS #6
+      WindowAggr: windowExpr=[[count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+        SubqueryAlias: t
+          Projection: #0 AS #2, #1 AS #3
+            Projection: column1 AS #0, column2 AS #1
+              Values: (Utf8("x"), Int32(NULL)), (Utf8("x"), Int32(1)), (Utf8("y"), Int32(NULL))
+
+    logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+
+    logical_plan after resolve_grouping_function:
+    SAME TEXT AS ABOVE
+
+    logical_plan after type_coercion:
+    SAME TEXT AS ABOVE
+
+    analyzed_logical_plan:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_lateral_projection:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_set_comparison:
+    SAME TEXT AS ABOVE
+
+    logical_plan after optimize_unions:
+    SAME TEXT AS ABOVE
+
+    logical_plan after unions_to_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after simplify_expressions:
+    SAME TEXT AS ABOVE
+
+    logical_plan after replace_distinct_aggregate:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after scalar_subquery_to_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_lateral_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after extract_equijoin_predicate:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_duplicated_expr:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_cross_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after propagate_empty_relation:
+    SAME TEXT AS ABOVE
+
+    logical_plan after filter_null_join_keys:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_outer_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after push_down_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after push_down_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after single_distinct_aggregation_to_group_by:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_group_by_constant:
+    SAME TEXT AS ABOVE
+
+    logical_plan after common_sub_expression_eliminate:
+    SAME TEXT AS ABOVE
+
+    logical_plan after extract_leaf_expressions:
+    SAME TEXT AS ABOVE
+
+    logical_plan after optimize_projections:
+    Projection: struct(t.#2 AS g, t.#3 AS value) AS record AS #5, count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS #4 AS rows AS #6
+      WindowAggr: windowExpr=[[count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+        SubqueryAlias: t
+          Projection: column1 AS #2, column2 AS #3
+            Values: (Utf8("x"), Int32(NULL)), (Utf8("x"), Int32(1)), (Utf8("y"), Int32(NULL))
+
+    logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_lateral_projection:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_set_comparison:
+    SAME TEXT AS ABOVE
+
+    logical_plan after optimize_unions:
+    SAME TEXT AS ABOVE
+
+    logical_plan after unions_to_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after simplify_expressions:
+    SAME TEXT AS ABOVE
+
+    logical_plan after replace_distinct_aggregate:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after scalar_subquery_to_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_lateral_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after extract_equijoin_predicate:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_duplicated_expr:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_cross_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after propagate_empty_relation:
+    SAME TEXT AS ABOVE
+
+    logical_plan after filter_null_join_keys:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_outer_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after push_down_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after push_down_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after single_distinct_aggregation_to_group_by:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_group_by_constant:
+    SAME TEXT AS ABOVE
+
+    logical_plan after common_sub_expression_eliminate:
+    SAME TEXT AS ABOVE
+
+    logical_plan after extract_leaf_expressions:
+    SAME TEXT AS ABOVE
+
+    logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+
+    logical_plan:
+    Projection: struct(t.#2 AS g, t.#3 AS value) AS record AS #5, count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS #4 AS rows AS #6
+      WindowAggr: windowExpr=[[count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+        SubqueryAlias: t
+          Projection: column1 AS #2, column2 AS #3
+            Values: (Utf8("x"), Int32(NULL)), (Utf8("x"), Int32(1)), (Utf8("y"), Int32(NULL))
+
+    initial_physical_plan:
+    ProjectionExec: expr=[struct(#2@0, #3@1) as #5, count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as #6]
+      WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+        ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
+          DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+    initial_physical_plan_with_stats:
+    ProjectionExec: expr=[struct(#2@0, #3@1) as #5, count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as #6], statistics=[Rows=Exact(3), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+      WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }], statistics=[Rows=Exact(3), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(2)),(Col[2]:)]]
+        ProjectionExec: expr=[column1@0 as #2, column2@1 as #3], statistics=[Rows=Exact(3), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(2))]]
+          DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(3), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(2))]]
+
+
+    initial_physical_plan_with_schema:
+    ProjectionExec: expr=[struct(#2@0, #3@1) as #5, count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as #6], schema=[#5:Struct("g": non-null Utf8, "value": Int32), #6:Int64]
+      WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }], schema=[#2:Utf8, #3:Int32;N, count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int64]
+        ProjectionExec: expr=[column1@0 as #2, column2@1 as #3], schema=[#2:Utf8, #3:Int32;N]
+          DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Utf8, column2:Int32;N]
+
+
+    physical_plan after OutputRequirements:
+    OutputRequirementExec: order_by=[], dist_by=Unspecified
+      ProjectionExec: expr=[struct(#2@0, #3@1) as #5, count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as #6]
+        WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+          ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
+            DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+    physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after join_selection:
+    SAME TEXT AS ABOVE
+
+    physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after FilterPushdown:
+    SAME TEXT AS ABOVE
+
+    physical_plan after WindowTopN:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EnsureRequirements:
+    OutputRequirementExec: order_by=[], dist_by=Unspecified
+      ProjectionExec: expr=[struct(#2@0, #3@1) as #5, count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as #6]
+        WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+          ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
+            SortExec: expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+    physical_plan after CombinePartialFinalAggregate:
+    SAME TEXT AS ABOVE
+
+    physical_plan after OptimizeAggregateOrder:
+    SAME TEXT AS ABOVE
+
+    physical_plan after ProjectionPushdown:
+    SAME TEXT AS ABOVE
+
+    physical_plan after OutputRequirements:
+    ProjectionExec: expr=[struct(#2@0, #3@1) as #5, count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as #6]
+      WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+        ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
+          SortExec: expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
+            DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+    physical_plan after LimitAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after LimitPushPastWindows:
+    SAME TEXT AS ABOVE
+
+    physical_plan after HashJoinBuffering:
+    SAME TEXT AS ABOVE
+
+    physical_plan after LimitPushdown:
+    SAME TEXT AS ABOVE
+
+    physical_plan after TopKRepartition:
+    SAME TEXT AS ABOVE
+
+    physical_plan after ProjectionPushdown:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushdownSort:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EnsureCooperative:
+    SAME TEXT AS ABOVE
+
+    physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteExplicitRepartition:
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteCollectLeftHashJoin:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EnforceBarrierPartitioning:
+    SAME TEXT AS ABOVE
+
+    physical_plan after SanityCheckPlan:
+    SAME TEXT AS ABOVE
+
+    physical_plan:
+    ProjectionExec: expr=[#5@0 as record, #6@1 as rows]
+      ProjectionExec: expr=[struct(#2@0, #3@1) as #5, count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as #6]
+        WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+          ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
+            SortExec: expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+    == Physical Plan ==
+    ProjectionExec: expr=[#5@0 as record, #6@1 as rows]
+      ProjectionExec: expr=[struct(#2@0, #3@1) as #5, count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as #6]
+        WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+          ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
+            SortExec: expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+    == Distributed Plan ==
+    === stage 0 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    ProjectionExec: expr=[#5@0 as record, #6@1 as rows]
+      ProjectionExec: expr=[struct(#2@0, #3@1) as #5, count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as #6]
+        WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [t.#2] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+          ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
+            SortExec: expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_wildcard_preserves_projection_order_alongside_a_generator"
+data:
+  |-
+    == Codegen ==
+    Whole-stage codegen is not supported; showing physical plan instead.
+
+    == Plan Steps ==
+    initial_logical_plan:
+    Sort: #8 ASC NULLS FIRST
+      Projection: Int32(0) AS first AS #5, t.#2 AS #6, t.#3 AS #7, #4 AS col AS last AS #8
+        Unnest: lists[#4|depth=1] structs[]
+          Projection: t.#2, t.#3, spark_array(Int32(7), Int32(8)) AS #4
+            SubqueryAlias: t
+              Projection: #0 AS #2, #1 AS #3
+                Projection: column1 AS #0, column2 AS #1
+                  Values: (Int32(1), Utf8("x"))
+
+    logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+
+    logical_plan after resolve_grouping_function:
+    SAME TEXT AS ABOVE
+
+    logical_plan after type_coercion:
+    SAME TEXT AS ABOVE
+
+    analyzed_logical_plan:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_lateral_projection:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_set_comparison:
+    SAME TEXT AS ABOVE
+
+    logical_plan after optimize_unions:
+    SAME TEXT AS ABOVE
+
+    logical_plan after unions_to_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after simplify_expressions:
+    Sort: #8 ASC NULLS FIRST
+      Projection: Int32(0) AS #5, t.#2 AS #6, t.#3 AS #7, #4 AS col AS last AS #8
+        Unnest: lists[#4|depth=1] structs[]
+          Projection: t.#2, t.#3, List([7, 8]) AS #4
+            SubqueryAlias: t
+              Projection: #0 AS #2, #1 AS #3
+                Projection: column1 AS #0, column2 AS #1
+                  Values: (Int32(1), Utf8("x"))
+
+    logical_plan after replace_distinct_aggregate:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after scalar_subquery_to_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_lateral_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after extract_equijoin_predicate:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_duplicated_expr:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_cross_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after propagate_empty_relation:
+    SAME TEXT AS ABOVE
+
+    logical_plan after filter_null_join_keys:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_outer_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after push_down_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after push_down_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after single_distinct_aggregation_to_group_by:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_group_by_constant:
+    SAME TEXT AS ABOVE
+
+    logical_plan after common_sub_expression_eliminate:
+    SAME TEXT AS ABOVE
+
+    logical_plan after extract_leaf_expressions:
+    SAME TEXT AS ABOVE
+
+    logical_plan after optimize_projections:
+    Sort: #8 ASC NULLS FIRST
+      Projection: Int32(0) AS #5, t.#2 AS #6, t.#3 AS #7, #4 AS col AS last AS #8
+        Unnest: lists[#4|depth=1] structs[]
+          Projection: t.#2, t.#3, List([7, 8]) AS #4
+            SubqueryAlias: t
+              Projection: column1 AS #2, column2 AS #3
+                Values: (Int32(1), Utf8("x"))
+
+    logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_lateral_projection:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_set_comparison:
+    SAME TEXT AS ABOVE
+
+    logical_plan after optimize_unions:
+    SAME TEXT AS ABOVE
+
+    logical_plan after unions_to_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after simplify_expressions:
+    SAME TEXT AS ABOVE
+
+    logical_plan after replace_distinct_aggregate:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after scalar_subquery_to_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_lateral_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after extract_equijoin_predicate:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_duplicated_expr:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_cross_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after propagate_empty_relation:
+    SAME TEXT AS ABOVE
+
+    logical_plan after filter_null_join_keys:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_outer_join:
+    SAME TEXT AS ABOVE
+
+    logical_plan after push_down_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after push_down_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after single_distinct_aggregation_to_group_by:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_group_by_constant:
+    SAME TEXT AS ABOVE
+
+    logical_plan after common_sub_expression_eliminate:
+    SAME TEXT AS ABOVE
+
+    logical_plan after extract_leaf_expressions:
+    SAME TEXT AS ABOVE
+
+    logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+
+    logical_plan:
+    Sort: #8 ASC NULLS FIRST
+      Projection: Int32(0) AS #5, t.#2 AS #6, t.#3 AS #7, #4 AS col AS last AS #8
+        Unnest: lists[#4|depth=1] structs[]
+          Projection: t.#2, t.#3, List([7, 8]) AS #4
+            SubqueryAlias: t
+              Projection: column1 AS #2, column2 AS #3
+                Values: (Int32(1), Utf8("x"))
+
+    initial_physical_plan:
+    SortExec: expr=[#8@3 ASC], preserve_partitioning=[false]
+      ProjectionExec: expr=[0 as #5, #2@0 as #6, #3@1 as #7, #4@2 as #8]
+        UnnestExec
+          ProjectionExec: expr=[#2@0 as #2, #3@1 as #3, [7, 8] as #4]
+            ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+    initial_physical_plan_with_stats:
+    SortExec: expr=[#8@3 ASC], preserve_partitioning=[false], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]: Min=Exact(Int32(0)) Max=Exact(Int32(0)) Null=Exact(0) Distinct=Exact(1)),(Col[1]:),(Col[2]:),(Col[3]:)]]
+      ProjectionExec: expr=[0 as #5, #2@0 as #6, #3@1 as #7, #4@2 as #8], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]: Min=Exact(Int32(0)) Max=Exact(Int32(0)) Null=Exact(0) Distinct=Exact(1)),(Col[1]:),(Col[2]:),(Col[3]:)]]
+        UnnestExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:)]]
+          ProjectionExec: expr=[#2@0 as #2, #3@1 as #3, [7, 8] as #4], statistics=[Rows=Exact(1), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Min=Exact(List([7, 8])) Max=Exact(List([7, 8])) Null=Exact(0) Distinct=Exact(1))]]
+            ProjectionExec: expr=[column1@0 as #2, column2@1 as #3], statistics=[Rows=Exact(1), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
+              DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(1), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
+
+
+    initial_physical_plan_with_schema:
+    SortExec: expr=[#8@3 ASC], preserve_partitioning=[false], schema=[#5:Int32, #6:Int32, #7:Utf8, #8:Int32;N]
+      ProjectionExec: expr=[0 as #5, #2@0 as #6, #3@1 as #7, #4@2 as #8], schema=[#5:Int32, #6:Int32, #7:Utf8, #8:Int32;N]
+        UnnestExec, schema=[#2:Int32, #3:Utf8, #4:Int32;N]
+          ProjectionExec: expr=[#2@0 as #2, #3@1 as #3, [7, 8] as #4], schema=[#2:Int32, #3:Utf8, #4:List(non-null Int32)]
+            ProjectionExec: expr=[column1@0 as #2, column2@1 as #3], schema=[#2:Int32, #3:Utf8]
+              DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32, column2:Utf8]
+
+
+    physical_plan after OutputRequirements:
+    OutputRequirementExec: order_by=[(#8@3, asc)], dist_by=SinglePartition
+      SortExec: expr=[#8@3 ASC], preserve_partitioning=[false]
+        ProjectionExec: expr=[0 as #5, #2@0 as #6, #3@1 as #7, #4@2 as #8]
+          UnnestExec
+            ProjectionExec: expr=[#2@0 as #2, #3@1 as #3, [7, 8] as #4]
+              ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
+                DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+    physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after join_selection:
+    SAME TEXT AS ABOVE
+
+    physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after FilterPushdown:
+    SAME TEXT AS ABOVE
+
+    physical_plan after WindowTopN:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EnsureRequirements:
+    SAME TEXT AS ABOVE
+
+    physical_plan after CombinePartialFinalAggregate:
+    SAME TEXT AS ABOVE
+
+    physical_plan after OptimizeAggregateOrder:
+    SAME TEXT AS ABOVE
+
+    physical_plan after ProjectionPushdown:
+    OutputRequirementExec: order_by=[(#8@3, asc)], dist_by=SinglePartition
+      SortExec: expr=[#8@3 ASC], preserve_partitioning=[false]
+        ProjectionExec: expr=[0 as #5, #2@0 as #6, #3@1 as #7, #4@2 as #8]
+          UnnestExec
+            ProjectionExec: expr=[column1@0 as #2, column2@1 as #3, [7, 8] as #4]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+    physical_plan after OutputRequirements:
+    SortExec: expr=[#8@3 ASC], preserve_partitioning=[false]
+      ProjectionExec: expr=[0 as #5, #2@0 as #6, #3@1 as #7, #4@2 as #8]
+        UnnestExec
+          ProjectionExec: expr=[column1@0 as #2, column2@1 as #3, [7, 8] as #4]
+            DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+    physical_plan after LimitAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after LimitPushPastWindows:
+    SAME TEXT AS ABOVE
+
+    physical_plan after HashJoinBuffering:
+    SAME TEXT AS ABOVE
+
+    physical_plan after LimitPushdown:
+    SAME TEXT AS ABOVE
+
+    physical_plan after TopKRepartition:
+    SAME TEXT AS ABOVE
+
+    physical_plan after ProjectionPushdown:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushdownSort:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EnsureCooperative:
+    SAME TEXT AS ABOVE
+
+    physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteExplicitRepartition:
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteCollectLeftHashJoin:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EnforceBarrierPartitioning:
+    SAME TEXT AS ABOVE
+
+    physical_plan after SanityCheckPlan:
+    SAME TEXT AS ABOVE
+
+    physical_plan:
+    ProjectionExec: expr=[#5@0 as first, #6@1 as id, #7@2 as payload, #8@3 as last]
+      SortExec: expr=[#8@3 ASC], preserve_partitioning=[false]
+        ProjectionExec: expr=[0 as #5, #2@0 as #6, #3@1 as #7, #4@2 as #8]
+          UnnestExec
+            ProjectionExec: expr=[column1@0 as #2, column2@1 as #3, [7, 8] as #4]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+    == Physical Plan ==
+    ProjectionExec: expr=[#5@0 as first, #6@1 as id, #7@2 as payload, #8@3 as last]
+      SortExec: expr=[#8@3 ASC], preserve_partitioning=[false]
+        ProjectionExec: expr=[0 as #5, #2@0 as #6, #3@1 as #7, #4@2 as #8]
+          UnnestExec
+            ProjectionExec: expr=[column1@0 as #2, column2@1 as #3, [7, 8] as #4]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+    == Distributed Plan ==
+    === stage 0 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    ProjectionExec: expr=[#5@0 as first, #6@1 as id, #7@2 as payload, #8@3 as last]
+      SortExec: expr=[#8@3 ASC], preserve_partitioning=[false]
+        ProjectionExec: expr=[0 as #5, #2@0 as #6, #3@1 as #7, #4@2 as #8]
+          UnnestExec
+            ProjectionExec: expr=[column1@0 as #2, column2@1 as #3, [7, 8] as #4]
+              DataSourceExec: partitions=1, partition_sizes=[1]

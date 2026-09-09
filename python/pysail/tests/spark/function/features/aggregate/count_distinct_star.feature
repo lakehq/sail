@@ -33,6 +33,16 @@ Feature: COUNT(DISTINCT *) function
 
   Rule: COUNT(DISTINCT *) with NULLs
 
+    Scenario: count distinct star excludes hidden full join keys
+      When query
+        """
+        SELECT COUNT(DISTINCT *) FROM VALUES (1), (2) AS l(id)
+        FULL JOIN VALUES (2), (3) AS r(id) USING (id)
+        """
+      Then query result
+        | count(DISTINCT id) |
+        | 3                  |
+
     Scenario Outline: count distinct star with NULLs <case>
       When query
         """

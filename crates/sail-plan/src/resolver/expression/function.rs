@@ -1,7 +1,7 @@
 use datafusion_common::DFSchemaRef;
+use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::utils::{expand_qualified_wildcard, expand_wildcard};
-use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, expr};
+use datafusion_expr::{Expr, expr};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -73,7 +73,8 @@ impl PlanResolver<'_> {
 
         let canonical_function_name = function_name.to_ascii_lowercase();
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
-        if let Some(udf) = catalog_manager.get_function(&canonical_function_name)?
+        let catalog_function = catalog_manager.get_function(&canonical_function_name)?;
+        if let Some(udf) = &catalog_function
             && udf.inner().is::<PySparkUnresolvedUDF>()
         {
             state.config_mut().arrow_allow_large_var_types = true;
@@ -96,6 +97,17 @@ impl PlanResolver<'_> {
         let (argument_display_names, arguments) = if canonical_function_name == "struct" {
             self.resolve_struct_expressions_and_names(arguments, schema, state)
                 .await?
+        } else if catalog_function.is_none()
+            && get_built_in_aggregate_function(&canonical_function_name).is_ok()
+        {
+            self.resolve_aggregate_arguments(
+                &canonical_function_name,
+                arguments,
+                is_distinct,
+                schema,
+                state,
+            )
+            .await?
         } else if has_spec_lambda_argument && is_higher_order_function(&canonical_function_name) {
             self.resolve_higher_order_function_arguments(
                 &canonical_function_name,
@@ -113,7 +125,7 @@ impl PlanResolver<'_> {
 
         // FIXME: `is_user_defined_function` is always false,
         //   so we need to check UDFs before built-in functions.
-        let func = match catalog_manager.get_function(&canonical_function_name)? {
+        let func = match catalog_function {
             Some(udf) => {
                 if ignore_nulls.is_some() || filter.is_some() || order_by.is_some() {
                     return Err(PlanError::invalid("invalid scalar function clause"));
@@ -153,14 +165,43 @@ impl PlanResolver<'_> {
                     })
                 }
             }
-            _ => {
-                match get_built_in_function(&canonical_function_name) {
+            _ => match get_built_in_function(&canonical_function_name) {
+                Ok(func) => {
+                    if ignore_nulls.is_some() || filter.is_some() || order_by.is_some() {
+                        return Err(PlanError::invalid("invalid scalar function clause"));
+                    }
+                    let input = ScalarFunctionInput {
+                        arguments,
+                        function_context: FunctionContextInput {
+                            argument_display_names: &argument_display_names,
+                            plan_config: &self.config,
+                            session_context: self.ctx,
+                            schema,
+                        },
+                    };
+                    func(input)?
+                }
+                _ => match get_built_in_aggregate_function(&canonical_function_name) {
                     Ok(func) => {
-                        if ignore_nulls.is_some() || filter.is_some() || order_by.is_some() {
-                            return Err(PlanError::invalid("invalid scalar function clause"));
-                        }
-                        let input = ScalarFunctionInput {
+                        let filter = match filter {
+                            Some(x) => {
+                                Some(Box::new(self.resolve_expression(*x, schema, state).await?))
+                            }
+                            None => None,
+                        };
+                        let order_by = match order_by {
+                            Some(x) => self.resolve_sort_orders(x, true, schema, state).await?,
+                            None => vec![],
+                        };
+                        let input = AggFunctionInput {
                             arguments,
+                            distinct: is_distinct,
+                            ignore_nulls,
+                            filter,
+                            order_by,
+                            preserve_count_argument_columns: state
+                                .config()
+                                .preserve_count_argument_columns,
                             function_context: FunctionContextInput {
                                 argument_display_names: &argument_display_names,
                                 plan_config: &self.config,
@@ -171,73 +212,12 @@ impl PlanResolver<'_> {
                         func(input)?
                     }
                     _ => {
-                        match get_built_in_aggregate_function(&canonical_function_name) {
-                            Ok(func) => {
-                                let filter = match filter {
-                                    Some(x) => Some(Box::new(
-                                        self.resolve_expression(*x, schema, state).await?,
-                                    )),
-                                    None => None,
-                                };
-                                let order_by = match order_by {
-                                    Some(x) => {
-                                        self.resolve_sort_orders(x, true, schema, state).await?
-                                    }
-                                    None => vec![],
-                                };
-                                // For DISTINCT aggregate functions with a wildcard argument (e.g., COUNT(DISTINCT *)),
-                                // expand the wildcard to visible column references here in the resolver where we have
-                                // access to `state` for hidden-column filtering. This ensures hidden columns (e.g.,
-                                // join keys) are excluded from the distinct count.
-                                #[expect(deprecated)]
-                                let arguments = if is_distinct
-                                    && matches!(
-                                        arguments.as_slice(),
-                                        [expr::Expr::Wildcard {
-                                            qualifier: None,
-                                            options: _
-                                        }]
-                                    ) {
-                                    schema
-                                        .columns()
-                                        .into_iter()
-                                        .filter(|c| {
-                                            state
-                                                .get_field_info(&c.name)
-                                                .is_ok_and(|info| !info.is_hidden())
-                                        })
-                                        .map(expr::Expr::Column)
-                                        .collect()
-                                } else {
-                                    arguments
-                                };
-                                let input = AggFunctionInput {
-                                    arguments,
-                                    distinct: is_distinct,
-                                    ignore_nulls,
-                                    filter,
-                                    order_by,
-                                    preserve_count_argument_columns: state
-                                        .config()
-                                        .preserve_count_argument_columns,
-                                    function_context: FunctionContextInput {
-                                        argument_display_names: &argument_display_names,
-                                        plan_config: &self.config,
-                                        session_context: self.ctx,
-                                        schema,
-                                    },
-                                };
-                                func(input)?
-                            }
-                            _ => {
-                                return Err(PlanError::unsupported(format!(
-                                    "unknown function: {function_name}",
-                                )));
-                            }
-                        }
+                        return Err(PlanError::unsupported(format!(
+                            "unknown function: {function_name}",
+                        )));
                     }
-                }
-            }
+                },
+            },
         };
 
         // DataFusion lambda variables carry no type until resolved against the schema.
@@ -251,26 +231,6 @@ impl PlanResolver<'_> {
             func
         };
 
-        // When `COUNT(DISTINCT *)` is used, expand the wildcard display names
-        // to individual column names so the output header matches Spark JVM behavior
-        // (e.g., `count(DISTINCT a, b, c)` instead of `count(DISTINCT *)`).
-        let argument_display_names =
-            if is_distinct && argument_display_names.iter().any(|n| n == "*") {
-                schema
-                    .columns()
-                    .iter()
-                    .filter_map(|c| {
-                        let info = state.get_field_info(&c.name).ok()?;
-                        if info.is_hidden() {
-                            None
-                        } else {
-                            Some(info.name().to_string())
-                        }
-                    })
-                    .collect::<Vec<_>>()
-            } else {
-                argument_display_names
-            };
         let service = self.ctx.extension::<PlanService>()?;
         let name = service.plan_formatter().function_to_string(
             &function_name,
@@ -317,23 +277,51 @@ impl PlanResolver<'_> {
             .await
     }
 
+    pub(super) async fn resolve_aggregate_arguments(
+        &self,
+        function_name: &str,
+        arguments: Vec<spec::Expr>,
+        is_distinct: bool,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<(Vec<String>, Vec<Expr>)> {
+        if let [
+            spec::Expr::UnresolvedStar {
+                target: None,
+                plan_id: None,
+                wildcard_options,
+            },
+        ] = arguments.as_slice()
+            && *wildcard_options == spec::WildcardOptions::default()
+        {
+            if function_name == "count" && !is_distinct {
+                // COUNT(*) counts rows, including rows whose columns are all NULL.
+                return Ok((
+                    vec!["*".to_string()],
+                    vec![Expr::Literal(COUNT_STAR_EXPANSION, None)],
+                ));
+            }
+            if is_distinct {
+                let expressions = self
+                    .resolve_named_expressions(arguments, schema, state)
+                    .await?;
+                return self
+                    .rewrite_multi_expr(expressions)?
+                    .into_iter()
+                    .map(|e| Ok((e.name.one()?, e.expr)))
+                    .collect();
+            }
+        }
+        self.resolve_expressions_and_names(arguments, schema, state)
+            .await
+    }
+
     async fn resolve_struct_expressions_and_names(
         &self,
         expressions: Vec<spec::Expr>,
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<(Vec<String>, Vec<expr::Expr>)> {
-        fn column_display_name(
-            column: &datafusion_common::Column,
-            state: &PlanResolverState,
-        ) -> PlanResult<Option<String>> {
-            let info = state.get_field_info(column.name())?;
-            if info.is_hidden() {
-                return Ok(None);
-            }
-            Ok(Some(info.name().to_string()))
-        }
-
         let mut names: Vec<String> = vec![];
         let mut exprs: Vec<expr::Expr> = vec![];
 
@@ -343,35 +331,7 @@ impl PlanResolver<'_> {
                 .await?;
 
             match expr {
-                // Expand wildcard inside `struct(...)` only, to match Spark behavior:
-                // - struct(*) expands to all visible columns
-                // - struct(alias.*) expands to all visible columns from that qualifier
-                #[expect(deprecated)]
-                Expr::Wildcard { qualifier, options } => {
-                    let plan = LogicalPlan::EmptyRelation(EmptyRelation {
-                        produce_one_row: false,
-                        schema: schema.clone(),
-                    });
-
-                    let expanded = match qualifier {
-                        Some(q) => expand_qualified_wildcard(&q, schema, Some(&options))?,
-                        None => expand_wildcard(schema, &plan, Some(&options))?,
-                    };
-
-                    for e in expanded {
-                        let Expr::Column(column) = e else {
-                            return Err(PlanError::internal(format!(
-                                "column expected for expanded wildcard expression in struct, got: {e:?}"
-                            )));
-                        };
-                        if let Some(display_name) = column_display_name(&column, state)? {
-                            names.push(display_name);
-                            exprs.push(Expr::Column(column));
-                        }
-                    }
-                }
-
-                // Nested-field wildcard expansion can produce a MultiExpr.
+                // Wildcard expansion produces a MultiExpr.
                 // Flatten it so `struct(a.*)` can become `struct(a.x, a.y, ...)`.
                 Expr::ScalarFunction(ScalarFunction { func, args })
                     if func.inner().is::<MultiExpr>() =>

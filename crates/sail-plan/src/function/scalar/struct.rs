@@ -4,7 +4,7 @@ use datafusion::functions::expr_fn;
 use datafusion_expr::{Expr, ScalarUDF, expr};
 use sail_function::scalar::struct_function::StructFunction;
 
-use crate::error::{PlanError, PlanResult};
+use crate::error::PlanResult;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
 fn r#struct(input: ScalarFunctionInput) -> PlanResult<Expr> {
@@ -13,17 +13,11 @@ fn r#struct(input: ScalarFunctionInput) -> PlanResult<Expr> {
         .iter()
         .zip(input.function_context.argument_display_names)
         .enumerate()
-        .map(|(i, (expr, name))| -> PlanResult<_> {
-            match expr {
-                Expr::Column(_) | Expr::Alias(_) => Ok(name.clone()),
-                #[expect(deprecated)]
-                Expr::Wildcard { .. } => Err(PlanError::internal(
-                    "wildcard should have been expanded before struct",
-                )),
-                _ => Ok(format!("col{}", i + 1)),
-            }
+        .map(|(i, (expr, name))| match expr {
+            Expr::Column(_) | Expr::Alias(_) => name.clone(),
+            _ => format!("col{}", i + 1),
         })
-        .collect::<PlanResult<_>>()?;
+        .collect();
     Ok(Expr::ScalarFunction(expr::ScalarFunction {
         func: Arc::new(ScalarUDF::from(StructFunction::new(field_names))),
         args: input.arguments,
