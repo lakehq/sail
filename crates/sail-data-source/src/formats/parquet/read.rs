@@ -122,6 +122,19 @@ impl ReadFormat for ParquetReadFormat {
         // Ensure deterministic ordering for stable schema inference.
         schemas.sort_unstable_by(|(location1, _), (location2, _)| location1.cmp(location2));
 
+        // A directory can carry the same timestamp column with different producer timezone labels
+        // (e.g. `timestamp[ms, UTC]` and `timestamp[us, America/New_York]`). Spark maps every
+        // adjusted-to-UTC timestamp to a single session-zoned `TimestampType`, so retag the
+        // timezone-aware fields that participate in the millisecond widening to the session
+        // timezone; otherwise they reach `Schema::try_merge` as unequal Arrow types and fail.
+        let session_timezone = ctx
+            .config_options()
+            .execution
+            .time_zone
+            .as_deref()
+            .unwrap_or("UTC");
+        normalize_widened_timestamp_timezones(&mut schemas, session_timezone);
+
         // TODO: Retag inferred microsecond-only adjusted-to-UTC timestamps with Spark's session
         // timezone instead of retaining the producer's `ARROW:schema` timezone identifier. Spark
         // renders such a column in the session zone; Sail currently keeps the producer's label.
@@ -354,6 +367,50 @@ fn is_binary_type(data_type: &DataType) -> bool {
     )
 }
 
+/// Retags producer-specific Arrow timezone labels to the Spark session timezone on timestamp
+/// fields that participate in the millisecond widening, so a directory mixing e.g.
+/// `timestamp[ms, UTC]` and `timestamp[us, America/New_York]` merges instead of failing at
+/// [`Schema::try_merge`].
+///
+/// Spark maps every timezone-aware (adjusted-to-UTC) timestamp to a single session-zoned
+/// `TimestampType`, and Arrow defines relabeling one nonempty timezone to another as
+/// metadata-only (the stored instants are identical), so the retag is lossless. A `None` timezone
+/// (`TIMESTAMP_NTZ`) is preserved untouched so it stays distinct from the aware type. Only fields
+/// that appear as timezone-aware milliseconds in at least one file are retagged; a
+/// microsecond-only field keeps its producer label (that pre-existing case is deferred above).
+fn normalize_widened_timestamp_timezones(
+    schemas: &mut [(object_store::path::Path, Schema)],
+    session_timezone: &str,
+) {
+    let widened_timestamp_fields = schemas
+        .iter()
+        .flat_map(|(_, schema)| schema.fields().iter())
+        .filter_map(|field| match field.data_type() {
+            DataType::Timestamp(TimeUnit::Millisecond, Some(_)) => Some(field.name().clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    for (_, schema) in schemas {
+        let metadata = schema.metadata().clone();
+        let fields = schema
+            .fields()
+            .iter()
+            .map(|field| match field.data_type() {
+                DataType::Timestamp(
+                    unit @ (TimeUnit::Millisecond | TimeUnit::Microsecond),
+                    Some(_),
+                ) if widened_timestamp_fields.contains(field.name()) => field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(DataType::Timestamp(*unit, Some(session_timezone.into()))),
+                _ => field.as_ref().clone(),
+            })
+            .collect::<Vec<_>>();
+        *schema = Schema::new_with_metadata(fields, metadata);
+    }
+}
+
 /// Clears all metadata (Schema level and field level) for a schema.
 fn clear_metadata(schema: Schema) -> Schema {
     let fields = schema
@@ -378,5 +435,94 @@ fn parse_coerce_int96_string(setting: &str) -> Result<TimeUnit> {
         _ => Err(DataFusionError::Configuration(format!(
             "Unknown or unsupported parquet `coerce_int96` setting: {setting}. Valid values are: ns, us, ms, and s."
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn timestamp_field(name: &str, unit: TimeUnit, tz: Option<&str>) -> Field {
+        Field::new(name, DataType::Timestamp(unit, tz.map(Into::into)), true)
+    }
+
+    fn located(name: &str, field: Field) -> (object_store::path::Path, Schema) {
+        (
+            object_store::path::Path::from(name),
+            Schema::new(vec![field]),
+        )
+    }
+
+    #[test]
+    fn retags_aware_fields_participating_in_millisecond_widening() {
+        // `ts` is aware microseconds (New York) in one file and aware milliseconds (UTC) in
+        // another; both are retagged to the session timezone so the later widening + merge agree.
+        let mut schemas = vec![
+            located(
+                "a",
+                timestamp_field("ts", TimeUnit::Microsecond, Some("America/New_York")),
+            ),
+            located(
+                "b",
+                timestamp_field("ts", TimeUnit::Millisecond, Some("UTC")),
+            ),
+        ];
+        normalize_widened_timestamp_timezones(&mut schemas, "America/Los_Angeles");
+        let tz = Some("America/Los_Angeles".into());
+        assert_eq!(
+            schemas[0].1.field(0).data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, tz.clone())
+        );
+        assert_eq!(
+            schemas[1].1.field(0).data_type(),
+            &DataType::Timestamp(TimeUnit::Millisecond, tz)
+        );
+    }
+
+    #[test]
+    fn preserves_timestamp_ntz_even_for_a_widened_field() {
+        // `ts` participates in the widening (aware ms in file a) but is TIMESTAMP_NTZ in file b;
+        // the `None` timezone must survive so it stays distinct from the aware type.
+        let mut schemas = vec![
+            located(
+                "a",
+                timestamp_field("ts", TimeUnit::Millisecond, Some("UTC")),
+            ),
+            located("b", timestamp_field("ts", TimeUnit::Microsecond, None)),
+        ];
+        normalize_widened_timestamp_timezones(&mut schemas, "America/Los_Angeles");
+        assert_eq!(
+            schemas[0].1.field(0).data_type(),
+            &DataType::Timestamp(TimeUnit::Millisecond, Some("America/Los_Angeles".into()))
+        );
+        assert_eq!(
+            schemas[1].1.field(0).data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, None)
+        );
+    }
+
+    #[test]
+    fn leaves_microsecond_only_fields_untouched() {
+        // No file has this field as aware milliseconds, so each producer label is retained
+        // (the pre-existing microsecond-only case, deferred).
+        let mut schemas = vec![
+            located(
+                "a",
+                timestamp_field("ts", TimeUnit::Microsecond, Some("UTC")),
+            ),
+            located(
+                "b",
+                timestamp_field("ts", TimeUnit::Microsecond, Some("America/New_York")),
+            ),
+        ];
+        normalize_widened_timestamp_timezones(&mut schemas, "America/Los_Angeles");
+        assert_eq!(
+            schemas[0].1.field(0).data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
+        );
+        assert_eq!(
+            schemas[1].1.field(0).data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, Some("America/New_York".into()))
+        );
     }
 }
