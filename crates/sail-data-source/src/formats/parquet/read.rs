@@ -3,9 +3,11 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef, TimeUnit};
 use datafusion::catalog::Session;
 use datafusion::datasource::physical_plan::ParquetSource;
-use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::parquet::metadata::{
     DFParquetMetadata, ordering_from_parquet_metadata,
+};
+use datafusion::datasource::physical_plan::parquet::{
+    CachedParquetFileReaderFactory, Int96Coercer,
 };
 use datafusion::parquet::arrow::parquet_to_arrow_schema;
 use datafusion_common::config::TableParquetOptions;
@@ -103,13 +105,34 @@ impl ReadFormat for ParquetReadFormat {
                     .with_metadata_size_hint(metadata_size_hint)
                     .with_file_metadata_cache(Some(Arc::clone(&metadata_cache)))
                     .with_coerce_int96(coerce_int96);
-                let schema = reader.fetch_schema().await?;
-                // Compare the Arrow-hinted schema against the metadata-free physical schema so
-                // that Arrow-only `timestamp[s]` hints over physical INT64 are read as long,
-                // matching Spark. The metadata cache above makes this second fetch cheap.
+                // Fetch the Parquet footer once and derive both schemas from it.
+                // `fetch_schema()` would read (and parse) the footer a second time; when the
+                // file-metadata cache is disabled (`file_metadata_cache.type=none`, a supported
+                // zero-capacity mode) that second read is not cached, doubling remote footer I/O
+                // during schema inference.
                 let metadata = reader.fetch_metadata().await?;
-                let physical =
-                    parquet_to_arrow_schema(metadata.file_metadata().schema_descr(), None)?;
+                let file_metadata = metadata.file_metadata();
+                // Arrow-hinted schema: mirror `DFParquetMetadata::fetch_schema` exactly, which
+                // reads the `ARROW:schema` key-value hint and then applies `coerce_int96` to the
+                // INT96-derived columns. Reproduced here (rather than calling `fetch_schema()`)
+                // so the inferred types stay identical to today for hinted and INT96 columns.
+                // `coerce_int96_tz` is never set on the reader, so INT96 columns coerce to a
+                // `None`-timezone timestamp, matching `fetch_schema`'s default.
+                let schema = parquet_to_arrow_schema(
+                    file_metadata.schema_descr(),
+                    file_metadata.key_value_metadata(),
+                )?;
+                let schema = coerce_int96
+                    .as_ref()
+                    .and_then(|time_unit| {
+                        Int96Coercer::new(file_metadata.schema_descr(), &schema, time_unit).coerce()
+                    })
+                    .unwrap_or(schema);
+                // Metadata-free physical schema: no `ARROW:schema` hint, so an Arrow-only
+                // `timestamp[s]` hint over a physical INT64 appears here as INT64. Comparing the
+                // two lets `reinterpret_second_timestamps_as_int64` read such a column as long,
+                // matching Spark.
+                let physical = parquet_to_arrow_schema(file_metadata.schema_descr(), None)?;
                 let schema = reinterpret_second_timestamps_as_int64(schema, &physical);
                 Ok::<_, DataFusionError>((object.location.clone(), schema))
             })
