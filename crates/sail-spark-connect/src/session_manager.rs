@@ -44,6 +44,19 @@ impl ServerSessionMutator for SparkSessionMutator {
             },
         )
         .map_err(|e| internal_datafusion_err!("{e}"))?;
+        // Seed the DataFusion `execution.time_zone` from the resolved Spark session timezone at
+        // session creation. `SparkSession::try_new` sets `spark.sql.session.timeZone` to the
+        // system timezone, but nothing otherwise copies it into `SessionConfig`; without this
+        // seed a session that never calls `conf.set` leaves `execution.time_zone = None`, so
+        // Parquet schema inference treats a non-UTC server as UTC. `handle_config_set` and
+        // `handle_config_unset` keep the two in sync thereafter.
+        let session_timezone = spark
+            .plan_config()
+            .map_err(|e| internal_datafusion_err!("{e}"))?
+            .session_timezone
+            .to_string();
+        let mut config = config;
+        config.options_mut().execution.time_zone = Some(session_timezone);
         Ok(config
             .with_extension(Arc::new(plan_service))
             .with_extension(Arc::new(spark)))

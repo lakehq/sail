@@ -111,7 +111,23 @@ pub(crate) fn handle_config_unset(
 ) -> SparkResult<ConfigResponse> {
     let spark = ctx.extension::<SparkSession>()?;
     let warnings = spark.get_config_warnings_by_keys(&keys)?;
+    let unsets_session_timezone = {
+        let key = SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE.to_string();
+        keys.iter().any(|k| k == &key)
+    };
     spark.unset_config(keys)?;
+    if unsets_session_timezone {
+        // Unsetting `spark.sql.session.timeZone` reverts it toward the default, so re-sync
+        // `execution.time_zone` to the now-effective session zone instead of leaving the last
+        // explicitly-set value behind. Mirrors the sync in `handle_config_set`.
+        let session_timezone = spark.plan_config()?.session_timezone.to_string();
+        ctx.state_ref()
+            .write()
+            .config_mut()
+            .options_mut()
+            .execution
+            .time_zone = Some(session_timezone);
+    }
     Ok(ConfigResponse {
         session_id: spark.session_id().to_string(),
         server_side_session_id: spark.session_id().to_string(),
