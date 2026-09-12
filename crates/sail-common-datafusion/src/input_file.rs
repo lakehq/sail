@@ -10,8 +10,8 @@ use datafusion::datasource::physical_plan::{
 use datafusion::datasource::table_schema::TableSchema;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::{
-    ColumnarValue, ExpressionPlacement, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
-    Signature, Volatility,
+    ColumnarValue, ExpressionPlacement, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
+    ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion::physical_expr::ScalarFunctionExpr;
 use datafusion::physical_expr::expressions::Literal;
@@ -145,11 +145,20 @@ pub struct InputFileMetadata {
 
 impl InputFileMetadata {
     pub fn try_new(object_store_url: &ObjectStoreUrl, file: &PartitionedFile) -> Result<Self> {
-        let name = format!(
-            "{}{}",
-            object_store_url.as_str(),
-            file.object_meta.location.as_ref().trim_start_matches('/')
-        );
+        let mut name = url::Url::clone(object_store_url.as_ref());
+        name.path_segments_mut()
+            .map_err(|()| {
+                datafusion::common::DataFusionError::Internal(
+                    "object store URL cannot be a base".to_string(),
+                )
+            })?
+            .clear()
+            .extend(
+                file.object_meta
+                    .location
+                    .parts()
+                    .map(|part| part.as_ref().to_string()),
+            );
         let (block_start, block_length) = match &file.range {
             Some(range) => {
                 let block_length = range
@@ -175,7 +184,7 @@ impl InputFileMetadata {
             ),
         };
         Ok(Self {
-            name,
+            name: name.to_string(),
             block_start,
             block_length,
         })
@@ -188,6 +197,13 @@ impl InputFileMetadata {
             block_length: -1,
         }
     }
+}
+
+pub fn is_input_file_metadata_function(function: &ScalarUDF) -> bool {
+    let function = function.inner();
+    function.is::<datafusion::functions::core::input_file_name::InputFileNameFunc>()
+        || function.is::<InputFileBlockStartFunc>()
+        || function.is::<InputFileBlockLengthFunc>()
 }
 
 pub fn projection_references_input_file_metadata(projection: &ProjectionExprs) -> bool {

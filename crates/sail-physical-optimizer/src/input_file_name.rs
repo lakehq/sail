@@ -5,13 +5,20 @@ use datafusion::common::{Constraints, Result, Statistics};
 use datafusion::config::ConfigOptions;
 use datafusion::datasource::physical_plan::{FileScanConfig, FileScanConfigBuilder, FileSource};
 use datafusion::datasource::source::DataSourceExec;
+use datafusion::physical_expr::ScalarFunctionExpr;
+use datafusion::physical_expr::expressions::{Column, LambdaVariable};
+use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::filter::{FilterExec, FilterExecBuilder};
+use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
+use datafusion::physical_plan::union::UnionExec;
+use datafusion::physical_plan::{ExecutionPlan, Partitioning, PhysicalExpr};
 use sail_common_datafusion::input_file::{
     InputFileMetadata, InputFileMetadataSource, expression_references_input_file_metadata,
+    is_input_file_metadata_function, projection_references_input_file_metadata,
     rewrite_input_file_metadata_projection,
 };
+use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
 use crate::projection_pushdown::LambdaSafeProjectionPushdown;
 
@@ -93,7 +100,15 @@ impl PhysicalOptimizerRule for PushDownInputFileMetadata {
         if !plan_references_input_file_metadata(&plan)? {
             return Ok(plan);
         }
-        self.projection_pushdown.optimize(plan, config)
+        let mut plan = plan.transform_up(extract_metadata_projection)?.data;
+        loop {
+            plan = self.projection_pushdown.optimize(plan, config)?;
+            let pushed = plan.transform_down(push_metadata_through_file_context)?;
+            plan = pushed.data;
+            if !pushed.transformed {
+                return Ok(plan);
+            }
+        }
     }
 
     fn name(&self) -> &str {
@@ -103,6 +118,192 @@ impl PhysicalOptimizerRule for PushDownInputFileMetadata {
     fn schema_check(&self) -> bool {
         true
     }
+}
+
+fn is_metadata_expression(expression: &Arc<dyn PhysicalExpr>) -> bool {
+    expression
+        .downcast_ref::<ScalarFunctionExpr>()
+        .is_some_and(|function| is_input_file_metadata_function(function.fun()))
+}
+
+/// Keep source-dependent expressions below projections that contain lambda variables.
+fn extract_metadata_projection(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+    let Some(projection) = plan.downcast_ref::<ProjectionExec>() else {
+        return Ok(Transformed::no(plan));
+    };
+    if !projection_references_input_file_metadata(projection.projection_expr())
+        || projection.expr().iter().all(|expression| {
+            expression.expr.is::<Column>() || is_metadata_expression(&expression.expr)
+        })
+    {
+        return Ok(Transformed::no(plan));
+    }
+    let (expressions, extracted) = extract_metadata_expressions(projection)?;
+    let schema = projection.input().schema();
+    let identity =
+        ProjectionExprs::from_indices(&(0..schema.fields().len()).collect::<Vec<_>>(), &schema);
+    let input = Arc::new(ProjectionExec::try_new(
+        identity.iter().cloned().chain(extracted),
+        Arc::clone(projection.input()),
+    )?) as Arc<dyn ExecutionPlan>;
+    let rewritten = ProjectionExec::try_new_with_schema_metadata(
+        expressions.iter().cloned(),
+        input,
+        projection.schema().as_ref(),
+    )?;
+    Ok(Transformed::yes(Arc::new(rewritten)))
+}
+
+fn extract_metadata_expressions(
+    projection: &ProjectionExec,
+) -> Result<(ProjectionExprs, Vec<ProjectionExpr>)> {
+    let schema = projection.input().schema();
+    let mut extracted: Vec<ProjectionExpr> = Vec::new();
+    let expressions = projection
+        .projection_expr()
+        .clone()
+        .try_map_exprs(|expression| {
+            expression
+                .transform_up(|expression| {
+                    if !is_metadata_expression(&expression) {
+                        return Ok(Transformed::no(expression));
+                    }
+                    let index = match extracted
+                        .iter()
+                        .position(|candidate| candidate.expr.eq(&expression))
+                    {
+                        Some(index) => index,
+                        None => {
+                            let mut suffix = extracted.len();
+                            let alias = loop {
+                                let alias = format!("__sail_input_file_metadata_{suffix}");
+                                if schema.field_with_name(&alias).is_err()
+                                    && !extracted.iter().any(|expression| expression.alias == alias)
+                                {
+                                    break alias;
+                                }
+                                suffix += 1;
+                            };
+                            extracted.push(ProjectionExpr::new(expression, alias));
+                            extracted.len() - 1
+                        }
+                    };
+                    Ok(Transformed::yes(Arc::new(Column::new(
+                        &extracted[index].alias,
+                        schema.fields().len() + index,
+                    ))
+                        as Arc<dyn PhysicalExpr>))
+                })
+                .map(|result| result.data)
+        })?;
+    // Lambda parameters follow the input columns in the physical evaluation schema.
+    let expressions = expressions.try_map_exprs(|expression| {
+        expression
+            .transform_up(|expression| {
+                if let Some(variable) = expression.downcast_ref::<LambdaVariable>() {
+                    Ok(Transformed::yes(Arc::new(LambdaVariable::new(
+                        variable.index() + extracted.len(),
+                        Arc::clone(variable.field()),
+                    ))
+                        as Arc<dyn PhysicalExpr>))
+                } else {
+                    Ok(Transformed::no(expression))
+                }
+            })
+            .map(|result| result.data)
+    })?;
+    Ok((expressions, extracted))
+}
+
+fn push_metadata_through_file_context(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+    let Some(projection) = plan.downcast_ref::<ProjectionExec>() else {
+        return Ok(Transformed::no(plan));
+    };
+    if !projection_references_input_file_metadata(projection.projection_expr()) {
+        return Ok(Transformed::no(plan));
+    }
+    if let Some(filter) = projection.input().downcast_ref::<FilterExec>() {
+        let (expressions, metadata) = extract_metadata_expressions(projection)?;
+        let schema = filter.input().schema();
+        let column_count = schema.fields().len();
+        let identity =
+            ProjectionExprs::from_indices(&(0..column_count).collect::<Vec<_>>(), &schema);
+        let indices = filter
+            .projection()
+            .as_ref()
+            .map_or_else(
+                || (0..column_count).collect::<Vec<_>>(),
+                |projection| projection.to_vec(),
+            )
+            .into_iter()
+            .chain(column_count..column_count + metadata.len())
+            .collect();
+        let input = Arc::new(ProjectionExec::try_new(
+            identity.iter().cloned().chain(metadata),
+            Arc::clone(filter.input()),
+        )?) as Arc<dyn ExecutionPlan>;
+        let filter = FilterExecBuilder::from(filter)
+            .with_input(input)
+            .apply_projection(None)?
+            .apply_projection(Some(indices))?
+            .build()?;
+        let rewritten = ProjectionExec::try_new_with_schema_metadata(
+            expressions.iter().cloned(),
+            Arc::new(filter),
+            projection.schema().as_ref(),
+        )?;
+        return Ok(Transformed::yes(Arc::new(rewritten)));
+    }
+    let project = |input: &Arc<dyn ExecutionPlan>| -> Result<Arc<dyn ExecutionPlan>> {
+        let schema = input.schema();
+        let expressions = projection
+            .projection_expr()
+            .clone()
+            .try_map_exprs(|expression| {
+                expression
+                    .transform_up(|expression| {
+                        if let Some(column) = expression.downcast_ref::<Column>() {
+                            Ok(Transformed::yes(Arc::new(Column::new(
+                                schema.field(column.index()).name(),
+                                column.index(),
+                            ))
+                                as Arc<dyn PhysicalExpr>))
+                        } else {
+                            Ok(Transformed::no(expression))
+                        }
+                    })
+                    .map(|result| result.data)
+            })?;
+        Ok(Arc::new(ProjectionExec::try_new_with_schema_metadata(
+            expressions.iter().cloned(),
+            Arc::clone(input),
+            projection.schema().as_ref(),
+        )?))
+    };
+    if let Some(union) = projection.input().downcast_ref::<UnionExec>() {
+        let inputs = union
+            .inputs()
+            .iter()
+            .map(project)
+            .collect::<Result<Vec<_>>>()?;
+        return Ok(Transformed::yes(UnionExec::try_new(inputs)?));
+    }
+    if let Some(repartition) = projection.input().downcast_ref::<ExplicitRepartitionExec>()
+        && matches!(
+            repartition.properties().output_partitioning(),
+            Partitioning::UnknownPartitioning(_)
+        )
+    {
+        return Ok(Transformed::yes(Arc::new(ExplicitRepartitionExec::new(
+            project(repartition.input())?,
+            repartition.properties().output_partitioning().clone(),
+        ))));
+    }
+    Ok(Transformed::no(plan))
 }
 
 fn plan_references_input_file_metadata(plan: &Arc<dyn ExecutionPlan>) -> Result<bool> {

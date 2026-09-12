@@ -43,6 +43,9 @@ data:
                     Projection: #3 AS k AS #4, #3 + CAST(Int32(1) AS Int64) AS v2 AS #5
                       Range: start=0, end=64, step=1, num_partitions=4
 
+    logical_plan after resolve_input_file_metadata:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -326,6 +329,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[(#13@0, asc)], dist_by=SinglePartition
       SortPreservingMergeExec: [#13@0 ASC]
@@ -410,6 +419,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:

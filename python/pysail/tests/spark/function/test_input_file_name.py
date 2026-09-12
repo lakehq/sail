@@ -4,12 +4,160 @@ from urllib.parse import unquote, urlparse
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 from pyspark.sql import functions as F  # noqa: N812
 
 PARQUET_SPLIT_ROW_COUNT = 16_384
 PARQUET_SPLIT_ROW_GROUP_SIZE = 512
 PARQUET_SPLIT_PAYLOAD_SIZE = 512
 DATAFUSION_REPARTITION_FILE_MIN_SIZE = 1024 * 1024
+
+
+@pytest.fixture
+def parquet_metadata(spark, tmp_path):
+    files = {}
+    for name, ids in [("a.parquet", [1, 2]), ("b.parquet", [3, 4])]:
+        path = tmp_path / name
+        pq.write_table(pa.table({"id": ids, "arr": [[value, value + 1] for value in ids]}), path)
+        files.update({value: (path.as_uri(), 0, path.stat().st_size) for value in ids})
+    return spark.read.parquet(str(tmp_path)), files
+
+
+@pytest.mark.parametrize("boundary", ["lambda", "coalesce", "union", "union_coalesce"])
+def test_input_file_metadata_survives_projection_boundaries(spark, parquet_metadata, boundary):
+    dataframe, expected = parquet_metadata
+    if boundary == "lambda":
+        dataframe = dataframe.selectExpr("id", "transform(arr, x -> x + id) AS arr")
+    elif boundary == "coalesce":
+        dataframe = dataframe.coalesce(1)
+    else:
+        dataframe = dataframe.select("id").union(spark.range(5, 7))
+        expected.update({5: ("", -1, -1), 6: ("", -1, -1)})
+        if boundary == "union_coalesce":
+            dataframe = dataframe.coalesce(1)
+
+    rows = dataframe.select(
+        "*",
+        F.input_file_name().alias("file_name"),
+        F.input_file_block_start().alias("block_start"),
+        F.input_file_block_length().alias("block_length"),
+    ).collect()
+
+    assert {row.id: (row.file_name, row.block_start, row.block_length) for row in rows} == expected
+    if boundary == "lambda":
+        assert {row.id: row.arr for row in rows} == {value: [2 * value, 2 * value + 1] for value in expected}
+
+
+def test_input_file_metadata_inside_lambda(parquet_metadata):
+    dataframe, expected = parquet_metadata
+    rows = dataframe.selectExpr(
+        "id",
+        "transform(arr, x -> concat(input_file_name(), cast(x AS string))) AS names",
+        "transform(arr, x -> input_file_block_start() + x) AS starts",
+        "transform(arr, x -> input_file_block_length() + x) AS lengths",
+        "transform(arr, x -> transform(array(x, x + 1), "
+        "y -> concat(input_file_name(), cast(x + y + id AS string)))) AS nested",
+    ).collect()
+
+    for row in rows:
+        name, start, length = expected[row.id]
+        assert row.names == [f"{name}{row.id}", f"{name}{row.id + 1}"]
+        assert row.starts == [start + row.id, start + row.id + 1]
+        assert row.lengths == [length + row.id, length + row.id + 1]
+        assert row.nested == [
+            [f"{name}{2 * value + row.id}", f"{name}{2 * value + row.id + 1}"] for value in [row.id, row.id + 1]
+        ]
+
+
+@pytest.mark.parametrize("function", ["input_file_name", "input_file_block_start", "input_file_block_length"])
+@pytest.mark.parametrize("window", ["partition", "order", "argument"])
+def test_input_file_metadata_in_window(parquet_metadata, function, window):
+    dataframe, files = parquet_metadata
+    index = ["input_file_name", "input_file_block_start", "input_file_block_length"].index(function)
+    metadata = {key: value[index] for key, value in files.items()}
+    if window == "partition":
+        expression = f"row_number() OVER (PARTITION BY {function}() ORDER BY id)"
+        expected = {
+            key: sum(value == metadata[previous] for previous in files if previous <= key)
+            for key, value in metadata.items()
+        }
+    elif window == "order":
+        expression = f"row_number() OVER (ORDER BY {function}(), id)"
+        expected = {
+            key: position for position, key in enumerate(sorted(files, key=lambda key: (metadata[key], key)), 1)
+        }
+    else:
+        expression = f"lag({function}()) OVER (ORDER BY id)"
+        expected = {key: metadata.get(key - 1) for key in files}
+
+    rows = dataframe.selectExpr("id", f"{expression} AS value").collect()
+    assert {row.id: row.value for row in rows} == expected
+
+
+@pytest.mark.parametrize("boundary", ["repartition", "sort", "aggregate"])
+def test_input_file_metadata_after_shuffle_uses_defaults(parquet_metadata, boundary):
+    dataframe, expected = parquet_metadata
+    if boundary == "repartition":
+        dataframe = dataframe.repartition(2)
+    elif boundary == "sort":
+        dataframe = dataframe.orderBy("id")
+    else:
+        dataframe = dataframe.groupBy("id").count()
+    rows = dataframe.select(
+        "id", F.input_file_name(), F.input_file_block_start(), F.input_file_block_length()
+    ).collect()
+    assert sorted(tuple(row) for row in rows) == [(key, "", -1, -1) for key in expected]
+
+
+def test_input_file_metadata_materialized_before_shuffle(parquet_metadata):
+    dataframe, expected = parquet_metadata
+    rows = (
+        dataframe.select("id", F.input_file_name(), F.input_file_block_start(), F.input_file_block_length())
+        .repartition(2)
+        .collect()
+    )
+    assert sorted(tuple(row) for row in rows) == [(key, *value) for key, value in expected.items()]
+
+
+def test_input_file_name_escapes_uri_path(spark, tmp_path):
+    directory = tmp_path / "space #hash %percent"
+    directory.mkdir()
+    path = directory / "file #100%.parquet"
+    pq.write_table(pa.table({"id": [1]}), path)
+    rows = spark.read.parquet(str(path)).select(F.input_file_name()).collect()
+    assert [row[0] for row in rows] == [path.as_uri()]
+
+
+@pytest.mark.parametrize("function", ["input_file_name", "input_file_block_start", "input_file_block_length"])
+@pytest.mark.parametrize("nested_union", [False, True])
+def test_input_file_metadata_rejects_multiple_file_sources(spark, parquet_metadata, function, nested_union):
+    dataframe, _ = parquet_metadata
+    joined = dataframe.alias("left").join(dataframe.alias("right"), "id").select("id")
+    if nested_union:
+        joined = joined.union(spark.range(5, 7))
+    with pytest.raises(Exception, match="MULTI_SOURCES_UNSUPPORTED_FOR_EXPRESSION"):
+        joined.selectExpr(f"{function}()").collect()
+
+
+def test_input_file_metadata_can_be_materialized_before_join(parquet_metadata):
+    dataframe, expected = parquet_metadata
+    left = dataframe.select("id", F.input_file_name().alias("left_file"))
+    right = dataframe.select("id", F.input_file_name().alias("right_file"))
+    rows = left.join(right, "id").collect()
+    assert {row.id: (row.left_file, row.right_file) for row in rows} == {
+        key: (value[0], value[0]) for key, value in expected.items()
+    }
+
+
+def test_input_file_metadata_from_union_of_files(parquet_metadata):
+    dataframe, expected = parquet_metadata
+    rows = (
+        dataframe.where("id <= 2")
+        .union(dataframe.where("id > 2"))
+        .select("id", F.input_file_name(), F.input_file_block_start(), F.input_file_block_length())
+        .collect()
+    )
+    assert sorted(tuple(row) for row in rows) == [(key, *value) for key, value in expected.items()]
 
 
 def _file_name(location: str) -> str:

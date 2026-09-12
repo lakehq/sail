@@ -129,10 +129,10 @@ pub struct IcebergDeleteApplyExec {
 impl IcebergDeleteApplyExec {
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
-        output_schema: SchemaRef,
+        equivalence_properties: datafusion::physical_expr::EquivalenceProperties,
     ) -> Arc<PlanProperties> {
         Arc::new(PlanProperties::new(
-            datafusion::physical_expr::EquivalenceProperties::new(output_schema),
+            equivalence_properties,
             Partitioning::UnknownPartitioning(1),
             input.pipeline_behavior(),
             input.boundedness(),
@@ -158,7 +158,7 @@ impl IcebergDeleteApplyExec {
             );
         }
         let output_schema = input.schema();
-        let cache = Self::compute_properties(&input, Arc::clone(&output_schema));
+        let cache = Self::compute_properties(&input, input.equivalence_properties().clone());
         Self {
             input,
             data_file_path,
@@ -204,8 +204,20 @@ impl IcebergDeleteApplyExec {
             None => self.input.schema(),
         };
         self.input_file_projection = projection;
-        self.cache = Self::compute_properties(&self.input, Arc::clone(&self.output_schema));
+        self.cache = self.projected_properties()?;
         Ok(self)
+    }
+
+    fn projected_properties(&self) -> Result<Arc<PlanProperties>> {
+        let properties = self.input.equivalence_properties();
+        let properties = match &self.input_file_projection {
+            Some(projection) => properties.project(
+                &projection.projection_mapping(&self.input.schema())?,
+                Arc::clone(&self.output_schema),
+            ),
+            None => properties.clone(),
+        };
+        Ok(Self::compute_properties(&self.input, properties))
     }
 
     fn input_file_metadata(&self) -> Result<InputFileMetadata> {
@@ -315,7 +327,7 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
             }
             None => cloned.input.schema(),
         };
-        cloned.cache = Self::compute_properties(&cloned.input, Arc::clone(&cloned.output_schema));
+        cloned.cache = cloned.projected_properties()?;
         Ok(Arc::new(cloned))
     }
 
