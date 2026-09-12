@@ -35,6 +35,8 @@ static ACTION_SCHEMA: LazyLock<SchemaRef> =
 pub struct CommitMeta {
     pub table_uri: String,
     pub row_count: u64,
+    pub removed_data_file_paths: Vec<String>,
+    pub skip_empty_commit: bool,
     pub requirements: Vec<TableRequirement>,
     pub table_properties: Vec<(String, String)>,
     pub lakehouse_table: Option<LakehouseExecutionContext>,
@@ -46,6 +48,8 @@ pub struct CommitMeta {
 pub struct CommitMetaAction {
     pub table_uri: String,
     pub row_count: u64,
+    pub removed_data_file_paths: Vec<String>,
+    pub skip_empty_commit: bool,
     /// Requirements are relatively small but hard to trace into Arrow schema; keep as JSON.
     pub requirements_json: String,
     /// Table properties are applied only when bootstrapping new table metadata.
@@ -562,6 +566,8 @@ pub fn encode_commit_meta(meta: CommitMeta) -> Result<RecordBatch> {
         action: ExecAction::CommitMeta(CommitMetaAction {
             table_uri: meta.table_uri,
             row_count: meta.row_count,
+            removed_data_file_paths: meta.removed_data_file_paths,
+            skip_empty_commit: meta.skip_empty_commit,
             requirements_json,
             table_properties_json,
             lakehouse_table_json,
@@ -614,6 +620,8 @@ pub fn decode_actions_and_meta_from_batch(
                 meta = Some(CommitMeta {
                     table_uri: m.table_uri,
                     row_count: m.row_count,
+                    removed_data_file_paths: m.removed_data_file_paths,
+                    skip_empty_commit: m.skip_empty_commit,
                     requirements,
                     table_properties,
                     lakehouse_table,
@@ -686,6 +694,8 @@ mod tests {
         let meta = CommitMeta {
             table_uri: "s3://bucket/table".to_string(),
             row_count: 10,
+            removed_data_file_paths: vec!["s3://bucket/old.parquet".to_string()],
+            skip_empty_commit: true,
             requirements: vec![TableRequirement::NotExist],
             table_properties: vec![],
             lakehouse_table: None,
@@ -701,12 +711,12 @@ mod tests {
                 referenced_data_file: Some(df.file_path.clone()),
                 ..df.clone()
             }])?,
-            encode_commit_meta(meta)?,
+            encode_commit_meta(meta.clone())?,
         ];
         let merged = concat_batches(&schema, &batches)
             .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
 
-        let (adds, deletes, meta) = decode_actions_and_meta_from_batch(&merged)?;
+        let (adds, deletes, decoded_meta) = decode_actions_and_meta_from_batch(&merged)?;
         assert_eq!(adds.len(), 1);
         assert_eq!(deletes.len(), 1);
         assert_eq!(adds[0].file_path, df.file_path);
@@ -721,7 +731,7 @@ mod tests {
             deletes[0].referenced_data_file.as_deref(),
             Some(df.file_path.as_str())
         );
-        assert!(meta.is_some());
+        assert_eq!(decoded_meta, Some(meta));
         Ok(())
     }
 }

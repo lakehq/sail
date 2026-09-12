@@ -1521,7 +1521,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_exists,
                 options,
                 lakehouse_table_json,
-                merge_row_intents,
+                row_level_mode,
                 write_context_json,
             }) => {
                 let input =
@@ -1557,7 +1557,26 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         plan_datafusion_err!("failed to decode Iceberg write context: {error}")
                     })?;
 
-                let writer = if merge_row_intents {
+                let mode = row_level_mode
+                    .map(r#gen::IcebergRowLevelWriteMode::try_from)
+                    .transpose()
+                    .map_err(|error| {
+                        plan_datafusion_err!("Invalid Iceberg row-level write mode: {error}")
+                    })?;
+                let writer = if mode == Some(r#gen::IcebergRowLevelWriteMode::CopyOnWrite) {
+                    if !table_exists || !matches!(sink_mode, PhysicalSinkMode::Append) {
+                        return plan_err!(
+                            "Iceberg COW writer requires an existing table and append sink mode"
+                        );
+                    }
+                    IcebergWriterExec::new_copy_on_write(
+                        input,
+                        table_url,
+                        partition_columns,
+                        options,
+                        write_context,
+                    )?
+                } else if mode == Some(r#gen::IcebergRowLevelWriteMode::MergeOnRead) {
                     IcebergWriterExec::new_merge(
                         input,
                         table_url,
@@ -2702,7 +2721,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 options,
                 lakehouse_table_json: self
                     .try_encode_lakehouse_table(iceberg_writer_exec.lakehouse_table())?,
-                merge_row_intents: iceberg_writer_exec.reads_merge_row_intents(),
+                row_level_mode: iceberg_writer_exec.row_level_mode().map(|mode| match mode {
+                    sail_common_datafusion::datasource::RowLevelWriteMode::CopyOnWrite => {
+                        r#gen::IcebergRowLevelWriteMode::CopyOnWrite as i32
+                    }
+                    sail_common_datafusion::datasource::RowLevelWriteMode::MergeOnRead => {
+                        r#gen::IcebergRowLevelWriteMode::MergeOnRead as i32
+                    }
+                }),
                 write_context_json,
             })
         } else if let Some(iceberg_commit_exec) = node.downcast_ref::<IcebergCommitExec>() {
@@ -3723,6 +3749,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 "hll_sketch_agg" => Ok(Arc::new(AggregateUDF::from(HllSketchAggFunction::new()))),
                 "hll_union_agg" => Ok(Arc::new(AggregateUDF::from(HllUnionAggFunction::new()))),
                 "kurtosis" => Ok(Arc::new(AggregateUDF::from(KurtosisFunction::new()))),
+                "max" => Ok(datafusion::functions_aggregate::min_max::max_udaf()),
                 "max_by" => Ok(Arc::new(AggregateUDF::from(MaxByFunction::new()))),
                 "min_by" => Ok(Arc::new(AggregateUDF::from(MinByFunction::new()))),
                 "mode" => Ok(Arc::new(AggregateUDF::from(ModeFunction::new()))),
@@ -3867,7 +3894,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
-        let udaf_kind = if node.inner().is::<BitmapAndAggFunction>()
+        let udaf_kind = if node
+            .inner()
+            .is::<datafusion::functions_aggregate::min_max::Max>()
+            || node.inner().is::<BitmapAndAggFunction>()
             || node.inner().is::<BitmapConstructAggFunction>()
             || node.inner().is::<BitmapOrAggFunction>()
             || node.inner().is::<CountMinSketchFunction>()
@@ -5704,6 +5734,71 @@ mod tests {
     }
 
     #[test]
+    fn test_round_trip_iceberg_copy_on_write_mode() -> Result<()> {
+        use datafusion::arrow::datatypes::{DataType, Field};
+        use datafusion::physical_plan::empty::EmptyExec;
+        use sail_common_datafusion::datasource::{
+            MERGE_FILE_COLUMN, OPERATION_COLUMN, RowLevelWriteMode,
+        };
+        use sail_iceberg::physical_plan::IcebergBaseWriteContext;
+        use sail_iceberg::spec::FormatVersion;
+
+        let data_schema = Schema::new(vec![Field::new("id", DataType::Int64, true)]);
+        let input_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new(MERGE_FILE_COLUMN, DataType::Utf8, true),
+            Field::new(OPERATION_COLUMN, DataType::Int32, false),
+        ]));
+        let table_url = Url::parse("file:///tmp/iceberg-cow-codec/")
+            .map_err(|error| plan_datafusion_err!("{error}"))?;
+        let options = IcebergWriterExecOptions::default();
+        let mut write_context = sail_iceberg::physical_plan::prepare_iceberg_write_context(
+            &table_url,
+            None,
+            &options,
+            &[],
+            &PhysicalSinkMode::Append,
+            &data_schema,
+        )?;
+        write_context.base_table = Some(IcebergBaseWriteContext {
+            format_version: FormatVersion::V2,
+            partition_specs: vec![],
+            default_spec_id: 0,
+            properties: Default::default(),
+            last_column_id: 1,
+            current_schema_id: 0,
+            last_partition_id: 999,
+            current_snapshot_id: Some(42),
+        });
+        let plan = Arc::new(IcebergWriterExec::new_copy_on_write(
+            Arc::new(EmptyExec::new(input_schema)),
+            table_url,
+            vec![],
+            options,
+            write_context,
+        )?);
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, plan)?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let writer = decoded
+            .downcast_ref::<IcebergWriterExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not an IcebergWriterExec"))?;
+        assert_eq!(
+            writer.row_level_mode(),
+            Some(RowLevelWriteMode::CopyOnWrite)
+        );
+        assert_eq!(
+            writer
+                .write_context()
+                .base_table
+                .as_ref()
+                .and_then(|base| base.current_snapshot_id),
+            Some(42)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_round_trip_iceberg_commit_preserves_scoped_overwrite_fields() -> Result<()> {
         use datafusion::physical_plan::empty::EmptyExec;
 
@@ -5824,7 +5919,7 @@ mod tests {
                 table_exists: false,
                 options: String::new(),
                 lakehouse_table_json: String::new(),
-                merge_row_intents: false,
+                row_level_mode: None,
                 write_context_json: String::new(),
             })),
         };

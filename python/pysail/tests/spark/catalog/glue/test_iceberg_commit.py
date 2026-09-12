@@ -387,3 +387,37 @@ def test_glue_rejects_stale_iceberg_metadata_location_update(
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
         spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
+
+
+@pytest.mark.parametrize("operation", ["delete", "update", "merge"])
+def test_copy_on_write_advances_glue_metadata_pointer(spark, moto_endpoint, tmp_path, operation):
+    database = "glue_iceberg_cow_db"
+    table = "cow_t"
+    table_fqn = f"{database}.{table}"
+    location = (tmp_path / table).as_uri()
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {database}")
+    try:
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        spark.sql(f"CREATE TABLE {table_fqn} (id INT, value INT) USING iceberg LOCATION '{location}'")
+        spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 10), (2, 20)")
+        before_location = _metadata_location(moto_endpoint, database, table)
+        before = _load_metadata_json(before_location)
+        statements = {
+            "delete": f"DELETE FROM {table_fqn} WHERE id = 1",
+            "update": f"UPDATE {table_fqn} SET value = 100 WHERE id = 1",
+            "merge": f"""MERGE INTO {table_fqn} AS t USING (SELECT 1 AS id) AS s ON t.id = s.id
+                        WHEN MATCHED THEN UPDATE SET value = 100""",
+        }
+        spark.sql(statements[operation]).collect()
+        after_location = _metadata_location(moto_endpoint, database, table)
+        assert after_location != before_location
+        _assert_uuid_metadata_location(after_location, 2)
+        after = _load_metadata_json(after_location)
+        assert after["table-uuid"] == before["table-uuid"]
+        assert after["metadata-log"][-1]["metadata-file"] == before_location
+        assert after["snapshots"][-1]["parent-snapshot-id"] == before["current-snapshot-id"]
+        expected = [(2, 20)] if operation == "delete" else [(1, 100), (2, 20)]
+        assert [tuple(row) for row in spark.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()] == expected
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")

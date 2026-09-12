@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, BooleanArray, Int32Array, Int64Array};
-use datafusion::arrow::compute::filter_record_batch;
-use datafusion::arrow::datatypes::{Schema, SchemaRef};
+use datafusion::arrow::array::{Array, BooleanArray, Int32Array, Int64Array, StringArray};
+use datafusion::arrow::compute::{cast, filter_record_batch};
+use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use sail_common_datafusion::datasource::{
     MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, MERGE_SOURCE_METRIC_COLUMN, OPERATION_COLUMN,
-    RowLevelOperationType,
+    RowLevelOperationType, RowLevelWriteMode,
 };
 
 use crate::row_level_metadata::{MERGE_PARTITION_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN};
@@ -57,8 +57,17 @@ impl IcebergMergeRowProjection {
         Arc::clone(&self.data_schema)
     }
 
-    pub(crate) fn project_data_rows(&self, batch: &RecordBatch) -> Result<RecordBatch> {
-        let mask = merge_operation_mask(batch, self.operation_index, merge_operation_writes_data)?;
+    pub(crate) fn project_data_rows(
+        &self,
+        batch: &RecordBatch,
+        mode: Option<RowLevelWriteMode>,
+    ) -> Result<RecordBatch> {
+        let mask = merge_operation_mask(batch, self.operation_index, |value| {
+            merge_operation_writes_data(value)
+                || (mode == Some(RowLevelWriteMode::CopyOnWrite)
+                    && (value == RowLevelOperationType::Copy.as_i32()
+                        || value == RowLevelOperationType::Update.as_i32()))
+        })?;
         let filtered = filter_record_batch(batch, &mask)
             .map_err(|error| DataFusionError::ArrowError(Box::new(error), None))?;
         let columns = self
@@ -70,6 +79,31 @@ impl IcebergMergeRowProjection {
             Arc::clone(&self.data_schema),
             columns,
         )?)
+    }
+
+    pub(crate) fn removed_file_paths(&self, batch: &RecordBatch) -> Result<Vec<String>> {
+        let paths = batch.column_by_name(MERGE_FILE_COLUMN).ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!("Iceberg COW input is missing file paths")
+        })?;
+        let paths = cast(paths, &DataType::Utf8)?;
+        let paths = paths
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| {
+                datafusion_common::internal_datafusion_err!(
+                    "Iceberg COW file paths must be strings"
+                )
+            })?;
+        paths
+            .iter()
+            .flatten()
+            .map(|path| {
+                if path.is_empty() {
+                    return datafusion_common::exec_err!("Iceberg COW file path cannot be empty");
+                }
+                Ok(path.to_string())
+            })
+            .collect()
     }
 
     pub(crate) fn project_position_delete_rows(&self, batch: &RecordBatch) -> Result<RecordBatch> {
@@ -166,7 +200,9 @@ mod tests {
         .expect("merge batch");
         let projection = IcebergMergeRowProjection::try_new(schema).expect("merge projection");
 
-        let data_rows = projection.project_data_rows(&batch).expect("data rows");
+        let data_rows = projection
+            .project_data_rows(&batch, Some(RowLevelWriteMode::MergeOnRead))
+            .expect("data rows");
         let data_ids = data_rows
             .column_by_name("id")
             .expect("id")

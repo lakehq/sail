@@ -82,6 +82,7 @@ fn iceberg_schema_evolution_adapter() -> Arc<dyn PhysicalExprAdapterFactory> {
 /// Iceberg table provider for DataFusion
 #[derive(Debug, Clone)]
 pub struct IcebergTableProvider {
+    pub(crate) row_level_options: crate::logical::row_level::IcebergRowLevelOptions,
     /// The table location (URI)
     table_uri: String,
     /// The current schema of the table
@@ -105,8 +106,25 @@ pub struct IcebergTableProvider {
 }
 
 impl IcebergTableProvider {
-    fn statistic_scalar(&self, field_id: i32, datum: &Datum) -> Option<ScalarValue> {
+    fn statistic_scalar(
+        &self,
+        data_file: &DataFile,
+        field_id: i32,
+        datum: &Datum,
+    ) -> Option<ScalarValue> {
         let field = self.schema.field_by_id(field_id)?;
+        // Iceberg bounds exclude NaNs. They cannot prove a floating column is
+        // constant unless the file explicitly records that there are no NaNs.
+        if matches!(
+            field.field_type.as_ref(),
+            crate::spec::types::Type::Primitive(
+                crate::spec::types::PrimitiveType::Float
+                    | crate::spec::types::PrimitiveType::Double
+            )
+        ) && data_file.nan_value_counts().get(&field_id) != Some(&0)
+        {
+            return None;
+        }
         to_scalar(
             &Literal::Primitive(datum.literal.clone()),
             field.field_type.as_ref(),
@@ -147,6 +165,7 @@ impl IcebergTableProvider {
         );
 
         Ok(Self {
+            row_level_options: Default::default(),
             table_uri: table_uri_str,
             schema,
             snapshot: Some(snapshot),
@@ -183,6 +202,7 @@ impl IcebergTableProvider {
         ));
 
         Ok(Self {
+            row_level_options: Default::default(),
             table_uri: table_uri_str,
             schema,
             snapshot: None,
@@ -803,6 +823,9 @@ impl IcebergTableProvider {
         let mut max_scalars: Vec<Option<ScalarValue>> =
             vec![None; self.arrow_schema.fields().len()];
         let mut null_counts: Vec<usize> = vec![0; self.arrow_schema.fields().len()];
+        let mut missing_min = vec![false; field_ids.len()];
+        let mut missing_max = vec![false; field_ids.len()];
+        let mut missing_null_count = vec![false; field_ids.len()];
 
         for df in data_files {
             total_rows = total_rows.saturating_add(df.record_count() as usize);
@@ -810,16 +833,21 @@ impl IcebergTableProvider {
 
             for (col_idx, field_id) in field_ids.iter().enumerate() {
                 let Some(field_id) = field_id else {
+                    missing_min[col_idx] = true;
+                    missing_max[col_idx] = true;
+                    missing_null_count[col_idx] = true;
                     continue;
                 };
                 // null counts
                 if let Some(c) = df.null_value_counts().get(field_id) {
                     null_counts[col_idx] = null_counts[col_idx].saturating_add(*c as usize);
+                } else {
+                    missing_null_count[col_idx] = true;
                 }
 
                 // min
                 if let Some(d) = df.lower_bounds().get(field_id)
-                    && let Some(sv) = self.statistic_scalar(*field_id, d)
+                    && let Some(sv) = self.statistic_scalar(df, *field_id, d)
                 {
                     min_scalars[col_idx] = match (&min_scalars[col_idx], &sv) {
                         (None, s) => Some(s.clone()),
@@ -829,11 +857,13 @@ impl IcebergTableProvider {
                             existing.clone()
                         }),
                     };
+                } else {
+                    missing_min[col_idx] = true;
                 }
 
                 // max
                 if let Some(d) = df.upper_bounds().get(field_id)
-                    && let Some(sv) = self.statistic_scalar(*field_id, d)
+                    && let Some(sv) = self.statistic_scalar(df, *field_id, d)
                 {
                     max_scalars[col_idx] = match (&max_scalars[col_idx], &sv) {
                         (None, s) => Some(s.clone()),
@@ -843,19 +873,27 @@ impl IcebergTableProvider {
                             existing.clone()
                         }),
                     };
+                } else {
+                    missing_max[col_idx] = true;
                 }
             }
         }
 
         let column_statistics = (0..self.arrow_schema.fields().len())
             .map(|i| ColumnStatistics {
-                null_count: Precision::Exact(null_counts[i]),
+                null_count: if missing_null_count[i] {
+                    Precision::Absent
+                } else {
+                    Precision::Exact(null_counts[i])
+                },
                 max_value: max_scalars[i]
                     .clone()
+                    .filter(|_| !missing_max[i])
                     .map(Precision::Exact)
                     .unwrap_or(Precision::Absent),
                 min_value: min_scalars[i]
                     .clone()
+                    .filter(|_| !missing_min[i])
                     .map(Precision::Exact)
                     .unwrap_or(Precision::Absent),
                 distinct_count: Precision::Absent,
@@ -897,14 +935,14 @@ impl IcebergTableProvider {
                 let min_value = data_file
                     .lower_bounds()
                     .get(&field_id)
-                    .and_then(|datum| self.statistic_scalar(field_id, datum))
+                    .and_then(|datum| self.statistic_scalar(data_file, field_id, datum))
                     .map(Precision::Exact)
                     .unwrap_or(Precision::Absent);
 
                 let max_value = data_file
                     .upper_bounds()
                     .get(&field_id)
-                    .and_then(|datum| self.statistic_scalar(field_id, datum))
+                    .and_then(|datum| self.statistic_scalar(data_file, field_id, datum))
                     .map(Precision::Exact)
                     .unwrap_or(Precision::Absent);
 
@@ -1671,5 +1709,91 @@ impl IcebergTableProvider {
         );
 
         Ok(scan_exec)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::spec::types::{NestedField, PrimitiveLiteral, PrimitiveType, Type};
+
+    fn statistics_fixture() -> Result<(IcebergTableProvider, DataFile)> {
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields([
+                Arc::new(NestedField::optional(
+                    1,
+                    "id",
+                    Type::Primitive(PrimitiveType::Int),
+                )),
+                Arc::new(NestedField::optional(
+                    2,
+                    "score",
+                    Type::Primitive(PrimitiveType::Double),
+                )),
+            ])
+            .build()
+            .map_err(|error| datafusion_common::plan_datafusion_err!("{error}"))?;
+        let provider = IcebergTableProvider::new_empty(
+            "file:///tmp/statistics/",
+            schema,
+            vec![PartitionSpec::unpartitioned_spec()],
+            0,
+        )?;
+        let mut file: DataFile = serde_json::from_value(serde_json::json!({
+            "content": "DATA", "file_path": "data.parquet", "file_format": "PARQUET",
+            "partition": [], "record_count": 2, "file_size_in_bytes": 100, "partition_spec_id": 0
+        }))
+        .map_err(|error| datafusion_common::plan_datafusion_err!("{error}"))?;
+        file.lower_bounds = HashMap::from([
+            (1, Datum::new(PrimitiveType::Int, PrimitiveLiteral::Int(2))),
+            (
+                2,
+                Datum::new(PrimitiveType::Double, PrimitiveLiteral::Double(2.5.into())),
+            ),
+        ]);
+        file.upper_bounds = file.lower_bounds.clone();
+        file.null_value_counts = HashMap::from([(1, 0), (2, 0)]);
+        Ok((provider, file))
+    }
+
+    #[test]
+    fn floating_bounds_require_a_known_zero_nan_count() -> Result<()> {
+        let (provider, mut file) = statistics_fixture()?;
+        for nan_count in [None, Some(1), Some(0)] {
+            file.nan_value_counts = nan_count.map(|count| (2, count)).into_iter().collect();
+            let expected = if nan_count == Some(0) {
+                Precision::Exact(ScalarValue::Float64(Some(2.5)))
+            } else {
+                Precision::Absent
+            };
+            for stats in [
+                provider.create_file_statistics(&file),
+                provider.aggregate_statistics(&[file.clone()]),
+            ] {
+                assert_eq!(stats.column_statistics[1].min_value, expected);
+                assert_eq!(stats.column_statistics[1].max_value, expected);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn aggregate_statistics_require_complete_optional_metrics() -> Result<()> {
+        let (provider, file) = statistics_fixture()?;
+        let mut missing = file.clone();
+        missing.lower_bounds.clear();
+        missing.upper_bounds.clear();
+        missing.null_value_counts.clear();
+        for files in [[file.clone(), missing.clone()], [missing, file]] {
+            let stats = provider.aggregate_statistics(&files);
+            assert_eq!(stats.num_rows, Precision::Exact(4));
+            for column in stats.column_statistics {
+                assert_eq!(column.null_count, Precision::Absent);
+                assert_eq!(column.min_value, Precision::Absent);
+                assert_eq!(column.max_value, Precision::Absent);
+            }
+        }
+        Ok(())
     }
 }
