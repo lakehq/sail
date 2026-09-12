@@ -1,9 +1,12 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use datafusion::common::stats::Precision;
+use datafusion::common::{ColumnStatistics, ScalarValue};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::Operator;
 use datafusion::physical_expr::expressions::BinaryExpr;
+use datafusion::physical_plan::projection::ProjectionExec;
 use log::trace;
 
 use crate::join_reorder::graph::{JoinEdge, QueryGraph, StableColumn};
@@ -59,8 +62,9 @@ pub struct CardinalityEstimator {
     equivalence_sets: Vec<EquivalenceSet>,
     /// Fast lookup from stable column -> equivalence set index.
     column_to_equiv_set: HashMap<StableColumn, usize>,
-    /// Mapping from (relation_id, column_index) to initial distinct_count
-    initial_distinct_counts: HashMap<StableColumn, f64>,
+    /// Supplied counts retain their precision when choosing an equivalence-set domain.
+    supplied_distinct_counts: HashMap<StableColumn, Precision<usize>>,
+    inferred_distinct_counts: HashMap<StableColumn, f64>,
 }
 
 impl CardinalityEstimator {
@@ -70,7 +74,8 @@ impl CardinalityEstimator {
             cardinality_cache: HashMap::new(),
             equivalence_sets: vec![],
             column_to_equiv_set: HashMap::new(),
-            initial_distinct_counts: HashMap::new(),
+            supplied_distinct_counts: HashMap::new(),
+            inferred_distinct_counts: HashMap::new(),
         };
 
         estimator.populate_initial_distinct_counts();
@@ -100,6 +105,8 @@ impl CardinalityEstimator {
         for relation in &self.graph.relations {
             let relation_id = relation.relation_id;
             let column_stats = &relation.statistics.column_statistics;
+            // Projection leaves carry input statistics without an output-column mapping.
+            let infer_ranges = !relation.plan.is::<ProjectionExec>();
             for (column_index, stats) in column_stats.iter().enumerate() {
                 let distinct_count = stats.distinct_count;
                 let stable_col = StableColumn {
@@ -107,15 +114,57 @@ impl CardinalityEstimator {
                     column_index,
                     name: format!("col_{}", column_index),
                 };
-                // DataFusion's distinct_count is a Precision enum
-                let count_val = match distinct_count {
-                    datafusion::common::stats::Precision::Exact(c) => c as f64,
-                    datafusion::common::stats::Precision::Inexact(c) => c as f64,
-                    datafusion::common::stats::Precision::Absent => continue, // Skip if absent
-                };
-                self.initial_distinct_counts.insert(stable_col, count_val);
+                match distinct_count {
+                    Precision::Exact(_) | Precision::Inexact(_) => {
+                        self.supplied_distinct_counts
+                            .insert(stable_col, distinct_count);
+                    }
+                    Precision::Absent if infer_ranges => {
+                        if let Some(span) = Self::integer_range_size(stats) {
+                            self.inferred_distinct_counts
+                                .insert(stable_col, (span as f64).min(relation.base_cardinality));
+                        }
+                    }
+                    Precision::Absent => {}
+                }
             }
         }
+    }
+
+    fn integer_range_size(stats: &ColumnStatistics) -> Option<i128> {
+        let (min, max) = match (stats.min_value.get_value()?, stats.max_value.get_value()?) {
+            (ScalarValue::Int8(Some(min)), ScalarValue::Int8(Some(max))) => {
+                (i128::from(*min), i128::from(*max))
+            }
+            (ScalarValue::Int16(Some(min)), ScalarValue::Int16(Some(max))) => {
+                (i128::from(*min), i128::from(*max))
+            }
+            (ScalarValue::Int32(Some(min)), ScalarValue::Int32(Some(max)))
+            | (ScalarValue::Date32(Some(min)), ScalarValue::Date32(Some(max))) => {
+                (i128::from(*min), i128::from(*max))
+            }
+            (ScalarValue::Int64(Some(min)), ScalarValue::Int64(Some(max))) => {
+                (i128::from(*min), i128::from(*max))
+            }
+            (ScalarValue::UInt8(Some(min)), ScalarValue::UInt8(Some(max))) => {
+                (i128::from(*min), i128::from(*max))
+            }
+            (ScalarValue::UInt16(Some(min)), ScalarValue::UInt16(Some(max))) => {
+                (i128::from(*min), i128::from(*max))
+            }
+            (ScalarValue::UInt32(Some(min)), ScalarValue::UInt32(Some(max))) => {
+                (i128::from(*min), i128::from(*max))
+            }
+            (ScalarValue::UInt64(Some(min)), ScalarValue::UInt64(Some(max))) => {
+                (i128::from(*min), i128::from(*max))
+            }
+            _ => return None,
+        };
+        if min > max {
+            return None;
+        }
+        // Subtract before converting to floats so nearby 64-bit bounds stay distinct.
+        Some(max - min + 1)
     }
 
     /// Initialize equivalence sets from query graph.
@@ -205,14 +254,18 @@ impl CardinalityEstimator {
 
     /// Estimate TDom (Total Domain) for an equivalence set.
     fn estimate_tdom_for_set(&self, set: &mut EquivalenceSet) {
-        let mut max_known_distinct: f64 = 0.0;
+        let mut max_distinct: f64 = 0.0;
         let mut min_base_card: f64 = f64::INFINITY;
-        let mut has_known_stats = false;
+        let mut has_estimate = false;
+        let mut has_exact_stats = false;
 
         for stable_col in &set.columns {
-            if let Some(distinct_count) = self.initial_distinct_counts.get(stable_col) {
-                max_known_distinct = max_known_distinct.max(*distinct_count);
-                has_known_stats = true;
+            if let Some(supplied) = self.supplied_distinct_counts.get(stable_col)
+                && let Some(count) = supplied.get_value()
+            {
+                max_distinct = max_distinct.max(*count as f64);
+                has_estimate = true;
+                has_exact_stats |= matches!(supplied, Precision::Exact(_));
             }
 
             if let Some(relation) = self.graph.get_relation(stable_col.relation_id) {
@@ -220,16 +273,19 @@ impl CardinalityEstimator {
             }
         }
 
-        // If we have any usable distinct-count statistics, prefer them. Importantly we must NOT
-        // "inflate" TDom to a table cardinality just because some columns in the equivalence set
-        // lack column stats, as that would make join selectivity unrealistically tiny and
-        // underestimate join sizes.
-        //
-        // If no stats exist, use a conservative upper bound: the smallest relation cardinality in
-        // the equivalence set. Domain cardinality cannot exceed any participating relation's row
-        // count, and using `min` avoids the pathological underestimation caused by `max`.
-        let mut tdom = if has_known_stats {
-            max_known_distinct.max(1.0)
+        // A range is an upper bound, so keep the supplied-count choice if any count is exact.
+        if !has_exact_stats {
+            for stable_col in &set.columns {
+                if let Some(inferred) = self.inferred_distinct_counts.get(stable_col) {
+                    max_distinct = max_distinct.max(*inferred);
+                    has_estimate = true;
+                }
+            }
+        }
+
+        // Preserve the original fallback when neither supplied counts nor usable ranges exist.
+        let mut tdom = if has_estimate {
+            max_distinct.max(1.0)
         } else if min_base_card.is_finite() {
             min_base_card.max(1.0)
         } else {
@@ -469,6 +525,342 @@ mod tests {
         graph.add_relation(relation2);
 
         graph
+    }
+
+    fn add_test_equi_join(graph: &mut QueryGraph) -> Result<()> {
+        let column = |relation_id| StableColumn {
+            relation_id,
+            column_index: 0,
+            name: "col1".to_string(),
+        };
+        graph.add_edge(JoinEdge::new(
+            JoinSet::new_singleton(0)?,
+            JoinSet::new_singleton(1)?,
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("col1", 0)),
+                Operator::Eq,
+                Arc::new(Column::new("col1", 0)),
+            )),
+            JoinType::Inner,
+            vec![(column(0), column(1))],
+        ))
+    }
+
+    #[test]
+    fn test_missing_dimension_ndv_uses_range_despite_known_fact_ndv() -> Result<()> {
+        // Arrange
+        let mut graph = create_test_graph();
+        graph.relations[0].initial_cardinality = 60_000_000.0;
+        graph.relations[0].base_cardinality = 60_000_000.0;
+        graph.relations[0].statistics.num_rows = Precision::Exact(60_000_000);
+        graph.relations[0].statistics.column_statistics[0].distinct_count = Precision::Inexact(4);
+        let dimension = &mut graph.relations[1];
+        dimension.initial_cardinality = 73_049.0;
+        dimension.base_cardinality = 73_049.0;
+        dimension.statistics.num_rows = Precision::Exact(73_049);
+        dimension.statistics.column_statistics[0].min_value =
+            Precision::Exact(ScalarValue::Int32(Some(2_415_022)));
+        dimension.statistics.column_statistics[0].max_value =
+            Precision::Inexact(ScalarValue::Int32(Some(2_488_070)));
+        add_test_equi_join(&mut graph)?;
+
+        // Act
+        let estimator = CardinalityEstimator::new(graph);
+        let domain = estimator.get_tdom_for_edge(&estimator.graph.edges[0]);
+        let rows = estimator.estimate_join_cardinality(60_000_000.0, 73_049.0, &[0]);
+
+        // Assert
+        assert_eq!(domain, 73_049.0);
+        assert!((rows - 60_000_000.0).abs() < 1e-6);
+        let (fact_key, dimension_key) = &estimator.graph.edges[0].equi_pairs[0];
+        assert_eq!(
+            estimator.supplied_distinct_counts.get(fact_key),
+            Some(&Precision::Inexact(4))
+        );
+        assert_eq!(
+            estimator.inferred_distinct_counts.get(dimension_key),
+            Some(&73_049.0)
+        );
+        assert_eq!(
+            estimator.graph.relations[0].statistics.column_statistics[0].distinct_count,
+            Precision::Inexact(4)
+        );
+        assert_eq!(
+            estimator.graph.relations[1].statistics.column_statistics[0].distinct_count,
+            Precision::Absent,
+            "range inference must not rewrite the supplied statistics"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_leaf_skips_range_inference_but_keeps_supplied_counts() -> Result<()> {
+        use datafusion::physical_plan::projection::ProjectionExpr;
+        use datafusion::physical_plan::test::exec::StatisticsExec;
+
+        for ndv in [
+            Precision::Absent,
+            Precision::Exact(100_000),
+            Precision::Inexact(128),
+        ] {
+            // Arrange
+            let schema = Schema::new(vec![
+                Field::new("id", DataType::Int32, false),
+                Field::new("flag", DataType::Int32, false),
+            ]);
+            let mut stats = Statistics::new_unknown(&schema);
+            stats.num_rows = Precision::Exact(100_000);
+            for (index, min, max) in [(0, 1, 100_000), (1, 0, 1)] {
+                stats.column_statistics[index].min_value =
+                    Precision::Exact(ScalarValue::Int32(Some(min)));
+                stats.column_statistics[index].max_value =
+                    Precision::Exact(ScalarValue::Int32(Some(max)));
+            }
+            stats.column_statistics[0].distinct_count = ndv;
+            let input = Arc::new(StatisticsExec::new(stats.clone(), schema));
+            let projection = Arc::new(ProjectionExec::try_new(
+                [
+                    ProjectionExpr {
+                        expr: Arc::new(Column::new("flag", 1)),
+                        alias: "flag".to_string(),
+                    },
+                    ProjectionExpr {
+                        expr: Arc::new(BinaryExpr::new(
+                            Arc::new(Column::new("id", 0)),
+                            Operator::Plus,
+                            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                        )),
+                        alias: "id_plus_one".to_string(),
+                    },
+                ],
+                input,
+            )?);
+            let mut graph = QueryGraph::new();
+            // GraphBuilder retains the input statistics for a computed projection leaf.
+            graph.add_relation(RelationNode::new(
+                projection,
+                0,
+                100_000.0,
+                100_000.0,
+                stats.clone(),
+            ));
+
+            // Act
+            let estimator = CardinalityEstimator::new(graph);
+
+            // Assert
+            assert!(
+                estimator.inferred_distinct_counts.is_empty(),
+                "the input id range must not become an NDV of 100,000 for the output flag"
+            );
+            assert_eq!(
+                estimator.supplied_distinct_counts.values().next().copied(),
+                ndv.get_value().map(|_| ndv)
+            );
+            assert_eq!(estimator.graph.relations[0].statistics, stats);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_exact_sparse_key_ndv_is_not_overridden_by_another_columns_range() -> Result<()> {
+        // Arrange
+        let mut graph = create_test_graph();
+        for relation in &mut graph.relations {
+            relation.initial_cardinality = 1_000_000.0;
+            relation.base_cardinality = 1_000_000.0;
+            relation.statistics.num_rows = Precision::Exact(1_000_000);
+            relation.statistics.column_statistics[0].min_value =
+                Precision::Exact(ScalarValue::Int32(Some(0)));
+            relation.statistics.column_statistics[0].max_value =
+                Precision::Exact(ScalarValue::Int32(Some(1_000_000)));
+        }
+        graph.relations[0].statistics.column_statistics[0].distinct_count = Precision::Exact(2);
+        add_test_equi_join(&mut graph)?;
+
+        // Act
+        let estimator = CardinalityEstimator::new(graph);
+        let domain = estimator.get_tdom_for_edge(&estimator.graph.edges[0]);
+        let rows = estimator.estimate_join_cardinality(1_000_000.0, 1_000_000.0, &[0]);
+
+        // Assert
+        let (supplied_key, inferred_key) = &estimator.graph.edges[0].equi_pairs[0];
+        assert_eq!(
+            estimator.supplied_distinct_counts.get(supplied_key),
+            Some(&Precision::Exact(2))
+        );
+        assert_eq!(
+            estimator.inferred_distinct_counts.get(inferred_key),
+            Some(&1_000_000.0),
+            "the inferred upper bound must remain separate from supplied counts"
+        );
+        assert_eq!(domain, 2.0);
+        assert_eq!(rows, 500_000_000_000.0);
+        assert_eq!(
+            estimator.graph.relations[1].statistics.column_statistics[0].distinct_count,
+            Precision::Absent
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_range_domain_is_used_when_no_supplied_ndv_exists() -> Result<()> {
+        // Arrange
+        let mut graph = create_test_graph();
+        graph.relations[1].statistics.column_statistics[0].min_value =
+            Precision::Exact(ScalarValue::Int32(Some(10)));
+        graph.relations[1].statistics.column_statistics[0].max_value =
+            Precision::Exact(ScalarValue::Int32(Some(19)));
+        add_test_equi_join(&mut graph)?;
+
+        // Act
+        let estimator = CardinalityEstimator::new(graph);
+        let domain = estimator.get_tdom_for_edge(&estimator.graph.edges[0]);
+
+        // Assert
+        assert!(estimator.supplied_distinct_counts.is_empty());
+        assert_eq!(domain, 10.0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_range_ndv_uses_pre_filter_base_and_preserves_global_cap() -> Result<()> {
+        // Arrange
+        let mut graph = create_test_graph();
+        graph.relations[0].statistics.column_statistics[0].distinct_count = Precision::Inexact(4);
+        let dimension = &mut graph.relations[1];
+        dimension.initial_cardinality = 100.0;
+        dimension.statistics.num_rows = Precision::Inexact(100);
+        dimension.statistics.column_statistics[0].min_value =
+            Precision::Inexact(ScalarValue::Int32(Some(1)));
+        dimension.statistics.column_statistics[0].max_value =
+            Precision::Exact(ScalarValue::Int32(Some(10_000)));
+        let dimension_key = StableColumn {
+            relation_id: 1,
+            column_index: 0,
+            name: "col1".to_string(),
+        };
+        add_test_equi_join(&mut graph)?;
+
+        // Act
+        let estimator = CardinalityEstimator::new(graph);
+        let domain = estimator.get_tdom_for_edge(&estimator.graph.edges[0]);
+        let rows = estimator.estimate_join_cardinality(1_000.0, 100.0, &[0]);
+
+        // Assert
+        assert_eq!(
+            estimator.inferred_distinct_counts.get(&dimension_key),
+            Some(&2_000.0),
+            "the range must be capped by the dimension's pre-filter base rows"
+        );
+        assert_eq!(
+            domain, 1_000.0,
+            "the smaller relation still caps the domain"
+        );
+        assert!((rows - 100.0).abs() < 1e-9);
+        Ok(())
+    }
+
+    #[test]
+    fn test_range_inference_preserves_explicit_ndvs_and_null_counts() {
+        for ndv in [
+            Precision::Exact(4),
+            Precision::Inexact(17),
+            Precision::Exact(0),
+            Precision::Inexact(0),
+        ] {
+            // Arrange
+            let mut graph = create_test_graph();
+            let stats = &mut graph.relations[0].statistics.column_statistics[0];
+            stats.distinct_count = ndv;
+            stats.min_value = Precision::Exact(ScalarValue::Int32(Some(1)));
+            stats.max_value = Precision::Exact(ScalarValue::Int32(Some(1_000)));
+            stats.null_count = Precision::Exact(7);
+
+            // Act
+            let estimator = CardinalityEstimator::new(graph);
+
+            // Assert
+            assert_eq!(estimator.supplied_distinct_counts.len(), 1);
+            assert_eq!(
+                estimator.supplied_distinct_counts.values().next().copied(),
+                Some(ndv)
+            );
+            assert!(estimator.inferred_distinct_counts.is_empty());
+            let stats = &estimator.graph.relations[0].statistics.column_statistics[0];
+            assert_eq!(stats.distinct_count, ndv);
+            assert_eq!(stats.null_count, Precision::Exact(7));
+        }
+    }
+
+    #[test]
+    fn test_integer_range_size_handles_extremes_without_float_rounding() {
+        use ScalarValue::{Date32, Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64};
+
+        for (min, max, expected) in [
+            (Int8(Some(i8::MIN)), Int8(Some(i8::MAX)), 1_i128 << 8),
+            (UInt8(Some(0)), UInt8(Some(u8::MAX)), 1_i128 << 8),
+            (Int16(Some(i16::MIN)), Int16(Some(i16::MAX)), 1_i128 << 16),
+            (UInt16(Some(0)), UInt16(Some(u16::MAX)), 1_i128 << 16),
+            (Int32(Some(i32::MIN)), Int32(Some(i32::MAX)), 1_i128 << 32),
+            (UInt32(Some(0)), UInt32(Some(u32::MAX)), 1_i128 << 32),
+            (Int64(Some(i64::MIN)), Int64(Some(i64::MAX)), 1_i128 << 64),
+            (UInt64(Some(0)), UInt64(Some(u64::MAX)), 1_i128 << 64),
+            (Int64(Some(i64::MAX - 2)), Int64(Some(i64::MAX)), 3),
+            (Int64(Some(i64::MIN)), Int64(Some(i64::MIN + 2)), 3),
+            (UInt64(Some(u64::MAX - 2)), UInt64(Some(u64::MAX)), 3),
+            (Date32(Some(-2)), Date32(Some(1)), 4),
+        ] {
+            // Arrange
+            let stats = ColumnStatistics {
+                min_value: Precision::Exact(min),
+                max_value: Precision::Inexact(max),
+                ..ColumnStatistics::new_unknown()
+            };
+
+            // Act
+            let span = CardinalityEstimator::integer_range_size(&stats);
+
+            // Assert
+            assert_eq!(span, Some(expected), "{stats:?}");
+        }
+    }
+
+    #[test]
+    fn test_integer_range_size_skips_invalid_or_unsupported_bounds() {
+        use Precision::{Absent, Exact, Inexact};
+        use ScalarValue::{Date32, Float64, Int32, Int64, UInt64, Utf8};
+
+        for (min, max) in [
+            (Exact(Int64(Some(2))), Exact(Int64(Some(1)))),
+            (Exact(UInt64(Some(2))), Inexact(UInt64(Some(1)))),
+            (Exact(Int32(Some(1))), Exact(Int64(Some(2)))),
+            (Exact(Int64(Some(1))), Exact(UInt64(Some(2)))),
+            (Exact(Date32(Some(1))), Exact(Int32(Some(2)))),
+            (Exact(Int64(None)), Exact(Int64(Some(2)))),
+            (Exact(Int64(Some(1))), Exact(Int64(None))),
+            (Exact(ScalarValue::Null), Exact(ScalarValue::Null)),
+            (Absent, Exact(Int64(Some(2)))),
+            (Exact(Int64(Some(1))), Absent),
+            (Exact(Float64(Some(1.0))), Exact(Float64(Some(2.0)))),
+            (
+                Exact(Utf8(Some("a".to_string()))),
+                Exact(Utf8(Some("z".to_string()))),
+            ),
+        ] {
+            // Arrange
+            let stats = ColumnStatistics {
+                min_value: min,
+                max_value: max,
+                ..ColumnStatistics::new_unknown()
+            };
+
+            // Act
+            let span = CardinalityEstimator::integer_range_size(&stats);
+
+            // Assert
+            assert_eq!(span, None, "{stats:?}");
+        }
     }
 
     #[test]
