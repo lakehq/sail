@@ -20,6 +20,7 @@ sail-catalog-hms = { path = "../sail-catalog-hms" }
 sail-data-source = { path = "../sail-data-source" }
 sail-delta-lake = { path = "../sail-delta-lake" }
 sail-iceberg = { path = "../sail-iceberg" }
+sail-lance = { path = "../sail-lance" }
 sail-logical-plan = { path = "../sail-logical-plan" }
 sail-logical-optimizer = { path = "../sail-logical-optimizer" }
 sail-physical-plan = { path = "../sail-physical-plan" }

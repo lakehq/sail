@@ -158,6 +158,9 @@ prost-types = "0.14"
 #   https://github.com/hyperium/tonic/blob/vRELEASE/tonic/Cargo.toml
 axum = "0.8.9"
 datafusion = { version = "54.1.0", default-features = false, features = [
+    # Required by any workspace member that depends on a crate needing
+    # DataFusion's SQL front end, such as Lance.
+    "sql",
     "nested_expressions",
     "crypto_expressions",
     "datetime_expressions",

@@ -42,6 +42,7 @@ use sail_data_source::listing::planner::ListingPhysicalPlanner;
 use sail_delta_lake::logical::DeltaMetadataAggregateRewriter;
 use sail_delta_lake::physical::DeltaPhysicalPlanner;
 use sail_iceberg::IcebergPhysicalPlanner;
+use sail_lance::LancePhysicalPlanner;
 use sail_logical_plan::barrier::BarrierNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
@@ -98,6 +99,7 @@ impl QueryPlanner for ExtensionQueryPlanner {
         let extension_planners: Vec<Arc<dyn ExtensionPlanner + Send + Sync>> = vec![
             Arc::new(DeltaPhysicalPlanner),
             Arc::new(IcebergPhysicalPlanner),
+            Arc::new(LancePhysicalPlanner),
             Arc::new(SystemTablePhysicalPlanner),
             Arc::new(ListingPhysicalPlanner),
             Arc::new(ConsolePhysicalPlanner),

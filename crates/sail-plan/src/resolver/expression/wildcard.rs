@@ -1,9 +1,10 @@
 use std::collections::VecDeque;
 
 use arrow::datatypes::DataType;
+use datafusion::sql::sqlparser::ast::{Ident, IdentWithAlias, ObjectName, ObjectNamePart};
+use datafusion::sql::unparser::Unparser;
 use datafusion_common::{DFSchemaRef, TableReference};
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::sql::{Ident, ObjectName, ObjectNamePart};
 use datafusion_expr::{ScalarUDF, col, expr, lit};
 use datafusion_functions::core::get_field;
 use sail_common::spec;
@@ -155,10 +156,16 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<expr::WildcardOptions> {
         fn make_ident(value: impl Into<String>) -> Ident {
-            Ident {
-                value: value.into(),
-                quote_style: None,
-                span: String::new(),
+            Ident::new(value)
+        }
+
+        fn make_ident_with_alias(
+            identifier: impl Into<String>,
+            alias: impl Into<String>,
+        ) -> IdentWithAlias {
+            IdentWithAlias {
+                ident: make_ident(identifier),
+                alias: make_ident(alias),
             }
         }
 
@@ -219,7 +226,7 @@ impl PlanResolver<'_> {
                         .resolve_expression(*elem.expression, schema, state)
                         .await?;
                     let item = expr::ReplaceSelectElement {
-                        expr: expression.to_string(),
+                        expr: Unparser::default().expr_to_sql(&expression)?,
                         column_name: make_ident(elem.column_name),
                         as_keyword: elem.as_keyword,
                     };
@@ -239,21 +246,11 @@ impl PlanResolver<'_> {
                 let rename = if x.len() > 1 {
                     expr::RenameSelectItem::Multiple(
                         x.into_iter()
-                            .map(|x| {
-                                format!(
-                                    "{} AS {}",
-                                    String::from(x.identifier),
-                                    String::from(x.alias)
-                                )
-                            })
+                            .map(|x| make_ident_with_alias(x.identifier, x.alias))
                             .collect(),
                     )
                 } else if let Some(x) = x.into_iter().next() {
-                    expr::RenameSelectItem::Single(format!(
-                        "{} AS {}",
-                        String::from(x.identifier),
-                        String::from(x.alias)
-                    ))
+                    expr::RenameSelectItem::Single(make_ident_with_alias(x.identifier, x.alias))
                 } else {
                     return Err(PlanError::invalid(
                         "exclude columns must have at least one column",

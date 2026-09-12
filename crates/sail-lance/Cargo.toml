@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright The Lance Authors
+
+# This is a Sail workspace crate: it belongs at `crates/sail-lance` in a Sail
+# checkout, and `scripts/install-into-sail.sh` puts it there. Sail and Lance are
+# built against the same DataFusion and Arrow releases, so both sides come from
+# the Sail workspace or from crates.io without any version bridging.
+[package]
+name = "sail-lance"
+version = { workspace = true }
+edition = { workspace = true }
+
+[features]
+default = []
+# Object store backends are forwarded to Lance. They are off by default so the
+# proof of concept builds quickly against the local filesystem.
+aws = ["lance/aws"]
+azure = ["lance/azure"]
+gcp = ["lance/gcp"]
+
+[dependencies]
+sail-common-datafusion = { path = "../sail-common-datafusion" }
+
+datafusion = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }
+arrow = { workspace = true }
+
+lance = { version = "11.0.0", default-features = false }
+lance-file = "11.0.0"
+lance-table = "11.0.0"
+
+async-trait = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

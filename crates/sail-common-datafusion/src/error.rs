@@ -163,6 +163,7 @@ impl CommonErrorCause {
                 },
                 DataFusionError::Shared(e) => Self::build::<Py>(e.as_ref(), seen),
                 DataFusionError::Ffi(x) => Self::Unknown(x.clone()),
+                DataFusionError::SQL(e, _) => Self::Plan(e.to_string()),
             };
         }
 
