@@ -22,7 +22,6 @@ Feature: map output schema
   @function(nullability)
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null literal input to map yields the schema Spark declares
       When query
         """
@@ -36,8 +35,7 @@ Feature: map output schema
          |    |-- value: string (valueContainsNull = false)
         """
 
-    @sail-bug
-    Scenario: a nullable column input to map stays nullable
+    Scenario: nullable keys do not make the map itself nullable
       When query
         """
         SELECT map(c, '2', 3.0, '4') AS result FROM VALUES (1.0), (CAST(NULL AS DECIMAL(2,1))) AS t(c)
@@ -49,3 +47,20 @@ Feature: map output schema
          |    |-- key: decimal(2,1)
          |    |-- value: string (valueContainsNull = false)
         """
+
+    Scenario: NULL values preserve a non-null map with nullable values
+      When query
+        """
+        SELECT map(1, v) AS result FROM VALUES ('a'), (CAST(NULL AS STRING)) AS t(v)
+        """
+      Then query schema
+        """
+        root
+         |-- result: map (nullable = false)
+         |    |-- key: integer
+         |    |-- value: string (valueContainsNull = true)
+        """
+      Then query result
+        | result      |
+        | {1 -> a}    |
+        | {1 -> NULL} |

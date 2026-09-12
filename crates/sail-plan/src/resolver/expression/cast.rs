@@ -235,6 +235,11 @@ impl PlanResolver<'_> {
                     cast(renamed, to)
                 }
             }
+            (from, DataType::Decimal128(_, _) | DataType::Decimal256(_, _), _)
+                if from.is_numeric() && !self.config.ansi_mode =>
+            {
+                try_cast(expr, cast_to_type)
+            }
             (_, to, true) => try_cast(expr, to),
             (_, to, _) => cast(expr, to),
         };
