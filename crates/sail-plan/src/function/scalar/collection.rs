@@ -1,6 +1,7 @@
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, when};
+use datafusion_functions::core::expr_fn::coalesce;
 use datafusion_functions::math::expr_fn::abs;
 use datafusion_functions_nested::expr_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -14,7 +15,7 @@ use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 fn size(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let value = input.arguments.one()?;
 
-    match value.get_type(input.function_context.schema)? {
+    let result = match value.get_type(input.function_context.schema)? {
         DataType::List(_)
         | DataType::ListView(_)
         | DataType::FixedSizeList(..)
@@ -24,6 +25,14 @@ fn size(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         wrong_type => Err(PlanError::InvalidArgument(format!(
             "size expects List or Map as argument, got {wrong_type:?}"
         ))),
+    }?;
+
+    let config = input.function_context.plan_config;
+    if config.legacy_size_of_null && !config.ansi_mode {
+        Ok(coalesce(vec![result, lit(-1_i32)]))
+    } else {
+        // TODO: Preserve input nullability in nonlegacy mode; see the size/cardinality schema tests.
+        Ok(result)
     }
 }
 
@@ -66,9 +75,6 @@ pub(super) fn list_built_in_collection_functions() -> Vec<(&'static str, ScalarF
     use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
-        // TODO: coalesce(result, -1)
-        // if spark.sql.ansi.enabled is false and spark.sql.legacy.sizeOfNull is true
-        // https://spark.apache.org/docs/latest/api/sql/index.html#cardinality
         ("cardinality", F::custom(size)),
         ("deep_size", F::unary(expr_fn::cardinality)),
         ("element_at", F::custom(|input| element_at(input, false))),

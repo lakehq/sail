@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use futures::TryStreamExt;
@@ -5,16 +6,110 @@ use object_store::path::Path;
 use object_store::{Error as ObjectStoreError, ObjectMeta, ObjectStore, ObjectStoreExt};
 
 use crate::spec::{
-    DELTA_LOG_DIR, DeltaError, DeltaResult, LastCheckpointHint, delta_log_prefix_path,
-    delta_log_root_path, is_uuid_checkpoint_filename, last_checkpoint_path,
-    parse_checkpoint_version, parse_checksum_version, parse_commit_version,
-    parse_compacted_json_versions,
+    CheckpointFileKind, DELTA_LOG_DIR, DeltaError, DeltaResult, LastCheckpointHint,
+    delta_log_prefix_path, delta_log_root_path, is_uuid_checkpoint_filename, last_checkpoint_path,
+    parse_checkpoint_filename, parse_checkpoint_version, parse_checksum_version,
+    parse_commit_version, parse_compacted_json_versions,
 };
 
-pub(crate) fn parse_delta_log_entry_version(meta: &ObjectMeta) -> Option<i64> {
-    parse_commit_version_from_location(&meta.location)
-        .or_else(|| parse_checkpoint_version_from_location(&meta.location))
-        .or_else(|| parse_compacted_json_versions_from_location(&meta.location).map(|(_, end)| end))
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum CheckpointIdentity {
+    Classic,
+    MultiPart { parts: u64 },
+    Uuid { filename: String },
+}
+
+impl CheckpointIdentity {
+    fn part_count(&self) -> u64 {
+        match self {
+            Self::Classic | Self::Uuid { .. } => 1,
+            Self::MultiPart { parts } => *parts,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CheckpointFileSet {
+    version: i64,
+    identity: CheckpointIdentity,
+    files: Vec<ObjectMeta>,
+}
+
+impl CheckpointFileSet {
+    pub(crate) fn version(&self) -> i64 {
+        self.version
+    }
+
+    #[cfg(test)]
+    pub(crate) fn files(&self) -> &[ObjectMeta] {
+        &self.files
+    }
+
+    pub(crate) fn into_files(self) -> Vec<ObjectMeta> {
+        self.files
+    }
+
+    pub(crate) fn is_multi_part(&self) -> bool {
+        matches!(self.identity, CheckpointIdentity::MultiPart { .. })
+    }
+
+    pub(crate) fn contains_location(&self, location: &Path) -> bool {
+        self.files.iter().any(|file| file.location == *location)
+    }
+}
+
+/// Groups checkpoint files into complete checkpoint instances. The returned sets are ordered by
+/// version and then by checkpoint preference at one version: classic, multi-part (with larger part
+/// counts last), and UUID-named V2.
+pub(crate) fn complete_checkpoint_file_sets(
+    checkpoint_files: impl IntoIterator<Item = ObjectMeta>,
+) -> Vec<CheckpointFileSet> {
+    let mut grouped_files: BTreeMap<(i64, CheckpointIdentity), BTreeMap<u64, ObjectMeta>> =
+        BTreeMap::new();
+
+    for file in checkpoint_files {
+        if file.size == 0 {
+            continue;
+        }
+        let Some(filename) = file.location.filename() else {
+            continue;
+        };
+        let Some(parsed) = parse_checkpoint_filename(filename) else {
+            continue;
+        };
+        let (identity, part) = match parsed.kind {
+            CheckpointFileKind::Classic => (CheckpointIdentity::Classic, 1),
+            CheckpointFileKind::MultiPart { part, parts } => {
+                (CheckpointIdentity::MultiPart { parts }, part)
+            }
+            CheckpointFileKind::Uuid { .. } => (
+                CheckpointIdentity::Uuid {
+                    filename: filename.to_string(),
+                },
+                1,
+            ),
+        };
+        grouped_files
+            .entry((parsed.version, identity))
+            .or_default()
+            .insert(part, file);
+    }
+
+    grouped_files
+        .into_iter()
+        .filter_map(|((version, identity), parts)| {
+            let expected_parts = identity.part_count();
+            let actual_parts = u64::try_from(parts.len()).ok()?;
+            if actual_parts != expected_parts || !parts.keys().copied().eq(1..=expected_parts) {
+                return None;
+            }
+            Some(CheckpointFileSet {
+                version,
+                identity,
+                files: parts.into_values().collect(),
+            })
+        })
+        .collect()
 }
 
 fn delta_log_top_level_filename(location: &Path) -> Option<&str> {
@@ -128,15 +223,34 @@ pub(crate) async fn latest_version_from_listing(
         .await
         .map(|v| v.saturating_sub(1))
         .unwrap_or(0);
-    let entries = list_delta_log_entries_from(store, offset_version).await?;
+    let entries = list_delta_log_entries_from(store.clone(), offset_version).await?;
+    let latest_version = latest_version_from_entries(entries);
+    if latest_version.is_none() && offset_version > 0 {
+        let entries = list_delta_log_entries_from(store, 0).await?;
+        return Ok(latest_version_from_entries(entries));
+    }
+    Ok(latest_version)
+}
 
+fn latest_version_from_entries(entries: Vec<ObjectMeta>) -> Option<i64> {
     let mut max_version: Option<i64> = None;
+    let mut checkpoint_files = Vec::new();
     for meta in entries {
-        if let Some(version) = parse_delta_log_entry_version(&meta) {
+        if parse_checkpoint_version_from_location(&meta.location).is_some() {
+            checkpoint_files.push(meta);
+            continue;
+        }
+        if let Some(version) = parse_commit_version_from_location(&meta.location).or_else(|| {
+            parse_compacted_json_versions_from_location(&meta.location).map(|(_, end)| end)
+        }) {
             max_version = Some(max_version.map_or(version, |curr| curr.max(version)));
         }
     }
-    Ok(max_version)
+    if let Some(checkpoint) = complete_checkpoint_file_sets(checkpoint_files).last() {
+        let version = checkpoint.version();
+        max_version = Some(max_version.map_or(version, |current| current.max(version)));
+    }
+    max_version
 }
 
 #[cfg(test)]
@@ -226,6 +340,97 @@ mod tests {
             .unwrap();
 
         assert_eq!(latest_version_from_listing(store).await.unwrap(), Some(21));
+    }
+
+    #[tokio::test]
+    async fn latest_version_from_listing_uses_complete_multi_part_checkpoint() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let hint = serde_json::to_vec(&LastCheckpointHint {
+            version: 20,
+            parts: Some(3),
+            ..Default::default()
+        })
+        .unwrap();
+        store
+            .put(&Path::from("_delta_log/_last_checkpoint"), hint.into())
+            .await
+            .unwrap();
+        for part in 1..=3 {
+            store
+                .put(
+                    &Path::from(format!(
+                        "_delta_log/00000000000000000020.checkpoint.{part:010}.0000000003.parquet"
+                    )),
+                    format!("part {part}").into_bytes().into(),
+                )
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(latest_version_from_listing(store).await.unwrap(), Some(20));
+    }
+
+    #[tokio::test]
+    async fn latest_version_from_listing_ignores_incomplete_multi_part_checkpoint() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let hint = serde_json::to_vec(&LastCheckpointHint {
+            version: 20,
+            parts: Some(3),
+            ..Default::default()
+        })
+        .unwrap();
+        store
+            .put(&Path::from("_delta_log/_last_checkpoint"), hint.into())
+            .await
+            .unwrap();
+        for part in [1, 3] {
+            store
+                .put(
+                    &Path::from(format!(
+                        "_delta_log/00000000000000000020.checkpoint.{part:010}.0000000003.parquet"
+                    )),
+                    format!("part {part}").into_bytes().into(),
+                )
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(latest_version_from_listing(store).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn latest_version_from_listing_falls_back_past_incomplete_multi_part_checkpoint() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let hint = serde_json::to_vec(&LastCheckpointHint {
+            version: 20,
+            parts: Some(3),
+            ..Default::default()
+        })
+        .unwrap();
+        store
+            .put(&Path::from("_delta_log/_last_checkpoint"), hint.into())
+            .await
+            .unwrap();
+        store
+            .put(
+                &Path::from("_delta_log/00000000000000000010.checkpoint.parquet"),
+                b"checkpoint".to_vec().into(),
+            )
+            .await
+            .unwrap();
+        for part in [1, 3] {
+            store
+                .put(
+                    &Path::from(format!(
+                        "_delta_log/00000000000000000020.checkpoint.{part:010}.0000000003.parquet"
+                    )),
+                    format!("part {part}").into_bytes().into(),
+                )
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(latest_version_from_listing(store).await.unwrap(), Some(10));
     }
 
     #[tokio::test]

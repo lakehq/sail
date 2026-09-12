@@ -27,6 +27,8 @@ use datafusion::functions::core::greatest::GreatestFunc;
 use datafusion::functions::core::input_file_name::InputFileNameFunc;
 use datafusion::functions::core::least::LeastFunc;
 use datafusion::functions::string::overlay::OverlayFunc;
+use datafusion::functions_nested::extract::ArrayElement;
+use datafusion::functions_nested::map_extract::MapExtract;
 use datafusion::functions_window::cume_dist::cume_dist_udwf;
 use datafusion::functions_window::lead_lag::{lag_udwf, lead_udwf};
 use datafusion::functions_window::nth_value::{first_value_udwf, last_value_udwf, nth_value_udwf};
@@ -102,7 +104,6 @@ use sail_common_datafusion::schema_evolution::{
     SchemaEvolutionCastColumnExpr, SchemaEvolutionPhysicalExprAdapterFactoryWithMatching,
     SchemaEvolutionTimezoneMode, StructFieldMatching,
 };
-use sail_common_datafusion::system::catalog::SystemTable;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_data_source::formats::binary::source::BinarySource;
 use sail_data_source::formats::console::ConsoleSinkExec;
@@ -119,10 +120,10 @@ use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
 use sail_data_source::listing::delete::FileDeleteExec;
 use sail_data_source::options::r#gen::RateReadOptions;
 use sail_delta_lake::physical_plan::{
-    DeletionVectorRowsWriterExec, DeletionVectorWriterExec, DeltaCommitContext, DeltaCommitExec,
-    DeltaDiscoveryExec, DeltaLogReplayExec, DeltaLogReplayMode, DeltaMetadataStatsExec,
-    DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaSnapshotContext, DeltaWriteContext,
-    DeltaWriterExec,
+    DeletionVectorRowOperationMode, DeletionVectorRowsWriterConfig, DeletionVectorRowsWriterExec,
+    DeletionVectorWriterExec, DeltaCommitContext, DeltaCommitExec, DeltaDiscoveryExec,
+    DeltaLogReplayExec, DeltaLogReplayMode, DeltaMetadataStatsExec, DeltaRemoveActionsExec,
+    DeltaScanByAddsExec, DeltaSnapshotContext, DeltaWriteContext, DeltaWriterExec,
 };
 use sail_delta_lake::schema::PhysicalPartitionColumn;
 use sail_delta_lake::spec::{
@@ -262,6 +263,7 @@ use sail_function::scalar::variant::spark_to_variant_object::SparkToVariantObjec
 use sail_function::scalar::variant::spark_variant_explode::SparkVariantExplodeUdf;
 use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
 use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
+use sail_function::scalar::vector::cosine_similarity::VectorCosineSimilarity;
 use sail_function::scalar::vector::inner_product::VectorInnerProduct;
 use sail_function::scalar::xml::from_xml::SparkFromXml;
 use sail_function::scalar::xml::to_xml::SparkToXml;
@@ -303,6 +305,7 @@ use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterKind, PySparkMapI
 use sail_python_udf::udf::pyspark_udaf::{PySparkGroupAggKind, PySparkGroupAggregateUDF};
 use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
 use sail_python_udf::udf::pyspark_udtf::{PySparkUDTF, PySparkUdtfKind};
+use sail_system_store::catalog::SystemTable;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use url::Url;
@@ -1484,6 +1487,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 version,
                 operation_json,
                 partition_value_columns_json,
+                operation_mode,
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -1508,15 +1512,20 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map(serde_json::from_str::<Vec<PhysicalPartitionColumn>>)
                     .transpose()
                     .map_err(|e| plan_datafusion_err!("{e}"))?;
+                let operation_mode =
+                    Self::try_decode_deletion_vector_row_operation_mode(operation_mode)?;
                 Ok(Arc::new(DeletionVectorRowsWriterExec::new(
                     input,
                     adds_input,
                     table_url,
-                    path_column,
-                    row_index_column,
-                    version,
-                    partition_value_columns,
-                    operation,
+                    DeletionVectorRowsWriterConfig::new(
+                        path_column,
+                        row_index_column,
+                        operation_mode,
+                        version,
+                        partition_value_columns,
+                        operation,
+                    ),
                 )?))
             }
             NodeKind::IcebergWriter(r#gen::IcebergWriterExecNode {
@@ -2761,6 +2770,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map(serde_json::to_string)
                     .transpose()
                     .map_err(|e| plan_datafusion_err!("{e}"))?,
+                operation_mode: Self::try_encode_deletion_vector_row_operation_mode(
+                    dv_rows_writer_exec.operation_mode(),
+                ),
             })
         } else if let Some(iceberg_writer_exec) = node.downcast_ref::<IcebergWriterExec>() {
             let input = try_encode_physical_plan_with_converter(
@@ -3274,6 +3286,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
         };
         match name {
+            "array_element" => Ok(Arc::new(ScalarUDF::from(ArrayElement::new()))),
+            "map_extract" => Ok(Arc::new(ScalarUDF::from(MapExtract::new()))),
             "array_item_with_position" => {
                 Ok(Arc::new(ScalarUDF::from(ArrayItemWithPosition::new())))
             }
@@ -3289,6 +3303,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_array_compact" => Ok(Arc::new(ScalarUDF::from(SparkArrayCompact::new()))),
             "spark_cast_string_to_int32" => {
                 Ok(Arc::new(ScalarUDF::from(SparkCastStringToInt32::new())))
+            }
+            "vector_cosine_similarity" => {
+                Ok(Arc::new(ScalarUDF::from(VectorCosineSimilarity::new())))
             }
             "vector_inner_product" => Ok(Arc::new(ScalarUDF::from(VectorInnerProduct::new()))),
             "bitmap_count" => Ok(Arc::new(ScalarUDF::from(BitmapCount::new()))),
@@ -3480,7 +3497,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
         // TODO: Implement custom registry to avoid codec for built-in functions
         let node_inner = node.inner();
-        let udf_kind: UdfKind = if node_inner.is::<ArrayItemWithPosition>()
+        let udf_kind: UdfKind = if node_inner.is::<ArrayElement>()
+            || node_inner.is::<MapExtract>()
+            || node_inner.is::<ArrayItemWithPosition>()
             || node_inner.is::<ArrayStructField>()
             || node_inner.is::<ArrayMax>()
             || node_inner.is::<ArrayMin>()
@@ -3488,6 +3507,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkArrayPosition>()
             || node_inner.is::<SparkArrayCompact>()
             || node_inner.is::<SparkCastStringToInt32>()
+            || node_inner.is::<VectorCosineSimilarity>()
             || node_inner.is::<VectorInnerProduct>()
             || node_inner.is::<BitmapCount>()
             || node_inner.is::<CoalesceFunc>()
@@ -4508,6 +4528,39 @@ impl RemoteExecutionCodec {
             }
         };
         Ok(r#gen::PhysicalSinkMode { mode: Some(mode) })
+    }
+
+    fn try_decode_deletion_vector_row_operation_mode(
+        operation_mode: i32,
+    ) -> Result<DeletionVectorRowOperationMode> {
+        match r#gen::DeletionVectorRowOperationMode::try_from(operation_mode).map_err(|_| {
+            plan_datafusion_err!(
+                "invalid deletion-vector row operation mode value: {operation_mode}"
+            )
+        })? {
+            r#gen::DeletionVectorRowOperationMode::Unspecified => {
+                plan_err!("deletion-vector row operation mode is unspecified")
+            }
+            r#gen::DeletionVectorRowOperationMode::Update => {
+                Ok(DeletionVectorRowOperationMode::Update)
+            }
+            r#gen::DeletionVectorRowOperationMode::Delete => {
+                Ok(DeletionVectorRowOperationMode::Delete)
+            }
+            r#gen::DeletionVectorRowOperationMode::Mixed => {
+                Ok(DeletionVectorRowOperationMode::Mixed)
+            }
+        }
+    }
+
+    fn try_encode_deletion_vector_row_operation_mode(
+        operation_mode: DeletionVectorRowOperationMode,
+    ) -> i32 {
+        (match operation_mode {
+            DeletionVectorRowOperationMode::Update => r#gen::DeletionVectorRowOperationMode::Update,
+            DeletionVectorRowOperationMode::Delete => r#gen::DeletionVectorRowOperationMode::Delete,
+            DeletionVectorRowOperationMode::Mixed => r#gen::DeletionVectorRowOperationMode::Mixed,
+        }) as i32
     }
 
     fn try_decode_delta_snapshot_context(
@@ -5616,6 +5669,61 @@ mod tests {
     }
 
     #[test]
+    fn test_round_trip_deletion_vector_rows_writer_preserves_operation_mode() -> Result<()> {
+        use datafusion::physical_plan::empty::EmptyExec;
+        use sail_common_datafusion::datasource::OPERATION_COLUMN;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("path", DataType::Utf8, false),
+            Field::new("row_index", DataType::Int64, false),
+            Field::new(OPERATION_COLUMN, DataType::Int32, false),
+        ]));
+        let table_url = Url::parse("file:///tmp/delta-table")
+            .map_err(|e| plan_datafusion_err!("invalid test table URL: {e}"))?;
+        let codec = RemoteExecutionCodec;
+
+        for operation_mode in [
+            DeletionVectorRowOperationMode::Update,
+            DeletionVectorRowOperationMode::Delete,
+            DeletionVectorRowOperationMode::Mixed,
+        ] {
+            let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+            let adds_input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+            let plan = Arc::new(DeletionVectorRowsWriterExec::new(
+                input,
+                adds_input,
+                table_url.clone(),
+                DeletionVectorRowsWriterConfig::new(
+                    "path",
+                    "row_index",
+                    operation_mode,
+                    42,
+                    None,
+                    None,
+                ),
+            )?);
+
+            let bytes = try_encode_physical_plan(&codec, plan)?;
+            let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+            let writer = decoded
+                .downcast_ref::<DeletionVectorRowsWriterExec>()
+                .ok_or_else(|| {
+                    plan_datafusion_err!("decoded plan is not DeletionVectorRowsWriterExec")
+                })?;
+            assert_eq!(writer.operation_mode(), operation_mode);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_decode_deletion_vector_rows_writer_rejects_missing_operation_mode() {
+        assert!(RemoteExecutionCodec::try_decode_deletion_vector_row_operation_mode(0).is_err());
+        assert!(
+            RemoteExecutionCodec::try_decode_deletion_vector_row_operation_mode(i32::MAX).is_err()
+        );
+    }
+
+    #[test]
     fn test_round_trip_recursive_query_preserves_output_schema() -> Result<()> {
         use datafusion::arrow::datatypes::{DataType, Field};
         use datafusion::physical_plan::empty::EmptyExec;
@@ -6341,6 +6449,21 @@ mod tests {
                 .is_some()
         );
         assert_eq!(decoded.name(), "vector_inner_product");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_vector_cosine_similarity_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(VectorCosineSimilarity::new()))?;
+
+        assert!(
+            decoded
+                .inner()
+                .downcast_ref::<VectorCosineSimilarity>()
+                .is_some()
+        );
+        assert_eq!(decoded.name(), "vector_cosine_similarity");
 
         Ok(())
     }

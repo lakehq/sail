@@ -396,6 +396,7 @@ impl TaskRunnerActor {
             plan,
             TracingExecOptions {
                 metrics: global_metrics(),
+                session_id: Some(self.session_id.clone()),
                 job_id: Some(key.job_id.into()),
                 stage: Some(key.stage),
                 attempt: Some(key.attempt),

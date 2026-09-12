@@ -209,6 +209,7 @@ pub struct ClusterConfig {
     pub worker_heartbeat_interval_secs: u64,
     pub worker_heartbeat_timeout_secs: u64,
     pub worker_launch_timeout_secs: u64,
+    pub worker_launch_retry_strategy: RetryStrategy,
     pub worker_task_slots: usize,
     pub task_launch_timeout_secs: u64,
     pub task_stream_buffer: usize,
@@ -718,6 +719,76 @@ pub struct CatalogConfig {
     pub default_database: Vec<String>,
     pub global_temporary_database: Vec<String>,
     pub list: Vec<CatalogType>,
+    pub system: SystemCatalogConfig,
+}
+
+/// Configuration for the local materialized system catalog store.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(
+    into = "system_catalog::SystemCatalog",
+    from = "system_catalog::SystemCatalog"
+)]
+pub struct SystemCatalogConfig {
+    pub store: SystemCatalogStore,
+}
+
+#[derive(Debug, Clone)]
+pub enum SystemCatalogStore {
+    Memory,
+    Disk { path: String },
+}
+
+mod system_catalog {
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum Store {
+        Memory,
+        Disk,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct Disk {
+        pub path: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct SystemCatalog {
+        pub store: Store,
+        pub disk: Disk,
+    }
+
+    impl From<SystemCatalog> for super::SystemCatalogConfig {
+        fn from(value: SystemCatalog) -> Self {
+            let store = match value.store {
+                Store::Memory => super::SystemCatalogStore::Memory,
+                Store::Disk => super::SystemCatalogStore::Disk {
+                    path: value.disk.path,
+                },
+            };
+            Self { store }
+        }
+    }
+
+    impl From<super::SystemCatalogConfig> for SystemCatalog {
+        fn from(value: super::SystemCatalogConfig) -> Self {
+            match value.store {
+                super::SystemCatalogStore::Memory => Self {
+                    store: Store::Memory,
+                    disk: Disk {
+                        path: String::new(),
+                    },
+                },
+                super::SystemCatalogStore::Disk { path } => Self {
+                    store: Store::Disk,
+                    disk: Disk { path },
+                },
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -872,12 +943,19 @@ pub struct TelemetryConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TelemetryExporterConfig {
-    pub otlp: OtlpConfig,
+    pub otlp: TelemetryOtlpExporterConfig,
+    pub system: TelemetrySystemExporterConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct OtlpConfig {
+pub struct TelemetrySystemExporterConfig {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetryOtlpExporterConfig {
     #[serde(
         serialize_with = "serialize_non_empty_string",
         deserialize_with = "deserialize_non_empty_string"

@@ -61,14 +61,19 @@ pub async fn list_log_segment_files(
     let mut checkpoint_files: Vec<String> = Vec::new();
     let mut sidecar_files: Vec<String> = Vec::new();
 
-    if let Some(meta) = checkpoint_meta {
-        let filename = meta.location.filename().unwrap_or_default().to_string();
-        checkpoint_files.push(filename.clone());
+    if let Some(checkpoint) = checkpoint_meta {
+        let checkpoint_metas = checkpoint.into_files();
+        for meta in &checkpoint_metas {
+            checkpoint_files.push(meta.location.filename().unwrap_or_default().to_string());
+        }
 
-        // Classic-named checkpoints may also follow the V2 format and refer to sidecars.
-        let sidecars = inspect_checkpoint_main_file(store, meta).await?;
-        for sidecar in sidecars {
-            sidecar_files.push(sidecar_log_path(&sidecar.path));
+        // Multi-part checkpoints are always V1. Single-file classic or UUID-named checkpoints may
+        // follow the V2 format and refer to sidecars.
+        if let [checkpoint_meta] = checkpoint_metas.as_slice() {
+            let sidecars = inspect_checkpoint_main_file(store, checkpoint_meta.clone()).await?;
+            for sidecar in sidecars {
+                sidecar_files.push(sidecar_log_path(&sidecar.path));
+            }
         }
     }
 

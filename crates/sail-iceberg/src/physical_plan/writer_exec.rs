@@ -328,7 +328,6 @@ impl ExecutionPlan for IcebergWriterExec {
         let stream = self.input.execute(partition, Arc::clone(&context))?;
 
         let table_url = self.table_url.clone();
-        let partition_columns = self.partition_columns.clone();
         let sink_mode = self.sink_mode.clone();
         let table_exists = self.table_exists;
         let merge_projection = self
@@ -375,12 +374,9 @@ impl ExecutionPlan for IcebergWriterExec {
 
             let writer_config = WriterConfig {
                 table_schema: table_schema.clone(),
-                partition_columns: partition_columns.clone(),
+                // TODO: Resolve `write.parquet.*` table properties and write-option overrides
+                // into the Parquet writer properties.
                 writer_properties: WriterProperties::default(),
-                target_file_size: 134_217_728,
-                write_batch_size: 32 * 1024,
-                num_indexed_cols: 32,
-                stats_columns: None,
                 iceberg_schema: Arc::new(iceberg_schema.clone()),
                 partition_spec: write_context.unbound_writer_partition_spec(),
                 variant_shredding,

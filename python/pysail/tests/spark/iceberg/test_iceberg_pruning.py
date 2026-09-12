@@ -131,6 +131,36 @@ def test_null_and_boolean(spark, tmp_path):
         catalog.drop_table("default.prune_null_bool")
 
 
+def test_missing_null_counts_do_not_prune_null_rows(spark, tmp_path):
+    catalog = create_sql_catalog(tmp_path)
+    identifier = "default.prune_missing_null_counts"
+    table = catalog.create_table(
+        identifier=identifier,
+        schema=Schema(
+            NestedField(field_id=1, name="id", field_type=LongType(), required=False),
+            NestedField(field_id=2, name="region", field_type=StringType(), required=False),
+        ),
+        properties={"write.metadata.metrics.default": "none"},
+    )
+    try:
+        table.append(
+            pa.table(
+                {
+                    "id": pa.array([1], type=pa.int64()),
+                    "region": pa.array([None], type=pa.string()),
+                }
+            )
+        )
+        files = table.inspect.files().to_pylist()
+        assert len(files) == 1
+        assert files[0]["null_value_counts"] == []
+
+        rows = spark.read.format("iceberg").load(table.location()).filter("region IS NULL").select("id").collect()
+        assert [row.id for row in rows] == [1]
+    finally:
+        catalog.drop_table(identifier)
+
+
 def test_correctness_small(spark, tmp_path):
     catalog = create_sql_catalog(tmp_path)
     table = catalog.create_table(

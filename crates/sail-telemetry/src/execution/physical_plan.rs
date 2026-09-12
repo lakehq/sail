@@ -42,6 +42,7 @@ use crate::metrics::{MetricAttribute, MetricManager, MetricRegistry};
 #[derive(Debug, Clone, Default)]
 pub struct TracingExecOptions {
     pub metrics: Option<MetricManager>,
+    pub session_id: Option<String>,
     pub job_id: Option<u64>,
     pub stage: Option<usize>,
     pub attempt: Option<usize>,
@@ -209,6 +210,11 @@ impl ExecutionPlan for TracingExec {
     ) -> Result<SendableRecordBatchStream> {
         let span = Span::enter_with_local_parent(self.inner.name().to_string())
             .with_property(|| (SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
+        let span = if let Some(session_id) = self.options.session_id.clone() {
+            span.with_property(|| (SpanAttribute::SESSION_ID, session_id))
+        } else {
+            span
+        };
         let stream = {
             let _guard = span.set_local_parent();
             self.inner.execute(partition, context)?
@@ -340,6 +346,9 @@ impl TracingExec {
 
     fn build_metric_attributes(&self) -> Vec<KeyValue> {
         let mut attributes = vec![];
+        if let Some(session_id) = &self.options.session_id {
+            attributes.push((MetricAttribute::SESSION_ID, session_id.clone().into()));
+        }
         if let Some(job_id) = self.options.job_id {
             attributes.push((MetricAttribute::EXECUTION_JOB_ID, job_id.to_string().into()));
         }

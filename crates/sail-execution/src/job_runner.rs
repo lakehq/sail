@@ -25,13 +25,15 @@ fn explain_job_graph(
 }
 
 pub struct LocalJobRunner {
+    session_id: String,
     next_job_id: AtomicU64,
     stopped: AtomicBool,
 }
 
 impl LocalJobRunner {
-    pub fn new() -> Self {
+    pub fn new(session_id: String) -> Self {
         Self {
+            session_id,
             next_job_id: AtomicU64::new(1),
             stopped: AtomicBool::new(false),
         }
@@ -40,7 +42,7 @@ impl LocalJobRunner {
 
 impl Default for LocalJobRunner {
     fn default() -> Self {
-        Self::new()
+        Self::new(String::new())
     }
 }
 
@@ -61,6 +63,7 @@ impl JobRunner for LocalJobRunner {
         let job_id = self.next_job_id.fetch_add(1, Ordering::Relaxed);
         let options = TracingExecOptions {
             metrics: global_metrics(),
+            session_id: Some(self.session_id.clone()),
             job_id: Some(job_id),
             stage: None,
             attempt: None,

@@ -7,6 +7,7 @@ use datafusion::arrow::error::ArrowError;
 use datafusion::common::DataFusionError;
 use prost::{DecodeError, UnknownEnumValue};
 use sail_cache::error::CacheError;
+use sail_common::actor::ActorSendError;
 use sail_common::error::CommonError;
 use sail_common_datafusion::error::{CommonErrorCause, PythonErrorCause};
 use sail_execution::error::ExecutionError;
@@ -158,6 +159,12 @@ impl<T> From<PoisonError<T>> for SparkError {
 
 impl<T> From<SendError<T>> for SparkError {
     fn from(error: SendError<T>) -> Self {
+        SparkError::SendError(error.to_string())
+    }
+}
+
+impl<T> From<ActorSendError<T>> for SparkError {
+    fn from(error: ActorSendError<T>) -> Self {
         SparkError::SendError(error.to_string())
     }
 }

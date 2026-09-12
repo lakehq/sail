@@ -1,4 +1,6 @@
+mod exporter;
 mod instruments;
+mod reporter;
 
 mod r#gen {
     include!(concat!(env!("OUT_DIR"), "/metric_registry.rs"));
@@ -9,8 +11,10 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
+pub use exporter::{SystemMetricExporter, SystemMetricExporterTarget, set_metric_sender};
 pub use r#gen::{MetricAttribute, MetricRegistry};
 pub use instruments::*;
+pub use reporter::SystemMetricReporter;
 
 /// Encapsulates a [`MetricRegistry`] together with the metrics collection interval.
 /// When metrics are enabled, both the registry and the interval are always present together.

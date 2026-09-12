@@ -53,6 +53,15 @@ enum TaskStatus {
 message ReportTaskStatusResponse {
 }
 
+message ReportMetricsRequest {
+  uint64 driver_id = 1;
+  // Each entry is an encoded opentelemetry.proto.metrics.v1.ResourceMetrics message.
+  repeated bytes metrics = 2;
+}
+
+message ReportMetricsResponse {
+}
+
 service DriverService {
   rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse) {}
   rpc ReportWorkerHeartbeat(ReportWorkerHeartbeatRequest) returns (ReportWorkerHeartbeatResponse) {}
@@ -60,4 +69,5 @@ service DriverService {
   // send the peer information to the worker again when running tasks in the future.
   rpc ReportWorkerKnownPeers(ReportWorkerKnownPeersRequest) returns (ReportWorkerKnownPeersResponse) {}
   rpc ReportTaskStatus(ReportTaskStatusRequest) returns (ReportTaskStatusResponse) {}
+  rpc ReportMetrics(ReportMetricsRequest) returns (ReportMetricsResponse) {}
 }

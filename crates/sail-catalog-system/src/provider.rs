@@ -10,7 +10,7 @@ use sail_catalog::provider::{
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
-use sail_common_datafusion::system::catalog::{SystemCatalog, SystemDatabase, SystemTable};
+use sail_system_store::catalog::{SystemCatalog, SystemDatabase, SystemTable};
 
 use crate::table_source::SystemTableSource;
 
