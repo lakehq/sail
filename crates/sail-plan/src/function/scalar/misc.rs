@@ -8,6 +8,7 @@ use datafusion_spark::function::bitmap::expr_fn as bitmap_fn;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::input_file::{InputFileBlockLengthFunc, InputFileBlockStartFunc};
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::misc::hll_sketch::{HllSketchEstimateFunction, HllUnionFunction};
@@ -88,6 +89,19 @@ fn current_user(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .plan_config
         .session_user_id
         .clone()))
+}
+
+fn input_file_name() -> expr::Expr {
+    // DataFusion's UDF errors outside file scans, while Spark returns an empty string.
+    expr_fn::coalesce(vec![expr_fn::input_file_name(), lit("")])
+}
+
+fn input_file_block_start() -> expr::Expr {
+    ScalarUDF::from(InputFileBlockStartFunc::new()).call(vec![])
+}
+
+fn input_file_block_length() -> expr::Expr {
+    ScalarUDF::from(InputFileBlockLengthFunc::new()).call(vec![])
 }
 
 fn type_of(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -275,15 +289,10 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
         ),
         (
             "input_file_block_length",
-            F::unknown("input_file_block_length"),
+            F::nullary(input_file_block_length),
         ),
-        (
-            "input_file_block_start",
-            F::unknown("input_file_block_start"),
-        ),
-        // TODO: Map this to DataFusion's file-name UDF after preserving Spark's empty-string
-        // behavior for non-file inputs and covering driver-to-worker file scans.
-        ("input_file_name", F::unknown("input_file_name")),
+        ("input_file_block_start", F::nullary(input_file_block_start)),
+        ("input_file_name", F::nullary(input_file_name)),
         ("java_method", F::unknown("java_method")),
         (
             "monotonically_increasing_id",

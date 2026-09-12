@@ -21,6 +21,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::statistics::StatisticsArgs;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
@@ -29,10 +30,15 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DataFusionError, Result, Statistics, internal_err};
+use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::input_file::{
+    InputFileMetadata, project_input_file_metadata_stream,
+    projection_references_input_file_metadata,
+};
 use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
 use url::Url;
 
@@ -59,7 +65,9 @@ struct ScanByAddsStreamState {
     context: Arc<TaskContext>,
     table_url: Url,
     table_version: i64,
+    scan_output_schema: SchemaRef,
     output_schema: SchemaRef,
+    input_file_projection: Option<ProjectionExprs>,
     scan_config: DeltaScanConfig,
     lakehouse_table: Option<LakehouseExecutionContext>,
     catalog_managed_commits: Option<CatalogManagedCommitSet>,
@@ -88,7 +96,9 @@ impl ScanByAddsStreamState {
         context: Arc<TaskContext>,
         table_url: Url,
         table_version: i64,
+        scan_output_schema: SchemaRef,
         output_schema: SchemaRef,
+        input_file_projection: Option<ProjectionExprs>,
         scan_config: DeltaScanConfig,
         lakehouse_table: Option<LakehouseExecutionContext>,
         catalog_managed_commits: Option<CatalogManagedCommitSet>,
@@ -100,7 +110,9 @@ impl ScanByAddsStreamState {
             context,
             table_url,
             table_version,
+            scan_output_schema,
             output_schema,
+            input_file_projection,
             scan_config,
             lakehouse_table,
             catalog_managed_commits,
@@ -259,12 +271,12 @@ impl ScanByAddsStreamState {
             .scan_config
             .row_index_column_name
             .clone()
-            .filter(|name| self.output_schema.field_with_name(name).is_ok());
+            .filter(|name| self.scan_output_schema.field_with_name(name).is_ok());
         let bitmaps =
             Self::load_deletion_vectors(Arc::clone(&self.context), self.table_url.clone(), &adds)
                 .await?;
 
-        if row_index_column.is_some() {
+        if self.input_file_projection.is_some() || row_index_column.is_some() {
             all_streams.extend(self.build_position_aware_scans(
                 snapshot,
                 log_store,
@@ -310,19 +322,26 @@ impl ScanByAddsStreamState {
         let output_schema = Arc::clone(&self.output_schema);
         let combined = stream::iter(all_streams)
             .map(Ok::<_, DataFusionError>)
-            .try_flatten()
-            .and_then(move |batch| {
-                let output_schema = Arc::clone(&output_schema);
+            .try_flatten();
+        let combined: SendableRecordBatchStream = if self.input_file_projection.is_some() {
+            Box::pin(RecordBatchStreamAdapter::new(
+                Arc::clone(&output_schema),
+                combined,
+            ))
+        } else {
+            let scan_output_schema = Arc::clone(&self.scan_output_schema);
+            let restored = combined.and_then(move |batch| {
+                let scan_output_schema = Arc::clone(&scan_output_schema);
                 async move {
-                    let casted =
-                        restore_logical_record_batch(&batch, &output_schema, column_mapping_mode)?;
-                    Ok(casted)
+                    restore_logical_record_batch(&batch, &scan_output_schema, column_mapping_mode)
                 }
             });
-        self.current_scan = Some(Box::pin(RecordBatchStreamAdapter::new(
-            Arc::clone(&self.output_schema),
-            combined,
-        )));
+            Box::pin(RecordBatchStreamAdapter::new(
+                Arc::clone(&output_schema),
+                restored,
+            ))
+        };
+        self.current_scan = Some(combined);
         Ok(())
     }
 
@@ -374,6 +393,7 @@ impl ScanByAddsStreamState {
         if adds.len() != bitmaps.len() {
             return internal_err!("deletion vector bitmap count does not match Add count");
         }
+        let column_mapping_mode = snapshot.effective_column_mapping_mode();
 
         let mut streams = Vec::new();
         for (add, bitmap) in adds.iter().zip(bitmaps) {
@@ -395,6 +415,40 @@ impl ScanByAddsStreamState {
                 } else {
                     stream
                 });
+                if let Some(projection) = &self.input_file_projection {
+                    let stream = streams.pop().ok_or_else(|| {
+                        DataFusionError::Internal("missing Delta file stream".to_string())
+                    })?;
+                    let scan_output_schema = Arc::clone(&self.scan_output_schema);
+                    let restored = stream.and_then(move |batch| {
+                        let scan_output_schema = Arc::clone(&scan_output_schema);
+                        async move {
+                            restore_logical_record_batch(
+                                &batch,
+                                &scan_output_schema,
+                                column_mapping_mode,
+                            )
+                        }
+                    });
+                    let restored = Box::pin(RecordBatchStreamAdapter::new(
+                        Arc::clone(&self.scan_output_schema),
+                        restored,
+                    ));
+                    let file_url = self.table_url.join(&add.path).map_err(|error| {
+                        DataFusionError::Execution(format!(
+                            "failed to resolve Delta data file {}: {error}",
+                            add.path
+                        ))
+                    })?;
+                    let metadata = InputFileMetadata {
+                        name: file_url.to_string(),
+                        block_start: 0,
+                        block_length: add.size,
+                    };
+                    streams.push(project_input_file_metadata_stream(
+                        restored, projection, &metadata,
+                    )?);
+                }
             }
         }
         Ok(streams)
@@ -413,12 +467,12 @@ impl ScanByAddsStreamState {
         let row_index_name = scan_config
             .row_index_column_name
             .clone()
-            .filter(|name| self.output_schema.field_with_name(name).is_ok());
+            .filter(|name| self.scan_output_schema.field_with_name(name).is_ok());
         scan_config.row_index_column_name = None;
 
         let file_output_schema = if let Some(row_index_name) = &row_index_name {
             let fields = self
-                .output_schema
+                .scan_output_schema
                 .fields()
                 .iter()
                 .filter(|field| field.name() != row_index_name)
@@ -426,7 +480,7 @@ impl ScanByAddsStreamState {
                 .collect::<Vec<_>>();
             Arc::new(Schema::new(fields))
         } else {
-            Arc::clone(&self.output_schema)
+            Arc::clone(&self.scan_output_schema)
         };
         let file_projection = file_scan_projection_for_schema(
             snapshot,
@@ -605,7 +659,9 @@ pub struct DeltaScanByAddsExec {
     table_url: Url,
     version: i64,
     table_schema: SchemaRef,
+    scan_output_schema: SchemaRef,
     output_schema: SchemaRef,
+    input_file_projection: Option<ProjectionExprs>,
     scan_config: DeltaScanConfig,
     projection: Option<Vec<usize>>,
     limit: Option<usize>,
@@ -641,7 +697,9 @@ impl DeltaScanByAddsExec {
             table_url,
             version,
             table_schema,
+            scan_output_schema: Arc::clone(&output_schema),
             output_schema,
+            input_file_projection: None,
             scan_config,
             projection,
             limit,
@@ -685,6 +743,31 @@ impl DeltaScanByAddsExec {
 
     pub fn output_schema(&self) -> &SchemaRef {
         &self.output_schema
+    }
+
+    pub fn scan_output_schema(&self) -> &SchemaRef {
+        &self.scan_output_schema
+    }
+
+    pub fn input_file_projection(&self) -> Option<&ProjectionExprs> {
+        self.input_file_projection.as_ref()
+    }
+
+    pub fn with_input_file_projection(
+        mut self,
+        projection: Option<ProjectionExprs>,
+    ) -> Result<Self> {
+        self.output_schema = match &projection {
+            Some(projection) => Arc::new(projection.project_schema(&self.scan_output_schema)?),
+            None => Arc::clone(&self.scan_output_schema),
+        };
+        self.input_file_projection = projection;
+        self.statistics = Statistics::new_unknown(self.output_schema.as_ref());
+        self.cache = Self::compute_properties(
+            Arc::clone(&self.output_schema),
+            self.input.output_partitioning().partition_count(),
+        );
+        Ok(self)
     }
 
     pub fn scan_config(&self) -> &DeltaScanConfig {
@@ -753,7 +836,15 @@ impl ExecutionPlan for DeltaScanByAddsExec {
         &self,
         f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        apply_expression_roots(self.pushdown_filter.iter(), f)
+        if apply_expression_roots(self.pushdown_filter.iter(), f)? == TreeNodeRecursion::Stop {
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        apply_expression_roots(
+            self.input_file_projection
+                .iter()
+                .flat_map(|projection| projection.iter().map(|expression| &expression.expr)),
+            f,
+        )
     }
 
     #[expect(deprecated)]
@@ -781,6 +872,24 @@ impl ExecutionPlan for DeltaScanByAddsExec {
         Ok(Arc::new(cloned))
     }
 
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if self.input_file_projection.is_none()
+            && !projection_references_input_file_metadata(projection.projection_expr())
+        {
+            return Ok(None);
+        }
+        let projection = match &self.input_file_projection {
+            Some(current) => current.try_merge(projection.projection_expr())?,
+            None => projection.projection_expr().clone(),
+        };
+        Ok(Some(Arc::new(
+            self.clone().with_input_file_projection(Some(projection))?,
+        )))
+    }
+
     fn execute(
         &self,
         partition: usize,
@@ -800,7 +909,9 @@ impl ExecutionPlan for DeltaScanByAddsExec {
             context,
             table_url,
             table_version,
+            Arc::clone(&self.scan_output_schema),
             Arc::clone(&output_schema),
+            self.input_file_projection.clone(),
             scan_config,
             lakehouse_table,
             catalog_managed_commits,

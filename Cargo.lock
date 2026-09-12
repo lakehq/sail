@@ -7664,10 +7664,12 @@ dependencies = [
  "chrono",
  "datafusion",
  "datafusion-common",
+ "datafusion-datasource",
  "datafusion-expr",
  "either",
  "futures",
  "lexical-core",
+ "object_store",
  "parquet-variant",
  "parquet-variant-compute",
  "parquet-variant-json",
@@ -8030,6 +8032,7 @@ dependencies = [
  "datafusion",
  "datafusion-physical-expr",
  "log",
+ "sail-common-datafusion",
  "sail-physical-plan",
 ]
 
