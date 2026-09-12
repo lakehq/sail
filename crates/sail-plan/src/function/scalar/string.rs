@@ -1,9 +1,11 @@
+use std::sync::Arc;
+
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::expr_fn;
 use datafusion::functions::regex::expr_fn as regex_fn;
 use datafusion::functions::regex::regexpcount::RegexpCountFunc;
 use datafusion_common::{DFSchema, ScalarValue};
-use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast, when};
+use datafusion_expr::{ExprSchemable, HigherOrderUDF, ScalarUDF, cast, expr, lit, try_cast, when};
 use datafusion_functions_nested::expr_fn::array_element;
 use datafusion_spark::function::math::expr_fn as math_fn;
 use datafusion_spark::function::string::elt::SparkElt;
@@ -38,6 +40,7 @@ use sail_function::scalar::string::spark_to_number::SparkToNumber;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::function::scalar::datetime::date_format;
+use crate::function::scalar::lambda::lambda_with_fresh_parameter;
 
 fn is_single_capture_extract(pattern: &expr::Expr, replacement: &expr::Expr) -> bool {
     let (expr::Expr::Literal(pattern, _), expr::Expr::Literal(replacement, _)) =
@@ -111,26 +114,26 @@ fn regexp_instr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             "regexp_instr requires an integer index",
         ));
     }
-    let nullable = string.nullable(schema)? || pattern.nullable(schema)?;
-    let index = if nullable {
-        let null_input = string.clone().is_null().or(pattern.clone().is_null());
-        when(null_input, lit(ScalarValue::try_from(&index_type)?)).otherwise(index)?
-    } else {
-        index
-    };
-    let index = if index_type.is_string() && !input.function_context.plan_config.ansi_mode {
+    let ansi_mode = input.function_context.plan_config.ansi_mode;
+    let index = if index_type.is_string() && !ansi_mode {
         ScalarUDF::from(SparkCastStringToInt32::new()).call(vec![index])
-    } else if index_type.is_numeric() && !input.function_context.plan_config.ansi_mode {
+    } else {
+        // ANSI conversion is deferred until the search arguments are evaluated.
         // Non-ANSI numeric narrowing preserves NULLs, and the converted value is unused.
         index
-    } else {
-        cast(index, DataType::Int32)
     };
-    Ok(ScalarUDF::from(SparkRegexpInstr::new()).call(vec![
-        cast(string, DataType::Utf8),
-        cast(pattern, DataType::Utf8),
-        index,
-    ]))
+    Ok(expr::Expr::HigherOrderFunction(
+        expr::HigherOrderFunction::new(
+            Arc::new(HigherOrderUDF::new_from_impl(SparkRegexpInstr::new(
+                ansi_mode,
+            ))),
+            vec![
+                cast(string, DataType::Utf8),
+                cast(pattern, DataType::Utf8),
+                lambda_with_fresh_parameter(index, "_regexp_instr")?,
+            ],
+        ),
+    ))
 }
 
 fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {

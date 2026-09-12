@@ -109,6 +109,23 @@ Feature: regexp_instr returns the first match position
         | result |
         | NULL   |
 
+    Scenario: NULL search arguments short-circuit index expressions for each row
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT regexp_instr(s, p, CAST(10 / i AS INT)) AS result
+        FROM VALUES (CAST(NULL AS STRING), 'a', 0),
+                    ('abc', 'a', 1),
+                    ('abc', CAST(NULL AS STRING), 0),
+                    ('abc', 'a', 2) AS t(s, p, i)
+        """
+      Then query result
+        | result |
+        | NULL   |
+        | 1      |
+        | NULL   |
+        | 1      |
+
     Scenario Outline: Invalid arguments: <args>
       When query
         """
@@ -143,6 +160,21 @@ Feature: regexp_instr returns the first match position
 
   @function(nullability)
   Rule: Output schema
+
+    Scenario: ANSI string index conversion retains nullable metadata
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT regexp_instr('abc', 'a', CAST(id AS STRING)) AS result FROM range(1)
+        """
+      Then query schema
+        """
+        root
+         |-- result: integer (nullable = true)
+        """
+      Then query result
+        | result |
+        | 1      |
 
     Scenario: a non-null literal input to regexp_instr yields the schema Spark declares
       When query

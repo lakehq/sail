@@ -47,6 +47,97 @@ Feature: Numeric casts to Decimal handle precision overflow
         | NULL   |
         | NULL   |
 
+  Rule: Safe Decimal conversions preserve input nullability
+
+    Scenario Outline: Non-null <source> safely widens to <target>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(CAST(id AS <source>) AS <target>) AS result FROM range(1)
+        """
+      Then query schema
+        """
+        root
+         |-- result: <target> (nullable = false)
+        """
+      Then query result
+        | result |
+        | 0      |
+
+      Examples:
+        | source        | target        |
+        | TINYINT       | decimal(3,0)  |
+        | SMALLINT      | decimal(5,0)  |
+        | INT           | decimal(10,0) |
+        | BIGINT        | decimal(20,0) |
+        | DECIMAL(20,0) | decimal(21,0) |
+
+    Scenario: BIGINT extrema fit a non-null Decimal result
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(v AS DECIMAL(20,0)) AS result
+        FROM VALUES (-9223372036854775807L - 1L), (9223372036854775807L) AS t(v)
+        """
+      Then query schema
+        """
+        root
+         |-- result: decimal(20,0) (nullable = false)
+        """
+      Then query result
+        | result               |
+        | -9223372036854775808 |
+        | 9223372036854775807  |
+
+    Scenario: An extra integer digit makes scale reduction safe
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(v AS DECIMAL(3,1)) AS result FROM VALUES (9.99), (1.23) AS t(v)
+        """
+      Then query schema
+        """
+        root
+         |-- result: decimal(3,1) (nullable = false)
+        """
+      Then query result
+        | result |
+        | 10.0   |
+        | 1.2    |
+
+    Scenario: Scale reduction without an extra integer digit can overflow
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(v AS DECIMAL(2,1)) AS result FROM VALUES (9.99), (1.23) AS t(v)
+        """
+      Then query schema
+        """
+        root
+         |-- result: decimal(2,1) (nullable = true)
+        """
+      Then query result
+        | result |
+        | NULL   |
+        | 1.2    |
+
+    Scenario: Safe widening preserves nullable input
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(v AS DECIMAL(20,0)) AS result
+        FROM VALUES (1L), (CAST(NULL AS BIGINT)) AS t(v)
+        """
+      Then query schema
+        """
+        root
+         |-- result: decimal(20,0) (nullable = true)
+        """
+      Then query result
+        | result |
+        | 1      |
+        | NULL   |
+
   Rule: ANSI overflow raises and TRY_CAST returns NULL
 
     Scenario: ANSI numeric overflow raises
