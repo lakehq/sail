@@ -32,6 +32,7 @@ mod dv_writer_exec;
 mod log_replay_exec;
 mod meta_adds;
 mod metadata_stats_exec;
+mod path_decode;
 mod remove_actions_exec;
 mod scan_by_adds_exec;
 mod write_context;
@@ -50,6 +51,7 @@ pub use dv_writer_exec::{
 };
 pub use log_replay_exec::{DeltaLogReplayExec, DeltaLogReplayMode};
 pub use metadata_stats_exec::DeltaMetadataStatsExec;
+pub use path_decode::DeltaDecodePath;
 pub mod planner;
 pub use planner::{
     DeltaPhysicalPlanner, DeltaPlannerConfig, PlannerContext, plan_delete, plan_delete_mor,

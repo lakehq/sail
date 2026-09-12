@@ -60,7 +60,7 @@ data:
           DeltaRemoveActionsExec
             CoalescePartitionsExec
               DeltaDiscoveryExec(table_path=file://<tmp>/logscan_parallel/)
-                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, deletionVector@7]
+                HashJoinExec: mode=CollectLeft, join_type=Left, on=[(__sail_file_path@0, delta_decode_path(__sail_file_path@0))], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, deletionVector@7]
                   CoalescePartitionsExec
                     AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
                       RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4

@@ -36,8 +36,8 @@ use super::context::PlannerContext;
 use super::utils::{LogReplayOptions, build_log_replay_pipeline_with_options};
 use crate::datasource::PATH_COLUMN;
 use crate::physical_plan::{
-    DeltaCommitExec, DeltaDiscoveryExec, DeltaRemoveActionsExec, DeltaWriteContext,
-    DeltaWriterExec, DeltaWriterExecOptions,
+    DeltaCommitExec, DeltaDecodePath, DeltaDiscoveryExec, DeltaRemoveActionsExec,
+    DeltaWriteContext, DeltaWriterExec, DeltaWriterExecOptions,
 };
 use crate::schema::PhysicalPartitionColumn;
 use crate::table::DeltaSnapshot;
@@ -121,25 +121,38 @@ pub async fn build_adds_from_touched_files(
 
     let meta_scan: Arc<dyn ExecutionPlan> =
         build_log_replay_pipeline_with_options(ctx, snapshot, log_replay_options).await?;
+    let touched_meta = join_touched_file_metadata(touched_plan, meta_scan)?;
 
+    Ok(Arc::new(DeltaDiscoveryExec::new(
+        touched_meta,
+        table_url.clone(),
+        version,
+        partition_columns.to_vec(),
+        true, // partition_scan
+    )?))
+}
+
+fn join_touched_file_metadata(
+    touched_plan: Arc<dyn ExecutionPlan>,
+    meta_scan: Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>> {
     let touched_schema = touched_plan.schema();
     let touched_idx = touched_schema
         .index_of(PATH_COLUMN)
         .map_err(|e| DataFusionError::Plan(format!("{e}")))?;
     let meta_schema = meta_scan.schema();
-    let meta_idx = meta_schema
-        .index_of(PATH_COLUMN)
-        .map_err(|e| DataFusionError::Plan(format!("{e}")))?;
-
+    // Scan paths are decoded; preserve the original log URI in the metadata payload.
+    let decoded_meta_path = DeltaDecodePath::expression(PATH_COLUMN, meta_schema.as_ref())?;
     let join = Arc::new(HashJoinExec::try_new(
         touched_plan,
         meta_scan,
         vec![(
             Arc::new(Column::new(PATH_COLUMN, touched_idx)),
-            Arc::new(Column::new(PATH_COLUMN, meta_idx)),
+            decoded_meta_path,
         )],
         None,
-        &JoinType::Inner,
+        // Missing metadata must reach Add decoding as a null path and fail the write.
+        &JoinType::Left,
         None,
         PartitionMode::CollectLeft,
         NullEquality::NullEqualsNothing,
@@ -160,17 +173,7 @@ pub async fn build_adds_from_touched_files(
             )
         })
         .collect();
-    let touched_meta: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(proj_exprs, join)?);
-
-    let touched_adds: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::new(
-        touched_meta,
-        table_url.clone(),
-        version,
-        partition_columns.to_vec(),
-        true, // partition_scan
-    )?);
-
-    Ok(touched_adds)
+    Ok(Arc::new(ProjectionExec::try_new(proj_exprs, join)?))
 }
 
 /// Build a remove-action source from a set of touched file paths.
@@ -194,4 +197,66 @@ pub async fn build_remove_from_touched_files(
         LogReplayOptions::default(),
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::array::{ArrayRef, RecordBatch, StringArray};
+    use datafusion::datasource::memory::MemorySourceConfig;
+    use datafusion::physical_plan::collect;
+    use datafusion::prelude::SessionContext;
+    use datafusion_common::cast::as_string_array;
+
+    use super::*;
+
+    fn path_metadata(paths: Vec<&str>) -> Result<Arc<dyn ExecutionPlan>> {
+        let paths: ArrayRef = Arc::new(StringArray::from(paths));
+        let batch = RecordBatch::try_from_iter(vec![(PATH_COLUMN, paths)])?;
+        Ok(MemorySourceConfig::try_new_exec(
+            &[vec![batch.clone()]],
+            batch.schema(),
+            None,
+        )?)
+    }
+
+    #[tokio::test]
+    async fn touched_file_join_preserves_log_uri_payload() -> Result<()> {
+        let session = SessionContext::new();
+        let metadata = join_touched_file_metadata(
+            path_metadata(vec!["p=a+b%20c/file.parquet"])?,
+            path_metadata(vec!["p=a+b%2520c/file.parquet", "untouched.parquet"])?,
+        )?;
+        let batches = collect(metadata, session.task_ctx()).await?;
+        let paths = batches
+            .iter()
+            .map(|batch| as_string_array(batch.column(0)))
+            .collect::<Result<Vec<_>>>()?;
+        assert_eq!(
+            paths
+                .iter()
+                .flat_map(|array| array.iter())
+                .collect::<Vec<_>>(),
+            vec![Some("p=a+b%2520c/file.parquet")]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn missing_touched_file_metadata_rejects_removal() -> Result<()> {
+        let session = SessionContext::new();
+        let metadata = join_touched_file_metadata(
+            path_metadata(vec!["active.parquet", "missing.parquet"])?,
+            path_metadata(vec!["active.parquet"])?,
+        )?;
+        let remover = Arc::new(DeltaRemoveActionsExec::new(Arc::new(
+            CoalescePartitionsExec::new(metadata),
+        ))?);
+        let error = collect(remover, session.task_ctx()).await.err();
+        assert!(matches!(
+            error,
+            Some(DataFusionError::Plan(message))
+                if message == format!("metadata batch '{PATH_COLUMN}' cannot be null")
+        ));
+        Ok(())
+    }
 }
