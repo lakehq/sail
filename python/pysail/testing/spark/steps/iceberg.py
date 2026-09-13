@@ -34,8 +34,6 @@ _PYTEST_TMP_PREFIX = re.compile(
     re.IGNORECASE,
 )
 
-_MANIFEST_LIST_FIRST_ROW_ID_POSITION = 15
-
 
 def _normalize_pytest_tmp_path(value: str) -> str:
     value = value.replace("\\", "/")
@@ -160,16 +158,17 @@ def _current_manifest_list(metadata: dict) -> dict:
         read_types={508: PartitionFieldSummary},
         read_enums={517: ManifestContent},
     ) as reader:
-        manifests = [_manifest_record_to_dict(record) for record in reader]
+        manifests = [_manifest_record_to_dict(record, format_version) for record in reader]
     return {"manifests": manifests}
 
 
-def _manifest_record_to_dict(record) -> dict:
-    data = record._data  # noqa: SLF001 - pyiceberg exposes manifest-list V3 fields only via Record data.
-    content = data[3]
+def _manifest_record_to_dict(record, format_version: int) -> dict:
+    fields = MANIFEST_LIST_FILE_SCHEMAS[format_version].fields
+    data = {field.name: record[index] for index, field in enumerate(fields)}
+    content = data.get("content", ManifestContent.DATA)
     if isinstance(content, ManifestContent):
         content = content.name.lower()
-    partitions = data[13]
+    partitions = data["partitions"]
     if partitions is not None:
         partitions = [
             {
@@ -181,24 +180,24 @@ def _manifest_record_to_dict(record) -> dict:
             for summary in partitions
         ]
     manifest = {
-        "manifest-path": data[0],
-        "manifest-length": data[1],
-        "partition-spec-id": data[2],
+        "manifest-path": data["manifest_path"],
+        "manifest-length": data["manifest_length"],
+        "partition-spec-id": data["partition_spec_id"],
         "content": content,
-        "sequence-number": data[4],
-        "min-sequence-number": data[5],
-        "added-snapshot-id": data[6],
-        "added-files-count": data[7],
-        "existing-files-count": data[8],
-        "deleted-files-count": data[9],
-        "added-rows-count": data[10],
-        "existing-rows-count": data[11],
-        "deleted-rows-count": data[12],
+        "sequence-number": data.get("sequence_number", 0),
+        "min-sequence-number": data.get("min_sequence_number", 0),
+        "added-snapshot-id": data["added_snapshot_id"],
+        "added-files-count": data["added_files_count"],
+        "existing-files-count": data["existing_files_count"],
+        "deleted-files-count": data["deleted_files_count"],
+        "added-rows-count": data["added_rows_count"],
+        "existing-rows-count": data["existing_rows_count"],
+        "deleted-rows-count": data["deleted_rows_count"],
         "partitions": partitions,
-        "key-metadata": data[14],
+        "key-metadata": data["key_metadata"],
     }
-    if len(data) > _MANIFEST_LIST_FIRST_ROW_ID_POSITION:
-        manifest["first-row-id"] = data[_MANIFEST_LIST_FIRST_ROW_ID_POSITION]
+    if "first_row_id" in data:
+        manifest["first-row-id"] = data["first_row_id"]
     return manifest
 
 

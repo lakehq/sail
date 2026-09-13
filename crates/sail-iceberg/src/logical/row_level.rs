@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::functions_aggregate::min_max::max_udaf;
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{DFSchemaRef, Result, plan_err};
 use datafusion_expr::expr::{WindowFunction, WindowFunctionParams};
 use datafusion_expr::{
@@ -12,6 +12,7 @@ use sail_common_datafusion::datasource::{
     RowLevelCommand, RowLevelOperationType, RowLevelWriteMode,
 };
 
+use crate::datasource::provider::IcebergTableProvider;
 use crate::logical::IcebergTableSource;
 use crate::spec::TableMetadata;
 
@@ -79,25 +80,51 @@ pub(crate) fn target_write_state(
     plan: &LogicalPlan,
     command: RowLevelCommand,
 ) -> Result<(RowLevelWriteMode, Option<i64>)> {
-    let mut state = None;
+    let provider = target_provider(plan)?;
+    Ok((
+        provider.row_level_options.mode(command)?,
+        provider
+            .current_snapshot()
+            .map(|snapshot| snapshot.snapshot_id()),
+    ))
+}
+
+pub(crate) fn target_provider(plan: &LogicalPlan) -> Result<Arc<IcebergTableProvider>> {
+    let mut provider = None;
     plan.apply(|node| {
         if let LogicalPlan::TableScan(scan) = node
             && let Some(source) = scan.source.downcast_ref::<IcebergTableSource>()
         {
-            let provider = source.provider();
-            state = Some((
-                provider.row_level_options.mode(command)?,
-                provider
-                    .current_snapshot()
-                    .map(|snapshot| snapshot.snapshot_id()),
-            ));
+            provider = Some(Arc::clone(source.provider()));
             return Ok(TreeNodeRecursion::Stop);
         }
         Ok(TreeNodeRecursion::Continue)
     })?;
-    state.ok_or_else(|| {
+    provider.ok_or_else(|| {
         datafusion_common::plan_datafusion_err!("Missing Iceberg row-level target scan")
     })
+}
+
+pub(crate) fn select_copy_on_write_candidates(
+    plan: LogicalPlan,
+    predicate: Expr,
+) -> Result<LogicalPlan> {
+    plan.transform_up(|plan| {
+        if let LogicalPlan::TableScan(mut scan) = plan {
+            if let Some(source) = scan.source.downcast_ref::<IcebergTableSource>() {
+                let provider = source
+                    .provider()
+                    .as_ref()
+                    .clone()
+                    .select_copy_on_write_candidates(predicate.clone());
+                scan.source = Arc::new(IcebergTableSource::new(Arc::new(provider)));
+                return Ok(Transformed::yes(LogicalPlan::TableScan(scan)));
+            }
+            return Ok(Transformed::no(LogicalPlan::TableScan(scan)));
+        }
+        Ok(Transformed::no(plan))
+    })
+    .map(|transformed| transformed.data)
 }
 
 /// Retain every row of a touched file, including delete intents, and new inserts.

@@ -4,12 +4,14 @@ use datafusion::logical_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, Result, ScalarValue, not_impl_err};
 use datafusion_expr::logical_plan::Extension;
+use datafusion_expr::utils::conjunction;
 use datafusion_expr::{Expr, LogicalPlan, TableScanBuilder, TableSource, lit};
 use log::trace;
 use sail_common_datafusion::datasource::{
     MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, MergeCapableSource, MergeInfo, MergeMatchedAction,
     MergeNotMatchedBySourceAction, RowLevelCommand, RowLevelWriteMode,
 };
+use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_logical_plan::merge::{
     MergePlanRequirements, expand_merge, validate_merge_internal_columns,
 };
@@ -46,6 +48,22 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         MERGE_FILE_COLUMN,
         row_index_column,
     )?;
+    if mode == RowLevelWriteMode::CopyOnWrite
+        && info.options.not_matched_by_source_clauses.is_empty()
+        && let Some(predicate) = conjunction(info.options.target_only_predicates.clone())
+    {
+        let predicate = sail_logical_plan::row_level::rewrite_row_level_target_condition(
+            Some(ExprWithSource::new(predicate, None)),
+            &info.options.resolved_target_schema,
+            info.target.schema(),
+            &info.options.resolved_target_field_names,
+        )?
+        .ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!("Missing MERGE target predicate")
+        })?;
+        target_plan =
+            super::row_level::select_copy_on_write_candidates(target_plan, predicate.expr)?;
+    }
     let target_fields: Vec<String> = target_plan
         .schema()
         .fields()

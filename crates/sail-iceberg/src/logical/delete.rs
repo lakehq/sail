@@ -25,7 +25,18 @@ pub(crate) fn expand_delete_node(info: DeleteInfo) -> Result<LogicalPlan> {
         &info.resolved_target_field_names,
     )?;
     let target_plan = if mode == RowLevelWriteMode::CopyOnWrite {
-        ensure_merge_metadata_columns(info.target_plan.as_ref().clone(), MERGE_FILE_COLUMN, None)?
+        let target = ensure_merge_metadata_columns(
+            info.target_plan.as_ref().clone(),
+            MERGE_FILE_COLUMN,
+            None,
+        )?;
+        super::row_level::select_copy_on_write_candidates(
+            target,
+            condition
+                .as_ref()
+                .map(|predicate| predicate.expr.clone())
+                .unwrap_or_else(|| lit(true)),
+        )?
     } else {
         info.target_plan.as_ref().clone()
     };

@@ -102,6 +102,25 @@ Feature: Iceberg copy-on-write row operations
       | 1  | 10    | A    |
       | 2  | 200   | A    |
 
+  Scenario: COW target-only actions include files excluded by the ON condition
+    Given statement
+      """
+      MERGE INTO iceberg_cow t USING (SELECT 1 AS id) s
+      ON t.id = s.id AND t.part = 'A'
+      WHEN MATCHED THEN UPDATE SET value = 100
+      WHEN NOT MATCHED BY SOURCE THEN UPDATE SET value = 999
+      """
+    When query
+      """
+      SELECT * FROM iceberg_cow ORDER BY id
+      """
+    Then query result ordered
+      | id | value | part |
+      | 1  | 100   | A    |
+      | 2  | 999   | A    |
+      | 3  | 999   | B    |
+      | 4  | 999   | B    |
+
   Scenario: COW unconditional matched DELETE accepts duplicate source matches
     Given statement
       """

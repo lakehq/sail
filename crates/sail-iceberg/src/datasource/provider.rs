@@ -101,6 +101,8 @@ pub struct IcebergTableProvider {
     file_column_name: Option<String>,
     /// Optional file-local row-index metadata column for row-level write planning.
     row_index_column_name: Option<String>,
+    /// Candidate-file selection only; never a row filter on the rewrite input.
+    copy_on_write_predicate: Option<Expr>,
     /// Whether to use the metadata-as-data read path (lazy manifest scanning)
     metadata_as_data_read: bool,
 }
@@ -175,6 +177,7 @@ impl IcebergTableProvider {
             arrow_schema,
             file_column_name: None,
             row_index_column_name: None,
+            copy_on_write_predicate: None,
             metadata_as_data_read: false,
         })
     }
@@ -212,6 +215,7 @@ impl IcebergTableProvider {
             arrow_schema,
             file_column_name: None,
             row_index_column_name: None,
+            copy_on_write_predicate: None,
             metadata_as_data_read: false,
         })
     }
@@ -325,6 +329,46 @@ impl IcebergTableProvider {
     /// Get the current snapshot
     pub fn current_snapshot(&self) -> Option<&Snapshot> {
         self.snapshot.as_ref()
+    }
+
+    pub(crate) fn select_copy_on_write_candidates(mut self, predicate: Expr) -> Self {
+        self.copy_on_write_predicate = Some(predicate);
+        self
+    }
+
+    pub(crate) async fn metadata_delete_paths(
+        &self,
+        session: &dyn Session,
+    ) -> Result<Option<Vec<String>>> {
+        let Some(predicate) = &self.copy_on_write_predicate else {
+            return Ok(None);
+        };
+        if self.snapshot.is_none() {
+            return Ok(Some(Vec::new()));
+        }
+        let table_url = Url::parse(&self.table_uri)
+            .map_err(|error| datafusion::common::DataFusionError::External(Box::new(error)))?;
+        let object_store = get_object_store_from_session(session, &table_url)?;
+        let store_ctx = StoreContext::new(object_store, &table_url)?;
+        let manifests = self.load_manifest_list(&store_ctx).await?;
+        let files = self
+            .load_data_files_with_seq(session, &[], &store_ctx, &manifests)
+            .await?;
+        let selected = crate::datasource::copy_on_write::select_copy_on_write_files(
+            session,
+            predicate,
+            Arc::clone(&self.arrow_schema),
+            &self.schema,
+            &self.partition_specs,
+            files,
+        )?;
+        Ok(selected.all_rows_match.then(|| {
+            selected
+                .candidates
+                .into_iter()
+                .map(|(file, _)| file.file_path)
+                .collect()
+        }))
     }
 
     pub(crate) async fn predicate_overwrite_paths(
@@ -1275,6 +1319,18 @@ impl IcebergTableProvider {
         let mut data_files_with_seq = self
             .load_data_files_with_seq(session, &pruning_filters, &store_ctx, &manifest_list)
             .await?;
+
+        if let Some(predicate) = &self.copy_on_write_predicate {
+            data_files_with_seq = crate::datasource::copy_on_write::select_copy_on_write_files(
+                session,
+                predicate,
+                Arc::clone(&self.arrow_schema),
+                &self.schema,
+                &self.partition_specs,
+                data_files_with_seq,
+            )?
+            .candidates;
+        }
 
         let filter_expr = conjunction(pruning_filters.iter().cloned());
         if filter_expr.is_some() || limit.is_some() {

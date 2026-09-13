@@ -5,7 +5,10 @@ use datafusion_expr::{Extension, LogicalPlan};
 use sail_common_datafusion::datasource::{
     MERGE_FILE_COLUMN, RowLevelCommand, RowLevelWriteMode, UpdateInfo,
 };
-use sail_logical_plan::row_level::{RowLevelEffectRequirements, RowLevelWriteNode, expand_update};
+use sail_logical_plan::row_level::{
+    RowLevelEffectRequirements, RowLevelWriteNode, expand_update,
+    rewrite_row_level_target_condition,
+};
 
 use crate::logical::merge::ensure_merge_metadata_columns;
 use crate::logical::row_level::{select_copy_on_write_rows, target_write_state, write_effects};
@@ -27,6 +30,17 @@ pub(crate) fn expand_update_node(mut info: UpdateInfo) -> Result<LogicalPlan> {
         MERGE_FILE_COLUMN,
         None,
     )?);
+    if let Some(predicate) = rewrite_row_level_target_condition(
+        info.condition.clone(),
+        &info.input_schema,
+        info.target_plan.schema(),
+        &info.resolved_target_field_names,
+    )? {
+        info.target_plan = Arc::new(super::row_level::select_copy_on_write_candidates(
+            info.target_plan.as_ref().clone(),
+            predicate.expr,
+        )?);
+    }
     let expanded = expand_update(
         info,
         mode,

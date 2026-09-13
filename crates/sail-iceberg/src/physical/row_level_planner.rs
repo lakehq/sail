@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result, not_impl_err, plan_err};
+use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_planner::PhysicalPlanner;
@@ -15,6 +16,7 @@ use crate::lake_source::{
 };
 use crate::operations::SnapshotUpdateKind;
 use crate::options::r#gen::IcebergWriteOptions;
+use crate::physical_plan::action_schema::{CommitMeta, encode_commit_meta};
 use crate::physical_plan::equality_delete_writer_exec::validate_equality_delete_schema;
 use crate::physical_plan::merge_row_projection::IcebergMergeRowProjection;
 use crate::physical_plan::{
@@ -197,6 +199,31 @@ async fn plan_iceberg_copy_on_write(
         &PhysicalSinkMode::Append,
         data_schema.as_ref(),
     )?;
+    if node.command() == RowLevelCommand::Delete
+        && let Some(paths) = crate::logical::row_level::target_provider(node.raw_target())?
+            .metadata_delete_paths(session)
+            .await?
+    {
+        let batch = encode_commit_meta(CommitMeta {
+            table_uri: table_url.to_string(),
+            removed_data_file_paths: paths,
+            skip_empty_commit: true,
+            requirements: write_context.requirements,
+            table_properties: writer_options.table_properties.clone(),
+            lakehouse_table: writer_options.lakehouse_table.clone(),
+            ..Default::default()
+        })?;
+        let input = MemorySourceConfig::try_new_exec(&[vec![batch.clone()]], batch.schema(), None)?;
+        return Ok(Arc::new(
+            IcebergCommitExec::new(
+                input,
+                table_url,
+                writer_options.lakehouse_table,
+                SnapshotUpdateKind::RowLevelRewrite,
+            )
+            .with_expected_snapshot_id(node.expected_snapshot_id()),
+        ));
+    }
     let writer = Arc::new(IcebergWriterExec::new_copy_on_write(
         Arc::clone(input),
         table_url.clone(),
@@ -209,7 +236,7 @@ async fn plan_iceberg_copy_on_write(
     }) {
         SnapshotUpdateKind::FastAppend
     } else {
-        SnapshotUpdateKind::CopyOnWrite
+        SnapshotUpdateKind::RowLevelRewrite
     };
     Ok(Arc::new(
         IcebergCommitExec::new(

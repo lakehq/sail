@@ -138,9 +138,7 @@ fn validate_scoped_overwrite_format(
     snapshot_update_kind: SnapshotUpdateKind,
     format_version: FormatVersion,
 ) -> Result<()> {
-    if matches!(snapshot_update_kind, SnapshotUpdateKind::CopyOnWrite)
-        && matches!(format_version, FormatVersion::V3)
-    {
+    if snapshot_update_kind.is_targeted_rewrite() && matches!(format_version, FormatVersion::V3) {
         return Err(DataFusionError::NotImplemented(
             "Iceberg v3 scoped overwrite is not supported until row lineage is preserved"
                 .to_string(),
@@ -778,7 +776,7 @@ impl ExecutionPlan for IcebergCommitExec {
             {
                 commit_info.requirements.push(requirement);
             }
-            if !matches!(snapshot_update_kind, SnapshotUpdateKind::CopyOnWrite)
+            if !snapshot_update_kind.is_targeted_rewrite()
                 && (dynamic_partition_overwrite || !removed_data_file_paths.is_empty())
             {
                 return Err(DataFusionError::Internal(
@@ -963,7 +961,7 @@ impl ExecutionPlan for IcebergCommitExec {
                         current_schema,
                     )?;
                 }
-                if (skip_empty_commit || (matches!(snapshot_update_kind, SnapshotUpdateKind::CopyOnWrite) && dynamic_partition_overwrite))
+                if (skip_empty_commit || (snapshot_update_kind.is_targeted_rewrite() && dynamic_partition_overwrite))
                     && commit_info.data_files.is_empty()
                     && commit_info.delete_files.is_empty()
                     && removed_data_file_paths.is_empty()
@@ -1569,11 +1567,16 @@ mod tests {
         let effective = FormatVersion::V2.max(format_version_for_schema(&schema));
         assert_eq!(effective, FormatVersion::V3);
 
-        for mode in ["predicate", "dynamic"] {
+        for kind in [
+            SnapshotUpdateKind::CopyOnWrite,
+            SnapshotUpdateKind::RowLevelRewrite,
+        ] {
             let error =
-                validate_scoped_overwrite_format(SnapshotUpdateKind::CopyOnWrite, effective)
-                    .expect_err(mode);
-            assert!(error.to_string().contains("v3 scoped overwrite"), "{mode}");
+                validate_scoped_overwrite_format(kind, effective).expect_err("v3 rewrite rejected");
+            assert!(
+                error.to_string().contains("v3 scoped overwrite"),
+                "{kind:?}"
+            );
         }
     }
 

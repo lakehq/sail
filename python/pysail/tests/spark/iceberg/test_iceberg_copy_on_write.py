@@ -12,6 +12,83 @@ from pysail.tests.spark.iceberg.test_iceberg_merge import _current_manifest_entr
 
 
 @pytest.mark.parametrize("format_version", [1, 2])
+@pytest.mark.parametrize("predicate", ["part = 'A'", "id < 3", "true"])
+def test_cow_metadata_delete_does_not_read_parquet(spark, tmp_path, format_version, predicate):
+    name = "cow_metadata_delete"
+    path = tmp_path / name
+    moved = []
+    try:
+        spark.sql(f"""CREATE TABLE {name} (id INT, part STRING) USING iceberg
+            PARTITIONED BY (part) LOCATION '{path.as_uri()}'
+            TBLPROPERTIES ('format-version'='{format_version}')""")
+        spark.sql(f"INSERT INTO {name} VALUES (1,'A'),(2,'A')")
+        spark.sql(f"INSERT INTO {name} VALUES (3,'B'),(4,'B')")
+        before = _find_latest_metadata(path)
+        for index, file in enumerate(path.rglob("*.parquet")):
+            backup = tmp_path / f"saved-{index}.parquet"
+            file.rename(backup)
+            moved.append((file, backup))
+        assert moved
+        spark.sql(f"DELETE FROM {name} WHERE {predicate}").collect()
+        for file, backup in moved:
+            backup.rename(file)
+        moved.clear()
+        expected = [] if predicate == "true" else [(3, "B"), (4, "B")]
+        assert [tuple(row) for row in spark.table(name).orderBy("id").collect()] == expected
+        after = _find_latest_metadata(path)
+        assert _current_snapshot(after)["summary"]["operation"] == "delete"
+        assert after["snapshots"][:-1] == before["snapshots"]
+        historical = (
+            spark.read.format("iceberg").option("snapshotId", before["current-snapshot-id"]).load(path.as_uri())
+        )
+        assert [tuple(row) for row in historical.orderBy("id").collect()] == [(1, "A"), (2, "A"), (3, "B"), (4, "B")]
+    finally:
+        for file, backup in moved:
+            backup.rename(file)
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+@pytest.mark.parametrize("format_version", [1, 2])
+@pytest.mark.parametrize("operation", ["delete", "update", "merge"])
+def test_cow_prunes_unrelated_files_without_filtering_survivors(spark, tmp_path, format_version, operation):
+    name = "cow_pruned_files"
+    path = tmp_path / name
+    moved = []
+    untouched_id = 3
+    try:
+        spark.sql(f"""CREATE TABLE {name} (id INT, value INT, part STRING) USING iceberg
+            PARTITIONED BY (part) LOCATION '{path.as_uri()}'
+            TBLPROPERTIES ('format-version'='{format_version}')""")
+        spark.sql(f"INSERT INTO {name} VALUES (1,10,'A'),(2,20,'A')")
+        spark.sql(f"INSERT INTO {name} VALUES (3,30,'B'),(4,40,'B')")
+        for index, entry in enumerate(_current_manifest_entries(path, ManifestContent.DATA)):
+            file = _local_file_path(entry.data_file.file_path)
+            if untouched_id in pq.ParquetFile(file).read(columns=["id"]).column("id").to_pylist():
+                backup = tmp_path / f"saved-{index}.parquet"
+                file.rename(backup)
+                moved.append((file, backup))
+        assert moved
+        statements = {
+            "delete": f"DELETE FROM {name} WHERE id=1",
+            "update": f"UPDATE {name} SET value=100 WHERE id=1",
+            "merge": f"""MERGE INTO {name} t USING (SELECT 1 AS id) s
+                ON t.id=s.id AND t.part='A' WHEN MATCHED THEN UPDATE SET value=100""",
+        }
+        spark.sql(statements[operation]).collect()
+        for file, backup in moved:
+            backup.rename(file)
+        moved.clear()
+        expected = [(2, 20, "A"), (3, 30, "B"), (4, 40, "B")]
+        if operation != "delete":
+            expected.insert(0, (1, 100, "A"))
+        assert [tuple(row) for row in spark.table(name).orderBy("id").collect()] == expected
+    finally:
+        for file, backup in moved:
+            backup.rename(file)
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+@pytest.mark.parametrize("format_version", [1, 2])
 @pytest.mark.parametrize("operation", ["delete", "update", "merge"])
 def test_cow_rewrites_only_affected_files_and_preserves_history(spark, tmp_path, format_version, operation):
     name = "cow_file_history"
