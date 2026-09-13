@@ -108,6 +108,7 @@ pub fn assemble_commit_plan(
 ///
 /// Joins the `touched_file_plan` (which yields `PATH_COLUMN` values for files that
 /// were modified) with a log replay pipeline to retrieve the full Add-action metadata.
+/// Touched paths must come from the target scan at the supplied snapshot.
 pub async fn build_adds_from_touched_files(
     ctx: &PlannerContext<'_>,
     snapshot: &DeltaSnapshot,
@@ -151,8 +152,7 @@ fn join_touched_file_metadata(
             decoded_meta_path,
         )],
         None,
-        // Missing metadata must reach Add decoding as a null path and fail the write.
-        &JoinType::Left,
+        &JoinType::Inner,
         None,
         PartitionMode::CollectLeft,
         NullEquality::NullEqualsNothing,
@@ -206,6 +206,7 @@ mod tests {
     use datafusion::physical_plan::collect;
     use datafusion::prelude::SessionContext;
     use datafusion_common::cast::as_string_array;
+    use datafusion_common::internal_datafusion_err;
 
     use super::*;
 
@@ -241,22 +242,65 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn touched_file_lookup_broadcasts_paths_without_duplicate_inputs() -> Result<()> {
+        let touched_plan = path_metadata(vec!["active.parquet"])?;
+        let meta_scan = path_metadata(vec!["active.parquet", "untouched.parquet"])?;
+        let metadata =
+            join_touched_file_metadata(Arc::clone(&touched_plan), Arc::clone(&meta_scan))?;
+        let projection = metadata
+            .downcast_ref::<ProjectionExec>()
+            .ok_or_else(|| internal_datafusion_err!("expected metadata projection"))?;
+        let lookup = projection
+            .input()
+            .downcast_ref::<HashJoinExec>()
+            .ok_or_else(|| internal_datafusion_err!("expected metadata lookup"))?;
+        assert_eq!(*lookup.join_type(), JoinType::Inner);
+        assert_eq!(*lookup.partition_mode(), PartitionMode::CollectLeft);
+        assert!(Arc::ptr_eq(lookup.left(), &touched_plan));
+        assert!(Arc::ptr_eq(lookup.right(), &meta_scan));
+        Ok(())
+    }
+
     #[tokio::test]
-    async fn missing_touched_file_metadata_rejects_removal() -> Result<()> {
+    async fn touched_file_lookup_combines_metadata_partitions() -> Result<()> {
         let session = SessionContext::new();
+        let partitions = [
+            vec!["p=first%2520file.parquet", "untouched.parquet"],
+            vec![],
+            vec!["p=second%2520file.parquet"],
+        ]
+        .into_iter()
+        .map(|paths| {
+            let paths: ArrayRef = Arc::new(StringArray::from(paths));
+            Ok(vec![RecordBatch::try_from_iter(vec![(
+                PATH_COLUMN,
+                paths,
+            )])?])
+        })
+        .collect::<Result<Vec<_>>>()?;
+        let meta_scan =
+            MemorySourceConfig::try_new_exec(&partitions, partitions[0][0].schema(), None)?;
         let metadata = join_touched_file_metadata(
-            path_metadata(vec!["active.parquet", "missing.parquet"])?,
-            path_metadata(vec!["active.parquet"])?,
+            path_metadata(vec!["p=first%20file.parquet", "p=second%20file.parquet"])?,
+            meta_scan,
         )?;
-        let remover = Arc::new(DeltaRemoveActionsExec::new(Arc::new(
-            CoalescePartitionsExec::new(metadata),
-        ))?);
-        let error = collect(remover, session.task_ctx()).await.err();
-        assert!(matches!(
-            error,
-            Some(DataFusionError::Plan(message))
-                if message == format!("metadata batch '{PATH_COLUMN}' cannot be null")
-        ));
+        let batches = collect(metadata, session.task_ctx()).await?;
+        let mut paths = batches
+            .iter()
+            .map(|batch| as_string_array(batch.column(0)))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flat_map(|array| array.iter())
+            .collect::<Vec<_>>();
+        paths.sort();
+        assert_eq!(
+            paths,
+            vec![
+                Some("p=first%2520file.parquet"),
+                Some("p=second%2520file.parquet"),
+            ]
+        );
         Ok(())
     }
 }
