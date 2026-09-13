@@ -354,11 +354,8 @@ fn need_rename_cast(expr: &expr::Expr) -> bool {
         expr::Expr::Cast(cast) => need_rename_cast(cast.expr.as_ref()),
         expr::Expr::TryCast(try_cast) => need_rename_cast(try_cast.expr.as_ref()),
         // Preserve the column naming of the casts replaced by the legacy UDF.
-        // TODO: Match Spark's full nested-cast names; leave the pre-existing
-        // Int32 UDF's naming unchanged until that broader naming fix.
         expr::Expr::ScalarFunction(function)
-            if function.func.inner().is::<SparkCastStringToInteger>()
-                && function.func.name() != "spark_cast_string_to_int32" =>
+            if function.func.inner().is::<SparkCastStringToInteger>() =>
         {
             function.args.first().is_none_or(need_rename_cast)
         }
