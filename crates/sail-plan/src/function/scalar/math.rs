@@ -132,6 +132,11 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
         if let Some(error) = rejects_udt_operand("+", &left, &right, function_context.schema) {
             return Err(error);
         }
+        if let Some(error) =
+            rejects_untyped_null_beside_calendar("+", &left, &right, function_context.schema)
+        {
+            return Err(error);
+        }
         let (left, right) = promote_string_operands(
             left,
             right,
@@ -280,6 +285,11 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
     } else {
         let (left, right) = arguments.two()?;
         if let Some(error) = rejects_udt_operand("-", &left, &right, function_context.schema) {
+            return Err(error);
+        }
+        if let Some(error) =
+            rejects_untyped_null_beside_calendar("-", &left, &right, function_context.schema)
+        {
             return Err(error);
         }
         let (left, right) = promote_string_operands(
@@ -1414,6 +1424,51 @@ fn operand_needs_own_coercion(expr: &Expr, schema: &DFSchemaRef) -> bool {
     }
 }
 
+/// Spark casts a bare `NULL` beside a calendar interval the way it casts one beside any datetime:
+/// to a day-time interval for `+` and to the other operand's type for `-`
+/// (`BinaryArithmeticWithDatetimeResolver.scala:88,91,119,121`). `calendar + day-time interval` has
+/// no arm, so `calendar + NULL`, `NULL + calendar` and `NULL - calendar` are refused, and only
+/// `calendar - NULL` resolves, as `calendar - calendar`.
+///
+/// Measured on the JVM, in both modes: a `make_interval` that still has an argument to cast is not
+/// resolved in the pass that casts the NULL, so for it the pair resolves after all.
+fn rejects_untyped_null_beside_calendar(
+    op: &str,
+    left: &Expr,
+    right: &Expr,
+    schema: &DFSchemaRef,
+) -> Option<PlanError> {
+    use OperandRole::*;
+    let (left_type, right_type) = (left.get_type(schema).ok()?, right.get_type(schema).ok()?);
+    let calendar = match (operand_role(&left_type), operand_role(&right_type), op) {
+        (IntervalCalendar, UntypedNull, "+") => left,
+        (UntypedNull, IntervalCalendar, "+" | "-") => right,
+        _ => return None,
+    };
+    (!make_interval_has_pending_casts(calendar, schema))
+        .then(|| arithmetic_operand_error(op, &left_type, &right_type))
+}
+
+/// Whether Spark still has to cast an argument of this `make_interval`: `MakeInterval` takes six
+/// INT fields and DECIMAL(18,6) seconds under `ImplicitCastInputTypes`.
+fn make_interval_has_pending_casts(expr: &Expr, schema: &DFSchemaRef) -> bool {
+    match expr {
+        Expr::Alias(alias) => make_interval_has_pending_casts(&alias.expr, schema),
+        Expr::ScalarFunction(function) if function.func.name() == "make_interval" => {
+            function.args.iter().enumerate().any(|(index, arg)| {
+                arg.get_type(schema).is_ok_and(|data_type| {
+                    if index < 6 {
+                        data_type != DataType::Int32
+                    } else {
+                        data_type != DataType::Decimal128(18, 6)
+                    }
+                })
+            })
+        }
+        _ => false,
+    }
+}
+
 /// What a bare `NULL` becomes when it sits next to a datetime.
 enum NullPartner {
     /// `Add` casts it to a day-time interval, whatever the datetime is. A DATE partner is promoted
@@ -1715,7 +1770,7 @@ fn rejects_udt_operand(
 /// unchanged -- `coalesce`/`nvl`, `nvl2`, `nullif`, `CASE`/`if`, and an array or map element
 /// access -- build their result field without it, so they are looked through to the value they
 /// return.
-fn operand_udt_field(expr: &Expr, schema: &DFSchemaRef) -> Option<FieldRef> {
+pub(crate) fn operand_udt_field(expr: &Expr, schema: &DFSchemaRef) -> Option<FieldRef> {
     // A cast yields its target type, never a UDT. DataFusion copies the source field's metadata
     // onto the cast's output field, so without this stop `CAST(udt AS STRING)` would still read
     // as a UDT and a query Spark resolves would be rejected.
@@ -1738,8 +1793,19 @@ fn operand_udt_field(expr: &Expr, schema: &DFSchemaRef) -> Option<FieldRef> {
             .map(|(_, then)| then.as_ref())
             .chain(case.else_expr.as_deref())
             .find_map(|branch| operand_udt_field(branch, schema)),
+        // An aggregate that returns one of the values it aggregates keeps their type.
+        Expr::AggregateFunction(function) => match function.func.name() {
+            "min" | "max" | "first_value" | "last_value" | "any_value" | "max_by" | "min_by" => {
+                function
+                    .params
+                    .args
+                    .first()
+                    .and_then(|arg| operand_udt_field(arg, schema))
+            }
+            _ => None,
+        },
         Expr::ScalarFunction(function) => match function.func.name() {
-            "coalesce" | "nvl" => function
+            "coalesce" | "nvl" | "greatest" | "least" => function
                 .args
                 .iter()
                 .find_map(|arg| operand_udt_field(arg, schema)),
@@ -1754,7 +1820,8 @@ fn operand_udt_field(expr: &Expr, schema: &DFSchemaRef) -> Option<FieldRef> {
                 .args
                 .first()
                 .and_then(|arg| operand_udt_field(arg, schema)),
-            "array_element" => function
+            // `explode(arr)` yields the array's elements, and `explode(map)` is not a UDT operand.
+            "array_element" | "explode" | "explode_outer" => function
                 .args
                 .first()
                 .and_then(|collection| collection_element_udt_field(collection, schema)),
@@ -1765,8 +1832,17 @@ fn operand_udt_field(expr: &Expr, schema: &DFSchemaRef) -> Option<FieldRef> {
 }
 
 /// The UDT element field of an array, or of the value list `map_extract` pulls out of a map. The
-/// resolver builds both element fields through `resolve_field`, so they keep the UDT metadata.
+/// resolver builds both element fields through `resolve_field`, so they keep the UDT metadata; an
+/// array built in place with `array(...)` does not, so its elements are looked at instead.
 fn collection_element_udt_field(collection: &Expr, schema: &DFSchemaRef) -> Option<FieldRef> {
+    if let Expr::ScalarFunction(function) = collection
+        && matches!(function.func.name(), "array" | "make_array" | "spark_array")
+    {
+        return function
+            .args
+            .iter()
+            .find_map(|arg| operand_udt_field(arg, schema));
+    }
     if let Expr::ScalarFunction(function) = collection
         && function.func.name() == "map_extract"
     {

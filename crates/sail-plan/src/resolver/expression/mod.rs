@@ -7,6 +7,7 @@ use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{PlanError, PlanResult};
+use crate::function::operand_udt_field;
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
@@ -351,7 +352,7 @@ impl PlanResolver<'_> {
             let named_expr = self
                 .resolve_named_expression(expression, schema, state)
                 .await?;
-            results.push(named_expr);
+            results.push(with_spark_udt_metadata(named_expr, schema));
         }
         Ok(results)
     }
@@ -663,4 +664,34 @@ mod tests {
 
         Ok(())
     }
+}
+
+/// A UDT keeps its identity through the expressions that return one of their inputs -- `coalesce`,
+/// `if`, `CASE`, an element access -- in Spark, because the result type IS the input type. Sail keeps
+/// UDT identity in the field metadata, and those expressions build their result field without it,
+/// so a column a subquery projects from `coalesce(udt, udt)` used to be a plain storage type: the
+/// schema said STRING where Spark says the UDT, and arithmetic over it resolved where Spark refuses.
+/// The projected field is given the UDT marker of the value it returns.
+fn with_spark_udt_metadata(mut named_expr: NamedExpr, schema: &DFSchemaRef) -> NamedExpr {
+    use datafusion_expr::ExprSchemable;
+    use sail_common::spec::SAIL_SPARK_UDT_METADATA_KEY;
+
+    let has_marker = |key: &str| key == SAIL_SPARK_UDT_METADATA_KEY;
+    if named_expr.metadata.iter().any(|(key, _)| has_marker(key)) {
+        return named_expr;
+    }
+    let Ok((_, field)) = named_expr.expr.to_field(schema) else {
+        return named_expr;
+    };
+    if field.metadata().contains_key(SAIL_SPARK_UDT_METADATA_KEY) {
+        return named_expr;
+    }
+    if let Some(udt) = operand_udt_field(&named_expr.expr, schema)
+        && let Some(value) = udt.metadata().get(SAIL_SPARK_UDT_METADATA_KEY)
+    {
+        named_expr
+            .metadata
+            .push((SAIL_SPARK_UDT_METADATA_KEY.to_string(), value.clone()));
+    }
+    named_expr
 }

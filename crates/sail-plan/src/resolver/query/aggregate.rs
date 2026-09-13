@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::functions_aggregate::{average, bit_and_or_xor, bool_and_or, count, min_max, sum};
@@ -6,6 +7,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, Tre
 use datafusion_common::{
     Column, DFSchemaRef, DataFusionError, Result as DataFusionResult, ScalarValue,
 };
+use datafusion_expr::expr::FieldMetadata;
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::logical_plan::{FetchType, SkipType};
 use datafusion_expr::utils::find_aggregate_exprs;
@@ -280,9 +282,15 @@ impl PlanResolver<'_> {
                 let NamedExpr {
                     name,
                     expr,
-                    metadata: _,
+                    metadata,
                 } = x;
-                Ok(expr.alias(state.register_field_name(name.one()?)))
+                let name = state.register_field_name(name.one()?);
+                if metadata.is_empty() {
+                    Ok(expr.alias(name))
+                } else {
+                    let metadata: HashMap<String, String> = metadata.into_iter().collect();
+                    Ok(expr.alias_with_metadata(name, Some(FieldMetadata::from(metadata))))
+                }
             })
             .collect::<PlanResult<Vec<_>>>()?;
         Ok(LogicalPlanBuilder::from(plan)
