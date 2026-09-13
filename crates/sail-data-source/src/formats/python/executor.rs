@@ -52,6 +52,8 @@ pub struct PartitionPlan {
     pub pickled_reader: Vec<u8>,
     /// Partitions for parallel reading
     pub partitions: Vec<InputPartition>,
+    /// Schema emitted by the reader, after optional column pruning.
+    pub schema: SchemaRef,
 }
 
 /// Result of writer setup, containing the pickled writer and its type.
@@ -94,12 +96,16 @@ pub trait PythonExecutor: Send + Sync + std::fmt::Debug {
     ///
     /// Calls the Python `DataSource.reader(schema).partitions()` method.
     /// If filters are provided, calls `pushFilters()` on the reader first.
+    /// Sail's optional `pruneColumns(pyarrow.Schema)` hook then receives the
+    /// required schema. Success promises output in that schema's order;
+    /// absent or unimplemented hooks retain the full schema.
     /// Returns a `PartitionPlan` containing the pickled reader (with filters applied)
     /// and the list of partitions.
     async fn get_partitions(
         &self,
         command: &[u8],
         schema: &SchemaRef,
+        required_schema: Option<&SchemaRef>,
         filters: Vec<PythonFilter>,
     ) -> Result<PartitionPlan>;
 
@@ -271,10 +277,12 @@ impl PythonExecutor for InProcessExecutor {
         &self,
         command: &[u8],
         schema: &SchemaRef,
+        required_schema: Option<&SchemaRef>,
         filters: Vec<PythonFilter>,
     ) -> Result<PartitionPlan> {
         let command = command.to_vec();
         let schema = schema.clone();
+        let required_schema = required_schema.cloned();
 
         tokio::task::spawn_blocking(move || {
             pyo3::Python::attach(|py| {
@@ -352,7 +360,13 @@ impl PythonExecutor for InProcessExecutor {
                     }
                 }
 
-                // Now call partitions() on the same reader that has the filters
+                // Pruning is opt-in: legacy readers still emit the full schema.
+                let schema = match required_schema {
+                    Some(required) if prune_columns(py, &reader, &required, &ds_name)? => required,
+                    _ => schema,
+                };
+
+                // Plan and pickle the same reader with filters and pruning applied.
                 let partitions = match reader.call_method0("partitions") {
                     Ok(partitions) => partitions,
                     Err(err) => {
@@ -410,6 +424,7 @@ impl PythonExecutor for InProcessExecutor {
                 );
 
                 Ok(PartitionPlan {
+                    schema,
                     pickled_reader,
                     partitions: result,
                 })
@@ -883,6 +898,33 @@ fn pickle_object(py: pyo3::Python<'_>, obj: &pyo3::Bound<'_, pyo3::PyAny>) -> Re
     Ok(bytes)
 }
 
+/// Sail-specific optional hook, not part of the PySpark 4.2 reader API.
+fn prune_columns(
+    py: Python<'_>,
+    reader: &Bound<'_, PyAny>,
+    schema: &SchemaRef,
+    datasource_name: &str,
+) -> Result<bool> {
+    let ctx = PythonDataSourceContext::new(datasource_name, "pruneColumns");
+    let hook = match reader.getattr("pruneColumns") {
+        Ok(hook) if hook.is_callable() => hook,
+        Ok(_) => return Ok(false),
+        Err(err) if err.is_instance_of::<PyAttributeError>(py) => return Ok(false),
+        Err(err) => return Err(ctx.wrap_py_error(err).into()),
+    };
+    let schema = super::arrow_utils::rust_schema_to_py(py, schema)?;
+    match hook.call1((schema,)) {
+        Ok(_) => Ok(true),
+        Err(err)
+            if err.is_instance_of::<pyo3::exceptions::PyNotImplementedError>(py)
+                || is_pyspark_not_implemented(py, &err) =>
+        {
+            Ok(false)
+        }
+        Err(err) => Err(ctx.wrap_py_error(err).into()),
+    }
+}
+
 fn is_pyspark_not_implemented(py: pyo3::Python<'_>, err: &pyo3::PyErr) -> bool {
     let errors_module = match py.import("pyspark.errors") {
         Ok(module) => module,
@@ -902,6 +944,52 @@ use super::error::py_err;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_optional_column_pruning() -> Result<()> {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = pyo3::types::PyModule::from_code(
+                py,
+                pyo3::ffi::c_str!(
+                    "class Legacy: pass\n\
+                     class Disabled: pruneColumns = None\n\
+                     class Unsupported:\n    def pruneColumns(self, schema): raise NotImplementedError()\n\
+                     class Broken:\n    def pruneColumns(self, schema): raise ValueError('broken')\n\
+                     class Pruned:\n    def pruneColumns(self, schema): self.schema = schema\n"
+                ),
+                pyo3::ffi::c_str!("pruning_test.py"),
+                pyo3::ffi::c_str!("pruning_test"),
+            )
+            .map_err(py_err)?;
+            let schema = std::sync::Arc::new(arrow_schema::Schema::empty());
+            for name in ["Legacy", "Disabled", "Unsupported"] {
+                let reader = module
+                    .getattr(name)
+                    .and_then(|cls| cls.call0())
+                    .map_err(py_err)?;
+                assert!(!prune_columns(py, &reader, &schema, name)?);
+            }
+            let reader = module
+                .getattr("Pruned")
+                .and_then(|cls| cls.call0())
+                .map_err(py_err)?;
+            assert!(prune_columns(py, &reader, &schema, "Pruned")?);
+            assert_eq!(
+                super::super::arrow_utils::py_schema_to_rust(
+                    py,
+                    &reader.getattr("schema").map_err(py_err)?,
+                )?,
+                schema,
+            );
+            let reader = module
+                .getattr("Broken")
+                .and_then(|cls| cls.call0())
+                .map_err(py_err)?;
+            assert!(prune_columns(py, &reader, &schema, "Broken").is_err());
+            Ok(())
+        })
+    }
 
     #[test]
     fn test_input_partition_clone() {

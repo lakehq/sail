@@ -82,24 +82,38 @@ impl TableProvider for PythonTableProvider {
         // Convert filters to Python format
         let (pushed_filters, _unpushed_exprs) = exprs_to_python_filters(filters);
 
+        // DataFusion includes columns required by residual filters in this
+        // projection. Preserve its order, including a zero-column projection.
+        let required_schema = projection
+            .map(|indices| self.schema.project(indices).map(Arc::new))
+            .transpose()?;
+
         // Get partitions from Python via executor, passing filters to push
         // This ensures pushFilters() and partitions() are called on the same reader instance
         // Returns PartitionPlan with pickled reader (filters applied) and partitions
         let partition_plan = self
             .executor
-            .get_partitions(&self.command, &self.schema, pushed_filters)
+            .get_partitions(
+                &self.command,
+                &self.schema,
+                required_schema.as_ref(),
+                pushed_filters,
+            )
             .await?;
 
+        let needs_projection = required_schema
+            .as_ref()
+            .is_some_and(|required| required != &partition_plan.schema);
         // Create execution plan with pickled reader (filters already applied)
         let exec = PythonDataSourceExec::new(
             partition_plan.pickled_reader,
-            self.schema.clone(),
+            partition_plan.schema,
             partition_plan.partitions,
         );
         let exec = Arc::new(exec) as Arc<dyn ExecutionPlan>;
 
         // Apply projection if present
-        let exec = if let Some(projection) = projection {
+        let exec = if let Some(projection) = projection.filter(|_| needs_projection) {
             let exprs: Vec<(Arc<dyn datafusion::physical_plan::PhysicalExpr>, String)> = projection
                 .iter()
                 .map(|&i| {
