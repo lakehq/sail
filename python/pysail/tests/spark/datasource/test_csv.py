@@ -726,3 +726,21 @@ def test_csv_infer_schema_reads_every_row_to_type_an_integer_column(spark, tmp_p
     df = spark.read.option("header", True).option("inferSchema", True).csv(str(path))
     assert df.schema["a"].dataType.simpleString() == expected
     assert df.agg({"a": "max"}).collect()[0][0] == (1 if expected == "int" else 3000000000)
+
+
+def test_csv_temporary_view_using_infer_schema_describes_an_int_column(spark, tmp_path):
+    # The statements of `temp_view_using.feature` ("SQL-only temporary data source views ..."), which
+    # only runs against Sail because the catalog suite starts its own server; here Spark checks them.
+    path = str(tmp_path / "view_csv_data")
+    insert = f"INSERT OVERWRITE DIRECTORY '{path}' USING csv OPTIONS (header 'true') SELECT * FROM VALUES (1, 'a'), (2, 'b') AS t(id, name)"  # noqa: S608
+    spark.sql(insert)
+    spark.sql(
+        f"CREATE OR REPLACE TEMPORARY VIEW v_csv_infer USING csv OPTIONS (path '{path}', header 'true', inferSchema 'true')"
+    )
+    try:
+        assert [tuple(row) for row in spark.sql("DESCRIBE TABLE v_csv_infer").collect()] == [
+            ("id", "int", None),
+            ("name", "string", None),
+        ]
+    finally:
+        spark.catalog.dropTempView("v_csv_infer")
