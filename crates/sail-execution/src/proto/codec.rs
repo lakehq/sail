@@ -239,6 +239,7 @@ use sail_function::scalar::string::spark_quote::SparkQuote;
 use sail_function::scalar::string::spark_regexp_extract_all::{
     SparkRegexpExtract, SparkRegexpExtractAll,
 };
+use sail_function::scalar::string::spark_regexp_instr::SparkRegexpInstrIndex;
 use sail_function::scalar::string::spark_sentences::SparkSentences;
 use sail_function::scalar::string::spark_split::SparkSplit;
 use sail_function::scalar::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
@@ -3239,6 +3240,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_split" | "split" => Ok(Arc::new(ScalarUDF::from(SparkSplit::new()))),
             "regexp_extract" => Ok(Arc::new(ScalarUDF::from(SparkRegexpExtract::new()))),
             "regexp_extract_all" => Ok(Arc::new(ScalarUDF::from(SparkRegexpExtractAll::new()))),
+            "spark_regexp_instr_index" => {
+                Ok(Arc::new(ScalarUDF::from(SparkRegexpInstrIndex::new())))
+            }
             "sentences" => Ok(Arc::new(ScalarUDF::from(SparkSentences::new()))),
             "spark_hex" | "hex" => Ok(Arc::new(ScalarUDF::from(SparkHex::new()))),
             "spark_unhex" | "unhex" => Ok(Arc::new(ScalarUDF::from(SparkUnHex::new()))),
@@ -3462,6 +3466,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkMurmur3Hash>()
             || node_inner.is::<SparkRegexpExtract>()
             || node_inner.is::<SparkRegexpExtractAll>()
+            || node_inner.is::<SparkRegexpInstrIndex>()
             || node_inner.is::<SparkReverse>()
             || node_inner.is::<SparkSchemaOfCsv>()
             || node_inner.is::<SparkSchemaOfJson>()

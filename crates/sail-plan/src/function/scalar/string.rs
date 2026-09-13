@@ -28,6 +28,7 @@ use sail_function::scalar::string::spark_quote::SparkQuote;
 use sail_function::scalar::string::spark_regexp_extract_all::{
     SparkRegexpExtract, SparkRegexpExtractAll,
 };
+use sail_function::scalar::string::spark_regexp_instr::SparkRegexpInstrIndex;
 use sail_function::scalar::string::spark_sentences::SparkSentences;
 use sail_function::scalar::string::spark_split::SparkSplit;
 use sail_function::scalar::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
@@ -71,6 +72,16 @@ fn regexp_replace(string: expr::Expr, pattern: expr::Expr, replacement: expr::Ex
     } else {
         regex_fn::regexp_replace(string, pattern, replacement, Some(lit("g")))
     }
+}
+
+fn regexp_instr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let mut arguments = input.arguments;
+    if let [_, _, idx] = arguments.as_mut_slice() {
+        // Spark ignores the integer index's value, but still propagates its nulls.
+        // DataFusion instead interprets this argument as a 1-based search start.
+        *idx = ScalarUDF::from(SparkRegexpInstrIndex::new()).call(vec![idx.clone()]);
+    }
+    Ok(ScalarUDF::from(RegexpInstrFunc::new()).call(arguments))
 }
 
 fn regexp_substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -412,7 +423,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("regexp_count", F::udf(RegexpCountFunc::new())),
         ("regexp_extract", F::udf(SparkRegexpExtract::new())),
         ("regexp_extract_all", F::udf(SparkRegexpExtractAll::new())),
-        ("regexp_instr", F::udf(RegexpInstrFunc::new())),
+        ("regexp_instr", F::custom(regexp_instr)),
         ("regexp_replace", F::ternary(regexp_replace)),
         ("regexp_substr", F::custom(regexp_substr)),
         ("repeat", F::binary(expr_fn::repeat)),
