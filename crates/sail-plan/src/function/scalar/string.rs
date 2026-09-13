@@ -114,8 +114,37 @@ fn is_binary(expr: &expr::Expr, schema: &DFSchema) -> bool {
 
 /// `datafusion-spark`'s `substring` implements `subStringSQL` -- 1-based, `0` read as `1`, a negative
 /// position counted from the end -- and has a byte-level path for a BINARY.
-fn binary_substring(arguments: Vec<expr::Expr>) -> expr::Expr {
+///
+/// Spark's `Substring` takes INT positions under `ImplicitCastInputTypes`, so a TINYINT or SMALLINT
+/// widens; the UDF signature only widens an INT, so the narrower integers are cast here.
+fn binary_substring(arguments: Vec<expr::Expr>, schema: &DFSchema) -> expr::Expr {
+    let arguments = arguments
+        .into_iter()
+        .enumerate()
+        .map(|(index, arg)| {
+            let narrow = index > 0
+                && matches!(
+                    arg.get_type(schema),
+                    Ok(DataType::Int8 | DataType::Int16 | DataType::UInt8 | DataType::UInt16)
+                );
+            if narrow {
+                cast(arg, DataType::Int32)
+            } else {
+                arg
+            }
+        })
+        .collect();
     ScalarUDF::from(SparkSubstring::new()).call(arguments)
+}
+
+/// A Parquet scan reads a BINARY as a `BinaryView`, which `SparkConcat` would turn into a string, so
+/// it is read as a plain `Binary` to keep the concatenation byte-level.
+fn binary_without_view(expr: expr::Expr, schema: &DFSchema) -> expr::Expr {
+    if matches!(expr.get_type(schema), Ok(DataType::BinaryView)) {
+        cast(expr, DataType::Binary)
+    } else {
+        expr
+    }
 }
 
 /// `Left(str, len)` is `Substring(str, 1, len)` (`stringExpressions.scala:2408`). A BINARY takes the
@@ -127,7 +156,10 @@ fn left(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     let (string, length) = arguments.two()?;
     if is_binary(&string, function_context.schema) {
-        return Ok(binary_substring(vec![string, lit(1i64), length]));
+        return Ok(binary_substring(
+            vec![string, lit(1i64), length],
+            function_context.schema,
+        ));
     }
     Ok(expr_fn::left(string, length))
 }
@@ -159,13 +191,21 @@ fn overlay(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let (input, replace, position) = arguments
         .three()
         .map_err(|_| PlanError::invalid("overlay requires 3 or 4 arguments"))?;
+    let schema = function_context.schema;
+    let input = binary_without_view(input, schema);
+    let replace = binary_without_view(replace, schema);
     let replace_length = ScalarUDF::from(SparkOctetLength::new()).call(vec![replace.clone()]);
+    // `Overlay` is null-intolerant (`stringExpressions.scala:1041`), so a NULL length stays NULL
+    // rather than falling back to the length of `replace`.
     let length = match length_opt {
-        Some(length) => when(length.clone().gt_eq(lit(0)), length).otherwise(replace_length)?,
+        Some(length) => when(length.clone().lt(lit(0)), replace_length).otherwise(length)?,
         None => replace_length,
     };
-    let head = binary_substring(vec![input.clone(), lit(1i64), position.clone() - lit(1)]);
-    let tail = binary_substring(vec![input, position + length]);
+    let head = binary_substring(
+        vec![input.clone(), lit(1i64), position.clone() - lit(1)],
+        schema,
+    );
+    let tail = binary_substring(vec![input, position + length], schema);
     Ok(ScalarUDF::from(SparkConcat::new()).call(vec![head, replace, tail]))
 }
 
@@ -178,7 +218,7 @@ fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .first()
         .is_some_and(|arg| is_binary(arg, function_context.schema))
     {
-        return Ok(binary_substring(arguments));
+        return Ok(binary_substring(arguments, function_context.schema));
     }
     let length_opt = (arguments.len() == 3).then(|| arguments.pop()).flatten();
     let (string, position) = arguments

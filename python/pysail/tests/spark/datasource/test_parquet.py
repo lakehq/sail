@@ -789,3 +789,52 @@ def test_parquet_uint32_date_offset_is_named_bigint(spark, tmp_path, op):
     spark.read.parquet(path).createOrReplaceTempView("uint32_offset")
     with pytest.raises(AnalysisException, match="BIGINT"):
         spark.sql(f"SELECT DATE'2024-01-01' {op} u32 FROM uint32_offset").collect()  # noqa: S608
+
+
+def test_parquet_binary_overlay_stays_a_binary_cut_by_bytes(spark, tmp_path):
+    # A Parquet scan reads BINARY as an Arrow `BinaryView`. `Overlay` over a BINARY is a BINARY cut by
+    # bytes (`stringExpressions.scala:1000-1010`), bytes that are not valid UTF-8 included, and a
+    # BINARY is not an arithmetic operand.
+    path = str(tmp_path / "binary_overlay.parquet")
+    pq.write_table(pa.table({"b": pa.array([b"\xff\x00Spark"], pa.binary()), "r": pa.array([b"_"], pa.binary())}), path)
+    spark.read.parquet(path).createOrReplaceTempView("binary_overlay")
+    row = spark.sql(
+        "SELECT typeof(overlay(b PLACING r FROM 2)) AS t, hex(overlay(b PLACING r FROM 2)) AS h FROM binary_overlay"
+    ).collect()
+    assert row == [Row(t="binary", h="FF5F537061726B")]
+    with pytest.raises(AnalysisException, match=r"(?i)cannot resolve"):
+        spark.sql("SELECT 2 / overlay(b PLACING r FROM 2) AS r FROM binary_overlay").collect()
+
+
+def test_parquet_date_minus_a_zoned_timestamp_uses_the_session_time_zone(spark, tmp_path):
+    # A DATE subtracted with a TIMESTAMP is read as midnight in the SESSION time zone
+    # (`SubtractTimestamps`), whatever zone the Parquet column was written with. The column instant is
+    # 06:00 UTC, which is 22:00 the day before in Los Angeles, so the date is two hours after it.
+    path = str(tmp_path / "zoned_timestamp.parquet")
+    instant = pa.array([datetime(2024, 1, 15, 6, 0, tzinfo=UTC)], pa.timestamp("us", tz="America/New_York"))
+    pq.write_table(pa.table({"d": pa.array([date(2024, 1, 15)], pa.date32()), "ts": instant}), path)
+    previous = spark.conf.get("spark.sql.session.timeZone")
+    spark.conf.set("spark.sql.session.timeZone", "America/Los_Angeles")
+    try:
+        spark.read.parquet(path).createOrReplaceTempView("zoned_timestamp")
+        row = spark.sql(
+            "SELECT CAST(d - ts AS STRING) AS a, CAST(ts - d AS STRING) AS b FROM zoned_timestamp"
+        ).collect()
+        assert row == [Row(a="INTERVAL '0 02:00:00' DAY TO SECOND", b="INTERVAL '-0 02:00:00' DAY TO SECOND")]
+    finally:
+        spark.conf.set("spark.sql.session.timeZone", previous)
+
+
+def test_parquet_uint64_plus_a_string_is_a_double_with_ansi_on(spark, tmp_path):
+    # Spark reads UINT_64 as DECIMAL(20,0), and a string beside a DECIMAL is promoted to DOUBLE
+    # (`AnsiStringPromotionTypeCoercion.findWiderTypeForString`), so a value past BIGINT still answers.
+    path = str(tmp_path / "uint64_string.parquet")
+    pq.write_table(pa.table({"u": pa.array([18446744073709551000], pa.uint64())}), path)
+    previous = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", "true")
+    try:
+        spark.read.parquet(path).createOrReplaceTempView("uint64_string")
+        row = spark.sql("SELECT typeof(u + '1') AS t, u + '1' AS v FROM uint64_string").collect()
+        assert row == [Row(t="double", v=1.8446744073709552e19)]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous)

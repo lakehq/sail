@@ -356,12 +356,26 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             // as midnight in the SESSION time zone, and DataFusion's own coercion reads it as
             // midnight UTC -- a wrong value under any other zone -- and yields
             // `Duration(Nanosecond)`, which has no Spark type at all.
-            (Ok(DataType::Date32), Ok(timestamp @ DataType::Timestamp(_, _))) => cast(
-                cast(left, timestamp.clone()) - right,
+            // A zoned column may carry a zone of its own (a Parquet file written elsewhere), so
+            // the DATE is read in the session zone, not in the column's.
+            (Ok(DataType::Date32), Ok(DataType::Timestamp(unit, zone))) => cast(
+                cast(
+                    left,
+                    DataType::Timestamp(
+                        unit,
+                        zone.map(|_| Arc::clone(&function_context.plan_config.session_timezone)),
+                    ),
+                ) - right,
                 DataType::Duration(TimeUnit::Microsecond),
             ),
-            (Ok(timestamp @ DataType::Timestamp(_, _)), Ok(DataType::Date32)) => cast(
-                left - cast(right, timestamp.clone()),
+            (Ok(DataType::Timestamp(unit, zone)), Ok(DataType::Date32)) => cast(
+                left - cast(
+                    right,
+                    DataType::Timestamp(
+                        unit,
+                        zone.map(|_| Arc::clone(&function_context.plan_config.session_timezone)),
+                    ),
+                ),
                 DataType::Duration(TimeUnit::Microsecond),
             ),
             // `SubtractDates` returns `DayTimeIntervalType(DAY)` (`datetimeExpressions.scala:3617`),
@@ -1275,8 +1289,10 @@ fn promote_string_operands(
         (Numeric, Str) => Some(&left_type),
         _ => None,
     };
+    // Spark reads an unsigned 64-bit Parquet column as DECIMAL(20,0), not an integral type, so the
+    // pair goes to DOUBLE.
     match target {
-        Some(numeric) if numeric.is_integer() => {
+        Some(numeric) if numeric.is_integer() && numeric != &DataType::UInt64 => {
             (cast(left, DataType::Int64), cast(right, DataType::Int64))
         }
         Some(_) => (
@@ -1635,8 +1651,12 @@ fn operand_udt_field(expr: &Expr, schema: &DFSchemaRef) -> Option<FieldRef> {
     // A cast yields its target type, never a UDT. DataFusion copies the source field's metadata
     // onto the cast's output field, so without this stop `CAST(udt AS STRING)` would still read
     // as a UDT and a query Spark resolves would be rejected.
-    if matches!(expr, Expr::Cast(_) | Expr::TryCast(_)) {
-        return None;
+    // An alias yields its child's type (`namedExpressions.scala:170`), but its field inherits the
+    // child's metadata, so a cast under it is looked through before that metadata is read.
+    match expr {
+        Expr::Cast(_) | Expr::TryCast(_) => return None,
+        Expr::Alias(alias) => return operand_udt_field(&alias.expr, schema),
+        _ => {}
     }
     if let Ok((_, field)) = expr.to_field(schema)
         && is_spark_udt_field(&field)
@@ -1644,7 +1664,6 @@ fn operand_udt_field(expr: &Expr, schema: &DFSchemaRef) -> Option<FieldRef> {
         return Some(field);
     }
     match expr {
-        Expr::Alias(alias) => operand_udt_field(&alias.expr, schema),
         Expr::Case(case) => case
             .when_then_expr
             .iter()
@@ -1703,28 +1722,23 @@ fn collection_element_udt_field(collection: &Expr, schema: &DFSchemaRef) -> Opti
     }
 }
 
-/// The plan-time rejection Spark raises at analysis for an arithmetic operand pair it cannot
-/// resolve. The `cannot resolve` substring it shares with Spark's `Cannot resolve …` text is what
-/// the `.feature` reject scenarios assert.
-///
-/// TODO: Spark picks the `DATATYPE_MISMATCH` subclass per expression -- `BINARY_OP_DIFF_TYPES`,
-/// `BINARY_OP_WRONG_TYPE` or `UNEXPECTED_INPUT_TYPE` -- always with SQLSTATE `42K09`, plus the
-/// rewritten expression text and query context. Emit them once Sail has structured analysis
-/// errors; `arithmetic_error_metadata.feature` pins the gap.
 /// Spark's unary `+` and `-` take `NumericAndInterval` (`arithmetic.scala:54,124`), so a DATE,
 /// TIMESTAMP, TIME, BOOLEAN, BINARY, container or UDT is refused at analysis. A STRING is not: string
 /// promotion casts it to DOUBLE first (`AnsiStringPromotionTypeCoercion`:
 /// `UnaryPositive(Cast(e, DoubleType))`), and an untyped NULL becomes a DOUBLE too.
 fn rejects_unary_operand(op: &str, arg: &Expr, schema: &DFSchemaRef) -> Option<PlanError> {
     use OperandRole::*;
-    let field = arg.to_field(schema).ok().map(|(_, field)| field);
-    let refused = field.as_ref().is_some_and(|field| {
-        is_spark_udt_field(field)
-            || matches!(
+    let udt = operand_udt_field(arg, schema);
+    let field = udt
+        .clone()
+        .or_else(|| arg.to_field(schema).ok().map(|(_, field)| field));
+    let refused = udt.is_some()
+        || field.as_ref().is_some_and(|field| {
+            matches!(
                 operand_role(field.data_type()),
                 Unsupported | Date | Timestamp | Time
             )
-    });
+        });
     refused.then(|| {
         let name = field.map_or_else(
             || "UNKNOWN".to_string(),
@@ -1736,6 +1750,14 @@ fn rejects_unary_operand(op: &str, arg: &Expr, schema: &DFSchemaRef) -> Option<P
     })
 }
 
+/// The plan-time rejection Spark raises at analysis for an arithmetic operand pair it cannot
+/// resolve. The `cannot resolve` substring it shares with Spark's `Cannot resolve …` text is what
+/// the `.feature` reject scenarios assert.
+///
+/// TODO: Spark picks the `DATATYPE_MISMATCH` subclass per expression -- `BINARY_OP_DIFF_TYPES`,
+/// `BINARY_OP_WRONG_TYPE` or `UNEXPECTED_INPUT_TYPE` -- always with SQLSTATE `42K09`, plus the
+/// rewritten expression text and query context. Emit them once Sail has structured analysis
+/// errors; `arithmetic_error_metadata.feature` pins the gap.
 fn arithmetic_operand_error(op: &str, left: &DataType, right: &DataType) -> PlanError {
     PlanError::analysis(format!(
         "cannot resolve arithmetic '{op}' with operand types {} and {}",

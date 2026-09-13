@@ -24,10 +24,13 @@ const LOOSE_SPARK_METADATA_KEYS: [&str; 1] = ["comment"];
 ///
 /// Spark puts the whole column metadata dictionary in one JSON blob and writes nothing when the
 /// dictionary is empty, so this folds the loose keys in, drops Sail's internal keys, and drops an
-/// empty blob.
+/// empty blob. A blob that is already there is the whole dictionary: explicit metadata REPLACES the
+/// column's own (`Alias.explicitMetadata`, `namedExpressions.scala:172-178`), so a loose key left
+/// over from the source column is not folded back over it.
 pub(crate) fn to_client_metadata(metadata: &HashMap<String, String>) -> HashMap<String, String> {
-    let mut spark: serde_json::Map<String, serde_json::Value> = metadata
-        .get(SPARK_METADATA_JSON_KEY)
+    let blob = metadata.get(SPARK_METADATA_JSON_KEY);
+    let fold_loose_keys = blob.is_none();
+    let mut spark: serde_json::Map<String, serde_json::Value> = blob
         .and_then(|x| serde_json::from_str(x).ok())
         .unwrap_or_default();
     let mut output = HashMap::with_capacity(metadata.len());
@@ -36,7 +39,9 @@ pub(crate) fn to_client_metadata(metadata: &HashMap<String, String>) -> HashMap<
             continue;
         }
         if LOOSE_SPARK_METADATA_KEYS.contains(&key.as_str()) {
-            spark.insert(key.clone(), serde_json::Value::String(value.clone()));
+            if fold_loose_keys {
+                spark.insert(key.clone(), serde_json::Value::String(value.clone()));
+            }
         } else {
             output.insert(key.clone(), value.clone());
         }

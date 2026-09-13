@@ -113,3 +113,16 @@ Feature: unary + and - operand types vs Spark 4.2.0
         | map     | map('a',1)                                                                |
         | variant | parse_json('{"a":1}')                                                     |
         | geom    | st_geomfromwkb(CAST('0101000000000000000000F03F000000000000F03F' AS BINARY)) |
+
+  Rule: a negative number written as a literal keeps its literal type
+
+    # `number: MINUS? BIGINT_LITERAL` makes `-1L` one BIGINT literal, and only an INT literal is an
+    # ORDER BY ordinal (`AstBuilder.scala:7591`), so this sorts by a constant.
+    Scenario: ORDER BY a negative BIGINT literal sorts by a constant
+      When query
+        """
+        SELECT 7 AS v ORDER BY -1L
+        """
+      Then query result
+        | v |
+        | 7 |

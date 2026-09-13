@@ -126,6 +126,30 @@ Feature: scaling a legacy calendar interval by a number, vs Spark 4.2.0
         """
       Then query error (?i)division by zero
 
+  Rule: the time part rounds with Java's Math.round, and a NaN field is zero even with ANSI on
+
+    # `fromDoubles` (`IntervalUtils.scala:634-642`) is `toIntExact(x.toLong)` per field, and
+    # `NaN.toLong` is 0, so NaN does not raise; the time part is `Math.round`, the exact floor(x+1/2),
+    # rounded to a whole microsecond BEFORE Sail's step to nanoseconds.
+    Scenario Outline: scaling a calendar interval exactly: <case> with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT CAST(<expression> AS STRING) AS v
+        """
+      Then query result
+        | v       |
+        | <value> |
+
+      Examples:
+        | case                   | ansi  | expression                                                                     | value                                    |
+        | a wide time part       | false | make_interval(0, 0, 0, 0, 27777, 46, 40.000001) * CAST(1 AS INT)               | 27777 hours 46 minutes 40.000001 seconds |
+        | a wide time part       | true  | make_interval(0, 0, 0, 0, 27777, 46, 40.000001) * CAST(1 AS INT)               | 27777 hours 46 minutes 40.000001 seconds |
+        | an odd count past 2^52 | false | make_interval(0, 0, 0, 0, 1251000, 0, 0.000001) * CAST(1 AS INT)               | 1251000 hours 0.000001 seconds           |
+        | just under a half      | false | make_interval(0, 0, 0, 0, 0, 0, 0.000001) * CAST(0.49999999999999994 AS DOUBLE) | 0 seconds                                |
+        | a NaN factor           | true  | make_interval(0, 1, 0, 1, 0, 0, 0) * CAST('NaN' AS DOUBLE)                     | 0 seconds                                |
+        | a NaN divisor          | true  | make_interval(0, 1, 0, 1, 0, 0, 0) / CAST('NaN' AS DOUBLE)                     | 0 seconds                                |
+
   Rule: the time part of a calendar interval is narrower in Sail than in Spark
 
     # Spark stores the time part of a calendar interval as MICROSECONDS and Sail as NANOSECONDS,

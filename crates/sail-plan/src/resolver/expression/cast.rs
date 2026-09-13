@@ -16,6 +16,7 @@ use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
 };
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::misc::spark_udt_storage::SparkUdtStorage;
 use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
@@ -24,6 +25,7 @@ use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
 use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
 
 use crate::error::{PlanError, PlanResult};
+use crate::function::common::is_spark_udt_field;
 use crate::function::is_spark_compatible_arrow_fixed_offset;
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
@@ -86,6 +88,14 @@ impl PlanResolver<'_> {
             )]
         } else {
             name
+        };
+        // A cast yields its target type, never the UDT it is applied to. DataFusion copies the
+        // source field's metadata through a cast, UDT marker included, so the UDT is read as its
+        // storage first, or a column projected from the cast would still be a UDT.
+        let expr = if is_spark_udt_field(&expr_field) {
+            ScalarUDF::from(SparkUdtStorage::new()).call(vec![expr])
+        } else {
+            expr
         };
         let override_string_cast = matches!(
             expr_type,

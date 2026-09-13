@@ -178,3 +178,50 @@ Feature: scaling a year-month interval by a number, vs Spark 4.2.0
         | ansi  |
         | false |
         | true  |
+
+  Rule: a DECIMAL scales an interval exactly, not through a DOUBLE
+
+    # Each of the four expressions has its own `DecimalType` arm (`intervalExpressions.scala:616-618,
+    # 665-667,756-758,835-837`): exact `Decimal` arithmetic, then `setScale(0, HALF_UP)`. `45 * 0.70`
+    # is exactly 31.5 and rounds to 32; through a DOUBLE it is 31.499999999999996 and rounds to 31.
+    # The DOUBLE row is the control: there Spark does go through a double.
+    Scenario Outline: scaling an interval by a decimal is exact: <case> with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT CAST(<expression> AS STRING) AS v
+        """
+      Then query result
+        | v       |
+        | <value> |
+
+      Examples:
+        | case                     | ansi  | expression                                                                 | value                                           |
+        | ym times a decimal tie   | false | INTERVAL '45' MONTH * CAST(0.7 AS DECIMAL(10,2))                           | INTERVAL '2-8' YEAR TO MONTH                    |
+        | ym times a decimal tie   | true  | INTERVAL '45' MONTH * CAST(0.7 AS DECIMAL(10,2))                           | INTERVAL '2-8' YEAR TO MONTH                    |
+        | a decimal literal        | false | INTERVAL '45' MONTH * 0.7                                                  | INTERVAL '2-8' YEAR TO MONTH                    |
+        | a negative tie           | false | INTERVAL '-45' MONTH * CAST(0.7 AS DECIMAL(10,2))                          | INTERVAL '-2-8' YEAR TO MONTH                   |
+        | ym over a decimal tie    | false | INTERVAL '7' MONTH / CAST(0.56 AS DECIMAL(10,2))                           | INTERVAL '1-1' YEAR TO MONTH                    |
+        | a double stays a double  | false | INTERVAL '45' MONTH * CAST(0.7 AS DOUBLE)                                  | INTERVAL '2-7' YEAR TO MONTH                    |
+        | dt times a decimal tie   | false | INTERVAL '0.000045' SECOND * CAST(0.7 AS DECIMAL(10,2))                    | INTERVAL '0 00:00:00.000032' DAY TO SECOND      |
+        | dt over a decimal tie    | false | INTERVAL '0.000007' SECOND / CAST(0.56 AS DECIMAL(10,2))                   | INTERVAL '0 00:00:00.000013' DAY TO SECOND      |
+        | a wide dt keeps its micro| false | INTERVAL '200000 00:00:00.000001' DAY TO SECOND * CAST(1 AS DECIMAL(10,2)) | INTERVAL '200000 00:00:00.000001' DAY TO SECOND |
+
+  Rule: a day-time interval rounded onto 2^63 microseconds is out of range
+
+    # `DoubleMath.roundToLong` (`intervalExpressions.scala:669,839`) accepts -2^63 but not 2^63, and
+    # `Long.MaxValue` micros is 2^63 once it is a DOUBLE -- so this raises instead of saturating.
+    Scenario Outline: a day-time interval scaled onto 2^63 raises: <case> with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT CAST(<expression> AS STRING) AS v
+        """
+      Then query error (?i)out of range
+
+      Examples:
+        | case                 | ansi  | expression                                                             |
+        | the max times one    | false | INTERVAL '106751991 04:00:54.775807' DAY TO SECOND * CAST(1 AS DOUBLE) |
+        | the max times one    | true  | INTERVAL '106751991 04:00:54.775807' DAY TO SECOND * CAST(1 AS DOUBLE) |
+        | the max over one     | false | INTERVAL '106751991 04:00:54.775807' DAY TO SECOND / CAST(1 AS DOUBLE) |
+        | half the max doubled | true  | INTERVAL '53375995 14:00:27.387904' DAY TO SECOND * CAST(2 AS DOUBLE)  |

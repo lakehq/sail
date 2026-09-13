@@ -396,7 +396,12 @@ fn datediff(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 }
             };
             match unit_str.as_str() {
-                "DAY" => Ok(date_days_arithmetic(end, start, Operator::Minus)),
+                // The unit form is `TimestampDiff`, a BIGINT (`datetimeExpressions.scala:3867`);
+                // only the two-argument form is an INT.
+                "DAY" => Ok(cast(
+                    date_days_arithmetic(end, start, Operator::Minus),
+                    DataType::Int64,
+                )),
                 "HOUR" | "MINUTE" | "SECOND" | "WEEK" => {
                     Ok(timestampdiff_fixed_unit(&unit_str, start, end))
                 }

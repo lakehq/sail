@@ -3,7 +3,7 @@ from pyspark.errors import AnalysisException
 from pyspark.sql.types import ArrayType, MapType, StringType, StructType
 
 from pysail.testing.spark.utils.common import is_jvm_spark
-from pysail.tests.spark.dataframe.udt import UnnamedPythonUDT
+from pysail.tests.spark.dataframe.udt import DoubleStoragePythonUDT, IntegerStoragePythonUDT, UnnamedPythonUDT
 
 OPERATORS = ["+", "-", "*", "/", "%"]
 
@@ -151,15 +151,237 @@ def test_udt_cast_to_a_plain_type_is_a_plain_operand(spark, udt_view, ansi_enabl
         spark.conf.set("spark.sql.ansi.enabled", previous)
 
 
+@pytest.mark.parametrize("ansi_enabled", ["false", "true"])
+@pytest.mark.parametrize(
+    "query",
+    [
+        pytest.param("SELECT x / 1 AS r FROM (SELECT CAST(a AS STRING) AS x FROM {v})", id="cast-divide"),
+        pytest.param("SELECT x / 1 AS r FROM (SELECT TRY_CAST(a AS STRING) AS x FROM {v})", id="try_cast-divide"),
+        pytest.param(
+            "SELECT x + INTERVAL '1' DAY AS r FROM (SELECT CAST(a AS STRING) AS x FROM {v})", id="cast-plus-interval"
+        ),
+        pytest.param("SELECT -x AS r FROM (SELECT CAST(a AS STRING) AS x FROM {v})", id="cast-unary-minus"),
+    ],
+)
+def test_udt_cast_projected_by_a_subquery_is_a_plain_operand(spark, udt_view, query, ansi_enabled):
+    # A cast yields its target type, so the column a subquery projects from `CAST(udt AS STRING)` is a
+    # plain STRING and the arithmetic over it resolves. DataFusion copies the source field's metadata
+    # through a cast, so the projected column used to read as a UDT and Sail refused these queries.
+    previous = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", ansi_enabled)
+    try:
+        assert spark.sql(query.format(v=udt_view)).collect() == []
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous)
+
+
+@pytest.mark.parametrize("cast", ["CAST", "TRY_CAST"])
+def test_udt_cast_to_string_is_a_string_in_the_schema(spark, udt_view, cast):
+    assert spark.sql(f"SELECT {cast}(a AS STRING) AS x FROM {udt_view}").schema["x"].dataType == StringType()  # noqa: S608
+
+
+# TODO: an expression that returns its UDT input -- `coalesce`, `if`, an element access, ... --
+#   builds its result field without the UDT metadata, so the column a subquery projects from it is
+#   a plain storage type in Sail. The arithmetic guard looks through those expressions only when
+#   they are the operand itself; the fix is to carry the UDT metadata on the result fields.
 @pytest.mark.xfail(
     not is_jvm_spark(),
     strict=True,
-    reason="a column projected from a cast keeps the UDT metadata in the plan schema",
+    reason="a UDT-returning expression projected by a subquery loses the UDT metadata",
 )
-def test_udt_cast_projected_by_a_subquery_is_a_plain_operand(spark, udt_view):
-    # The cast's output field must not carry the UDT metadata, or the column a subquery projects
-    # from it is judged a UDT and arithmetic Spark resolves is rejected. Neutralising the marker
-    # through the alias metadata does not work: the physical plan rebuilds the field from the
-    # source and Sail then reports `Schema field unallowed change`.
-    query = f"SELECT x / 1 AS r FROM (SELECT CAST(a AS STRING) AS x FROM {udt_view})"  # noqa: S608
-    assert spark.sql(query).collect() == []
+def test_udt_expression_projected_by_a_subquery_is_rejected(spark, udt_view):
+    with pytest.raises(AnalysisException, match=r"(?i)cannot resolve"):
+        spark.sql(f"SELECT x / 1 AS r FROM (SELECT coalesce(a, a) AS x FROM {udt_view})").collect()  # noqa: S608
+
+
+@pytest.fixture
+def udt_wide_view(spark):
+    u = UnnamedPythonUDT()
+    schema = StructType().add("a", u).add("arr", ArrayType(u)).add("m", MapType(StringType(), u))
+    spark.createDataFrame(data=[], schema=schema).createOrReplaceTempView("udt_unary_arithmetic")
+    return "udt_unary_arithmetic"
+
+
+@pytest.mark.parametrize("ansi_enabled", ["false", "true"])
+@pytest.mark.parametrize(
+    "expression",
+    [
+        pytest.param("-CAST(a AS STRING)", id="minus"),
+        pytest.param("+CAST(a AS STRING)", id="plus"),
+        pytest.param("-CAST(a AS STRING) + 1", id="minus-then-add"),
+    ],
+)
+def test_unary_operator_over_a_udt_cast_to_a_plain_type_resolves(spark, udt_wide_view, expression, ansi_enabled):
+    # A cast yields its target type, so the unary operator sees a STRING, which string promotion
+    # makes a DOUBLE -- the same rule the binary operators already follow for a UDT cast.
+    previous = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", ansi_enabled)
+    try:
+        assert spark.sql(f"SELECT {expression} AS r FROM {udt_wide_view}").collect() == []  # noqa: S608
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous)
+
+
+@pytest.mark.parametrize("ansi_enabled", ["false", "true"])
+@pytest.mark.parametrize(
+    "expression",
+    [
+        pytest.param("-coalesce(a, a)", id="minus-coalesce"),
+        pytest.param("+coalesce(a, a)", id="plus-coalesce"),
+        pytest.param("-if(true, a, a)", id="minus-if"),
+        pytest.param("-arr[0]", id="minus-array-index"),
+        pytest.param("-m['k']", id="minus-map-value"),
+    ],
+)
+def test_unary_operator_over_a_udt_reached_through_an_expression_is_rejected(
+    spark, udt_wide_view, expression, ansi_enabled
+):
+    # `UnaryMinus`/`UnaryPositive` take `NumericAndInterval` (`arithmetic.scala:54,124`); an
+    # expression that returns its UDT input is still a UDT, as the binary guard already knows.
+    previous = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", ansi_enabled)
+    try:
+        with pytest.raises(AnalysisException, match=r"(?i)cannot resolve"):
+            spark.sql(f"SELECT {expression} AS r FROM {udt_wide_view}").collect()  # noqa: S608
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous)
+
+
+@pytest.mark.parametrize("ansi_enabled", ["false", "true"])
+def test_an_aliased_udt_cast_is_a_plain_operand(spark, udt_wide_view, ansi_enabled):
+    # `Alias.dataType = child.dataType` (`namedExpressions.scala:170`): the alias does not bring
+    # the UDT back.
+    from pyspark.sql import functions as F  # noqa: N812
+
+    previous = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", ansi_enabled)
+    try:
+        df = spark.table(udt_wide_view).select((F.col("a").cast("string").alias("x") / 1).alias("r"))
+        assert df.collect() == []
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous)
+
+
+STORAGES = [
+    pytest.param((UnnamedPythonUDT, "STRING"), id="string-storage"),
+    pytest.param((IntegerStoragePythonUDT, "INT"), id="int-storage"),
+    pytest.param((DoubleStoragePythonUDT, "DOUBLE"), id="double-storage"),
+]
+
+
+@pytest.fixture
+def storage_view(spark, request):
+    udt, storage = request.param
+    u = udt()
+    schema = (
+        StructType()
+        .add("k", "integer")
+        .add("a", u)
+        .add("arr", ArrayType(u))
+        .add("m", MapType(StringType(), u))
+        .add("s", StructType().add("u", u))
+    )
+    spark.createDataFrame(data=[], schema=schema).createOrReplaceTempView("udt_storage_operand")
+    return "udt_storage_operand", storage
+
+
+@pytest.fixture
+def ansi(spark, request):
+    previous = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", request.param)
+    yield request.param
+    spark.conf.set("spark.sql.ansi.enabled", previous)
+
+
+ANSI = pytest.mark.parametrize("ansi", ["false", "true"], indirect=True)
+STORAGE = pytest.mark.parametrize("storage_view", STORAGES, indirect=True)
+
+
+@ANSI
+@pytest.mark.usefixtures("ansi")
+@STORAGE
+@pytest.mark.parametrize(
+    "template",
+    [
+        pytest.param("SELECT {x} + 1 AS r FROM {v}", id="plus"),
+        pytest.param("SELECT 1 - {x} AS r FROM {v}", id="minus"),
+        pytest.param("SELECT {x} * 2 AS r FROM {v}", id="times"),
+        pytest.param("SELECT 2 / {x} AS r FROM {v}", id="divide"),
+        pytest.param("SELECT {x} % 2 AS r FROM {v}", id="remainder"),
+        pytest.param("SELECT -{x} AS r FROM {v}", id="unary-minus"),
+        pytest.param("SELECT +{x} AS r FROM {v}", id="unary-plus"),
+    ],
+)
+@pytest.mark.parametrize(
+    "operand",
+    [
+        pytest.param("a", id="column"),
+        pytest.param("s.u", id="struct-field"),
+        pytest.param("coalesce(a, a)", id="coalesce"),
+        pytest.param("if(k > 0, a, a)", id="if"),
+        pytest.param("arr[0]", id="array-index"),
+        pytest.param("m['k']", id="map-value"),
+    ],
+)
+def test_a_udt_of_any_storage_is_rejected_by_every_operator(spark, storage_view, template, operand):
+    # A UDT is none of the arithmetic input types whatever it is stored as, and an INT or DOUBLE
+    # storage is the one a storage-type check would let through for every operator.
+    view, _ = storage_view
+    with pytest.raises(AnalysisException, match=r"(?i)cannot resolve"):
+        spark.sql(template.format(x=operand, v=view)).collect()
+
+
+@ANSI
+@pytest.mark.usefixtures("ansi")
+@STORAGE
+@pytest.mark.parametrize(
+    "template",
+    [
+        pytest.param("SELECT x + 1 AS r FROM (SELECT {cast}(a AS STRING) AS x FROM {v})", id="plus"),
+        pytest.param("SELECT 2 / x AS r FROM (SELECT {cast}(a AS STRING) AS x FROM {v})", id="divide"),
+        pytest.param("SELECT -x AS r FROM (SELECT {cast}(a AS STRING) AS x FROM {v})", id="unary-minus"),
+        pytest.param(
+            "SELECT x - INTERVAL '1' DAY AS r FROM (SELECT {cast}(a AS STRING) AS x FROM {v})", id="minus-interval"
+        ),
+        pytest.param("SELECT {cast}(a AS STRING) * 2 AS r FROM {v}", id="direct-times"),
+    ],
+)
+@pytest.mark.parametrize("cast", ["CAST", "TRY_CAST"])
+def test_a_udt_of_any_storage_cast_to_string_is_a_plain_operand(spark, storage_view, template, cast):
+    # A cast yields its target type, so the result is a plain STRING whether it is used in place or
+    # projected by a subquery first.
+    view, _ = storage_view
+    assert spark.sql(template.format(cast=cast, v=view)).collect() == []
+
+
+@STORAGE
+@pytest.mark.parametrize("cast", ["CAST", "TRY_CAST"])
+def test_a_udt_of_any_storage_cast_to_string_is_a_string_column(spark, storage_view, cast):
+    view, _ = storage_view
+    assert spark.sql(f"SELECT {cast}(a AS STRING) AS x FROM {view}").schema["x"].dataType == StringType()  # noqa: S608
+
+
+@pytest.mark.parametrize(
+    "operand",
+    [
+        pytest.param("coalesce(a, a)", id="coalesce"),
+        pytest.param("nvl(a, a)", id="nvl"),
+        pytest.param("if(k > 0, a, a)", id="if"),
+        pytest.param("CASE WHEN k > 0 THEN a ELSE a END", id="case"),
+        pytest.param("nullif(a, a)", id="nullif"),
+        pytest.param("arr[0]", id="array-index"),
+        pytest.param("m['k']", id="map-value"),
+    ],
+)
+@STORAGE
+@pytest.mark.xfail(
+    not is_jvm_spark(),
+    strict=True,
+    reason="a UDT-returning expression projected by a subquery loses the UDT metadata",
+)
+def test_a_udt_expression_projected_by_a_subquery_is_rejected(spark, storage_view, operand):
+    # Deferred with `test_udt_expression_projected_by_a_subquery_is_rejected`: the same root, over
+    # every expression the guard looks through in place and every storage.
+    view, _ = storage_view
+    with pytest.raises(AnalysisException, match=r"(?i)cannot resolve"):
+        spark.sql(f"SELECT x / 1 AS r FROM (SELECT {operand} AS x FROM {view})").collect()  # noqa: S608

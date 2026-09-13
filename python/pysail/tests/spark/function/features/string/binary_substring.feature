@@ -63,6 +63,33 @@ Feature: substr, substring, left and overlay over a BINARY, vs Spark 4.2.0
         | t      | n    |
         | binary | true |
 
+    # `Overlay` is null-intolerant (`stringExpressions.scala:1041`): a NULL length is a NULL result,
+    # not a fall-back to the length of the replacement.
+    Scenario: a binary overlay with a NULL length is a NULL BINARY
+      When query
+        """
+        SELECT typeof(overlay(X'537061726B' PLACING X'5F' FROM 2 FOR CAST(NULL AS INT))) AS t,
+          overlay(X'537061726B' PLACING X'5F' FROM 2 FOR CAST(NULL AS INT)) IS NULL AS n
+        """
+      Then query result
+        | t      | n    |
+        | binary | true |
+
+    # `Left` takes an INT length under `ImplicitCastInputTypes`, so a TINYINT or SMALLINT widens.
+    Scenario Outline: left over a binary takes a <case> length
+      When query
+        """
+        SELECT typeof(<expression>) AS t, hex(<expression>) AS h
+        """
+      Then query result
+        | t      | h     |
+        | binary | <hex> |
+
+      Examples:
+        | case     | expression                                        | hex    |
+        | tinyint  | left(X'4142', 1Y)                                 | 41     |
+        | smallint | left(X'537061726B2053514C', CAST(3 AS SMALLINT))  | 537061 |
+
   Rule: right is the exception -- Spark reads its BINARY input as a STRING
 
     # `Right` takes only strings, so a BINARY is implicitly cast and the result is a STRING, which

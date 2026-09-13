@@ -11,6 +11,7 @@ import json
 
 import pyarrow as pa
 import pytest
+from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql.types import ArrayType, IntegerType, StructField, StructType
 
 from pysail.testing.spark.utils.common import is_jvm_spark
@@ -136,3 +137,52 @@ def test_the_internal_udt_marker_does_not_reach_the_wire(spark):
     assert metadata, "the probe walked no fields"
     leaked = {path: sorted(k.decode() for k in value if k.startswith(b"SAIL::")) for path, value in metadata.items()}
     assert {path: keys for path, keys in leaked.items() if keys} == {}
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [pytest.param({"comment": "new"}, id="same-key"), pytest.param({"k": "v"}, id="other-key")],
+)
+def test_explicit_metadata_replaces_a_table_column_comment(spark, metadata):
+    # An alias with explicit metadata REPLACES the column's own, the table comment included
+    # (`Alias.explicitMetadata`, `namedExpressions.scala:172-178`); the loose `comment` must not be
+    # folded back over it.
+    spark.sql("DROP TABLE IF EXISTS wire_metadata_replaced")
+    spark.sql("CREATE TABLE wire_metadata_replaced (c INT COMMENT 'old') USING parquet")
+    try:
+        df = spark.table("wire_metadata_replaced")
+        assert df.withMetadata("c", metadata).schema["c"].metadata == metadata
+        assert df.select(F.col("c").alias("c", metadata=metadata)).schema["c"].metadata == metadata
+    finally:
+        spark.sql("DROP TABLE IF EXISTS wire_metadata_replaced")
+
+
+# TODO: a table column's loose `comment` rides through expressions Spark does not inherit metadata
+#   from (CAST, `first`, `any_value`, `withColumn`), as blob metadata already did before; the fix is in
+#   how the resolver propagates field metadata, not in the wire sanitizer.
+@pytest.mark.xfail(not is_jvm_spark(), strict=True, reason="Sail propagates field metadata through CAST and aggregates")
+@pytest.mark.parametrize(
+    "query",
+    [
+        pytest.param("SELECT CAST(c AS BIGINT) AS r FROM wire_metadata_inherit", id="cast"),
+        pytest.param("SELECT first(c) AS r FROM wire_metadata_inherit GROUP BY g", id="first"),
+        pytest.param("SELECT any_value(c) AS r FROM wire_metadata_inherit GROUP BY g", id="any_value"),
+    ],
+)
+def test_a_table_column_comment_is_not_inherited_by_an_expression(spark, query):
+    spark.sql("DROP TABLE IF EXISTS wire_metadata_inherit")
+    spark.sql("CREATE TABLE wire_metadata_inherit (c INT COMMENT 'old', g INT) USING parquet")
+    try:
+        assert spark.sql(query).schema["r"].metadata == {}
+    finally:
+        spark.sql("DROP TABLE IF EXISTS wire_metadata_inherit")
+
+
+@pytest.mark.xfail(not is_jvm_spark(), strict=True, reason="Sail's withColumn inherits the column's metadata")
+def test_a_table_column_comment_is_not_inherited_by_with_column(spark):
+    spark.sql("DROP TABLE IF EXISTS wire_metadata_inherit")
+    spark.sql("CREATE TABLE wire_metadata_inherit (c INT COMMENT 'old') USING parquet")
+    try:
+        assert spark.table("wire_metadata_inherit").withColumn("c", F.col("c")).schema["c"].metadata == {}
+    finally:
+        spark.sql("DROP TABLE IF EXISTS wire_metadata_inherit")

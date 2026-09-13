@@ -25,7 +25,9 @@ use sail_function::scalar::misc::version::SparkVersion;
 use sail_function::sketch::DEFAULT_THETA_LG_NOM_ENTRIES;
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+use crate::function::common::{
+    ScalarFunction, ScalarFunctionInput, is_spark_udt_field, spark_field_type_name,
+};
 
 fn assert_true(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput { arguments, .. } = input;
@@ -106,12 +108,38 @@ fn type_of(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Ok(lit(type_of))
 }
 
+/// The BIGINT a `bitmap_*` position function reads. Its `inputTypes` is `Seq(LongType)`
+/// (`bitmapExpressions.scala`), and implicit casting reaches a BIGINT only from a NULL, a number or
+/// a STRING, so any other argument is refused at analysis instead of being cast.
+fn bitmap_position_argument(name: &str, input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let value = arguments.one()?;
+    let (_, field) = value.to_field(function_context.schema)?;
+    let data_type = field.data_type();
+    let accepted = !is_spark_udt_field(&field)
+        && (data_type.is_null()
+            || data_type.is_numeric()
+            || matches!(
+                data_type,
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+            ));
+    if !accepted {
+        return Err(PlanError::analysis(format!(
+            "cannot resolve {name} due to data type mismatch: the argument requires BIGINT, got {}",
+            spark_field_type_name(&field)
+        )));
+    }
+    Ok(cast(value, DataType::Int64))
+}
+
 fn bitmap_bit_position(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let ScalarFunctionInput { arguments, .. } = input;
     // `inputTypes = Seq(LongType)` and `dataType = LongType` (`bitmapExpressions.scala`). As an INT
     // it was a different arithmetic operand than Spark's: `DATE + bitmap_bit_position(1)` resolved here
     // and is refused there, since `DateAdd` takes no BIGINT.
-    let value = cast(arguments.one()?, DataType::Int64);
+    let value = bitmap_position_argument("bitmap_bit_position", input)?;
     let num_bits = 8 * 4 * 1024;
     Ok(when(
         value.clone().gt(lit(0)),
@@ -122,11 +150,10 @@ fn bitmap_bit_position(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn bitmap_bucket_number(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let ScalarFunctionInput { arguments, .. } = input;
     // `inputTypes = Seq(LongType)` and `dataType = LongType` (`bitmapExpressions.scala`). As an INT
     // it was a different arithmetic operand than Spark's: `DATE + bitmap_bucket_number(1)` resolved here
     // and is refused there, since `DateAdd` takes no BIGINT.
-    let value = cast(arguments.one()?, DataType::Int64);
+    let value = bitmap_position_argument("bitmap_bucket_number", input)?;
     let num_bits = 8 * 4 * 1024;
     Ok(when(
         value.clone().gt(lit(0)),

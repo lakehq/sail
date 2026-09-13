@@ -219,6 +219,7 @@ use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::misc::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
 };
+use sail_function::scalar::misc::spark_udt_storage::SparkUdtStorage;
 use sail_function::scalar::misc::theta_sketch::{
     ThetaDifferenceFunction, ThetaIntersectionFunction, ThetaSketchEstimateFunction,
     ThetaUnionFunction,
@@ -3325,6 +3326,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkLuhnCheck::new())))
             }
             "negate_duration" => Ok(Arc::new(ScalarUDF::from(NegateDuration::new()))),
+            "spark_udt_storage" => Ok(Arc::new(ScalarUDF::from(SparkUdtStorage::new()))),
             "spark_multiply_ym_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMultiplyYmInterval::new())))
             }
@@ -3444,6 +3446,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<MapFromEntries>()
             || node_inner.is::<MultiExpr>()
             || node_inner.is::<NegateDuration>()
+            || node_inner.is::<SparkUdtStorage>()
             || node_inner.is::<SparkMultiplyYmInterval>()
             || node_inner.is::<SparkDivideYmInterval>()
             || node_inner.is::<SparkMultiplyDtInterval>()
@@ -7465,6 +7468,13 @@ mod tests {
         assert_eq!(decoded.timezone(), Some("America/Los_Angeles"));
         assert!(decoded.is_try());
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_udt_storage_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkUdtStorage::new()))?;
+        assert!(decoded.inner().downcast_ref::<SparkUdtStorage>().is_some());
         Ok(())
     }
 

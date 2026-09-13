@@ -7,7 +7,7 @@ must be defined in a module instead of directly in the doctest namespace.
 Reference: <https://issues.apache.org/jira/browse/SPARK-56463>
 """
 
-from pyspark.sql.types import StringType, UserDefinedType
+from pyspark.sql.types import DoubleType, IntegerType, StringType, UserDefinedType
 
 
 class UnnamedPythonUDT(UserDefinedType):
@@ -23,3 +23,23 @@ class UnnamedPythonUDT(UserDefinedType):
 class NamedPythonUDT(UnnamedPythonUDT):
     def simpleString(self):  # noqa: N802
         return "foo"
+
+
+class IntegerStoragePythonUDT(UserDefinedType):
+    @classmethod
+    def sqlType(cls):  # noqa: N802
+        return IntegerType()
+
+    @classmethod
+    def module(cls):
+        return __name__
+
+
+class DoubleStoragePythonUDT(UserDefinedType):
+    @classmethod
+    def sqlType(cls):  # noqa: N802
+        return DoubleType()
+
+    @classmethod
+    def module(cls):
+        return __name__
