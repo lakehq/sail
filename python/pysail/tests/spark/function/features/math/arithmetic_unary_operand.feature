@@ -114,6 +114,46 @@ Feature: unary + and - operand types vs Spark 4.2.0
         | variant | parse_json('{"a":1}')                                                     |
         | geom    | st_geomfromwkb(CAST('0101000000000000000000F03F000000000000F03F' AS BINARY)) |
 
+  Rule: the positive function is the unary +
+
+    # `positive` is registered as `UnaryPositive` (`FunctionRegistry.scala:470`), the very expression
+    # the unary `+` parses to, so it takes the same operands and promotes a STRING to a DOUBLE. As a
+    # bare identity it answered a DATE, an ARRAY or a TIMESTAMP back unchanged.
+    Scenario Outline: positive rejects a <case> operand with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT positive(<operand>) AS result
+        """
+      Then query error (?i)cannot resolve
+
+      Examples:
+        | case   | ansi  | operand                        |
+        | bool   | false | true                           |
+        | date   | false | DATE'2024-01-15'               |
+        | ts     | true  | TIMESTAMP'2024-01-15 12:00:00' |
+        | array  | false | array(1)                       |
+        | map    | true  | map('a',1)                     |
+        | struct | false | named_struct('a',1)            |
+        | bin    | true  | CAST('2' AS BINARY)            |
+
+    Scenario Outline: positive of <case> is <type>
+      When query
+        """
+        SELECT typeof(positive(<operand>)) AS t
+        """
+      Then query result
+        | t      |
+        | <type> |
+
+      Examples:
+        | case         | operand                  | type                   |
+        | an int       | CAST(2 AS INT)           | int                    |
+        | a string     | '2'                      | double                 |
+        | a NULL       | NULL                     | double                 |
+        | a decimal    | CAST(2 AS DECIMAL(10,2)) | decimal(10,2)          |
+        | an interval  | INTERVAL '1-2' YEAR TO MONTH | interval year to month |
+
   Rule: a negative number written as a literal keeps its literal type
 
     # `number: MINUS? BIGINT_LITERAL` makes `-1L` one BIGINT literal, and only an INT literal is an

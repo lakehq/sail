@@ -88,10 +88,20 @@ fn nvl(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         )
     };
     if is_container(&left) || is_container(&right) {
-        Ok(expr_fn::coalesce(vec![left, right]))
-    } else {
-        Ok(expr_fn::nvl(left, right))
+        return Ok(expr_fn::coalesce(vec![left, right]));
     }
+    // DataFusion's `nvl` coerces a DATE or TIMESTAMP to `Utf8` too, so a datetime pair goes through
+    // `coalesce` as well, widened first the way Sail's `coalesce` widens it: `nvl(date, '...')` is a
+    // DATE with ANSI on and a STRING with it off, as in Spark.
+    let is_temporal = |expr: &expr::Expr| {
+        expr.get_type(schema)
+            .is_ok_and(|data_type| is_temporal_type(&data_type))
+    };
+    if is_temporal(&left) || is_temporal(&right) {
+        let arguments = coerce_string_temporal_values(vec![left, right], &function_context)?;
+        return Ok(expr_fn::coalesce(arguments));
+    }
+    Ok(expr_fn::nvl(left, right))
 }
 
 fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {

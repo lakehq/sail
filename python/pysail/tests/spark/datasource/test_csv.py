@@ -675,3 +675,54 @@ def test_csv_read_field_count_mismatch(spark, tmp_path):
     _write_csv(path, "data", b"a,b,c\n1\n1,2\n")
     df = spark.read.option("header", True).option("allowTruncatedRows", True).csv(str(path))
     assert df.select("c", "a").collect() == [Row(c=None, a="1"), Row(c=None, a="1")]
+
+
+@pytest.mark.parametrize(
+    ("files", "expected"),
+    [
+        pytest.param({"data": b"a\n2\n-5\n"}, "int", id="fits-an-int"),
+        pytest.param({"data": b"a\n-2147483648\n2147483647\n"}, "int", id="int-bounds"),
+        pytest.param({"data": b"a\n\n7\n"}, "int", id="with-a-null"),
+        pytest.param({"data": b"a\n2\n2147483648\n"}, "bigint", id="past-an-int"),
+        pytest.param({"a": b"a\n2\n", "b": b"a\n3000000000\n"}, "bigint", id="past-an-int-in-another-file"),
+    ],
+)
+def test_csv_infer_schema_types_an_integer_column_as_int_when_it_fits(spark, tmp_path, files, expected):
+    # `CSVInferSchema.tryParseInteger` tries INT before BIGINT (`CSVInferSchema.scala:138-139,159`).
+    path = tmp_path / "csv_infer_integer"
+    for name, content in files.items():
+        _write_csv(path, name, content)
+    df = spark.read.option("header", True).option("inferSchema", True).csv(str(path))
+    assert df.schema["a"].dataType.simpleString() == expected
+
+
+def test_csv_inferred_int_column_is_a_date_offset(spark, tmp_path):
+    # The type decides the arithmetic: `DateAdd` takes an INT but not a BIGINT, so an inferred
+    # integer column shifts a DATE in Spark and has to here too.
+    path = tmp_path / "csv_inferred_date_offset"
+    _write_csv(path, "data", b"a\n2\n")
+    spark.read.option("header", True).option("inferSchema", True).csv(str(path)).createOrReplaceTempView("csv_offset")
+    try:
+        rows = spark.sql(
+            "SELECT CAST(DATE'2024-01-15' + a AS STRING) AS p, CAST(DATE'2024-01-15' - a AS STRING) AS m FROM csv_offset"
+        ).collect()
+        assert rows == [Row(p="2024-01-17", m="2024-01-13")]
+    finally:
+        spark.catalog.dropTempView("csv_offset")
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        pytest.param(b"a\n" + b"1\n" * 5000, "int", id="many-rows-that-fit"),
+        pytest.param(b"a\n" + b"1\n" * 5000 + b"3000000000\n", "bigint", id="past-an-int-after-the-type-sample"),
+    ],
+)
+def test_csv_infer_schema_reads_every_row_to_type_an_integer_column(spark, tmp_path, content, expected):
+    # `inferSchema` reads every row (`samplingRatio` defaults to 1.0), so a value past an INT far
+    # beyond the first rows still makes the column a BIGINT, and a large file of small values is INT.
+    path = tmp_path / "csv_infer_integer_long"
+    _write_csv(path, "data", content)
+    df = spark.read.option("header", True).option("inferSchema", True).csv(str(path))
+    assert df.schema["a"].dataType.simpleString() == expected
+    assert df.agg({"a": "max"}).collect()[0][0] == (1 if expected == "int" else 3000000000)

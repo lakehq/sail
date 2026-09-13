@@ -127,6 +127,58 @@ Feature: a STRING operand of arithmetic, vs Spark 4.2.0
         | str - time | true  | '06:00:00' - TIME'01:00:00'     | interval hour to second |
         | time - str | true  | TIME'06:00:00' - '01:00:00'     | interval hour to second |
 
+  Rule: with ANSI off a string that still has its own arguments to coerce is not read as a DATE
+
+    # Spark reads `string - date` through `SubtractDates` only once the string operand is resolved.
+    # An operand whose own arguments still need a cast -- an untyped NULL beside a string, a DATE
+    # beside a string, an INT inside `concat` -- is not resolved in the pass that would read it as a
+    # DATE, so `StringPromotionTypeCoercion` casts it to DOUBLE first and `SubtractDates` then refuses
+    # the DOUBLE. Measured on the JVM; wrapping the same operand in `upper` or `substr` resolves again.
+    Scenario Outline: <operand> minus a date is refused with ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT <operand> - DATE'2024-01-15' AS v
+        """
+      Then query error (?i)cannot resolve
+
+      Examples:
+        | operand                                           |
+        | coalesce(NULL, '2024-01-16')                      |
+        | coalesce(DATE'2024-01-15', '2024-01-16')          |
+        | nvl(NULL, '2024-01-16')                           |
+        | ifnull('2024-01-16', DATE'2024-01-15')            |
+        | if(true, '2024-01-16', NULL)                      |
+        | CASE WHEN true THEN NULL ELSE '2024-01-16' END    |
+        | nvl2(NULL, '2024-01-16', NULL)                    |
+        | nullif('2', NULL)                                 |
+        | least(NULL, '2024-01-16')                         |
+        | greatest('2024-01-16', NULL)                      |
+        | concat('2024-01-', 16)                            |
+
+    Scenario Outline: <operand> minus a date resolves with ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT (<operand> - DATE'2024-01-15') IS NOT NULL AS resolved
+        FROM (SELECT '2024-01-16' AS s)
+        """
+      Then query result
+        | resolved |
+        | true     |
+
+      Examples:
+        | operand                                         |
+        | s                                               |
+        | coalesce('2024-01-16', '2024-01-17')            |
+        | coalesce(CAST(NULL AS STRING), '2024-01-16')    |
+        | coalesce(s, s)                                  |
+        | if(true, '2024-01-16', '2024-01-17')            |
+        | CASE WHEN true THEN '2024-01-16' END            |
+        | nvl2(NULL, '2024-01-16', '2024-01-17')          |
+        | upper(coalesce(NULL, '2024-01-16'))             |
+        | concat('2024-01-', '16')                        |
+
   Rule: a string shifted by an interval is read as a timestamp and written back as a string
 
     # `Cast(TimestampAddInterval(l, r), l.dataType)` (`BinaryArithmeticWithDatetimeResolver.scala`),

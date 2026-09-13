@@ -754,10 +754,6 @@ fn hypot(expr1: Expr, expr2: Expr) -> Expr {
     cast(expr_fn::sqrt(sum_squared), DataType::Float64)
 }
 
-fn positive(expr: Expr) -> Expr {
-    expr
-}
-
 fn rint(expr: Expr) -> Expr {
     cast(expr_fn::round(vec![expr]), DataType::Float64)
 }
@@ -1023,6 +1019,20 @@ fn spark_unary_negate(arg: Expr, ansi_mode: bool, schema: &DFSchemaRef) -> Expr 
     }
 }
 
+/// `positive(x)` is `UnaryPositive` (`FunctionRegistry.scala:470`), the expression the unary `+`
+/// parses to, so it takes the unary `+` path: the same guard and the same string promotion.
+fn spark_positive(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let arg = arguments.one()?;
+    spark_plus(ScalarFunctionInput {
+        arguments: vec![arg],
+        function_context,
+    })
+}
+
 fn spark_negative(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let ScalarFunctionInput {
         arguments,
@@ -1083,7 +1093,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("negative", F::custom(spark_negative)),
         ("pi", F::nullary(expr_fn::pi)),
         ("pmod", F::custom(spark_pmod)),
-        ("positive", F::unary(positive)),
+        ("positive", F::custom(spark_positive)),
         ("pow", F::binary(power)),
         ("power", F::binary(power)),
         ("radians", F::unary(double(expr_fn::radians))),
@@ -1339,10 +1349,68 @@ fn promote_string_beside_datetime(
     };
     let (left_role, right_role) = (operand_role(&left_type), operand_role(&right_type));
     match (left_role, right_role) {
+        // With ANSI off Spark reads the string as a DATE only once it is resolved; an operand that
+        // still casts its own arguments is promoted to DOUBLE first, and the DOUBLE is refused.
+        (Str, Date) if !ansi_mode && operand_needs_own_coercion(&left, schema) => {
+            Ok((cast(left, DataType::Float64), right))
+        }
         (Str, Date) => Ok((as_datetime(left, &right_type)?, right)),
         (Str, Timestamp | Time) if ansi_mode => Ok((as_datetime(left, &right_type)?, right)),
         (Date | Timestamp | Time, Str) if ansi_mode => Ok((left, as_datetime(right, &left_type)?)),
         _ => Ok((left, right)),
+    }
+}
+
+/// Whether Spark still has to cast one of this operand's own arguments before the operand resolves:
+/// a conditional whose value branches differ in type (an untyped NULL included), or `concat` over a
+/// non-string. Spark's rules run in passes, and such an operand is not yet resolved in the pass that
+/// reads `string - date` as `SubtractDates`, so string promotion gets to it first. Only the operand
+/// itself counts: once it is wrapped in another expression, the measured verdict is resolved again.
+///
+/// The temporal branches `coalesce`, `nvl` and `if` already rewrote to strings count as a cast, since
+/// Spark inserts that cast in the same pass.
+///
+/// TODO: any function whose implicit input casts are still pending (`upper(1)`, `substr(123, 1)`)
+/// behaves the same in Spark; only the expressions that return a string beside a date are covered.
+fn operand_needs_own_coercion(expr: &Expr, schema: &DFSchemaRef) -> bool {
+    let branch_type = |arg: &Expr| match arg {
+        Expr::ScalarFunction(function)
+            if matches!(
+                function.func.name(),
+                "spark_to_utf8" | "spark_to_large_utf8" | "spark_to_utf8_view"
+            ) =>
+        {
+            None
+        }
+        _ => arg.get_type(schema).ok(),
+    };
+    let branches_differ = |branches: Vec<&Expr>| {
+        let types = branches.into_iter().map(branch_type).collect::<Vec<_>>();
+        types.iter().any(Option::is_none) || types.windows(2).any(|pair| pair[0] != pair[1])
+    };
+    match expr {
+        Expr::Alias(alias) => operand_needs_own_coercion(&alias.expr, schema),
+        Expr::Case(case) => branches_differ(
+            case.when_then_expr
+                .iter()
+                .map(|(_, then)| then.as_ref())
+                .chain(case.else_expr.as_deref())
+                .collect(),
+        ),
+        Expr::ScalarFunction(function) => match function.func.name() {
+            "coalesce" | "nvl" | "nullif" | "greatest" | "least" => {
+                branches_differ(function.args.iter().collect())
+            }
+            "nvl2" => branches_differ(function.args.iter().skip(1).collect()),
+            "spark_concat" => function.args.iter().any(|arg| {
+                !matches!(
+                    arg.get_type(schema),
+                    Ok(DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)
+                )
+            }),
+            _ => false,
+        },
+        _ => false,
     }
 }
 
