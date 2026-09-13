@@ -10,6 +10,7 @@ use sail_common::geoarrow::extension::GeoArrowWkbType;
 use sail_common::spec;
 use sail_common::spec::{
     SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
+    SAIL_ORIGINAL_FIELD_NAME_METADATA_KEY,
 };
 use sail_common_datafusion::variant::{VARIANT_VALUE_FIELD_NAME, variant_metadata_field};
 use serde_json::json;
@@ -201,7 +202,9 @@ impl PlanResolver<'_> {
                 )))
             }
             DataType::Struct { fields } => {
-                Ok(adt::DataType::Struct(self.resolve_fields(fields, state)?))
+                let mut fields = self.resolve_fields(fields, state)?;
+                deduplicate_field_names(&mut fields);
+                Ok(adt::DataType::Struct(fields))
             }
             DataType::Union {
                 union_fields,
@@ -427,5 +430,193 @@ impl PlanResolver<'_> {
             }
             spec::TimestampType::WithoutTimeZone => Ok(None),
         }
+    }
+}
+
+/// Deduplicate duplicate field names within an Arrow struct in place.
+///
+/// Arrow struct fields are addressed by name, so duplicate names in a Spark struct
+/// (which Spark allows) must be made unique for the Arrow representation. Duplicates
+/// receive a numeric suffix (`name_0`, `name_1`, ...) in order of appearance, matching
+/// Spark's `deduplicateFieldNames` in `ArrowUtils.scala`. Unique names are left untouched.
+///
+/// Only the direct children are renamed here; nested structs are already deduplicated
+/// because struct resolution recurses through this function.
+///
+/// The original name is stored in the field metadata under
+/// [`SAIL_ORIGINAL_FIELD_NAME_METADATA_KEY`] so the logical Spark schema reported
+/// back to the client keeps the user-visible name.
+///
+/// Reference: https://github.com/apache/spark/blob/master/sql/api/src/main/scala/org/apache/spark/sql/util/ArrowUtils.scala
+fn deduplicate_field_names(fields: &mut adt::Fields) {
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for field in fields.iter() {
+        *counts.entry(field.name().as_str()).or_default() += 1;
+    }
+    if counts.values().all(|&c| c == 1) {
+        return;
+    }
+    let mut next: HashMap<String, usize> = HashMap::new();
+    let renamed = fields
+        .iter()
+        .map(|field| {
+            if counts[field.name().as_str()] > 1 {
+                let i = next.entry(field.name().clone()).or_default();
+                let new_name = format!("{}_{i}", field.name());
+                *i += 1;
+                let original_name = field.name().clone();
+                let mut metadata = field.metadata().clone();
+                metadata.insert(
+                    SAIL_ORIGINAL_FIELD_NAME_METADATA_KEY.to_string(),
+                    original_name,
+                );
+                Arc::new(
+                    field
+                        .as_ref()
+                        .clone()
+                        .with_name(new_name)
+                        .with_metadata(metadata),
+                )
+            } else {
+                Arc::clone(field)
+            }
+        })
+        .collect::<Vec<_>>();
+    *fields = adt::Fields::from(renamed);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use datafusion::execution::SessionStateBuilder;
+    use datafusion::prelude::SessionContext;
+    use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
+    use sail_catalog::provider::CatalogProvider;
+    use sail_catalog_memory::MemoryCatalogProvider;
+    use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
+    use sail_common_datafusion::session::plan::PlanService;
+
+    use super::*;
+    use crate::catalog::SparkCatalogObjectDisplay;
+    use crate::config::PlanConfig;
+    use crate::formatter::SparkPlanFormatter;
+    use crate::resolver::PlanResolver;
+
+    fn f(name: &str) -> adt::Field {
+        adt::Field::new(name, adt::DataType::Int32, true)
+    }
+
+    #[test]
+    fn test_deduplicate_field_names() {
+        // No duplicates: unchanged.
+        let mut fields = adt::Fields::from(vec![f("a"), f("b")]);
+        deduplicate_field_names(&mut fields);
+        let names: Vec<_> = fields.iter().map(|f| f.name().clone()).collect();
+        assert_eq!(names, ["a", "b"]);
+
+        // Duplicates get deterministic numeric suffixes in order of appearance.
+        let mut fields = adt::Fields::from(vec![f("x"), f("a"), f("x"), f("x")]);
+        deduplicate_field_names(&mut fields);
+        let names: Vec<_> = fields.iter().map(|f| f.name().clone()).collect();
+        assert_eq!(names, ["x_0", "a", "x_1", "x_2"]);
+
+        // Renamed fields carry their original name so it can be restored when the
+        // schema is reported back to the client; unchanged fields carry no such key.
+        let original = |f: &adt::Field| {
+            f.metadata()
+                .get(SAIL_ORIGINAL_FIELD_NAME_METADATA_KEY)
+                .cloned()
+        };
+        assert_eq!(original(&fields[0]).as_deref(), Some("x"));
+        assert_eq!(original(&fields[1]), None);
+        assert_eq!(original(&fields[2]).as_deref(), Some("x"));
+        assert_eq!(original(&fields[3]).as_deref(), Some("x"));
+    }
+
+    fn create_session() -> PlanResult<SessionContext> {
+        let mut state = SessionStateBuilder::new().build();
+        let catalog_manager = CatalogManager::try_new(CatalogManagerOptions {
+            catalogs: HashMap::from([(
+                "sail".to_string(),
+                Arc::new(MemoryCatalogProvider::new(
+                    "sail".to_string(),
+                    vec![Arc::from("default")].try_into()?,
+                    None,
+                )) as Arc<dyn CatalogProvider>,
+            )]),
+            default_catalog: "sail".to_string(),
+            default_database: vec!["default".to_string()],
+            global_temporary_database: vec!["global_temp".to_string()],
+        })?;
+        let plan_service = PlanService::new(
+            Box::new(DefaultCatalogDisplay::<SparkCatalogObjectDisplay>::default()),
+            Box::new(SparkPlanFormatter),
+        );
+        state.config_mut().set_extension(Arc::new(catalog_manager));
+        state.config_mut().set_extension(Arc::new(plan_service));
+        Ok(SessionContext::new_with_state(state))
+    }
+
+    fn spec_field(name: &str, data_type: spec::DataType) -> spec::Field {
+        spec::Field {
+            name: name.to_string(),
+            data_type,
+            nullable: true,
+            metadata: vec![],
+        }
+    }
+
+    /// End-to-end resolution of the nested struct schema used by the PySpark
+    /// `test_createDataFrame_duplicate_field_names` / `test_toPandas_duplicate_field_names`
+    /// cases: a struct with duplicated nested field names must resolve to an Arrow
+    /// struct with unique names.
+    #[test]
+    fn test_resolve_struct_with_duplicate_nested_field_names() -> PlanResult<()> {
+        let ctx = create_session()?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let mut state = PlanResolverState::new();
+
+        // struct<x: string, x: int, y: int, y: string>
+        let data_type = spec::DataType::Struct {
+            fields: spec::Fields::from(vec![
+                spec_field("x", spec::DataType::Utf8),
+                spec_field("x", spec::DataType::Int32),
+                spec_field("y", spec::DataType::Int32),
+                spec_field("y", spec::DataType::Utf8),
+            ]),
+        };
+
+        let adt::DataType::Struct(fields) = resolver.resolve_data_type(&data_type, &mut state)?
+        else {
+            return Err(PlanError::internal("expected struct"));
+        };
+        let names: Vec<_> = fields.iter().map(|f| f.name().clone()).collect();
+        assert_eq!(names, ["x_0", "x_1", "y_0", "y_1"]);
+        Ok(())
+    }
+
+    /// A struct without duplicates must be left untouched.
+    #[test]
+    fn test_resolve_struct_without_duplicates_unchanged() -> PlanResult<()> {
+        let ctx = create_session()?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let mut state = PlanResolverState::new();
+
+        let data_type = spec::DataType::Struct {
+            fields: spec::Fields::from(vec![
+                spec_field("a", spec::DataType::Int32),
+                spec_field("b", spec::DataType::Utf8),
+            ]),
+        };
+
+        let adt::DataType::Struct(fields) = resolver.resolve_data_type(&data_type, &mut state)?
+        else {
+            return Err(PlanError::internal("expected struct"));
+        };
+        let names: Vec<_> = fields.iter().map(|f| f.name().clone()).collect();
+        assert_eq!(names, ["a", "b"]);
+        Ok(())
     }
 }
