@@ -5,7 +5,8 @@ use datafusion::arrow::error::ArrowError;
 use datafusion::functions::expr_fn;
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::{
-    BinaryExpr, Expr, ExprSchemable, Operator, ScalarUDF, cast, expr, lit, try_cast,
+    BinaryExpr, Expr, ExprSchemable, Operator, ScalarUDF, WindowFunctionDefinition, cast, expr,
+    lit, try_cast,
 };
 use datafusion_spark::function::math::expr_fn as math_fn;
 use half::f16;
@@ -1793,9 +1794,15 @@ pub(crate) fn operand_udt_field(expr: &Expr, schema: &DFSchemaRef) -> Option<Fie
             .map(|(_, then)| then.as_ref())
             .chain(case.else_expr.as_deref())
             .find_map(|branch| operand_udt_field(branch, schema)),
-        // An aggregate that returns one of the values it aggregates keeps their type.
-        Expr::AggregateFunction(function) => match function.func.name() {
-            "min" | "max" | "first_value" | "last_value" | "any_value" | "max_by" | "min_by" => {
+        // An aggregate that returns one of the values it aggregates keeps their type, as a plain
+        // aggregate or over a window.
+        Expr::AggregateFunction(function) if returns_its_input(function.func.name()) => function
+            .params
+            .args
+            .first()
+            .and_then(|arg| operand_udt_field(arg, schema)),
+        Expr::WindowFunction(function) => match &function.fun {
+            WindowFunctionDefinition::AggregateUDF(udf) if returns_its_input(udf.name()) => {
                 function
                     .params
                     .args
@@ -1820,8 +1827,10 @@ pub(crate) fn operand_udt_field(expr: &Expr, schema: &DFSchemaRef) -> Option<Fie
                 .args
                 .first()
                 .and_then(|arg| operand_udt_field(arg, schema)),
+            // `named_struct('x', a).x` is `a`.
+            "get_field" => struct_field_udt_field(&function.args, schema),
             // `explode(arr)` yields the array's elements, and `explode(map)` is not a UDT operand.
-            "array_element" | "explode" | "explode_outer" => function
+            "array_element" | "explode" | "explode_outer" | "array_min" | "array_max" => function
                 .args
                 .first()
                 .and_then(|collection| collection_element_udt_field(collection, schema)),
@@ -1831,10 +1840,69 @@ pub(crate) fn operand_udt_field(expr: &Expr, schema: &DFSchemaRef) -> Option<Fie
     }
 }
 
+/// Whether an aggregate returns one of the values it aggregates, so its type is theirs
+/// (`Min`, `Max`, `First`, `Last`, `MaxMinBy` and `Mode` all declare `dataType = child.dataType`).
+fn returns_its_input(name: &str) -> bool {
+    matches!(
+        name,
+        "min" | "max" | "first_value" | "last_value" | "any_value" | "max_by" | "min_by" | "mode"
+    )
+}
+
+/// The UDT field `get_field` reads out of a struct built in place with `named_struct`, whose own
+/// field does not carry the UDT metadata of the value it was built from.
+fn struct_field_udt_field(args: &[Expr], schema: &DFSchemaRef) -> Option<FieldRef> {
+    let [
+        Expr::ScalarFunction(constructor),
+        Expr::Literal(ScalarValue::Utf8(Some(name)), _),
+    ] = args
+    else {
+        return None;
+    };
+    if constructor.func.name() != "named_struct" {
+        return None;
+    }
+    constructor.args.chunks(2).find_map(|pair| match pair {
+        [Expr::Literal(ScalarValue::Utf8(Some(key)), _), value] if key == name => {
+            operand_udt_field(value, schema)
+        }
+        _ => None,
+    })
+}
+
 /// The UDT element field of an array, or of the value list `map_extract` pulls out of a map. The
 /// resolver builds both element fields through `resolve_field`, so they keep the UDT metadata; an
 /// array built in place with `array(...)` does not, so its elements are looked at instead.
 fn collection_element_udt_field(collection: &Expr, schema: &DFSchemaRef) -> Option<FieldRef> {
+    match collection {
+        // `collect_list(a)` is an array of `a`, wrapped in `coalesce(..., [])` by the resolver.
+        Expr::AggregateFunction(function) if function.func.name() == "array_agg" => {
+            return function
+                .params
+                .args
+                .first()
+                .and_then(|arg| operand_udt_field(arg, schema));
+        }
+        Expr::ScalarFunction(function) if function.func.name() == "coalesce" => {
+            return function
+                .args
+                .iter()
+                .find_map(|arg| collection_element_udt_field(arg, schema));
+        }
+        // `transform(arr, x -> x)` keeps the elements when the lambda returns its own parameter;
+        // the other higher-order functions keep the array's element field and need no help.
+        Expr::HigherOrderFunction(function)
+            if matches!(function.func.name(), "transform" | "array_transform") =>
+        {
+            if let [array, Expr::Lambda(lambda)] = function.args.as_slice()
+                && let Expr::LambdaVariable(variable) = lambda.body.as_ref()
+                && lambda.params.first() == Some(&variable.name)
+            {
+                return collection_element_udt_field(array, schema);
+            }
+        }
+        _ => {}
+    }
     if let Expr::ScalarFunction(function) = collection
         && matches!(function.func.name(), "array" | "make_array" | "spark_array")
     {

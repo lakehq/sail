@@ -383,6 +383,14 @@ def test_a_udt_from_an_aggregate_generator_or_set_operation_projected_by_a_subqu
         pytest.param("arr[0]", id="array-index"),
         pytest.param("min(a)", id="min"),
         pytest.param("explode(arr)", id="explode"),
+        pytest.param("array_min(arr)", id="array_min"),
+        pytest.param("array_max(arr)", id="array_max"),
+        pytest.param("collect_list(a)[0]", id="collect_list-item"),
+        pytest.param("min(a) OVER (PARTITION BY k)", id="min-over-window"),
+        pytest.param("mode(a)", id="mode"),
+        pytest.param("named_struct('x', a).x", id="named_struct-field"),
+        pytest.param("transform(arr, x -> x)[0]", id="transform-item"),
+        pytest.param("filter(arr, x -> true)[0]", id="filter-item"),
     ],
 )
 def test_a_udt_returning_expression_is_the_udt_in_the_schema(spark, storage_view, expression):
@@ -390,3 +398,34 @@ def test_a_udt_returning_expression_is_the_udt_in_the_schema(spark, storage_view
     view, _ = storage_view
     field = spark.sql(f"SELECT {expression} AS x FROM {view}").schema["x"]  # noqa: S608
     assert isinstance(field.dataType, UserDefinedType)
+
+
+@STORAGE
+@pytest.mark.parametrize(
+    "expression",
+    [
+        pytest.param("array_min(arr)", id="array_min"),
+        pytest.param("array_max(arr)", id="array_max"),
+        pytest.param("collect_list(a)[0]", id="collect_list-item"),
+        pytest.param("min(a) OVER (PARTITION BY k)", id="min-over-window"),
+        pytest.param("mode(a)", id="mode"),
+        pytest.param("named_struct('x', a).x", id="named_struct-field"),
+        pytest.param("transform(arr, x -> x)[0]", id="transform-item"),
+        pytest.param("filter(arr, x -> true)[0]", id="filter-item"),
+    ],
+)
+@pytest.mark.parametrize(
+    "template",
+    [
+        pytest.param("SELECT {e} / 1 AS r FROM {v}", id="in-place"),
+        pytest.param("SELECT x / 1 AS r FROM (SELECT {e} AS x FROM {v})", id="through-a-subquery"),
+        pytest.param("SELECT -x AS r FROM (SELECT {e} AS x FROM {v})", id="unary-through-a-subquery"),
+    ],
+)
+def test_a_udt_from_an_array_aggregate_window_or_struct_function_is_rejected(spark, storage_view, expression, template):
+    # Each of these declares its type as the UDT it reads (`ArrayMin`/`ArrayMax` the element type,
+    # `Mode` and the window aggregate `child.dataType`, `GetStructField` the field type), so Spark
+    # refuses arithmetic over it in place and through a subquery alike.
+    view, _ = storage_view
+    with pytest.raises(AnalysisException, match=r"(?i)cannot resolve"):
+        spark.sql(template.format(e=expression, v=view)).collect()
