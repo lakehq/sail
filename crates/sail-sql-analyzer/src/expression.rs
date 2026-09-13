@@ -9,7 +9,7 @@ use sail_sql_parser::ast::expression::{
     WindowFrameBound, WindowModifier, WindowSpec, WithinGroupClause,
 };
 use sail_sql_parser::ast::identifier::{ObjectName, QualifiedWildcard};
-use sail_sql_parser::ast::literal::NumberLiteral;
+use sail_sql_parser::ast::literal::{NumberLiteral, NumberSuffix};
 use sail_sql_parser::ast::query::{
     ClusterByClause, DistributeByClause, IdentList, NamedExpr, OrderByClause, PartitionByClause,
     SortByClause,
@@ -246,6 +246,22 @@ fn from_ast_window_frame_bound(bound: WindowFrameBound) -> SqlResult<spec::Windo
     }
 }
 
+/// A DECIMAL literal whose value is zero (`0.0`, `0.00`, `0BD`).
+///
+/// TODO: `-0.0` is one literal in Spark's grammar too, but folding it hands the zero-divisor
+///   short-circuit in `spark_divide`, `spark_modulo` and `spark_div` a literal zero, which refuses at
+///   analysis a query Spark only fails when the division is evaluated. The INT and floating zeros
+///   were already folded by `negate_literal`, so only the DECIMAL ones stay a negation until that
+///   short-circuit is removed.
+fn is_decimal_zero(literal: &NumberLiteral) -> bool {
+    let decimal = match literal.suffix {
+        Some(NumberSuffix::Bd) => true,
+        None => literal.value.contains('.') && !literal.value.contains(['e', 'E']),
+        Some(_) => false,
+    };
+    decimal && literal.value.chars().all(|c| matches!(c, '0' | '.'))
+}
+
 pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
     match expr {
         Expr::Atom(atom) => from_ast_atom_expression(atom),
@@ -257,7 +273,8 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
         // the column `(- 1)`. A parenthesized number is `AtomExpr::Nested`, so `-(2147483648)` is not
         // folded and stays a BIGINT negation, as in Spark.
         Expr::UnaryOperator(UnaryOperator::Minus(_), expr)
-            if matches!(*expr, Expr::Atom(AtomExpr::NumberLiteral(_))) =>
+            if matches!(&*expr, Expr::Atom(AtomExpr::NumberLiteral(literal))
+                if !is_decimal_zero(literal)) =>
         {
             let Expr::Atom(AtomExpr::NumberLiteral(literal)) = *expr else {
                 return Err(SqlError::invalid("expected a number literal"));

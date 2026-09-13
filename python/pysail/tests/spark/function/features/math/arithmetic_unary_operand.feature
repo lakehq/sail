@@ -156,6 +156,28 @@ Feature: unary + and - operand types vs Spark 4.2.0
 
   Rule: a negative number written as a literal keeps its literal type
 
+    # TODO: Spark folds the sign before a postfix `::` (`-1::BOOLEAN` is `CAST(-1 AS BOOLEAN)`); Sail
+    #  parses `-(1::BOOLEAN)` and refuses the unary minus. Already so on `main`.
+    @sail-bug
+    Scenario: a signed literal is cast as a whole
+      When query
+        """
+        SELECT -1::BOOLEAN AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    # TODO: Sail refuses `ORDER BY -1` like Spark, but leaks the `Debug` of the sort order instead of
+    #  `ORDER_BY_POS_OUT_OF_RANGE` (`AstBuilder.scala:7591`).
+    @sail-bug
+    Scenario: ORDER BY -1 names the position out of range
+      When query
+        """
+        SELECT x FROM VALUES (1), (2) AS t(x) ORDER BY -1
+        """
+      Then query error ORDER BY position -1 is not in select list
+
     # `number: MINUS? BIGINT_LITERAL` makes `-1L` one BIGINT literal, and only an INT literal is an
     # ORDER BY ordinal (`AstBuilder.scala:7591`), so this sorts by a constant.
     Scenario: ORDER BY a negative BIGINT literal sorts by a constant

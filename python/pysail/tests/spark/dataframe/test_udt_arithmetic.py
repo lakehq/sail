@@ -161,6 +161,9 @@ def test_udt_cast_to_a_plain_type_is_a_plain_operand(spark, udt_view, ansi_enabl
             "SELECT x + INTERVAL '1' DAY AS r FROM (SELECT CAST(a AS STRING) AS x FROM {v})", id="cast-plus-interval"
         ),
         pytest.param("SELECT -x AS r FROM (SELECT CAST(a AS STRING) AS x FROM {v})", id="cast-unary-minus"),
+        # `string(x)` is the same `Cast`, reached through the function registry instead of the parser.
+        pytest.param("SELECT x / 1 AS r FROM (SELECT string(a) AS x FROM {v})", id="string-function-divide"),
+        pytest.param("SELECT -x AS r FROM (SELECT string(a) AS x FROM {v})", id="string-function-unary-minus"),
     ],
 )
 def test_udt_cast_projected_by_a_subquery_is_a_plain_operand(spark, udt_view, query, ansi_enabled):
@@ -491,3 +494,7 @@ def test_a_udt_returning_expression_over_rows_is_collected_as_the_udt_object(spa
     schema = StructType().add("k", "integer").add("a", BoxPythonUDT()).add("b", BoxPythonUDT())
     spark.createDataFrame([(1, None, Box("bb"))], schema).createOrReplaceTempView("udt_rows_object")
     assert spark.sql("SELECT coalesce(a, b) AS x FROM udt_rows_object").collect()[0].x == Box("bb")
+
+
+def test_udt_string_function_is_a_string_in_the_schema(spark, udt_view):
+    assert spark.sql(f"SELECT string(a) AS x FROM {udt_view}").schema["x"].dataType == StringType()  # noqa: S608

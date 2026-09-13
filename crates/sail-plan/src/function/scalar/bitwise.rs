@@ -51,6 +51,8 @@ pub(super) fn list_built_in_bitwise_functions() -> Vec<(&'static str, ScalarFunc
         ("shiftrightunsigned", F::custom(shiftrightunsigned)),
         (">>>", F::custom(shiftrightunsigned)),
         ("|", F::binary_op(Operator::BitwiseOr)),
-        ("~", F::unary(|arg| (-arg) - lit(1))),
+        // `BitwiseNot` is `~` on the integral type itself (`bitwiseExpressions.scala:184-201`); spelled
+        // as `-x - 1` it overflowed on the minimum, which `-2147483648` now is as an INT literal.
+        ("~", F::unary(bitwise_fn::bitwise_not)),
     ]
 }

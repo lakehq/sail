@@ -286,3 +286,28 @@ Feature: a STRING operand of arithmetic, vs Spark 4.2.0
         | case           | expression             |
         | frac str / int | '2.5' / CAST(2 AS INT) |
         | bad str / int  | 'abc' / CAST(2 AS INT) |
+
+  Rule: a string that scales an interval is read as a DOUBLE the way the mode reads it
+
+    # `MultiplyDTInterval`, `MultiplyYMInterval` and their divisions take `NumericType`
+    # (`intervalExpressions.scala:605,658,745,828`), `MultiplyInterval` and `DivideInterval` take
+    # `DoubleType` (`:181`), through implicit casts, so a malformed string is NULL with ANSI off.
+    Scenario Outline: an interval scaled by a malformed string is NULL with ANSI off: <case>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(<expression> AS STRING) AS v
+        """
+      Then query result
+        | v    |
+        | NULL |
+
+      Examples:
+        | case           | expression                               |
+        | day-time * str | INTERVAL '1' DAY * 'x'                   |
+        | str * day-time | 'x' * INTERVAL '1' DAY                   |
+        | day-time / str | INTERVAL '1' DAY / 'x'                   |
+        | ym * str       | INTERVAL '1' MONTH * 'x'                 |
+        | ym / str       | INTERVAL '1' MONTH / 'x'                 |
+        | calendar * str | make_interval(0, 1, 0, 1, 0, 0, 0) * 'x' |
+        | calendar / str | make_interval(0, 1, 0, 1, 0, 0, 0) / 'x' |

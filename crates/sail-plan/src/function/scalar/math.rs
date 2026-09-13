@@ -19,6 +19,7 @@ use sail_function::scalar::datetime::spark_interval_scale::{
     SparkDivideCalendarInterval, SparkDivideDtInterval, SparkDivideYmInterval,
     SparkMultiplyCalendarInterval, SparkMultiplyDtInterval, SparkMultiplyYmInterval,
 };
+use sail_function::scalar::datetime::spark_time_add_interval::SparkTimeAddDtInterval;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
@@ -87,9 +88,6 @@ fn shift_string_by_interval(
     }
 }
 
-/// Microseconds in a day, to scale a date difference into a day-time interval.
-const MICROSECONDS_PER_DAY: i64 = 24 * 60 * 60 * 1_000_000;
-
 /// Arguments:
 ///   - left: A numeric, STRING, DATE, TIMESTAMP, or INTERVAL expression.
 ///   - right: If left is a numeric right must be numeric expression, or an INTERVAL otherwise.
@@ -130,7 +128,20 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
         })
     } else {
         let (left, right) = arguments.two()?;
+        if let Some(error) = rejects_time_operand_when_disabled(
+            &left,
+            &right,
+            function_context.schema,
+            function_context.plan_config.time_type_enabled,
+        ) {
+            return Err(error);
+        }
         if let Some(error) = rejects_udt_operand("+", &left, &right, function_context.schema) {
+            return Err(error);
+        }
+        if let Some(error) =
+            rejects_binary_string_operand("+", &left, &right, function_context.schema)
+        {
             return Err(error);
         }
         let (left, right) = promote_string_operands(
@@ -224,10 +235,12 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             // TODO: DataFusion wraps within the 24-hour clock; Spark raises `[DATETIME_OVERFLOW]`
             // in both ANSI modes. `arithmetic_time_subtraction.feature` pins the gap.
             (Ok(DataType::Time32(_) | DataType::Time64(_)), Ok(DataType::Duration(_))) => {
-                left + cast(right, DataType::Interval(IntervalUnit::MonthDayNano))
+                // A UDF, not DataFusion's `time + interval`: that `BinaryExpr` panics in interval
+                // bound propagation when the TIME's bounds are known (a CTE column).
+                ScalarUDF::from(SparkTimeAddDtInterval::new()).call(vec![left, right])
             }
             (Ok(DataType::Duration(_)), Ok(DataType::Time32(_) | DataType::Time64(_))) => {
-                cast(left, DataType::Interval(IntervalUnit::MonthDayNano)) + right
+                ScalarUDF::from(SparkTimeAddDtInterval::new()).call(vec![right, left])
             }
             (Ok(left_type), Ok(DataType::Date32)) if left_type.is_numeric() => {
                 cast(left + cast(right, DataType::Int32), DataType::Date32)
@@ -280,7 +293,20 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
         ))
     } else {
         let (left, right) = arguments.two()?;
+        if let Some(error) = rejects_time_operand_when_disabled(
+            &left,
+            &right,
+            function_context.schema,
+            function_context.plan_config.time_type_enabled,
+        ) {
+            return Err(error);
+        }
         if let Some(error) = rejects_udt_operand("-", &left, &right, function_context.schema) {
+            return Err(error);
+        }
+        if let Some(error) =
+            rejects_binary_string_operand("-", &left, &right, function_context.schema)
+        {
             return Err(error);
         }
         let (left, right) = promote_string_operands(
@@ -345,7 +371,10 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             // (`BinaryArithmeticWithDatetimeResolver.scala:133-134`). `interval - time` is absent
             // on purpose: Spark has no such arm and `rejects_subtract` rejects the pair first.
             (Ok(DataType::Time32(_) | DataType::Time64(_)), Ok(DataType::Duration(_))) => {
-                left - cast(right, DataType::Interval(IntervalUnit::MonthDayNano))
+                ScalarUDF::from(SparkTimeAddDtInterval::new()).call(vec![
+                    left,
+                    ScalarUDF::from(NegateDuration::new()).call(vec![right]),
+                ])
             }
             (Ok(DataType::Date32), Ok(DataType::Duration(TimeUnit::Microsecond))) => {
                 left - cast(right, DataType::Interval(IntervalUnit::MonthDayNano))
@@ -379,16 +408,16 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 ),
                 DataType::Duration(TimeUnit::Microsecond),
             ),
-            // `SubtractDates` returns `DayTimeIntervalType(DAY)` (`datetimeExpressions.scala:3617`),
-            // not a number. Sail spells a day-time interval as Arrow `Duration`, so the day count
-            // is scaled to microseconds. Without this the difference is a BIGINT, which lands in a
-            // different arithmetic cell than Spark's interval: `(date - date) + INTERVAL` is
-            // refused here and answered there, and `(date - date) + INT` the other way round.
-            (Ok(DataType::Date32), Ok(DataType::Date32)) => cast(
-                (cast(left, DataType::Int64) - cast(right, DataType::Int64))
-                    * lit(MICROSECONDS_PER_DAY),
-                DataType::Duration(TimeUnit::Microsecond),
-            ),
+            // TODO: `SubtractDates` returns `DayTimeIntervalType(DAY)` (`datetimeExpressions.scala:3616`).
+            //  Sail's only day-time spelling is `Duration`, which carries no field range, and its
+            //  consumers read a `Duration` by seconds: `CAST(date - date AS INT)` answered 1209600
+            //  where Spark casts by the end field (`IntervalUtils.scala:921-928`) and answers 14, and
+            //  `hash`, `to_json`, `try_sum` and `try_avg` refused it. Until the interval keeps its
+            //  fields (`fix/interval`), the difference stays the day count, typed INT -- the offset
+            //  `DateAdd` takes, so `DATE + (date - date)` still resolves.
+            (Ok(DataType::Date32), Ok(DataType::Date32)) => {
+                cast(left, DataType::Int32) - cast(right, DataType::Int32)
+            }
             (Ok(DataType::Date32), Ok(right_type)) if right_type.is_numeric() => {
                 cast(cast(left, DataType::Int32) - right, DataType::Date32)
             }
@@ -424,6 +453,10 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
     if let Some(error) = rejects_udt_operand("*", &left, &right, function_context.schema) {
         return Err(error);
     }
+    if let Some(error) = rejects_binary_string_operand("*", &left, &right, function_context.schema)
+    {
+        return Err(error);
+    }
     let (left, right) = promote_string_operands(
         left,
         right,
@@ -443,6 +476,25 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
     {
         return Err(arithmetic_operand_error("*", left_type, right_type));
     }
+    let ansi_mode = function_context.plan_config.ansi_mode;
+    let is_interval = |data_type: &Result<DataType, _>| {
+        matches!(
+            data_type,
+            Ok(
+                DataType::Interval(IntervalUnit::YearMonth | IntervalUnit::MonthDayNano)
+                    | DataType::Duration(TimeUnit::Microsecond)
+            )
+        )
+    };
+    let (left, right) = match (&left_type, &right_type) {
+        (left_interval, Ok(number_type)) if is_interval(left_interval) => {
+            (left, interval_scale_number(right, number_type, ansi_mode))
+        }
+        (Ok(number_type), right_interval) if is_interval(right_interval) => {
+            (interval_scale_number(left, number_type, ansi_mode), right)
+        }
+        _ => (left, right),
+    };
     Ok(match (left_type, right_type) {
         // `MultiplyYMInterval` (`BinaryArithmeticWithDatetimeResolver.scala:154-155`), either
         // operand order. It scales the MONTHS and rounds HALF_UP, and DataFusion has no coercion
@@ -582,6 +634,11 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
     if let Some(error) = rejects_udt_operand("/", &dividend, &divisor, function_context.schema) {
         return Err(error);
     }
+    if let Some(error) =
+        rejects_binary_string_operand("/", &dividend, &divisor, function_context.schema)
+    {
+        return Err(error);
+    }
     // `/` is a `BinaryArithmetic` too, so the string promotion applies. Its generic branch below
     // already cast a string to DOUBLE, which hid the gap for most pairs -- but not beside a
     // DECIMAL (refused, or typed DECIMAL), not for a malformed string with ANSI off (raised where
@@ -612,6 +669,16 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
     {
         return Err(arithmetic_operand_error("/", dividend_type, divisor_type));
     }
+    let divisor = match (&dividend_type, &divisor_type) {
+        (
+            Ok(
+                DataType::Interval(IntervalUnit::YearMonth | IntervalUnit::MonthDayNano)
+                | DataType::Duration(TimeUnit::Microsecond),
+            ),
+            Ok(divisor_type),
+        ) => interval_scale_number(divisor, divisor_type, ansi_mode),
+        _ => divisor,
+    };
     // `DivideYMInterval` (`BinaryArithmeticWithDatetimeResolver.scala:167`) scales the MONTHS and
     // rounds HALF_UP. It goes before the zero-divisor short-circuit below on purpose: the interval
     // divisions do not read the ANSI flag (`IntervalDivide`), so `INTERVAL '1' MONTH / 0` raises
@@ -737,6 +804,12 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 func: interval_div,
                 args: vec![dividend, divisor],
             })
+        }
+        // `IntegralDivide.inputType` is `LongType` (`arithmetic.scala:890-893`): integers are widened
+        // to BIGINT BEFORE dividing, so `-2147483648 DIV -1` is 2147483648 where an INT division
+        // overflows -- and `-2147483648` is an INT literal now that the sign is folded into it.
+        (Ok(left), Ok(right)) if left.is_integer() && right.is_integer() => {
+            cast(dividend, DataType::Int64) / cast(divisor, DataType::Int64)
         }
         // TODO: In case getting the type fails, we don't want to fail the query.
         //  Future work is needed here, ideally we create something like `Operator::SparkDivide`.
@@ -894,6 +967,11 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
     let (dividend, divisor) = arguments.two()?;
     if let Some(error) = rejects_udt_operand("%", &dividend, &divisor, function_context.schema) {
+        return Err(error);
+    }
+    if let Some(error) =
+        rejects_binary_string_operand("%", &dividend, &divisor, function_context.schema)
+    {
         return Err(error);
     }
     let (dividend, divisor) = promote_string_operands(
@@ -1355,6 +1433,99 @@ fn promote_string_beside_datetime(
         (Date | Timestamp | Time, Str) if ansi_mode => Ok((left, as_datetime(right, &left_type)?)),
         _ => Ok((left, right)),
     }
+}
+
+/// `TimeAddInterval` and `SubtractTimes` are `TimeExpression`s, which refuse the TIME type when
+/// `spark.sql.timeType.enabled` is off (`timeExpressions.scala:41-47`). A TIME literal is not gated
+/// on its own, so the arithmetic that would reach those expressions is.
+fn rejects_time_operand_when_disabled(
+    left: &Expr,
+    right: &Expr,
+    schema: &DFSchemaRef,
+    time_type_enabled: bool,
+) -> Option<PlanError> {
+    let is_time = |e: &Expr| {
+        matches!(
+            e.get_type(schema),
+            Ok(DataType::Time32(_) | DataType::Time64(_))
+        )
+    };
+    (!time_type_enabled && (is_time(left) || is_time(right))).then(|| {
+        PlanError::analysis("[UNSUPPORTED_TIME_TYPE] The data type TIME is not supported.")
+    })
+}
+
+/// The number an interval is scaled by. `MultiplyYMInterval`, `MultiplyDTInterval` and their
+/// divisions take a `NumericType` (`intervalExpressions.scala:605,658,745,828`), and
+/// `MultiplyInterval`/`DivideInterval` a `DoubleType` (`:181`), all through implicit casts, so a
+/// STRING arrives as `Cast(s, DoubleType)`, which reads a malformed string as NULL with ANSI off.
+/// The scaling UDFs coerce a string with DataFusion's strict cast, which raises instead.
+fn interval_scale_number(number: Expr, number_type: &DataType, ansi_mode: bool) -> Expr {
+    if !ansi_mode
+        && matches!(
+            number_type,
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+        )
+    {
+        try_cast(number, DataType::Float64)
+    } else {
+        number
+    }
+}
+
+/// Whether an operand is `substr`/`substring`/`left`/`overlay` over a BINARY. Spark keeps that result
+/// a BINARY (`stringExpressions.scala:1000-1010,2301-2313,2408`), which is not an arithmetic operand,
+/// so the pair is refused at analysis.
+///
+/// TODO: Sail reads that input as a STRING, because most of its string functions do not take a
+///   BINARY yet and a BINARY result broke them downstream (`trim(substr(b, 2))`). The operand is
+///   recognised by shape meanwhile, so a column a subquery projects from it is still a STRING.
+fn is_binary_string_function(expr: &Expr, schema: &DFSchemaRef) -> bool {
+    fn peel(expr: &Expr) -> &Expr {
+        match expr {
+            Expr::Alias(alias) => peel(&alias.expr),
+            Expr::Cast(cast) => peel(&cast.expr),
+            Expr::TryCast(cast) => peel(&cast.expr),
+            _ => expr,
+        }
+    }
+    let Expr::ScalarFunction(function) = peel(expr) else {
+        return false;
+    };
+    matches!(
+        function.func.name(),
+        "substr" | "substring" | "left" | "overlay"
+    ) && function.args.first().is_some_and(|input| {
+        matches!(
+            peel(input).get_type(schema),
+            Ok(DataType::Binary | DataType::LargeBinary | DataType::BinaryView)
+        )
+    })
+}
+
+fn rejects_binary_string_operand(
+    op: &str,
+    left: &Expr,
+    right: &Expr,
+    schema: &DFSchemaRef,
+) -> Option<PlanError> {
+    let name = |expr: &Expr| {
+        if is_binary_string_function(expr, schema) {
+            "BINARY".to_string()
+        } else {
+            expr.get_type(schema)
+                .map_or_else(|_| "UNKNOWN".to_string(), |t| spark_type_name(&t))
+        }
+    };
+    (is_binary_string_function(left, schema) || is_binary_string_function(right, schema)).then(
+        || {
+            PlanError::analysis(format!(
+                "cannot resolve arithmetic '{op}' with operand types {} and {}",
+                name(left),
+                name(right)
+            ))
+        },
+    )
 }
 
 /// What a bare `NULL` becomes when it sits next to a datetime.
@@ -1832,6 +2003,7 @@ fn rejects_unary_operand(op: &str, arg: &Expr, schema: &DFSchemaRef) -> Option<P
         .clone()
         .or_else(|| arg.to_field(schema).ok().map(|(_, field)| field));
     let refused = udt.is_some()
+        || is_binary_string_function(arg, schema)
         || field.as_ref().is_some_and(|field| {
             matches!(
                 operand_role(field.data_type()),

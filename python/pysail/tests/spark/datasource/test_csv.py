@@ -769,3 +769,48 @@ def test_csv_null_value_reads_as_null(spark, tmp_path, infer_schema, content, nu
         assert df.schema["a"].dataType.simpleString() == "int"
     rows = [tuple(None if v is None else str(v) for v in row) for row in df.orderBy("s").collect()]
     assert sorted(rows, key=str) == sorted(expected, key=str)
+
+
+@pytest.mark.parametrize("infer_schema", [True, False])
+@pytest.mark.parametrize(
+    ("content", "null_value", "expected"),
+    [
+        pytest.param(b"a,s\n1,x\n,\nNA,NA\n", "NA", [("1", "x"), (None, None), (None, None)], id="an-empty-field"),
+        pytest.param(b"s\nNAME\nNA\nBANANA\n", "NA", [("BANANA",), ("NAME",), (None,)], id="a-field-containing-it"),
+        pytest.param(b"a\n-5\n-\n7\n", "-", [("-5",), ("7",), (None,)], id="a-negative-number"),
+    ],
+)
+def test_csv_null_value_matches_a_whole_field(spark, tmp_path, infer_schema, content, null_value, expected):
+    # A field is NULL when it EQUALS `nullValue` or is empty (`UnivocityParser.scala:307`,
+    # `CSVInferSchema.scala:134`): `nullValue` does not match part of a field, and it does not
+    # stop an empty field from being NULL.
+    path = tmp_path / "csv_null_value_whole_field"
+    _write_csv(path, "data", content)
+    df = (
+        spark.read.option("header", True)
+        .option("inferSchema", infer_schema)
+        .option("nullValue", null_value)
+        .csv(str(path))
+    )
+    rows = [tuple(None if v is None else str(v) for v in row) for row in df.collect()]
+    assert sorted(rows, key=str) == sorted(expected, key=str)
+
+
+def test_csv_null_value_reads_an_empty_field_under_a_schema_as_null(spark, tmp_path):
+    path = tmp_path / "csv_null_value_schema"
+    _write_csv(path, "data", b"a,s\n1,x\n,\nNA,NA\n")
+    df = spark.read.schema("a INT, s STRING").option("header", True).option("nullValue", "NA").csv(str(path))
+    assert sorted(df.collect(), key=safe_sort_key) == sorted(
+        [Row(a=1, s="x"), Row(a=None, s=None), Row(a=None, s=None)], key=safe_sort_key
+    )
+
+
+@pytest.mark.parametrize("content", [b"a,b\n1,x\n#tail", b"a,b\r1,x\r#c\r2,y\r"], ids=["comment-at-eof", "comment-cr"])
+def test_csv_null_value_keeps_comment_handling_of_a_string_read(spark, tmp_path, content):
+    # A string-only read with `nullValue` ends a comment at the record terminator and drops an
+    # unterminated comment at the end of the file, like the same read without `nullValue`.
+    path = tmp_path / "csv_null_value_comment"
+    _write_csv(path, "data", content)
+    df = spark.read.option("header", True).option("comment", "#").option("nullValue", "NA").csv(str(path))
+    expected = {b"a,b\n1,x\n#tail": [Row(a="1", b="x")], b"a,b\r1,x\r#c\r2,y\r": [Row(a="1", b="x"), Row(a="2", b="y")]}
+    assert df.collect() == expected[content]

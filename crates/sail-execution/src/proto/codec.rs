@@ -176,6 +176,7 @@ use sail_function::scalar::datetime::spark_make_timestamp_ntz::SparkMakeTimestam
 use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use sail_function::scalar::datetime::spark_next_day::SparkNextDay;
 use sail_function::scalar::datetime::spark_time::SparkTime;
+use sail_function::scalar::datetime::spark_time_add_interval::SparkTimeAddDtInterval;
 use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
@@ -3339,6 +3340,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_divide_dt_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkDivideDtInterval::new())))
             }
+            "spark_time_add_dt_interval" => {
+                Ok(Arc::new(ScalarUDF::from(SparkTimeAddDtInterval::new())))
+            }
             "spark_make_dt_interval" | "make_dt_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeDtInterval::new())))
             }
@@ -3451,6 +3455,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkDivideYmInterval>()
             || node_inner.is::<SparkMultiplyDtInterval>()
             || node_inner.is::<SparkDivideDtInterval>()
+            || node_inner.is::<SparkTimeAddDtInterval>()
             || node_inner.is::<OverlayFunc>()
             || node_inner.is::<ParseUrl>()
             || node_inner.is::<RaiseError>()
@@ -7468,6 +7473,18 @@ mod tests {
         assert_eq!(decoded.timezone(), Some("America/Los_Angeles"));
         assert!(decoded.is_try());
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_time_add_dt_interval_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkTimeAddDtInterval::new()))?;
+        assert!(
+            decoded
+                .inner()
+                .downcast_ref::<SparkTimeAddDtInterval>()
+                .is_some()
+        );
         Ok(())
     }
 

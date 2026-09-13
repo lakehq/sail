@@ -40,6 +40,28 @@ Feature: Division by zero behavior
         | Modulo by literal zero throws error in ANSI mode                 | 10 % 0                                                  | (?i)remainder.*zero  |
         | Computed expression evaluating to zero throws error in ANSI mode | 1 / (1 - 1)                                             | (?i)division by zero |
 
+  Rule: a negative zero DECIMAL divisor that is never evaluated does not fail analysis
+
+    # Spark raises division by zero only when the division is evaluated (`DivModLike.eval`), so a
+    # row that never reaches it answers. Sail refuses a literal zero divisor at analysis; `-0.0` is a
+    # literal only once the minus is folded into it.
+    Scenario Outline: a never-evaluated <op> by <divisor> answers with ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT if(k > 100, k <op> <divisor>, NULL) AS result FROM VALUES (1) AS t(k)
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+      Examples:
+        | op  | divisor |
+        | /   | -0.0    |
+        | %   | -0.0    |
+        | DIV | -0.0    |
+        | /   | -0BD    |
+
   Rule: Dynamic divisor division by zero raises error in ANSI mode
     Scenario Outline: Dynamic divisor: <case>
       Given config spark.sql.ansi.enabled = true

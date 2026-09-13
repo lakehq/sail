@@ -38,6 +38,8 @@ Feature: arithmetic operands whose type is derived, vs Spark 4.2.0
     # is not an arithmetic operand, so it refuses at ANALYSIS. Sail used to cast the input to a
     # STRING, which is one: the query failed at runtime with ANSI on and ANSWERED `NULL` with it off,
     # once string promotion read the string with `try_cast`. Both modes, for that reason.
+    # Sail reads that input as a STRING for now (see `binary_substring.feature`), so the operand is
+    # recognised by shape and refused like Spark's BINARY.
     Scenario Outline: <case> is refused as an arithmetic operand with ANSI <ansi>
       Given config spark.sql.ansi.enabled = <ansi>
       When query
@@ -58,6 +60,22 @@ Feature: arithmetic operands whose type is derived, vs Spark 4.2.0
         | substring of binary | true  | /  | substring(encode('Spark SQL', 'utf-8'), 5)                               |
         | left of a binary    | true  | /  | left(encode('Spark SQL', 'utf-8'), 3)                                    |
         | overlay of a binary | true  | /  | overlay(encode('Spark SQL', 'utf-8') PLACING encode('_','utf-8') FROM 6) |
+        | substr of a binary  | false | +  | substr(encode('Spark SQL', 'utf-8'), 5)                                  |
+        | left of a binary    | true  | *  | left(encode('Spark SQL', 'utf-8'), 3)                                    |
+        | substring of binary | false | -  | substring(encode('Spark SQL', 'utf-8'), 5)                               |
+
+    Scenario Outline: unary minus over <case> is refused with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT -<operand> AS result
+        """
+      Then query error (?i)cannot resolve
+
+      Examples:
+        | case               | ansi  | operand                                 |
+        | substr of a binary | false | substr(encode('Spark SQL', 'utf-8'), 5) |
+        | left of a binary   | true  | left(encode('Spark SQL', 'utf-8'), 3)   |
 
   Rule: a function returning an ARRAY is an ARRAY operand
 
@@ -146,8 +164,10 @@ Feature: arithmetic operands whose type is derived, vs Spark 4.2.0
     # numeric, so the verdict holds. So the risk reduces to the result-type divergences already
     # pinned in `arithmetic_result_type.feature`; these three are that risk made observable.
     #
-    # `date - date` yields a day-time interval in both engines now, so an INT added to it is
-    # refused by both -- green, and the guard against the type drifting back.
+    # Spark's `date - date` is a day-time interval, so an INT added to it is refused. Sail keeps the
+    # difference an INT day count until a `Duration` carries its field range (see the next Rule), so
+    # it answers.
+    @sail-bug
     Scenario: a date difference plus an INT is refused
       When query
         """
@@ -179,4 +199,62 @@ Feature: arithmetic operands whose type is derived, vs Spark 4.2.0
       Then query result
         | result            |
         | INTERVAL '16' DAY |
+
+  Rule: a date difference keeps the day count its consumers read
+
+    # Spark casts a `DayTimeIntervalType(DAY)` to a number by its END field, in days
+    # (`IntervalUtils.scala:921-928`). A `Duration` carries no field, and Sail reads one by seconds,
+    # so a difference typed `Duration` cast to INT answered 1209600 for 14 days and refused SMALLINT,
+    # `hash` and `try_sum`. Each row answered before the difference became a `Duration`.
+    Scenario Outline: a date difference read by <case>
+      When query
+        """
+        SELECT <expression> AS result
+        """
+      Then query result
+        | result  |
+        | <value> |
+
+      Examples:
+        | case                 | expression                                                                | value      |
+        | a cast to INT        | CAST(DATE'2024-01-15' - DATE'2024-01-01' AS INT)                          | 14         |
+        | a cast to SMALLINT   | CAST(DATE'2024-01-15' - DATE'2024-01-01' AS SMALLINT)                     | 14         |
+        | hash                 | hash(DATE'2024-01-15' - DATE'2024-01-01') IS NOT NULL                     | true       |
+        | try_sum              | try_sum(DATE'2024-01-15' - DATE'2024-01-01') IS NOT NULL                  | true       |
+        | a date shifted by it | CAST(DATE'2024-01-20' + (DATE'2024-01-15' - DATE'2024-01-01') AS STRING)  | 2024-02-03 |
+
+  Rule: what a date difference answers once it carries Spark's interval type
+
+    # TODO: Spark's `date - date` is `DayTimeIntervalType(DAY)`, so it compares, adds and extracts as
+    #  an interval. Sail keeps the difference an INT day count until an interval carries its field
+    #  range (`fix/interval`): as a `Duration` it was read by seconds and `CAST(date - date AS INT)`
+    #  answered 1209600. Each row below was refused on `main` too.
+    @sail-bug
+    Scenario Outline: a date difference <case>
+      When query
+        """
+        SELECT <expression> AS result
+        """
+      Then query result
+        | result  |
+        | <value> |
+
+      Examples:
+        | case                        | expression                                                                     | value |
+        | compares with an interval   | (DATE'2024-01-15' - DATE'2024-01-01') < INTERVAL '15' DAY                      | true  |
+        | extracts its days           | extract(DAY FROM DATE'2024-01-15' - DATE'2024-01-01')                          | 14    |
+        | subtracts an hour           | (DATE'2024-01-15' - DATE'2024-01-01') - INTERVAL '1' HOUR IS NOT NULL          | true  |
+
+    # TODO: a day-time interval cast to a number is read by its end field in Spark
+    #  (`IntervalUtils.scala:921-928`); a `Duration` carries no field, so Sail reads seconds. Already so
+    #  on `main`.
+    @sail-bug
+    Scenario: a DAY interval cast to INT is its day count
+      When query
+        """
+        SELECT CAST(INTERVAL '14' DAY AS INT) AS result
+        """
+      Then query result
+        | result |
+        | 14     |
 

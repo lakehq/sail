@@ -3,7 +3,7 @@ use std::sync::Arc;
 use arrow::datatypes::DataType;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{ExprSchemable, Operator, ScalarUDF, cast, expr, lit, when};
+use datafusion_expr::{ExprSchemable, Operator, ScalarUDF, cast, expr, lit, try_cast, when};
 use datafusion_spark::function::bitmap::expr_fn as bitmap_fn;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::utils::quote_namespace_if_needed;
@@ -132,7 +132,15 @@ fn bitmap_position_argument(name: &str, input: ScalarFunctionInput) -> PlanResul
             spark_field_type_name(&field)
         )));
     }
-    Ok(cast(value, DataType::Int64))
+    // The implicit cast follows the ANSI flag like any `Cast` (`Cast.scala:886-905`): with it off a
+    // malformed string is NULL, never an error.
+    // TODO: with ANSI off Spark also saturates a DOUBLE past BIGINT, reads NaN as 0 and wraps a
+    //  DECIMAL; `try_cast` reads those as NULL.
+    if function_context.plan_config.ansi_mode {
+        Ok(cast(value, DataType::Int64))
+    } else {
+        Ok(try_cast(value, DataType::Int64))
+    }
 }
 
 fn bitmap_bit_position(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {

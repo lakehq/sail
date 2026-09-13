@@ -67,21 +67,17 @@ impl PlanResolver<'_> {
             }
             Literal::Date32 { days } => Ok(ScalarValue::Date32(days)),
             Literal::Date64 { milliseconds } => Ok(ScalarValue::Date64(milliseconds)),
-            // A TIME literal never goes through data type resolution, so it needs the same gate.
-            Literal::Time32Second { seconds } => {
-                self.check_time_type_enabled()?;
-                Ok(ScalarValue::Time32Second(seconds))
-            }
+            // A TIME literal is not gated on its own: Spark gates `Cast` to TIME, the `TimeExpression`s
+            // and the output schema (`TypeUtils.scala:142`, `timeExpressions.scala:41`), so
+            // `CAST(TIME'..' AS STRING)` answers with `spark.sql.timeType.enabled` off.
+            Literal::Time32Second { seconds } => Ok(ScalarValue::Time32Second(seconds)),
             Literal::Time32Millisecond { milliseconds } => {
-                self.check_time_type_enabled()?;
                 Ok(ScalarValue::Time32Millisecond(milliseconds))
             }
             Literal::Time64Microsecond { microseconds } => {
-                self.check_time_type_enabled()?;
                 Ok(ScalarValue::Time64Microsecond(microseconds))
             }
             Literal::Time64Nanosecond { nanoseconds } => {
-                self.check_time_type_enabled()?;
                 Ok(ScalarValue::Time64Nanosecond(nanoseconds))
             }
             Literal::DurationSecond { seconds } => Ok(ScalarValue::DurationSecond(seconds)),

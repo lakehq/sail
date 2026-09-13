@@ -14,6 +14,7 @@ use sail_catalog::utils::quote_name_if_needed;
 use sail_common::spec::{SAIL_SPARK_UDT_METADATA_KEY, SPARK_METADATA_JSON_KEY};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::{is_marked_variant_storage_type, is_variant_storage_field};
+use sail_function::scalar::misc::spark_udt_storage::SparkUdtStorage;
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 use sail_function::sketch::{DEFAULT_HLL_LG_CONFIG_K, DEFAULT_THETA_LG_NOM_ENTRIES};
 use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
@@ -160,8 +161,21 @@ impl ScalarFunctionBuilder {
         Arc::new(
             move |ScalarFunctionInput {
                       arguments,
-                      function_context: _,
-                  }| { Ok(cast(arguments.one()?, data_type.clone())) },
+                      function_context,
+                  }| {
+                let arg = arguments.one()?;
+                // `string(x)` and the other cast aliases are `Cast(x, T)` (`FunctionRegistry.scala:1204`),
+                // so they read a UDT as its storage exactly as `CAST(x AS T)` does in
+                // `resolve_expression_cast`: DataFusion copies the source field's metadata through a
+                // cast, and a column projected from `string(udt)` would still read as a UDT.
+                let arg = match arg.to_field(function_context.schema) {
+                    Ok((_, field)) if is_spark_udt_field(&field) => {
+                        ScalarUDF::from(SparkUdtStorage::new()).call(vec![arg])
+                    }
+                    _ => arg,
+                };
+                Ok(cast(arg, data_type.clone()))
+            },
         )
     }
 

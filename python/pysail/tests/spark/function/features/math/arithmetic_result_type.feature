@@ -47,11 +47,10 @@ Feature: arithmetic result types (+ - * / %) vs Spark 4.2.0
         | result                 |
         | interval day to second |
 
-    # `SubtractDates` returns `DayTimeIntervalType(DAY)` (`datetimeExpressions.scala:3617`), and
-    # that is a day-time interval in Sail too, so the arithmetic cell matches; what is left is the
-    # FIELD RANGE, which an Arrow `Duration` cannot carry -- every day-time interval reads DAY TO
-    # SECOND. That needs the `SAIL::spark::interval` metadata, which lands with `fix/interval`;
-    # this PR only moved the difference into the right family.
+    # `SubtractDates` returns `DayTimeIntervalType(DAY)` (`datetimeExpressions.scala:3617`). Sail
+    # answers an INT day count: an Arrow `Duration` cannot carry the FIELD RANGE, and without it a
+    # `Duration` is read by seconds wherever the difference is consumed (`CAST(... AS INT)` answered
+    # 1209600). That needs the `SAIL::spark::interval` metadata, which lands with `fix/interval`.
     @sail-bug
     Scenario: a date minus a date is an interval with Spark's field range
       When query

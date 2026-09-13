@@ -98,6 +98,48 @@ def test_a_time_nobody_spelled_is_refused_when_the_flag_is_off(spark, expression
         spark.sql(f"SELECT {expression} AS result").collect()
 
 
+# A TIME literal is not refused on its own: Spark gates `Cast` to TIME, the `TimeExpression`s and
+# the result schema, so a literal consumed before the output still answers with the flag off.
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        pytest.param("SELECT CAST(TIME'01:02:03' AS STRING) AS result", "01:02:03", id="cast-to-string"),
+        pytest.param("SELECT TIME'01:02:03' < TIME'04:05:06' AS result", True, id="comparison"),
+        pytest.param("SELECT typeof(TIME'01:02:03') AS result", "time(6)", id="typeof"),
+        pytest.param("SELECT count(*) AS result FROM VALUES (TIME'01:02:03') AS t(x)", 1, id="values"),
+    ],
+)
+def test_a_time_literal_that_never_reaches_the_output_resolves_when_the_flag_is_off(spark, query, expected):
+    with time_type_enabled(spark, "false"):
+        assert spark.sql(query).collect()[0][0] == expected
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        pytest.param("CAST(TIME'01:02:03' - TIME'01:00:00' AS STRING)", id="subtract-times"),
+        pytest.param("CAST(TIME'01:02:03' + INTERVAL '1' HOUR AS STRING)", id="time-add-interval"),
+    ],
+)
+def test_time_arithmetic_is_refused_when_the_flag_is_off(spark, expression):
+    with (
+        time_type_enabled(spark, "false"),
+        pytest.raises(AnalysisException, match=r"(?i)the data type TIME is not supported"),
+    ):
+        spark.sql(f"SELECT {expression} AS result").collect()
+
+
+# TODO: Spark refuses every `TimeExpression` over a TIME with the flag off; Sail only gates the
+#   output schema and the arithmetic, so a TIME function returning another type answers.
+@pytest.mark.xfail(not is_jvm_spark(), strict=True, reason="Sail does not gate `TimeExpression`s")
+def test_a_time_function_is_refused_when_the_flag_is_off(spark):
+    with (
+        time_type_enabled(spark, "false"),
+        pytest.raises(AnalysisException, match=r"(?i)the data type TIME is not supported"),
+    ):
+        spark.sql("SELECT hour(TIME'01:02:03') AS result").collect()
+
+
 def test_a_file_whose_schema_has_a_time_column_is_refused_when_the_flag_is_off(spark, tmp_path):
     location = str(tmp_path / "time.parquet")
     with time_type_enabled(spark, "true"):
