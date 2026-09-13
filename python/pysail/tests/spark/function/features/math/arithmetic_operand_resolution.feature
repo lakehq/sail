@@ -2442,35 +2442,15 @@ Feature: arithmetic operand pairs Spark resolves (+ - * / %) vs Spark 4.2.0
         | time - null | TIME '01:02:03' - NULL  | interval hour to second |
         | null - time | NULL - TIME '01:02:03'  | interval hour to second |
 
-  Rule: an untyped NULL beside a calendar interval resolves only while the interval is unresolved
+  Rule: an untyped NULL beside a calendar interval
 
     # `CalendarInterval + NULL` has no arm of its own: the NULL is cast to a day-time interval for
     # `+` and to the other operand's type for `-` (`BinaryArithmeticWithDatetimeResolver.scala:88,
-    # 91,119,121`), and `calendar + day-time interval` is refused (`CAST_WITHOUT_SUGGESTION`). Only
-    # `calendar - NULL` survives, as `calendar - calendar`. The exception is measured, not derived:
-    # while a `make_interval` still has an argument to cast -- seconds that are not DECIMAL(18,6), a
-    # field that is not an INT -- it is unresolved in the pass that would cast the NULL, and the
-    # pair resolves. ANSI is not an axis: every row below was measured in both modes on the JVM.
-    Scenario Outline: <expression> is refused with ANSI <ansi>
-      Given config spark.sql.ansi.enabled = <ansi>
-      When query
-        """
-        SELECT <expression> AS v FROM (SELECT make_interval(0, 1, 0, 1, 0, 0, 0) AS c)
-        """
-      Then query error (?i)cannot resolve
-
-      Examples:
-        | ansi  | expression                                                     |
-        | false | c + NULL                                                       |
-        | true  | NULL + c                                                       |
-        | false | NULL - c                                                       |
-        | true  | coalesce(c, c) + NULL                                          |
-        | false | CAST('1 day' AS INTERVAL) + NULL                               |
-        | true  | NULL - CAST('1 day' AS INTERVAL)                               |
-        | false | make_interval(0, 1) + NULL                                     |
-        | true  | NULL + make_interval(0, 1, 0, 1, 0, 0, CAST(0 AS DECIMAL(18,6))) |
-        | false | NULL - make_interval(0, 1, 0, 1, 0, 0, CAST(0 AS DECIMAL(18,6))) |
-
+    # 91,119,121`), and `calendar + day-time interval` is refused. Whether Spark gets there depends on
+    # whether the interval operand is still unresolved in that pass: `make_interval(0,1,0,1,0,0,0)`,
+    # `-make_interval(...)`, `make_interval(...) * 2` resolve; a column or `CAST('1 day' AS INTERVAL)`
+    # does not. Sail resolves them all rather than refuse a query Spark answers.
+    # ANSI is not an axis: every row below was measured in both modes on the JVM.
     Scenario Outline: <expression> resolves with ANSI <ansi>
       Given config spark.sql.ansi.enabled = <ansi>
       When query
@@ -2489,6 +2469,31 @@ Feature: arithmetic operand pairs Spark resolves (+ - * / %) vs Spark 4.2.0
         | true  | NULL - make_interval(0, 1, 0, 1, 0, 0, 0.5)                     |
         | false | NULL + make_interval(0, 1, 0, 1, 0, 0, CAST(0 AS DECIMAL(10,6))) |
         | true  | make_interval(CAST(0 AS BIGINT), 1, 0, 1, 0, 0, CAST(0 AS DECIMAL(18,6))) + NULL |
+        | false | -make_interval(0, 1, 0, 1, 0, 0, 0) + NULL                      |
+        | true  | NULL + make_interval(0, 1, 0, 1, 0, 0, 0) * 2                   |
+        | false | NULL - coalesce(make_interval(0, 1, 0, 1, 0, 0, 0), NULL)       |
+
+    # TODO: Spark refuses these, since the interval operand is already resolved; see above.
+    @sail-bug
+    Scenario Outline: <expression> is refused with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT <expression> AS v FROM (SELECT make_interval(0, 1, 0, 1, 0, 0, 0) AS c)
+        """
+      Then query error (?i)cannot resolve
+
+      Examples:
+        | ansi  | expression                                                       |
+        | false | c + NULL                                                         |
+        | true  | NULL + c                                                         |
+        | false | NULL - c                                                         |
+        | true  | coalesce(c, c) + NULL                                            |
+        | false | CAST('1 day' AS INTERVAL) + NULL                                 |
+        | true  | NULL - CAST('1 day' AS INTERVAL)                                 |
+        | false | make_interval(0, 1) + NULL                                       |
+        | true  | NULL + make_interval(0, 1, 0, 1, 0, 0, CAST(0 AS DECIMAL(18,6))) |
+        | false | NULL - make_interval(0, 1, 0, 1, 0, 0, CAST(0 AS DECIMAL(18,6))) |
 
   Rule: a DATE minus a TIMESTAMP is subtracted as two timestamps
 

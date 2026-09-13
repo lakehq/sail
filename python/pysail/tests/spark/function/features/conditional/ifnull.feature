@@ -55,3 +55,21 @@ Feature: ifnull output schema
       Then query result
         | v          |
         | 2025-03-15 |
+
+    # `coalesce` cannot type a TIMESTAMP beside a DATE yet, so that pair stays on `nvl`; it must resolve.
+    Scenario Outline: ifnull of <case> resolves with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT ifnull(<left>, <right>) IS NOT NULL AS resolved
+        """
+      Then query result
+        | resolved |
+        | true     |
+
+      Examples:
+        | case                 | ansi  | left                              | right                          |
+        | a timestamp, a date  | false | TIMESTAMP'2024-01-15 10:00:00'    | DATE'2024-01-16'               |
+        | a date, a timestamp  | true  | DATE'2024-01-16'                  | TIMESTAMP'2024-01-15 10:00:00' |
+        | an ntz, a date       | false | TIMESTAMP_NTZ'2024-01-15 10:00:00' | DATE'2024-01-16'              |
+        | two dates            | true  | CAST(NULL AS DATE)                | DATE'2024-01-16'               |

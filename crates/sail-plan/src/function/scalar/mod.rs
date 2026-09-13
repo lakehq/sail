@@ -1,5 +1,4 @@
 pub(crate) use lambda::{get_lambda_parameters, is_higher_order_function};
-pub(crate) use math::operand_udt_field;
 
 use crate::function::common::ScalarFunction;
 

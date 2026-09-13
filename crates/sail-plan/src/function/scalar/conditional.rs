@@ -90,14 +90,18 @@ fn nvl(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     if is_container(&left) || is_container(&right) {
         return Ok(expr_fn::coalesce(vec![left, right]));
     }
-    // DataFusion's `nvl` coerces a DATE or TIMESTAMP to `Utf8` too, so a datetime pair goes through
-    // `coalesce` as well, widened first the way Sail's `coalesce` widens it: `nvl(date, '...')` is a
-    // DATE with ANSI on and a STRING with it off, as in Spark.
-    let is_temporal = |expr: &expr::Expr| {
-        expr.get_type(schema)
-            .is_ok_and(|data_type| is_temporal_type(&data_type))
-    };
-    if is_temporal(&left) || is_temporal(&right) {
+    // DataFusion's `nvl` coerces a DATE or TIMESTAMP to `Utf8`, so a datetime pair goes through
+    // `coalesce`, widened first the way Sail's `coalesce` widens it: `nvl(date, '...')` is a DATE
+    // with ANSI on and a STRING with it off, as in Spark.
+    // TODO: `coalesce` cannot type a TIMESTAMP beside a DATE yet, so that pair stays on `nvl`.
+    let data_type = |expr: &expr::Expr| expr.get_type(schema).ok();
+    let (left_type, right_type) = (data_type(&left), data_type(&right));
+    let is_temporal = |t: &Option<DataType>| t.as_ref().is_some_and(is_temporal_type);
+    let is_date = |t: &Option<DataType>| t.as_ref().is_some_and(is_date_type);
+    let is_timestamp = |t: &Option<DataType>| matches!(t, Some(DataType::Timestamp(_, _)));
+    let timestamp_beside_date = (is_timestamp(&left_type) && is_date(&right_type))
+        || (is_date(&left_type) && is_timestamp(&right_type));
+    if (is_temporal(&left_type) || is_temporal(&right_type)) && !timestamp_beside_date {
         let arguments = coerce_string_temporal_values(vec![left, right], &function_context)?;
         return Ok(expr_fn::coalesce(arguments));
     }

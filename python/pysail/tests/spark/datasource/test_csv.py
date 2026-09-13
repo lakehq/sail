@@ -744,3 +744,28 @@ def test_csv_temporary_view_using_infer_schema_describes_an_int_column(spark, tm
         ]
     finally:
         spark.catalog.dropTempView("v_csv_infer")
+
+
+@pytest.mark.parametrize("infer_schema", [True, False])
+@pytest.mark.parametrize(
+    ("content", "null_value", "expected"),
+    [
+        pytest.param(b"a,s\n1,x\nNA,NA\n", "NA", [("1", "x"), (None, None)], id="a-marker"),
+        pytest.param(b"a,s\n1,x\n3000000000,NA\n", "3000000000", [("1", "x"), (None, "NA")], id="past-an-int"),
+    ],
+)
+def test_csv_null_value_reads_as_null(spark, tmp_path, infer_schema, content, null_value, expected):
+    # `nullValue` turns the matching field into NULL whatever the column type, so an integer column
+    # inferred around it reads back, and a marker past an INT does not widen or break the column.
+    path = tmp_path / "csv_null_value"
+    _write_csv(path, "data", content)
+    df = (
+        spark.read.option("header", True)
+        .option("inferSchema", infer_schema)
+        .option("nullValue", null_value)
+        .csv(str(path))
+    )
+    if infer_schema:
+        assert df.schema["a"].dataType.simpleString() == "int"
+    rows = [tuple(None if v is None else str(v) for v in row) for row in df.orderBy("s").collect()]
+    assert sorted(rows, key=str) == sorted(expected, key=str)

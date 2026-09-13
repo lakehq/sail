@@ -107,6 +107,10 @@ impl CsvSource {
     /// The projected decoder covers all-string file schemas (the Spark default
     /// `inferSchema=false`); typed columns keep the arrow decoder.
     fn projected_decoder(&self) -> Result<Option<ProjectedCsvDecoder>> {
+        // Only arrow's decoder applies a null pattern (`nullValue`), so a read with one keeps it.
+        if self.options.null_regex.is_some() {
+            return Ok(None);
+        }
         let schema = self.table_schema.file_schema();
         let all_strings = schema
             .fields()
@@ -147,6 +151,13 @@ impl CsvSource {
         }
         if let Some(comment) = self.comment() {
             builder = builder.with_comment(comment);
+        }
+        // `nullValue` makes the matching field NULL whatever the column type, as the schema inference
+        // pass already reads it; without it a marker in an INT column failed the scan.
+        if let Some(null_regex) = &self.options.null_regex {
+            let regex = regex::Regex::new(null_regex)
+                .map_err(|error| DataFusionError::External(Box::new(error)))?;
+            builder = builder.with_null_regex(regex);
         }
 
         Ok(builder)
