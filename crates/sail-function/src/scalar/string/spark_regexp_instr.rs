@@ -54,7 +54,14 @@ impl ScalarUDFImpl for SparkRegexpInstrIndex {
         // including ANSI overflow handling, before normalizing their search start.
         if !matches!(
             data_type,
-            DataType::Int8 | DataType::Int16 | DataType::Int32
+            DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::Int64
+                | DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64
         ) {
             return Ok(value.clone());
         }
