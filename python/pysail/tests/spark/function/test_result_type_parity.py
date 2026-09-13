@@ -35,7 +35,7 @@ ERROR = "<error>"
 # The longest catalogue example worth running as a single expression.
 MAX_QUERY_LENGTH = 160
 # What the reference currently records; both must go DOWN, never up.
-DIVERGENT_TYPES = 38
+DIVERGENT_TYPES = 31
 SAIL_REFUSES = 83
 
 
@@ -78,13 +78,15 @@ def measure(spark, expressions: list[str]) -> dict[str, str]:
 def test_the_result_type_of_every_function_matches_the_reference(spark):
     reference = RESULT_TYPES
     engine = "spark" if is_jvm_spark() else "sail"
-    expressions = catalogue_expressions()
-    assert expressions, "the function catalogue yielded no examples"
+    # The recorded expressions ship with the package, so the guard runs from an installed wheel too;
+    # the YAML catalogue they came from lives in the source checkout only.
+    expressions = sorted(reference)
 
     measured = measure(spark, expressions)
-    expected = {e: reference[e][engine] for e in expressions if e in reference}
+    expected = {e: reference[e][engine] for e in expressions}
     changed = {e: (expected[e], measured[e]) for e in expected if measured[e] != expected[e]}
-    added = [e for e in expressions if e not in reference]
+    catalogue = catalogue_expressions() if CATALOGUE.is_dir() else []
+    added = [e for e in catalogue if e not in reference]
 
     # A changed type is not automatically a bug -- it is a change nobody recorded. Fixing a
     # divergence trips this too, which is the point: the reference is regenerated deliberately.

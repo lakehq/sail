@@ -2365,6 +2365,7 @@ Feature: arithmetic operand pairs Spark resolves (+ - * / %) vs Spark 4.2.0
     # ANSI is not an axis: all twenty-four cells were measured under both modes on the JVM and
     # neither the verdict nor the type changes, so one mode is the whole contract.
     Scenario Outline: an untyped NULL beside a <case> resolves
+      Given config spark.sql.timeType.enabled = true
       When query
         """
         SELECT typeof(<expression>) IS NOT NULL AS resolved
@@ -2396,6 +2397,7 @@ Feature: arithmetic operand pairs Spark resolves (+ - * / %) vs Spark 4.2.0
     # inserts is DAY TO SECOND and `:69` widens the date for anything past DAY -- and `-` gives a
     # day-time interval.
     Scenario Outline: an untyped NULL beside a <case> is typed <type>
+      Given config spark.sql.timeType.enabled = true
       When query
         """
         SELECT typeof(<expression>) AS t
@@ -2424,6 +2426,7 @@ Feature: arithmetic operand pairs Spark resolves (+ - * / %) vs Spark 4.2.0
     # `date - date` itself; it goes with `fix/interval`.
     @sail-bug
     Scenario Outline: an untyped NULL beside a <case> is typed <type>, which Sail does not spell
+      Given config spark.sql.timeType.enabled = true
       When query
         """
         SELECT typeof(<expression>) AS t

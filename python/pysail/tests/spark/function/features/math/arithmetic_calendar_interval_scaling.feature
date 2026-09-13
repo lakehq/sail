@@ -106,11 +106,23 @@ Feature: scaling a legacy calendar interval by a number, vs Spark 4.2.0
         | v    |
         | true |
 
+    # A PySpark 3.5 client cannot receive a `calendar_interval` column at all (`Unsupported data type
+    # calendar_interval`), so the bare interval is only asserted from PySpark 4; the cast to STRING
+    # keeps the same division reachable from every client.
+    @spark-4.0
     Scenario: a calendar interval divided by zero raises with ANSI on
       Given config spark.sql.ansi.enabled = true
       When query
         """
         SELECT make_interval(0,0,0,1,0,0,0) / CAST(0 AS INT) AS v
+        """
+      Then query error (?i)division by zero
+
+    Scenario: a calendar interval divided by zero raises with ANSI on, read as a string
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST(make_interval(0,0,0,1,0,0,0) / CAST(0 AS INT) AS STRING) AS v
         """
       Then query error (?i)division by zero
 

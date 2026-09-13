@@ -35,11 +35,11 @@ Feature: arithmetic operands whose type is derived, vs Spark 4.2.0
   Rule: a BINARY-returning function is a BINARY operand
 
     # Spark types `substr`/`substring`/`left`/`overlay` over a BINARY input as BINARY, and BINARY
-    # is not an arithmetic operand, so it refuses at ANALYSIS. Sail types them as STRING, which
-    # `/` and `%` happily coerce, so the query is planned and then dies at RUNTIME with
-    # `Cannot cast string 'k SQL' to value of Int32`. Later, and with a worse message.
-    @sail-bug
-    Scenario Outline: <case> is refused as an arithmetic operand
+    # is not an arithmetic operand, so it refuses at ANALYSIS. Sail used to cast the input to a
+    # STRING, which is one: the query failed at runtime with ANSI on and ANSWERED `NULL` with it off,
+    # once string promotion read the string with `try_cast`. Both modes, for that reason.
+    Scenario Outline: <case> is refused as an arithmetic operand with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
       When query
         """
         SELECT CAST(2 AS INT) <op> <operand> AS result
@@ -47,12 +47,17 @@ Feature: arithmetic operands whose type is derived, vs Spark 4.2.0
       Then query error (?i)cannot resolve
 
       Examples:
-        | case                | op | operand                                                              |
-        | substr of a binary  | /  | substr(encode('Spark SQL', 'utf-8'), 5)                              |
-        | substr of a binary  | %  | substr(encode('Spark SQL', 'utf-8'), 5)                              |
-        | substring of binary | /  | substring(encode('Spark SQL', 'utf-8'), 5)                           |
-        | left of a binary    | /  | left(encode('Spark SQL', 'utf-8'), 3)                                |
-        | overlay of a binary | /  | overlay(encode('Spark SQL', 'utf-8') PLACING encode('_','utf-8') FROM 6) |
+        | case                | ansi  | op | operand                                                                  |
+        | substr of a binary  | false | /  | substr(encode('Spark SQL', 'utf-8'), 5)                                  |
+        | substr of a binary  | false | %  | substr(encode('Spark SQL', 'utf-8'), 5)                                  |
+        | substring of binary | false | /  | substring(encode('Spark SQL', 'utf-8'), 5)                               |
+        | left of a binary    | false | /  | left(encode('Spark SQL', 'utf-8'), 3)                                    |
+        | overlay of a binary | false | /  | overlay(encode('Spark SQL', 'utf-8') PLACING encode('_','utf-8') FROM 6) |
+        | substr of a binary  | true  | /  | substr(encode('Spark SQL', 'utf-8'), 5)                                  |
+        | substr of a binary  | true  | %  | substr(encode('Spark SQL', 'utf-8'), 5)                                  |
+        | substring of binary | true  | /  | substring(encode('Spark SQL', 'utf-8'), 5)                               |
+        | left of a binary    | true  | /  | left(encode('Spark SQL', 'utf-8'), 3)                                    |
+        | overlay of a binary | true  | /  | overlay(encode('Spark SQL', 'utf-8') PLACING encode('_','utf-8') FROM 6) |
 
   Rule: a function returning an ARRAY is an ARRAY operand
 
