@@ -61,6 +61,39 @@ fn if_expr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
+/// `nvl`/`ifnull` are `Coalesce(Seq(left, right))` in Spark (`nullExpressions.scala:246`).
+/// DataFusion's `nvl` coerces every container to `Utf8` -- `nvl(array, array)` is a STRING, and so
+/// is `nvl(NULL, array('2'))` -- and a STRING is an arithmetic operand, so
+/// `2 / nvl(NULL, array('2'))` resolved where Spark refuses an ARRAY. A container therefore goes
+/// through `coalesce`, which keeps its type.
+///
+/// Scalars stay on `nvl`: `coalesce` refuses `nvl('a', 1)`, which Sail answers like Spark today.
+fn nvl(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let (left, right) = arguments.two()?;
+    let schema = function_context.schema;
+    let is_container = |expr: &expr::Expr| {
+        matches!(
+            expr.get_type(schema),
+            Ok(DataType::List(_)
+                | DataType::LargeList(_)
+                | DataType::FixedSizeList(_, _)
+                | DataType::ListView(_)
+                | DataType::LargeListView(_)
+                | DataType::Map(_, _)
+                | DataType::Struct(_))
+        )
+    };
+    if is_container(&left) || is_container(&right) {
+        Ok(expr_fn::coalesce(vec![left, right]))
+    } else {
+        Ok(expr_fn::nvl(left, right))
+    }
+}
+
 fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
         arguments,
@@ -181,11 +214,11 @@ pub(super) fn list_built_in_conditional_functions() -> Vec<(&'static str, Scalar
     vec![
         ("coalesce", F::custom(coalesce)),
         ("if", F::custom(if_expr)),
-        ("ifnull", F::binary(expr_fn::nvl)),
+        ("ifnull", F::custom(nvl)),
         ("nanvl", F::binary(expr_fn::nanvl)),
         ("nullif", F::binary(expr_fn::nullif)),
         ("nullifzero", F::custom(nullifzero)),
-        ("nvl", F::binary(expr_fn::nvl)),
+        ("nvl", F::custom(nvl)),
         ("nvl2", F::ternary(expr_fn::nvl2)),
         ("zeroifnull", F::custom(zeroifnull)),
         ("when", F::custom(case)),

@@ -56,15 +56,44 @@ Feature: arithmetic operands whose type is derived, vs Spark 4.2.0
 
   Rule: a function returning an ARRAY is an ARRAY operand
 
-    # Spark types `nvl(NULL, array('2'))` as `ARRAY<STRING>` and refuses it; Sail types it STRING
-    # and fails at runtime instead. Same shape as the BINARY family, different return type.
-    @sail-bug
-    Scenario: an array from nvl is refused as an arithmetic operand
+    # `nvl`/`ifnull` are `Coalesce(Seq(left, right))` in Spark (`nullExpressions.scala:246`), so a
+    # container stays a container and an arithmetic operator refuses it at analysis. DataFusion's
+    # `nvl` coerced every ARRAY, MAP and STRUCT to a STRING -- even `nvl(array, array)` -- and a
+    # STRING is an arithmetic operand: the query failed at runtime with ANSI on and ANSWERED `NULL`
+    # with it off, once string promotion read the string with `try_cast`. Both modes, both names.
+    Scenario Outline: an array from <function> is refused as an arithmetic operand with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
       When query
         """
-        SELECT CAST(2 AS INT) / nvl(NULL, array('2')) AS result
+        SELECT CAST(2 AS INT) / <function>(NULL, array('2')) AS result
         """
       Then query error (?i)cannot resolve
+
+      Examples:
+        | function | ansi  |
+        | nvl      | false |
+        | nvl      | true  |
+        | ifnull   | false |
+        | ifnull   | true  |
+
+    # The root, asserted directly: the container keeps its type through `nvl`, with a NULL or not.
+    Scenario Outline: <function> keeps a container's type: <case>
+      When query
+        """
+        SELECT typeof(<function>(<left>, <right>)) AS t
+        """
+      Then query result
+        | t      |
+        | <type> |
+
+      Examples:
+        | function | case          | left                   | right                  | type               |
+        | nvl      | NULL, array   | NULL                   | array('2')             | array<string>      |
+        | nvl      | array, array  | array('1')             | array('2')             | array<string>      |
+        | nvl      | map, map      | map('a', 1)            | map('b', 2)            | map<string,int>    |
+        | nvl      | struct        | named_struct('a', 1)   | named_struct('a', 2)   | struct<a:int>      |
+        | ifnull   | NULL, array   | NULL                   | array('2')             | array<string>      |
+        | nvl      | a plain int   | CAST(NULL AS INT)      | 2                      | int                |
 
   Rule: make_date with a NULL argument is still a DATE
 
