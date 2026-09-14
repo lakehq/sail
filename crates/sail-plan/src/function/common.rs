@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
 use datafusion::logical_expr::expr::NullTreatment;
 use datafusion::prelude::SessionContext;
 use datafusion_common::tree_node::TreeNode;
@@ -10,7 +10,11 @@ use datafusion_expr::{
     AggregateUDF, BinaryExpr, ExprSchemable, Operator, ScalarUDF, ScalarUDFImpl, WindowFrame,
     WindowFunctionDefinition, WindowUDF, cast, expr, lit,
 };
+use sail_catalog::utils::quote_name_if_needed;
+use sail_common::spec::{SAIL_SPARK_UDT_METADATA_KEY, SPARK_METADATA_JSON_KEY};
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_common_datafusion::variant::{is_marked_variant_storage_type, is_variant_storage_field};
+use sail_function::scalar::misc::spark_udt_storage::SparkUdtStorage;
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 use sail_function::sketch::{DEFAULT_HLL_LG_CONFIG_K, DEFAULT_THETA_LG_NOM_ENTRIES};
 use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
@@ -157,8 +161,21 @@ impl ScalarFunctionBuilder {
         Arc::new(
             move |ScalarFunctionInput {
                       arguments,
-                      function_context: _,
-                  }| { Ok(cast(arguments.one()?, data_type.clone())) },
+                      function_context,
+                  }| {
+                let arg = arguments.one()?;
+                // `string(x)` and the other cast aliases are `Cast(x, T)` (`FunctionRegistry.scala:1204`),
+                // so they read a UDT as its storage exactly as `CAST(x AS T)` does in
+                // `resolve_expression_cast`: DataFusion copies the source field's metadata through a
+                // cast, and a column projected from `string(udt)` would still read as a UDT.
+                let arg = match arg.to_field(function_context.schema) {
+                    Ok((_, field)) if is_spark_udt_field(&field) => {
+                        ScalarUDF::from(SparkUdtStorage::new()).call(vec![arg])
+                    }
+                    _ => arg,
+                };
+                Ok(cast(arg, data_type.clone()))
+            },
         )
     }
 
@@ -522,4 +539,153 @@ pub fn expr_contains_spark_cast_to_variant(body: &expr::Expr) -> PlanResult<bool
                 if function.func.inner().is::<SparkCastToVariant>()
         ))
     })?)
+}
+
+/// Whether the field carries Spark UDT identity. Sail stores a UDT as its STORAGE type plus
+/// this metadata key (`resolver/data_type.rs`), so a guard reading only the `DataType` judges a
+/// UDT by the type underneath it -- Spark rejects the UDT itself, whatever it is stored as.
+pub(crate) fn is_spark_udt_field(field: &Field) -> bool {
+    field.metadata().contains_key(SAIL_SPARK_UDT_METADATA_KEY)
+}
+
+/// [`spark_type_name`] for an operand whose `Field` is available. Only the field carries UDT
+/// identity and the VARIANT marker, so the bare `DataType` cannot name either.
+pub(crate) fn spark_field_type_name(field: &Field) -> String {
+    if is_spark_udt_field(field) {
+        format!("UDT(\"{}\")", spark_type_name(field.data_type()))
+    } else if is_variant_storage_field(field) {
+        "VARIANT".to_string()
+    } else {
+        spark_type_name(field.data_type())
+    }
+}
+
+/// The comment on a struct field, read the way Spark's `StructField.getComment` reads it. A SQL
+/// `COMMENT` lands under the plain `comment` key; a DataFrame schema carries the whole Spark
+/// metadata as JSON under [`SPARK_METADATA_JSON_KEY`].
+fn spark_field_comment(field: &Field) -> Option<String> {
+    if let Some(comment) = field.metadata().get("comment") {
+        return Some(comment.clone());
+    }
+    let metadata = field.metadata().get(SPARK_METADATA_JSON_KEY)?;
+    let metadata: serde_json::Value = serde_json::from_str(metadata).ok()?;
+    metadata.get("comment")?.as_str().map(str::to_owned)
+}
+
+/// The Spark type name (`INT`, `STRING`, `INTERVAL DAY TO SECOND`, ...), for error messages that
+/// quote operand types rather than leaking Arrow's `Debug` (`Int32`, `Utf8`, `Interval(...)`).
+pub(crate) fn spark_type_name(data_type: &DataType) -> String {
+    match data_type {
+        DataType::Decimal32(precision, scale)
+        | DataType::Decimal64(precision, scale)
+        | DataType::Decimal128(precision, scale)
+        | DataType::Decimal256(precision, scale) => {
+            format!("DECIMAL({precision},{scale})")
+        }
+        DataType::Int8 => "TINYINT".to_string(),
+        DataType::Int16 => "SMALLINT".to_string(),
+        DataType::Int32 => "INT".to_string(),
+        DataType::Int64 => "BIGINT".to_string(),
+        DataType::Float32 => "FLOAT".to_string(),
+        DataType::Float64 => "DOUBLE".to_string(),
+        // Spark has no unsigned type: its Parquet reader widens each unsigned width one step so
+        // every value stays representable (`ParquetSchemaConverter.scala:290,311`), and the widened
+        // type is the one Spark names. Spark has no half-float either.
+        DataType::UInt8 => "SMALLINT".to_string(),
+        DataType::UInt16 => "INT".to_string(),
+        DataType::UInt32 => "BIGINT".to_string(),
+        DataType::UInt64 => "DECIMAL(20,0)".to_string(),
+        DataType::Float16 => "HALF FLOAT".to_string(),
+        // The non-numeric types the arithmetic operand-reject error surfaces, named the Spark
+        // way rather than leaking Arrow's `Debug` (`Utf8`, `Boolean`, `Interval(...)`).
+        DataType::Boolean => "BOOLEAN".to_string(),
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => "STRING".to_string(),
+        DataType::Binary
+        | DataType::LargeBinary
+        | DataType::BinaryView
+        | DataType::FixedSizeBinary(_) => "BINARY".to_string(),
+        DataType::Date32 | DataType::Date64 => "DATE".to_string(),
+        DataType::Timestamp(_, Some(_)) => "TIMESTAMP".to_string(),
+        DataType::Timestamp(_, None) => "TIMESTAMP_NTZ".to_string(),
+        // Spark's `TimeType.typeName` is `time($precision)` (`TimeType.scala:45`), so the
+        // precision is part of the name: Arrow's time unit maps to 0/3/6/9 digits.
+        DataType::Time32(unit) | DataType::Time64(unit) => {
+            let precision = match unit {
+                TimeUnit::Second => 0,
+                TimeUnit::Millisecond => 3,
+                TimeUnit::Microsecond => 6,
+                TimeUnit::Nanosecond => 9,
+            };
+            format!("TIME({precision})")
+        }
+        DataType::Interval(IntervalUnit::YearMonth) => "INTERVAL YEAR TO MONTH".to_string(),
+        // Spark's legacy CalendarIntervalType, which Arrow stores as `Interval(MonthDayNano)`.
+        // `CalendarIntervalType.typeName` is plain `interval` (`CalendarIntervalType.scala:40`),
+        // so naming it `INTERVAL DAY TO SECOND` would make this table disagree with
+        // `operand_role`, which keeps the calendar interval apart from the day-time one.
+        DataType::Interval(IntervalUnit::MonthDayNano) => "INTERVAL".to_string(),
+        // The other two spellings of Spark's day-time interval. `Interval(DayTime)` maps to
+        // `DayTimeInterval` on the way out (`data_type_arrow.rs:200`) and the plan formatter
+        // already renders it `interval day to second` (`formatter.rs:81`).
+        DataType::Duration(_) | DataType::Interval(IntervalUnit::DayTime) => {
+            "INTERVAL DAY TO SECOND".to_string()
+        }
+        DataType::Null => "VOID".to_string(),
+        // Not reusing `SparkPlanFormatter::data_type_to_simple_string` (formatter.rs): that one
+        // renders Spark's lowercase `simpleString` for plan output, while a `DATATYPE_MISMATCH`
+        // operand needs the uppercase spelling, the ` NOT NULL` field suffix, a VARIANT arm and
+        // `Decimal32`/`Decimal64`, and must be infallible. Keep the two tables in sync.
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field)
+        | DataType::FixedSizeList(field, _) => {
+            format!("ARRAY<{}>", spark_type_name(field.data_type()))
+        }
+        // A VARIANT is stored as a struct of binary `metadata`/`value` columns, so it has to be
+        // named before the generic struct arm below — otherwise the message reports Sail's
+        // physical shredding layout (`STRUCT<value: BINARY NOT NULL, ...>`) for a value Spark
+        // simply calls "VARIANT".
+        DataType::Struct(_) if is_marked_variant_storage_type(data_type) => "VARIANT".to_string(),
+        DataType::Struct(fields) => {
+            let fields = fields
+                .iter()
+                .map(|field| {
+                    let nullability = if field.is_nullable() { "" } else { " NOT NULL" };
+                    // `StructField.sql` (`StructField.scala:289-301`): the comment follows
+                    // NOT NULL, with only the single quote escaped.
+                    let comment = spark_field_comment(field)
+                        .map(|comment| format!(" COMMENT '{}'", comment.replace('\'', "\\'")))
+                        .unwrap_or_default();
+                    // Spark back-quotes a nested field name that is not a plain
+                    // identifier, doubling any back-quote inside it.
+                    format!(
+                        "{}: {}{nullability}{comment}",
+                        quote_name_if_needed(field.name()),
+                        spark_type_name(field.data_type())
+                    )
+                })
+                .collect::<Vec<_>>();
+            format!("STRUCT<{}>", fields.join(", "))
+        }
+        DataType::Map(field, _) => match field.data_type() {
+            DataType::Struct(entries) if entries.len() == 2 => format!(
+                "MAP<{}, {}>",
+                spark_type_name(entries[0].data_type()),
+                spark_type_name(entries[1].data_type())
+            ),
+            other => format!("MAP<{}>", spark_type_name(other)),
+        },
+        // A dictionary-encoded column carries its logical type in the VALUE type, and
+        // `rejects_as_divide_dividend` deliberately does not reject `Dictionary` (it may wrap a
+        // numeric), so one can reach this function as the PEER of a rejected operand. Naming the
+        // value type keeps the message in Spark's vocabulary; the encoding is an Arrow storage
+        // detail Spark has no name for.
+        DataType::Dictionary(_, value_type) => spark_type_name(value_type),
+        DataType::RunEndEncoded(_, values) => spark_type_name(values.data_type()),
+        // Spark has no union type, so there is no spelling to borrow. Named rather than left to
+        // a wildcard so the match stays exhaustive: a new Arrow variant becomes a compile error
+        // instead of an Arrow `Debug` leak.
+        DataType::Union(_, _) => "UNION".to_string(),
+    }
 }

@@ -21,6 +21,7 @@ impl PlanResolver<'_> {
             spec::Plan::Query(query) => {
                 let plan = self.resolve_query_plan(query, &mut state).await?;
                 let plan = Self::preserve_order_sensitive_aggregate_sorts(plan)?;
+                self.check_time_type_in_schema(plan.schema())?;
                 let fields = Some(Self::get_field_names(plan.schema(), &state)?);
                 Ok(NamedPlan { plan, fields })
             }

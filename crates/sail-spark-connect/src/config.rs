@@ -317,6 +317,16 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             output.pivot_max_values = value;
         }
 
+        // Sail's default differs from the registry's: Spark keeps TIME off outside its own tests,
+        // while Sail implements the type. Read with Sail's default so an unset key means "on".
+        if let Some(value) = config
+            .get_with_default(SparkConfigKey::SPARK_SQL_TIME_TYPE_ENABLED, Some("true"))
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.time_type_enabled = value;
+        }
+
         if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_TVF_ALLOW_MULTIPLE_TABLE_ARGUMENTS_ENABLED)
             .map(|x| x.trim().to_lowercase().parse::<bool>())

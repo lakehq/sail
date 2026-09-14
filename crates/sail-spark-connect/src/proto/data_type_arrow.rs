@@ -114,11 +114,14 @@ impl TryFrom<adt::Field> for sdt::StructField {
         } else {
             field.data_type().clone().try_into()?
         };
+        // The loose keys have to be folded in here too: this is what `df.schema` is built from,
+        // and a client only ever reads the single JSON blob.
+        let metadata = crate::schema::to_client_metadata(field.metadata());
         Ok(sdt::StructField {
             name: field.name().clone(),
             data_type: Some(data_type),
             nullable: field.is_nullable(),
-            metadata: field.metadata().get(spec::SPARK_METADATA_JSON_KEY).cloned(),
+            metadata: metadata.get(spec::SPARK_METADATA_JSON_KEY).cloned(),
         })
     }
 }

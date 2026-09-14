@@ -145,16 +145,9 @@ Feature: abs comprehensive tests
         | CAST(-2147483648 AS INT)             | -2147483648          |
         | CAST(-9223372036854775808 AS BIGINT) | -9223372036854775808 |
 
-    @sail-bug
-    # Sail promotes the literal to BIGINT; JVM keeps INT and wraps to MIN.
-    # Root cause: Sail's SQL parses `-2147483648` as unary-minus + positive
-    # literal; the positive side overflows INT32 (max 2147483647) and gets
-    # widened to BIGINT. Spark has a special rule that recognises the whole
-    # `-INT32_MIN` (and `-LONG_MIN`) literal and keeps the narrow type.
-    # Fix path: `sail-sql-analyzer` (or parser) — add constant-folding rule
-    # for `UnaryMinus(IntegerLiteral(N))` that narrows when `-N` fits in a
-    # smaller signed type. Affects every expression with negative-MIN
-    # literals, not just abs.
+    # Spark's grammar folds the minus into the literal (`number: MINUS? INTEGER_VALUE`), so
+    # `-2147483648` is an INT and `abs` wraps it back to MIN. Sail used to negate a BIGINT
+    # `2147483648` instead; it folds the sign the same way now.
     Scenario: abs INT literal MIN preserves INT type and wraps under ANSI false
       Given config spark.sql.ansi.enabled = false
       When query

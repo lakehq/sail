@@ -5,6 +5,7 @@ use arrow_schema::extension::{
     EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY, ExtensionType,
 };
 use datafusion::arrow::datatypes as adt;
+use datafusion_common::DFSchema;
 use parquet_variant_compute::VariantType;
 use sail_common::geoarrow::extension::GeoArrowWkbType;
 use sail_common::spec;
@@ -89,6 +90,72 @@ impl PlanResolver<'_> {
         self.resolve_data_type(data_type, &mut state)
     }
 
+    /// Spark refuses the TIME type unless `spark.sql.timeType.enabled` is on, in every Connect
+    /// execution rather than only when converting to Arrow.
+    ///
+    /// Spark raises this as an `AnalysisException`, so it must be an analysis error here too:
+    /// an unsupported-operation error reaches the client as a different exception class and
+    /// `except AnalysisException` would not catch it.
+    ///
+    /// References:
+    ///   org.apache.spark.sql.catalyst.util.TypeUtils#failUnsupportedDataType
+    ///   org.apache.spark.sql.errors.QueryCompilationErrors#unsupportedTimeTypeError
+    pub(super) fn check_time_type_enabled(&self) -> PlanResult<()> {
+        if self.config.time_type_enabled {
+            Ok(())
+        } else {
+            Err(PlanError::analysis(
+                "[UNSUPPORTED_TIME_TYPE] The data type TIME is not supported.",
+            ))
+        }
+    }
+
+    /// Whether TIME occurs anywhere in the type, the way Spark looks for it:
+    /// `dataType.existsRecursively(_.isInstanceOf[TimeType])`.
+    ///
+    /// Reference: org.apache.spark.sql.catalyst.util.TypeUtils#failUnsupportedDataType
+    fn contains_time_type(data_type: &adt::DataType) -> bool {
+        match data_type {
+            adt::DataType::Time32(_) | adt::DataType::Time64(_) => true,
+            adt::DataType::List(field)
+            | adt::DataType::LargeList(field)
+            | adt::DataType::ListView(field)
+            | adt::DataType::LargeListView(field)
+            | adt::DataType::FixedSizeList(field, _)
+            | adt::DataType::Map(field, _)
+            | adt::DataType::RunEndEncoded(_, field) => Self::contains_time_type(field.data_type()),
+            adt::DataType::Struct(fields) => fields
+                .iter()
+                .any(|field| Self::contains_time_type(field.data_type())),
+            adt::DataType::Union(fields, _) => fields
+                .iter()
+                .any(|(_, field)| Self::contains_time_type(field.data_type())),
+            adt::DataType::Dictionary(_, value_type) => Self::contains_time_type(value_type),
+            _ => false,
+        }
+    }
+
+    /// Spark refuses a query whose OUTPUT SCHEMA carries TIME anywhere, not only one where the
+    /// user spells the type: the check runs on `dataframe.schema` in every Connect execution.
+    /// That is what catches a TIME-returning function (`to_time`, `make_time`) or a file whose
+    /// schema already has a TIME column -- neither reaches [`Self::resolve_data_type`].
+    ///
+    /// Reference:
+    ///   org.apache.spark.sql.connect.execution.SparkConnectPlanExecution#processAsArrowBatches
+    pub(super) fn check_time_type_in_schema(&self, schema: &DFSchema) -> PlanResult<()> {
+        if self.config.time_type_enabled {
+            return Ok(());
+        }
+        if schema
+            .fields()
+            .iter()
+            .any(|field| Self::contains_time_type(field.data_type()))
+        {
+            return self.check_time_type_enabled();
+        }
+        Ok(())
+    }
+
     /// References:
     ///   org.apache.spark.sql.util.ArrowUtils#toArrowType
     ///   org.apache.spark.sql.connect.common.DataTypeProtoConverter
@@ -123,9 +190,11 @@ impl PlanResolver<'_> {
             DataType::Date32 => Ok(adt::DataType::Date32),
             DataType::Date64 => Ok(adt::DataType::Date64),
             DataType::Time32 { time_unit } => {
+                self.check_time_type_enabled()?;
                 Ok(adt::DataType::Time32(Self::resolve_time_unit(time_unit)?))
             }
             DataType::Time64 { time_unit } => {
+                self.check_time_type_enabled()?;
                 Ok(adt::DataType::Time64(Self::resolve_time_unit(time_unit)?))
             }
             DataType::Duration { time_unit } => {

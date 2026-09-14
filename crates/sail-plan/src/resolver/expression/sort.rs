@@ -48,7 +48,9 @@ impl PlanResolver<'_> {
                 let num_fields = schema.fields().len();
                 let position = match literal {
                     spec::Literal::Int32 { value: Some(value) } => *value as usize,
-                    spec::Literal::Int64 { value: Some(value) } => *value as usize,
+                    // A negative BIGINT (`-1L`) is a constant, not an ordinal: only an INT literal
+                    // is one (`AstBuilder.scala:7591`).
+                    spec::Literal::Int64 { value: Some(value) } if *value > 0 => *value as usize,
                     _ => {
                         return Ok(expr::Sort {
                             expr: self.resolve_expression(*child, schema, state).await?,

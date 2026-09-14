@@ -1,13 +1,15 @@
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from pandas.testing import assert_frame_equal
+from pyspark.errors import AnalysisException
 from pyspark.sql import Row
 
+from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.files import get_data_directory_size
 from pysail.testing.spark.utils.sql import escape_sql_identifier, escape_sql_string_literal
 
@@ -710,3 +712,149 @@ def test_parquet_read_uppercase_single_file_with_schema(spark, sample_df, tmp_pa
     df = spark.read.schema(sample_df.schema).parquet(str(upper))
     assert df.count() == sample_df.count()
     assert sorted(df.collect(), key=safe_sort_key) == sorted(sample_df.collect(), key=safe_sort_key)
+
+
+def test_parquet_arithmetic_operand_rejection(spark, tmp_path):
+    # Fixed-size binary and unsigned integers have no SQL literal spelling, so
+    # a file is the only way they reach the arithmetic operand guards.
+    path = str(tmp_path / "arithmetic_operands.parquet")
+    pq.write_table(
+        pa.table(
+            {
+                "fsb": pa.array([b"abcd"], pa.binary(4)),
+                "u8": pa.array([1], pa.uint8()),
+                "u16": pa.array([1], pa.uint16()),
+                "u32": pa.array([1], pa.uint32()),
+                "u64": pa.array([1], pa.uint64()),
+            }
+        ),
+        path,
+    )
+    spark.read.parquet(path).createOrReplaceTempView("arithmetic_operands")
+
+    # BINARY is not one of the input types any operator accepts.
+    for op in ["+", "-", "*", "/", "%"]:
+        with pytest.raises(AnalysisException, match=r"(?i)cannot resolve"):
+            spark.sql(f"SELECT fsb {op} 1 FROM arithmetic_operands").collect()  # noqa: S608
+
+    # Spark reads UINT_32 as BIGINT and UINT_64 as DECIMAL(20,0), and `DateAdd` takes only a
+    # BYTE, SHORT or INT offset (`datetimeExpressions.scala:331-332`, and it is
+    # `ExpectsInputTypes`), so it rejects both. Sail used to accept `u32` because its date offset
+    # rule was widened for functions it typed BIGINT; they carry Spark's INT now, the rule is
+    # `DateAdd`'s own, and the engines agree on every width.
+    for column in ["u8", "u16"]:
+        query = f"SELECT DATE'2024-01-01' + {column} AS r FROM arithmetic_operands"  # noqa: S608
+        assert spark.sql(query).collect() == [Row(r=date(2024, 1, 2))]
+    for column in ["u32", "u64"]:
+        query = f"SELECT DATE'2024-01-01' + {column} AS r FROM arithmetic_operands"  # noqa: S608
+        with pytest.raises(AnalysisException, match=r"(?i)cannot resolve"):
+            spark.sql(query).collect()
+
+    # The same unsigned columns stay usable in ordinary numeric arithmetic.
+    assert spark.sql("SELECT u32 * 2 AS r FROM arithmetic_operands").collect() == [Row(r=2)]
+
+
+@pytest.mark.parametrize(
+    ("column", "spark_type"),
+    [("u8", "SMALLINT"), ("u16", "INT"), ("u32", "BIGINT"), ("u64", "DECIMAL(20,0)")],
+)
+def test_parquet_unsigned_operand_is_named_by_its_spark_type(spark, tmp_path, column, spark_type):
+    # Spark has no unsigned types: its Parquet reader widens each unsigned width one step
+    # so every value stays representable (`ParquetSchemaConverter.scala:290,311`), and the
+    # arithmetic error names that widened type.
+    path = str(tmp_path / "unsigned_operand.parquet")
+    pq.write_table(
+        pa.table(
+            {
+                "u8": pa.array([1], pa.uint8()),
+                "u16": pa.array([1], pa.uint16()),
+                "u32": pa.array([1], pa.uint32()),
+                "u64": pa.array([1], pa.uint64()),
+                "flag": pa.array([True], pa.bool_()),
+            }
+        ),
+        path,
+    )
+    spark.read.parquet(path).createOrReplaceTempView("unsigned_operand")
+    with pytest.raises(AnalysisException) as excinfo:
+        spark.sql(f"SELECT flag + {column} FROM unsigned_operand").collect()  # noqa: S608
+    assert f"BOOLEAN and {spark_type}" in str(excinfo.value).replace('"', "")
+
+
+@pytest.mark.parametrize("op", ["+", "-"])
+def test_parquet_uint32_date_offset_is_named_bigint(spark, tmp_path, op):
+    # Spark reads a UINT_32 column as BIGINT, which `DateAdd` refuses, and names it BIGINT in the
+    # message.
+    path = str(tmp_path / "uint32_offset.parquet")
+    pq.write_table(pa.table({"u32": pa.array([1], pa.uint32())}), path)
+    spark.read.parquet(path).createOrReplaceTempView("uint32_offset")
+    with pytest.raises(AnalysisException, match="BIGINT"):
+        spark.sql(f"SELECT DATE'2024-01-01' {op} u32 FROM uint32_offset").collect()  # noqa: S608
+
+
+# TODO: Sail reads a BINARY `overlay` input as a STRING until its string functions take a BINARY
+#   (see `binary_substring.feature`); a BINARY result broke them downstream.
+@pytest.mark.xfail(not is_jvm_spark(), strict=True, reason="a BINARY overlay is read as a STRING")
+def test_parquet_binary_overlay_stays_a_binary_cut_by_bytes(spark, tmp_path):
+    # A Parquet scan reads BINARY as an Arrow `BinaryView`. `Overlay` over a BINARY is a BINARY cut by
+    # bytes (`stringExpressions.scala:1000-1010`), bytes that are not valid UTF-8 included, and a
+    # BINARY is not an arithmetic operand.
+    path = str(tmp_path / "binary_overlay.parquet")
+    pq.write_table(pa.table({"b": pa.array([b"\xff\x00Spark"], pa.binary()), "r": pa.array([b"_"], pa.binary())}), path)
+    spark.read.parquet(path).createOrReplaceTempView("binary_overlay")
+    row = spark.sql(
+        "SELECT typeof(overlay(b PLACING r FROM 2)) AS t, hex(overlay(b PLACING r FROM 2)) AS h FROM binary_overlay"
+    ).collect()
+    assert row == [Row(t="binary", h="FF5F537061726B")]
+    with pytest.raises(AnalysisException, match=r"(?i)cannot resolve"):
+        spark.sql("SELECT 2 / overlay(b PLACING r FROM 2) AS r FROM binary_overlay").collect()
+
+
+def test_parquet_date_minus_a_zoned_timestamp_uses_the_session_time_zone(spark, tmp_path):
+    # A DATE subtracted with a TIMESTAMP is read as midnight in the SESSION time zone
+    # (`SubtractTimestamps`), whatever zone the Parquet column was written with. The column instant is
+    # 06:00 UTC, which is 22:00 the day before in Los Angeles, so the date is two hours after it.
+    path = str(tmp_path / "zoned_timestamp.parquet")
+    instant = pa.array([datetime(2024, 1, 15, 6, 0, tzinfo=UTC)], pa.timestamp("us", tz="America/New_York"))
+    pq.write_table(pa.table({"d": pa.array([date(2024, 1, 15)], pa.date32()), "ts": instant}), path)
+    previous = spark.conf.get("spark.sql.session.timeZone")
+    spark.conf.set("spark.sql.session.timeZone", "America/Los_Angeles")
+    try:
+        spark.read.parquet(path).createOrReplaceTempView("zoned_timestamp")
+        row = spark.sql(
+            "SELECT CAST(d - ts AS STRING) AS a, CAST(ts - d AS STRING) AS b FROM zoned_timestamp"
+        ).collect()
+        assert row == [Row(a="INTERVAL '0 02:00:00' DAY TO SECOND", b="INTERVAL '-0 02:00:00' DAY TO SECOND")]
+    finally:
+        spark.conf.set("spark.sql.session.timeZone", previous)
+
+
+def test_parquet_uint64_plus_a_string_is_a_double_with_ansi_on(spark, tmp_path):
+    # Spark reads UINT_64 as DECIMAL(20,0), and a string beside a DECIMAL is promoted to DOUBLE
+    # (`AnsiStringPromotionTypeCoercion.findWiderTypeForString`), so a value past BIGINT still answers.
+    path = str(tmp_path / "uint64_string.parquet")
+    pq.write_table(pa.table({"u": pa.array([18446744073709551000], pa.uint64())}), path)
+    previous = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", "true")
+    try:
+        spark.read.parquet(path).createOrReplaceTempView("uint64_string")
+        row = spark.sql("SELECT typeof(u + '1') AS t, u + '1' AS v FROM uint64_string").collect()
+        assert row == [Row(t="double", v=1.8446744073709552e19)]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous)
+
+
+def test_parquet_binary_substring_feeds_string_functions(spark, tmp_path):
+    # `substr`/`left`/`overlay` of a BINARY read from Parquet feed `hex`, `trim`, `replace` and
+    # `initcap` in Spark (`stringExpressions.scala:2301-2313`, `mathExpressions.scala:1195-1196`).
+    path = str(tmp_path / "parquet_binary_substring")
+    spark.sql("SELECT X'2061626364' AS b").write.parquet(path)
+    spark.read.parquet(path).createOrReplaceTempView("parquet_binary_substring")
+    try:
+        row = spark.sql(
+            "SELECT hex(substr(b, 2)) AS h, trim(substr(b, 1, 3)) AS t, replace(left(b, 3), 'a', 'z') AS r, "
+            "initcap(overlay(b PLACING X'78' FROM 1)) AS i FROM parquet_binary_substring"
+        ).collect()
+        assert row == [Row(h="61626364", t="ab", r=" zb", i="Xabcd")]
+    finally:
+        spark.catalog.dropTempView("parquet_binary_substring")

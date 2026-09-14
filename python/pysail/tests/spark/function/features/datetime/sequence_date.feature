@@ -137,7 +137,6 @@ Feature: sequence() over DATE returns expected arrays
         | result                                      |
         | [-5400000000, -1800000000, 1800000000]      |
 
-    @sail-bug
     Scenario: mixed timestamp sequence coercion accepts the minimum long literal
       Given config spark.sql.session.timeZone = UTC
       When query

@@ -266,10 +266,13 @@ fn dateadd(input: ScalarFunctionInput, function_name: &str) -> PlanResult<Expr> 
 
 fn make_date(year: Expr, month: Expr, day: Expr) -> Expr {
     match (&year, &month, &day) {
+        // `MakeDate.dataType` is `DateType` whatever its arguments are, so a NULL argument yields a
+        // NULL DATE, not an untyped NULL. The untyped one slipped past every date guard:
+        // `2 * make_date(2019, 7, NULL)` answered NULL where Spark refuses a DATE operand.
         (Expr::Literal(ScalarValue::Null, metadata), _, _)
         | (_, Expr::Literal(ScalarValue::Null, metadata), _)
         | (_, _, Expr::Literal(ScalarValue::Null, metadata)) => {
-            Expr::Literal(ScalarValue::Null, metadata.clone())
+            Expr::Literal(ScalarValue::Date32(None), metadata.clone())
         }
         _ => expr_fn::make_date(year, month, day),
     }
@@ -282,8 +285,11 @@ fn date_days_arithmetic(dt1: Expr, dt2: Expr, op: Operator) -> Expr {
         }
         _ => (cast(dt1, DataType::Date32), cast(dt2, DataType::Date32)),
     };
-    let dt1 = cast(dt1, DataType::Int64);
-    let dt2 = cast(dt2, DataType::Int64);
+    // `DateDiff.dataType` is `IntegerType` (`datetimeExpressions.scala:2522`). A BIGINT here is
+    // not cosmetic: it is a different arithmetic operand than Spark's, so `DATE + datediff(...)`
+    // lands in a cell Spark never uses.
+    let dt1 = cast(dt1, DataType::Int32);
+    let dt2 = cast(dt2, DataType::Int32);
     Expr::BinaryExpr(BinaryExpr {
         left: Box::new(dt1),
         op,
@@ -390,7 +396,12 @@ fn datediff(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 }
             };
             match unit_str.as_str() {
-                "DAY" => Ok(date_days_arithmetic(end, start, Operator::Minus)),
+                // The unit form is `TimestampDiff`, a BIGINT (`datetimeExpressions.scala:3867`);
+                // only the two-argument form is an INT.
+                "DAY" => Ok(cast(
+                    date_days_arithmetic(end, start, Operator::Minus),
+                    DataType::Int64,
+                )),
                 "HOUR" | "MINUTE" | "SECOND" | "WEEK" => {
                     Ok(timestampdiff_fixed_unit(&unit_str, start, end))
                 }
