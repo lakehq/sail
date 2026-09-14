@@ -233,6 +233,93 @@ Feature: min_by function
         | array        | array(st_geomfromwkb(w))             |
         | named_struct | named_struct('g', st_geomfromwkb(w)) |
 
+  Rule: Clause surface
+
+    # These are not orderability rules: Spark decides them in FunctionResolution.validateFunction
+    # and in CheckAnalysis, for the function itself and in either position (aggregate or window).
+
+    Scenario Outline: min_by accepts the clause <case>
+      When query
+        """
+        SELECT <expr> AS result
+        FROM VALUES ('a', 10), ('b', 50), ('c', 20), ('a', 10) AS t(x, y)
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case     | expr                               | result |
+        | plain    | min_by(x, y)                       | a      |
+        | DISTINCT | min_by(DISTINCT x, y)              | a      |
+        | FILTER   | min_by(x, y) FILTER (WHERE y > 10) | c      |
+
+    # A window aggregate emits one row per input row, so this returns four.
+    Scenario: min_by accepts the clause OVER
+      When query
+        """
+        SELECT min_by(x, y) OVER (PARTITION BY 1) AS result
+        FROM VALUES ('a', 10), ('b', 50), ('c', 20), ('a', 10) AS t(x, y)
+        """
+      Then query result
+        | result |
+        | a      |
+        | a      |
+        | a      |
+        | a      |
+
+    @spark-4
+    Scenario: min_by rejects the clause IGNORE NULLS
+      When query
+        """
+        SELECT min_by(x, y) IGNORE NULLS AS result
+        FROM VALUES (CAST(NULL AS STRING), 5), ('b', 10) AS t(x, y)
+        """
+      Then query error INVALID_SQL_SYNTAX.*does not support IGNORE NULLS
+
+    @spark-4
+    Scenario: min_by rejects the clause WITHIN GROUP
+      When query
+        """
+        SELECT min_by(x, y) WITHIN GROUP (ORDER BY x DESC) AS result
+        FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y)
+        """
+      Then query error INVALID_SQL_SYNTAX.*does not support WITHIN GROUP
+
+    Scenario: min_by rejects the clause DISTINCT combined with OVER
+      When query
+        """
+        SELECT min_by(DISTINCT x, y) OVER (PARTITION BY 1) AS result
+        FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y)
+        """
+      Then query error DISTINCT_WINDOW_FUNCTION_UNSUPPORTED
+
+    @spark-4.2
+    Scenario: min_by supports the clause FILTER combined with OVER
+      When query
+        """
+        SELECT min_by(x, y) FILTER (WHERE y > 10) OVER (PARTITION BY 1) AS result
+        FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y)
+        """
+      Then query result
+        | result |
+        | c      |
+        | c      |
+        | c      |
+
+    # Spark names an unaliased aggregate with its FILTER clause, as `<call> FILTER (WHERE <condition>)`.
+    Scenario: min_by names an unaliased result with its FILTER clause
+      When query
+        """
+        SELECT min_by(x, y) FILTER (WHERE y > 10)
+        FROM VALUES ('a', 10), ('b', 50) AS t(x, y)
+        """
+      Then query schema
+        """
+        root
+         |-- min_by(x, y) FILTER (WHERE (y > 10)): string (nullable = true)
+        """
+
   Rule: Arity
 
     # Spark's MaxMinBy is BinaryLike. Sail used to panic here and kill the RPC, because
@@ -699,6 +786,15 @@ Feature: min_by function
         """
       Then query error NAMED_PARAMETERS_NOT_SUPPORTED
 
+    # The named-argument check applies to known built-ins only: Spark resolves the routine first,
+    # so a misspelled one is reported as UNRESOLVED_ROUTINE, never as named-argument misuse.
+    Scenario: a misspelled min_by called with named arguments is not reported as named-argument misuse
+      When query
+        """
+        SELECT min_byy(x => 'a', y => 1) AS result
+        """
+      Then query error (?s)\A(?!.*NAMED_PARAMETERS_NOT_SUPPORTED).*min_byy
+
   Rule: Output schema
 
     # `dataType = valueExpr.dataType` and `nullable = true`, whatever the value's own nullability.
@@ -734,49 +830,6 @@ Feature: min_by function
          |-- result: array (nullable = true)
          |    |-- element: integer (containsNull = true)
         """
-
-  Rule: Clause surface
-
-    # Same rules as documented on max_by: Spark decides these in FunctionResolution.validateFunction
-    # and in CheckAnalysis.
-    @spark-4
-    Scenario: min_by rejects the clause IGNORE NULLS
-      When query
-        """
-        SELECT min_by(x, y) IGNORE NULLS AS result
-        FROM VALUES (CAST(NULL AS STRING), 5), ('b', 10) AS t(x, y)
-        """
-      Then query error INVALID_SQL_SYNTAX.*does not support IGNORE NULLS
-
-    @spark-4
-    Scenario: min_by rejects the clause WITHIN GROUP
-      When query
-        """
-        SELECT min_by(x, y) WITHIN GROUP (ORDER BY x DESC) AS result
-        FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y)
-        """
-      Then query error INVALID_SQL_SYNTAX.*does not support WITHIN GROUP
-
-    Scenario: min_by rejects the clause DISTINCT combined with OVER
-      When query
-        """
-        SELECT min_by(DISTINCT x, y) OVER (PARTITION BY 1) AS result
-        FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y)
-        """
-      Then query error DISTINCT_WINDOW_FUNCTION_UNSUPPORTED
-
-    @spark-4.2
-    Scenario: min_by supports the clause FILTER combined with OVER
-      When query
-        """
-        SELECT min_by(x, y) FILTER (WHERE y > 10) OVER (PARTITION BY 1) AS result
-        FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y)
-        """
-      Then query result
-        | result |
-        | c      |
-        | c      |
-        | c      |
 
   Rule: The top-k form
 

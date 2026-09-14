@@ -212,10 +212,8 @@ Feature: max_by function
 
   Rule: Clause surface
 
-    # These are not orderability rules: Spark decides them in FunctionResolution
-    # .validateFunction, and Sail's aggregate branch forwards is_distinct, ignore_nulls,
-    # filter and order_by verbatim with no per-function gate. The gap therefore belongs to
-    # sail-plan and would affect every aggregate; max_by is only the function it is shown on.
+    # These are not orderability rules: Spark decides them in FunctionResolution.validateFunction
+    # and in CheckAnalysis, for the function itself and in either position (aggregate or window).
 
     Scenario Outline: max_by accepts the clause <case>
       When query
@@ -293,6 +291,19 @@ Feature: max_by function
         | c      |
         | c      |
         | c      |
+
+    # Spark names an unaliased aggregate with its FILTER clause, as `<call> FILTER (WHERE <condition>)`.
+    Scenario: max_by names an unaliased result with its FILTER clause
+      When query
+        """
+        SELECT max_by(x, y) FILTER (WHERE y < 50)
+        FROM VALUES ('a', 10), ('b', 50) AS t(x, y)
+        """
+      Then query schema
+        """
+        root
+         |-- max_by(x, y) FILTER (WHERE (y < 50)): string (nullable = true)
+        """
 
   Rule: Arity
 
@@ -440,6 +451,18 @@ Feature: max_by function
         | 1 | one    |
         | 2 | one    |
 
+    # The same rule decides the aggregate form: ascending with NULLS FIRST ranks the nested NULL
+    # below the non-null value, so the non-null row wins.
+    Scenario: max_by ranks a NULL struct field below a non-null one in an aggregate
+      When query
+        """
+        SELECT max_by(x, y) AS result
+        FROM VALUES ('one', named_struct('a', 1)), ('null', named_struct('a', CAST(NULL AS INT))) AS t(x, y)
+        """
+      Then query result
+        | result |
+        | one    |
+
     # A NULL struct field is likewise smaller than a non-null one in Spark, whichever row is newer.
     # DataFusion's `partial_cmp_struct` skips the NULL position and answers `Equal`, which would
     # turn the comparison into a tie, so both row orders are pinned.
@@ -559,6 +582,18 @@ Feature: max_by function
         | i | result |
         | 1 | NULL   |
         | 2 | NULL   |
+
+    # The aggregate counterpart of the array window scenario above: ascending with NULLS FIRST
+    # ranks the NULL element below the non-null ones, so it never wins.
+    Scenario: max_by ranks a NULL array element below a non-null one in an aggregate
+      When query
+        """
+        SELECT max_by(x, o) AS result
+        FROM VALUES ('one', array(1)), ('null', array(CAST(NULL AS INT))), ('zero', array(0)) AS t(x, o)
+        """
+      Then query result
+        | result |
+        | one    |
 
     # The window form reaches the same `return_field`, so it keeps the GEOMETRY metadata too.
     @spark-4.2
@@ -736,6 +771,15 @@ Feature: max_by function
         FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y)
         """
       Then query error NAMED_PARAMETERS_NOT_SUPPORTED
+
+    # The named-argument check applies to known built-ins only: Spark resolves the routine first,
+    # so an unknown one is reported as UNRESOLVED_ROUTINE, never as named-argument misuse.
+    Scenario: an unknown function called with named arguments is not reported as named-argument misuse
+      When query
+        """
+        SELECT no_such_function_zzz(a => 1) AS result
+        """
+      Then query error (?s)\A(?!.*NAMED_PARAMETERS_NOT_SUPPORTED).*no_such_function_zzz
 
   Rule: Output schema
 

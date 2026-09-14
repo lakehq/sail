@@ -79,7 +79,12 @@ impl PlanResolver<'_> {
         {
             state.config_mut().arrow_allow_large_var_types = true;
         }
-        if catalog_function.is_none() && kwarg_names.iter().any(Option::is_some) {
+        // An unknown function keeps reporting itself as unknown rather than as named-argument misuse.
+        if catalog_function.is_none()
+            && kwarg_names.iter().any(Option::is_some)
+            && (get_built_in_function(&canonical_function_name).is_ok()
+                || get_built_in_aggregate_function(&canonical_function_name).is_ok())
+        {
             check_named_arguments_supported(&canonical_function_name)?;
         }
 
@@ -114,6 +119,8 @@ impl PlanResolver<'_> {
         };
 
         let has_lambda_argument = arguments.iter().any(|x| matches!(x, expr::Expr::Lambda(_)));
+        // Spark names an aggregate with its FILTER clause, e.g. `count(x) FILTER (WHERE (y > 1))`.
+        let mut filter_display_name = None;
 
         // FIXME: `is_user_defined_function` is always false,
         //   so we need to check UDFs before built-in functions.
@@ -178,9 +185,13 @@ impl PlanResolver<'_> {
                         match get_built_in_aggregate_function(&canonical_function_name) {
                             Ok(func) => {
                                 let filter = match filter {
-                                    Some(x) => Some(Box::new(
-                                        self.resolve_expression(*x, schema, state).await?,
-                                    )),
+                                    Some(x) => {
+                                        let NamedExpr { name, expr, .. } = self
+                                            .resolve_named_expression(*x, schema, state)
+                                            .await?;
+                                        filter_display_name = Some(name.one()?);
+                                        Some(Box::new(expr))
+                                    }
                                     None => None,
                                 };
                                 let order_by = match order_by {
@@ -281,6 +292,10 @@ impl PlanResolver<'_> {
             argument_display_names.iter().map(|x| x.as_str()).collect(),
             is_distinct,
         )?;
+        let name = match filter_display_name {
+            Some(filter) => format!("{name} FILTER (WHERE {filter})"),
+            None => name,
+        };
 
         // Extract metadata from UDF if it implements return_field_from_args
         let metadata = if let expr::Expr::ScalarFunction(ScalarFunction {
