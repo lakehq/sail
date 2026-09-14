@@ -27,11 +27,19 @@ impl PlanResolver<'_> {
             return Err(PlanError::todo("deduplicate within watermark"));
         }
         if !column_names.is_empty() && !all_columns_as_keys {
-            let on_expr: Vec<Expr> = self
-                .resolve_columns(schema, &column_names, state)?
-                .into_iter()
-                .map(Expr::Column)
-                .collect();
+            // The name selects output columns, so it is matched with the resolver alone, and
+            // every column that matches becomes a key.
+            // A column that is named more than once is a key only once, since the same
+            // expression cannot be repeated in the plan.
+            let mut on_expr: Vec<Expr> = Vec::new();
+            for name in &column_names {
+                for column in self.resolve_columns_by_resolver(schema, name.as_ref(), state)? {
+                    let expr = Expr::Column(column);
+                    if !on_expr.contains(&expr) {
+                        on_expr.push(expr);
+                    }
+                }
+            }
             let select_expr: Vec<Expr> = schema.columns().into_iter().map(Expr::Column).collect();
             Ok(LogicalPlan::Distinct(Distinct::On(DistinctOn::try_new(
                 on_expr,

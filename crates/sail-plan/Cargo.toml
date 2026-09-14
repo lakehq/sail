@@ -45,7 +45,6 @@ arrow = { workspace = true }
 arrow-schema = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-indexmap = { workspace = true }
 log = { workspace = true }
 regex = { workspace = true }
 regex-syntax = { workspace = true }

@@ -229,7 +229,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: attribute ObjectName([Identifier(\"S\")]) is missing from the schema: cannot resolve attribute"
+        "failure": "analysis error: [UNRESOLVED_COLUMN.WITHOUT_SUGGESTION] A column, variable, or function parameter with name `S` cannot be resolved."
       }
     },
     {
@@ -263,7 +263,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: attribute ObjectName([Identifier(\"S\")]) is missing from the schema: cannot resolve attribute"
+        "failure": "analysis error: [UNRESOLVED_COLUMN.WITHOUT_SUGGESTION] A column, variable, or function parameter with name `S` cannot be resolved."
       }
     },
     {

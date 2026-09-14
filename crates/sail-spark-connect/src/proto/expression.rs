@@ -42,13 +42,19 @@ impl TryFrom<Expression> for spec::Expr {
                 plan_id,
                 is_metadata_column,
             }) => {
-                // The unparsed identifier such as `a.b` is supposed to be parsed as nested
-                // object names. However, there may be raw identifier such as `array(1)` which
-                // cannot be parsed. Therefore, when parsing fails, we create an object name
-                // containing the single raw identifier.
-                let name = parse_object_name(unparsed_identifier.as_str())
-                    .and_then(from_ast_object_name)
-                    .unwrap_or_else(|_| spec::ObjectName::from(vec![unparsed_identifier]));
+                // The identifier is split on dots outside of backticks, which is what the Spark
+                // analyzer does for an attribute name. It is deliberately not parsed as SQL:
+                // nothing is folded and no whitespace is skipped, so a name keeps the spaces it
+                // was written with, and a raw identifier such as `array(1)` is one whole part.
+                let name = spec::ObjectName::parse_attribute(unparsed_identifier.as_str())
+                    .ok_or_else(|| {
+                        SparkError::AnalysisError(format!(
+                            "[INVALID_ATTRIBUTE_NAME_SYNTAX] Syntax error in the attribute name: \
+                             {unparsed_identifier}. Check that backticks appear in pairs, a quoted \
+                             string is a complete name part and use a backtick only inside quoted \
+                             name parts."
+                        ))
+                    })?;
                 Ok(spec::Expr::UnresolvedAttribute {
                     name,
                     plan_id,

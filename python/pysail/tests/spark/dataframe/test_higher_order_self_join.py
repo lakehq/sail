@@ -2,6 +2,7 @@ import pyspark.sql.functions as F  # noqa: N812
 import pytest
 
 from pysail.testing.spark.steps.plan import normalize_plan_text
+from pysail.testing.spark.utils.common import is_jvm_spark
 
 
 @pytest.mark.parametrize(
@@ -49,6 +50,7 @@ def test_higher_order_lambda_survives_self_join(spark, higher_order_expression, 
 
 
 @pytest.mark.yamlsnapshot(group="plan")
+@pytest.mark.skipif(is_jvm_spark(), reason="The snapshot is of Sail's own plan")
 def test_higher_order_lambda_survives_nested_loop_join_filter(spark, snapshot):
     left = spark.createDataFrame(
         [

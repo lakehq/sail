@@ -211,3 +211,35 @@ Feature: Set operations (INTERSECT, EXCEPT)
         """
       Then query result
         | id |
+
+  Rule: A set operation reconciles the column types of both sides
+
+    @sail-bug
+    Scenario: the wider type of the two sides is the type of the result
+      When query
+        """
+        SELECT CAST(1 AS INT) AS a UNION ALL SELECT CAST(2 AS BIGINT) AS a
+        """
+      Then query schema
+        """
+        root
+         |-- a: long (nullable = false)
+        """
+
+    @sail-bug
+    Scenario: a value that cannot be cast to the reconciled type is rejected
+      When query
+        """
+        SELECT 1 AS a UNION ALL SELECT 'x' AS a
+        """
+      Then query error CAST_INVALID_INPUT
+
+  Rule: A set operation rejects a map-typed column
+
+    @sail-bug
+    Scenario: selecting distinct rows of a map column is rejected
+      When query
+        """
+        SELECT DISTINCT m FROM (SELECT map('a', 1) AS m UNION ALL SELECT map('a', 1))
+        """
+      Then query error SET_OPERATION_ON_MAP_TYPE
