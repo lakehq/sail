@@ -313,3 +313,60 @@ Feature: PIVOT rotates rows into columns
         | year | dotNET | Java |
         | 2012 | [10]   | [2]  |
         | 2013 | []     | [3]  |
+
+  Rule: The pivot column may be written with or without parentheses
+
+    # Spark's `pivotColumn` is a single identifier or a parenthesized list of them
+    # (`SqlBaseParser.g4`), so `FOR course IN` and `FOR (course) IN` are the same query.
+    Scenario: pivot column written with parentheses
+      When query
+        """
+        SELECT * FROM (
+          SELECT year, course, earnings FROM VALUES
+            (2012, 'dotNET', 10000),
+            (2012, 'Java', 20000),
+            (2013, 'dotNET', 48000)
+          AS courseSales(year, course, earnings)
+        ) PIVOT (
+          sum(earnings) FOR (course) IN ('dotNET', 'Java')
+        )
+        """
+      Then query result
+        | year | dotNET | Java  |
+        | 2012 | 10000  | 20000 |
+        | 2013 | 48000  | NULL  |
+
+    # Sail's SQL parser types the pivot column as a parenthesized `IdentList`, so the bare form
+    # fails to parse. Accepting it means `Either<Ident, IdentList>` in `PivotClause` and the
+    # analyzer, plus regenerating the parser syntax gold data.
+    @sail-bug
+    Scenario: pivot column written without parentheses
+      When query
+        """
+        SELECT * FROM (
+          SELECT year, course, earnings FROM VALUES
+            (2012, 'dotNET', 10000),
+            (2012, 'Java', 20000),
+            (2013, 'dotNET', 48000)
+          AS courseSales(year, course, earnings)
+        ) PIVOT (
+          sum(earnings) FOR course IN ('dotNET', 'Java')
+        )
+        """
+      Then query result
+        | year | dotNET | Java  |
+        | 2012 | 10000  | 20000 |
+        | 2013 | 48000  | NULL  |
+
+    # Accepting a bare identifier must not make a malformed pivot column valid.
+    Scenario: a pivot column that is not an identifier is still a syntax error
+      When query
+        """
+        SELECT * FROM (
+          SELECT year, course, earnings FROM VALUES (2012, 'dotNET', 10000) AS courseSales(year, course, earnings)
+        ) PIVOT (
+          sum(earnings) FOR test-test IN ('dotNET')
+        )
+        """
+      Then query error (?i)(PARSE_SYNTAX_ERROR|invalid argument)
+
