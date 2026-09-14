@@ -418,7 +418,7 @@ def test_spark_creates_sail_reads_partitioned_iceberg(
 @pytest.mark.xfail(
     reason=(
         "Sail detects the Hive textfile format at the HMS metadata layer but has no "
-        "textfile file reader, so reading raises 'No table format found for: textfile'."
+        "textfile file reader, so reading raises 'No data source found for: textfile'."
     ),
     strict=True,
 )

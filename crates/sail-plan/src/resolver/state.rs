@@ -48,6 +48,9 @@ impl FieldInfo {
 #[derive(Debug, Clone, Default)]
 pub(super) struct PlanResolverStateConfig {
     pub arrow_allow_large_var_types: bool,
+    /// Keep source columns in COUNT arguments while resolving SQL PIVOT aggregates.
+    /// Implicit pivot grouping needs those references before the aggregate is rewritten.
+    pub preserve_count_argument_columns: bool,
 }
 
 #[derive(Debug, Default)]

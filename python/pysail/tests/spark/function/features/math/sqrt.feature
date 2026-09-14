@@ -1,5 +1,16 @@
 Feature: sqrt output schema
 
+  Rule: Result values
+
+    Scenario: negative double input returns NaN
+      When query
+        """
+        SELECT isnan(sqrt(CAST(-1 AS DOUBLE))) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
   @function(nullability)
   Rule: Output schema
 

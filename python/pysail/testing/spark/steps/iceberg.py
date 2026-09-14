@@ -17,6 +17,7 @@ from pyiceberg.avro.file import AvroFile
 from pyiceberg.io.pyarrow import PyArrowFile, PyArrowFileIO
 from pyiceberg.manifest import MANIFEST_LIST_FILE_SCHEMAS, ManifestContent, PartitionFieldSummary
 from pyspark.sql import Row
+from pyspark.sql import functions as F  # noqa: N812
 from pytest_bdd import given, parsers, then
 
 from pysail.testing.spark.steps.delta import _get_by_path, _parse_expected_value
@@ -168,6 +169,17 @@ def _manifest_record_to_dict(record) -> dict:
     content = data[3]
     if isinstance(content, ManifestContent):
         content = content.name.lower()
+    partitions = data[13]
+    if partitions is not None:
+        partitions = [
+            {
+                "contains-null": summary.contains_null,
+                "contains-nan": summary.contains_nan,
+                "lower-bound": summary.lower_bound,
+                "upper-bound": summary.upper_bound,
+            }
+            for summary in partitions
+        ]
     manifest = {
         "manifest-path": data[0],
         "manifest-length": data[1],
@@ -182,7 +194,7 @@ def _manifest_record_to_dict(record) -> dict:
         "added-rows-count": data[10],
         "existing-rows-count": data[11],
         "deleted-rows-count": data[12],
-        "partitions": data[13],
+        "partitions": partitions,
         "key-metadata": data[14],
     }
     if len(data) > _MANIFEST_LIST_FIRST_ROW_ID_POSITION:
@@ -396,6 +408,25 @@ def append_query_to_iceberg_table_with_merge_schema(
         "mergeSchema",
         "true",
     ).save(location.path.absolute().as_uri())
+
+
+@given(parsers.parse("overwrite query into iceberg table {table_name} where {predicate}"))
+def overwrite_query_into_iceberg_table(
+    table_name: str,
+    predicate: str,
+    docstring: str,
+    spark,
+) -> None:
+    spark.sql(docstring).writeTo(table_name).overwrite(F.expr(predicate))
+
+
+@given(parsers.parse("overwrite partitions of iceberg table {table_name} with query"))
+def overwrite_partitions_of_iceberg_table(
+    table_name: str,
+    docstring: str,
+    spark,
+) -> None:
+    spark.sql(docstring).writeTo(table_name).overwritePartitions()
 
 
 def _sanitize_iceberg_metadata(metadata: dict) -> dict:
@@ -635,6 +666,34 @@ def check_iceberg_metadata_contains(variables, datatable):
         expected = _parse_expected_value(raw)
         actual = _get_by_path(metadata, path)
         assert actual == expected, f"path {path!r} expected {expected!r}, got {actual!r}"
+
+
+@given("remember current iceberg data manifest paths")
+def remember_current_iceberg_data_manifest_paths(variables):
+    location = variables.get("location")
+    assert location is not None, "expected variable `location` to be defined for iceberg manifest inspection"
+
+    metadata = _find_latest_metadata(Path(location.path))
+    manifest_list = _current_manifest_list(metadata)
+    variables["remembered_iceberg_data_manifest_paths"] = {
+        manifest["manifest-path"] for manifest in manifest_list["manifests"] if manifest.get("content") == "data"
+    }
+
+
+@then(parsers.parse("iceberg current data manifests reuse {count:d} remembered paths"))
+def check_iceberg_data_manifest_reuse(variables, count: int):
+    location = variables.get("location")
+    assert location is not None, "expected variable `location` to be defined for iceberg manifest inspection"
+    remembered = variables.get("remembered_iceberg_data_manifest_paths")
+    assert remembered is not None, "expected remembered Iceberg data manifest paths"
+
+    metadata = _find_latest_metadata(Path(location.path))
+    manifest_list = _current_manifest_list(metadata)
+    current = {
+        manifest["manifest-path"] for manifest in manifest_list["manifests"] if manifest.get("content") == "data"
+    }
+    reused = current & remembered
+    assert len(reused) == count, f"expected {count} reused data manifests, found {len(reused)}: {reused!r}"
 
 
 @then("iceberg current manifest list matches snapshot")

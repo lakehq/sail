@@ -782,7 +782,7 @@ mod tests {
                 pointer: MetadataPointerAuthority::DeltaRatifiedCommits,
                 commit: CommitAuthority::DeltaRatifiedCommit,
             },
-            ScanAuthority::ClientTableFormat,
+            ScanAuthority::ClientLakeSource,
         )
     }
 
@@ -1030,7 +1030,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(scan.authority, ScanAuthority::ClientTableFormat);
+        assert_eq!(scan.authority, ScanAuthority::ClientLakeSource);
         assert_eq!(mock.scan_calls.load(Ordering::SeqCst), 1);
 
         let delta_commits = provider

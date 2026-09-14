@@ -208,7 +208,6 @@ Feature: abs comprehensive tests
         | '5.5' | 5.5    |
         | 'NaN' | NaN    |
 
-    @sail-bug
     Scenario Outline: String coercion under ANSI=false: <case>
       Given config spark.sql.ansi.enabled = false
       When query
@@ -220,8 +219,22 @@ Feature: abs comprehensive tests
         | <result> |
 
       Examples:
+        | case                                 | input    | result |
+        | abs whitespace-padded numeric string | '  -5  ' | 5.0    |
+
+    @sail-bug
+    Scenario Outline: Unparseable string coercion under ANSI=false: <case>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT abs(<input>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
         | case                                                 | input    | result |
-        | abs whitespace-padded numeric string                 | '  -5  ' | 5.0    |
         | abs non-numeric string returns NULL under ANSI false | 'hello'  | NULL   |
         | abs empty string returns NULL under ANSI false       | ''       | NULL   |
 

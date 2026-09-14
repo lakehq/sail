@@ -26,6 +26,7 @@ pub use checkpoint::{CheckpointActionRow, LastCheckpointHint, LastCheckpointV2};
 pub use checksum::VersionChecksum;
 pub use datafusion::arrow::datatypes::SchemaRef;
 pub use error::{CommitConflictError, DeltaError, DeltaResult, TransactionError};
+pub(crate) use log::{CheckpointFileKind, parse_checkpoint_filename};
 pub use log::{
     DELTA_LOG_DIR, LAST_CHECKPOINT_FILE, SIDECARS_DIR, checkpoint_path, checksum_path, commit_path,
     compacted_json_path, delta_log_file_path, delta_log_prefix_path, delta_log_root_path,
@@ -47,7 +48,7 @@ pub use schema::{
     MetadataValue, PrimitiveType, Schema, StructField, StructType,
 };
 pub use statistics::{ColumnCountStat, ColumnValueStat, MaxStat, MinStat, StatValue, Stats};
-pub(crate) use statistics::{parse_stats_json_array, stats_schema};
+pub(crate) use statistics::{parse_stats_json_array, physical_data_skipping_columns, stats_schema};
 pub(crate) use utils::{
     contains_timestampntz, contains_timestampntz_arrow, contains_variant, contains_variant_arrow,
 };

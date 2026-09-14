@@ -45,7 +45,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: vector_cosine_similarity"
+        "success": "ok"
       }
     },
     {

@@ -52,7 +52,6 @@ use crate::table::DeltaSnapshot;
 
 /// Parameters for building file scan configuration
 pub struct FileScanParams<'a> {
-    pub pruning_mask: Option<&'a [bool]>,
     pub projection: Option<&'a Vec<usize>>,
     pub limit: Option<usize>,
     pub pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
@@ -66,7 +65,7 @@ pub struct FileScanParams<'a> {
 /// Strategy for providing table-level statistics to DataFusion.
 #[derive(Debug, Clone, Copy)]
 pub enum TableStatsMode {
-    /// Use snapshot/log-derived statistics (can be expensive for large snapshots).
+    /// Use snapshot/log-derived statistics for the provided `Add` actions.
     Snapshot,
     /// Aggregate statistics only from the provided `Add` actions (chunk-local).
     AddsOnly,
@@ -330,7 +329,9 @@ pub fn build_file_scan_config(
         ..Default::default()
     };
 
-    let table_schema = TableSchema::new(logical_file_schema, table_partition_cols_schema);
+    let table_schema = TableSchema::builder(logical_file_schema)
+        .with_table_partition_cols(table_partition_cols_schema)
+        .build();
     // Calculate table statistics.
     //
     // `Statistics::column_statistics` expects the same length as the table schema
@@ -341,7 +342,7 @@ pub fn build_file_scan_config(
         TableStatsMode::Snapshot => {
             let snapshot_schema = Arc::new(snapshot.schema().clone());
             snapshot
-                .datafusion_table_statistics(params.pruning_mask)
+                .datafusion_table_statistics_for_adds(files)
                 .map(|stats| {
                     map_statistics_to_schema_with_name_mapping(
                         &stats,

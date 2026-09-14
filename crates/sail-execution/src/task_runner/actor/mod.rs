@@ -13,6 +13,7 @@ use tokio::sync::oneshot;
 use crate::id::TaskKey;
 
 pub struct TaskRunnerActor {
+    session_id: String,
     signals: HashMap<TaskKey, oneshot::Sender<()>>,
     codec: Box<dyn PhysicalExtensionCodec>,
     extensions: TaskRunnerExtensions,

@@ -43,7 +43,7 @@ chrono = { workspace = true }
 serde_json = { workspace = true }
 url = { workspace = true }
 futures = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
+serde = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }
 parquet = { workspace = true }

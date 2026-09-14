@@ -1,3 +1,4 @@
+use arrow_pyarrow::FromPyArrow;
 use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion_common::ScalarValue;
 use pyo3::exceptions::PyValueError;
@@ -5,7 +6,6 @@ use pyo3::prelude::PyAnyMethods;
 use pyo3::types::PyModule;
 use pyo3::{Bound, IntoPyObject, PyAny, PyResult, Python, intern};
 use sail_common::spec;
-use sail_pyarrow::FromPyArrow;
 
 use crate::cereal::{
     PySparkVersion, build_input_types_json, check_python_udf_version, get_pyspark_version,

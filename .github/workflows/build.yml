@@ -85,8 +85,6 @@ jobs:
     uses: ./.github/workflows/rust-tests.yml
     secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-    with:
-      run_catalog_tests: ${{ needs.setup.outputs.run_catalog_tests }}
     needs:
       - setup
 

@@ -106,7 +106,10 @@ impl MetricEmitter for DefaultMetricEmitter {
                     )
                     .emit();
             }
-            MetricValue::Count { .. }
+            // Peak-memory metrics are handled only by emitters that recognize both the physical
+            // operator and the DataFusion metric name.
+            MetricValue::PeakMemoryUsage { .. }
+            | MetricValue::Count { .. }
             | MetricValue::Gauge { .. }
             | MetricValue::Time { .. }
             | MetricValue::Ratio { .. }

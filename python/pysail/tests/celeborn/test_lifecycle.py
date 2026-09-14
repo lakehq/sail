@@ -59,8 +59,7 @@ def lifecycle_manager(
 ) -> Generator[LifecycleManager, None, None]:
     assert celeborn_workers["celeborn-worker-1"].rpc_port > 0
     with LifecycleManager(
-        celeborn_master.host,
-        celeborn_master.port,
+        [f"{celeborn_master.host}:{celeborn_master.port}"],
         "sail-celeborn-integration",
         endpoint_resolver=celeborn_endpoint_resolver,
     ) as manager:
@@ -81,18 +80,36 @@ def test_lifecycle_manager_registers_shuffles_and_unregisters(
 
 def test_lifecycle_manager_returns_registration_failure() -> None:
     with (
-        LifecycleManager("127.0.0.1", 0, "sail-celeborn-unavailable") as manager,
+        LifecycleManager(["127.0.0.1:0"], "sail-celeborn-unavailable") as manager,
         pytest.raises(RuntimeError, match="application error: registration failed: I/O error"),
     ):
         manager.register_shuffle(1, [0], False, 1)
+
+
+def test_lifecycle_manager_fails_over_master_endpoints(
+    celeborn_master: MasterService,
+    celeborn_workers: dict[str, WorkerService],
+    celeborn_endpoint_resolver: object,
+) -> None:
+    assert celeborn_workers["celeborn-worker-1"].rpc_port > 0
+    with LifecycleManager(
+        ["127.0.0.1:1", f"{celeborn_master.host}:{celeborn_master.port}"],
+        "sail-celeborn-failover",
+        endpoint_resolver=celeborn_endpoint_resolver,
+    ) as manager:
+        workers = manager.register_shuffle(1, [0, 1], False, 1)
+
+    assert sorted(workers) == [
+        "celeborn-worker-1:12000:12001:12002:12003",
+        "celeborn-worker-2:12000:12001:12002:12003",
+    ]
 
 
 def test_lifecycle_manager_sends_periodic_heartbeats(
     celeborn_master_proxy: EndpointProxy,
 ) -> None:
     with LifecycleManager(
-        celeborn_master_proxy.host,
-        celeborn_master_proxy.port,
+        [f"{celeborn_master_proxy.host}:{celeborn_master_proxy.port}"],
         "sail-celeborn-heartbeat",
         heartbeat_interval_secs=1,
     ):

@@ -1,14 +1,12 @@
-use std::collections::HashMap;
-use std::mem::size_of;
-use std::sync::Arc;
 use std::time::Duration;
 
-use datafusion::common::{Result as DataFusionResult, TableReference};
-use datafusion::execution::cache::cache_manager::{CachedFileList, ListFilesCache};
-use datafusion::execution::cache::{CacheAccessor, ListFilesEntry, TableScopedPath};
+use datafusion::common::{HashMap, Result, TableReference};
+use datafusion::execution::cache::cache_manager::CachedFileList;
+use datafusion::execution::cache::{
+    Cache as DataFusionCache, CacheEntryInfo, CacheValue, TableScopedPath,
+};
 use log::debug;
 use moka::sync::Cache;
-use object_store::ObjectMeta;
 
 pub struct MokaFileListingCache {
     objects: Cache<TableScopedPath, CachedFileList>,
@@ -43,28 +41,15 @@ impl MokaFileListingCache {
     }
 }
 
-/// Calculates the number of bytes an [`ObjectMeta`] occupies in the heap.
-fn meta_heap_bytes(object_meta: &ObjectMeta) -> usize {
-    let mut size = object_meta.location.as_ref().len();
-
-    if let Some(e) = &object_meta.e_tag {
-        size += e.len();
-    }
-    if let Some(v) = &object_meta.version {
-        size += v.len();
-    }
-
-    size
-}
-
-impl CacheAccessor<TableScopedPath, CachedFileList> for MokaFileListingCache {
+impl DataFusionCache<TableScopedPath, CachedFileList> for MokaFileListingCache {
     fn get(&self, k: &TableScopedPath) -> Option<CachedFileList> {
         self.objects.get(k)
     }
 
     fn put(&self, key: &TableScopedPath, value: CachedFileList) -> Option<CachedFileList> {
+        let previous = self.objects.get(key);
         self.objects.insert(key.clone(), value);
-        None
+        previous
     }
 
     fn remove(&self, k: &TableScopedPath) -> Option<CachedFileList> {
@@ -86,9 +71,7 @@ impl CacheAccessor<TableScopedPath, CachedFileList> for MokaFileListingCache {
     fn name(&self) -> String {
         Self::NAME.to_string()
     }
-}
 
-impl ListFilesCache for MokaFileListingCache {
     fn cache_limit(&self) -> usize {
         self.max_entries
             .map(|limit| limit as usize)
@@ -107,19 +90,16 @@ impl ListFilesCache for MokaFileListingCache {
         // TODO: support dynamic update of cache ttl
     }
 
-    fn list_entries(&self) -> HashMap<TableScopedPath, ListFilesEntry> {
+    fn list_entries(&self) -> HashMap<TableScopedPath, CacheEntryInfo<CachedFileList>> {
         self.objects
             .iter()
             .map(|(table_scoped_path, cached)| {
-                let metas = Arc::clone(&cached.files);
-                let size_bytes = (metas.capacity() * size_of::<ObjectMeta>())
-                    + metas.iter().map(meta_heap_bytes).sum::<usize>();
                 (
                     (*table_scoped_path).clone(),
-                    ListFilesEntry {
-                        metas: cached.clone(),
-                        size_bytes,
-                        // moka handles expiration; we don't have per-entry expiration time
+                    CacheEntryInfo {
+                        size_bytes: cached.size(),
+                        value: cached,
+                        hits: 0,
                         expires: None,
                     },
                 )
@@ -127,11 +107,13 @@ impl ListFilesCache for MokaFileListingCache {
             .collect()
     }
 
-    fn drop_table_entries(&self, table_ref: &Option<TableReference>) -> DataFusionResult<()> {
+    fn drop_table_entries(&self, table_ref: &TableReference) -> Result<()> {
         let keys_to_drop: Vec<TableScopedPath> = self
             .objects
             .iter()
-            .filter_map(|(k, _v)| (k.table == *table_ref).then_some((*k).clone()))
+            .filter_map(|(key, _)| {
+                (key.table.as_ref() == Some(table_ref)).then_some((*key).clone())
+            })
             .collect();
 
         for key in keys_to_drop {

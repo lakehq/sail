@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
+use datafusion::physical_expr::{Distribution, PhysicalExpr};
 use datafusion::physical_plan::filter::batch_filter;
+use datafusion::physical_plan::statistics::{ChildStats, StatisticsArgs};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties, apply_expression_roots,
 };
 use datafusion_common::{Result, Statistics};
 use futures::StreamExt;
@@ -28,7 +30,7 @@ impl StreamFilterExec {
         predicate: Arc<dyn PhysicalExpr>,
     ) -> Result<Self> {
         let properties = Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(input.schema()),
+            input.equivalence_properties().clone(),
             input.output_partitioning().clone(),
             // Filtering preserves pipeline behavior of input
             input.pipeline_behavior(),
@@ -85,6 +87,22 @@ impl ExecutionPlan for StreamFilterExec {
         vec![&self.input]
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        apply_expression_roots([&self.predicate], f)
+    }
+
+    #[expect(deprecated)]
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: datafusion::physical_plan::ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.with_new_children(children)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
@@ -116,7 +134,15 @@ impl ExecutionPlan for StreamFilterExec {
         )))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        self.input.partition_statistics(partition)
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        Ok(Arc::clone(&input_stats[0]))
     }
 }

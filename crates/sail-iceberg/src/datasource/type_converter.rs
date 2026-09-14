@@ -37,15 +37,16 @@ pub const ICEBERG_ARROW_FIELD_DOC_KEY: &str = "doc";
 pub const ICEBERG_FIELD_INITIAL_DEFAULT: &str = "iceberg.field.initial-default";
 pub const ICEBERG_FIELD_WRITE_DEFAULT: &str = "iceberg.field.write-default";
 
-fn get_field_id(field: &ArrowField) -> Result<i32> {
-    if let Some(value) = field.metadata().get(PARQUET_FIELD_ID_META_KEY) {
-        value
-            .parse::<i32>()
-            .map_err(|e| plan_datafusion_err!("Iceberg: Failed to parse field id: {e}"))
-    } else {
-        // Default to 0 when metadata is missing; callers may reassign stable IDs later.
-        Ok(0)
-    }
+pub(crate) fn iceberg_field_id(field: &ArrowField) -> Result<Option<i32>> {
+    field
+        .metadata()
+        .get(PARQUET_FIELD_ID_META_KEY)
+        .map(|value| {
+            value
+                .parse::<i32>()
+                .map_err(|e| plan_datafusion_err!("Iceberg: Failed to parse field id: {e}"))
+        })
+        .transpose()
 }
 
 fn get_field_doc(field: &ArrowField) -> Option<String> {
@@ -134,7 +135,8 @@ pub fn arrow_field_to_iceberg(field: &ArrowField) -> Result<NestedField> {
     let required = !field.is_nullable();
     let doc = get_field_doc(field);
     let mut nested_field = NestedField::new(
-        get_field_id(field)?,
+        // Callers that create a new Iceberg schema may reassign a missing field ID later.
+        iceberg_field_id(field)?.unwrap_or_default(),
         field.name().clone(),
         iceberg_type.clone(),
         required,

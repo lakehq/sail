@@ -3,7 +3,6 @@ use sail_common::actor::{Actor, ActorAction, ActorContext};
 use crate::proto::RemoteExecutionCodec;
 use crate::task_runner::{TaskRunnerActor, TaskRunnerComponents, TaskRunnerMessage};
 
-#[tonic::async_trait]
 impl Actor for TaskRunnerActor {
     type Message = TaskRunnerMessage;
     type Options = TaskRunnerComponents;
@@ -14,10 +13,12 @@ impl Actor for TaskRunnerActor {
 
     fn new(options: Self::Options) -> Self {
         let TaskRunnerComponents {
+            session_id,
             extensions,
             placement,
         } = options;
         Self {
+            session_id,
             signals: Default::default(),
             codec: Box::new(RemoteExecutionCodec),
             extensions,
@@ -25,7 +26,11 @@ impl Actor for TaskRunnerActor {
         }
     }
 
-    fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
+    async fn receive(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        message: Self::Message,
+    ) -> ActorAction {
         match message {
             TaskRunnerMessage::RunTask {
                 key,

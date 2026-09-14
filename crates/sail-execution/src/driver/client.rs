@@ -8,8 +8,9 @@ use crate::driver::r#gen::{
     CelebornPartitionLocation, CelebornRegisterShuffleRequest, CelebornRegisterShuffleResponse,
     CelebornReportMetricsRequest, CelebornReviveRequest, CelebornReviveResponse,
     CelebornUnregisterShuffleRequest, RegisterWorkerRequest, RegisterWorkerResponse,
-    ReportTaskStatusRequest, ReportTaskStatusResponse, ReportWorkerHeartbeatRequest,
-    ReportWorkerHeartbeatResponse, ReportWorkerKnownPeersRequest, ReportWorkerKnownPeersResponse,
+    ReportMetricsRequest, ReportMetricsResponse, ReportTaskStatusRequest, ReportTaskStatusResponse,
+    ReportWorkerHeartbeatRequest, ReportWorkerHeartbeatResponse, ReportWorkerKnownPeersRequest,
+    ReportWorkerKnownPeersResponse,
 };
 use crate::driver::{TaskStatus, r#gen};
 use crate::error::{ExecutionError, ExecutionResult};
@@ -269,6 +270,20 @@ impl DriverClient {
         });
         let response = self.inner.get().await?.report_task_status(request).await?;
         let ReportTaskStatusResponse {} = response.into_inner();
+        Ok(())
+    }
+
+    pub async fn report_metrics(&self, metrics: Vec<Vec<u8>>) -> ExecutionResult<()> {
+        let response = self
+            .inner
+            .get()
+            .await?
+            .report_metrics(Request::new(ReportMetricsRequest {
+                driver_id: self.driver_id.into(),
+                metrics,
+            }))
+            .await?;
+        let ReportMetricsResponse {} = response.into_inner();
         Ok(())
     }
 }

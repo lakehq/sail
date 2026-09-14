@@ -107,17 +107,22 @@ Feature: Delta Lake Deletion Vectors (Merge-on-Read)
         """
       Given statement template
         """
-        CREATE TABLE delta_dv_read
+        CREATE TABLE delta_dv_read (
+          id INT,
+          name STRING
+        )
         USING DELTA LOCATION {{ location.sql }}
         TBLPROPERTIES (
           'delta.enableDeletionVectors' = 'true'
         )
-        AS SELECT * FROM VALUES
+        """
+      Given statement
+        """
+        INSERT INTO delta_dv_read VALUES
           (1, 'Alpha'),
           (2, 'Beta'),
           (3, 'Gamma'),
           (4, 'Delta')
-        AS t(id, name)
         """
 
     Scenario: Read after DV delete filters deleted rows
@@ -185,7 +190,7 @@ Feature: Delta Lake Deletion Vectors (Merge-on-Read)
         | 3   | 7     |
       When query
         """
-        SELECT COUNT(*) AS cnt FROM delta_dv_read
+        SELECT COUNT(1) AS cnt FROM delta_dv_read
         """
       Then query result
         | cnt |
@@ -343,6 +348,14 @@ Feature: Delta Lake Deletion Vectors (Merge-on-Read)
         """
       Then query plan matches snapshot
 
+    Scenario: EXPLAIN EXTENDED DELETE on DV table shows merge-on-read mode
+      When query
+        """
+        EXPLAIN EXTENDED
+        DELETE FROM delta_dv_explain WHERE id = 2
+        """
+      Then query plan matches snapshot
+
     Scenario: EXPLAIN SELECT on DV table after delete uses eager Add input
       Given statement
         """
@@ -355,7 +368,7 @@ Feature: Delta Lake Deletion Vectors (Merge-on-Read)
         """
       Then query plan matches snapshot
 
-    Scenario: EXPLAIN COUNT(1) after DV delete uses logical row-count metadata
+    Scenario: EXPLAIN COUNT literal after delete uses logical DV statistics
       Given statement
         """
         DELETE FROM delta_dv_explain WHERE id = 1
@@ -364,6 +377,20 @@ Feature: Delta Lake Deletion Vectors (Merge-on-Read)
         """
         EXPLAIN
         SELECT COUNT(1) AS cnt FROM delta_dv_explain
+        """
+      Then query plan matches snapshot
+
+    Scenario: EXPLAIN CODEGEN filtered DV scan retains estimated statistics
+      Given statement
+        """
+        DELETE FROM delta_dv_explain WHERE id = 1
+        """
+      When query
+        """
+        EXPLAIN CODEGEN
+        SELECT COUNT(*) AS cnt
+        FROM delta_dv_explain
+        WHERE value > 100
         """
       Then query plan matches snapshot
 

@@ -18,6 +18,7 @@ pub mod datasource;
 pub mod deletion_vector;
 mod delta_log;
 pub mod error;
+pub mod lake_source;
 pub mod logical;
 pub mod options;
 pub mod physical;
@@ -27,13 +28,12 @@ pub mod session_extension;
 mod snapshot;
 pub mod spec;
 pub mod table;
-pub mod table_format;
 mod transaction;
 mod writer;
 
+pub use lake_source::DeltaLakeSource;
 pub use logical::DeltaTableSource;
 pub use table::create_delta_source;
-pub use table_format::DeltaTableFormat;
 
 pub use crate::delta_log::{
     CommitOrBytes, LogStore, LogStoreConfig, LogStoreRef, ObjectStoreRef, StorageConfig,

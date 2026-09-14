@@ -75,7 +75,7 @@ impl TaskRunnerActor {
         };
         let (tx, rx) = oneshot::channel();
         self.signals.insert(key.clone(), tx);
-        ctx.spawn(TaskMonitor::new(ctx.handle().clone(), key, stream, rx).run());
+        ctx.spawn(TaskMonitor::new(ctx.handle().clone(), key, stream, rx).supervise());
         ActorAction::Continue
     }
 
@@ -396,6 +396,7 @@ impl TaskRunnerActor {
             plan,
             TracingExecOptions {
                 metrics: global_metrics(),
+                session_id: Some(self.session_id.clone()),
                 job_id: Some(key.job_id.into()),
                 stage: Some(key.stage),
                 attempt: Some(key.attempt),

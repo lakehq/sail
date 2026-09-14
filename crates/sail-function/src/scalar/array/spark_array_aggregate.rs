@@ -395,13 +395,13 @@ fn scatter_updates(
             return exec_err!("{name} internal error: invalid scatter row {row}");
         }
         if base_start < row {
-            mutable.extend(0, base_start, row);
+            mutable.try_extend(0, base_start, row)?;
         }
-        mutable.extend(1, update_index, update_index + 1);
+        mutable.try_extend(1, update_index, update_index + 1)?;
         base_start = row + 1;
     }
     if base_start < base.len() {
-        mutable.extend(0, base_start, base.len());
+        mutable.try_extend(0, base_start, base.len())?;
     }
     Ok(make_array(mutable.freeze()))
 }

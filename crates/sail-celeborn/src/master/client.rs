@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use prost::Message;
@@ -7,6 +9,7 @@ use uuid::Uuid;
 use crate::common::{
     PartitionLocation, SlotReservation, UserIdentifier, WorkerIdentity, WorkerSlotLocations,
 };
+use crate::endpoint::parse_endpoint;
 use crate::error::{CelebornError, CelebornResult};
 use crate::protocol::StatusCode;
 use crate::protocol::proto::{
@@ -18,21 +21,93 @@ use crate::protocol::transport::{TransportConnection, TransportMessage};
 
 const MASTER_ENDPOINT_NAME: &str = "MasterEndpoint";
 
-/// The master endpoint and timeout used by a [`MasterClient`].
+/// The master endpoints and timeout used by a [`MasterClient`].
 #[derive(Debug, Clone)]
 pub struct MasterClientOptions {
-    pub host: String,
-    pub port: u16,
+    pub endpoints: Vec<String>,
     pub timeout: Duration,
 }
 
 impl MasterClientOptions {
-    pub fn new(host: impl Into<String>, port: u16) -> Self {
+    pub fn new(endpoints: Vec<String>) -> Self {
         Self {
-            host: host.into(),
-            port,
+            endpoints,
             timeout: Duration::from_secs(30),
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct MasterConnection {
+    host: String,
+    port: u16,
+    connection: TransportConnection,
+}
+
+impl MasterConnection {
+    fn try_new(endpoint: String, timeout: Duration) -> Option<Self> {
+        let (host, port) = parse_endpoint(&endpoint)?;
+        Some(Self {
+            host: host.clone(),
+            port,
+            connection: TransportConnection::new(host, port, timeout),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+enum MasterConnections {
+    Available {
+        valid: Vec<MasterConnection>,
+        current: Arc<AtomicUsize>,
+        invalid: Vec<String>,
+    },
+    Unavailable {
+        invalid: Vec<String>,
+    },
+}
+
+impl MasterConnections {
+    fn new(options: MasterClientOptions) -> Self {
+        let mut valid = Vec::new();
+        let mut invalid = Vec::new();
+        for endpoint in options.endpoints {
+            if let Some(connection) = MasterConnection::try_new(endpoint.clone(), options.timeout) {
+                valid.push(connection);
+            } else {
+                invalid.push(endpoint);
+            }
+        }
+        if valid.is_empty() {
+            Self::Unavailable { invalid }
+        } else {
+            Self::Available {
+                valid,
+                current: Arc::new(AtomicUsize::new(0)),
+                invalid,
+            }
+        }
+    }
+
+    fn fallback_error(&self) -> CelebornError {
+        let invalid = match self {
+            Self::Available { invalid, .. } | Self::Unavailable { invalid } => invalid,
+        };
+        if invalid.is_empty() {
+            CelebornError::InvalidArgument(
+                "at least one Celeborn master endpoint must be configured".to_string(),
+            )
+        } else {
+            CelebornError::InvalidArgument(format!(
+                "invalid Celeborn master endpoints: {}",
+                invalid.join(", ")
+            ))
+        }
+    }
+
+    fn advance_after_failure(current: &AtomicUsize, index: usize, count: usize) {
+        let next = (index + 1) % count;
+        let _ = current.compare_exchange(index, next, Ordering::Relaxed, Ordering::Relaxed);
     }
 }
 
@@ -41,16 +116,13 @@ impl MasterClientOptions {
 /// Clones share a serialized TCP connection, matching Celeborn's Netty client channel lifecycle.
 #[derive(Debug, Clone)]
 pub struct MasterClient {
-    options: MasterClientOptions,
-    connection: TransportConnection,
+    connections: MasterConnections,
 }
 
 impl MasterClient {
     pub fn new(options: MasterClientOptions) -> Self {
-        let connection = TransportConnection::new(&options.host, options.port, options.timeout);
         Self {
-            options,
-            connection,
+            connections: MasterConnections::new(options),
         }
     }
 
@@ -258,16 +330,37 @@ impl MasterClient {
         message_type: MessageType,
         payload: Vec<u8>,
     ) -> CelebornResult<TransportMessage> {
-        let payload = TransportMessage::new(message_type, payload)
-            .into_rpc_envelope(
-                &self.options.host,
-                &self.options.host,
-                self.options.port,
-                MASTER_ENDPOINT_NAME,
-            )
-            .encode()?;
-        let response = self.connection.send_rpc(payload).await?;
-        TransportMessage::decode_java(&response)
+        let mut last_error = None;
+        if let MasterConnections::Available { valid, current, .. } = &self.connections {
+            let mut index = current.load(Ordering::Relaxed) % valid.len();
+            for _ in 0..valid.len() {
+                let connection = &valid[index];
+                let request = TransportMessage::new(message_type, payload.clone())
+                    .into_rpc_envelope(
+                        &connection.host,
+                        &connection.host,
+                        connection.port,
+                        MASTER_ENDPOINT_NAME,
+                    )
+                    .encode()?;
+                match connection.connection.send_rpc(request).await {
+                    Ok(response) => match TransportMessage::decode_java(&response) {
+                        Ok(response) => return Ok(response),
+                        Err(error) => {
+                            last_error = Some(error);
+                            MasterConnections::advance_after_failure(current, index, valid.len());
+                            index = (index + 1) % valid.len();
+                        }
+                    },
+                    Err(error) => {
+                        last_error = Some(error);
+                        MasterConnections::advance_after_failure(current, index, valid.len());
+                        index = (index + 1) % valid.len();
+                    }
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| self.connections.fallback_error()))
     }
 }
 

@@ -209,6 +209,7 @@ pub struct ClusterConfig {
     pub worker_heartbeat_interval_secs: u64,
     pub worker_heartbeat_timeout_secs: u64,
     pub worker_launch_timeout_secs: u64,
+    pub worker_launch_retry_strategy: RetryStrategy,
     pub worker_task_slots: usize,
     pub task_launch_timeout_secs: u64,
     pub task_stream_buffer: usize,
@@ -326,8 +327,7 @@ pub struct StorageShuffleBackend {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CelebornShuffleBackend {
-    pub master_host: String,
-    pub master_port: u16,
+    pub master_endpoints: Vec<String>,
     pub compression: CelebornCompressionCodec,
     pub heartbeat_interval_secs: u64,
     pub endpoint_overrides: Vec<CelebornEndpointOverride>,
@@ -414,10 +414,8 @@ impl std::fmt::Display for CelebornPartitionSplitMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CelebornEndpointOverride {
-    pub internal_host: String,
-    pub internal_port: u16,
-    pub external_host: String,
-    pub external_port: u16,
+    pub internal: String,
+    pub external: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -468,8 +466,7 @@ mod shuffle_backend {
                         compression: super::ShuffleCompression::None,
                     },
                     celeborn: super::CelebornShuffleBackend {
-                        master_host: String::new(),
-                        master_port: 0,
+                        master_endpoints: vec![],
                         compression: super::CelebornCompressionCodec::default(),
                         heartbeat_interval_secs: 10,
                         endpoint_overrides: vec![],
@@ -481,8 +478,7 @@ mod shuffle_backend {
                     r#type: Type::Storage,
                     storage,
                     celeborn: super::CelebornShuffleBackend {
-                        master_host: String::new(),
-                        master_port: 0,
+                        master_endpoints: vec![],
                         compression: super::CelebornCompressionCodec::default(),
                         heartbeat_interval_secs: 10,
                         endpoint_overrides: vec![],
@@ -723,6 +719,76 @@ pub struct CatalogConfig {
     pub default_database: Vec<String>,
     pub global_temporary_database: Vec<String>,
     pub list: Vec<CatalogType>,
+    pub system: SystemCatalogConfig,
+}
+
+/// Configuration for the local materialized system catalog store.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(
+    into = "system_catalog::SystemCatalog",
+    from = "system_catalog::SystemCatalog"
+)]
+pub struct SystemCatalogConfig {
+    pub store: SystemCatalogStore,
+}
+
+#[derive(Debug, Clone)]
+pub enum SystemCatalogStore {
+    Memory,
+    Disk { path: String },
+}
+
+mod system_catalog {
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum Store {
+        Memory,
+        Disk,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct Disk {
+        pub path: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct SystemCatalog {
+        pub store: Store,
+        pub disk: Disk,
+    }
+
+    impl From<SystemCatalog> for super::SystemCatalogConfig {
+        fn from(value: SystemCatalog) -> Self {
+            let store = match value.store {
+                Store::Memory => super::SystemCatalogStore::Memory,
+                Store::Disk => super::SystemCatalogStore::Disk {
+                    path: value.disk.path,
+                },
+            };
+            Self { store }
+        }
+    }
+
+    impl From<super::SystemCatalogConfig> for SystemCatalog {
+        fn from(value: super::SystemCatalogConfig) -> Self {
+            match value.store {
+                super::SystemCatalogStore::Memory => Self {
+                    store: Store::Memory,
+                    disk: Disk {
+                        path: String::new(),
+                    },
+                },
+                super::SystemCatalogStore::Disk { path } => Self {
+                    store: Store::Disk,
+                    disk: Disk { path },
+                },
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -877,12 +943,19 @@ pub struct TelemetryConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TelemetryExporterConfig {
-    pub otlp: OtlpConfig,
+    pub otlp: TelemetryOtlpExporterConfig,
+    pub system: TelemetrySystemExporterConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct OtlpConfig {
+pub struct TelemetrySystemExporterConfig {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetryOtlpExporterConfig {
     #[serde(
         serialize_with = "serialize_non_empty_string",
         deserialize_with = "deserialize_non_empty_string"
@@ -929,8 +1002,7 @@ impl ClusterConfigEnv {
         SHUFFLE_BACKEND__STORAGE__PATH,
         SHUFFLE_BACKEND__STORAGE__MAX_FILE_SIZE,
         SHUFFLE_BACKEND__STORAGE__COMPRESSION,
-        SHUFFLE_BACKEND__CELEBORN__MASTER_HOST,
-        SHUFFLE_BACKEND__CELEBORN__MASTER_PORT,
+        SHUFFLE_BACKEND__CELEBORN__MASTER_ENDPOINTS,
         SHUFFLE_BACKEND__CELEBORN__COMPRESSION,
         SHUFFLE_BACKEND__CELEBORN__HEARTBEAT_INTERVAL_SECS,
         SHUFFLE_BACKEND__CELEBORN__ENDPOINT_OVERRIDES,

@@ -16,6 +16,7 @@ use async_trait::async_trait;
 use datafusion::arrow::compute::concat_batches;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_expr::expressions::{Column, Literal as PhysicalLiteral};
 use datafusion::physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
@@ -252,13 +253,29 @@ impl ExecutionPlan for IcebergWriterExec {
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         match &self.merge_distribution_keys {
-            Some(expressions) => vec![Distribution::HashPartitioned(expressions.clone())],
+            Some(expressions) => vec![Distribution::KeyPartitioned(expressions.clone())],
             None => vec![Distribution::UnspecifiedDistribution],
         }
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    #[expect(deprecated)]
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: datafusion::physical_plan::ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.with_new_children(children)
     }
 
     fn with_new_children(
@@ -311,7 +328,6 @@ impl ExecutionPlan for IcebergWriterExec {
         let stream = self.input.execute(partition, Arc::clone(&context))?;
 
         let table_url = self.table_url.clone();
-        let partition_columns = self.partition_columns.clone();
         let sink_mode = self.sink_mode.clone();
         let table_exists = self.table_exists;
         let merge_projection = self
@@ -344,12 +360,9 @@ impl ExecutionPlan for IcebergWriterExec {
                     }
                 }
                 PhysicalSinkMode::Append => {}
-                PhysicalSinkMode::Overwrite => {}
-                PhysicalSinkMode::OverwriteIf { .. } | PhysicalSinkMode::OverwritePartitions => {
-                    return Err(DataFusionError::NotImplemented(
-                        "predicate or partition overwrite not implemented for Iceberg".to_string(),
-                    ));
-                }
+                PhysicalSinkMode::Overwrite
+                | PhysicalSinkMode::OverwriteIf { .. }
+                | PhysicalSinkMode::OverwritePartitions => {}
             }
 
             let data_location = write_context.data_location()?;
@@ -361,12 +374,9 @@ impl ExecutionPlan for IcebergWriterExec {
 
             let writer_config = WriterConfig {
                 table_schema: table_schema.clone(),
-                partition_columns: partition_columns.clone(),
+                // TODO: Resolve `write.parquet.*` table properties and write-option overrides
+                // into the Parquet writer properties.
                 writer_properties: WriterProperties::default(),
-                target_file_size: 134_217_728,
-                write_batch_size: 32 * 1024,
-                num_indexed_cols: 32,
-                stats_columns: None,
                 iceberg_schema: Arc::new(iceberg_schema.clone()),
                 partition_spec: write_context.unbound_writer_partition_spec(),
                 variant_shredding,
@@ -622,15 +632,20 @@ mod tests {
         distributions
             .first()
             .and_then(|distribution| match distribution {
-                Distribution::HashPartitioned(expressions) => Some(expressions.as_slice()),
+                Distribution::KeyPartitioned(expressions) => Some(expressions.as_slice()),
                 _ => None,
             })
             .expect("MERGE should require hash partitioning")
     }
 
+    fn input_distributions(plan: &dyn ExecutionPlan) -> Vec<Distribution> {
+        plan.input_distribution_requirements().into_per_child()
+    }
+
     #[test]
     fn unpartitioned_merge_hashes_file_delete_keys() {
-        let distributions = iceberg_writer(true, vec![]).required_input_distribution();
+        let writer = iceberg_writer(true, vec![]);
+        let distributions = input_distributions(&writer);
         let expressions = hash_expressions(&distributions);
 
         assert_eq!(expressions.len(), 3);
@@ -651,7 +666,8 @@ mod tests {
                 transform: Some(PartitionTransform::Day),
             },
         ];
-        let distributions = iceberg_writer(true, partition_columns).required_input_distribution();
+        let writer = iceberg_writer(true, partition_columns);
+        let distributions = input_distributions(&writer);
         let expressions = hash_expressions(&distributions);
 
         assert_eq!(expressions.len(), 4);
@@ -671,8 +687,8 @@ mod tests {
             Field::new("id", DataType::Int64, true),
             Field::new(OPERATION_COLUMN, DataType::Int32, false),
         ]));
-        let distributions =
-            iceberg_writer_for_schema(true, vec![], schema).required_input_distribution();
+        let writer = iceberg_writer_for_schema(true, vec![], schema);
+        let distributions = input_distributions(&writer);
         let expressions = hash_expressions(&distributions);
 
         assert_eq!(expressions.len(), 3);
@@ -696,8 +712,8 @@ mod tests {
             column: "event_time".to_string(),
             transform: Some(PartitionTransform::Day),
         }];
-        let distributions = iceberg_writer_for_schema(true, partition_columns, schema)
-            .required_input_distribution();
+        let writer = iceberg_writer_for_schema(true, partition_columns, schema);
+        let distributions = input_distributions(&writer);
         let expressions = hash_expressions(&distributions);
 
         assert_eq!(expressions.len(), 3);
@@ -713,9 +729,7 @@ mod tests {
     #[test]
     fn ordinary_writes_preserve_upstream_distribution() {
         assert!(matches!(
-            iceberg_writer(false, vec![])
-                .required_input_distribution()
-                .as_slice(),
+            input_distributions(&iceberg_writer(false, vec![])).as_slice(),
             [Distribution::UnspecifiedDistribution]
         ));
     }

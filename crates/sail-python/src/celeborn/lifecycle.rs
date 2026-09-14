@@ -28,8 +28,7 @@ enum LifecycleManagerState {
 
 #[pyclass(name = "LifecycleManager")]
 pub(super) struct PyLifecycleManager {
-    master_host: String,
-    master_port: u16,
+    master_endpoints: Vec<String>,
     application_id: String,
     endpoint_resolver: Option<Arc<dyn EndpointResolver>>,
     partition_split_threshold: i64,
@@ -42,13 +41,11 @@ pub(super) struct PyLifecycleManager {
 
 #[pymethods]
 impl PyLifecycleManager {
-    #[expect(clippy::too_many_arguments)]
     #[new]
-    #[pyo3(signature = (master_host, master_port, application_id, *, endpoint_resolver=None, partition_split_threshold=1073741824, partition_split_mode="soft".to_string(), compression="lz4".to_string(), heartbeat_interval_secs=10))]
+    #[pyo3(signature = (master_endpoints, application_id, *, endpoint_resolver=None, partition_split_threshold=1073741824, partition_split_mode="soft".to_string(), compression="lz4".to_string(), heartbeat_interval_secs=10))]
     fn new(
         py: Python<'_>,
-        master_host: String,
-        master_port: u16,
+        master_endpoints: Vec<String>,
         application_id: String,
         endpoint_resolver: Option<Py<PyStaticEndpointResolver>>,
         partition_split_threshold: i64,
@@ -66,8 +63,7 @@ impl PyLifecycleManager {
             .parse::<CompressionCodec>()
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(Self {
-            master_host,
-            master_port,
+            master_endpoints,
             application_id,
             endpoint_resolver,
             partition_split_threshold,
@@ -93,7 +89,7 @@ impl PyLifecycleManager {
         let runtime = self.runtime.clone();
         let mut options = LifecycleManagerOptions::new(
             self.application_id.clone(),
-            MasterClientOptions::new(self.master_host.clone(), self.master_port),
+            MasterClientOptions::new(self.master_endpoints.clone()),
         );
         if let Some(endpoint_resolver) = self.endpoint_resolver.clone() {
             options = options.with_endpoint_resolver(endpoint_resolver);

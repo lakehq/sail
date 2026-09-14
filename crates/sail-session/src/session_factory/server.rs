@@ -1,6 +1,7 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
+use datafusion::common::config::ConfigNonZeroUsize;
 use datafusion::common::parquet_config::DFParquetWriterVersion;
 use datafusion::common::{Result, internal_err};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
@@ -19,10 +20,10 @@ use sail_common_datafusion::session::job::{JobRunner, JobService};
 use sail_common_datafusion::session::repartition::RepartitionBufferConfig;
 use sail_delta_lake::session_extension::DeltaTableCache;
 use sail_physical_optimizer::{PhysicalOptimizerOptions, get_physical_optimizers};
-use sail_telemetry::telemetry::global_system_event_reader;
+use sail_telemetry::telemetry::global_system_store_reader;
 
 use crate::catalog::create_catalog_manager;
-use crate::formats::create_table_format_registry;
+use crate::formats::create_data_source_registry;
 use crate::optimizer::{default_analyzer_rules, default_optimizer_rules};
 use crate::planner::new_query_planner;
 use crate::runtime::RuntimeEnvFactory;
@@ -109,7 +110,7 @@ impl ServerSessionFactory {
             // We do not use the DataFusion catalog and schema since we manage catalogs ourselves.
             .with_create_default_catalog_and_schema(false)
             .with_information_schema(false)
-            .with_extension(create_table_format_registry()?)
+            .with_extension(create_data_source_registry()?)
             .with_extension(Arc::new(create_catalog_manager(
                 &self.config,
                 self.runtime.clone(),
@@ -126,9 +127,9 @@ impl ServerSessionFactory {
             )))
             .with_extension(Arc::new(self.create_system_table_service(info)?))
             .with_extension(Arc::new(DeltaTableCache::default()));
-        self.apply_execution_config(&mut config);
+        self.apply_execution_config(&mut config)?;
         self.apply_execution_parquet_config(&mut config);
-        self.apply_optimizer_config(&mut config);
+        self.apply_optimizer_config(&mut config)?;
         let config = self.mutator.mutate_config(config, info)?;
         Ok(config)
     }
@@ -139,7 +140,7 @@ impl ServerSessionFactory {
             .runtime_env
             .create(|builder| self.mutator.mutate_runtime_env(builder, info))?;
         // We do not add default features to the session state,
-        // since we manage table formats and functions ourselves.
+        // since we manage data sources and functions ourselves.
         let builder = SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime)
@@ -155,18 +156,21 @@ impl ServerSessionFactory {
     }
 
     fn create_system_table_service(&self, _info: &ServerSessionInfo) -> Result<SystemTableService> {
-        let reader = global_system_event_reader().ok_or_else(|| {
+        let reader = global_system_store_reader().ok_or_else(|| {
             datafusion::common::DataFusionError::Internal(
-                "system event telemetry is not initialized".to_string(),
+                "telemetry is not initialized for system store".to_string(),
             )
         })?;
-        Ok(SystemTableService::new(reader))
+        Ok(SystemTableService::new(
+            reader,
+            self.config.execution.batch_size,
+        ))
     }
 
-    fn apply_execution_config(&mut self, config: &mut SessionConfig) {
+    fn apply_execution_config(&mut self, config: &mut SessionConfig) -> Result<()> {
         let execution = &mut config.options_mut().execution;
 
-        execution.batch_size = self.config.execution.batch_size;
+        execution.batch_size = ConfigNonZeroUsize::try_new(self.config.execution.batch_size)?;
         if self.config.execution.default_parallelism > 0 {
             execution.target_partitions = self.config.execution.default_parallelism;
         }
@@ -176,19 +180,24 @@ impl ServerSessionFactory {
             .execution
             .use_row_number_estimates_to_optimize_partitioning;
         execution.listing_table_ignore_subdirectory = false;
+        Ok(())
     }
 
-    fn apply_optimizer_config(&mut self, config: &mut SessionConfig) {
+    fn apply_optimizer_config(&mut self, config: &mut SessionConfig) -> Result<()> {
         let optimizer = &mut config.options_mut().optimizer;
         optimizer.join_reordering = self.config.optimizer.enable_join_swap;
         optimizer.prefer_hash_join = self.config.optimizer.prefer_hash_join;
         optimizer.expand_views_at_output = self.config.optimizer.expand_views_at_output;
-        match &self.config.mode {
-            ExecutionMode::Local => {}
-            ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster => {
-                optimizer.enable_dynamic_filter_pushdown = false;
-            }
+        // DataFusion 55's hash-join dynamic filter assumes every plan partition reports to
+        // process-local state. Cluster execution uses independently decoded task plans, so keep
+        // join filters disabled while allowing task-local TopK and aggregate filters.
+        if matches!(
+            self.config.mode,
+            ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster
+        ) {
+            optimizer.enable_join_dynamic_filter_pushdown = false;
         }
+        Ok(())
     }
 
     fn apply_execution_parquet_config(&mut self, config: &mut SessionConfig) {

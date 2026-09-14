@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
@@ -9,7 +11,8 @@ use datafusion::physical_expr::{HigherOrderFunctionExpr, PhysicalExpr};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::physical_plan::to_proto::serialize_physical_expr_with_converter;
 use datafusion_proto::physical_plan::{
-    PhysicalExtensionCodec, PhysicalPlanDecodeContext, PhysicalProtoConverterExtension,
+    PhysicalExtensionCodec, PhysicalPlanDecodeContext, PhysicalPlanNodeExt,
+    PhysicalProtoConverterExtension,
 };
 use datafusion_proto::protobuf::{
     PhysicalExprNode, PhysicalExtensionExprNode, PhysicalPlanNode, physical_expr_node,
@@ -23,7 +26,10 @@ use crate::plan::r#gen::{
 use crate::proto::decode::{try_decode_field_ref, try_decode_higher_order_udf};
 use crate::proto::encode::{try_encode_field_ref, try_encode_higher_order_udf};
 
-pub(super) struct RemotePhysicalProtoConverter;
+#[derive(Default)]
+pub(super) struct RemotePhysicalProtoConverter {
+    decoded_expressions: RefCell<HashMap<u64, Arc<dyn PhysicalExpr>>>,
+}
 
 impl Debug for RemotePhysicalProtoConverter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -54,7 +60,7 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
         input_schema: &Schema,
         ctx: &PhysicalPlanDecodeContext<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        match decode_remote_expr_kind(proto)? {
+        let decoded = match decode_remote_expr_kind(proto)? {
             Some((ExprKind::HigherOrderUdf(node), inputs)) => {
                 self.higher_order_proto_to_expr(node, inputs, input_schema, ctx)
             }
@@ -66,17 +72,36 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
                         node.index
                     )
                 })?;
-                Ok(Arc::new(LambdaVariable::new(index, field)))
+                Ok(Arc::new(LambdaVariable::new(index, field)) as Arc<dyn PhysicalExpr>)
             }
             Some((ExprKind::Lambda(node), inputs)) => {
                 let [body] = inputs else {
                     return plan_err!("LambdaExpr expects exactly one input, got {}", inputs.len());
                 };
                 let body = self.proto_to_physical_expr(body, input_schema, ctx)?;
-                Ok(Arc::new(LambdaExpr::try_new(node.params, body)?))
+                Ok(Arc::new(LambdaExpr::try_new(node.params, body)?) as Arc<dyn PhysicalExpr>)
             }
             _ => self.default_proto_to_physical_expr(proto, input_schema, ctx),
+        }?;
+
+        let Some(expression_id) = proto.expr_id else {
+            return Ok(decoded);
+        };
+
+        let cached = self
+            .decoded_expressions
+            .borrow()
+            .get(&expression_id)
+            .cloned();
+        if let Some(cached) = cached {
+            let children = decoded.children().into_iter().cloned().collect();
+            return cached.with_new_children(children);
         }
+
+        self.decoded_expressions
+            .borrow_mut()
+            .insert(expression_id, Arc::clone(&decoded));
+        Ok(decoded)
     }
 
     fn physical_expr_to_proto(

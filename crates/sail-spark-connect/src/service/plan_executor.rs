@@ -7,7 +7,7 @@ use fastrace::Span;
 use fastrace::collector::SpanContext;
 use fastrace::future::FutureExt;
 use futures::stream;
-use log::{debug, warn};
+use log::debug;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::job::JobService;
@@ -670,27 +670,26 @@ pub(crate) async fn handle_execute_register_datasource(
         }
     };
 
-    // Register in the session-scoped TableFormatRegistry with embedded pickled bytes
+    // Register in the session-scoped DataSourceRegistry with embedded pickled bytes.
     {
         use std::sync::Arc;
 
-        use sail_common_datafusion::datasource::TableFormatRegistry;
-        use sail_data_source::formats::python::PythonTableFormat;
+        use sail_common_datafusion::datasource::DataSourceRegistry;
+        use sail_data_source::formats::python::PythonDataSourceAdapter;
 
-        // Register format in session's TableFormatRegistry with embedded pickled class
-        // This provides session isolation - the format is only visible to this session
-        match ctx.extension::<TableFormatRegistry>() {
+        // The embedded class keeps the source isolated to this session.
+        match ctx.extension::<DataSourceRegistry>() {
             Ok(registry) => {
-                let format = Arc::new(PythonTableFormat::with_pickled_class(name.clone(), command));
-                // Ignore error if already registered (allows re-registration to update)
-                if let Err(e) = registry.register(format) {
-                    warn!("Failed to register python datasource {}: {}", name, e);
-                }
+                let source = Arc::new(PythonDataSourceAdapter::with_pickled_class(
+                    name.clone(),
+                    command,
+                ));
+                registry.register_data_source(source)?;
                 log::info!("Registered session-scoped datasource: {}", name);
             }
             _ => {
                 return Err(SparkError::internal(
-                    "TableFormatRegistry not found in session context",
+                    "DataSourceRegistry not found in session context",
                 ));
             }
         }

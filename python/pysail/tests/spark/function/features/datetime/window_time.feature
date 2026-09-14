@@ -54,7 +54,6 @@ Feature: window_time() event-time extraction function
   @function(nullability)
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null literal input to window_time yields the schema Spark declares
       When query
         """

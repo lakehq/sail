@@ -27,8 +27,9 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DataFusionError, Result, internal_err};
-use datafusion_physical_expr::{Distribution, EquivalenceProperties};
+use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::stream::{self, StreamExt};
 use log::warn;
 use object_store::{Error as ObjectStoreError, ObjectStoreExt, PutMode, PutOptions};
@@ -519,6 +520,22 @@ impl ExecutionPlan for DeltaCommitExec {
         vec![&self.input]
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    #[expect(deprecated)]
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: datafusion::physical_plan::ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.with_new_children(children)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -938,15 +955,22 @@ impl ExecutionPlan for DeltaCommitExec {
                         table,
                     )
                     .await?;
-                    let reference = Self::refresh_catalog_managed_reference(
-                        &context,
-                        lakehouse_context,
-                        &table_url,
-                        &log_store,
-                        reference,
-                        latest_catalog_version,
-                    )
-                    .await?;
+                    let reference = if crate::transaction::CommitData::is_blind_append(
+                        &final_actions,
+                        &operation,
+                    ) {
+                        Self::refresh_catalog_managed_reference(
+                            &context,
+                            lakehouse_context,
+                            &table_url,
+                            &log_store,
+                            reference,
+                            latest_catalog_version,
+                        )
+                        .await?
+                    } else {
+                        reference
+                    };
                     let pre_commit = CommitBuilder::from(
                         CommitProperties::default()
                             .with_operation_metrics(operation_metrics)

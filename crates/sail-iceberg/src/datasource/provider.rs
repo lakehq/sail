@@ -15,7 +15,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion::arrow::array::{Array, BooleanArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::catalog::Session;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::common::scalar::ScalarValue;
@@ -34,12 +36,13 @@ use datafusion::logical_expr::{
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
-use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::GlobalLimitExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
+use datafusion::physical_plan::{ExecutionPlan, Partitioning};
+use datafusion_datasource::file_scan_config::output_partitioning_from_partition_fields;
 use object_store::ObjectMeta;
 use sail_common_datafusion::schema_evolution::{
     SchemaEvolutionPhysicalExprAdapterFactoryWithMatching, StructFieldMatching,
@@ -50,7 +53,7 @@ use crate::datasource::expressions::simplify_expr;
 use crate::datasource::pruning::{
     prune_data_files_by_partition_values, prune_files, prune_manifests_by_partition_summaries,
 };
-use crate::datasource::type_converter::iceberg_schema_to_arrow;
+use crate::datasource::type_converter::{iceberg_field_id, iceberg_schema_to_arrow};
 use crate::io::{
     StoreContext, load_manifest as io_load_manifest, load_manifest_list as io_load_manifest_list,
 };
@@ -63,11 +66,11 @@ use crate::row_level_metadata::{
 };
 use crate::spec::delete_index::{DeleteFileIndex, DeleteFileRef};
 use crate::spec::transform::Transform;
-use crate::spec::types::values::Literal;
+use crate::spec::types::values::{Datum, Literal};
 use crate::spec::{
     DataFile, ManifestContentType, ManifestList, ManifestStatus, PartitionSpec, Schema, Snapshot,
 };
-use crate::utils::conversions::primitive_to_scalar_default;
+use crate::utils::conversions::{primitive_to_scalar_default, to_scalar};
 use crate::utils::get_object_store_from_session;
 
 fn iceberg_schema_evolution_adapter() -> Arc<dyn PhysicalExprAdapterFactory> {
@@ -88,7 +91,6 @@ pub struct IcebergTableProvider {
     /// All partition specs referenced by the table
     partition_specs: Vec<PartitionSpec>,
     /// Default partition spec id (for schema ordering / partition metadata)
-    #[expect(unused)]
     default_spec_id: i32,
     /// Arrow schema for DataFusion
     arrow_schema: Arc<ArrowSchema>,
@@ -103,6 +105,20 @@ pub struct IcebergTableProvider {
 }
 
 impl IcebergTableProvider {
+    fn statistic_scalar(&self, field_id: i32, datum: &Datum) -> Option<ScalarValue> {
+        let field = self.schema.field_by_id(field_id)?;
+        to_scalar(
+            &Literal::Primitive(datum.literal.clone()),
+            field.field_type.as_ref(),
+        )
+        .inspect_err(|error| {
+            log::debug!(
+                "Ignoring Iceberg statistic for field ID {field_id} because it cannot be converted: {error}"
+            );
+        })
+        .ok()
+    }
+
     /// Create a new Iceberg table provider
     pub fn new(
         table_uri: impl ToString,
@@ -289,6 +305,119 @@ impl IcebergTableProvider {
     /// Get the current snapshot
     pub fn current_snapshot(&self) -> Option<&Snapshot> {
         self.snapshot.as_ref()
+    }
+
+    pub(crate) async fn predicate_overwrite_paths(
+        &self,
+        session: &dyn Session,
+        condition: &Expr,
+    ) -> Result<Vec<String>> {
+        if self.snapshot.is_none() {
+            return Ok(Vec::new());
+        }
+        let default_spec = self
+            .partition_specs
+            .iter()
+            .find(|spec| spec.spec_id() == self.default_spec_id)
+            .ok_or_else(|| {
+                datafusion::common::DataFusionError::Plan(
+                    "Iceberg table metadata has no default partition spec".to_string(),
+                )
+            })?;
+        let identity_fields = default_spec
+            .fields()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, field)| {
+                matches!(field.transform, Transform::Identity).then_some((field.source_id, index))
+            })
+            .collect::<HashMap<_, _>>();
+        for column in condition.column_refs() {
+            let field = self.schema.field_by_name(&column.name).ok_or_else(|| {
+                datafusion::common::DataFusionError::Plan(format!(
+                    "predicate overwrite column '{}' is not present in the Iceberg schema",
+                    column.name
+                ))
+            })?;
+            if !identity_fields.contains_key(&field.id) {
+                return Err(datafusion::common::DataFusionError::NotImplemented(
+                    format!(
+                        "Iceberg predicate overwrite supports only identity-partition columns; use DELETE ... WHERE followed by INSERT for '{}'",
+                        column.name
+                    ),
+                ));
+            }
+        }
+
+        let table_url = Url::parse(&self.table_uri)
+            .map_err(|error| datafusion::common::DataFusionError::External(Box::new(error)))?;
+        let object_store = get_object_store_from_session(session, &table_url)?;
+        let store_ctx = StoreContext::new(object_store, &table_url)?;
+        let manifest_list = self.load_manifest_list(&store_ctx).await?;
+        if !self
+            .build_delete_file_index(&store_ctx, &manifest_list)
+            .await?
+            .is_empty()
+        {
+            return plan_err!(
+                "copy-on-write predicate overwrite is not supported for Iceberg tables with active delete files"
+            );
+        }
+        let files = self
+            .load_data_files_with_seq(session, &[], &store_ctx, &manifest_list)
+            .await?
+            .into_iter()
+            .map(|(file, _)| file)
+            .collect::<Vec<_>>();
+        let df_schema = self.arrow_schema.clone().to_dfschema()?;
+        let predicate = session.create_physical_expr(condition.clone(), &df_schema)?;
+        let mut paths = Vec::new();
+        for file in files {
+            if file.partition_spec_id != default_spec.spec_id()
+                || file.partition.len() != default_spec.fields().len()
+            {
+                return Err(datafusion::common::DataFusionError::NotImplemented(
+                    "predicate overwrite is not supported for Iceberg tables with incomparable live partition specs"
+                        .to_string(),
+                ));
+            }
+            let columns = self
+                .arrow_schema
+                .fields()
+                .iter()
+                .map(|arrow_field| {
+                    let scalar = self
+                        .schema
+                        .field_by_name(arrow_field.name())
+                        .and_then(|field| {
+                            identity_fields
+                                .get(&field.id)
+                                .copied()
+                                .and_then(|index| file.partition.get(index))
+                                .and_then(Option::as_ref)
+                                .map(|literal| to_scalar(literal, &field.field_type))
+                        })
+                        .unwrap_or_else(|| ScalarValue::try_from(arrow_field.data_type()));
+                    scalar?.to_array_of_size(1)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let batch = RecordBatch::try_new(self.arrow_schema.clone(), columns)?;
+            let result = predicate.evaluate(&batch)?.into_array(1)?;
+            let result = result
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .ok_or_else(|| {
+                    datafusion::common::DataFusionError::Plan(
+                        "Iceberg overwrite predicate did not evaluate to boolean".to_string(),
+                    )
+                })?;
+            if !result.is_null(0) && result.value(0) {
+                paths.push(file.file_path);
+            }
+        }
+        paths.sort();
+        paths.dedup();
+        Ok(paths)
     }
 
     fn projected_arrow_schema(&self, projection: Option<&Vec<usize>>) -> Result<Arc<ArrowSchema>> {
@@ -518,6 +647,7 @@ impl IcebergTableProvider {
                 extensions: Default::default(),
                 metadata_size_hint: None,
                 table_reference: None,
+                arrow_schema: None,
             };
 
             partitioned_files.push(partitioned_file);
@@ -615,9 +745,8 @@ impl IcebergTableProvider {
             global: session.config().options().execution.parquet.clone(),
             ..Default::default()
         };
-        let table_schema = TableSchema::new(
-            self.arrow_schema.clone(),
-            vec![
+        let table_schema = TableSchema::builder(self.arrow_schema.clone())
+            .with_table_partition_cols(vec![
                 Arc::new(Field::new(file_column_name, DataType::Utf8, false)),
                 Arc::new(Field::new(
                     MERGE_PARTITION_SPEC_ID_COLUMN,
@@ -625,8 +754,8 @@ impl IcebergTableProvider {
                     false,
                 )),
                 Arc::new(Field::new(MERGE_PARTITION_COLUMN, DataType::Utf8, false)),
-            ],
-        );
+            ])
+            .build();
         Arc::new(ParquetSource::new(table_schema).with_table_parquet_options(parquet_options))
     }
 
@@ -661,8 +790,12 @@ impl IcebergTableProvider {
         let mut total_rows: usize = 0;
         let mut total_bytes: usize = 0;
 
-        // Pre-compute field id per column index
-        let field_ids: Vec<i32> = self.schema.fields().iter().map(|f| f.id).collect();
+        let field_ids: Vec<Option<i32>> = self
+            .arrow_schema
+            .fields()
+            .iter()
+            .map(|field| iceberg_field_id(field).unwrap_or_default())
+            .collect();
 
         // Initialize accumulators per column
         let mut min_scalars: Vec<Option<ScalarValue>> =
@@ -676,14 +809,18 @@ impl IcebergTableProvider {
             total_bytes = total_bytes.saturating_add(df.file_size_in_bytes() as usize);
 
             for (col_idx, field_id) in field_ids.iter().enumerate() {
+                let Some(field_id) = field_id else {
+                    continue;
+                };
                 // null counts
                 if let Some(c) = df.null_value_counts().get(field_id) {
                     null_counts[col_idx] = null_counts[col_idx].saturating_add(*c as usize);
                 }
 
                 // min
-                if let Some(d) = df.lower_bounds().get(field_id) {
-                    let sv = primitive_to_scalar_default(&d.literal);
+                if let Some(d) = df.lower_bounds().get(field_id)
+                    && let Some(sv) = self.statistic_scalar(*field_id, d)
+                {
                     min_scalars[col_idx] = match (&min_scalars[col_idx], &sv) {
                         (None, s) => Some(s.clone()),
                         (Some(existing), s) => Some(if s < existing {
@@ -695,8 +832,9 @@ impl IcebergTableProvider {
                 }
 
                 // max
-                if let Some(d) = df.upper_bounds().get(field_id) {
-                    let sv = primitive_to_scalar_default(&d.literal);
+                if let Some(d) = df.upper_bounds().get(field_id)
+                    && let Some(sv) = self.statistic_scalar(*field_id, d)
+                {
                     max_scalars[col_idx] = match (&max_scalars[col_idx], &sv) {
                         (None, s) => Some(s.clone()),
                         (Some(existing), s) => Some(if s > existing {
@@ -743,14 +881,10 @@ impl IcebergTableProvider {
             .arrow_schema
             .fields()
             .iter()
-            .enumerate()
-            .map(|(i, _field)| {
-                let field_id = self
-                    .schema
-                    .fields()
-                    .get(i)
-                    .map(|f| f.id)
-                    .unwrap_or(i as i32 + 1);
+            .map(|field| {
+                let Some(field_id) = iceberg_field_id(field).unwrap_or_default() else {
+                    return ColumnStatistics::new_unknown();
+                };
 
                 let null_count = data_file
                     .null_value_counts()
@@ -763,14 +897,14 @@ impl IcebergTableProvider {
                 let min_value = data_file
                     .lower_bounds()
                     .get(&field_id)
-                    .map(|datum| primitive_to_scalar_default(&datum.literal))
+                    .and_then(|datum| self.statistic_scalar(field_id, datum))
                     .map(Precision::Exact)
                     .unwrap_or(Precision::Absent);
 
                 let max_value = data_file
                     .upper_bounds()
                     .get(&field_id)
-                    .map(|datum| primitive_to_scalar_default(&datum.literal))
+                    .and_then(|datum| self.statistic_scalar(field_id, datum))
                     .map(Precision::Exact)
                     .unwrap_or(Precision::Absent);
 
@@ -988,7 +1122,7 @@ impl TableProvider for IcebergTableProvider {
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(vec![FileGroup::from(partitioned)])
                     // Position deletes require the original file order and absolute offsets.
-                    .with_partitioned_by_file_group(true)
+                    .with_output_partitioning(Some(Partitioning::UnknownPartitioning(1)))
                     .with_preserve_order(true)
                     .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                     .build();
@@ -1168,13 +1302,19 @@ impl IcebergTableProvider {
                 .collect::<Vec<_>>();
             let parquet_source =
                 self.build_merge_parquet_source(session, file_column_name.as_str());
+            let output_partitioning = output_partitioning_from_partition_fields(
+                parquet_source.table_schema().table_schema(),
+                parquet_source.table_schema().table_partition_cols(),
+                file_groups.len(),
+            )
+            .unwrap_or_else(|| Partitioning::UnknownPartitioning(file_groups.len()));
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(file_groups)
                     // MERGE synthesizes file-local row positions before applying filters.
                     // Keep every file group whole so DataFusion cannot split a Parquet file
                     // into byte ranges whose streams would each start at position zero.
-                    .with_partitioned_by_file_group(true)
+                    .with_output_partitioning(Some(output_partitioning))
                     .with_preserve_order(true)
                     .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                     .build();
@@ -1196,7 +1336,7 @@ impl IcebergTableProvider {
                     .with_file_groups(vec![FileGroup::from(partitioned)])
                     // Existing position deletes and MERGE row positions both require the
                     // original file order and absolute offsets.
-                    .with_partitioned_by_file_group(true)
+                    .with_output_partitioning(Some(Partitioning::UnknownPartitioning(1)))
                     .with_preserve_order(true)
                     .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                     .build();

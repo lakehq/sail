@@ -1,3 +1,4 @@
+mod batch;
 pub mod physical_plan;
 pub mod planner;
 pub mod predicate;

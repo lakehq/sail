@@ -8,7 +8,7 @@
 //!
 //! # Separation from format-level metadata
 //!
-//! Table-format writers (Delta, Iceberg, …) are responsible for translating
+//! Lake source writers (Delta, Iceberg, …) are responsible for translating
 //! these engine-level keys into format-specific on-disk keys at commit time,
 //! and for translating them back at read time. The engine pipeline itself
 //! never reasons about format-specific metadata directly.
@@ -25,7 +25,7 @@ use datafusion::arrow::datatypes::Field;
 use crate::catalog::CatalogTableColumnIdentity;
 
 /// Sail-private field metadata used while planning writes. It records the target
-/// catalog field nullability so table formats can preserve it even if expression
+/// catalog field nullability so lake sources can preserve it even if expression
 /// simplification proves the current write value itself is non-null.
 pub const SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY: &str = "__sail.writeTargetNullable";
 

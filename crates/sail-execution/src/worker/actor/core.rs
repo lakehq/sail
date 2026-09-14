@@ -6,6 +6,7 @@ use fastrace::future::FutureExt;
 use log::info;
 use sail_celeborn::shuffle::{ShuffleClient, ShuffleClientActor, ShuffleClientOptions};
 use sail_common::actor::{Actor, ActorAction, ActorContext};
+use sail_telemetry::metrics::set_metric_sender;
 
 use crate::driver::DriverClientSet;
 use crate::rpc::{ClientOptions, ServerMonitor};
@@ -19,7 +20,6 @@ use crate::task_runner::{
 use crate::worker::peer_tracker::{PeerTracker, PeerTrackerOptions};
 use crate::worker::{WorkerActor, WorkerMessage, WorkerOptions};
 
-#[tonic::async_trait]
 impl Actor for WorkerActor {
     type Message = WorkerMessage;
     type Options = WorkerOptions;
@@ -37,6 +37,16 @@ impl Actor for WorkerActor {
                 port: options.driver_port,
             },
         );
+        let metrics_client = driver_client_set.core.clone();
+        set_metric_sender(move |metrics| {
+            let client = metrics_client.clone();
+            async move {
+                client
+                    .report_metrics(metrics)
+                    .await
+                    .map_err(|error| error.to_string())
+            }
+        });
         Self {
             options,
             server: ServerMonitor::new(),
@@ -82,6 +92,7 @@ impl Actor for WorkerActor {
         let task_runner = ctx
             .children_mut()
             .spawn::<TaskRunnerActor>(TaskRunnerComponents {
+                session_id: self.options.session_id.clone(),
                 extensions: TaskRunnerExtensions {
                     local_streams,
                     storage_streams,
@@ -109,7 +120,11 @@ impl Actor for WorkerActor {
             .await;
     }
 
-    fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
+    async fn receive(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        message: Self::Message,
+    ) -> ActorAction {
         match message {
             WorkerMessage::ServerReady { port, signal } => {
                 self.handle_server_ready(ctx, port, signal)

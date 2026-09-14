@@ -42,7 +42,7 @@ use crate::datasource::{
 use crate::options::DeltaLogReplayStrategy;
 use crate::physical_plan::{
     COL_LOG_IS_REMOVE, COL_LOG_VERSION, COL_REPLAY_PATH, DeltaCommitExec, DeltaLogReplayExec,
-    DeltaWriterExec, DeltaWriterExecOptions, create_projection, create_repartition, create_sort,
+    DeltaWriterExec, DeltaWriterExecOptions, create_projection, create_sort,
 };
 use crate::schema::PhysicalPartitionColumn;
 use crate::spec::fields::{
@@ -277,6 +277,30 @@ fn replay_output_schema(
     Arc::new(Schema::new(fields))
 }
 
+/// Build the input of a `DeltaWriterExec`: group table partitions within each writer task.
+///
+/// Writer parallelism follows the input plan. `DeltaWriterExec` reports that it does not benefit
+/// from input partitioning, so no partitions are manufactured for it, and no partition key
+/// sharding is imposed either: several tasks may write into the same table partition directory
+/// (file names are unique per writer). This can produce one final partial file per task for every
+/// table partition the task touches.
+///
+/// `create_sort` locates partition columns positionally, assuming `create_projection` has already
+/// moved them to the end of the schema, so the projection must stay ahead of the sort. With no
+/// partition columns and no user sort order both layers degrade to an identity projection and a
+/// sort on a literal, so they are skipped instead.
+pub fn prepare_delta_writer_input(
+    input: Arc<dyn ExecutionPlan>,
+    partition_columns: &[String],
+    sort_order: Option<LexRequirement>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    if partition_columns.is_empty() && sort_order.is_none() {
+        return Ok(input);
+    }
+    let plan = create_projection(input, partition_columns.to_vec())?;
+    Ok(create_sort(plan, partition_columns.to_vec(), sort_order)?)
+}
+
 pub fn build_standard_write_layers(
     ctx: &PlannerContext<'_>,
     input: Arc<dyn ExecutionPlan>,
@@ -284,10 +308,7 @@ pub fn build_standard_write_layers(
     sort_order: Option<LexRequirement>,
     original_schema: SchemaRef,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let target_partitions = ctx.session().config().target_partitions().max(1);
-    let plan = create_projection(Arc::clone(&input), ctx.partition_columns().to_vec())?;
-    let plan = create_repartition(plan, ctx.partition_columns().to_vec(), target_partitions)?;
-    let plan = create_sort(plan, ctx.partition_columns().to_vec(), sort_order)?;
+    let plan = prepare_delta_writer_input(Arc::clone(&input), ctx.partition_columns(), sort_order)?;
 
     let writer_schema = plan.schema();
     let write_context = ctx.prepare_write_context(&writer_schema, sink_mode, None)?;
@@ -807,8 +828,59 @@ async fn build_log_replay_pipeline_with_files(
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used)]
 mod tests {
+    use datafusion::arrow::datatypes::{DataType, Field};
+    use datafusion::physical_plan::ExecutionPlanProperties;
+    use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::physical_plan::repartition::RepartitionExec;
+    use datafusion::physical_plan::sorts::sort::SortExec;
+
     use super::*;
+
+    fn input_with_partitions(partitions: usize) -> Arc<dyn ExecutionPlan> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("value", DataType::Int64, false),
+            Field::new("day", DataType::Utf8, false),
+        ]));
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema));
+        Arc::new(
+            RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(partitions)).unwrap(),
+        )
+    }
+
+    #[test]
+    fn partitioned_writer_input_groups_table_partitions_per_task() {
+        let input = input_with_partitions(10);
+        let plan = prepare_delta_writer_input(input, &["day".to_string()], None).unwrap();
+
+        // Writer parallelism follows the input plan, and each task sorts its own partition so
+        // that `DeltaWriter` sees table partitions grouped.
+        assert_eq!(plan.output_partitioning().partition_count(), 10);
+        let sort = plan.downcast_ref::<SortExec>().unwrap();
+        assert!(sort.preserve_partitioning());
+
+        // The projection moves partition columns to the end, which `create_sort` relies on.
+        let projection = sort.input().downcast_ref::<ProjectionExec>().unwrap();
+        assert_eq!(
+            projection.schema().field(1).name(),
+            &"day".to_string(),
+            "partition columns must be projected to the end of the schema"
+        );
+        assert_eq!(
+            projection.input().output_partitioning().partition_count(),
+            10
+        );
+    }
+
+    #[test]
+    fn unpartitioned_writer_input_skips_identity_projection_and_literal_sort() {
+        let plan = prepare_delta_writer_input(input_with_partitions(10), &[], None).unwrap();
+
+        assert!(plan.downcast_ref::<SortExec>().is_none());
+        assert!(plan.downcast_ref::<ProjectionExec>().is_none());
+        assert_eq!(plan.output_partitioning().partition_count(), 10);
+    }
 
     #[test]
     fn selects_replay_pipeline_mode_for_strategy_and_checkpoint_presence() {

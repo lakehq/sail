@@ -13,7 +13,6 @@
 use std::sync::Arc;
 
 use datafusion::common::{DataFusionError, Result, ToDFSchema};
-use datafusion::physical_expr::expressions::NotExpr;
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
@@ -24,7 +23,9 @@ use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapter
 use super::commit::assemble_commit_plan;
 use super::context::PlannerContext;
 use super::metadata_predicate::{build_metadata_filter, predicate_requires_stats};
-use super::utils::{LogReplayOptions, build_log_replay_pipeline_with_options};
+use super::utils::{
+    LogReplayOptions, build_log_replay_pipeline_with_options, prepare_delta_writer_input,
+};
 use crate::physical_plan::{
     DeltaCommitContext, DeltaDiscoveryExec, DeltaScanByAddsExec, DeltaWriterExecOptions,
     prepare_delta_write_context,
@@ -50,9 +51,11 @@ pub async fn build_delete_plan(
         .to_dfschema()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let condition_expr = condition.expr.clone();
-    let physical_condition = ctx
+    // DELETE removes rows only when the predicate is true; false and null rows remain.
+    let retention_condition = condition_expr.clone().is_not_true();
+    let physical_retention_condition = ctx
         .session()
-        .create_physical_expr(condition_expr.clone(), &table_df_schema)?;
+        .create_physical_expr(retention_condition, &table_df_schema)?;
 
     // Partition-only predicates can delete entire files without scanning data. In that case,
     // build a visible metadata pipeline over a log-derived meta table.
@@ -75,11 +78,9 @@ pub async fn build_delete_plan(
         snapshot_state,
         condition_expr.clone(),
     )?;
-    let find_files_writer: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
+    let find_files_writer: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::new(
         meta_scan_w,
         ctx.table_url().clone(),
-        None,
-        None,
         version,
         partition_columns.clone(),
         partition_only,
@@ -89,11 +90,9 @@ pub async fn build_delete_plan(
         build_log_replay_pipeline_with_options(ctx, snapshot_state, log_replay_options).await?;
     let meta_scan_r: Arc<dyn ExecutionPlan> =
         build_metadata_filter(ctx.session(), meta_scan_r, snapshot_state, condition_expr)?;
-    let find_files_remove: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
+    let find_files_remove: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::new(
         meta_scan_r,
         ctx.table_url().clone(),
-        None,
-        None,
         version,
         partition_columns.clone(),
         partition_only,
@@ -131,13 +130,13 @@ pub async fn build_delete_plan(
     let adapter = adapter_factory
         .create(table_schema.clone(), scan_exec.schema())
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let adapted_condition = adapter
-        .rewrite(physical_condition.clone())
+    let adapted_retention_condition = adapter
+        .rewrite(physical_retention_condition)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-    let negated_condition = Arc::new(NotExpr::new(adapted_condition));
     let filter_exec: Arc<dyn ExecutionPlan> =
-        Arc::new(FilterExec::try_new(negated_condition, scan_exec)?);
+        Arc::new(FilterExec::try_new(adapted_retention_condition, scan_exec)?);
+    let writer_input = prepare_delta_writer_input(filter_exec, &partition_columns, None)?;
 
     let operation = Some(DeltaOperation::Delete {
         predicate: condition.source,
@@ -151,12 +150,12 @@ pub async fn build_delete_plan(
         &partition_columns,
         &sail_common_datafusion::datasource::PhysicalSinkMode::Append,
         ctx.table_exists(),
-        &filter_exec.schema(),
+        &writer_input.schema(),
         operation,
     )?;
 
     assemble_commit_plan(
-        filter_exec,
+        writer_input,
         Some(find_files_remove),
         Some(snapshot_state.physical_partition_columns()),
         ctx.table_url().clone(),
@@ -227,11 +226,9 @@ pub async fn build_delete_plan_mor(
         build_metadata_filter(ctx.session(), meta_scan, snapshot_state, condition_expr)?;
 
     // Wrap with DeltaDiscoveryExec for metadata pipeline visibility.
-    let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
+    let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::new(
         meta_scan,
         ctx.table_url().clone(),
-        None,
-        None,
         version,
         partition_columns.clone(),
         false, // not partition_only for MoR

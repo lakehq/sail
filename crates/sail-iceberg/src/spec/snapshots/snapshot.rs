@@ -72,6 +72,7 @@ pub struct Snapshot {
     pub parent_snapshot_id: Option<i64>,
     /// A monotonically increasing long that tracks the order of
     /// changes to a table.
+    #[serde(default)]
     pub sequence_number: i64,
     /// A timestamp when the snapshot was created, used for garbage
     /// collection and table inspection

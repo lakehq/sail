@@ -1,9 +1,9 @@
 use std::sync::PoisonError;
 
 use datafusion::common::DataFusionError;
+use sail_common::actor::ActorSendError;
 use sail_execution::error::ExecutionError;
 use thiserror::Error;
-use tokio::sync::mpsc::error::SendError;
 
 pub type SessionResult<T> = Result<T, SessionError>;
 
@@ -43,8 +43,8 @@ impl From<ExecutionError> for SessionError {
     }
 }
 
-impl<T> From<SendError<T>> for SessionError {
-    fn from(error: SendError<T>) -> Self {
+impl<T> From<ActorSendError<T>> for SessionError {
+    fn from(error: ActorSendError<T>) -> Self {
         SessionError::InternalError(error.to_string())
     }
 }

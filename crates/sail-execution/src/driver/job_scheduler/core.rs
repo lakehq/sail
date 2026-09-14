@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::physical_expr::Partitioning;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
@@ -11,21 +12,24 @@ use log::{debug, warn};
 use sail_common::actor::ActorContext;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
-use sail_telemetry::system_event::SystemEvent;
+use sail_system_store::SystemEvent;
+use sail_telemetry::events::SystemEventReporter;
 
 use crate::driver::DriverActor;
 use crate::driver::job_scheduler::state::{
-    JobDescriptor, JobState, StageState, TaskAttemptDescriptor, TaskRegionState, TaskState,
+    JobDescriptor, StageState, TaskAttemptDescriptor, TaskRegionState, TaskState,
 };
 use crate::driver::job_scheduler::topology::TaskRegionTopology;
-use crate::driver::job_scheduler::{JobAction, JobScheduler, JobSchedulerOptions};
-use crate::driver::output::build_job_output;
+use crate::driver::job_scheduler::{JobAction, JobScheduler, JobSchedulerOptions, JobState};
+use crate::driver::output::{JobOutputOutcome, build_job_output};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey};
 use crate::job_graph::{
     InputMode, JobGraph, OutputDistribution, OutputMode, Stage, StageInput, TaskPlacement,
 };
-use crate::proto::{encode_remote_physical_expr, encode_remote_physical_plan};
+use crate::proto::{
+    encode_remote_partitioning, encode_remote_physical_expr, encode_remote_physical_plan,
+};
 use crate::shuffle::ShuffleBackendKind;
 use crate::task::definition::{
     TaskDefinition, TaskInput, TaskInputKey, TaskInputLocator, TaskOutput, TaskOutputDistribution,
@@ -82,7 +86,7 @@ impl JobScheduler {
                     inputs: stage
                         .inputs
                         .iter()
-                        .map(|input| sail_common_datafusion::system::types::StageInput {
+                        .map(|input| sail_system_store::types::StageInput {
                             stage: input.stage as u64,
                             mode: input.mode.to_string(),
                         })
@@ -275,7 +279,7 @@ impl JobScheduler {
     fn cascade_cancel_task_attempts(
         job_id: JobId,
         job: &mut JobDescriptor,
-        event_reporter: &sail_telemetry::system_event::SystemEventReporter,
+        event_reporter: &SystemEventReporter,
         session_id: &str,
     ) -> Vec<JobAction> {
         let mut actions = vec![];
@@ -328,7 +332,7 @@ impl JobScheduler {
     fn clean_up_job_by_stage(
         job_id: JobId,
         job: &mut JobDescriptor,
-        event_reporter: &sail_telemetry::system_event::SystemEventReporter,
+        event_reporter: &SystemEventReporter,
         session_id: &str,
     ) -> Vec<JobAction> {
         let mut actions = vec![];
@@ -373,7 +377,7 @@ impl JobScheduler {
     fn schedule_task_regions(
         job_id: JobId,
         job: &mut JobDescriptor,
-        event_reporter: &sail_telemetry::system_event::SystemEventReporter,
+        event_reporter: &SystemEventReporter,
         session_id: &str,
     ) -> Vec<JobAction> {
         let mut actions = vec![];
@@ -490,7 +494,12 @@ impl JobScheduler {
 
         let mut tasks: Vec<(TaskPlacement, TaskSet)> = vec![];
         for (key, value) in stage_groups {
-            for entries in value.buckets {
+            // A region may contain only some stage partitions. Empty buckets need no task slots.
+            for entries in value
+                .buckets
+                .into_iter()
+                .filter(|entries| !entries.is_empty())
+            {
                 tasks.push((key.placement, TaskSet { entries }));
             }
         }
@@ -575,7 +584,7 @@ impl JobScheduler {
     /// Determine the actions needed in the driver to clean up the job.
     /// The method cancels all the task attempts that are not in terminal states
     /// and removes all the job output streams.
-    pub fn clean_up_job(&mut self, job_id: JobId) -> Vec<JobAction> {
+    pub fn clean_up_job(&mut self, job_id: JobId, outcome: JobOutputOutcome) -> Vec<JobAction> {
         let event_reporter = self.event_reporter.clone();
         let session_id = self.options.session_id.clone();
         let Some(job) = self.jobs.get_mut(&job_id) else {
@@ -619,11 +628,7 @@ impl JobScheduler {
             stage: None,
             context: job.context.clone(),
         });
-        if matches!(job.state, JobState::Draining) {
-            job.state = JobState::Succeeded;
-        } else {
-            job.state = JobState::Canceled;
-        }
+        job.state.finish_output(outcome);
         event_reporter.report(SystemEvent::JobUpdated {
             session_id,
             job_id: u64::from(job_id),
@@ -991,6 +996,17 @@ impl<'a> TaskOutputBuilder<'a> {
                 TaskOutputDistribution::Hash {
                     keys,
                     channels: *channels,
+                }
+            }
+            OutputDistribution::Range { partitioning } => {
+                let channels = partitioning.partition_count();
+                let partitioning = encode_remote_partitioning(
+                    self.codec,
+                    &Partitioning::Range(partitioning.clone()),
+                )?;
+                TaskOutputDistribution::Range {
+                    partitioning: Arc::from(partitioning),
+                    channels,
                 }
             }
             OutputDistribution::RoundRobinBatch { channels } => {

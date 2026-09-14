@@ -11,11 +11,11 @@ sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-physical-plan = { path = "../sail-physical-plan" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
-sail-pyarrow = { path = "../sail-pyarrow" }
 
 async-trait = { workspace = true }
 serde = { workspace = true }
 futures = { workspace = true }
+arrow-pyarrow = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-datasource = { workspace = true }
@@ -28,6 +28,8 @@ chumsky = { workspace = true }
 glob = { workspace = true }
 url = { workspace = true }
 regex = { workspace = true }
+csv-core = { workspace = true }
+memchr = { workspace = true }
 percent-encoding = { workspace = true }
 log = { workspace = true }
 bytes = { workspace = true }

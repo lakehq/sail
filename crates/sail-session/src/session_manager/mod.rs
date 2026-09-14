@@ -118,8 +118,9 @@ pub async fn create_session_manager(
         session_factory,
         job_runner_factory,
         driver_gateway,
-        event_reporter: global_system_event_reporter()
-            .ok_or_else(|| SessionError::internal("system event telemetry is not initialized"))?,
+        event_reporter: global_system_event_reporter().ok_or_else(|| {
+            SessionError::internal("telemetry is not initialized for system store")
+        })?,
     };
     SessionManager::try_new(options, components, system)
 }

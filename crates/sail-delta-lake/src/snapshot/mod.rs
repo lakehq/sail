@@ -62,6 +62,7 @@ use crate::table::{
 
 mod config;
 pub(crate) mod materialize;
+mod metadata_aggregate;
 mod stats;
 
 pub use config::DeltaSnapshotConfig;
@@ -69,6 +70,7 @@ pub(crate) use config::{
     CatalogManagedCommitFile, CatalogManagedCommitSet, catalog_managed_commit_file_name,
     catalog_managed_commit_path,
 };
+pub(crate) use metadata_aggregate::{GroupedCountMetadata, GroupedCountMetadataRow};
 
 pub struct DeltaSnapshot {
     version: i64,
@@ -1023,6 +1025,7 @@ mod tests {
     use std::collections::{BTreeMap, HashMap};
     use std::sync::Arc;
 
+    use datafusion::common::ScalarValue;
     use datafusion::common::stats::Precision;
     use object_store::ObjectStore;
     use object_store::memory::InMemory;
@@ -1223,6 +1226,237 @@ mod tests {
 
         assert_eq!(statistics.column_statistics[0].min_value, Precision::Absent);
         assert_eq!(statistics.column_statistics[0].max_value, Precision::Absent);
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn snapshot_statistics_ignore_fully_deleted_files() {
+        let snapshot = test_snapshot_with_adds(
+            Protocol::new(3, 7, Some(vec![TableFeature::DeletionVectors]), None),
+            test_metadata([]),
+            Vec::new(),
+            vec![
+                stats_add(
+                    "live.parquet",
+                    Some(
+                        r#"{"numRecords":2,"minValues":{"id":10},"maxValues":{"id":20},"nullCount":{"id":0}}"#,
+                    ),
+                    None,
+                ),
+                stats_add(
+                    "deleted.parquet",
+                    Some(
+                        r#"{"numRecords":2,"tightBounds":false,"minValues":{"id":-100},"maxValues":{"id":100}}"#,
+                    ),
+                    Some(2),
+                ),
+            ],
+        );
+
+        let statistics = snapshot.pruning_stats().unwrap().statistics().unwrap();
+        let id = &statistics.column_statistics[0];
+
+        assert_eq!(statistics.num_rows, Precision::Exact(2));
+        assert_eq!(id.null_count, Precision::Exact(0));
+        assert_eq!(id.min_value, Precision::Exact(ScalarValue::Int64(Some(10))));
+        assert_eq!(id.max_value, Precision::Exact(ScalarValue::Int64(Some(20))));
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn snapshot_statistics_derive_partition_column_values() {
+        let metadata = Metadata::try_new(
+            None,
+            None,
+            StructType::try_new([
+                StructField::not_null("id", DataType::LONG),
+                StructField::nullable("region", DataType::STRING),
+            ])
+            .unwrap(),
+            vec!["region".to_string()],
+            0,
+            HashMap::new(),
+        )
+        .unwrap();
+        let mut west = stats_add(
+            "region=west/part.parquet",
+            Some(r#"{"numRecords":3,"nullCount":{"id":0}}"#),
+            None,
+        );
+        west.partition_values = HashMap::from([("region".to_string(), Some("west".to_string()))]);
+        let mut null_region = stats_add(
+            "region=null/part.parquet",
+            Some(r#"{"numRecords":2,"nullCount":{"id":0}}"#),
+            None,
+        );
+        null_region.partition_values = HashMap::from([("region".to_string(), None)]);
+        let snapshot = test_snapshot_with_adds(
+            Protocol::new(1, 2, None, None),
+            metadata,
+            Vec::new(),
+            vec![west, null_region],
+        );
+
+        let statistics = snapshot.pruning_stats().unwrap().statistics().unwrap();
+        let region = &statistics.column_statistics[1];
+
+        assert_eq!(region.null_count, Precision::Exact(2));
+        assert_eq!(
+            region.min_value,
+            Precision::Exact(ScalarValue::Utf8(Some("west".to_string())))
+        );
+        assert_eq!(
+            region.max_value,
+            Precision::Exact(ScalarValue::Utf8(Some("west".to_string())))
+        );
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn selected_add_statistics_only_describe_the_selected_files() {
+        let snapshot = test_snapshot_with_adds(
+            Protocol::new(3, 7, Some(vec![TableFeature::DeletionVectors]), None),
+            test_metadata([]),
+            Vec::new(),
+            vec![
+                stats_add(
+                    "unselected.parquet",
+                    Some(r#"{"numRecords":100,"nullCount":{"id":0}}"#),
+                    None,
+                ),
+                stats_add(
+                    "selected.parquet",
+                    Some(r#"{"numRecords":5,"tightBounds":false,"nullCount":{"id":0}}"#),
+                    Some(2),
+                ),
+            ],
+        );
+
+        let statistics = snapshot
+            .datafusion_table_statistics_for_adds(&snapshot.adds()[1..])
+            .unwrap();
+
+        assert_eq!(statistics.num_rows, Precision::Exact(3));
+        assert_eq!(statistics.total_byte_size, Precision::Inexact(10));
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn grouped_count_metadata_splits_constant_and_residual_files() {
+        let metadata = test_metadata_with_schema(
+            StructType::try_new([StructField::nullable("provider", DataType::STRING)]).unwrap(),
+        )
+        .unwrap();
+        let snapshot = test_snapshot_with_adds(
+            Protocol::new(3, 7, Some(vec![TableFeature::DeletionVectors]), None),
+            metadata,
+            Vec::new(),
+            vec![
+                stats_add(
+                    "constant.parquet",
+                    Some(
+                        r#"{"numRecords":10,"minValues":{"provider":"fb"},"maxValues":{"provider":"fb"},"nullCount":{"provider":0}}"#,
+                    ),
+                    None,
+                ),
+                stats_add(
+                    "constant-dv.parquet",
+                    Some(
+                        r#"{"numRecords":5,"tightBounds":false,"minValues":{"provider":"fb"},"maxValues":{"provider":"fb"},"nullCount":{"provider":0}}"#,
+                    ),
+                    Some(2),
+                ),
+                stats_add(
+                    "mixed.parquet",
+                    Some(
+                        r#"{"numRecords":7,"minValues":{"provider":"fb"},"maxValues":{"provider":"yt"},"nullCount":{"provider":0}}"#,
+                    ),
+                    None,
+                ),
+                stats_add(
+                    "null.parquet",
+                    Some(r#"{"numRecords":4,"nullCount":{"provider":4}}"#),
+                    None,
+                ),
+                stats_add(
+                    "wide-mixed-null.parquet",
+                    Some(
+                        r#"{"numRecords":3,"tightBounds":false,"minValues":{"provider":"fb"},"maxValues":{"provider":"fb"},"nullCount":{"provider":1}}"#,
+                    ),
+                    None,
+                ),
+                stats_add(
+                    "deleted.parquet",
+                    Some(r#"{"numRecords":2,"tightBounds":false}"#),
+                    Some(2),
+                ),
+            ],
+        );
+
+        let metadata = snapshot
+            .grouped_count_metadata(&["provider".to_string()], 10)
+            .unwrap();
+
+        assert_eq!(metadata.metadata_file_count, 4);
+        assert_eq!(metadata.residual_file_indices, vec![2, 4]);
+        assert_eq!(metadata.metadata_bytes, 40);
+        assert_eq!(metadata.residual_bytes, 20);
+        assert_eq!(metadata.rows.len(), 2);
+        assert_eq!(
+            metadata.rows[0].group_values,
+            vec![ScalarValue::Utf8(Some("fb".to_string()))]
+        );
+        assert_eq!(metadata.rows[0].count, 13);
+        assert_eq!(metadata.rows[1].group_values, vec![ScalarValue::Utf8(None)]);
+        assert_eq!(metadata.rows[1].count, 4);
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn grouped_count_metadata_uses_physical_partition_names() {
+        let schema = StructType::try_new([StructField::not_null("provider", DataType::STRING)
+            .with_metadata([
+                (
+                    ColumnMetadataKey::ColumnMappingId.as_ref(),
+                    MetadataValue::Number(1),
+                ),
+                (
+                    ColumnMetadataKey::ColumnMappingPhysicalName.as_ref(),
+                    MetadataValue::String("col-provider".to_string()),
+                ),
+            ])])
+        .unwrap();
+        let metadata = Metadata::try_new(
+            None,
+            None,
+            schema,
+            vec!["provider".to_string()],
+            0,
+            [("delta.columnMapping.mode".to_string(), "name".to_string())]
+                .into_iter()
+                .collect(),
+        )
+        .unwrap();
+        let mut add = stats_add("partition.parquet", Some(r#"{"numRecords":5}"#), None);
+        add.partition_values
+            .insert("col-provider".to_string(), Some("fb".to_string()));
+        let snapshot = test_snapshot_with_adds(
+            Protocol::new(2, 5, None, None),
+            metadata,
+            Vec::new(),
+            vec![add],
+        );
+
+        let metadata = snapshot
+            .grouped_count_metadata(&["provider".to_string()], 10)
+            .unwrap();
+
+        assert_eq!(metadata.residual_file_indices, Vec::<usize>::new());
+        assert_eq!(metadata.rows[0].count, 5);
+        assert_eq!(
+            metadata.rows[0].group_values,
+            vec![ScalarValue::Utf8(Some("fb".to_string()))]
+        );
     }
 
     #[test]

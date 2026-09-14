@@ -6,6 +6,7 @@ pub mod monotonic_id;
 pub mod range;
 pub mod remote_checkpoint;
 pub mod repartition;
+pub mod row_level;
 pub mod schema_pivot;
 pub mod show_string;
 pub mod sort;

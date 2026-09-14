@@ -288,6 +288,7 @@ mod tests {
     use datafusion_common::{DFSchema, ScalarValue};
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::expr::{HigherOrderFunction, LambdaVariable};
+    use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
     use datafusion_expr::{Case, Expr, HigherOrderUDF, col, lambda, lit};
     use datafusion_physical_expr::create_physical_expr;
 
@@ -326,6 +327,7 @@ mod tests {
             )),
             &schema,
             &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
         )?
         .evaluate(&RecordBatch::try_new(
             Arc::clone(schema.inner()),

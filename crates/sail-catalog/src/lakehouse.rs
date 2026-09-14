@@ -10,7 +10,7 @@ use sail_common_datafusion::catalog::{
 use serde::{Deserialize, Serialize};
 
 use crate::provider::{
-    CreateTableMetadataRequirement, CreateTableOptions, TableFormatCreateMetadataMode,
+    CreateTableMetadataRequirement, CreateTableOptions, LakeSourceCreateMetadataMode,
 };
 
 // TODO: Complete the remaining lakehouse catalog capability work:
@@ -67,12 +67,12 @@ pub struct LakehouseCreatePlan {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum LakehouseCreateMaterialization {
     None,
-    BeforeCatalogTableFormat {
-        mode: TableFormatCreateMetadataMode,
+    BeforeCatalogLakeSource {
+        mode: LakeSourceCreateMetadataMode,
         context: Option<Box<LakehouseExecutionContext>>,
     },
-    AfterCatalogTableFormat {
-        mode: TableFormatCreateMetadataMode,
+    AfterCatalogLakeSource {
+        mode: LakeSourceCreateMetadataMode,
     },
     CatalogNative {
         payload: serde_json::Value,
@@ -246,10 +246,10 @@ pub fn plan_lakehouse_create_from_requirement(
     let lifecycle = table_lifecycle(options.is_external);
     let mode = match requirement {
         CreateTableMetadataRequirement::None => None,
-        CreateTableMetadataRequirement::TableFormat { mode } => Some(mode),
+        CreateTableMetadataRequirement::LakeSource { mode } => Some(mode),
     };
     let authority = match mode {
-        Some(TableFormatCreateMetadataMode::CatalogCoordinated) => {
+        Some(LakeSourceCreateMetadataMode::CatalogCoordinated) => {
             catalog_coordinated_create_authority(&format, lifecycle, capabilities)
         }
         None if matches!(format, LakehouseFormat::Iceberg)
@@ -281,15 +281,15 @@ pub fn plan_lakehouse_create_from_requirement(
     );
     let materialization = match mode {
         None => LakehouseCreateMaterialization::None,
-        Some(TableFormatCreateMetadataMode::PathManaged) => {
-            LakehouseCreateMaterialization::BeforeCatalogTableFormat {
-                mode: TableFormatCreateMetadataMode::PathManaged,
+        Some(LakeSourceCreateMetadataMode::PathManaged) => {
+            LakehouseCreateMaterialization::BeforeCatalogLakeSource {
+                mode: LakeSourceCreateMetadataMode::PathManaged,
                 context: None,
             }
         }
-        Some(TableFormatCreateMetadataMode::CatalogCoordinated) => {
-            LakehouseCreateMaterialization::BeforeCatalogTableFormat {
-                mode: TableFormatCreateMetadataMode::CatalogCoordinated,
+        Some(LakeSourceCreateMetadataMode::CatalogCoordinated) => {
+            LakehouseCreateMaterialization::BeforeCatalogLakeSource {
+                mode: LakeSourceCreateMetadataMode::CatalogCoordinated,
                 context: Some(Box::new(execution.clone())),
             }
         }
@@ -400,7 +400,7 @@ fn resolved_scan_authority(
     } else if matches!(authority, LakehouseAuthority::ReadOnlyVirtualized { .. }) {
         ScanAuthority::ReadOnlyVirtual
     } else {
-        ScanAuthority::ClientTableFormat
+        ScanAuthority::ClientLakeSource
     }
 }
 

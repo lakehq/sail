@@ -2,6 +2,7 @@ use datafusion::arrow::array::{RecordBatch, RecordBatchOptions};
 use datafusion::physical_expr::create_physical_expr;
 use datafusion_common::{DFSchema, Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{ColumnarValue, Expr};
 
 pub struct LiteralEvaluator {
@@ -34,7 +35,12 @@ impl LiteralEvaluator {
     }
 
     pub fn evaluate(&self, expr: &Expr) -> Result<ScalarValue> {
-        let expr = create_physical_expr(expr, &self.schema, &self.props)?;
+        let expr = create_physical_expr(
+            expr,
+            &self.schema,
+            &self.props,
+            &PhysicalPlanningContext::default(),
+        )?;
         match expr.evaluate(&self.input)? {
             ColumnarValue::Array(array) => {
                 if array.len() != 1 {

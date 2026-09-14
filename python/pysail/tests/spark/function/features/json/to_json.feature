@@ -99,6 +99,122 @@ Feature: to_json
         | result                     |
         | {"zeta":"z","mid":"m"}     |
 
+  Rule: Null struct fields
+
+    Scenario Outline: to_json omits typed and untyped null literal fields equally
+      When query
+        """
+        SELECT to_json(named_struct('a', 1, 'b', <null>, 'c', 3)) AS result
+        """
+      Then query result
+        | result        |
+        | {"a":1,"c":3} |
+
+      Examples:
+        | null                 |
+        | CAST(NULL AS STRING) |
+        | NULL                 |
+
+    Scenario: to_json omits a void field alongside VALUES columns
+      When query
+        """
+        SELECT to_json(struct(a,b)) AS result
+        FROM (SELECT a,null AS b FROM VALUES (1),(2) AS t(a))
+        """
+      Then query result
+        | result  |
+        | {"a":1} |
+        | {"a":2} |
+
+    Scenario: to_json omits a void field alongside range columns
+      When query
+        """
+        SELECT id, to_json(named_struct('a', id, 'b', NULL)) AS result
+        FROM range(3)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | result  |
+        | 0  | {"a":0} |
+        | 1  | {"a":1} |
+        | 2  | {"a":2} |
+
+    Scenario: omitting null struct fields preserves null containers and collection entries
+      When query
+        """
+        SELECT
+          to_json(named_struct('void', NULL, 'typed', CAST(NULL AS STRING))) AS all_null,
+          to_json(CAST(NULL AS STRUCT<a: INT>)) AS null_struct,
+          to_json(array(NULL, NULL)) AS array_nulls,
+          to_json(map('missing', NULL)) AS map_nulls
+        """
+      Then query result
+        | all_null | null_struct | array_nulls | map_nulls        |
+        | {}       | NULL        | [null,null] | {"missing":null} |
+
+    Scenario: to_json omits void fields recursively in structs and collection values
+      When query
+        """
+        SELECT
+          to_json(named_struct(
+            'nested', named_struct('a', id, 'b', NULL),
+            'all_null', named_struct('b', NULL)
+          )) AS nested,
+          to_json(array(named_struct('a', id, 'b', NULL), NULL)) AS array_structs,
+          to_json(map('value', named_struct('a', id, 'b', NULL), 'missing', NULL)) AS map_structs
+        FROM range(1)
+        """
+      Then query result
+        | nested                           | array_structs  | map_structs                      |
+        | {"nested":{"a":0},"all_null":{}} | [{"a":0},null] | {"value":{"a":0},"missing":null} |
+
+    Scenario: to_json null field omission survives a Parquet roundtrip
+      Given variable location for temporary directory to_json_null_fields
+      Given statement template
+        """
+        INSERT OVERWRITE DIRECTORY {{ location.sql }} USING parquet
+        SELECT id, to_json(named_struct(
+          'id', id,
+          'void', NULL,
+          'typed', CASE WHEN id = 0 THEN CAST(NULL AS STRING) ELSE 'present' END
+        )) AS result,
+        to_json(CASE WHEN id = 0 THEN CAST(NULL AS STRUCT<a: BIGINT>)
+          ELSE named_struct('a', id) END) AS nullable_struct
+        FROM range(2)
+        """
+      When query template
+        """
+        SELECT id, result, nullable_struct FROM parquet.`{{ location.string }}` ORDER BY id
+        """
+      Then query result ordered
+        | id | result                     | nullable_struct |
+        | 0  | {"id":0}                   | NULL            |
+        | 1  | {"id":1,"typed":"present"} | {"a":1}         |
+
+    # TODO: honor the per-call ignoreNullFields option; Sail currently always omits null fields.
+    @sail-bug
+    Scenario: to_json can retain null fields with the ignoreNullFields option
+      When query
+        """
+        SELECT to_json(named_struct('a', 1, 'b', CAST(NULL AS STRING), 'c', NULL),
+          map('ignoreNullFields', 'false')) AS result
+        """
+      Then query result
+        | result                    |
+        | {"a":1,"b":null,"c":null} |
+
+    # TODO: use spark.sql.jsonGenerator.ignoreNullFields when no per-call option is supplied.
+    @sail-bug
+    Scenario: to_json can retain null fields with the session configuration
+      Given config spark.sql.jsonGenerator.ignoreNullFields = false
+      When query
+        """
+        SELECT to_json(named_struct('a', 1, 'b', CAST(NULL AS STRING), 'c', NULL)) AS result
+        """
+      Then query result
+        | result                    |
+        | {"a":1,"b":null,"c":null} |
+
   Rule: Map key order
 
     Scenario: to_json preserves map entry order when sortKeys is disabled

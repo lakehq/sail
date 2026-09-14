@@ -3,20 +3,22 @@ use std::sync::Arc;
 
 use datafusion_common::arrow::datatypes::{DataType, Field, FieldRef, IntervalUnit, TimeUnit};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{DFSchema, JoinType, ScalarValue, TableReference};
+use datafusion_common::{DFSchema, JoinType, ScalarValue};
 use datafusion_expr::utils::{expr_to_columns, find_aggregate_exprs, split_conjunction};
-use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, SubqueryAlias, build_join_schema, lit};
-use sail_catalog::manager::CatalogManager;
+use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, build_join_schema, lit};
 use sail_common::spec;
-use sail_common_datafusion::catalog::{LakehouseOperation, TableKind};
 use sail_common_datafusion::column_features::ColumnFeatures;
-use sail_common_datafusion::datasource::{MergeInfo, OptionLayer, SourceInfo, TableFormatRegistry};
+use sail_common_datafusion::datasource::{DataSourceRegistry, MergeInfo};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::lakesource::RowLevelOperation;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_logical_plan::merge::{
     MergeAssignment, MergeIntoOptions, MergeMatchedAction, MergeMatchedClause,
     MergeNotMatchedBySourceAction, MergeNotMatchedBySourceClause, MergeNotMatchedByTargetAction,
-    MergeNotMatchedByTargetClause, MergeTargetInfo,
+    MergeNotMatchedByTargetClause,
+};
+use sail_logical_plan::row_level::{
+    StructFieldAlignment, align_row_level_value, evolve_row_level_field,
 };
 
 use crate::config::StoreAssignmentPolicy;
@@ -60,15 +62,17 @@ impl PlanResolver<'_> {
             ));
         }
 
-        let target_metadata = self.get_merge_target_info(&target).await?;
+        let target_metadata = self.resolve_row_level_target(&target).await?;
 
         let target_alias_string = target_alias
             .as_ref()
             .map(|alias| alias.as_ref().to_string());
-        let mut target_plan = self.resolve_merge_table_plan(target.clone(), state).await?;
+        let mut target_plan = self
+            .resolve_row_level_table_plan(target.clone(), state)
+            .await?;
 
         if let Some(alias) = target_alias_string.as_ref() {
-            target_plan = self.apply_table_alias(target_plan, alias)?;
+            target_plan = self.apply_row_level_table_alias(target_plan, alias)?;
         }
 
         let (source_plan, source_alias_string) = self.resolve_merge_source(source, state).await?;
@@ -161,17 +165,17 @@ impl PlanResolver<'_> {
             &resolved_source_field_names,
             with_schema_evolution,
         )?;
-        self.validate_explicit_merge_assignment_types(
-            &matched_clauses,
-            &not_matched_by_source,
-            &not_matched_by_target,
+        self.validate_and_align_explicit_merge_assignment_types(
+            &mut matched_clauses,
+            &mut not_matched_by_source,
+            &mut not_matched_by_target,
             &merge_schema,
             target_schema,
             source_schema,
             &resolved_target_field_names,
         )?;
         let check_constraint_exprs = self
-            .resolve_delta_merge_check_constraints(
+            .resolve_delta_row_level_check_constraints(
                 &target_metadata.format,
                 &target_metadata.options,
                 target_schema,
@@ -203,18 +207,18 @@ impl PlanResolver<'_> {
             check_constraint_exprs,
         };
 
-        let registry = self.ctx.extension::<TableFormatRegistry>()?;
-        let format = registry.get(&target_format)?;
+        let registry = self.ctx.extension::<DataSourceRegistry>()?;
+        let lake_source = registry.get_lake_source(&target_format)?;
         let session_state = self.ctx.state();
-        Ok(format
-            .create_merger(
+        Ok(lake_source
+            .plan_row_level_operation(
                 &session_state,
-                MergeInfo {
+                RowLevelOperation::Merge(Box::new(MergeInfo {
                     target: Arc::new(target_plan),
                     source: Arc::new(source_plan),
                     options,
                     input_schema: merge_schema,
-                },
+                })),
             )
             .await?)
     }
@@ -227,9 +231,9 @@ impl PlanResolver<'_> {
         match source {
             spec::MergeSource::Table { name, alias } => {
                 let alias_string = alias.as_ref().map(|a| a.as_ref().to_string());
-                let mut plan = self.resolve_merge_table_plan(name, state).await?;
+                let mut plan = self.resolve_row_level_table_plan(name, state).await?;
                 if let Some(alias) = alias_string.as_ref() {
-                    plan = self.apply_table_alias(plan, alias)?;
+                    plan = self.apply_row_level_table_alias(plan, alias)?;
                 }
                 Ok((plan, alias_string))
             }
@@ -237,38 +241,11 @@ impl PlanResolver<'_> {
                 let mut plan = self.resolve_query_plan(*input, state).await?;
                 let alias_string = alias.as_ref().map(|a| a.as_ref().to_string());
                 if let Some(alias) = alias_string.as_ref() {
-                    plan = self.apply_table_alias(plan, alias)?;
+                    plan = self.apply_row_level_table_alias(plan, alias)?;
                 }
                 Ok((plan, alias_string))
             }
         }
-    }
-
-    async fn resolve_merge_table_plan(
-        &self,
-        name: spec::ObjectName,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<LogicalPlan> {
-        let read = spec::ReadNamedTable {
-            name,
-            temporal: None,
-            sample: None,
-            options: vec![],
-        };
-        let plan = spec::QueryPlan::new(spec::QueryNode::Read {
-            read_type: spec::ReadType::NamedTable(Box::new(read)),
-            is_streaming: false,
-        });
-        self.resolve_query_plan(plan, state).await
-    }
-
-    fn apply_table_alias(&self, plan: LogicalPlan, alias: &str) -> PlanResult<LogicalPlan> {
-        Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
-            Arc::new(plan),
-            TableReference::Bare {
-                table: Arc::from(alias.to_string()),
-            },
-        )?))
     }
 
     async fn resolve_merge_clauses(
@@ -642,9 +619,16 @@ impl PlanResolver<'_> {
                     "MERGE source schema is missing field `{target_name}`"
                 ))
             })?;
+            let evolved_target = with_schema_evolution.then(|| {
+                evolve_row_level_field(target_field, source_field, self.config.case_sensitive)
+            });
+            let target_type = evolved_target
+                .as_ref()
+                .map(Field::data_type)
+                .unwrap_or_else(|| target_field.data_type());
             self.validate_store_assignment_type(
                 source_field.data_type(),
-                target_field.data_type(),
+                target_type,
                 target_name,
             )?;
         }
@@ -781,19 +765,19 @@ impl PlanResolver<'_> {
         Ok(Some(lit(ScalarValue::try_from(target_field.data_type())?)))
     }
 
-    fn validate_explicit_merge_assignment_types(
+    fn validate_and_align_explicit_merge_assignment_types(
         &self,
-        matched_clauses: &[MergeMatchedClause],
-        not_matched_by_source_clauses: &[MergeNotMatchedBySourceClause],
-        not_matched_by_target_clauses: &[MergeNotMatchedByTargetClause],
+        matched_clauses: &mut [MergeMatchedClause],
+        not_matched_by_source_clauses: &mut [MergeNotMatchedBySourceClause],
+        not_matched_by_target_clauses: &mut [MergeNotMatchedByTargetClause],
         merge_schema: &datafusion_common::DFSchemaRef,
         target_schema: &datafusion_common::DFSchemaRef,
         source_schema: &datafusion_common::DFSchemaRef,
         target_names: &[String],
     ) -> PlanResult<()> {
         for clause in matched_clauses {
-            if let MergeMatchedAction::UpdateSet(assignments) = &clause.action {
-                self.validate_merge_assignments(
+            if let MergeMatchedAction::UpdateSet(assignments) = &mut clause.action {
+                self.validate_and_align_merge_assignments(
                     assignments,
                     merge_schema,
                     target_schema,
@@ -802,8 +786,8 @@ impl PlanResolver<'_> {
             }
         }
         for clause in not_matched_by_source_clauses {
-            if let MergeNotMatchedBySourceAction::UpdateSet(assignments) = &clause.action {
-                self.validate_merge_assignments(
+            if let MergeNotMatchedBySourceAction::UpdateSet(assignments) = &mut clause.action {
+                self.validate_and_align_merge_assignments(
                     assignments,
                     target_schema,
                     target_schema,
@@ -812,11 +796,12 @@ impl PlanResolver<'_> {
             }
         }
         for clause in not_matched_by_target_clauses {
-            if let MergeNotMatchedByTargetAction::InsertColumns { columns, values } = &clause.action
+            if let MergeNotMatchedByTargetAction::InsertColumns { columns, values } =
+                &mut clause.action
             {
-                for (column, value) in columns.iter().zip(values) {
+                for (column, value) in columns.iter().zip(values.iter_mut()) {
                     let target_index = Self::merge_target_field_index(target_schema, column)?;
-                    self.validate_merge_value(
+                    self.validate_and_align_merge_value(
                         value,
                         source_schema,
                         target_index,
@@ -829,17 +814,17 @@ impl PlanResolver<'_> {
         Ok(())
     }
 
-    fn validate_merge_assignments(
+    fn validate_and_align_merge_assignments(
         &self,
-        assignments: &[MergeAssignment],
+        assignments: &mut [MergeAssignment],
         value_schema: &datafusion_common::DFSchemaRef,
         target_schema: &datafusion_common::DFSchemaRef,
         target_names: &[String],
     ) -> PlanResult<()> {
         for assignment in assignments {
             let target_index = Self::merge_target_field_index(target_schema, &assignment.column)?;
-            self.validate_merge_value(
-                &assignment.value,
+            self.validate_and_align_merge_value(
+                &mut assignment.value,
                 value_schema,
                 target_index,
                 target_schema,
@@ -849,9 +834,9 @@ impl PlanResolver<'_> {
         Ok(())
     }
 
-    fn validate_merge_value(
+    fn validate_and_align_merge_value(
         &self,
-        value: &Expr,
+        value: &mut Expr,
         value_schema: &datafusion_common::DFSchemaRef,
         target_index: usize,
         target_schema: &datafusion_common::DFSchemaRef,
@@ -864,10 +849,18 @@ impl PlanResolver<'_> {
         let target_name = target_names.get(target_index).ok_or_else(|| {
             PlanError::invalid("MERGE target field name is missing during assignment validation")
         })?;
-        self.validate_store_assignment_type(&write_type, target_field.data_type(), target_name)
+        self.validate_store_assignment_type(&write_type, target_field.data_type(), target_name)?;
+        *value = align_row_level_value(
+            value.clone(),
+            &write_type,
+            target_field.data_type(),
+            self.config.case_sensitive,
+            StructFieldAlignment::Exact,
+        )?;
+        Ok(())
     }
 
-    fn validate_store_assignment_type(
+    pub(super) fn validate_store_assignment_type(
         &self,
         write_type: &DataType,
         target_type: &DataType,
@@ -896,82 +889,6 @@ impl PlanResolver<'_> {
             .ok_or_else(|| {
                 PlanError::invalid(format!("Cannot resolve MERGE target column `{column}`"))
             })
-    }
-
-    async fn get_merge_target_info(&self, table: &spec::ObjectName) -> PlanResult<MergeTargetInfo> {
-        // Handle path-based table access like `delta.`/path/to/table``
-        // where the first part is a registered table format name.
-        if let [format, path] = table.parts() {
-            let format = format.as_ref().to_ascii_lowercase();
-            let registry = self.ctx.extension::<TableFormatRegistry>()?;
-            if let Ok(table_format) = registry.get(&format) {
-                let location = path.as_ref().to_string();
-                let metadata = table_format
-                    .infer_metadata(
-                        &self.ctx.state(),
-                        SourceInfo {
-                            paths: vec![location.clone()],
-                            lakehouse_table: None,
-                            schema: None,
-                            constraints: Default::default(),
-                            partition_by: vec![],
-                            bucket_by: None,
-                            sort_order: vec![],
-                            options: vec![],
-                            read_case_sensitive: self.config.case_sensitive,
-                        },
-                    )
-                    .await?;
-                return Ok(MergeTargetInfo {
-                    table_name: table.clone().into(),
-                    format,
-                    location,
-                    partition_by: vec![],
-                    options: vec![OptionLayer::TablePropertyList {
-                        items: metadata.properties,
-                    }],
-                    lakehouse_table: None,
-                });
-            }
-        }
-        let catalog_manager = self.ctx.extension::<CatalogManager>()?;
-        let status = catalog_manager
-            .get_table_or_view(table.parts())
-            .await
-            .map_err(PlanError::from)?;
-        match status.kind {
-            TableKind::Table {
-                location,
-                format,
-                partition_by,
-                properties,
-                ..
-            } => {
-                let location = location.ok_or_else(|| {
-                    PlanError::invalid(format!("table does not have a location: {table:?}"))
-                })?;
-                let table_name: Vec<String> = table.clone().into();
-                let lakehouse_table = self
-                    .resolve_lakehouse_table_context(
-                        &table_name,
-                        LakehouseOperation::Write,
-                        Some(&format),
-                        vec![],
-                    )
-                    .await?;
-                Ok(MergeTargetInfo {
-                    table_name,
-                    format,
-                    location,
-                    partition_by: partition_by.into_iter().map(|field| field.column).collect(),
-                    options: vec![OptionLayer::TablePropertyList { items: properties }],
-                    lakehouse_table: Some(lakehouse_table),
-                })
-            }
-            _ => Err(PlanError::unsupported(
-                "MERGE is only supported against tables",
-            )),
-        }
     }
 }
 
@@ -1059,27 +976,26 @@ fn store_assignment_compatible(
         (write_type, target_type)
     {
         return write_fields.len() == target_fields.len()
-            && write_fields
-                .iter()
-                .zip(target_fields)
-                .all(|(write_field, target_field)| {
-                    let names_match = if case_sensitive {
+            && target_fields.iter().all(|target_field| {
+                let mut matching_fields = write_fields.iter().filter(|write_field| {
+                    if case_sensitive {
                         write_field.name() == target_field.name()
                     } else {
                         write_field.name().eq_ignore_ascii_case(target_field.name())
-                    };
-                    names_match
-                        && resolvable_nullability(
-                            write_field.is_nullable(),
-                            target_field.is_nullable(),
-                        )
-                        && store_assignment_compatible(
-                            write_field.data_type(),
-                            target_field.data_type(),
-                            policy,
-                            case_sensitive,
-                        )
+                    }
                 });
+                let Some(write_field) = matching_fields.next() else {
+                    return false;
+                };
+                matching_fields.next().is_none()
+                    && resolvable_nullability(write_field.is_nullable(), target_field.is_nullable())
+                    && store_assignment_compatible(
+                        write_field.data_type(),
+                        target_field.data_type(),
+                        policy,
+                        case_sensitive,
+                    )
+            });
     }
 
     if is_nested_type(write_type) || is_nested_type(target_type) {

@@ -5,6 +5,32 @@ next: false
 
 # Changelog
 
+## 0.7.1
+
+_August 24, 2026_
+
+- Added support for the Celeborn shuffle backend ([#2378](https://github.com/lakehq/sail/pull/2378), [#2373](https://github.com/lakehq/sail/pull/2373), [#2403](https://github.com/lakehq/sail/pull/2403), [#2415](https://github.com/lakehq/sail/pull/2415), [#2414](https://github.com/lakehq/sail/pull/2414), [#2423](https://github.com/lakehq/sail/pull/2423), [#2442](https://github.com/lakehq/sail/pull/2442), [#2443](https://github.com/lakehq/sail/pull/2443), [#2447](https://github.com/lakehq/sail/pull/2447), [#2465](https://github.com/lakehq/sail/pull/2465), and [#2486](https://github.com/lakehq/sail/pull/2486)).
+- Improved Delta Lake integration ([#2231](https://github.com/lakehq/sail/pull/2231), [#2321](https://github.com/lakehq/sail/pull/2321), [#2374](https://github.com/lakehq/sail/pull/2374), [#2450](https://github.com/lakehq/sail/pull/2450), [#2461](https://github.com/lakehq/sail/pull/2461), [#2467](https://github.com/lakehq/sail/pull/2467), [#2475](https://github.com/lakehq/sail/pull/2475), and [#2478](https://github.com/lakehq/sail/pull/2478)).
+- Improved Iceberg integration ([#2222](https://github.com/lakehq/sail/pull/2222), [#2297](https://github.com/lakehq/sail/pull/2297), [#2348](https://github.com/lakehq/sail/pull/2348), [#2362](https://github.com/lakehq/sail/pull/2362), [#2402](https://github.com/lakehq/sail/pull/2402), and [#2490](https://github.com/lakehq/sail/pull/2490)).
+- Added query optimizer configuration options ([#2451](https://github.com/lakehq/sail/pull/2451)).
+- Added support for the `vector_inner_product` SQL function ([#2360](https://github.com/lakehq/sail/pull/2360)).
+- Improved Spark compatibility for SQL expressions, SQL functions, and queries ([#2372](https://github.com/lakehq/sail/pull/2372), [#2401](https://github.com/lakehq/sail/pull/2401), [#2405](https://github.com/lakehq/sail/pull/2405), [#2406](https://github.com/lakehq/sail/pull/2406), [#2407](https://github.com/lakehq/sail/pull/2407), [#2408](https://github.com/lakehq/sail/pull/2408), [#2409](https://github.com/lakehq/sail/pull/2409), [#2410](https://github.com/lakehq/sail/pull/2410), [#2411](https://github.com/lakehq/sail/pull/2411), [#2413](https://github.com/lakehq/sail/pull/2413), [#2429](https://github.com/lakehq/sail/pull/2429), [#2430](https://github.com/lakehq/sail/pull/2430), and [#2436](https://github.com/lakehq/sail/pull/2436)).
+- Improved performance for SQL functions involving regular expressions ([#2448](https://github.com/lakehq/sail/pull/2448)).
+- Migrated system tables to an event-driven design ([#2477](https://github.com/lakehq/sail/pull/2477)).
+- Refactored query execution internals ([#2355](https://github.com/lakehq/sail/pull/2355), [#2359](https://github.com/lakehq/sail/pull/2359), [#2397](https://github.com/lakehq/sail/pull/2397), [#2398](https://github.com/lakehq/sail/pull/2398), and [#2399](https://github.com/lakehq/sail/pull/2399)).
+- Improved support for Python data sources ([#2371](https://github.com/lakehq/sail/pull/2371) and [#2437](https://github.com/lakehq/sail/pull/2437)).
+- Improved support for Parquet data sources ([#2351](https://github.com/lakehq/sail/pull/2351)).
+- Improved support for CSV data sources ([#2412](https://github.com/lakehq/sail/pull/2412) and [#2484](https://github.com/lakehq/sail/pull/2484)).
+- Improved multipart uploads to object storage ([#2482](https://github.com/lakehq/sail/pull/2482)).
+- Fixed an issue with shuffle output mode for scalar subqueries ([#2432](https://github.com/lakehq/sail/pull/2432)).
+- Fixed an issue with cache configuration handling ([#2481](https://github.com/lakehq/sail/pull/2481)).
+- Improved worker cleanup during shutdown in cluster mode ([#2392](https://github.com/lakehq/sail/pull/2392)).
+- Improved task failure reporting in cluster mode ([#2480](https://github.com/lakehq/sail/pull/2480)).
+
+### Contributors
+
+Huge thanks to [@davidlghellin](https://github.com/davidlghellin), [@rohankumardubey](https://github.com/rohankumardubey), [@Robin-Everaars](https://github.com/Robin-Everaars), [@jaideeppyne](https://github.com/jaideeppyne) (_first-time contributor_), [@radmirnovii](https://github.com/radmirnovii), [@maxvwa](https://github.com/maxvwa) (_first-time contributor_), [@weixiuli](https://github.com/weixiuli), and [@ErikBPF](https://github.com/ErikBPF) (_first-time contributor_) for your contributions!
+
 ## 0.7.0
 
 _August 3, 2026_

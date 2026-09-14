@@ -32,8 +32,7 @@ def remote(
     """Run Spark Connect with a Celeborn shuffle backend."""
     endpoint_overrides = "[{}]".format(
         ", ".join(
-            f'{{ internal_host = "{hostname}", internal_port = {port}, '
-            f'external_host = "{worker.host}", external_port = {mapped_port} }}'
+            f'{{ internal = "{hostname}:{port}", external = "{worker.host}:{mapped_port}" }}'
             for hostname, worker in celeborn_workers.items()
             for port, mapped_port in [
                 (12000, worker.rpc_port),
@@ -46,8 +45,9 @@ def remote(
     envs = {
         "SAIL_MODE": "local-cluster",
         "SAIL_CLUSTER__SHUFFLE_BACKEND__TYPE": "celeborn",
-        "SAIL_CLUSTER__SHUFFLE_BACKEND__CELEBORN__MASTER_HOST": celeborn_master.host,
-        "SAIL_CLUSTER__SHUFFLE_BACKEND__CELEBORN__MASTER_PORT": str(celeborn_master.port),
+        "SAIL_CLUSTER__SHUFFLE_BACKEND__CELEBORN__MASTER_ENDPOINTS": (
+            f'["{celeborn_master.host}:{celeborn_master.port}"]'
+        ),
         "SAIL_CLUSTER__SHUFFLE_BACKEND__CELEBORN__ENDPOINT_OVERRIDES": endpoint_overrides,
     }
     with spark_connect_server(envs=envs) as server:

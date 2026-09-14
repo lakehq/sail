@@ -134,14 +134,9 @@ impl PartitionSpec {
                 .field_by_id(source_id)
                 .ok_or_else(|| format!("Cannot find source field with id {source_id}"))?;
 
-            // Prefer logical date type for Day transform to align with Iceberg writers
-            let result_type = if matches!(partition_field.transform, Transform::Day) {
-                crate::spec::types::Type::Primitive(crate::spec::types::PrimitiveType::Date)
-            } else {
-                partition_field
-                    .transform
-                    .result_type(&source_field.field_type)?
-            };
+            let result_type = partition_field
+                .transform
+                .result_type(&source_field.field_type)?;
 
             let nested_field = NestedField::new(
                 partition_field.field_id,

@@ -64,9 +64,9 @@ impl MetricEmitter for BuildProbeJoinMetricEmitter {
                     .emit();
                 MetricHandled::Yes
             }
-            MetricValue::Gauge { name, gauge } if name == "build_mem_used" => {
+            MetricValue::PeakMemoryUsage { name, gauge } if name == "build_mem_used" => {
                 registry
-                    .execution_join_build_side_memory_used
+                    .execution_join_build_side_peak_memory_used
                     .recorder(gauge)
                     .with_attributes(attributes)
                     .with_optional_attribute(
@@ -307,9 +307,9 @@ impl MetricEmitter for SortMergeJoinMetricEmitter {
                     .emit();
                 MetricHandled::Yes
             }
-            MetricValue::Gauge { name, gauge } if name == "peak_mem_used" => {
+            MetricValue::PeakMemoryUsage { name, gauge } if name == "peak_mem_used" => {
                 registry
-                    .execution_join_memory_used
+                    .execution_join_peak_memory_used
                     .recorder(gauge)
                     .with_attributes(attributes)
                     .with_optional_attribute(
@@ -350,7 +350,7 @@ mod tests {
             registry.execution_join_build_side_batch_count.name(),
             registry.execution_join_build_side_row_count.name(),
             registry.execution_join_build_side_match_count.name(),
-            registry.execution_join_build_side_memory_used.name(),
+            registry.execution_join_build_side_peak_memory_used.name(),
             registry.execution_join_probe_side_batch_count.name(),
             registry.execution_join_probe_side_row_count.name(),
             registry.execution_join_probe_side_matched_row_count.name(),
@@ -382,7 +382,7 @@ mod tests {
             registry.execution_join_operation_time.name(),
             registry.execution_join_input_batch_count.name(),
             registry.execution_join_input_row_count.name(),
-            registry.execution_join_memory_used.name(),
+            registry.execution_join_peak_memory_used.name(),
             registry.execution_spill_count.name(),
             registry.execution_spill_size.name(),
             registry.execution_spill_row_count.name(),
@@ -409,6 +409,7 @@ mod tests {
 
         MetricEmitterTester::new()
             .with_plan(plan)
+            .with_baseline_metrics()
             .with_expected_metrics(expected_build_probe_join_metrics)
             .run()
             .await
@@ -431,6 +432,7 @@ mod tests {
 
         MetricEmitterTester::new()
             .with_plan(plan)
+            .with_baseline_metrics()
             .with_expected_metrics(expected_build_probe_join_metrics)
             .run()
             .await
@@ -446,6 +448,7 @@ mod tests {
 
         MetricEmitterTester::new()
             .with_plan(plan)
+            .with_baseline_metrics()
             .with_expected_metrics(expected_build_probe_join_metrics)
             .run()
             .await
@@ -467,6 +470,7 @@ mod tests {
 
         MetricEmitterTester::new()
             .with_plan(plan)
+            .with_baseline_metrics()
             .with_expected_metrics(expected_build_probe_join_metrics)
             .with_expected_metrics(expected_nested_loop_join_metrics)
             .run()
@@ -493,6 +497,7 @@ mod tests {
 
         MetricEmitterTester::new()
             .with_plan(plan)
+            .with_baseline_metrics()
             .with_expected_metrics(expected_stream_join_metrics)
             .run()
             .await
@@ -519,6 +524,7 @@ mod tests {
 
         MetricEmitterTester::new()
             .with_plan(plan)
+            .with_baseline_metrics()
             .with_expected_metrics(expected_sort_merge_join_metrics)
             .run()
             .await

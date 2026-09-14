@@ -1456,7 +1456,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         if rest_session.scan_planning_mode.as_deref() == Some("server") {
             context.scan = ScanAuthority::IcebergRestServerSide;
         } else {
-            context.scan = ScanAuthority::ClientTableFormat;
+            context.scan = ScanAuthority::ClientLakeSource;
         }
         let reference = TableAccessSessionRef {
             fingerprint: rest_session.fingerprint.clone(),
@@ -3641,7 +3641,7 @@ mod tests {
                 pointer: MetadataPointerAuthority::IcebergRest,
                 commit: CommitAuthority::IcebergRestCommit,
             },
-            ScanAuthority::ClientTableFormat,
+            ScanAuthority::ClientLakeSource,
         );
 
         let session = ctx
