@@ -20,10 +20,9 @@ use datafusion::common::{Result, ScalarValue};
 use datafusion::error::DataFusionError;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr};
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::projection::ProjectionExec;
-use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
-use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_physical_expr::expressions::{Column as PhysicalColumn, lit};
 
 mod action_schema;
@@ -169,46 +168,6 @@ pub fn create_sort(
     };
 
     Ok(sort_exec)
-}
-
-/// Create a `RepartitionExec` instance for Delta Lake data repartitioning.
-pub fn create_repartition(
-    input: Arc<dyn ExecutionPlan>,
-    partition_columns: Vec<String>,
-    num_partitions: usize,
-) -> Result<Arc<RepartitionExec>> {
-    let num_partitions = num_partitions.max(1);
-    let partitioning = if partition_columns.is_empty() {
-        // No partition columns, ensure some parallelism
-        Partitioning::RoundRobinBatch(num_partitions)
-    } else {
-        // Since create_projection moves partition columns to the end, we can rely on their positions.
-        let schema = input.schema();
-        let num_cols = schema.fields().len();
-        let num_part_cols = partition_columns.len();
-
-        // TODO: Investigate repartitioning behavior for "bucketing" with overlapping partition columns
-        // Current implementation may not handle the desired output structure where multiple writers
-        // can create files within the same partition directory. For example:
-        // year=2024/
-        //     part-00000.parquet (created by writer 1)
-        //     part-00001.parquet (created by writer 2)
-        //     part-00002.parquet (created by writer 3)
-        //     part-00003.parquet (created by writer 4)
-        // year=2025/
-        //     part-00000.parquet (created by writer 1)
-        //     part-00001.parquet (created by writer 2)
-        //     part-00002.parquet (created by writer 3)
-        //     part-00003.parquet (created by writer 4)
-        let partition_exprs: Vec<Arc<dyn PhysicalExpr>> = (num_cols - num_part_cols..num_cols)
-            .zip(partition_columns.iter())
-            .map(|(idx, name)| Arc::new(PhysicalColumn::new(name, idx)) as Arc<dyn PhysicalExpr>)
-            .collect();
-
-        Partitioning::Hash(partition_exprs, num_partitions)
-    };
-
-    Ok(Arc::new(RepartitionExec::try_new(input, partitioning)?))
 }
 
 pub(crate) fn current_timestamp_millis() -> Result<i64> {

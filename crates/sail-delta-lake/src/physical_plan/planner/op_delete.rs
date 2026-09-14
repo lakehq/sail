@@ -23,7 +23,9 @@ use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapter
 use super::commit::assemble_commit_plan;
 use super::context::PlannerContext;
 use super::metadata_predicate::{build_metadata_filter, predicate_requires_stats};
-use super::utils::{LogReplayOptions, build_log_replay_pipeline_with_options};
+use super::utils::{
+    LogReplayOptions, build_log_replay_pipeline_with_options, prepare_delta_writer_input,
+};
 use crate::physical_plan::{
     DeltaCommitContext, DeltaDiscoveryExec, DeltaScanByAddsExec, DeltaWriterExecOptions,
     prepare_delta_write_context,
@@ -134,6 +136,7 @@ pub async fn build_delete_plan(
 
     let filter_exec: Arc<dyn ExecutionPlan> =
         Arc::new(FilterExec::try_new(adapted_retention_condition, scan_exec)?);
+    let writer_input = prepare_delta_writer_input(filter_exec, &partition_columns, None)?;
 
     let operation = Some(DeltaOperation::Delete {
         predicate: condition.source,
@@ -147,12 +150,12 @@ pub async fn build_delete_plan(
         &partition_columns,
         &sail_common_datafusion::datasource::PhysicalSinkMode::Append,
         ctx.table_exists(),
-        &filter_exec.schema(),
+        &writer_input.schema(),
         operation,
     )?;
 
     assemble_commit_plan(
-        filter_exec,
+        writer_input,
         Some(find_files_remove),
         Some(snapshot_state.physical_partition_columns()),
         ctx.table_url().clone(),
