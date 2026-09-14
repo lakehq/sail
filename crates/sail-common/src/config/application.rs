@@ -11,7 +11,7 @@ use crate::config::loader::{
     ConfigDefinition, deserialize_non_empty_string, deserialize_non_zero, deserialize_unknown_unit,
 };
 use crate::config::observer::{
-    serialize_non_empty_string, serialize_non_zero, serialize_optional_secret,
+    serialize_non_empty_string, serialize_non_zero, serialize_optional_secret, serialize_secret,
 };
 use crate::error::{CommonError, CommonResult};
 
@@ -810,6 +810,17 @@ pub enum OneLakeApi {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct OAuth2CatalogConfig {
+    pub token_endpoint: String,
+    pub client_id: String,
+    #[serde(serialize_with = "serialize_secret")]
+    pub client_secret: SecretString,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CatalogType {
     Memory {
@@ -848,6 +859,8 @@ pub enum CatalogType {
         /// plain string.
         #[serde(skip_serializing_if = "Option::is_none")]
         bearer_access_token_file: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        oauth_client_credentials: Option<OAuth2CatalogConfig>,
         #[serde(flatten)]
         cache: CatalogCacheConfig,
     },

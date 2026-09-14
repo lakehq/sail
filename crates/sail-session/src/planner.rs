@@ -521,6 +521,14 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 return internal_err!("StreamCollectorExec requires exactly one physical input");
             };
             Arc::new(StreamCollectorExec::try_new(input.clone())?)
+        } else if node
+            .as_any()
+            .is::<sail_plan::catalog_write::CatalogCreateWriteNode>()
+        {
+            let [input] = physical_inputs else {
+                return internal_err!("Catalog create-and-write requires one input");
+            };
+            Arc::new(sail_physical_plan::catalog_write::CatalogCreateWriteExec::new(input.clone()))
         } else if let Some(node) = node.as_any().downcast_ref::<CatalogCommandNode>() {
             let schema = node.schema().inner().clone();
             Arc::new(CatalogCommandExec::new(node.command().clone(), schema))

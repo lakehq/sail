@@ -276,14 +276,14 @@ pub async fn create_delta_source(
     options: DeltaReadOptions,
     lakehouse_table: Option<LakehouseExecutionContext>,
 ) -> Result<Arc<dyn datafusion::logical_expr::TableSource>> {
+    let storage_access = lakehouse_table
+        .as_ref()
+        .and_then(|table| table.storage_access.clone());
     let (snapshot, log_store, scan_config) =
         load_delta_read_state(ctx, table_url, schema, options, false, lakehouse_table).await?;
-
-    Ok(Arc::new(DeltaTableSource::try_new(
-        snapshot,
-        log_store,
-        scan_config,
-    )?))
+    let mut source = DeltaTableSource::try_new(snapshot, log_store, scan_config)?;
+    source.storage_access = storage_access;
+    Ok(Arc::new(source))
 }
 
 /// Infers the Delta logical schema for planning without constructing a logical read source.
@@ -756,6 +756,15 @@ async fn load_delta_read_state(
     metadata_only: bool,
     lakehouse_table: Option<LakehouseExecutionContext>,
 ) -> Result<(Arc<DeltaSnapshot>, LogStoreRef, DeltaScanConfig)> {
+    let storage_session = lakehouse_table
+        .as_ref()
+        .and_then(|table| table.storage_access.as_deref())
+        .map(|spec| sail_object_store::access::storage_session(ctx, spec))
+        .transpose()?;
+    let ctx: &dyn Session = storage_session
+        .as_ref()
+        .map(|session| session as &dyn Session)
+        .unwrap_or(ctx);
     let reads_catalog_table = lakehouse_table.is_some();
     let url = ListingTableUrl::try_new(table_url.clone(), None)?;
     let object_store = ctx.runtime_env().object_store(&url)?;

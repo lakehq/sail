@@ -11,11 +11,21 @@ use crate::plan::ShufflePartitioning;
 use crate::proto::{decode_remote_partitioning, decode_remote_physical_expr};
 use crate::task::r#gen;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TaskDefinition {
     pub plan: Arc<[u8]>,
     pub inputs: Vec<TaskInput>,
     pub output: TaskOutput,
+}
+
+impl std::fmt::Debug for TaskDefinition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TaskDefinition")
+            .field("plan_bytes", &self.plan.len())
+            .field("inputs", &self.inputs)
+            .field("output", &self.output)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]

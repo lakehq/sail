@@ -16,6 +16,7 @@ use crate::resolver::plan::NamedPlan;
 use crate::streaming::rewriter::{is_streaming_plan, rewrite_streaming_plan};
 
 pub mod catalog;
+pub mod catalog_write;
 pub mod config;
 pub mod error;
 pub mod explain;
@@ -38,7 +39,15 @@ pub async fn resolve_and_execute_plan(
 ) -> PlanResult<(Arc<dyn ExecutionPlan>, Vec<StringifiedPlan>)> {
     let mut info = vec![];
     let resolver = PlanResolver::new(ctx, config);
-    let NamedPlan { plan, fields } = resolver.resolve_named_plan(plan).await?;
+    let NamedPlan { mut plan, fields } = resolver.resolve_named_plan(plan).await?;
+    if let LogicalPlan::Extension(extension) = &plan
+        && let Some(create) = extension
+            .node
+            .as_any()
+            .downcast_ref::<catalog_write::CatalogCreateWriteNode>()
+    {
+        plan = create.prepare(ctx).await?;
+    }
     info.push(plan.to_stringified(PlanType::InitialLogicalPlan));
     let df = execute_logical_plan(ctx, plan).await?;
     let (session_state, plan) = df.into_parts();

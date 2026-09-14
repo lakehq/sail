@@ -56,7 +56,10 @@ impl Table {
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let store_ctx = StoreContext::new(object_store.clone(), &table_url)?;
         let metadata_location = match metadata_location {
-            Some(location) => metadata_loader::metadata_location_to_object_path_string(&location)?,
+            Some(location) => {
+                store_ctx.validate_location(&location)?;
+                metadata_loader::metadata_location_to_object_path_string(&location)?
+            }
             None => metadata_loader::find_latest_metadata_file(&object_store, &table_url).await?,
         };
         log::trace!("Found Iceberg metadata file at {}", metadata_location);

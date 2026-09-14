@@ -29,6 +29,12 @@ use crate::proto::encode::{try_encode_field_ref, try_encode_higher_order_udf};
 #[derive(Default)]
 pub(super) struct RemotePhysicalProtoConverter {
     decoded_expressions: RefCell<HashMap<u64, Arc<dyn PhysicalExpr>>>,
+    storage_runtimes: RefCell<
+        HashMap<
+            sail_common::storage::StorageAccessSpec,
+            Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        >,
+    >,
 }
 
 impl Debug for RemotePhysicalProtoConverter {
@@ -43,6 +49,48 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
         proto: &PhysicalPlanNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        if let Some(datafusion_proto::protobuf::physical_plan_node::PhysicalPlanType::Extension(
+            extension,
+        )) = &proto.physical_plan_type
+        {
+            let node =
+                crate::plan::r#gen::ExtendedPhysicalPlanNode::decode(extension.node.as_slice())
+                    .map_err(|_| plan_datafusion_err!("Invalid extended physical plan"))?;
+            if let Some(crate::plan::r#gen::extended_physical_plan_node::NodeKind::StorageAccess(
+                access,
+            )) = node.node_kind
+            {
+                let [input] = extension.inputs.as_slice() else {
+                    return plan_err!("StorageAccessExec requires one encoded input");
+                };
+                let spec: sail_common::storage::StorageAccessSpec =
+                    serde_json::from_slice(&access.access)
+                        .map_err(|_| plan_datafusion_err!("Invalid storage access payload"))?;
+                let runtime = match self.storage_runtimes.borrow_mut().entry(spec.clone()) {
+                    std::collections::hash_map::Entry::Occupied(entry) => entry.get().clone(),
+                    std::collections::hash_map::Entry::Vacant(entry) => entry
+                        .insert(sail_object_store::access::storage_runtime(
+                            &ctx.task_ctx().runtime_env(),
+                            &spec,
+                        )?)
+                        .clone(),
+                };
+                let task = sail_object_store::access::storage_task_context(
+                    ctx.task_ctx(),
+                    runtime.clone(),
+                );
+                let mut scope = PhysicalPlanDecodeContext::new(&task, ctx.codec());
+                if let Some(results) = ctx.scalar_subquery_results() {
+                    scope = scope.with_scalar_subquery_results(results.clone());
+                }
+                let input = self.proto_to_execution_plan(input, &scope)?;
+                return Ok(Arc::new(
+                    sail_physical_plan::storage_access::StorageAccessExec::new(
+                        input, spec, runtime,
+                    ),
+                ));
+            }
+        }
         self.default_proto_to_execution_plan(proto, ctx)
     }
 

@@ -524,6 +524,20 @@ impl PlanResolver<'_> {
             .rewrite_delta_check_constraints_from_options(input, &write_format, &sink_info, state)
             .await?;
         sink_info.input = input;
+        if !preconditions.is_empty()
+            && sink_info.lakehouse_table.as_ref().is_some_and(|context| {
+                context.pointer
+                    == sail_common_datafusion::catalog::MetadataPointerAuthority::IcebergRest
+            })
+        {
+            return Ok(LogicalPlan::Extension(Extension {
+                node: Arc::new(crate::catalog_write::CatalogCreateWriteNode::try_new(
+                    preconditions,
+                    write_format,
+                    sink_info,
+                )?),
+            }));
+        }
         let registry = self.ctx.extension::<DataSourceRegistry>()?;
         let plan = registry
             .get_data_source(&write_format)?
@@ -617,7 +631,7 @@ impl PlanResolver<'_> {
                 let lakehouse_table = self
                     .resolve_lakehouse_table_context(
                         &catalog_table,
-                        LakehouseOperation::Read,
+                        LakehouseOperation::Write,
                         Some(&format),
                         vec![],
                     )

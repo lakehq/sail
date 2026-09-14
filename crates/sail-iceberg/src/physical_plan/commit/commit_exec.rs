@@ -827,7 +827,10 @@ impl ExecutionPlan for IcebergCommitExec {
                 None
             } else {
                 Some(match catalog_metadata_location.as_deref() {
-                    Some(location) => Ok(metadata_location_to_object_path_string(location)?),
+                    Some(location) => {
+                        store_ctx.validate_location(location)?;
+                        Ok(metadata_location_to_object_path_string(location)?)
+                    }
                     None => {
                         crate::table::find_latest_metadata_file(&object_store, &table_url).await
                     }
@@ -921,6 +924,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 let latest_meta = if attempt == 1 {
                     initial_latest_meta.clone()
                 } else if let Some(location) = catalog_metadata_location.as_deref() {
+                    store_ctx.validate_location(location)?;
                     metadata_location_to_object_path_string(location)?
                 } else {
                     crate::table::find_latest_metadata_file(&object_store, &table_url).await?

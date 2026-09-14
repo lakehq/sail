@@ -102,6 +102,7 @@ pub struct IcebergTableProvider {
     row_index_column_name: Option<String>,
     /// Whether to use the metadata-as-data read path (lazy manifest scanning)
     metadata_as_data_read: bool,
+    pub(crate) storage_access: Option<Box<sail_common::storage::StorageAccessSpec>>,
 }
 
 impl IcebergTableProvider {
@@ -157,6 +158,7 @@ impl IcebergTableProvider {
             file_column_name: None,
             row_index_column_name: None,
             metadata_as_data_read: false,
+            storage_access: None,
         })
     }
 
@@ -193,6 +195,7 @@ impl IcebergTableProvider {
             file_column_name: None,
             row_index_column_name: None,
             metadata_as_data_read: false,
+            storage_access: None,
         })
     }
 
@@ -952,6 +955,42 @@ impl TableProvider for IcebergTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        if let Some(spec) = &self.storage_access {
+            let session = sail_object_store::access::storage_session(session, spec)?;
+            let plan = self
+                .scan_files(&session, projection, filters, limit)
+                .await?;
+            crate::storage_access::bind_scan_storage(plan, spec, session.runtime_env())
+        } else {
+            self.scan_files(session, projection, filters, limit).await
+        }
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filter: &[&Expr],
+    ) -> Result<Vec<TableProviderFilterPushDown>> {
+        if self.metadata_as_data_read
+            || self.file_column_name.is_some()
+            || self.row_index_column_name.is_some()
+        {
+            return Ok(vec![TableProviderFilterPushDown::Unsupported; filter.len()]);
+        }
+        Ok(filter
+            .iter()
+            .map(|e| self.classify_pushdown_for_expr(e))
+            .collect())
+    }
+}
+
+impl IcebergTableProvider {
+    async fn scan_files(
+        &self,
+        session: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         log::trace!("Starting scan for table: {}", self.table_uri);
 
         let Some(snapshot) = self.snapshot.as_ref() else {
@@ -1194,24 +1233,6 @@ impl TableProvider for IcebergTableProvider {
         Ok(final_plan)
     }
 
-    fn supports_filters_pushdown(
-        &self,
-        filter: &[&Expr],
-    ) -> Result<Vec<TableProviderFilterPushDown>> {
-        if self.metadata_as_data_read
-            || self.file_column_name.is_some()
-            || self.row_index_column_name.is_some()
-        {
-            return Ok(vec![TableProviderFilterPushDown::Unsupported; filter.len()]);
-        }
-        Ok(filter
-            .iter()
-            .map(|e| self.classify_pushdown_for_expr(e))
-            .collect())
-    }
-}
-
-impl IcebergTableProvider {
     async fn scan_with_merge_metadata(
         &self,
         session: &dyn Session,

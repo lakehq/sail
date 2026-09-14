@@ -5,4 +5,4 @@ pub mod options;
 mod url;
 mod utils;
 
-pub use url::resolve_listing_urls;
+pub use url::{resolve_listing_urls, resolve_listing_writer_url};

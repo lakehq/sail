@@ -27,6 +27,7 @@ pub mod schema;
 pub mod session_extension;
 mod snapshot;
 pub mod spec;
+mod storage_access;
 pub mod table;
 mod transaction;
 mod writer;

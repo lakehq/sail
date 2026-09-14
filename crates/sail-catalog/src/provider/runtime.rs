@@ -102,6 +102,27 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
             .map_err(|e| CatalogError::External(format!("Failed to execute create_table: {e}")))?
     }
 
+    async fn create_table_for_write(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: LakehouseCreateRequest,
+    ) -> CatalogResult<LakehouseResolvedTable> {
+        let provider = self.inner.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        self.handle
+            .spawn(async move {
+                provider
+                    .create_table_for_write(&database, &table, request)
+                    .await
+            })
+            .await
+            .map_err(|e| {
+                CatalogError::External(format!("Failed to execute create_table_for_write: {e}"))
+            })?
+    }
+
     fn create_table_metadata_requirement(
         &self,
         options: &CreateTableOptions,

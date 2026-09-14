@@ -26,3 +26,4 @@ sail-common = { path = "../sail-common" }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+wiremock = { workspace = true }

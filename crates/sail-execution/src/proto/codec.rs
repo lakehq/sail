@@ -1514,6 +1514,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     ),
                 )?))
             }
+            NodeKind::StorageAccess(_) => {
+                plan_err!("StorageAccessExec must be decoded through the scoped plan converter")
+            }
             NodeKind::IcebergWriter(r#gen::IcebergWriterExecNode {
                 input,
                 table_url,
@@ -2676,6 +2679,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 operation_mode: Self::try_encode_deletion_vector_row_operation_mode(
                     dv_rows_writer_exec.operation_mode(),
                 ),
+            })
+        } else if let Some(access) =
+            node.downcast_ref::<sail_physical_plan::storage_access::StorageAccessExec>()
+        {
+            NodeKind::StorageAccess(r#gen::StorageAccessExecNode {
+                access: serde_json::to_vec(access.spec())
+                    .map_err(|_| plan_datafusion_err!("Cannot encode storage access"))?,
             })
         } else if let Some(iceberg_writer_exec) = node.downcast_ref::<IcebergWriterExec>() {
             let input = try_encode_physical_plan_with_converter(
@@ -7541,6 +7551,140 @@ mod tests {
         assert!(decoded.inner().downcast_ref::<SparkDatePart>().is_some());
         assert_eq!(decoded.name(), "date_part");
 
+        Ok(())
+    }
+    #[tokio::test]
+    async fn test_storage_access_decodes_before_root_and_nested_parquet() -> Result<()> {
+        use sail_object_store::access::iceberg::iceberg_storage_credentials;
+        use sail_physical_plan::storage_access::StorageAccessExec;
+        let config = std::collections::HashMap::from([
+            ("s3.access-key-id".to_string(), "codec-key".to_string()),
+            (
+                "s3.secret-access-key".to_string(),
+                "codec-secret".to_string(),
+            ),
+            ("s3.endpoint".to_string(), "http://localhost:1".to_string()),
+        ]);
+        let spec = sail_common::storage::StorageAccessSpec {
+            credentials: iceberg_storage_credentials("s3://bucket/table", &config, &[])?,
+        };
+        let context = TaskContext::default();
+        assert!(
+            context
+                .runtime_env()
+                .object_store(datafusion::execution::object_store::ObjectStoreUrl::parse(
+                    "s3://bucket"
+                )?)
+                .is_err()
+        );
+        let runtime = sail_object_store::access::storage_runtime(&context.runtime_env(), &spec)?;
+        for nested in [false, true] {
+            let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+            let scan = FileScanConfigBuilder::new(
+                datafusion::execution::object_store::ObjectStoreUrl::parse("s3://bucket")?,
+                Arc::new(ParquetSource::new(schema)),
+            )
+            .build();
+            let scan = DataSourceExec::from_data_source(scan) as Arc<dyn ExecutionPlan>;
+            let scoped = Arc::new(StorageAccessExec::new(scan, spec.clone(), runtime.clone()))
+                as Arc<dyn ExecutionPlan>;
+            let plan = if nested {
+                Arc::new(
+                    datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec::new(
+                        scoped,
+                    ),
+                ) as Arc<dyn ExecutionPlan>
+            } else {
+                scoped
+            };
+            let bytes = crate::proto::encode_remote_physical_plan(&RemoteExecutionCodec, plan)?;
+            assert!(
+                bytes
+                    .windows(b"codec-secret".len())
+                    .any(|window| window == b"codec-secret")
+            );
+            let decoded =
+                crate::proto::decode_remote_physical_plan(&context, &RemoteExecutionCodec, &bytes)?;
+            let owner = if nested {
+                decoded.children()[0].clone()
+            } else {
+                decoded.clone()
+            };
+            let owner = owner
+                .downcast_ref::<StorageAccessExec>()
+                .ok_or_else(|| plan_datafusion_err!("Missing storage access owner"))?;
+            assert_eq!(owner.spec(), &spec);
+            assert!(owner.input().is::<DataSourceExec>());
+            assert!(!format!("{decoded:?}").contains("codec-secret"));
+            assert!(
+                !datafusion::physical_plan::displayable(decoded.as_ref())
+                    .indent(true)
+                    .to_string()
+                    .contains("codec-secret")
+            );
+            assert!(
+                context
+                    .runtime_env()
+                    .object_store(datafusion::execution::object_store::ObjectStoreUrl::parse(
+                        "s3://bucket"
+                    )?)
+                    .is_err()
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_storage_access_runtime_reuse_is_limited_to_one_decoded_plan_and_identity()
+    -> Result<()> {
+        use sail_common::storage::{StorageAccessSpec, StorageSecret};
+        use sail_object_store::access::iceberg::iceberg_storage_credentials;
+        use sail_object_store::access::storage_runtime;
+        use sail_physical_plan::storage_access::StorageAccessExec;
+        let properties = std::collections::HashMap::from([
+            ("s3.access-key-id".to_string(), "key".to_string()),
+            ("s3.secret-access-key".to_string(), "secret-a".to_string()),
+        ]);
+        let a = StorageAccessSpec {
+            credentials: iceberg_storage_credentials("s3://bucket/table", &properties, &[])?,
+        };
+        let mut b = a.clone();
+        b.credentials[0].s3.secret_access_key = StorageSecret::new("secret-b".to_string());
+        let context = TaskContext::default();
+        let schema = Arc::new(Schema::empty());
+        let mut inputs = Vec::new();
+        for spec in [a.clone(), a, b] {
+            let runtime = storage_runtime(&context.runtime_env(), &spec)?;
+            inputs.push(Arc::new(StorageAccessExec::new(
+                Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
+                    schema.clone(),
+                )),
+                spec,
+                runtime,
+            )) as Arc<dyn ExecutionPlan>);
+        }
+        let plan = datafusion::physical_plan::union::UnionExec::try_new(inputs)?;
+        let bytes = crate::proto::encode_remote_physical_plan(&RemoteExecutionCodec, plan)?;
+        let first =
+            crate::proto::decode_remote_physical_plan(&context, &RemoteExecutionCodec, &bytes)?;
+        let second =
+            crate::proto::decode_remote_physical_plan(&context, &RemoteExecutionCodec, &bytes)?;
+        let runtimes = |plan: &Arc<dyn ExecutionPlan>| -> Result<Vec<_>> {
+            plan.children()
+                .iter()
+                .map(|child| {
+                    child
+                        .downcast_ref::<StorageAccessExec>()
+                        .map(|owner| owner.runtime().clone())
+                        .ok_or_else(|| plan_datafusion_err!("Missing storage access owner"))
+                })
+                .collect()
+        };
+        let first = runtimes(&first)?;
+        let second = runtimes(&second)?;
+        assert!(Arc::ptr_eq(&first[0], &first[1]));
+        assert!(!Arc::ptr_eq(&first[0], &first[2]));
+        assert!(!Arc::ptr_eq(&first[0], &second[0]));
         Ok(())
     }
 }

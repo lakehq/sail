@@ -24,6 +24,7 @@ pub struct StoreContext {
     pub base: Arc<dyn object_store::ObjectStore>,
     pub prefixed: Arc<dyn object_store::ObjectStore>,
     pub prefix_path: ObjectPath,
+    table_url: Url,
 }
 
 impl StoreContext {
@@ -39,13 +40,32 @@ impl StoreContext {
             base,
             prefixed,
             prefix_path: base_path,
+            table_url: table_url.clone(),
         })
+    }
+
+    pub(crate) fn validate_location(&self, raw: &str) -> Result<(), DataFusionError> {
+        if let Some(url) = crate::utils::parse_absolute_url(raw) {
+            let scheme = |url: &Url| match url.scheme() {
+                "s3a" | "s3n" => "s3".to_string(),
+                scheme => scheme.to_string(),
+            };
+            if scheme(&url) != scheme(&self.table_url)
+                || url.authority() != self.table_url.authority()
+            {
+                return Err(DataFusionError::NotImplemented(
+                    "Iceberg files across object-store origins are unsupported".to_string(),
+                ));
+            }
+        }
+        Ok(())
     }
 
     pub fn resolve<'a>(
         &'a self,
         raw: &str,
     ) -> Result<(&'a Arc<dyn object_store::ObjectStore>, ObjectPath), DataFusionError> {
+        self.validate_location(raw)?;
         if let Some(url) = crate::utils::parse_absolute_url(raw) {
             return Ok((&self.base, crate::utils::url_to_object_path(&url)?));
         }
@@ -60,6 +80,7 @@ impl StoreContext {
     }
 
     pub fn resolve_to_absolute_path(&self, raw_path: &str) -> Result<ObjectPath, DataFusionError> {
+        self.validate_location(raw_path)?;
         if let Some(url) = crate::utils::parse_absolute_url(raw_path) {
             return crate::utils::url_to_object_path(&url);
         }
@@ -105,4 +126,28 @@ pub async fn load_manifest(
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     Manifest::parse_avro(&bytes).map_err(DataFusionError::Execution)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn storage_access_preserves_object_store_origin() -> Result<(), Box<dyn std::error::Error>> {
+        let context = StoreContext::new(
+            Arc::new(object_store::memory::InMemory::new()),
+            &Url::parse("s3://bucket/table")?,
+        )?;
+        assert_eq!(
+            context.resolve_to_absolute_path("s3a://bucket/table/data")?,
+            ObjectPath::from("table/data")
+        );
+        assert!(context.resolve("s3://another-bucket/table/data").is_err());
+        assert!(
+            context
+                .resolve_to_absolute_path("s3://another-bucket/table/data")
+                .is_err()
+        );
+        Ok(())
+    }
 }

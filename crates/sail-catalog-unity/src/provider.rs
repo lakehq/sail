@@ -17,9 +17,11 @@ use arrow::datatypes::DataType;
 use sail_catalog::credentials::CatalogCredentials;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::lakehouse::{
-    DeltaRatifiedCommit, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
-    LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest,
-    LakehouseCreateMaterialization, LakehouseCreatePlan, LakehouseCreateRequest,
+    BeginTableAccessRequest, DeltaRatifiedCommit, DeltaRatifiedCommitRequest,
+    DeltaRatifiedCommitResponse, LakehouseCapability, LakehouseCommitOutcome,
+    LakehouseCommitRequest, LakehouseCreateMaterialization, LakehouseCreatePlan,
+    LakehouseCreateRequest, LakehouseResolvedTable, ResolveLakehouseTableRequest,
+    TableAccessPurpose, TableAccessSession, resolve_lakehouse_table_status,
 };
 use sail_catalog::provider::{
     AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
@@ -27,12 +29,17 @@ use sail_catalog::provider::{
     LakeSourceCreateMetadataMode, Namespace,
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
+use sail_common::storage::{
+    StorageAccessSpec, StorageCredentialRequest, StorageCredentialSource, UnityPathOperation,
+    UnityTableOperation,
+};
 use sail_common::utils::http::SAIL_USER_AGENT;
 use sail_common_datafusion::catalog::delta::{
     DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY, unity_table_id_value,
 };
 use sail_common_datafusion::catalog::{
-    DatabaseStatus, TableColumnStatus, TableKind, TableStatus, identity_partition_fields,
+    DatabaseStatus, LakehouseFormat, LakehouseOperation, TableAccessSessionRef, TableColumnStatus,
+    TableKind, TableStatus, identity_partition_fields,
 };
 
 use crate::data_type::{
@@ -116,13 +123,13 @@ impl UnityCatalogProvider {
         }
     }
 
-    async fn create_managed_staging_location(
+    async fn create_managed_staging_table(
         &self,
         client: &ApiClient,
         catalog_name: &str,
         schema_name: &str,
         table: &str,
-    ) -> CatalogResult<String> {
+    ) -> CatalogResult<r#gen::StagingTableInfo> {
         let request = r#gen::CreateStagingTable {
             name: self.object_name(table),
             catalog_name: self.object_name(catalog_name),
@@ -136,11 +143,52 @@ impl UnityCatalogProvider {
                 )));
             }
         };
-        response.inner.staging_location.ok_or_else(|| {
-            CatalogError::External(
+        if response
+            .inner
+            .staging_location
+            .as_ref()
+            .is_none_or(|location| location.is_empty())
+        {
+            return Err(CatalogError::External(
                 "Unity Catalog staging table response is missing a staging location".to_string(),
-            )
-        })
+            ));
+        }
+        Ok(response.inner)
+    }
+
+    fn uses_s3(location: &str) -> bool {
+        url::Url::parse(location).is_ok_and(|url| matches!(url.scheme(), "s3" | "s3a" | "s3n"))
+    }
+
+    async fn storage_access(
+        &self,
+        location: &str,
+        request: StorageCredentialRequest,
+    ) -> CatalogResult<Option<Box<StorageAccessSpec>>> {
+        if !Self::uses_s3(location) {
+            return Ok(None);
+        }
+        let endpoint = match &request {
+            StorageCredentialRequest::UnityTable { .. } => "temporary-table-credentials",
+            StorageCredentialRequest::UnityPath { .. } => "temporary-path-credentials",
+            _ => {
+                return Err(CatalogError::InvalidArgument(
+                    "Expected Unity credential request".to_string(),
+                ));
+            }
+        };
+        let source = StorageCredentialSource {
+            endpoint: format!("{}/{endpoint}", self.options.uri.trim_end_matches('/')),
+            authentication: self.options.credentials.export_for_execution().await.map_err(|error| {
+                CatalogError::InvalidArgument(format!("Unity credential vending requires transferable catalog authentication: {error}"))
+            })?,
+            headers: Default::default(),
+            request,
+        };
+        sail_object_store::access::unity::storage_access(location, source)
+            .await
+            .map(|access| Some(Box::new(access)))
+            .map_err(|error| CatalogError::External(error.to_string()))
     }
 
     fn qualified_object_name(&self, names: &[&str]) -> String {
@@ -669,8 +717,12 @@ impl CatalogProvider for UnityCatalogProvider {
         } else {
             // The SQL planner supplies generated default locations for managed tables. Unity
             // managed table creation must use a staging location allocated by the catalog.
-            self.create_managed_staging_location(&client, &catalog_name, &schema_name, table)
+            self.create_managed_staging_table(&client, &catalog_name, &schema_name, table)
                 .await?
+                .staging_location
+                .ok_or_else(|| {
+                    CatalogError::External("Missing Unity staging location".to_string())
+                })?
         };
 
         let request = r#gen::CreateTable {
@@ -820,9 +872,112 @@ impl CatalogProvider for UnityCatalogProvider {
 
     fn lakehouse_capabilities(&self) -> Vec<LakehouseCapability> {
         vec![
+            LakehouseCapability::TableAccessSessions,
+            LakehouseCapability::CredentialVending,
             LakehouseCapability::CatalogCommit,
             LakehouseCapability::DeltaRatifiedCommits,
         ]
+    }
+
+    async fn resolve_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: ResolveLakehouseTableRequest,
+    ) -> CatalogResult<LakehouseResolvedTable> {
+        let status = self.get_table(database, table).await?;
+        let mut resolved = resolve_lakehouse_table_status(
+            &self.name,
+            request.catalog_table,
+            &status,
+            request.operation,
+            &self.lakehouse_capabilities(),
+        );
+        if resolved.execution.format == LakehouseFormat::Delta
+            && resolved
+                .execution
+                .table_identity
+                .table_uri
+                .as_deref()
+                .is_some_and(Self::uses_s3)
+        {
+            let purpose = if request.operation == LakehouseOperation::Read {
+                TableAccessPurpose::DataRead
+            } else {
+                TableAccessPurpose::DataWrite
+            };
+            resolved.execution = self
+                .begin_table_access(
+                    database,
+                    table,
+                    BeginTableAccessRequest {
+                        context: resolved.execution,
+                        purpose,
+                    },
+                )
+                .await?
+                .context;
+        }
+        Ok(resolved)
+    }
+
+    async fn begin_table_access(
+        &self,
+        _database: &Namespace,
+        _table: &str,
+        request: BeginTableAccessRequest,
+    ) -> CatalogResult<TableAccessSession> {
+        let mut context = request.context;
+        let location = context
+            .table_identity
+            .table_uri
+            .as_deref()
+            .unwrap_or_default();
+        if context.format != LakehouseFormat::Delta || !Self::uses_s3(location) {
+            return Err(CatalogError::UnsupportedCapability(
+                "Unity credential vending for this storage format".to_string(),
+            ));
+        }
+        let table_id = context
+            .table_identity
+            .table_id
+            .as_ref()
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| {
+                CatalogError::InvalidArgument(
+                    "Unity Delta table is missing its catalog table id".to_string(),
+                )
+            })?;
+        let operation = match request.purpose {
+            TableAccessPurpose::DataWrite | TableAccessPurpose::Commit => {
+                UnityTableOperation::ReadWrite
+            }
+            _ => UnityTableOperation::Read,
+        };
+        let reference = TableAccessSessionRef {
+            fingerprint: format!("unity:{}:{table_id}:{operation:?}", self.name),
+        };
+        context.storage_access = self
+            .storage_access(
+                location,
+                StorageCredentialRequest::UnityTable {
+                    table_id: table_id.clone(),
+                    operation,
+                },
+            )
+            .await?;
+        context.access_session = Some(reference.clone());
+        let credential = context
+            .storage_access
+            .as_ref()
+            .and_then(|access| access.credentials.first());
+        Ok(TableAccessSession {
+            reference,
+            expires_at_ms: credential.and_then(|credential| credential.s3.expires_at_ms),
+            credential_scope: credential.map(|credential| credential.prefix.clone()),
+            capability_fingerprint: context.capability_fingerprint.clone(),
+            context,
+        })
     }
 
     async fn plan_lakehouse_create(
@@ -848,12 +1003,45 @@ impl CatalogProvider for UnityCatalogProvider {
                     .await
                     .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
                 let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
-                let location = self
-                    .create_managed_staging_location(&client, &catalog_name, &schema_name, table)
+                let staging = self
+                    .create_managed_staging_table(&client, &catalog_name, &schema_name, table)
                     .await?;
+                let location = staging.staging_location.ok_or_else(|| {
+                    CatalogError::External("Missing Unity staging location".to_string())
+                })?;
+                if Self::uses_s3(&location) {
+                    let table_id = staging.id.filter(|id| !id.is_empty()).ok_or_else(|| {
+                        CatalogError::External(
+                            "Unity staging response is missing a table id".to_string(),
+                        )
+                    })?;
+                    plan.table.execution.storage_access = self
+                        .storage_access(
+                            &location,
+                            StorageCredentialRequest::UnityTable {
+                                table_id,
+                                operation: UnityTableOperation::ReadWrite,
+                            },
+                        )
+                        .await?;
+                }
                 plan.table.status.location = Some(location.clone());
                 plan.table.execution.table_identity.table_uri = Some(location);
             }
+        }
+        if request.options.format.eq_ignore_ascii_case("delta")
+            && request.options.is_external
+            && let Some(location) = &request.options.location
+        {
+            plan.table.execution.storage_access = self
+                .storage_access(
+                    location,
+                    StorageCredentialRequest::UnityPath {
+                        url: location.clone(),
+                        operation: UnityPathOperation::PathCreateTable,
+                    },
+                )
+                .await?;
         }
         Ok(plan)
     }
@@ -1087,6 +1275,198 @@ mod tests {
 
     use super::*;
     use crate::config::UnityCatalogConfig;
+
+    fn vended_response() -> serde_json::Value {
+        serde_json::json!({"aws_temp_credentials": {
+            "access_key_id": "vended-key", "secret_access_key": "private-storage-secret", "session_token": "storage-token"
+        }, "expiration_time": 4_000_000_000_000_i64})
+    }
+
+    #[tokio::test]
+    async fn delta_access_uses_catalog_identity_and_operation_permissions() {
+        use wiremock::matchers::{body_json, header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        let mut options = empty_options("catalog", true);
+        options.uri = server.uri();
+        options.credentials = Arc::new(crate::credential::CredentialProvider::BearerToken(
+            "catalog-secret".to_string(),
+        ));
+        let provider = UnityCatalogProvider::new("unity".to_string(), options).unwrap();
+        Mock::given(method("GET"))
+            .and(path("/tables/catalog%2Eschema%2Etable"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "name": "table", "table_id": "catalog-table-id", "data_source_format": "DELTA",
+                "table_type": "EXTERNAL", "storage_location": "s3://bucket/table", "columns": []
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        for (operation, permission) in [
+            (LakehouseOperation::Read, UnityTableOperation::Read),
+            (LakehouseOperation::Write, UnityTableOperation::ReadWrite),
+        ] {
+            Mock::given(method("POST"))
+                .and(path("/temporary-table-credentials"))
+                .and(body_json(
+                    serde_json::json!({"table_id": "catalog-table-id", "operation": permission}),
+                ))
+                .and(header("authorization", "Bearer catalog-secret"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(vended_response()))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let resolved = provider
+                .resolve_lakehouse_table(
+                    &Namespace::try_from(vec!["schema"]).unwrap(),
+                    "table",
+                    ResolveLakehouseTableRequest {
+                        catalog_table: vec![
+                            "unity".to_string(),
+                            "schema".to_string(),
+                            "table".to_string(),
+                        ],
+                        operation,
+                        requested_format: None,
+                        options: vec![],
+                    },
+                )
+                .await
+                .unwrap();
+            assert!(resolved.execution.access_session.is_some());
+            let access = resolved.execution.storage_access.unwrap();
+            assert_eq!(access.credentials[0].prefix, "s3://bucket/table/");
+            assert_eq!(
+                access.credentials[0].refresh.as_ref().unwrap().request,
+                StorageCredentialRequest::UnityTable {
+                    table_id: "catalog-table-id".to_string(),
+                    operation: permission,
+                }
+            );
+            assert!(!format!("{:?}", resolved.status).contains("private-storage-secret"));
+            assert!(!format!("{:?}", provider.options).contains("catalog-secret"));
+        }
+    }
+
+    #[tokio::test]
+    async fn delta_create_vends_staging_table_or_external_path_credentials() {
+        use wiremock::matchers::{body_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        let mut options = empty_options("catalog", true);
+        options.uri = server.uri();
+        let provider = UnityCatalogProvider::new("unity".to_string(), options).unwrap();
+        Mock::given(method("POST"))
+            .and(path("/staging-tables"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"id": "staging-id", "staging_location": "s3://bucket/staged"}),
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/temporary-table-credentials"))
+            .and(body_json(
+                serde_json::json!({"table_id": "staging-id", "operation": "READ_WRITE"}),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(vended_response()))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST")).and(path("/temporary-path-credentials"))
+            .and(body_json(serde_json::json!({"url": "s3://bucket/external", "operation": "PATH_CREATE_TABLE"})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(vended_response())).expect(1).mount(&server).await;
+        for is_external in [false, true] {
+            let plan = provider
+                .plan_lakehouse_create(
+                    &Namespace::try_from(vec!["schema"]).unwrap(),
+                    "new_table",
+                    LakehouseCreateRequest {
+                        catalog_table: vec![
+                            "unity".to_string(),
+                            "schema".to_string(),
+                            "new_table".to_string(),
+                        ],
+                        options: CreateTableOptions {
+                            columns: vec![],
+                            comment: None,
+                            constraints: vec![],
+                            location: is_external.then(|| "s3://bucket/external".to_string()),
+                            format: "delta".to_string(),
+                            partition_by: vec![],
+                            sort_by: vec![],
+                            bucket_by: None,
+                            mode: sail_common::spec::CreateTableMode::Create,
+                            properties: vec![],
+                            is_external,
+                            is_write_precondition: true,
+                        },
+                    },
+                )
+                .await
+                .unwrap();
+            let access = plan.table.execution.storage_access.unwrap();
+            let prefix = if is_external {
+                "s3://bucket/external/"
+            } else {
+                "s3://bucket/staged/"
+            };
+            assert_eq!(access.credentials[0].prefix, prefix);
+        }
+    }
+
+    #[tokio::test]
+    async fn rejected_storage_credentials_are_not_replaced_by_ambient_access() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(403).set_body_string("private-error-body"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut options = empty_options("catalog", true);
+        options.uri = server.uri();
+        let provider = UnityCatalogProvider::new("unity".to_string(), options).unwrap();
+        let request = StorageCredentialRequest::UnityTable {
+            table_id: "id".to_string(),
+            operation: UnityTableOperation::Read,
+        };
+        let error = provider
+            .storage_access("s3://bucket/table", request.clone())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("403"));
+        assert!(!error.contains("private-error-body"));
+        assert!(
+            provider
+                .storage_access("file:///local/table", request)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn nontransferable_authentication_is_a_hard_access_error() {
+        let mut options = empty_options("catalog", true);
+        options.credentials = Arc::new(sail_catalog::credentials::FileCatalogCredentials::new(
+            "/driver/token",
+        ));
+        let provider = UnityCatalogProvider::new("unity".to_string(), options).unwrap();
+        let error = provider
+            .storage_access(
+                "s3://bucket/table",
+                StorageCredentialRequest::UnityTable {
+                    table_id: "id".to_string(),
+                    operation: UnityTableOperation::Read,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, CatalogError::InvalidArgument(_)));
+    }
 
     fn options_from_config(
         default_catalog: impl Into<String>,

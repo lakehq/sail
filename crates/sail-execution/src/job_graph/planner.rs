@@ -264,6 +264,31 @@ fn plan_job_graph_stages(
     driver_stage_handling: DriverStageHandling,
     scalar_context: Option<ScalarSubqueryContext<'_>>,
 ) -> ExecutionResult<PlannedSubtree> {
+    if let Some(access) =
+        plan.downcast_ref::<sail_physical_plan::storage_access::StorageAccessExec>()
+    {
+        let driver = is_driver_stage_plan(access.input());
+        let child = plan_job_graph_stages(
+            access.input().clone(),
+            usage,
+            graph,
+            if driver {
+                DriverStageHandling::PreserveRoot
+            } else {
+                DriverStageHandling::CreateStage
+            },
+            scalar_context,
+        )?;
+        let scope = rebuild_subtree(plan, vec![child])?.into_planned_subtree();
+        return if driver && matches!(driver_stage_handling, DriverStageHandling::CreateStage) {
+            Ok(PlannedSubtree::without_pending_scalar_subquery_expr(
+                create_driver_stage(scope, graph, scalar_context)?,
+            ))
+        } else {
+            Ok(scope)
+        };
+    }
+
     if let Some(scalar) = plan.downcast_ref::<ScalarSubqueryExec>() {
         return build_scalar_subquery_job_graph(scalar, usage, graph, driver_stage_handling);
     }
@@ -610,6 +635,11 @@ fn build_barrier_job_graph(
 }
 
 fn is_driver_stage_plan(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    if let Some(access) =
+        plan.downcast_ref::<sail_physical_plan::storage_access::StorageAccessExec>()
+    {
+        return is_driver_stage_plan(access.input());
+    }
     if let Some(cooperative) = plan.downcast_ref::<CooperativeExec>() {
         return is_driver_stage_plan(cooperative.input());
     }
@@ -1474,5 +1504,38 @@ mod tests {
                 .iter()
                 .any(|input| matches!(input.mode, InputMode::Broadcast))
         );
+    }
+    #[tokio::test]
+    async fn test_storage_access_stays_with_driver_commit_across_shuffle() {
+        use sail_physical_plan::storage_access::StorageAccessExec;
+        let spec = sail_common::storage::StorageAccessSpec {
+            credentials: vec![],
+        };
+        let runtime = datafusion::execution::TaskContext::default().runtime_env();
+        let input = Arc::new(
+            RepartitionExec::try_new(empty_plan(), Partitioning::RoundRobinBatch(2)).unwrap(),
+        );
+        let commit = Arc::new(sail_iceberg::physical_plan::IcebergCommitExec::new(
+            input,
+            url::Url::parse("s3://bucket/table").unwrap(),
+            None,
+            sail_iceberg::operations::SnapshotUpdateKind::FastAppend,
+        )) as Arc<dyn ExecutionPlan>;
+        let plan = Arc::new(StorageAccessExec::new(commit, spec.clone(), runtime));
+        let graph = JobGraph::try_new(plan, flight_shuffle_options()).unwrap();
+        let stages = graph
+            .stages()
+            .iter()
+            .filter(|stage| stage.plan.is::<StorageAccessExec>())
+            .collect::<Vec<_>>();
+        assert_eq!(stages.len(), 1);
+        assert_eq!(stages[0].placement, TaskPlacement::Driver);
+        let scope = stages[0].plan.downcast_ref::<StorageAccessExec>().unwrap();
+        assert!(
+            scope
+                .input()
+                .is::<sail_iceberg::physical_plan::IcebergCommitExec>()
+        );
+        assert_eq!(scope.spec(), &spec);
     }
 }

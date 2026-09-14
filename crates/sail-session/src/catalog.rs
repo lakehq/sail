@@ -4,7 +4,8 @@ use std::sync::Arc;
 use datafusion::common::{Result, plan_datafusion_err};
 use datafusion_common::plan_err;
 use sail_catalog::credentials::{
-    CatalogCredentials, EmptyCatalogCredentials, FileCatalogCredentials, StaticCatalogCredentials,
+    CatalogCredentials, EmptyCatalogCredentials, FileCatalogCredentials, OAuthCatalogCredentials,
+    StaticCatalogCredentials,
 };
 use sail_catalog::error::CatalogResult;
 use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
@@ -18,8 +19,11 @@ use sail_catalog_memory::MemoryCatalogProvider;
 use sail_catalog_onelake::{OneLakeApiKind, OneLakeCatalogProvider};
 use sail_catalog_system::{SYSTEM_CATALOG_NAME, SystemCatalogProvider};
 use sail_catalog_unity::{UnityCatalogConfig, UnityCatalogOptions, UnityCatalogProvider};
-use sail_common::config::{AppConfig, CacheType, CatalogCacheConfig, CatalogType, OneLakeApi};
+use sail_common::config::{
+    AppConfig, CacheType, CatalogCacheConfig, CatalogType, OAuth2CatalogConfig, OneLakeApi,
+};
 use sail_common::runtime::RuntimeHandle;
+use sail_common::storage::{OAuth2ClientCredentials, StorageSecret};
 use secrecy::{ExposeSecret, SecretString};
 
 pub fn create_catalog_manager(
@@ -54,6 +58,7 @@ pub fn create_catalog_manager(
                     oauth_access_token,
                     bearer_access_token,
                     bearer_access_token_file,
+                    oauth_client_credentials,
                     cache,
                 } => {
                     let mut properties = HashMap::new();
@@ -74,7 +79,8 @@ pub fn create_catalog_manager(
                         bearer_access_token_file.as_ref(),
                         bearer_access_token.as_ref(),
                         oauth_access_token.as_ref(),
-                    );
+                        oauth_client_credentials.as_ref(),
+                    )?;
 
                     let runtime_aware = RuntimeAwareCatalogProvider::try_new(
                         || {
@@ -321,18 +327,37 @@ fn iceberg_rest_credentials(
     bearer_access_token_file: Option<&String>,
     bearer_access_token: Option<&SecretString>,
     oauth_access_token: Option<&SecretString>,
-) -> Arc<dyn CatalogCredentials> {
+    oauth_client_credentials: Option<&OAuth2CatalogConfig>,
+) -> CatalogResult<Arc<dyn CatalogCredentials>> {
+    if let Some(oauth) = oauth_client_credentials {
+        if bearer_access_token_file.is_some()
+            || bearer_access_token.is_some()
+            || oauth_access_token.is_some()
+        {
+            return Err(sail_catalog::error::CatalogError::InvalidArgument(
+                "oauth_client_credentials cannot be combined with a static access token or token file".to_string(),
+            ));
+        }
+        return Ok(Arc::new(OAuthCatalogCredentials::try_new(
+            OAuth2ClientCredentials {
+                endpoint: oauth.token_endpoint.clone(),
+                client_id: oauth.client_id.clone(),
+                client_secret: StorageSecret::new(oauth.client_secret.expose_secret().to_string()),
+                scope: oauth.scope.clone(),
+            },
+        )?));
+    }
     if let Some(path) = bearer_access_token_file {
-        Arc::new(FileCatalogCredentials::new(path)) as Arc<dyn CatalogCredentials>
+        Ok(Arc::new(FileCatalogCredentials::new(path)) as Arc<dyn CatalogCredentials>)
     } else {
-        bearer_access_token
+        Ok(bearer_access_token
             .or(oauth_access_token)
             .map(|token| {
                 Arc::new(StaticCatalogCredentials::new(
                     token.expose_secret().to_string(),
                 )) as Arc<dyn CatalogCredentials>
             })
-            .unwrap_or_else(|| Arc::new(EmptyCatalogCredentials))
+            .unwrap_or_else(|| Arc::new(EmptyCatalogCredentials)))
     }
 }
 
@@ -440,7 +465,8 @@ mod tests {
         let path = path.to_string_lossy().to_string();
         let static_token = SecretString::from("static-token".to_string());
 
-        let credentials = iceberg_rest_credentials(Some(&path), Some(&static_token), None);
+        let credentials =
+            iceberg_rest_credentials(Some(&path), Some(&static_token), None, None).unwrap();
         assert_eq!(
             credentials.retrieve().await.unwrap(),
             Some("file-token".to_string())
@@ -450,7 +476,7 @@ mod tests {
     #[tokio::test]
     async fn iceberg_credentials_use_the_static_bearer_token() {
         let token = SecretString::from("static-token".to_string());
-        let credentials = iceberg_rest_credentials(None, Some(&token), None);
+        let credentials = iceberg_rest_credentials(None, Some(&token), None, None).unwrap();
         assert_eq!(
             credentials.retrieve().await.unwrap(),
             Some("static-token".to_string())
@@ -460,7 +486,7 @@ mod tests {
     #[tokio::test]
     async fn iceberg_credentials_fall_back_to_the_oauth_token() {
         let token = SecretString::from("oauth-token".to_string());
-        let credentials = iceberg_rest_credentials(None, None, Some(&token));
+        let credentials = iceberg_rest_credentials(None, None, Some(&token), None).unwrap();
         assert_eq!(
             credentials.retrieve().await.unwrap(),
             Some("oauth-token".to_string())
@@ -469,7 +495,44 @@ mod tests {
 
     #[tokio::test]
     async fn iceberg_credentials_are_empty_without_any_token() {
-        let credentials = iceberg_rest_credentials(None, None, None);
+        let credentials = iceberg_rest_credentials(None, None, None, None).unwrap();
         assert_eq!(credentials.retrieve().await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn iceberg_oauth_configuration_is_renewable_and_redacted() -> Result<()> {
+        let config: CatalogType = serde_json::from_value(serde_json::json!({
+            "type": "iceberg-rest", "name": "catalog", "uri": "https://catalog.example",
+            "oauth_client_credentials": {
+                "token_endpoint": "https://identity.example/token",
+                "client_id": "sail-client", "client_secret": "private-client-secret", "scope": "catalog"
+            }
+        })).unwrap();
+        assert!(
+            !serde_json::to_string(&config)
+                .unwrap()
+                .contains("private-client-secret")
+        );
+        assert!(!format!("{config:?}").contains("private-client-secret"));
+        let CatalogType::IcebergRest {
+            oauth_client_credentials: Some(oauth),
+            ..
+        } = config
+        else {
+            return Err(plan_datafusion_err!("Expected OAuth catalog configuration"));
+        };
+        let credential = iceberg_rest_credentials(None, None, None, Some(&oauth)).unwrap();
+        let sail_common::storage::CatalogCredentialSource::OAuth2(source) =
+            credential.export_for_execution().await.unwrap()
+        else {
+            return Err(plan_datafusion_err!(
+                "Expected renewable OAuth credential source"
+            ));
+        };
+        assert_eq!(source.client_secret.expose(), "private-client-secret");
+        assert_eq!(source.scope.as_deref(), Some("catalog"));
+        let token = SecretString::from("static-token".to_string());
+        assert!(iceberg_rest_credentials(None, Some(&token), None, Some(&oauth)).is_err());
+        Ok(())
     }
 }

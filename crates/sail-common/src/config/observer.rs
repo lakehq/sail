@@ -64,3 +64,10 @@ where
     let _ = v;
     s.serialize_str("[REDACTED]")
 }
+
+pub fn serialize_secret<S>(_value: &SecretString, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str("[REDACTED]")
+}

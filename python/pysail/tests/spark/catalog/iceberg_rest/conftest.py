@@ -6,6 +6,7 @@ servers.
 
 from __future__ import annotations
 
+import json
 import time
 from typing import TYPE_CHECKING
 
@@ -25,6 +26,7 @@ if TYPE_CHECKING:
 LAKEKEEPER_IMAGE = "quay.io/lakekeeper/catalog:v0.12.1"
 LAKEKEEPER_DATABASE_URL = "postgresql://postgres:postgres@lakekeeper-db:5432/postgres"
 LAKEKEEPER_PROJECT_ID = "00000000-0000-0000-0000-000000000000"
+SEAWEEDFS_STS_ROLE_ARN = "arn:aws:iam::000000000000:role/LakekeeperVendedRole"
 NESSIE_NAMESPACE_SEPARATOR = "-"
 
 
@@ -38,23 +40,82 @@ def docker_network() -> Generator[Network, None, None]:
 
 
 @pytest.fixture(scope="module")
+def seaweedfs_credentials() -> tuple[str, str]:
+    """Return the default static credentials used to administer SeaweedFS."""
+    return "admin", "password"
+
+
+@pytest.fixture(scope="module")
 def seaweedfs_container(
     docker_network: Network,
     tmp_path_factory: pytest.TempPathFactory,
+    seaweedfs_credentials: tuple[str, str],
 ) -> Generator[DockerContainer, None, None]:
     """Start a SeaweedFS container with S3 API enabled."""
-    # Write S3 IAM config so signed S3 requests with admin/password are accepted.
-    s3_config = (
-        '{"identities":[{"name":"admin","credentials":[{"accessKey":"admin","secretKey":"password"}]'
-        ',"actions":["Admin","Read","Write"]}]}'
-    )
+    access_key_id, secret_access_key = seaweedfs_credentials
+    s3_config = {
+        "identities": [
+            {
+                "name": "admin",
+                "credentials": [
+                    {
+                        "accessKey": access_key_id,
+                        "secretKey": secret_access_key,
+                    }
+                ],
+                "actions": ["Admin", "Read", "List", "Tagging", "Write"],
+            }
+        ],
+        "sts": {
+            "tokenDuration": "1h",
+            "maxSessionLength": "12h",
+            "issuer": "seaweedfs-sts",
+            "signingKey": "dGVzdC1zaWduaW5nLWtleS1mb3Itc3RzLWludGVncmF0aW9uLXRlc3Rz",
+        },
+        "roles": [
+            {
+                "roleName": "LakekeeperVendedRole",
+                "roleArn": SEAWEEDFS_STS_ROLE_ARN,
+                "trustPolicy": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": "*",
+                            "Action": "sts:AssumeRole",
+                        }
+                    ],
+                },
+                "attachedPolicies": ["FullAccess"],
+            }
+        ],
+        "policies": [
+            {
+                "name": "FullAccess",
+                "document": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Action": "*",
+                            "Resource": "*",
+                        }
+                    ],
+                },
+            }
+        ],
+    }
     tmp_dir = tmp_path_factory.mktemp("seaweedfs")
     config_path = tmp_dir / "s3_config.json"
-    config_path.write_text(s3_config)
+    config_path.write_text(json.dumps(s3_config))
 
     container = (
         DockerContainer("chrislusf/seaweedfs:4.21")
-        .with_command("server -s3 -s3.port=8333 -master.volumeSizeLimitMB=64 -s3.config=/etc/seaweedfs/s3_config.json")
+        .with_command(
+            "server -s3 -s3.port=8333 -master.volumeSizeLimitMB=64 "
+            "-s3.config=/etc/seaweedfs/s3_config.json "
+            "-s3.iam.config=/etc/seaweedfs/s3_config.json -s3.iam.readOnly=false"
+        )
         .with_volume_mapping(str(config_path), "/etc/seaweedfs/s3_config.json", "ro")
         .with_exposed_ports(8333)
         .with_network(docker_network)
@@ -81,16 +142,27 @@ def seaweedfs_host_endpoint(seaweedfs_container: DockerContainer) -> str:
 
 
 @pytest.fixture(scope="module")
-def _create_s3_bucket(seaweedfs_host_endpoint: str) -> None:
+def seaweedfs_shared_endpoint(seaweedfs_container: DockerContainer) -> str:
+    """S3 endpoint reachable from both the host and Docker containers."""
+    port = seaweedfs_container.get_exposed_port(8333)
+    return f"http://s3.localhost:{port}"
+
+
+@pytest.fixture(scope="module")
+def _create_s3_bucket(
+    seaweedfs_host_endpoint: str,
+    seaweedfs_credentials: tuple[str, str],
+) -> None:
     """Create the icebergdata bucket on SeaweedFS using boto3."""
     import boto3
     from botocore.config import Config
 
+    access_key_id, secret_access_key = seaweedfs_credentials
     s3 = boto3.client(
         "s3",
         endpoint_url=seaweedfs_host_endpoint,
-        aws_access_key_id="admin",
-        aws_secret_access_key="password",  # noqa: S106
+        aws_access_key_id=access_key_id,
+        aws_secret_access_key=secret_access_key,
         region_name="us-east-1",
         config=Config(signature_version="s3v4"),
     )
@@ -118,6 +190,7 @@ def lakekeeper_command_container(
         .with_env("LAKEKEEPER__PG_ENCRYPTION_KEY", "This-is-NOT-Secure!")
         .with_env("LAKEKEEPER__PG_DATABASE_URL_READ", LAKEKEEPER_DATABASE_URL)
         .with_env("LAKEKEEPER__PG_DATABASE_URL_WRITE", LAKEKEEPER_DATABASE_URL)
+        .with_kwargs(extra_hosts={"s3.localhost": "host-gateway"})
         .with_network(docker_network)
     )
 
@@ -205,6 +278,8 @@ def lakekeeper_endpoint(lakekeeper_container: DockerContainer) -> str:
 def lakekeeper_warehouse_id(
     lakekeeper_endpoint: str,
     seaweedfs_internal_endpoint: str,
+    seaweedfs_shared_endpoint: str,
+    seaweedfs_credentials: tuple[str, str],
     _create_s3_bucket: None,
 ) -> str:
     """Bootstrap Lakekeeper and create the S3-compatible test warehouse."""
@@ -215,6 +290,7 @@ def lakekeeper_warehouse_id(
     )
     bootstrap.raise_for_status()
 
+    access_key_id, secret_access_key = seaweedfs_credentials
     warehouse = requests.post(
         f"{lakekeeper_endpoint}/management/v1/warehouse",
         json={
@@ -224,18 +300,21 @@ def lakekeeper_warehouse_id(
                 "type": "s3",
                 "bucket": "icebergdata",
                 "key-prefix": "lakekeeper",
-                "endpoint": seaweedfs_internal_endpoint,
+                "endpoint": seaweedfs_shared_endpoint,
+                "sts-endpoint": seaweedfs_internal_endpoint,
                 "region": "us-east-1",
                 "path-style-access": True,
                 "flavor": "s3-compat",
-                "sts-enabled": False,
-                "remote-signing-enabled": True,
+                "sts-enabled": True,
+                "sts-role-arn": SEAWEEDFS_STS_ROLE_ARN,
+                "sts-token-validity-seconds": 3600,
+                "remote-signing-enabled": False,
             },
             "storage-credential": {
                 "type": "s3",
                 "credential-type": "access-key",
-                "access-key-id": "admin",
-                "secret-access-key": "password",
+                "access-key-id": access_key_id,
+                "secret-access-key": secret_access_key,
             },
         },
         timeout=30,

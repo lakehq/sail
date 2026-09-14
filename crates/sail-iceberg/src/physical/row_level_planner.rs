@@ -30,7 +30,17 @@ pub(crate) async fn plan_iceberg_row_level_write(
     node: &RowLevelWriteNode,
     physical_inputs: &[Arc<dyn ExecutionPlan>],
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    match (node.mode(), node.command()) {
+    let access = node
+        .target_lakehouse_table()
+        .and_then(|table| table.storage_access.as_deref());
+    let storage_session = access
+        .map(|spec| sail_object_store::access::storage_session(session, spec))
+        .transpose()?;
+    let session: &dyn Session = storage_session
+        .as_ref()
+        .map(|state| state as &dyn Session)
+        .unwrap_or(session);
+    let plan = match (node.mode(), node.command()) {
         (RowLevelWriteMode::MergeOnRead, RowLevelCommand::Delete) => {
             plan_iceberg_delete(session, planner, node).await
         }
@@ -43,6 +53,10 @@ pub(crate) async fn plan_iceberg_row_level_write(
         (RowLevelWriteMode::CopyOnWrite, command) => {
             not_impl_err!("Iceberg row-level {command:?} copy-on-write operations")
         }
+    }?;
+    match access {
+        Some(spec) => crate::storage_access::bind_write_storage(plan, spec, session.runtime_env()),
+        None => Ok(plan),
     }
 }
 

@@ -32,6 +32,9 @@ impl PlanResolver<'_> {
             )
             .await?;
         let execution = resolved.execution;
+        if execution.access_session.is_some() {
+            return Ok(execution);
+        }
         match manager
             .begin_table_access(
                 table,
