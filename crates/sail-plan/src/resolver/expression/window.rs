@@ -7,7 +7,7 @@ use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
 use datafusion_expr::expr::WindowFunctionParams;
 use datafusion_expr::simplify::SimplifyContextBuilder;
 use datafusion_expr::{
-    AggregateUDF, ExprSchemable, WindowFrame, WindowFrameBound, WindowFrameUnits, expr,
+    AggregateUDF, ExprSchemable, WindowFrame, WindowFrameBound, WindowFrameUnits, expr, when,
 };
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec::{self};
@@ -15,6 +15,7 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::aggregate::max_min_by::check_ordering_field_orderable;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
 use sail_python_udf::udf::pyspark_udaf::{PySparkGroupAggKind, PySparkGroupAggregateUDF};
@@ -25,6 +26,7 @@ use crate::function::common::{FunctionContextInput, WinFunctionInput, get_null_t
 use crate::function::get_built_in_window_function;
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
+use crate::resolver::expression::function::check_named_arguments_supported;
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
@@ -84,7 +86,7 @@ impl PlanResolver<'_> {
                 is_internal: _,
                 is_distinct,
                 ignore_nulls,
-                filter: None,
+                filter,
                 // TODO: `window` and `window_function` both have an `order_by` field.
                 //  Check: Which one should we use? Are they the same? Is one of them empty?
                 order_by: None,
@@ -92,10 +94,19 @@ impl PlanResolver<'_> {
                 let Ok(function_name) = <Vec<String>>::from(function_name).one() else {
                     return Err(PlanError::unsupported("qualified window function name"));
                 };
+                check_distinct_window_function(&function_name, is_distinct)?;
+                let canonical_function_name = function_name.to_ascii_lowercase();
+                if filter.is_some()
+                    && !matches!(canonical_function_name.as_str(), "max_by" | "min_by")
+                {
+                    return Err(PlanError::unsupported(format!(
+                        "FILTER clause on the window function `{function_name}`"
+                    )));
+                }
                 if !named_arguments.is_empty() {
+                    check_named_arguments_supported(&canonical_function_name)?;
                     return Err(PlanError::todo("named window function arguments"));
                 }
-                let canonical_function_name = function_name.to_ascii_lowercase();
                 // `is_user_defined_function` is always false on the wire, so a registered
                 // Python UDAF arrives here as `UnresolvedFunction`. Look it up in the
                 // catalog before falling back to the built-in window function registry.
@@ -119,6 +130,11 @@ impl PlanResolver<'_> {
                         })
                 });
                 if let Some(udaf) = registered_udaf {
+                    if filter.is_some() {
+                        return Err(PlanError::unsupported(format!(
+                            "FILTER clause on the window function `{function_name}`"
+                        )));
+                    }
                     let (udaf, arguments, argument_display_names) = self
                         .resolve_registered_pyspark_udaf(
                             udaf,
@@ -145,6 +161,18 @@ impl PlanResolver<'_> {
                     let (argument_display_names, arguments) = self
                         .resolve_expressions_and_names(arguments, schema, state)
                         .await?;
+                    let arguments = match filter {
+                        Some(filter) => {
+                            let filter = self.resolve_expression(*filter, schema, state).await?;
+                            filter_max_min_by_window_arguments(
+                                &canonical_function_name,
+                                arguments,
+                                filter,
+                                schema,
+                            )?
+                        }
+                        None => arguments,
+                    };
                     let function = get_built_in_window_function(&canonical_function_name)?;
                     let input = WinFunctionInput {
                         arguments,
@@ -180,6 +208,7 @@ impl PlanResolver<'_> {
                     function,
                 } = function;
                 let function_name: String = function_name.into();
+                check_distinct_window_function(&function_name, is_distinct)?;
                 let (arguments, kwargs) = Self::extract_kwargs(arguments);
                 let (argument_display_names, arguments) = self
                     .resolve_expressions_and_names(arguments, schema, state)
@@ -526,4 +555,38 @@ impl PlanResolver<'_> {
             }
         }
     }
+}
+
+/// Spark rejects any `DISTINCT` aggregate used as a window function in analysis
+/// (`WindowResolution.checkWindowFunction`), whatever the frame.
+fn check_distinct_window_function(function_name: &str, is_distinct: bool) -> PlanResult<()> {
+    if is_distinct {
+        return Err(PlanError::AnalysisError(format!(
+            "[DISTINCT_WINDOW_FUNCTION_UNSUPPORTED] Distinct window functions are not supported: \"{function_name}(DISTINCT ...)\"."
+        )));
+    }
+    Ok(())
+}
+
+/// Rewrites `max_by(x, y) FILTER (WHERE p) OVER w` as `max_by(x, CASE WHEN p THEN y END) OVER w`,
+/// and the same for `min_by` and the top-k form.
+///
+/// Both functions skip a row whose ordering is NULL entirely, so nulling the ordering of a row the
+/// filter rejects removes exactly that row. The filter is not handed to DataFusion's window
+/// expression instead, because `datafusion-proto` does not serialize it and a cluster run would
+/// silently drop it. `CASE` builds its field from the branch type alone, so the orderability of
+/// the original field is checked here, before its metadata is lost.
+fn filter_max_min_by_window_arguments(
+    function_name: &str,
+    mut arguments: Vec<expr::Expr>,
+    filter: expr::Expr,
+    schema: &DFSchemaRef,
+) -> PlanResult<Vec<expr::Expr>> {
+    let Some(ordering) = arguments.get_mut(1) else {
+        return Ok(arguments);
+    };
+    let (_, field) = ordering.to_field(schema)?;
+    check_ordering_field_orderable(function_name, &field)?;
+    *ordering = when(filter, ordering.clone()).end()?;
+    Ok(arguments)
 }

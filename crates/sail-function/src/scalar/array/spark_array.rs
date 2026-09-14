@@ -1,5 +1,6 @@
 /// [Credit]: <https://github.com/apache/datafusion/blob/c21d025df463ce623f9193c4b24d86141fce81ca/datafusion/functions-nested/src/make_array.rs>
 /// Spark defaults to DataType::Int32 while DataFusion defaults to DataType::Int64.
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -78,7 +79,11 @@ impl ScalarUDFImpl for SparkArray {
         let contains_null = args.arg_fields.iter().any(|f| f.is_nullable());
         let return_type = match self.return_type(&data_types)? {
             DataType::List(field) => DataType::List(Arc::new(
-                field.as_ref().clone().with_nullable(contains_null),
+                field
+                    .as_ref()
+                    .clone()
+                    .with_nullable(contains_null)
+                    .with_metadata(common_element_metadata(args.arg_fields)),
             )),
             data_type => data_type,
         };
@@ -89,12 +94,14 @@ impl ScalarUDFImpl for SparkArray {
         let ScalarFunctionArgs {
             args, return_field, ..
         } = args;
-        let value_nullable = match return_field.data_type() {
-            DataType::List(field) | DataType::LargeList(field) => field.is_nullable(),
-            _ => true,
+        let (value_nullable, value_metadata) = match return_field.data_type() {
+            DataType::List(field) | DataType::LargeList(field) => {
+                (field.is_nullable(), field.metadata().clone())
+            }
+            _ => (true, HashMap::new()),
         };
         let func = make_scalar_function(move |arrays| {
-            make_array_inner_with_nullable(arrays, value_nullable)
+            make_array_inner_with_nullable(arrays, value_nullable, value_metadata.clone())
         });
         func(args.as_slice())
     }
@@ -169,10 +176,29 @@ pub(crate) fn empty_array_type() -> DataType {
 /// Constructs an array using the input `data` as `ArrayRef`.
 /// Returns a reference-counted `Array` instance result.
 pub fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
-    make_array_inner_with_nullable(arrays, true)
+    make_array_inner_with_nullable(arrays, true, HashMap::new())
 }
 
-fn make_array_inner_with_nullable(arrays: &[ArrayRef], value_nullable: bool) -> Result<ArrayRef> {
+/// The metadata the element field carries: that of the arguments, when every argument that is
+/// not an untyped NULL has the same. Sail keeps logical types such as GEOMETRY in field metadata,
+/// so an array of them stays an array of them; arguments that disagree get none.
+fn common_element_metadata(arg_fields: &[FieldRef]) -> HashMap<String, String> {
+    let mut typed = arg_fields.iter().filter(|f| !f.data_type().is_null());
+    let Some(first) = typed.next() else {
+        return HashMap::new();
+    };
+    if typed.all(|f| f.metadata() == first.metadata()) {
+        first.metadata().clone()
+    } else {
+        HashMap::new()
+    }
+}
+
+fn make_array_inner_with_nullable(
+    arrays: &[ArrayRef],
+    value_nullable: bool,
+    value_metadata: HashMap<String, String>,
+) -> Result<ArrayRef> {
     if arrays.is_empty() {
         let array = new_empty_array(&DataType::Null);
         return Ok(Arc::new(
@@ -200,8 +226,10 @@ fn make_array_inner_with_nullable(arrays: &[ArrayRef], value_nullable: bool) -> 
                     .build_list_array(),
             ))
         }
-        DataType::LargeList(..) => array_array::<i64>(arrays, data_type, value_nullable),
-        _ => array_array::<i32>(arrays, data_type, value_nullable),
+        DataType::LargeList(..) => {
+            array_array::<i64>(arrays, data_type, value_nullable, value_metadata)
+        }
+        _ => array_array::<i32>(arrays, data_type, value_nullable, value_metadata),
     }
 }
 
@@ -249,6 +277,7 @@ fn array_array<O: OffsetSizeTrait>(
     args: &[ArrayRef],
     data_type: DataType,
     value_nullable: bool,
+    value_metadata: HashMap<String, String>,
 ) -> Result<ArrayRef> {
     // do not accept 0 arguments.
     if args.is_empty() {
@@ -288,7 +317,7 @@ fn array_array<O: OffsetSizeTrait>(
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new_list_field(data_type, value_nullable)),
+        Arc::new(Field::new_list_field(data_type, value_nullable).with_metadata(value_metadata)),
         OffsetBuffer::new(offsets.into()),
         make_array(data),
         None,

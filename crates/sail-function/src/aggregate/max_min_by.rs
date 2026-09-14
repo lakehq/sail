@@ -11,7 +11,7 @@ use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::arrow::row::{OwnedRow, RowConverter, Rows, SortField};
 use datafusion::common::cast::as_list_array;
-use datafusion::common::{HashSet, ScalarValue};
+use datafusion::common::{HashSet, ScalarValue, exec_datafusion_err};
 use datafusion::error::DataFusionError;
 use datafusion::functions_aggregate::first_last::{first_value_udaf, last_value_udaf};
 use datafusion::logical_expr::expr::{AggregateFunction, ScalarFunction, Sort};
@@ -28,7 +28,7 @@ use sail_common_datafusion::ordering::{
     contains_float, is_orderable, is_orderable_field, normalize_floats_for_ordering,
 };
 
-use crate::error::{generic_exec_err, generic_internal_err, invalid_arg_count_exec_err};
+use crate::error::{generic_internal_err, invalid_arg_count_exec_err};
 use crate::scalar::spark_ordering_key::SparkOrderingKey;
 
 /// Builds the converter that encodes an ordering key in Spark's order.
@@ -502,11 +502,13 @@ fn max_min_by_top_k_args<'a, T>(
     match args {
         [value, ordering] => Ok((value, ordering, None)),
         [value, ordering, k] => Ok((value, ordering, Some(k))),
-        _ => Err(invalid_arg_count_exec_err(
-            function_name,
-            MAX_MIN_BY_ARG_COUNT,
-            args.len(),
-        )),
+        _ => {
+            let (min, max) = MAX_MIN_BY_ARG_COUNT;
+            Err(exec_datafusion_err!(
+                "[WRONG_NUM_ARGS.WITHOUT_SUGGESTION] The `{function_name}` requires [{min}, {max}] parameters but the actual number is {}.",
+                args.len()
+            ))
+        }
     }
 }
 
@@ -516,9 +518,8 @@ pub fn check_max_min_by_k(function_name: &str, k: Option<i32>) -> Result<usize, 
     let k = k.unwrap_or(0);
     match usize::try_from(k) {
         Ok(k) if (1..=MAX_MIN_BY_MAX_K as usize).contains(&k) => Ok(k),
-        _ => Err(generic_exec_err(
-            function_name,
-            &format!("The `k` must be between [1, {MAX_MIN_BY_MAX_K}] (current value = {k})"),
+        _ => Err(exec_datafusion_err!(
+            "[DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE] Cannot resolve `{function_name}` due to data type mismatch: The `k` must be between [1, {MAX_MIN_BY_MAX_K}] (current value = {k})."
         )),
     }
 }
@@ -537,11 +538,16 @@ fn physical_k(
     };
     match k.downcast_ref::<Literal>().map(|literal| literal.value()) {
         Some(ScalarValue::Int32(value)) => Ok(Some(check_max_min_by_k(function_name, *value)?)),
-        _ => Err(generic_exec_err(
-            function_name,
-            &format!("the input k should be a foldable int expression; however, got {k}"),
+        _ => Err(exec_datafusion_err!(
+            "[DATATYPE_MISMATCH.NON_FOLDABLE_INPUT] Cannot resolve `{function_name}` due to data type mismatch: the input k should be a foldable int expression; however, got {k}."
         )),
     }
+}
+
+fn invalid_ordering_type_err(function_name: &str, ordering_type: &DataType) -> DataFusionError {
+    exec_datafusion_err!(
+        "[DATATYPE_MISMATCH.INVALID_ORDERING_TYPE] Cannot resolve `{function_name}` due to data type mismatch: The `{function_name}` does not support ordering on type \"{ordering_type}\"."
+    )
 }
 
 fn get_min_max_by_result_type(
@@ -550,10 +556,7 @@ fn get_min_max_by_result_type(
 ) -> Result<Vec<DataType>, DataFusionError> {
     let (value_type, ordering_type, k_type) = max_min_by_top_k_args(function_name, input_types)?;
     if !is_orderable(ordering_type) {
-        return Err(generic_exec_err(
-            function_name,
-            &format!("does not support ordering on type {ordering_type}"),
-        ));
+        return Err(invalid_ordering_type_err(function_name, ordering_type));
     }
     // Answering a shorter list than it was given makes DataFusion reject the call with a
     // `Failed to coerce arguments` planning error before any hook below runs, so every
@@ -564,11 +567,8 @@ fn get_min_max_by_result_type(
     if let Some(k_type) = k_type {
         let castable = k_type.is_null() || k_type.is_numeric() || k_type.is_string();
         if !castable {
-            return Err(generic_exec_err(
-                function_name,
-                &format!(
-                    "The third parameter requires the \"INT\" type, however the input has the type {k_type}"
-                ),
+            return Err(exec_datafusion_err!(
+                "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve `{function_name}` due to data type mismatch: The third parameter requires the \"INT\" type, however the input has the type \"{k_type}\"."
             ));
         }
         if let Some(k) = coerced.get_mut(2) {
@@ -596,13 +596,19 @@ fn check_ordering_field(
     arg_fields: &[FieldRef],
 ) -> Result<(), DataFusionError> {
     let (_, ordering_field, _) = max_min_by_top_k_args(function_name, arg_fields)?;
+    check_ordering_field_orderable(function_name, ordering_field)
+}
+
+/// Rejects an ordering argument whose field Spark cannot order, for callers that rewrite the
+/// argument before the function sees it and would otherwise lose the field metadata.
+pub fn check_ordering_field_orderable(
+    function_name: &str,
+    ordering_field: &Field,
+) -> Result<(), DataFusionError> {
     if !is_orderable_field(ordering_field) {
-        return Err(generic_exec_err(
+        return Err(invalid_ordering_type_err(
             function_name,
-            &format!(
-                "does not support ordering on type {}",
-                ordering_field.data_type()
-            ),
+            ordering_field.data_type(),
         ));
     }
     Ok(())

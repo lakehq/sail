@@ -193,9 +193,9 @@ Feature: max_by function
         """
       Then query error (?s)max_by.*does not support ordering on type
 
-    # Spark recurses into ARRAY and STRUCT, so a nested GEOMETRY is unorderable too. Sail's
-    # `array()` and `named_struct()` drop the child's geo metadata, so the check never sees it.
-    @sail-bug @spark-4.2
+    # Spark recurses into ARRAY and STRUCT, so a nested GEOMETRY is unorderable too. The check
+    # only sees it if `array()` and `named_struct()` keep the child's geo metadata.
+    @spark-4.2
     Scenario Outline: max_by rejects a GEOMETRY nested by <case>
       When query
         """
@@ -270,7 +270,7 @@ Feature: max_by function
         """
       Then query error INVALID_SQL_SYNTAX.*does not support WITHIN GROUP
 
-    @sail-bug
+    # `WindowResolution.checkWindowFunction` rejects any DISTINCT aggregate used as a window function.
     Scenario: max_by rejects the clause DISTINCT combined with OVER
       When query
         """
@@ -279,9 +279,8 @@ Feature: max_by function
         """
       Then query error DISTINCT_WINDOW_FUNCTION_UNSUPPORTED
 
-    # The mirror image: Spark allows FILTER on a window aggregate, while Sail's window match
-    # arm requires `filter: None` and rejects it.
-    @sail-bug @spark-4.2
+    # The mirror image: Spark 4.2 allows FILTER on a window aggregate.
+    @spark-4.2
     Scenario: max_by supports the clause FILTER combined with OVER
       When query
         """
@@ -729,8 +728,7 @@ Feature: max_by function
   Rule: Named arguments
 
     # `MaxByBuilder` is a plain ExpressionBuilder with no `functionSignature`, so Spark
-    # rejects named arguments in analysis. Sail ignores the names and runs the call.
-    @sail-bug
+    # rejects named arguments in analysis.
     Scenario: max_by rejects named arguments
       When query
         """
@@ -912,3 +910,37 @@ Feature: max_by function
         GROUP BY g
         """
       Then query error The .k. must be between .1, 100000. .current value = 0.
+
+  Rule: Rejections carry Spark's error class
+
+    # Spark reports these in analysis with an error class; clients match on the class rather than
+    # on the free text, so the class name is asserted alongside the message core.
+    @spark-4.2
+    Scenario Outline: max_by reports the Spark error class for <case>
+      When query
+        """
+        SELECT <call> AS result
+        FROM VALUES (1, 'a', 10), (2, 'b', 50) AS t(i, x, y)
+        """
+      Then query error <error>
+
+      Examples:
+        | case                  | call                            | error                                                                          |
+        | an unorderable key    | max_by(x, map('k', y))          | (?s)DATATYPE_MISMATCH.INVALID_ORDERING_TYPE.*does not support ordering on type |
+        | an out-of-range k     | max_by(x, y, 0)                 | (?s)DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE.*The .k. must be between              |
+        | a non-foldable k      | max_by(x, y, i)                 | (?s)DATATYPE_MISMATCH.NON_FOLDABLE_INPUT.*foldable int expression              |
+        | a k of the wrong type | max_by(x, y, DATE '2024-01-01') | (?s)DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE.*requires the "INT" type           |
+        | four arguments        | max_by(x, y, 2, 3)              | (?s)WRONG_NUM_ARGS.*requires .2, 3. parameters                                 |
+
+    # A GEOMETRY key is unorderable however it is produced. Sail's CASE builds its output field
+    # from the branch `DataType` alone (DataFusion's `expr_schema.rs`), dropping the geo metadata,
+    # so the key reaches the orderability check as plain BINARY and is accepted.
+    @sail-bug @spark-4.2
+    Scenario: max_by rejects a GEOMETRY ordering key produced by CASE
+      When query
+        """
+        SELECT max_by(v, CASE WHEN true THEN st_geomfromwkb(w) END) AS result
+        FROM VALUES ('a', X'0101000000000000000000F03F0000000000000040'),
+                    ('b', X'010100000000000000000000400000000000000040') AS t(v, w)
+        """
+      Then query error (?s)max_by.*does not support ordering on type

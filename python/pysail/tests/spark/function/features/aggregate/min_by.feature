@@ -216,6 +216,23 @@ Feature: min_by function
         """
       Then query error (?s)min_by.*does not support ordering on type
 
+    # Spark recurses into ARRAY and STRUCT, so a nested GEOMETRY is unorderable too. The check
+    # only sees it if `array()` and `named_struct()` keep the child's geo metadata.
+    @spark-4.2
+    Scenario Outline: min_by rejects a GEOMETRY nested by <case>
+      When query
+        """
+        SELECT min_by(v, <ordering>) AS result
+        FROM VALUES ('a', X'0101000000000000000000F03F0000000000000040'),
+                    ('b', X'010100000000000000000000400000000000000040') AS t(v, w)
+        """
+      Then query error (?s)min_by.*does not support ordering on type
+
+      Examples:
+        | case         | ordering                             |
+        | array        | array(st_geomfromwkb(w))             |
+        | named_struct | named_struct('g', st_geomfromwkb(w)) |
+
   Rule: Arity
 
     # Spark's MaxMinBy is BinaryLike. Sail used to panic here and kill the RPC, because
@@ -673,8 +690,7 @@ Feature: min_by function
   Rule: Named arguments
 
     # `MinByBuilder` is a plain ExpressionBuilder with no `functionSignature`, so Spark
-    # rejects named arguments in analysis. Sail ignores the names and runs the call.
-    @sail-bug
+    # rejects named arguments in analysis.
     Scenario: min_by rejects named arguments
       When query
         """
@@ -741,8 +757,6 @@ Feature: min_by function
         """
       Then query error INVALID_SQL_SYNTAX.*does not support WITHIN GROUP
 
-    # Sail forwards DISTINCT to the window aggregate, and rejects FILTER on one outright.
-    @sail-bug
     Scenario: min_by rejects the clause DISTINCT combined with OVER
       When query
         """
@@ -751,7 +765,7 @@ Feature: min_by function
         """
       Then query error DISTINCT_WINDOW_FUNCTION_UNSUPPORTED
 
-    @sail-bug @spark-4.2
+    @spark-4.2
     Scenario: min_by supports the clause FILTER combined with OVER
       When query
         """
@@ -901,3 +915,37 @@ Feature: min_by function
         GROUP BY g
         """
       Then query error The .k. must be between .1, 100000. .current value = 0.
+
+  Rule: Rejections carry Spark's error class
+
+    # Spark reports these in analysis with an error class; clients match on the class rather than
+    # on the free text, so the class name is asserted alongside the message core.
+    @spark-4.2
+    Scenario Outline: min_by reports the Spark error class for <case>
+      When query
+        """
+        SELECT <call> AS result
+        FROM VALUES (1, 'a', 10), (2, 'b', 50) AS t(i, x, y)
+        """
+      Then query error <error>
+
+      Examples:
+        | case                  | call                            | error                                                                          |
+        | an unorderable key    | min_by(x, map('k', y))          | (?s)DATATYPE_MISMATCH.INVALID_ORDERING_TYPE.*does not support ordering on type |
+        | an out-of-range k     | min_by(x, y, 0)                 | (?s)DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE.*The .k. must be between              |
+        | a non-foldable k      | min_by(x, y, i)                 | (?s)DATATYPE_MISMATCH.NON_FOLDABLE_INPUT.*foldable int expression              |
+        | a k of the wrong type | min_by(x, y, DATE '2024-01-01') | (?s)DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE.*requires the "INT" type           |
+        | four arguments        | min_by(x, y, 2, 3)              | (?s)WRONG_NUM_ARGS.*requires .2, 3. parameters                                 |
+
+    # A GEOMETRY key is unorderable however it is produced. Sail's CASE builds its output field
+    # from the branch `DataType` alone (DataFusion's `expr_schema.rs`), dropping the geo metadata,
+    # so the key reaches the orderability check as plain BINARY and is accepted.
+    @sail-bug @spark-4.2
+    Scenario: min_by rejects a GEOMETRY ordering key produced by CASE
+      When query
+        """
+        SELECT min_by(v, CASE WHEN true THEN st_geomfromwkb(w) END) AS result
+        FROM VALUES ('a', X'0101000000000000000000F03F0000000000000040'),
+                    ('b', X'010100000000000000000000400000000000000040') AS t(v, w)
+        """
+      Then query error (?s)min_by.*does not support ordering on type

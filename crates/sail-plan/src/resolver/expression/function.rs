@@ -73,10 +73,14 @@ impl PlanResolver<'_> {
 
         let canonical_function_name = function_name.to_ascii_lowercase();
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
-        if let Some(udf) = catalog_manager.get_function(&canonical_function_name)?
+        let catalog_function = catalog_manager.get_function(&canonical_function_name)?;
+        if let Some(udf) = &catalog_function
             && udf.inner().is::<PySparkUnresolvedUDF>()
         {
             state.config_mut().arrow_allow_large_var_types = true;
+        }
+        if catalog_function.is_none() && kwarg_names.iter().any(Option::is_some) {
+            check_named_arguments_supported(&canonical_function_name)?;
         }
 
         // For functions that accept a date-part keyword as the first argument
@@ -532,4 +536,37 @@ fn extract_metadata_from_udf(
             .collect()),
         _ => Ok(vec![]),
     }
+}
+
+/// The built-in functions that declare a `functionSignature` in Spark 4.2 and therefore accept
+/// named arguments (`FunctionRegistry.rearrangeExpressions`).
+const NAMED_ARGUMENT_FUNCTIONS: &[&str] = &[
+    "count_min_sketch",
+    "explode",
+    "explode_outer",
+    "inline",
+    "inline_outer",
+    "mask",
+    "posexplode",
+    "posexplode_outer",
+    "tuple_sketch_agg_double",
+    "tuple_sketch_agg_integer",
+    "tuple_union_agg_double",
+    "tuple_union_agg_integer",
+    "tuple_union_double",
+    "tuple_union_integer",
+    "tuple_union_theta_double",
+    "tuple_union_theta_integer",
+    "variant_explode",
+    "variant_explode_outer",
+];
+
+/// Spark rejects named arguments for every other built-in function in analysis.
+pub(crate) fn check_named_arguments_supported(function_name: &str) -> PlanResult<()> {
+    if NAMED_ARGUMENT_FUNCTIONS.contains(&function_name) {
+        return Ok(());
+    }
+    Err(PlanError::AnalysisError(format!(
+        "[NAMED_PARAMETERS_NOT_SUPPORTED] Named parameters are not supported for function `{function_name}`; please retry the query with positional arguments to the function call instead."
+    )))
 }
