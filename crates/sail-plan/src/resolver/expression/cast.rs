@@ -16,7 +16,7 @@ use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
 };
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
-use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
+use sail_function::scalar::spark_cast_string_to_integer::SparkCastStringToInteger;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
@@ -147,10 +147,10 @@ impl PlanResolver<'_> {
                     lit(data_type_string),
                 ])
             }
-            (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View, DataType::Int32, false)
-                if !self.config.ansi_mode =>
+            (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View, to, false)
+                if to.is_integer() && !self.config.ansi_mode =>
             {
-                ScalarUDF::new_from_impl(SparkCastStringToInt32::new()).call(vec![expr])
+                ScalarUDF::new_from_impl(SparkCastStringToInteger::try_new(to)?).call(vec![expr])
             }
             (from, DataType::Timestamp(time_unit, _) | DataType::Duration(time_unit), _)
                 if from.is_numeric() =>
@@ -353,6 +353,12 @@ fn need_rename_cast(expr: &expr::Expr) -> bool {
         }
         expr::Expr::Cast(cast) => need_rename_cast(cast.expr.as_ref()),
         expr::Expr::TryCast(try_cast) => need_rename_cast(try_cast.expr.as_ref()),
+        // Preserve the column naming of the casts replaced by the legacy UDF.
+        expr::Expr::ScalarFunction(function)
+            if function.func.inner().is::<SparkCastStringToInteger>() =>
+        {
+            function.args.first().is_none_or(need_rename_cast)
+        }
         _ => true,
     }
 }
