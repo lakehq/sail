@@ -1002,3 +1002,266 @@ Feature: min_by function
                     ('b', X'010100000000000000000000400000000000000040') AS t(v, w)
         """
       Then query error (?s)min_by.*does not support ordering on type
+
+  Rule: Grouping extensions
+
+    Scenario: min_by is computed per ROLLUP grouping set
+      When query
+        """
+        SELECT k, p, min_by(v, o) AS r
+        FROM VALUES ('k1', 'a', 10, 'x'), ('k1', 'b', 50, 'y'), ('k2', 'c', 20, 'x'), ('k2', 'd', 30, 'x') AS t(k, v, o, p)
+        GROUP BY ROLLUP(k, p)
+        ORDER BY k NULLS FIRST, p NULLS FIRST
+        """
+      Then query result ordered
+        | k    | p    | r |
+        | NULL | NULL | a |
+        | k1   | NULL | a |
+        | k1   | x    | a |
+        | k1   | y    | b |
+        | k2   | NULL | c |
+        | k2   | x    | c |
+
+    Scenario: min_by is computed per CUBE grouping set
+      When query
+        """
+        SELECT k, p, min_by(v, o) AS r
+        FROM VALUES ('k1', 'a', 10, 'x'), ('k1', 'b', 50, 'y'), ('k2', 'c', 20, 'x'), ('k2', 'd', 30, 'x') AS t(k, v, o, p)
+        GROUP BY CUBE(k, p)
+        ORDER BY k NULLS FIRST, p NULLS FIRST
+        """
+      Then query result ordered
+        | k    | p    | r |
+        | NULL | NULL | a |
+        | NULL | x    | a |
+        | NULL | y    | b |
+        | k1   | NULL | a |
+        | k1   | x    | a |
+        | k1   | y    | b |
+        | k2   | NULL | c |
+        | k2   | x    | c |
+
+    @spark-4.2
+    Scenario: min_by top-k is computed per ROLLUP grouping set
+      When query
+        """
+        SELECT k, min_by(v, o, 2) AS r
+        FROM VALUES ('k1', 'a', 10, 'x'), ('k1', 'b', 50, 'y'), ('k2', 'c', 20, 'x'), ('k2', 'd', 30, 'x') AS t(k, v, o, p)
+        GROUP BY ROLLUP(k)
+        ORDER BY k NULLS FIRST
+        """
+      Then query result ordered
+        | k    | r      |
+        | NULL | [a, c] |
+        | k1   | [a, b] |
+        | k2   | [c, d] |
+
+    Scenario: min_by can be used in HAVING
+      When query
+        """
+        SELECT k, min_by(v, o) AS r
+        FROM VALUES ('k1', 'a', 10, 'x'), ('k1', 'b', 50, 'y'), ('k2', 'c', 20, 'x'), ('k2', 'd', 30, 'x') AS t(k, v, o, p)
+        GROUP BY k
+        HAVING min_by(v, o) <> 'a'
+        ORDER BY k
+        """
+      Then query result ordered
+        | k  | r |
+        | k2 | c |
+
+    Scenario: min_by in each branch of a UNION ALL
+      When query
+        """
+        SELECT min_by(v, o) AS r FROM VALUES ('k1', 'a', 10, 'x'), ('k1', 'b', 50, 'y'), ('k2', 'c', 20, 'x'), ('k2', 'd', 30, 'x') AS t(k, v, o, p) WHERE k = 'k1'
+        UNION ALL
+        SELECT min_by(v, o) AS r FROM VALUES ('k1', 'a', 10, 'x'), ('k1', 'b', 50, 'y'), ('k2', 'c', 20, 'x'), ('k2', 'd', 30, 'x') AS t(k, v, o, p) WHERE k = 'k2'
+        ORDER BY r
+        """
+      Then query result ordered
+        | r |
+        | a |
+        | c |
+
+    Scenario: min_by in a RANGE window frame
+      When query
+        """
+        SELECT o, min_by(v, o) OVER (ORDER BY o RANGE BETWEEN 10 PRECEDING AND CURRENT ROW) AS r
+        FROM VALUES ('k1', 'a', 10, 'x'), ('k1', 'b', 50, 'y'), ('k2', 'c', 20, 'x'), ('k2', 'd', 30, 'x') AS t(k, v, o, p)
+        ORDER BY o
+        """
+      Then query result ordered
+        | o  | r |
+        | 10 | a |
+        | 20 | a |
+        | 30 | c |
+        | 50 | b |
+
+  Rule: PIVOT
+
+    Scenario: min_by as the PIVOT aggregate
+      When query
+        """
+        SELECT * FROM (SELECT k, v, o, p FROM VALUES ('k1', 'a', 10, 'x'), ('k1', 'b', 50, 'y'), ('k2', 'c', 20, 'x'), ('k2', 'd', 30, 'x') AS t(k, v, o, p))
+        PIVOT (min_by(v, o) FOR (p) IN ('x', 'y'))
+        ORDER BY k
+        """
+      Then query result ordered
+        | k  | x | y    |
+        | k1 | a | b    |
+        | k2 | c | NULL |
+
+    Scenario: min_by alongside another aggregate in a PIVOT
+      When query
+        """
+        SELECT * FROM (SELECT k, v, o, p FROM VALUES ('k1', 'a', 10, 'x'), ('k1', 'b', 50, 'y'), ('k2', 'c', 20, 'x'), ('k2', 'd', 30, 'x') AS t(k, v, o, p))
+        PIVOT (min_by(v, o) AS a, count(o) AS c FOR (p) IN ('x', 'y'))
+        ORDER BY k
+        """
+      Then query result ordered
+        | k  | x_a | x_c | y_a  | y_c |
+        | k1 | a   | 1   | b    | 1   |
+        | k2 | c   | 2   | NULL | 0   |
+
+    @spark-4.2
+    Scenario: min_by top-k as the PIVOT aggregate
+      When query
+        """
+        SELECT * FROM (SELECT k, v, o, p FROM VALUES ('k1', 'a', 10, 'x'), ('k1', 'b', 50, 'y'), ('k2', 'c', 20, 'x'), ('k2', 'd', 30, 'x') AS t(k, v, o, p))
+        PIVOT (min_by(v, o, 2) FOR (p) IN ('x', 'y'))
+        ORDER BY k
+        """
+      Then query result ordered
+        | k  | x      | y    |
+        | k1 | [a]    | [b]  |
+        | k2 | [c, d] | NULL |
+
+  Rule: Shuffled input across partitions
+
+    # `REPARTITION(8)` spreads the rows over several partitions, so aggregates merge partial
+    # states and the plan crosses the codec when the suite runs with `SAIL_MODE=local-cluster`.
+    # Window results are reduced to a checksum so that one row stands for thousands.
+
+    Scenario: min_by over a GROUP BY on shuffled input
+      When query
+        """
+        SELECT g, min_by(x, y * 1000000 + id) AS r FROM (SELECT /*+ REPARTITION(8) */ id, id % 7 AS g, CAST(id AS STRING) AS x, (id * 37) % 1000 AS y, CAST((id * 37) % 1000 AS DOUBLE) * (CASE WHEN id % 2 = 0 THEN -1 ELSE 1 END) AS d, named_struct('a', CASE WHEN id % 5 = 0 THEN NULL ELSE (id * 13) % 100 END, 'b', id) AS st FROM range(0, 20000)) AS t GROUP BY g ORDER BY g
+        """
+      Then query result ordered
+        | g | r    |
+        | 0 | 0    |
+        | 1 | 6000 |
+        | 2 | 5000 |
+        | 3 | 4000 |
+        | 4 | 3000 |
+        | 5 | 2000 |
+        | 6 | 1000 |
+
+    Scenario: min_by with a DOUBLE key over a GROUP BY on shuffled input
+      When query
+        """
+        SELECT g, min_by(x, d * 1000000 + id) AS r FROM (SELECT /*+ REPARTITION(8) */ id, id % 7 AS g, CAST(id AS STRING) AS x, (id * 37) % 1000 AS y, CAST((id * 37) % 1000 AS DOUBLE) * (CASE WHEN id % 2 = 0 THEN -1 ELSE 1 END) AS d, named_struct('a', CASE WHEN id % 5 = 0 THEN NULL ELSE (id * 13) % 100 END, 'b', id) AS st FROM range(0, 20000)) AS t GROUP BY g ORDER BY g
+        """
+      Then query result ordered
+        | g | r    |
+        | 0 | 5054 |
+        | 1 | 4054 |
+        | 2 | 3054 |
+        | 3 | 2054 |
+        | 4 | 1054 |
+        | 5 | 54   |
+        | 6 | 6054 |
+
+    Scenario: min_by with a STRUCT key that has NULL fields on shuffled input
+      When query
+        """
+        SELECT min_by(x, named_struct('a', st.a, 'b', st.b)) AS r FROM (SELECT /*+ REPARTITION(8) */ id, id % 7 AS g, CAST(id AS STRING) AS x, (id * 37) % 1000 AS y, CAST((id * 37) % 1000 AS DOUBLE) * (CASE WHEN id % 2 = 0 THEN -1 ELSE 1 END) AS d, named_struct('a', CASE WHEN id % 5 = 0 THEN NULL ELSE (id * 13) % 100 END, 'b', id) AS st FROM range(0, 20000)) AS t
+        """
+      Then query result ordered
+        | r |
+        | 0 |
+
+    @spark-4.2
+    Scenario: min_by top-k merges partial states on shuffled input
+      When query
+        """
+        SELECT g, min_by(x, y * 1000000 + id, 3) AS r FROM (SELECT /*+ REPARTITION(8) */ id, id % 7 AS g, CAST(id AS STRING) AS x, (id * 37) % 1000 AS y, CAST((id * 37) % 1000 AS DOUBLE) * (CASE WHEN id % 2 = 0 THEN -1 ELSE 1 END) AS d, named_struct('a', CASE WHEN id % 5 = 0 THEN NULL ELSE (id * 13) % 100 END, 'b', id) AS st FROM range(0, 20000)) AS t GROUP BY g ORDER BY g
+        """
+      Then query result ordered
+        | g | r                    |
+        | 0 | [0, 7000, 14000]     |
+        | 1 | [6000, 13000, 6973]  |
+        | 2 | [5000, 12000, 19000] |
+        | 3 | [4000, 11000, 18000] |
+        | 4 | [3000, 10000, 17000] |
+        | 5 | [2000, 9000, 16000]  |
+        | 6 | [1000, 8000, 15000]  |
+
+    @spark-4.2
+    Scenario: min_by top-k with a DOUBLE key on shuffled input
+      When query
+        """
+        SELECT min_by(x, d * 1000000 + id, 5) AS r FROM (SELECT /*+ REPARTITION(8) */ id, id % 7 AS g, CAST(id AS STRING) AS x, (id * 37) % 1000 AS y, CAST((id * 37) % 1000 AS DOUBLE) * (CASE WHEN id % 2 = 0 THEN -1 ELSE 1 END) AS d, named_struct('a', CASE WHEN id % 5 = 0 THEN NULL ELSE (id * 13) % 100 END, 'b', id) AS st FROM range(0, 20000)) AS t
+        """
+      Then query result ordered
+        | r                            |
+        | [54, 1054, 2054, 3054, 4054] |
+
+    @spark-4.2
+    Scenario: min_by top-k with DISTINCT on shuffled input
+      When query
+        """
+        SELECT g, min_by(DISTINCT CAST(y AS STRING), y, 3) AS r FROM (SELECT /*+ REPARTITION(8) */ id, id % 7 AS g, CAST(id AS STRING) AS x, (id * 37) % 1000 AS y, CAST((id * 37) % 1000 AS DOUBLE) * (CASE WHEN id % 2 = 0 THEN -1 ELSE 1 END) AS d, named_struct('a', CASE WHEN id % 5 = 0 THEN NULL ELSE (id * 13) % 100 END, 'b', id) AS st FROM range(0, 20000)) AS t GROUP BY g ORDER BY g
+        """
+      Then query result ordered
+        | g | r         |
+        | 0 | [0, 1, 2] |
+        | 1 | [0, 1, 2] |
+        | 2 | [0, 1, 2] |
+        | 3 | [0, 1, 2] |
+        | 4 | [0, 1, 2] |
+        | 5 | [0, 1, 2] |
+        | 6 | [0, 1, 2] |
+
+    @spark-4.2
+    Scenario: min_by top-k with FILTER on shuffled input
+      When query
+        """
+        SELECT g, min_by(x, y * 1000000 + id, 2) FILTER (WHERE id % 3 = 0) AS r FROM (SELECT /*+ REPARTITION(8) */ id, id % 7 AS g, CAST(id AS STRING) AS x, (id * 37) % 1000 AS y, CAST((id * 37) % 1000 AS DOUBLE) * (CASE WHEN id % 2 = 0 THEN -1 ELSE 1 END) AS d, named_struct('a', CASE WHEN id % 5 = 0 THEN NULL ELSE (id * 13) % 100 END, 'b', id) AS st FROM range(0, 20000)) AS t GROUP BY g ORDER BY g
+        """
+      Then query result ordered
+        | g | r              |
+        | 0 | [0, 14973]     |
+        | 1 | [6000, 14946]  |
+        | 2 | [12000, 5973]  |
+        | 3 | [18000, 11973] |
+        | 4 | [3000, 17973]  |
+        | 5 | [9000, 2973]   |
+        | 6 | [15000, 8973]  |
+
+    Scenario: min_by in a sliding window frame on shuffled input
+      When query
+        """
+        SELECT sum(CAST(r AS BIGINT) * id) AS h FROM (SELECT id, min_by(x, y * 1000000 + id) OVER (PARTITION BY g ORDER BY id ROWS BETWEEN 3 PRECEDING AND CURRENT ROW) AS r FROM (SELECT /*+ REPARTITION(8) */ id, id % 7 AS g, CAST(id AS STRING) AS x, (id * 37) % 1000 AS y, CAST((id * 37) % 1000 AS DOUBLE) * (CASE WHEN id % 2 = 0 THEN -1 ELSE 1 END) AS d, named_struct('a', CASE WHEN id % 5 = 0 THEN NULL ELSE (id * 13) % 100 END, 'b', id) AS st FROM range(0, 20000)) AS t)
+        """
+      Then query result ordered
+        | h             |
+        | 2664441313800 |
+
+    @spark-4.2
+    Scenario: min_by top-k in a sliding window frame on shuffled input
+      When query
+        """
+        SELECT sum(CAST(r[0] AS BIGINT) * id + CAST(r[1] AS BIGINT)) AS h FROM (SELECT id, min_by(x, y * 1000000 + id, 2) OVER (PARTITION BY g ORDER BY id ROWS BETWEEN 3 PRECEDING AND 1 FOLLOWING) AS r FROM (SELECT /*+ REPARTITION(8) */ id, id % 7 AS g, CAST(id AS STRING) AS x, (id * 37) % 1000 AS y, CAST((id * 37) % 1000 AS DOUBLE) * (CASE WHEN id % 2 = 0 THEN -1 ELSE 1 END) AS d, named_struct('a', CASE WHEN id % 5 = 0 THEN NULL ELSE (id * 13) % 100 END, 'b', id) AS st FROM range(0, 20000)) AS t)
+        """
+      Then query result ordered
+        | h             |
+        | 2664792275124 |
+
+    Scenario: min_by with a STRUCT key in a running window on shuffled input
+      When query
+        """
+        SELECT sum(CAST(r AS BIGINT) * id) AS h FROM (SELECT id, min_by(x, st) OVER (PARTITION BY g ORDER BY id) AS r FROM (SELECT /*+ REPARTITION(8) */ id, id % 7 AS g, CAST(id AS STRING) AS x, (id * 37) % 1000 AS y, CAST((id * 37) % 1000 AS DOUBLE) * (CASE WHEN id % 2 = 0 THEN -1 ELSE 1 END) AS d, named_struct('a', CASE WHEN id % 5 = 0 THEN NULL ELSE (id * 13) % 100 END, 'b', id) AS st FROM range(0, 20000)) AS t)
+        """
+      Then query result ordered
+        | h          |
+        | 2999648589 |

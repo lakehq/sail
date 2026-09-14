@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/max_min_by.rs>
 use datafusion::arrow::array::{Array, ArrayRef, ListArray};
-use datafusion::arrow::buffer::NullBuffer;
+use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::arrow::row::{OwnedRow, RowConverter, Rows, SortField};
@@ -159,19 +159,31 @@ impl TopKEntry {
     }
 }
 
-/// Builds `MaxMinByK`'s result: the values in order, or a NULL array when there are none.
-fn top_k_result<'a>(
-    value_type: &DataType,
+/// Builds a single-row list from the values, or a NULL array when there are none.
+///
+/// The list is built with the element field the function declared, not one rebuilt from its
+/// `DataType`: a value argument whose field carries metadata (a `createDataFrame` column, or a
+/// logical type such as GEOMETRY) would otherwise produce an array whose type does not match the
+/// declared one, and DataFusion rejects the batch.
+fn top_k_list<'a>(
+    element: &FieldRef,
     values: impl Iterator<Item = &'a ScalarValue>,
-) -> ScalarValue {
+) -> Result<ScalarValue, DataFusionError> {
     let values = values.cloned().collect::<Vec<_>>();
     if values.is_empty() {
-        return ScalarValue::List(Arc::new(ListArray::new_null(
-            Arc::new(Field::new_list_field(value_type.clone(), true)),
+        return Ok(ScalarValue::List(Arc::new(ListArray::new_null(
+            Arc::clone(element),
             1,
-        )));
+        ))));
     }
-    ScalarValue::List(ScalarValue::new_list_nullable(&values, value_type))
+    let values = ScalarValue::iter_to_array(values)?;
+    let offsets = OffsetBuffer::from_lengths([values.len()]);
+    Ok(ScalarValue::List(Arc::new(ListArray::try_new(
+        Arc::clone(element),
+        offsets,
+        values,
+        None,
+    )?)))
 }
 
 /// The accumulator for the top-k form, mirroring `MaxMinByK` and `MaxMinByKHeap`.
@@ -189,7 +201,7 @@ struct MaxMinByKAccumulator {
     entries: Vec<TopKEntry>,
     seen: Option<HashSet<(ScalarValue, ScalarValue)>>,
     converter: RowConverter,
-    value_type: DataType,
+    element: FieldRef,
     ordering_type: DataType,
     k: usize,
     is_max: bool,
@@ -197,7 +209,7 @@ struct MaxMinByKAccumulator {
 
 impl MaxMinByKAccumulator {
     fn new(
-        value_type: &DataType,
+        element: &FieldRef,
         ordering_type: &DataType,
         k: usize,
         is_max: bool,
@@ -207,7 +219,7 @@ impl MaxMinByKAccumulator {
             entries: Vec::new(),
             seen: distinct.then(HashSet::default),
             converter: ordering_converter(ordering_type)?,
-            value_type: value_type.clone(),
+            element: Arc::clone(element),
             ordering_type: ordering_type.clone(),
             k,
             is_max,
@@ -267,10 +279,7 @@ impl Accumulator for MaxMinByKAccumulator {
 
     fn evaluate(&mut self) -> Result<ScalarValue, DataFusionError> {
         self.compact();
-        Ok(top_k_result(
-            &self.value_type,
-            self.entries.iter().map(|entry| &entry.value),
-        ))
+        top_k_list(&self.element, self.entries.iter().map(|entry| &entry.value))
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>, DataFusionError> {
@@ -286,7 +295,7 @@ impl Accumulator for MaxMinByKAccumulator {
             .map(|entry| entry.ordering.clone())
             .collect::<Vec<_>>();
         Ok(vec![
-            ScalarValue::List(ScalarValue::new_list_nullable(&values, &self.value_type)),
+            top_k_list(&self.element, values.iter())?,
             ScalarValue::List(ScalarValue::new_list_nullable(
                 &orderings,
                 &self.ordering_type,
@@ -335,14 +344,14 @@ struct SlidingMaxMinByAccumulator {
     arrived: u64,
     heap_size: usize,
     converter: RowConverter,
-    value_type: DataType,
+    value: FieldRef,
     k: Option<usize>,
     is_max: bool,
 }
 
 impl SlidingMaxMinByAccumulator {
     fn new(
-        value_type: &DataType,
+        value: &FieldRef,
         ordering_type: &DataType,
         k: Option<usize>,
         is_max: bool,
@@ -353,7 +362,7 @@ impl SlidingMaxMinByAccumulator {
             arrived: 0,
             heap_size: 0,
             converter: ordering_converter(ordering_type)?,
-            value_type: value_type.clone(),
+            value: Arc::clone(value),
             k,
             is_max,
         })
@@ -430,13 +439,10 @@ impl Accumulator for SlidingMaxMinByAccumulator {
 
     fn evaluate(&mut self) -> Result<ScalarValue, DataFusionError> {
         match self.k {
-            Some(k) => Ok(top_k_result(
-                &self.value_type,
-                self.ranked().take(k).map(|(value, _)| value),
-            )),
+            Some(k) => top_k_list(&self.value, self.ranked().take(k).map(|(value, _)| value)),
             None => match self.ranked().next() {
                 Some((value, _)) => Ok(value.clone()),
-                None => Ok(ScalarValue::try_from(&self.value_type)?),
+                None => Ok(ScalarValue::try_from(self.value.data_type())?),
             },
         }
     }
@@ -646,15 +652,15 @@ fn min_max_by_accumulator(
     let function_name = max_min_by_name(is_max);
     let (_, ordering, _) = max_min_by_top_k_args(function_name, acc_args.exprs)?;
     let ordering_type = ordering.data_type(acc_args.schema)?;
-    let return_type = acc_args.return_field.data_type();
+    let return_field = &acc_args.return_field;
     match physical_k(function_name, acc_args.exprs)? {
         None => Ok(Box::new(MaxMinByAccumulator::new(
-            return_type,
+            return_field.data_type(),
             &ordering_type,
             is_max,
         )?)),
         Some(k) => Ok(Box::new(MaxMinByKAccumulator::new(
-            top_k_element_type(function_name, return_type)?,
+            top_k_element_field(function_name, return_field)?,
             &ordering_type,
             k,
             is_max,
@@ -670,26 +676,26 @@ fn min_max_by_sliding_accumulator(
     let function_name = max_min_by_name(is_max);
     let (_, ordering, _) = max_min_by_top_k_args(function_name, acc_args.exprs)?;
     let ordering_type = ordering.data_type(acc_args.schema)?;
-    let return_type = acc_args.return_field.data_type();
+    let return_field = &acc_args.return_field;
     let k = physical_k(function_name, acc_args.exprs)?;
-    let value_type = match k {
-        None => return_type,
-        Some(_) => top_k_element_type(function_name, return_type)?,
+    let value = match k {
+        None => return_field,
+        Some(_) => top_k_element_field(function_name, return_field)?,
     };
     Ok(Box::new(SlidingMaxMinByAccumulator::new(
-        value_type,
+        value,
         &ordering_type,
         k,
         is_max,
     )?))
 }
 
-fn top_k_element_type<'a>(
+fn top_k_element_field<'a>(
     function_name: &str,
-    return_type: &'a DataType,
-) -> Result<&'a DataType, DataFusionError> {
-    match return_type {
-        DataType::List(element) => Ok(element.data_type()),
+    return_field: &'a FieldRef,
+) -> Result<&'a FieldRef, DataFusionError> {
+    match return_field.data_type() {
+        DataType::List(element) => Ok(element),
         _ => Err(generic_internal_err(
             function_name,
             "the top-k form must return an array",

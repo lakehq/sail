@@ -988,3 +988,267 @@ Feature: max_by function
                     ('b', X'010100000000000000000000400000000000000040') AS t(v, w)
         """
       Then query error (?s)max_by.*does not support ordering on type
+
+  Rule: Grouping extensions
+
+    Scenario: max_by is computed per ROLLUP grouping set
+      When query
+        """
+        SELECT k, p, max_by(v, o) AS r
+        FROM VALUES ('k1', 'a', 10, 'x'), ('k1', 'b', 50, 'y'), ('k2', 'c', 20, 'x'), ('k2', 'd', 30, 'x') AS t(k, v, o, p)
+        GROUP BY ROLLUP(k, p)
+        ORDER BY k NULLS FIRST, p NULLS FIRST
+        """
+      Then query result ordered
+        | k    | p    | r |
+        | NULL | NULL | b |
+        | k1   | NULL | b |
+        | k1   | x    | a |
+        | k1   | y    | b |
+        | k2   | NULL | d |
+        | k2   | x    | d |
+
+    Scenario: max_by is computed per CUBE grouping set
+      When query
+        """
+        SELECT k, p, max_by(v, o) AS r
+        FROM VALUES ('k1', 'a', 10, 'x'), ('k1', 'b', 50, 'y'), ('k2', 'c', 20, 'x'), ('k2', 'd', 30, 'x') AS t(k, v, o, p)
+        GROUP BY CUBE(k, p)
+        ORDER BY k NULLS FIRST, p NULLS FIRST
+        """
+      Then query result ordered
+        | k    | p    | r |
+        | NULL | NULL | b |
+        | NULL | x    | d |
+        | NULL | y    | b |
+        | k1   | NULL | b |
+        | k1   | x    | a |
+        | k1   | y    | b |
+        | k2   | NULL | d |
+        | k2   | x    | d |
+
+    @spark-4.2
+    Scenario: max_by top-k is computed per ROLLUP grouping set
+      When query
+        """
+        SELECT k, max_by(v, o, 2) AS r
+        FROM VALUES ('k1', 'a', 10, 'x'), ('k1', 'b', 50, 'y'), ('k2', 'c', 20, 'x'), ('k2', 'd', 30, 'x') AS t(k, v, o, p)
+        GROUP BY ROLLUP(k)
+        ORDER BY k NULLS FIRST
+        """
+      Then query result ordered
+        | k    | r      |
+        | NULL | [b, d] |
+        | k1   | [b, a] |
+        | k2   | [d, c] |
+
+    Scenario: max_by can be used in HAVING
+      When query
+        """
+        SELECT k, max_by(v, o) AS r
+        FROM VALUES ('k1', 'a', 10, 'x'), ('k1', 'b', 50, 'y'), ('k2', 'c', 20, 'x'), ('k2', 'd', 30, 'x') AS t(k, v, o, p)
+        GROUP BY k
+        HAVING max_by(v, o) <> 'a'
+        ORDER BY k
+        """
+      Then query result ordered
+        | k  | r |
+        | k1 | b |
+        | k2 | d |
+
+    Scenario: max_by in each branch of a UNION ALL
+      When query
+        """
+        SELECT max_by(v, o) AS r FROM VALUES ('k1', 'a', 10, 'x'), ('k1', 'b', 50, 'y'), ('k2', 'c', 20, 'x'), ('k2', 'd', 30, 'x') AS t(k, v, o, p) WHERE k = 'k1'
+        UNION ALL
+        SELECT max_by(v, o) AS r FROM VALUES ('k1', 'a', 10, 'x'), ('k1', 'b', 50, 'y'), ('k2', 'c', 20, 'x'), ('k2', 'd', 30, 'x') AS t(k, v, o, p) WHERE k = 'k2'
+        ORDER BY r
+        """
+      Then query result ordered
+        | r |
+        | b |
+        | d |
+
+    Scenario: max_by in a RANGE window frame
+      When query
+        """
+        SELECT o, max_by(v, o) OVER (ORDER BY o RANGE BETWEEN 10 PRECEDING AND CURRENT ROW) AS r
+        FROM VALUES ('k1', 'a', 10, 'x'), ('k1', 'b', 50, 'y'), ('k2', 'c', 20, 'x'), ('k2', 'd', 30, 'x') AS t(k, v, o, p)
+        ORDER BY o
+        """
+      Then query result ordered
+        | o  | r |
+        | 10 | a |
+        | 20 | c |
+        | 30 | d |
+        | 50 | b |
+
+  Rule: PIVOT
+
+    Scenario: max_by as the PIVOT aggregate
+      When query
+        """
+        SELECT * FROM (SELECT k, v, o, p FROM VALUES ('k1', 'a', 10, 'x'), ('k1', 'b', 50, 'y'), ('k2', 'c', 20, 'x'), ('k2', 'd', 30, 'x') AS t(k, v, o, p))
+        PIVOT (max_by(v, o) FOR (p) IN ('x', 'y'))
+        ORDER BY k
+        """
+      Then query result ordered
+        | k  | x | y    |
+        | k1 | a | b    |
+        | k2 | d | NULL |
+
+    Scenario: max_by alongside another aggregate in a PIVOT
+      When query
+        """
+        SELECT * FROM (SELECT k, v, o, p FROM VALUES ('k1', 'a', 10, 'x'), ('k1', 'b', 50, 'y'), ('k2', 'c', 20, 'x'), ('k2', 'd', 30, 'x') AS t(k, v, o, p))
+        PIVOT (max_by(v, o) AS a, count(o) AS c FOR (p) IN ('x', 'y'))
+        ORDER BY k
+        """
+      Then query result ordered
+        | k  | x_a | x_c | y_a  | y_c |
+        | k1 | a   | 1   | b    | 1   |
+        | k2 | d   | 2   | NULL | 0   |
+
+    @spark-4.2
+    Scenario: max_by top-k as the PIVOT aggregate
+      When query
+        """
+        SELECT * FROM (SELECT k, v, o, p FROM VALUES ('k1', 'a', 10, 'x'), ('k1', 'b', 50, 'y'), ('k2', 'c', 20, 'x'), ('k2', 'd', 30, 'x') AS t(k, v, o, p))
+        PIVOT (max_by(v, o, 2) FOR (p) IN ('x', 'y'))
+        ORDER BY k
+        """
+      Then query result ordered
+        | k  | x      | y    |
+        | k1 | [a]    | [b]  |
+        | k2 | [d, c] | NULL |
+
+  Rule: Shuffled input across partitions
+
+    # `REPARTITION(8)` spreads the rows over several partitions, so aggregates merge partial
+    # states and the plan crosses the codec when the suite runs with `SAIL_MODE=local-cluster`.
+    # Window results are reduced to a checksum so that one row stands for thousands.
+
+    Scenario: max_by over a GROUP BY on shuffled input
+      When query
+        """
+        SELECT g, max_by(x, y * 1000000 + id) AS r FROM (SELECT /*+ REPARTITION(8) */ id, id % 7 AS g, CAST(id AS STRING) AS x, (id * 37) % 1000 AS y, CAST((id * 37) % 1000 AS DOUBLE) * (CASE WHEN id % 2 = 0 THEN -1 ELSE 1 END) AS d, named_struct('a', CASE WHEN id % 5 = 0 THEN NULL ELSE (id * 13) % 100 END, 'b', id) AS st FROM range(0, 20000)) AS t GROUP BY g ORDER BY g
+        """
+      Then query result ordered
+        | g | r     |
+        | 0 | 13027 |
+        | 1 | 19027 |
+        | 2 | 18027 |
+        | 3 | 17027 |
+        | 4 | 16027 |
+        | 5 | 15027 |
+        | 6 | 14027 |
+
+    Scenario: max_by with a DOUBLE key over a GROUP BY on shuffled input
+      When query
+        """
+        SELECT g, max_by(x, d * 1000000 + id) AS r FROM (SELECT /*+ REPARTITION(8) */ id, id % 7 AS g, CAST(id AS STRING) AS x, (id * 37) % 1000 AS y, CAST((id * 37) % 1000 AS DOUBLE) * (CASE WHEN id % 2 = 0 THEN -1 ELSE 1 END) AS d, named_struct('a', CASE WHEN id % 5 = 0 THEN NULL ELSE (id * 13) % 100 END, 'b', id) AS st FROM range(0, 20000)) AS t GROUP BY g ORDER BY g
+        """
+      Then query result ordered
+        | g | r     |
+        | 0 | 13027 |
+        | 1 | 19027 |
+        | 2 | 18027 |
+        | 3 | 17027 |
+        | 4 | 16027 |
+        | 5 | 15027 |
+        | 6 | 14027 |
+
+    Scenario: max_by with a STRUCT key that has NULL fields on shuffled input
+      When query
+        """
+        SELECT max_by(x, named_struct('a', st.a, 'b', st.b)) AS r FROM (SELECT /*+ REPARTITION(8) */ id, id % 7 AS g, CAST(id AS STRING) AS x, (id * 37) % 1000 AS y, CAST((id * 37) % 1000 AS DOUBLE) * (CASE WHEN id % 2 = 0 THEN -1 ELSE 1 END) AS d, named_struct('a', CASE WHEN id % 5 = 0 THEN NULL ELSE (id * 13) % 100 END, 'b', id) AS st FROM range(0, 20000)) AS t
+        """
+      Then query result ordered
+        | r     |
+        | 19923 |
+
+    @spark-4.2
+    Scenario: max_by top-k merges partial states on shuffled input
+      When query
+        """
+        SELECT g, max_by(x, y * 1000000 + id, 3) AS r FROM (SELECT /*+ REPARTITION(8) */ id, id % 7 AS g, CAST(id AS STRING) AS x, (id * 37) % 1000 AS y, CAST((id * 37) % 1000 AS DOUBLE) * (CASE WHEN id % 2 = 0 THEN -1 ELSE 1 END) AS d, named_struct('a', CASE WHEN id % 5 = 0 THEN NULL ELSE (id * 13) % 100 END, 'b', id) AS st FROM range(0, 20000)) AS t GROUP BY g ORDER BY g
+        """
+      Then query result ordered
+        | g | r                    |
+        | 0 | [13027, 6027, 19054] |
+        | 1 | [19027, 12027, 5027] |
+        | 2 | [18027, 11027, 4027] |
+        | 3 | [17027, 10027, 3027] |
+        | 4 | [16027, 9027, 2027]  |
+        | 5 | [15027, 8027, 1027]  |
+        | 6 | [14027, 7027, 27]    |
+
+    @spark-4.2
+    Scenario: max_by top-k with a DOUBLE key on shuffled input
+      When query
+        """
+        SELECT max_by(x, d * 1000000 + id, 5) AS r FROM (SELECT /*+ REPARTITION(8) */ id, id % 7 AS g, CAST(id AS STRING) AS x, (id * 37) % 1000 AS y, CAST((id * 37) % 1000 AS DOUBLE) * (CASE WHEN id % 2 = 0 THEN -1 ELSE 1 END) AS d, named_struct('a', CASE WHEN id % 5 = 0 THEN NULL ELSE (id * 13) % 100 END, 'b', id) AS st FROM range(0, 20000)) AS t
+        """
+      Then query result ordered
+        | r                                   |
+        | [19027, 18027, 17027, 16027, 15027] |
+
+    @spark-4.2
+    Scenario: max_by top-k with DISTINCT on shuffled input
+      When query
+        """
+        SELECT g, max_by(DISTINCT CAST(y AS STRING), y, 3) AS r FROM (SELECT /*+ REPARTITION(8) */ id, id % 7 AS g, CAST(id AS STRING) AS x, (id * 37) % 1000 AS y, CAST((id * 37) % 1000 AS DOUBLE) * (CASE WHEN id % 2 = 0 THEN -1 ELSE 1 END) AS d, named_struct('a', CASE WHEN id % 5 = 0 THEN NULL ELSE (id * 13) % 100 END, 'b', id) AS st FROM range(0, 20000)) AS t GROUP BY g ORDER BY g
+        """
+      Then query result ordered
+        | g | r               |
+        | 0 | [999, 998, 997] |
+        | 1 | [999, 998, 997] |
+        | 2 | [999, 998, 997] |
+        | 3 | [999, 998, 997] |
+        | 4 | [999, 998, 997] |
+        | 5 | [999, 998, 997] |
+        | 6 | [999, 998, 997] |
+
+    @spark-4.2
+    Scenario: max_by top-k with FILTER on shuffled input
+      When query
+        """
+        SELECT g, max_by(x, y * 1000000 + id, 2) FILTER (WHERE id % 3 = 0) AS r FROM (SELECT /*+ REPARTITION(8) */ id, id % 7 AS g, CAST(id AS STRING) AS x, (id * 37) % 1000 AS y, CAST((id * 37) % 1000 AS DOUBLE) * (CASE WHEN id % 2 = 0 THEN -1 ELSE 1 END) AS d, named_struct('a', CASE WHEN id % 5 = 0 THEN NULL ELSE (id * 13) % 100 END, 'b', id) AS st FROM range(0, 20000)) AS t GROUP BY g ORDER BY g
+        """
+      Then query result ordered
+        | g | r              |
+        | 0 | [6027, 12054]  |
+        | 1 | [12027, 18054] |
+        | 2 | [18027, 3054]  |
+        | 3 | [3027, 9054]   |
+        | 4 | [9027, 15054]  |
+        | 5 | [15027, 54]    |
+        | 6 | [27, 6054]     |
+
+    Scenario: max_by in a sliding window frame on shuffled input
+      When query
+        """
+        SELECT sum(CAST(r AS BIGINT) * id) AS h FROM (SELECT id, max_by(x, y * 1000000 + id) OVER (PARTITION BY g ORDER BY id ROWS BETWEEN 3 PRECEDING AND CURRENT ROW) AS r FROM (SELECT /*+ REPARTITION(8) */ id, id % 7 AS g, CAST(id AS STRING) AS x, (id * 37) % 1000 AS y, CAST((id * 37) % 1000 AS DOUBLE) * (CASE WHEN id % 2 = 0 THEN -1 ELSE 1 END) AS d, named_struct('a', CASE WHEN id % 5 = 0 THEN NULL ELSE (id * 13) % 100 END, 'b', id) AS st FROM range(0, 20000)) AS t)
+        """
+      Then query result ordered
+        | h             |
+        | 2664291224546 |
+
+    @spark-4.2
+    Scenario: max_by top-k in a sliding window frame on shuffled input
+      When query
+        """
+        SELECT sum(CAST(r[0] AS BIGINT) * id + CAST(r[1] AS BIGINT)) AS h FROM (SELECT id, max_by(x, y * 1000000 + id, 2) OVER (PARTITION BY g ORDER BY id ROWS BETWEEN 3 PRECEDING AND 1 FOLLOWING) AS r FROM (SELECT /*+ REPARTITION(8) */ id, id % 7 AS g, CAST(id AS STRING) AS x, (id * 37) % 1000 AS y, CAST((id * 37) % 1000 AS DOUBLE) * (CASE WHEN id % 2 = 0 THEN -1 ELSE 1 END) AS d, named_struct('a', CASE WHEN id % 5 = 0 THEN NULL ELSE (id * 13) % 100 END, 'b', id) AS st FROM range(0, 20000)) AS t)
+        """
+      Then query result ordered
+        | h             |
+        | 2665740014700 |
+
+    Scenario: max_by with a STRUCT key in a running window on shuffled input
+      When query
+        """
+        SELECT sum(CAST(r AS BIGINT) * id) AS h FROM (SELECT id, max_by(x, st) OVER (PARTITION BY g ORDER BY id) AS r FROM (SELECT /*+ REPARTITION(8) */ id, id % 7 AS g, CAST(id AS STRING) AS x, (id * 37) % 1000 AS y, CAST((id * 37) % 1000 AS DOUBLE) * (CASE WHEN id % 2 = 0 THEN -1 ELSE 1 END) AS d, named_struct('a', CASE WHEN id % 5 = 0 THEN NULL ELSE (id * 13) % 100 END, 'b', id) AS st FROM range(0, 20000)) AS t)
+        """
+      Then query result ordered
+        | h             |
+        | 2597201908434 |
