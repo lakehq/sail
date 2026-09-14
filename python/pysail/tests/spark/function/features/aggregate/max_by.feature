@@ -193,6 +193,23 @@ Feature: max_by function
         """
       Then query error (?s)max_by.*does not support ordering on type
 
+    # Spark recurses into ARRAY and STRUCT, so a nested GEOMETRY is unorderable too. Sail's
+    # `array()` and `named_struct()` drop the child's geo metadata, so the check never sees it.
+    @sail-bug @spark-4.2
+    Scenario Outline: max_by rejects a GEOMETRY nested by <case>
+      When query
+        """
+        SELECT max_by(v, <ordering>) AS result
+        FROM VALUES ('a', X'0101000000000000000000F03F0000000000000040'),
+                    ('b', X'010100000000000000000000400000000000000040') AS t(v, w)
+        """
+      Then query error (?s)max_by.*does not support ordering on type
+
+      Examples:
+        | case         | ordering                             |
+        | array        | array(st_geomfromwkb(w))             |
+        | named_struct | named_struct('g', st_geomfromwkb(w)) |
+
   Rule: Clause surface
 
     # These are not orderability rules: Spark decides them in FunctionResolution
@@ -231,9 +248,9 @@ Feature: max_by function
         | b      |
 
     # applyIgnoreNulls has a whitelist (NthValue, Lead, Lag, First, Last, AnyValue,
-    # CollectList, CollectSet); max_by is not in it. Sail answers 'b' where the plain call
-    # answers NULL.
-    @sail-bug @spark-4
+    # CollectList, CollectSet); max_by is not in it. Honoring the clause would answer 'b' where
+    # the plain call answers NULL.
+    @spark-4
     Scenario: max_by rejects the clause IGNORE NULLS
       When query
         """
@@ -242,9 +259,9 @@ Feature: max_by function
         """
       Then query error INVALID_SQL_SYNTAX.*does not support IGNORE NULLS
 
-    # WITHIN GROUP requires SupportsOrderingWithinGroup, which max_by is not. Sail keeps the
-    # user's ORDER BY and appends its own key after it, answering 'c' instead of 'b'.
-    @sail-bug @spark-4
+    # WITHIN GROUP requires SupportsOrderingWithinGroup, which max_by is not. Keeping the
+    # user's ORDER BY ahead of the ordering key would answer 'c' instead of 'b'.
+    @spark-4
     Scenario: max_by rejects the clause WITHIN GROUP
       When query
         """
@@ -296,9 +313,8 @@ Feature: max_by function
         | four arguments  | 1, 2, 3, 4 |
 
     # Spark 4.2 added the top-k form, which returns an array of the k values
-    # (MaxMinByK.scala). Sail does not implement it; it now rejects the third argument
-    # instead of silently dropping it and returning a scalar.
-    @sail-bug @spark-4.2
+    # (MaxMinByK.scala).
+    @spark-4.2
     Scenario: max_by supports the three-argument top-k form
       When query
         """
@@ -390,3 +406,509 @@ Feature: max_by function
       Then query result
         | result  |
         | {"v":3} |
+
+  Rule: Spark ordering semantics of the ordering argument
+
+    # `MaxByAndMinBy.scala` updates with `If(old > new, old, new)`, so equal keys take the newer
+    # row. The comparison is SQL ordering, where -0.0 equals 0.0, so a running window must switch
+    # to the newer row. An IEEE total order would rank -0.0 below 0.0 and keep the older row.
+    Scenario: max_by treats negative zero and zero DOUBLE ordering keys as equal in a running window
+      When query
+        """
+        SELECT i,
+               max_by(x, y) OVER (ORDER BY i ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS result
+        FROM VALUES (1, 'pos', 0.0D), (2, 'neg', -0.0D) AS t(i, x, y)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result |
+        | 1 | pos    |
+        | 2 | neg    |
+
+    # In Spark's nested ordering a NULL array element is smaller than a non-null one, so the
+    # newer `array(NULL)` never wins over `array(1)`. DataFusion's `ScalarValue::partial_cmp`
+    # follows Postgres instead and ranks the NULL element greater.
+    Scenario: max_by ranks a NULL array element below a non-null one in a running window
+      When query
+        """
+        SELECT i,
+               max_by(x, y) OVER (ORDER BY i ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS result
+        FROM VALUES (1, 'one', array(1)), (2, 'null', array(CAST(NULL AS INT))) AS t(i, x, y)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result |
+        | 1 | one    |
+        | 2 | one    |
+
+    # A NULL struct field is likewise smaller than a non-null one in Spark, whichever row is newer.
+    # DataFusion's `partial_cmp_struct` skips the NULL position and answers `Equal`, which would
+    # turn the comparison into a tie, so both row orders are pinned.
+    Scenario Outline: max_by ranks a NULL struct field below a non-null one in a running window with <case>
+      When query
+        """
+        SELECT i,
+               max_by(x, y) OVER (ORDER BY i ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS result
+        FROM VALUES (1, '<first>', named_struct('a', <first_key>)), (2, '<second>', named_struct('a', <second_key>)) AS t(i, x, y)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result   |
+        | 1 | <first>  |
+        | 2 | <result> |
+
+      Examples:
+        | case                 | first | first_key         | second | second_key        | result |
+        | the NULL field newer | one   | 1                 | null   | CAST(NULL AS INT) | one    |
+        | the NULL field older | null  | CAST(NULL AS INT) | one    | 1                 | one    |
+
+  Rule: The value argument keeps its logical type
+
+    # `dataType = valueExpr.dataType`, so the result is still a GEOMETRY. Sail carries GEOMETRY as
+    # BINARY plus field metadata, so the result field must be the value field, not one rebuilt
+    # from its `DataType`.
+    @spark-4.2
+    Scenario: max_by keeps the GEOMETRY type of the value argument
+      When query
+        """
+        SELECT max_by(st_geomfromwkb(w), y) AS result
+        FROM VALUES (1, X'0101000000000000000000F03F0000000000000040') AS t(y, w)
+        """
+      Then query schema
+        """
+        root
+         |-- result: geometry (nullable = true)
+        """
+
+  Rule: Spark ordering boundaries that Sail already matches
+
+    # These keys all have a strict winner, so both the aggregate and the whole-partition window
+    # form are deterministic. Each boundary is one Sail could get wrong: NaN is the largest double
+    # in Spark's SQL ordering, BINARY compares unsigned bytes, a pre-epoch fraction must not flip
+    # sign, DECIMAL(38,0) sits at the 128-bit limit, and a longer array wins over its own prefix.
+    Scenario Outline: max_by follows Spark ordering for <case> ordering keys in the <path> form
+      When query
+        """
+        SELECT DISTINCT <call> AS result
+        FROM VALUES <rows> AS t(x, o)
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                           | path      | call                 | rows                                                                                                                       | result |
+        | NaN above infinity             | aggregate | max_by(x, o)         | ('one', 1.0D), ('inf', CAST('Infinity' AS DOUBLE)), ('nan', CAST('NaN' AS DOUBLE)), ('ninf', CAST('-Infinity' AS DOUBLE))  | nan    |
+        | NaN above infinity             | window    | max_by(x, o) OVER () | ('one', 1.0D), ('inf', CAST('Infinity' AS DOUBLE)), ('nan', CAST('NaN' AS DOUBLE)), ('ninf', CAST('-Infinity' AS DOUBLE))  | nan    |
+        | unsigned BINARY                | aggregate | max_by(x, o)         | ('lo', X'01'), ('hi', X'FF'), ('mid', X'7F')                                                                               | hi     |
+        | unsigned BINARY                | window    | max_by(x, o) OVER () | ('lo', X'01'), ('hi', X'FF'), ('mid', X'7F')                                                                               | hi     |
+        | pre-epoch fractional TIMESTAMP | aggregate | max_by(x, o)         | ('a', TIMESTAMP '1969-12-31 23:59:59.5'), ('b', TIMESTAMP '1969-12-31 23:59:59.9'), ('c', TIMESTAMP '1969-12-31 23:59:59') | b      |
+        | pre-epoch fractional TIMESTAMP | window    | max_by(x, o) OVER () | ('a', TIMESTAMP '1969-12-31 23:59:59.5'), ('b', TIMESTAMP '1969-12-31 23:59:59.9'), ('c', TIMESTAMP '1969-12-31 23:59:59') | b      |
+        | DECIMAL(38,0) extremes         | aggregate | max_by(x, o)         | ('max', 99999999999999999999999999999999999999BD), ('min', -99999999999999999999999999999999999999BD), ('zero', 0BD)       | max    |
+        | DECIMAL(38,0) extremes         | window    | max_by(x, o) OVER () | ('max', 99999999999999999999999999999999999999BD), ('min', -99999999999999999999999999999999999999BD), ('zero', 0BD)       | max    |
+        | ARRAY prefix length            | aggregate | max_by(x, o)         | ('short', array(1, 2)), ('long', array(1, 2, 0)), ('big', array(0, 9))                                                     | long   |
+        | ARRAY prefix length            | window    | max_by(x, o) OVER () | ('short', array(1, 2)), ('long', array(1, 2, 0)), ('big', array(0, 9))                                                     | long   |
+        | NULL array element             | aggregate | max_by(x, o)         | ('one', array(1)), ('null', array(CAST(NULL AS INT))), ('zero', array(0))                                                  | one    |
+        | NULL struct field              | aggregate | max_by(x, o)         | ('one', named_struct('a', 1)), ('null', named_struct('a', CAST(NULL AS INT))), ('zero', named_struct('a', 0))              | one    |
+
+    # NaN == NaN in Spark's SQL ordering, so every row ties and the strict predicate takes the
+    # newer one. `ScalarValue::partial_cmp` agrees here because `total_cmp` also equates NaNs.
+    Scenario: max_by takes the newer row on NaN ties in a running window
+      When query
+        """
+        SELECT i,
+               max_by(x, o) OVER (ORDER BY i ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS result
+        FROM VALUES (1, 'a', CAST('NaN' AS DOUBLE)), (2, 'b', CAST('NaN' AS DOUBLE)) AS t(i, x, o)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result |
+        | 1 | a      |
+        | 2 | b      |
+
+  Rule: Spark ordering semantics that Sail does not match yet
+
+    # -0.0 equals 0.0 in Spark's SQL ordering, so the first fields tie and the second field
+    # decides. No tie between rows is involved, so both forms are deterministic. An IEEE total
+    # order would rank -0.0 below 0.0 before the second field is ever read.
+    Scenario Outline: max_by treats negative zero and zero as equal inside a STRUCT ordering key in the <path> form
+      When query
+        """
+        SELECT DISTINCT <call> AS result
+        FROM VALUES ('pos', named_struct('a', 0.0D, 'b', 1)), ('neg', named_struct('a', -0.0D, 'b', 2)) AS t(x, o)
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | path      | call                 | result |
+        | aggregate | max_by(x, o)         | neg    |
+        | window    | max_by(x, o) OVER () | neg    |
+
+    # A NULL ordering key is skipped, and a VOID key is NULL on every row, so Spark returns NULL.
+    # A `NullArray` has no validity buffer, so the window accumulator must read its logical nulls.
+    Scenario: max_by skips a VOID ordering key in a running window
+      When query
+        """
+        SELECT i,
+               max_by(x, CAST(NULL AS VOID)) OVER (ORDER BY i ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS result
+        FROM VALUES (1, 'a'), (2, 'b') AS t(i, x)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result |
+        | 1 | NULL   |
+        | 2 | NULL   |
+
+    # The window form reaches the same `return_field`, so it keeps the GEOMETRY metadata too.
+    @spark-4.2
+    Scenario: max_by keeps the GEOMETRY type of the value argument as a window function
+      When query
+        """
+        SELECT max_by(st_geomfromwkb(w), y) OVER () AS result
+        FROM VALUES (1, X'0101000000000000000000F03F0000000000000040') AS t(y, w)
+        """
+      Then query schema
+        """
+        root
+         |-- result: geometry (nullable = true)
+        """
+
+  Rule: Aggregate surface
+
+    # Sail rewrites the aggregate form to an ordered `last_value` with an added
+    # `ordering IS NOT NULL` filter, so these pin the shapes that rewrite has to survive. A NULL
+    # value is not skipped: only a NULL ordering key is, so a NULL at the extremum is the answer.
+    # The code-point case holds because Spark compares UTF-8 bytes, not UTF-16 code units.
+    Scenario Outline: max_by returns the expected value for <case>
+      When query
+        """
+        <query>
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                                             | query                                                                                                                                                                | result |
+        | empty input                                      | SELECT max_by(x, y) AS result FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y) WHERE false                                                                     | NULL   |
+        | single row                                       | SELECT max_by(x, y) AS result FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y) WHERE x = 'c'                                                                   | c      |
+        | a NULL value at the extremum                     | SELECT max_by(CASE WHEN y = 50 THEN NULL ELSE x END, y) AS result FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y)                                             | NULL   |
+        | a negated ordering expression                    | SELECT max_by(x, -y) AS result FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y)                                                                                | a      |
+        | a CASE ordering expression                       | SELECT max_by(x, CASE WHEN x = 'c' THEN 100 ELSE y END) AS result FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y)                                             | c      |
+        | the value and ordering being the same column     | SELECT max_by(y, y) AS result FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y)                                                                                 | 50     |
+        | a constant value                                 | SELECT max_by('k', y) AS result FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y)                                                                               | k      |
+        | an ordering column from a joined table           | SELECT max_by(a.x, b.w) AS result FROM VALUES ('a', 1), ('b', 2), ('c', 3) AS a(x, id) JOIN VALUES (1, 30), (2, 10), (3, 20) AS b(id, w) ON a.id = b.id              | a      |
+        | a CTE                                            | WITH s AS (SELECT * FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y)) SELECT max_by(x, y) AS result FROM s                                                     | b      |
+        | try_cast NULLs in the ordering                   | SELECT max_by(x, try_cast(o AS INT)) AS result FROM VALUES ('a', '1'), ('b', 'zz'), ('c', '3') AS t(x, o)                                                            | c      |
+        | long strings sharing a prefix                    | SELECT max_by(x, o) AS result FROM VALUES ('short', repeat('a', 5000)), ('long', concat(repeat('a', 5000), 'b')), ('mid', concat(repeat('a', 4999), 'b')) AS t(x, o) | mid    |
+        | a supplementary character against a high BMP one | SELECT max_by(x, o) AS result FROM VALUES ('emoji', '😀'), ('bmp', '｡') AS t(x, o)                                                                                    | emoji  |
+
+    # The FILTER predicate is ANDed with the rewrite's own NULL filter, per group.
+    Scenario: max_by combines FILTER with a GROUP BY that has a NULL group key
+      When query
+        """
+        SELECT g, max_by(x, y) FILTER (WHERE i > 1) AS result
+        FROM VALUES ('a', 10, 'g1', 1), ('b', 50, 'g1', 2), ('c', 20, NULL, 3), ('d', 40, NULL, 4), ('e', 30, 'g2', 5) AS t(x, y, g, i)
+        GROUP BY g
+        ORDER BY g NULLS FIRST
+        """
+      Then query result ordered
+        | g    | result |
+        | NULL | d      |
+        | g1   | b      |
+        | g2   | e      |
+
+    Scenario: max_by works with GROUPING SETS
+      When query
+        """
+        SELECT g, max_by(x, y) AS result, grouping(g) AS gg
+        FROM VALUES ('a', 10, 'g1', 1), ('b', 50, 'g1', 2), ('c', 20, NULL, 3), ('d', 40, NULL, 4), ('e', 30, 'g2', 5) AS t(x, y, g, i)
+        GROUP BY GROUPING SETS ((g), ())
+        ORDER BY gg, g NULLS FIRST
+        """
+      Then query result ordered
+        | g    | result | gg |
+        | NULL | d      | 0  |
+        | g1   | b      | 0  |
+        | g2   | e      | 0  |
+        | NULL | b      | 1  |
+
+  Rule: Window surface
+
+    # A NULL partition key forms its own partition, and a named WINDOW resolves like an inline one.
+    Scenario: max_by over a named window partitioned by a key with NULLs
+      When query
+        """
+        SELECT i, max_by(x, y) OVER w AS result
+        FROM VALUES ('a', 10, 'g1', 1), ('b', 50, 'g1', 2), ('c', 20, NULL, 3), ('d', 40, NULL, 4), ('e', 30, 'g2', 5) AS t(x, y, g, i)
+        WINDOW w AS (PARTITION BY g)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result |
+        | 1 | b      |
+        | 2 | b      |
+        | 3 | d      |
+        | 4 | d      |
+        | 5 | e      |
+
+    # With ORDER BY and no frame, the default frame is RANGE up to the current row, so ORDER BY
+    # peers (here the NULL keys, sorted first) are all inside each other's frame.
+    Scenario: max_by includes ORDER BY peers in the default window frame
+      When query
+        """
+        SELECT i, max_by(x, y) OVER (ORDER BY g) AS result
+        FROM VALUES ('a', 10, 'g1', 1), ('b', 50, 'g1', 2), ('c', 20, NULL, 3), ('d', 40, NULL, 4), ('e', 30, 'g2', 5) AS t(x, y, g, i)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result |
+        | 1 | b      |
+        | 2 | b      |
+        | 3 | d      |
+        | 4 | d      |
+        | 5 | b      |
+
+    # Spark's update expression keeps NULL while no row has had a non-null key yet, and then
+    # ignores rows whose key is NULL.
+    Scenario: max_by skips NULL ordering keys in a running window
+      When query
+        """
+        SELECT i,
+               max_by(x, CASE WHEN i IN (1, 3) THEN NULL ELSE y END) OVER (ORDER BY i ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS result
+        FROM VALUES ('a', 10, 'g1', 1), ('b', 50, 'g1', 2), ('c', 20, NULL, 3), ('d', 40, NULL, 4), ('e', 30, 'g2', 5) AS t(x, y, g, i)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result |
+        | 1 | NULL   |
+        | 2 | b      |
+        | 3 | b      |
+        | 4 | b      |
+        | 5 | b      |
+
+    # Any frame that does not start at UNBOUNDED PRECEDING needs a retractable accumulator: at
+    # row 4 the buffered maximum leaves the frame and the next best row has to take over.
+    Scenario: max_by supports a sliding window frame
+      When query
+        """
+        SELECT i, max_by(x, y) OVER (ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS result
+        FROM VALUES ('a', 10, 'g1', 1), ('b', 50, 'g1', 2), ('c', 20, NULL, 3), ('d', 40, NULL, 4), ('e', 30, 'g2', 5) AS t(x, y, g, i)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result |
+        | 1 | a      |
+        | 2 | b      |
+        | 3 | b      |
+        | 4 | d      |
+        | 5 | d      |
+
+    # A frame that reaches FOLLOWING rows retracts from its front while rows enter at its back.
+    # NULL keys enter and leave it without ever winning, and at row 2 `a` and `c` tie on 3, so the newer `c` wins.
+    Scenario: max_by retracts ties and NULL keys in a sliding window frame
+      When query
+        """
+        SELECT i, max_by(x, y) OVER (ORDER BY i ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) AS result
+        FROM VALUES (1, 'a', 3), (2, 'b', 1), (3, 'c', 3), (4, 'd', CAST(NULL AS INT)), (5, 'e', 2), (6, 'f', 2), (7, 'g', 5), (8, 'h', CAST(NULL AS INT)) AS t(i, x, y)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result |
+        | 1 | a      |
+        | 2 | c      |
+        | 3 | c      |
+        | 4 | c      |
+        | 5 | c      |
+        | 6 | g      |
+        | 7 | g      |
+        | 8 | g      |
+
+  Rule: Named arguments
+
+    # `MaxByBuilder` is a plain ExpressionBuilder with no `functionSignature`, so Spark
+    # rejects named arguments in analysis. Sail ignores the names and runs the call.
+    @sail-bug
+    Scenario: max_by rejects named arguments
+      When query
+        """
+        SELECT max_by(x => x, y => y) AS result
+        FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y)
+        """
+      Then query error NAMED_PARAMETERS_NOT_SUPPORTED
+
+  Rule: Output schema
+
+    # `dataType = valueExpr.dataType` and `nullable = true`, whatever the value's own nullability.
+    Scenario Outline: max_by returns a nullable result for a <case> value argument
+      When query
+        """
+        SELECT max_by(<value>, y) AS result
+        FROM VALUES ('a', 10, 1), ('b', 50, 2), ('c', 20, 3) AS t(x, y, i)
+        """
+      Then query schema
+        """
+        root
+         |-- <schema>
+        """
+
+      Examples:
+        | case          | value                               | schema                                  |
+        | INT           | i                                   | result: integer (nullable = true)       |
+        | DECIMAL       | CAST(i AS DECIMAL(5, 2))            | result: decimal(5,2) (nullable = true)  |
+        | TIMESTAMP_NTZ | TIMESTAMP_NTZ '2024-01-01 00:00:00' | result: timestamp_ntz (nullable = true) |
+        | VOID          | NULL                                | result: void (nullable = true)          |
+
+    # The nested nullability flags come from the value argument unchanged.
+    Scenario: max_by keeps the nested nullability of an ARRAY value argument
+      When query
+        """
+        SELECT max_by(array(i, NULL), y) OVER () AS result
+        FROM VALUES ('a', 10, 1), ('b', 50, 2), ('c', 20, 3) AS t(x, y, i)
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = true)
+         |    |-- element: integer (containsNull = true)
+        """
+
+  Rule: The top-k form
+
+    # `MaxMinByK` returns the values of the k rows with the largest orderings, sorted descending
+    # by the ordering, as `ARRAY<value type>`. It skips NULL orderings but keeps NULL values,
+    # returns NULL when no ordering is non-null, and casts k to INT. These inputs have no ties
+    # inside the first k rows, so the order of each array is deterministic.
+    @spark-4.2
+    Scenario Outline: max_by returns the top-k values for <case>
+      When query
+        """
+        SELECT <call> AS result
+        FROM VALUES (1, 'a', 10, 'g1'), (2, 'b', 50, 'g1'), (3, 'c', 20, 'g2'), (4, 'd', CAST(NULL AS INT), 'g2'), (5, CAST(NULL AS STRING), 40, 'g1'), (6, 'f', 30, 'g2') AS t(i, x, y, g) <where>
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                                | call                                    | where       | result             |
+        | k of 2                              | max_by(x, y, 2)                         |             | [b, NULL]          |
+        | k above the row count               | max_by(x, y, 10)                        |             | [b, NULL, f, c, a] |
+        | k of 1                              | max_by(x, y, 1)                         |             | [b]                |
+        | k as a string                       | max_by(x, y, '2')                       |             | [b, NULL]          |
+        | k as a double                       | max_by(x, y, 2.0)                       |             | [b, NULL]          |
+        | k as a foldable expression          | max_by(x, y, 1 + 1)                     |             | [b, NULL]          |
+        | k at the maximum                    | max_by(x, y, 100000)                    |             | [b, NULL, f, c, a] |
+        | no input rows                       | max_by(x, y, 2)                         | WHERE false | NULL               |
+        | only NULL orderings                 | max_by(x, CAST(NULL AS INT), 2)         |             | NULL               |
+        | FILTER                              | max_by(x, y, 2) FILTER (WHERE g = 'g2') |             | [f, c]             |
+        | a STRUCT ordering with a NULL field | max_by(x, named_struct('a', y), 3)      |             | [b, NULL, f]       |
+
+    # DISTINCT removes duplicate (value, ordering) pairs before the k rows are chosen.
+    @spark-4.2
+    Scenario: max_by top-k removes duplicate pairs with DISTINCT
+      When query
+        """
+        SELECT max_by(DISTINCT x, y, 2) AS result
+        FROM VALUES ('a', 1), ('a', 1), ('b', 2), ('b', 2), ('c', 0) AS t(x, y)
+        """
+      Then query result
+        | result |
+        | [b, a] |
+
+    @spark-4.2
+    Scenario: max_by top-k is computed per group
+      When query
+        """
+        SELECT g, max_by(x, y, 2) AS result
+        FROM VALUES (1, 'a', 10, 'g1'), (2, 'b', 50, 'g1'), (3, 'c', 20, 'g2'), (4, 'd', CAST(NULL AS INT), 'g2'), (5, CAST(NULL AS STRING), 40, 'g1'), (6, 'f', 30, 'g2') AS t(i, x, y, g)
+        GROUP BY g
+        ORDER BY g
+        """
+      Then query result ordered
+        | g  | result    |
+        | g1 | [b, NULL] |
+        | g2 | [f, c]    |
+
+    @spark-4.2
+    Scenario: max_by top-k in a running window
+      When query
+        """
+        SELECT i, max_by(x, y, 2) OVER (ORDER BY i) AS result
+        FROM VALUES (1, 'a', 10, 'g1'), (2, 'b', 50, 'g1'), (3, 'c', 20, 'g2'), (4, 'd', CAST(NULL AS INT), 'g2'), (5, CAST(NULL AS STRING), 40, 'g1'), (6, 'f', 30, 'g2') AS t(i, x, y, g)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result    |
+        | 1 | [a]       |
+        | 2 | [b, a]    |
+        | 3 | [b, c]    |
+        | 4 | [b, c]    |
+        | 5 | [b, NULL] |
+        | 6 | [b, NULL] |
+
+    # A sliding frame has to drop rows as they leave, including the top values themselves.
+    @spark-4.2
+    Scenario: max_by top-k in a sliding window frame
+      When query
+        """
+        SELECT i, max_by(x, y, 2) OVER (ORDER BY i ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS result
+        FROM VALUES (1, 'a', 10, 'g1'), (2, 'b', 50, 'g1'), (3, 'c', 20, 'g2'), (4, 'd', CAST(NULL AS INT), 'g2'), (5, CAST(NULL AS STRING), 40, 'g1'), (6, 'f', 30, 'g2') AS t(i, x, y, g)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result    |
+        | 1 | [a]       |
+        | 2 | [b, a]    |
+        | 3 | [b, c]    |
+        | 4 | [b, c]    |
+        | 5 | [NULL, c] |
+        | 6 | [NULL, f] |
+
+    @spark-4.2
+    Scenario: max_by top-k returns an array of nullable values
+      When query
+        """
+        SELECT max_by(x, y, 2) AS result
+        FROM VALUES (1, 'a', 10, 'g1'), (2, 'b', 50, 'g1'), (3, 'c', 20, 'g2'), (4, 'd', CAST(NULL AS INT), 'g2'), (5, CAST(NULL AS STRING), 40, 'g1'), (6, 'f', 30, 'g2') AS t(i, x, y, g)
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = true)
+         |    |-- element: string (containsNull = true)
+        """
+
+    # `MaxMinByK.checkInputDataTypes`: k must be a foldable INT within [1, 100000]; a NULL k reads
+    # as 0, and a type Spark cannot implicitly cast to INT is rejected before the range check.
+    @spark-4.2
+    Scenario Outline: max_by top-k rejects <case>
+      When query
+        """
+        SELECT max_by(x, y, <k>) AS result
+        FROM VALUES (1, 'a', 10, 'g1'), (2, 'b', 50, 'g1'), (3, 'c', 20, 'g2'), (4, 'd', CAST(NULL AS INT), 'g2'), (5, CAST(NULL AS STRING), 40, 'g1'), (6, 'f', 30, 'g2') AS t(i, x, y, g)
+        """
+      Then query error <error>
+
+      Examples:
+        | case                  | k                 | error                                                        |
+        | a NULL k              | NULL              | The .k. must be between .1, 100000. .current value = 0.      |
+        | a zero k              | 0                 | The .k. must be between .1, 100000. .current value = 0.      |
+        | a negative k          | -1                | The .k. must be between .1, 100000. .current value = -1.     |
+        | a k above the maximum | 100001            | The .k. must be between .1, 100000. .current value = 100001. |
+        | a non-foldable k      | i                 | the input k should be a foldable int expression              |
+        | a DATE k              | DATE '2024-01-01' | third parameter requires the "INT" type                      |
+
+    # Spark checks k in analysis, so the error does not depend on any group surviving.
+    @spark-4.2
+    Scenario: max_by top-k rejects an out-of-range k when no group survives
+      When query
+        """
+        SELECT g, max_by(x, y, 0) AS result
+        FROM VALUES (1, 'a', 10, 'g1'), (2, 'b', 50, 'g1'), (3, 'c', 20, 'g2'), (4, 'd', CAST(NULL AS INT), 'g2'), (5, CAST(NULL AS STRING), 40, 'g1'), (6, 'f', 30, 'g2') AS t(i, x, y, g)
+        WHERE false
+        GROUP BY g
+        """
+      Then query error The .k. must be between .1, 100000. .current value = 0.

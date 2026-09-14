@@ -11,6 +11,7 @@ sail-common = { path = "../sail-common" }
 
 chrono = { workspace = true }
 ryu = { workspace = true }
+half = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }

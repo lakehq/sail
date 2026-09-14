@@ -1,4 +1,13 @@
-use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit};
+use std::sync::Arc;
+
+use datafusion::arrow::array::{
+    Array, ArrayRef, AsArray, FixedSizeListArray, LargeListArray, ListArray, StructArray,
+};
+use datafusion::arrow::datatypes::{
+    DataType, Field, Float16Type, Float32Type, Float64Type, IntervalUnit,
+};
+use datafusion_common::Result;
+use half::f16;
 use sail_common::geoarrow::extension::GeoArrowWkbType;
 
 use crate::variant::{is_marked_variant_storage_type, is_variant_storage_field};
@@ -96,4 +105,112 @@ pub fn is_orderable_field(field: &Field) -> bool {
         return false;
     }
     is_orderable(field.data_type())
+}
+
+/// Rewrites every floating-point value, at any nesting depth, to the one Spark compares it as:
+/// `-0.0` becomes `0.0` and every NaN becomes the same positive NaN.
+///
+/// Spark orders floating-point values with `SQLOrderingUtil.compareDoubles`, where `-0.0` equals
+/// `0.0` and all NaNs are equal and greater than any other value. Arrow's row format and
+/// comparison kernels use the IEEE total order instead, which tells both apart, so an ordering
+/// key must go through here before it is compared with them.
+pub fn normalize_floats_for_ordering(array: &ArrayRef) -> Result<ArrayRef> {
+    if !contains_float(array.data_type()) {
+        return Ok(Arc::clone(array));
+    }
+    Ok(match array.data_type() {
+        DataType::Float16 => Arc::new(array.as_primitive::<Float16Type>().unary::<_, Float16Type>(
+            |v| {
+                if v.is_nan() {
+                    f16::NAN
+                } else if v == f16::ZERO {
+                    f16::ZERO
+                } else {
+                    v
+                }
+            },
+        )),
+        DataType::Float32 => Arc::new(array.as_primitive::<Float32Type>().unary::<_, Float32Type>(
+            |v| {
+                if v.is_nan() {
+                    f32::NAN
+                } else if v == 0.0 {
+                    0.0
+                } else {
+                    v
+                }
+            },
+        )),
+        DataType::Float64 => Arc::new(array.as_primitive::<Float64Type>().unary::<_, Float64Type>(
+            |v| {
+                if v.is_nan() {
+                    f64::NAN
+                } else if v == 0.0 {
+                    0.0
+                } else {
+                    v
+                }
+            },
+        )),
+        DataType::Struct(_) => {
+            let array = array.as_struct();
+            let columns = array
+                .columns()
+                .iter()
+                .map(normalize_floats_for_ordering)
+                .collect::<Result<Vec<_>>>()?;
+            Arc::new(StructArray::try_new(
+                array.fields().clone(),
+                columns,
+                array.nulls().cloned(),
+            )?)
+        }
+        DataType::List(field) => {
+            let array = array.as_list::<i32>();
+            Arc::new(ListArray::try_new(
+                Arc::clone(field),
+                array.offsets().clone(),
+                normalize_floats_for_ordering(array.values())?,
+                array.nulls().cloned(),
+            )?)
+        }
+        DataType::LargeList(field) => {
+            let array = array.as_list::<i64>();
+            Arc::new(LargeListArray::try_new(
+                Arc::clone(field),
+                array.offsets().clone(),
+                normalize_floats_for_ordering(array.values())?,
+                array.nulls().cloned(),
+            )?)
+        }
+        DataType::FixedSizeList(field, size) => {
+            let array = array.as_fixed_size_list();
+            Arc::new(FixedSizeListArray::try_new(
+                Arc::clone(field),
+                *size,
+                normalize_floats_for_ordering(array.values())?,
+                array.nulls().cloned(),
+            )?)
+        }
+        DataType::Dictionary(_, _) => {
+            let array = array.as_any_dictionary();
+            array.with_values(normalize_floats_for_ordering(array.values())?)
+        }
+        // Sail never builds these around an ordering key, and `contains_float` does not look
+        // inside them, so they cannot reach this arm with a float to rewrite.
+        _ => Arc::clone(array),
+    })
+}
+
+/// Whether a value of this type holds a float that [`normalize_floats_for_ordering`] rewrites.
+pub fn contains_float(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Float16 | DataType::Float32 | DataType::Float64 => true,
+        DataType::Struct(fields) => fields.iter().any(|field| contains_float(field.data_type())),
+        DataType::List(field) | DataType::LargeList(field) | DataType::FixedSizeList(field, _) => {
+            contains_float(field.data_type())
+        }
+        DataType::Dictionary(_, value_type) => contains_float(value_type),
+        _ => false,
+    }
 }

@@ -234,9 +234,8 @@ Feature: min_by function
         | four arguments  | 1, 2, 3, 4 |
 
     # Spark 4.2 added the top-k form, which returns an array of the k values
-    # (MaxMinByK.scala). Sail does not implement it; it now rejects the third argument
-    # instead of silently dropping it and returning a scalar.
-    @sail-bug @spark-4.2
+    # (MaxMinByK.scala).
+    @spark-4.2
     Scenario: min_by supports the three-argument top-k form
       When query
         """
@@ -330,3 +329,575 @@ Feature: min_by function
       Then query result
         | result  |
         | {"v":1} |
+
+  Rule: Spark ordering semantics of the ordering argument
+
+    # `MaxByAndMinBy.scala` updates with `If(old < new, old, new)`, so equal keys take the newer
+    # row. The comparison is SQL ordering, where -0.0 equals 0.0, so a running window must switch
+    # to the newer row. An IEEE total order would rank -0.0 below 0.0 and keep the older row.
+    Scenario: min_by treats negative zero and zero DOUBLE ordering keys as equal in a running window
+      When query
+        """
+        SELECT i,
+               min_by(x, y) OVER (ORDER BY i ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS result
+        FROM VALUES (1, 'neg', -0.0D), (2, 'pos', 0.0D) AS t(i, x, y)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result |
+        | 1 | neg    |
+        | 2 | pos    |
+
+    # In Spark's nested ordering a NULL array element is smaller than a non-null one, so the
+    # newer `array(NULL)` wins over `array(1)`. DataFusion's `ScalarValue::partial_cmp` follows
+    # Postgres instead and ranks the NULL element greater.
+    Scenario: min_by ranks a NULL array element below a non-null one in a running window
+      When query
+        """
+        SELECT i,
+               min_by(x, y) OVER (ORDER BY i ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS result
+        FROM VALUES (1, 'one', array(1)), (2, 'null', array(CAST(NULL AS INT))) AS t(i, x, y)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result |
+        | 1 | one    |
+        | 2 | null   |
+
+    # The same rule decides the aggregate form. A descending sort with NULLS FIRST would also put
+    # the nested NULL first, ranking it as the largest value, so the non-null row would win.
+    Scenario: min_by ranks a NULL struct field below a non-null one in an aggregate
+      When query
+        """
+        SELECT min_by(x, y) AS result
+        FROM VALUES ('one', named_struct('a', 1)), ('null', named_struct('a', CAST(NULL AS INT))) AS t(x, y)
+        """
+      Then query result
+        | result |
+        | null   |
+
+    # In the window form, DataFusion's `partial_cmp_struct` skips the NULL position and answers
+    # `Equal`, which would turn the comparison into a tie, so both row orders are pinned.
+    Scenario Outline: min_by ranks a NULL struct field below a non-null one in a running window with <case>
+      When query
+        """
+        SELECT i,
+               min_by(x, y) OVER (ORDER BY i ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS result
+        FROM VALUES (1, '<first>', named_struct('a', <first_key>)), (2, '<second>', named_struct('a', <second_key>)) AS t(i, x, y)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result   |
+        | 1 | <first>  |
+        | 2 | <result> |
+
+      Examples:
+        | case                 | first | first_key         | second | second_key        | result |
+        | the NULL field newer | one   | 1                 | null   | CAST(NULL AS INT) | null   |
+        | the NULL field older | null  | CAST(NULL AS INT) | one    | 1                 | null   |
+
+  Rule: The value argument keeps its logical type
+
+    # `dataType = valueExpr.dataType`, so the result is still a GEOGRAPHY. Sail carries GEOGRAPHY
+    # as BINARY plus field metadata, so the result field must be the value field, not one rebuilt
+    # from its `DataType`.
+    @spark-4.2
+    Scenario: min_by keeps the GEOGRAPHY type of the value argument
+      When query
+        """
+        SELECT min_by(st_geogfromwkb(w), y) AS result
+        FROM VALUES (1, X'0101000000000000000000F03F0000000000000040') AS t(y, w)
+        """
+      Then query schema
+        """
+        root
+         |-- result: geography (nullable = true)
+        """
+
+  Rule: Spark ordering boundaries that Sail already matches
+
+    # These keys all have a strict winner, so both the aggregate and the whole-partition window
+    # form are deterministic. Each boundary is one Sail could get wrong: NaN is the largest double
+    # in Spark's SQL ordering, BINARY compares unsigned bytes, a pre-epoch fraction must not flip
+    # sign, DECIMAL(38,0) sits at the 128-bit limit, and a longer array wins over its own prefix.
+    Scenario Outline: min_by follows Spark ordering for <case> ordering keys in the <path> form
+      When query
+        """
+        SELECT DISTINCT <call> AS result
+        FROM VALUES <rows> AS t(x, o)
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                           | path      | call                 | rows                                                                                                                       | result |
+        | NaN above infinity             | aggregate | min_by(x, o)         | ('one', 1.0D), ('inf', CAST('Infinity' AS DOUBLE)), ('nan', CAST('NaN' AS DOUBLE)), ('ninf', CAST('-Infinity' AS DOUBLE))  | ninf   |
+        | NaN above infinity             | window    | min_by(x, o) OVER () | ('one', 1.0D), ('inf', CAST('Infinity' AS DOUBLE)), ('nan', CAST('NaN' AS DOUBLE)), ('ninf', CAST('-Infinity' AS DOUBLE))  | ninf   |
+        | unsigned BINARY                | aggregate | min_by(x, o)         | ('lo', X'01'), ('hi', X'FF'), ('mid', X'7F')                                                                               | lo     |
+        | unsigned BINARY                | window    | min_by(x, o) OVER () | ('lo', X'01'), ('hi', X'FF'), ('mid', X'7F')                                                                               | lo     |
+        | pre-epoch fractional TIMESTAMP | aggregate | min_by(x, o)         | ('a', TIMESTAMP '1969-12-31 23:59:59.5'), ('b', TIMESTAMP '1969-12-31 23:59:59.9'), ('c', TIMESTAMP '1969-12-31 23:59:59') | c      |
+        | pre-epoch fractional TIMESTAMP | window    | min_by(x, o) OVER () | ('a', TIMESTAMP '1969-12-31 23:59:59.5'), ('b', TIMESTAMP '1969-12-31 23:59:59.9'), ('c', TIMESTAMP '1969-12-31 23:59:59') | c      |
+        | DECIMAL(38,0) extremes         | aggregate | min_by(x, o)         | ('max', 99999999999999999999999999999999999999BD), ('min', -99999999999999999999999999999999999999BD), ('zero', 0BD)       | min    |
+        | DECIMAL(38,0) extremes         | window    | min_by(x, o) OVER () | ('max', 99999999999999999999999999999999999999BD), ('min', -99999999999999999999999999999999999999BD), ('zero', 0BD)       | min    |
+        | ARRAY prefix length            | aggregate | min_by(x, o)         | ('short', array(1, 2)), ('long', array(1, 2, 0)), ('big', array(0, 9))                                                     | big    |
+        | ARRAY prefix length            | window    | min_by(x, o) OVER () | ('short', array(1, 2)), ('long', array(1, 2, 0)), ('big', array(0, 9))                                                     | big    |
+
+    # NaN == NaN in Spark's SQL ordering, so every row ties and the strict predicate takes the
+    # newer one. `ScalarValue::partial_cmp` agrees here because `total_cmp` also equates NaNs.
+    Scenario: min_by takes the newer row on NaN ties in a running window
+      When query
+        """
+        SELECT i,
+               min_by(x, o) OVER (ORDER BY i ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS result
+        FROM VALUES (1, 'a', CAST('NaN' AS DOUBLE)), (2, 'b', CAST('NaN' AS DOUBLE)) AS t(i, x, o)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result |
+        | 1 | a      |
+        | 2 | b      |
+
+  Rule: Spark ordering semantics that Sail does not match yet
+
+    # -0.0 equals 0.0 in Spark's SQL ordering, so the first fields tie and the second field
+    # decides. No tie between rows is involved, so both forms are deterministic. An IEEE total
+    # order would rank -0.0 below 0.0 before the second field is ever read.
+    Scenario Outline: min_by treats negative zero and zero as equal inside a STRUCT ordering key in the <path> form
+      When query
+        """
+        SELECT DISTINCT <call> AS result
+        FROM VALUES ('pos', named_struct('a', 0.0D, 'b', 1)), ('neg', named_struct('a', -0.0D, 'b', 2)) AS t(x, o)
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | path      | call                 | result |
+        | aggregate | min_by(x, o)         | pos    |
+        | window    | min_by(x, o) OVER () | pos    |
+
+    # A NULL ordering key is skipped, and a VOID key is NULL on every row, so Spark returns NULL.
+    # A `NullArray` has no validity buffer, so the window accumulator must read its logical nulls.
+    Scenario: min_by skips a VOID ordering key in a running window
+      When query
+        """
+        SELECT i,
+               min_by(x, CAST(NULL AS VOID)) OVER (ORDER BY i ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS result
+        FROM VALUES (1, 'a'), (2, 'b') AS t(i, x)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result |
+        | 1 | NULL   |
+        | 2 | NULL   |
+
+    # The aggregate counterpart of the array window scenario above: a descending sort with NULLS
+    # FIRST would rank the NULL element as the largest, so the non-null rows would win.
+    Scenario: min_by ranks a NULL array element below a non-null one in an aggregate
+      When query
+        """
+        SELECT min_by(x, o) AS result
+        FROM VALUES ('one', array(1)), ('null', array(CAST(NULL AS INT))), ('zero', array(0)) AS t(x, o)
+        """
+      Then query result
+        | result |
+        | null   |
+
+    # The window form reaches the same `return_field`, so it keeps the GEOGRAPHY metadata too.
+    @spark-4.2
+    Scenario: min_by keeps the GEOGRAPHY type of the value argument as a window function
+      When query
+        """
+        SELECT min_by(st_geogfromwkb(w), y) OVER () AS result
+        FROM VALUES (1, X'0101000000000000000000F03F0000000000000040') AS t(y, w)
+        """
+      Then query schema
+        """
+        root
+         |-- result: geography (nullable = true)
+        """
+
+  Rule: Aggregate surface
+
+    # Sail rewrites the aggregate form to an ordered `last_value` with an added
+    # `ordering IS NOT NULL` filter, so these pin the shapes that rewrite has to survive. A NULL
+    # value is not skipped: only a NULL ordering key is, so a NULL at the extremum is the answer.
+    # The code-point case holds because Spark compares UTF-8 bytes, not UTF-16 code units.
+    Scenario Outline: min_by returns the expected value for <case>
+      When query
+        """
+        <query>
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                                             | query                                                                                                                                                                | result |
+        | empty input                                      | SELECT min_by(x, y) AS result FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y) WHERE false                                                                     | NULL   |
+        | single row                                       | SELECT min_by(x, y) AS result FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y) WHERE x = 'c'                                                                   | c      |
+        | a NULL value at the extremum                     | SELECT min_by(CASE WHEN y = 10 THEN NULL ELSE x END, y) AS result FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y)                                             | NULL   |
+        | a negated ordering expression                    | SELECT min_by(x, -y) AS result FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y)                                                                                | b      |
+        | a CASE ordering expression                       | SELECT min_by(x, CASE WHEN x = 'c' THEN 0 ELSE y END) AS result FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y)                                               | c      |
+        | the value and ordering being the same column     | SELECT min_by(y, y) AS result FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y)                                                                                 | 10     |
+        | a constant value                                 | SELECT min_by('k', y) AS result FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y)                                                                               | k      |
+        | an ordering column from a joined table           | SELECT min_by(a.x, b.w) AS result FROM VALUES ('a', 1), ('b', 2), ('c', 3) AS a(x, id) JOIN VALUES (1, 30), (2, 10), (3, 20) AS b(id, w) ON a.id = b.id              | b      |
+        | a CTE                                            | WITH s AS (SELECT * FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y)) SELECT min_by(x, y) AS result FROM s                                                     | a      |
+        | try_cast NULLs in the ordering                   | SELECT min_by(x, try_cast(o AS INT)) AS result FROM VALUES ('a', '1'), ('b', 'zz'), ('c', '3') AS t(x, o)                                                            | a      |
+        | long strings sharing a prefix                    | SELECT min_by(x, o) AS result FROM VALUES ('short', repeat('a', 5000)), ('long', concat(repeat('a', 5000), 'b')), ('mid', concat(repeat('a', 4999), 'b')) AS t(x, o) | short  |
+        | a supplementary character against a high BMP one | SELECT min_by(x, o) AS result FROM VALUES ('emoji', '😀'), ('bmp', '｡') AS t(x, o)                                                                                    | bmp    |
+
+    # The FILTER predicate is ANDed with the rewrite's own NULL filter, per group.
+    Scenario: min_by combines FILTER with a GROUP BY that has a NULL group key
+      When query
+        """
+        SELECT g, min_by(x, y) FILTER (WHERE i > 1) AS result
+        FROM VALUES ('a', 10, 'g1', 1), ('b', 50, 'g1', 2), ('c', 20, NULL, 3), ('d', 40, NULL, 4), ('e', 30, 'g2', 5) AS t(x, y, g, i)
+        GROUP BY g
+        ORDER BY g NULLS FIRST
+        """
+      Then query result ordered
+        | g    | result |
+        | NULL | c      |
+        | g1   | b      |
+        | g2   | e      |
+
+    Scenario: min_by works with GROUPING SETS
+      When query
+        """
+        SELECT g, min_by(x, y) AS result, grouping(g) AS gg
+        FROM VALUES ('a', 10, 'g1', 1), ('b', 50, 'g1', 2), ('c', 20, NULL, 3), ('d', 40, NULL, 4), ('e', 30, 'g2', 5) AS t(x, y, g, i)
+        GROUP BY GROUPING SETS ((g), ())
+        ORDER BY gg, g NULLS FIRST
+        """
+      Then query result ordered
+        | g    | result | gg |
+        | NULL | c      | 0  |
+        | g1   | a      | 0  |
+        | g2   | e      | 0  |
+        | NULL | a      | 1  |
+
+  Rule: Window surface
+
+    # A NULL partition key forms its own partition, and a named WINDOW resolves like an inline one.
+    Scenario: min_by over a named window partitioned by a key with NULLs
+      When query
+        """
+        SELECT i, min_by(x, y) OVER w AS result
+        FROM VALUES ('a', 10, 'g1', 1), ('b', 50, 'g1', 2), ('c', 20, NULL, 3), ('d', 40, NULL, 4), ('e', 30, 'g2', 5) AS t(x, y, g, i)
+        WINDOW w AS (PARTITION BY g)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result |
+        | 1 | a      |
+        | 2 | a      |
+        | 3 | c      |
+        | 4 | c      |
+        | 5 | e      |
+
+    # With ORDER BY and no frame, the default frame is RANGE up to the current row, so ORDER BY
+    # peers (here the NULL keys, sorted first) are all inside each other's frame.
+    Scenario: min_by includes ORDER BY peers in the default window frame
+      When query
+        """
+        SELECT i, min_by(x, y) OVER (ORDER BY g) AS result
+        FROM VALUES ('a', 10, 'g1', 1), ('b', 50, 'g1', 2), ('c', 20, NULL, 3), ('d', 40, NULL, 4), ('e', 30, 'g2', 5) AS t(x, y, g, i)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result |
+        | 1 | a      |
+        | 2 | a      |
+        | 3 | c      |
+        | 4 | c      |
+        | 5 | a      |
+
+    # Spark's update expression keeps NULL while no row has had a non-null key yet, and then
+    # ignores rows whose key is NULL.
+    Scenario: min_by skips NULL ordering keys in a running window
+      When query
+        """
+        SELECT i,
+               min_by(x, CASE WHEN i IN (1, 3) THEN NULL ELSE y END) OVER (ORDER BY i ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS result
+        FROM VALUES ('a', 10, 'g1', 1), ('b', 50, 'g1', 2), ('c', 20, NULL, 3), ('d', 40, NULL, 4), ('e', 30, 'g2', 5) AS t(x, y, g, i)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result |
+        | 1 | NULL   |
+        | 2 | b      |
+        | 3 | b      |
+        | 4 | d      |
+        | 5 | e      |
+
+    # Any frame that does not start at UNBOUNDED PRECEDING needs a retractable accumulator: at
+    # row 4 the buffered minimum leaves the frame and the next best row has to take over.
+    Scenario: min_by supports a sliding window frame
+      When query
+        """
+        SELECT i, min_by(x, y) OVER (ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS result
+        FROM VALUES ('a', 10, 'g1', 1), ('b', 50, 'g1', 2), ('c', 20, NULL, 3), ('d', 40, NULL, 4), ('e', 30, 'g2', 5) AS t(x, y, g, i)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result |
+        | 1 | a      |
+        | 2 | a      |
+        | 3 | c      |
+        | 4 | c      |
+        | 5 | e      |
+
+    # A frame that reaches FOLLOWING rows retracts from its front while rows enter at its back.
+    # NULL keys enter and leave it without ever winning, and at row 5 `e` and `f` tie on 2, so the newer `f` wins.
+    Scenario: min_by retracts ties and NULL keys in a sliding window frame
+      When query
+        """
+        SELECT i, min_by(x, y) OVER (ORDER BY i ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) AS result
+        FROM VALUES (1, 'a', 3), (2, 'b', 1), (3, 'c', 3), (4, 'd', CAST(NULL AS INT)), (5, 'e', 2), (6, 'f', 2), (7, 'g', 5), (8, 'h', CAST(NULL AS INT)) AS t(i, x, y)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result |
+        | 1 | b      |
+        | 2 | b      |
+        | 3 | b      |
+        | 4 | b      |
+        | 5 | f      |
+        | 6 | f      |
+        | 7 | f      |
+        | 8 | f      |
+
+  Rule: Named arguments
+
+    # `MinByBuilder` is a plain ExpressionBuilder with no `functionSignature`, so Spark
+    # rejects named arguments in analysis. Sail ignores the names and runs the call.
+    @sail-bug
+    Scenario: min_by rejects named arguments
+      When query
+        """
+        SELECT min_by(x => x, y => y) AS result
+        FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y)
+        """
+      Then query error NAMED_PARAMETERS_NOT_SUPPORTED
+
+  Rule: Output schema
+
+    # `dataType = valueExpr.dataType` and `nullable = true`, whatever the value's own nullability.
+    Scenario Outline: min_by returns a nullable result for a <case> value argument
+      When query
+        """
+        SELECT min_by(<value>, y) AS result
+        FROM VALUES ('a', 10, 1), ('b', 50, 2), ('c', 20, 3) AS t(x, y, i)
+        """
+      Then query schema
+        """
+        root
+         |-- <schema>
+        """
+
+      Examples:
+        | case          | value                               | schema                                  |
+        | INT           | i                                   | result: integer (nullable = true)       |
+        | DECIMAL       | CAST(i AS DECIMAL(5, 2))            | result: decimal(5,2) (nullable = true)  |
+        | TIMESTAMP_NTZ | TIMESTAMP_NTZ '2024-01-01 00:00:00' | result: timestamp_ntz (nullable = true) |
+        | VOID          | NULL                                | result: void (nullable = true)          |
+
+    # The nested nullability flags come from the value argument unchanged.
+    Scenario: min_by keeps the nested nullability of an ARRAY value argument
+      When query
+        """
+        SELECT min_by(array(i, NULL), y) OVER () AS result
+        FROM VALUES ('a', 10, 1), ('b', 50, 2), ('c', 20, 3) AS t(x, y, i)
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = true)
+         |    |-- element: integer (containsNull = true)
+        """
+
+  Rule: Clause surface
+
+    # Same rules as documented on max_by: Spark decides these in FunctionResolution.validateFunction
+    # and in CheckAnalysis.
+    @spark-4
+    Scenario: min_by rejects the clause IGNORE NULLS
+      When query
+        """
+        SELECT min_by(x, y) IGNORE NULLS AS result
+        FROM VALUES (CAST(NULL AS STRING), 5), ('b', 10) AS t(x, y)
+        """
+      Then query error INVALID_SQL_SYNTAX.*does not support IGNORE NULLS
+
+    @spark-4
+    Scenario: min_by rejects the clause WITHIN GROUP
+      When query
+        """
+        SELECT min_by(x, y) WITHIN GROUP (ORDER BY x DESC) AS result
+        FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y)
+        """
+      Then query error INVALID_SQL_SYNTAX.*does not support WITHIN GROUP
+
+    # Sail forwards DISTINCT to the window aggregate, and rejects FILTER on one outright.
+    @sail-bug
+    Scenario: min_by rejects the clause DISTINCT combined with OVER
+      When query
+        """
+        SELECT min_by(DISTINCT x, y) OVER (PARTITION BY 1) AS result
+        FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y)
+        """
+      Then query error DISTINCT_WINDOW_FUNCTION_UNSUPPORTED
+
+    @sail-bug @spark-4.2
+    Scenario: min_by supports the clause FILTER combined with OVER
+      When query
+        """
+        SELECT min_by(x, y) FILTER (WHERE y > 10) OVER (PARTITION BY 1) AS result
+        FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS t(x, y)
+        """
+      Then query result
+        | result |
+        | c      |
+        | c      |
+        | c      |
+
+  Rule: The top-k form
+
+    # `MaxMinByK` returns the values of the k rows with the smallest orderings, sorted ascending
+    # by the ordering, as `ARRAY<value type>`. It skips NULL orderings but keeps NULL values,
+    # returns NULL when no ordering is non-null, and casts k to INT. These inputs have no ties
+    # inside the first k rows, so the order of each array is deterministic.
+    @spark-4.2
+    Scenario Outline: min_by returns the top-k values for <case>
+      When query
+        """
+        SELECT <call> AS result
+        FROM VALUES (1, 'a', 10, 'g1'), (2, 'b', 50, 'g1'), (3, 'c', 20, 'g2'), (4, 'd', CAST(NULL AS INT), 'g2'), (5, CAST(NULL AS STRING), 40, 'g1'), (6, 'f', 30, 'g2') AS t(i, x, y, g) <where>
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                                | call                                    | where       | result             |
+        | k of 2                              | min_by(x, y, 2)                         |             | [a, c]             |
+        | k above the row count               | min_by(x, y, 10)                        |             | [a, c, f, NULL, b] |
+        | k of 1                              | min_by(x, y, 1)                         |             | [a]                |
+        | k as a string                       | min_by(x, y, '2')                       |             | [a, c]             |
+        | k as a double                       | min_by(x, y, 2.0)                       |             | [a, c]             |
+        | k as a foldable expression          | min_by(x, y, 1 + 1)                     |             | [a, c]             |
+        | k at the maximum                    | min_by(x, y, 100000)                    |             | [a, c, f, NULL, b] |
+        | no input rows                       | min_by(x, y, 2)                         | WHERE false | NULL               |
+        | only NULL orderings                 | min_by(x, CAST(NULL AS INT), 2)         |             | NULL               |
+        | FILTER                              | min_by(x, y, 2) FILTER (WHERE g = 'g2') |             | [c, f]             |
+        | a STRUCT ordering with a NULL field | min_by(x, named_struct('a', y), 3)      |             | [d, a, c]          |
+
+    # DISTINCT removes duplicate (value, ordering) pairs before the k rows are chosen.
+    @spark-4.2
+    Scenario: min_by top-k removes duplicate pairs with DISTINCT
+      When query
+        """
+        SELECT min_by(DISTINCT x, y, 2) AS result
+        FROM VALUES ('a', 1), ('a', 1), ('b', 2), ('b', 2), ('c', 0) AS t(x, y)
+        """
+      Then query result
+        | result |
+        | [c, a] |
+
+    @spark-4.2
+    Scenario: min_by top-k is computed per group
+      When query
+        """
+        SELECT g, min_by(x, y, 2) AS result
+        FROM VALUES (1, 'a', 10, 'g1'), (2, 'b', 50, 'g1'), (3, 'c', 20, 'g2'), (4, 'd', CAST(NULL AS INT), 'g2'), (5, CAST(NULL AS STRING), 40, 'g1'), (6, 'f', 30, 'g2') AS t(i, x, y, g)
+        GROUP BY g
+        ORDER BY g
+        """
+      Then query result ordered
+        | g  | result    |
+        | g1 | [a, NULL] |
+        | g2 | [c, f]    |
+
+    @spark-4.2
+    Scenario: min_by top-k in a running window
+      When query
+        """
+        SELECT i, min_by(x, y, 2) OVER (ORDER BY i) AS result
+        FROM VALUES (1, 'a', 10, 'g1'), (2, 'b', 50, 'g1'), (3, 'c', 20, 'g2'), (4, 'd', CAST(NULL AS INT), 'g2'), (5, CAST(NULL AS STRING), 40, 'g1'), (6, 'f', 30, 'g2') AS t(i, x, y, g)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result |
+        | 1 | [a]    |
+        | 2 | [a, b] |
+        | 3 | [a, c] |
+        | 4 | [a, c] |
+        | 5 | [a, c] |
+        | 6 | [a, c] |
+
+    # A sliding frame has to drop rows as they leave, including the top values themselves.
+    @spark-4.2
+    Scenario: min_by top-k in a sliding window frame
+      When query
+        """
+        SELECT i, min_by(x, y, 2) OVER (ORDER BY i ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS result
+        FROM VALUES (1, 'a', 10, 'g1'), (2, 'b', 50, 'g1'), (3, 'c', 20, 'g2'), (4, 'd', CAST(NULL AS INT), 'g2'), (5, CAST(NULL AS STRING), 40, 'g1'), (6, 'f', 30, 'g2') AS t(i, x, y, g)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result    |
+        | 1 | [a]       |
+        | 2 | [a, b]    |
+        | 3 | [a, c]    |
+        | 4 | [c, b]    |
+        | 5 | [c, NULL] |
+        | 6 | [f, NULL] |
+
+    @spark-4.2
+    Scenario: min_by top-k returns an array of nullable values
+      When query
+        """
+        SELECT min_by(x, y, 2) AS result
+        FROM VALUES (1, 'a', 10, 'g1'), (2, 'b', 50, 'g1'), (3, 'c', 20, 'g2'), (4, 'd', CAST(NULL AS INT), 'g2'), (5, CAST(NULL AS STRING), 40, 'g1'), (6, 'f', 30, 'g2') AS t(i, x, y, g)
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = true)
+         |    |-- element: string (containsNull = true)
+        """
+
+    # `MaxMinByK.checkInputDataTypes`: k must be a foldable INT within [1, 100000]; a NULL k reads
+    # as 0, and a type Spark cannot implicitly cast to INT is rejected before the range check.
+    @spark-4.2
+    Scenario Outline: min_by top-k rejects <case>
+      When query
+        """
+        SELECT min_by(x, y, <k>) AS result
+        FROM VALUES (1, 'a', 10, 'g1'), (2, 'b', 50, 'g1'), (3, 'c', 20, 'g2'), (4, 'd', CAST(NULL AS INT), 'g2'), (5, CAST(NULL AS STRING), 40, 'g1'), (6, 'f', 30, 'g2') AS t(i, x, y, g)
+        """
+      Then query error <error>
+
+      Examples:
+        | case                  | k                 | error                                                        |
+        | a NULL k              | NULL              | The .k. must be between .1, 100000. .current value = 0.      |
+        | a zero k              | 0                 | The .k. must be between .1, 100000. .current value = 0.      |
+        | a negative k          | -1                | The .k. must be between .1, 100000. .current value = -1.     |
+        | a k above the maximum | 100001            | The .k. must be between .1, 100000. .current value = 100001. |
+        | a non-foldable k      | i                 | the input k should be a foldable int expression              |
+        | a DATE k              | DATE '2024-01-01' | third parameter requires the "INT" type                      |
+
+    # Spark checks k in analysis, so the error does not depend on any group surviving.
+    @spark-4.2
+    Scenario: min_by top-k rejects an out-of-range k when no group survives
+      When query
+        """
+        SELECT g, min_by(x, y, 0) AS result
+        FROM VALUES (1, 'a', 10, 'g1'), (2, 'b', 50, 'g1'), (3, 'c', 20, 'g2'), (4, 'd', CAST(NULL AS INT), 'g2'), (5, CAST(NULL AS STRING), 40, 'g1'), (6, 'f', 30, 'g2') AS t(i, x, y, g)
+        WHERE false
+        GROUP BY g
+        """
+      Then query error The .k. must be between .1, 100000. .current value = 0.
