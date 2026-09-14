@@ -68,3 +68,16 @@ Feature: if output schema
         root
          |-- result: string (nullable = false)
         """
+
+  Rule: Numeric branches use a common type
+
+    Scenario: IF widens numeric branches
+      When query
+        """
+        SELECT
+          typeof(if(false, 1, CAST(1 AS BIGINT))) AS result_type,
+          if(false, 1, CAST(3000000000 AS BIGINT)) AS result
+        """
+      Then query result
+        | result_type | result     |
+        | bigint      | 3000000000 |
