@@ -90,7 +90,7 @@ def test_drop_column_reports_an_ambiguous_reference_with_a_dotted_alias(spark):
     right = spark.createDataFrame([(2,)], ["a"]).alias("z")
 
     with pytest.raises(Exception, match=re.escape("could be: [`x.y`.`a`, `z`.`a`].")):
-        left.crossJoin(right).drop(col("a")).columns
+        _ = left.crossJoin(right).drop(col("a")).columns
 
 
 def test_dataframe_with_column_alias(spark):
