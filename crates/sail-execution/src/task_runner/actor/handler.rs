@@ -160,13 +160,14 @@ impl TaskRunnerActor {
         &mut self,
         key: TaskStreamKey,
         replicas: usize,
+        buffered: bool,
         schema: Arc<Schema>,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
     ) -> ActorAction {
         let _ = result.send(
             self.extensions
                 .local_streams
-                .create_stream(key, replicas, schema),
+                .create_stream(key, replicas, buffered, schema),
         );
         ActorAction::Continue
     }

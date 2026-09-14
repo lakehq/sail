@@ -23,6 +23,7 @@ mod tests {
     use sail_catalog_system::predicate::PredicateExtractor;
     use sail_catalog_system::{SYSTEM_CATALOG_NAME, SystemCatalogProvider};
     use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
+    use sail_common_datafusion::datasource::DataSourceRegistry;
     use sail_common_datafusion::session::plan::PlanService;
     use sail_plan::catalog::SparkCatalogObjectDisplay;
     use sail_plan::config::PlanConfig;
@@ -62,6 +63,9 @@ mod tests {
         );
         state.config_mut().set_extension(Arc::new(catalog_manager));
         state.config_mut().set_extension(Arc::new(plan_service));
+        state
+            .config_mut()
+            .set_extension(Arc::new(DataSourceRegistry::new()));
         Ok(SessionContext::new_with_state(state))
     }
 

@@ -4,7 +4,7 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::common::Result;
 use log::debug;
 use tokio::sync::mpsc;
-use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
+use tonic::codegen::tokio_stream::wrappers::{ReceiverStream, UnboundedReceiverStream};
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::stream::error::TaskStreamResult;
@@ -16,8 +16,8 @@ use crate::stream::writer::{TaskStreamChannelSink, TaskStreamWriteState};
 /// Since [`Arc`] is used inside the record batch, it is relatively cheap
 /// to clone the data in multiple replicas.
 pub(crate) struct MemoryStream {
-    sender: Option<MemoryStreamReplicaSender>,
-    receivers: Vec<mpsc::Receiver<TaskStreamResult<RecordBatch>>>,
+    sender: Option<Box<dyn TaskStreamChannelSink>>,
+    receivers: Vec<TaskStreamSource>,
 }
 
 impl MemoryStream {
@@ -34,27 +34,65 @@ impl MemoryStream {
         for _ in 0..diff {
             let (tx, rx) = mpsc::channel(buffer);
             senders.push(Some(tx));
-            receivers.push(rx);
+            receivers.push(Box::pin(ReceiverStream::new(rx)) as TaskStreamSource);
         }
         let overflow = vec![VecDeque::new(); senders.len()];
         Self {
-            sender: Some(MemoryStreamReplicaSender { senders, overflow }),
+            sender: Some(Box::new(MemoryStreamReplicaSender { senders, overflow })),
+            receivers,
+        }
+    }
+
+    pub fn new_buffered(replicas: usize) -> Self {
+        let mut senders = Vec::with_capacity(replicas);
+        let mut receivers = Vec::with_capacity(replicas);
+        for _ in 0..replicas {
+            let (sender, receiver) = mpsc::unbounded_channel();
+            senders.push(sender);
+            receivers.push(Box::pin(UnboundedReceiverStream::new(receiver)) as TaskStreamSource);
+        }
+        Self {
+            sender: Some(Box::new(BufferedMemoryStreamReplicaSender { senders })),
             receivers,
         }
     }
 
     pub(crate) fn publish(&mut self) -> ExecutionResult<Box<dyn TaskStreamChannelSink>> {
-        let sender = self.sender.take().ok_or_else(|| {
+        self.sender.take().ok_or_else(|| {
             ExecutionError::InternalError("memory stream can only be written once".to_string())
-        })?;
-        Ok(Box::new(sender))
+        })
     }
 
     pub(crate) fn subscribe(&mut self) -> ExecutionResult<TaskStreamSource> {
         let rx = self.receivers.pop().ok_or_else(|| {
             ExecutionError::InternalError("memory stream has exhausted all replica(s)".to_string())
         })?;
-        Ok(Box::pin(ReceiverStream::new(rx)))
+        Ok(rx)
+    }
+}
+
+struct BufferedMemoryStreamReplicaSender {
+    senders: Vec<mpsc::UnboundedSender<TaskStreamResult<RecordBatch>>>,
+}
+
+#[tonic::async_trait]
+impl TaskStreamChannelSink for BufferedMemoryStreamReplicaSender {
+    async fn write(&mut self, batch: RecordBatch) -> Result<TaskStreamWriteState> {
+        self.senders
+            .retain(|sender| sender.send(Ok(batch.clone())).is_ok());
+        Ok(if self.senders.is_empty() {
+            TaskStreamWriteState::Closed
+        } else {
+            TaskStreamWriteState::Active
+        })
+    }
+
+    async fn commit(self: Box<Self>) -> Result<()> {
+        Ok(())
+    }
+
+    async fn abort(self: Box<Self>) -> Result<()> {
+        Ok(())
     }
 }
 
@@ -166,5 +204,38 @@ impl TaskStreamChannelSink for MemoryStreamReplicaSender {
 
     async fn abort(self: Box<Self>) -> Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::array::RecordBatch;
+    use datafusion::arrow::datatypes::Schema;
+    use futures::TryStreamExt;
+
+    use super::MemoryStream;
+
+    #[tokio::test]
+    #[expect(clippy::expect_used)]
+    async fn buffered_stream_can_finish_before_a_consumer_subscribes() {
+        let mut stream = MemoryStream::new_buffered(1);
+        let mut sink = stream.publish().expect("buffered stream publisher");
+        let schema = Arc::new(Schema::empty());
+        for _ in 0..1_000 {
+            sink.write(RecordBatch::new_empty(schema.clone()))
+                .await
+                .expect("buffered stream write");
+        }
+        sink.commit().await.expect("buffered stream commit");
+
+        let batches = stream
+            .subscribe()
+            .expect("buffered stream subscriber")
+            .try_collect::<Vec<_>>()
+            .await
+            .expect("buffered stream read");
+        assert_eq!(batches.len(), 1_000);
     }
 }
