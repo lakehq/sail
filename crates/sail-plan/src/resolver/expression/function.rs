@@ -18,6 +18,7 @@ use crate::function::{
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::expression::lambda::is_spec_lambda_argument;
+use crate::resolver::expression::predicate::coerce_timestamp_string_predicate;
 use crate::resolver::function::PythonUdf;
 use crate::resolver::state::PlanResolverState;
 
@@ -239,6 +240,7 @@ impl PlanResolver<'_> {
                 }
             }
         };
+        let func = coerce_timestamp_string_predicate(func, schema, &self.config)?;
 
         // DataFusion lambda variables carry no type until resolved against the schema.
         // Sail bypasses the DataFusion SQL planner, so resolution happens here — but
