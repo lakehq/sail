@@ -137,19 +137,23 @@ Feature: TIME subtraction result parity
       | double |
 
   # `extract` reads a day-time interval field by field: `getMinutes` is the minutes past the hour
-  # (`IntervalUtils.scala:60-62`). Sail's `date_part` reads a `Duration` as a total, and a TIME
-  # difference is a `Duration` now, so it answers 90.
-  @sail-bug
+  # (`IntervalUtils.scala:60-62`). A TIME difference is a day-time interval, so it answers 30, not the
+  # 90 minutes of the total.
   @spark-4.1
   Scenario: the minutes of a TIME difference are the minutes past the hour
     Given config spark.sql.timeType.enabled = true
     When query
       """
-      SELECT extract(MINUTE FROM TIME '10:30:00' - TIME '09:00:00') AS minutes
+      SELECT
+        extract(MINUTE FROM TIME '10:30:00' - TIME '09:00:00') AS minutes,
+        date_part('MINUTE', TIME '10:30:00' - TIME '09:00:00') AS part,
+        extract(MINUTE FROM (TIME '10:30:00' - TIME '09:00:00') * 2) AS doubled,
+        extract(MINUTE FROM -(TIME '10:30:00' - TIME '09:00:00')) AS negated,
+        extract(HOUR FROM TIME '10:30:00' - TIME '09:00:00') AS hours
       """
     Then query result
-      | minutes |
-      | 30      |
+      | minutes | part | doubled | negated | hours |
+      | 30      | 30   | 0       | -30     | 1     |
 
   # A TIME whose bounds the planner knows -- one projected out of a CTE -- sent DataFusion's interval
   # bound propagation into `unreachable!()` for `time + interval`, and the query died with a
