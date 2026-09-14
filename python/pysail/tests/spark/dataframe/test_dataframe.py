@@ -82,6 +82,17 @@ def test_dataframe_drop(spark):
     )
 
 
+def test_drop_column_reports_an_ambiguous_reference_with_a_dotted_alias(spark):
+    # Dropping a `Column` resolves it as an attribute and fails on ambiguity, unlike dropping a
+    # name, which removes every match. The alias is one part that contains a dot, so it has to be
+    # reported whole: rendering the qualifier and splitting it on dots would name `x` and `y`.
+    left = spark.createDataFrame([(1,)], ["a"]).alias("x.y")
+    right = spark.createDataFrame([(2,)], ["a"]).alias("z")
+
+    with pytest.raises(Exception, match=re.escape("could be: [`x.y`.`a`, `z`.`a`].")):
+        left.crossJoin(right).drop(col("a")).columns
+
+
 def test_dataframe_with_column_alias(spark):
     df = spark.createDataFrame(
         schema="id INTEGER, value STRING",
