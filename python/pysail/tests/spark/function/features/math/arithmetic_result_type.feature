@@ -47,6 +47,22 @@ Feature: arithmetic result types (+ - * / %) vs Spark 4.2.0
         | result                 |
         | interval day to second |
 
+    # TODO: `SubtractTimestamps` measures the difference in local time (`DateTimeUtils.subtractTimestamps`),
+    #  and Sail subtracts the instants, so a DST change inside the difference shifts it by an hour. The
+    #  root is `TIMESTAMP - TIMESTAMP`, which diverges the same way; the DATE arms only inherit it.
+    @sail-bug
+    Scenario: a timestamp minus a date is measured in local time across a DST change
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT
+          CAST(TIMESTAMP'2024-03-10 12:00:00' - DATE'2024-03-10' AS STRING) AS a,
+          CAST(DATE'2024-03-11' - TIMESTAMP'2024-03-10 00:00:00' AS STRING) AS b
+        """
+      Then query result
+        | a                                   | b                                   |
+        | INTERVAL '0 12:00:00' DAY TO SECOND | INTERVAL '1 00:00:00' DAY TO SECOND |
+
     # `SubtractDates` returns `DayTimeIntervalType(DAY)` (`datetimeExpressions.scala:3617`). Sail
     # answers an INT day count: an Arrow `Duration` cannot carry the FIELD RANGE, and without it a
     # `Duration` is read by seconds wherever the difference is consumed (`CAST(... AS INT)` answered

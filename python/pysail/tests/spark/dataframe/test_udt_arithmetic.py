@@ -498,3 +498,18 @@ def test_a_udt_returning_expression_over_rows_is_collected_as_the_udt_object(spa
 
 def test_udt_string_function_is_a_string_in_the_schema(spark, udt_view):
     assert spark.sql(f"SELECT string(a) AS x FROM {udt_view}").schema["x"].dataType == StringType()  # noqa: S608
+
+
+@pytest.mark.parametrize("ansi_enabled", ["false", "true"])
+def test_dataframe_negation_of_a_udt_is_rejected(spark, ansi_enabled):
+    # PySpark's `-col` is `negative(col)`, which is `UnaryMinus` (`FunctionRegistry.scala:467`).
+    from pyspark.sql import functions as F  # noqa: N812
+
+    previous = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", ansi_enabled)
+    try:
+        df = spark.createDataFrame(data=[], schema=StructType().add("a", IntegerStoragePythonUDT()))
+        with pytest.raises(AnalysisException, match=r"(?i)cannot resolve"):
+            df.select(-F.col("a")).collect()
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous)

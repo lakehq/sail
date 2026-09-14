@@ -70,3 +70,12 @@ Feature: bitmap_bucket_number output schema
       Then query result
         | result |
         | 1      |
+
+    Scenario: bitmap_bucket_number of the BIGINT minimum
+      When query
+        """
+        SELECT bitmap_bucket_number(-9223372036854775808) AS result
+        """
+      Then query result
+        | result           |
+        | -281474976710656 |

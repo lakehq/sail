@@ -49,9 +49,19 @@ impl ScalarUDFImpl for SparkTimeAddDtInterval {
         &self.signature
     }
 
+    /// `TimeAddInterval` answers `TimeType(max(p, 6))` when the interval reaches SECOND
+    /// (`timeExpressions.scala:596-606`). Sail's `Duration` does not carry the interval's end field,
+    /// so the result is TIME(6), or TIME(9) for a nanosecond input; the input type cut the fraction.
+    /// TODO: `TIME(0) + INTERVAL '1' HOUR` is `time(0)` in Spark and `time(6)` here, until the
+    ///  day-time interval keeps its end field.
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match arg_types {
-            [time @ (DataType::Time32(_) | DataType::Time64(_)), _] => Ok(time.clone()),
+            [DataType::Time64(TimeUnit::Nanosecond), _] => {
+                Ok(DataType::Time64(TimeUnit::Nanosecond))
+            }
+            [DataType::Time32(_) | DataType::Time64(_), _] => {
+                Ok(DataType::Time64(TimeUnit::Microsecond))
+            }
             _ => plan_err!("Spark `TimeAddInterval` expects a TIME and a day-time interval"),
         }
     }

@@ -106,6 +106,23 @@ Feature: scaling a legacy calendar interval by a number, vs Spark 4.2.0
         | v    |
         | true |
 
+    # `IntervalUtils.divide` tests `num == 0` (`IntervalUtils.scala:742-745`), which holds for -0.0.
+    Scenario Outline: a calendar interval divided by <case> is NULL with ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT make_interval(0,0,0,1,0,0,0) / <divisor> IS NULL AS v
+        """
+      Then query result
+        | v    |
+        | true |
+
+      Examples:
+        | case                    | divisor              |
+        | a negative zero literal | -0.0D                |
+        | a negative zero cast    | CAST('-0' AS DOUBLE) |
+        | a negative zero string  | '-0.0'               |
+
     # A PySpark 3.5 client cannot receive a `calendar_interval` column at all (`Unsupported data type
     # calendar_interval`), so the bare interval is only asserted from PySpark 4; the cast to STRING
     # keeps the same division reachable from every client.

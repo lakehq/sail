@@ -55,6 +55,44 @@ Feature: TIME subtraction result parity
       | a        | b        | c        |
       | 13:00:00 | 13:00:00 | 11:00:00 |
 
+  # `TimeAddInterval` returns `TimeType(max(p, 6))` when the interval reaches SECOND
+  # (`timeExpressions.scala:596-606`), so the fraction of the interval is not cut back to the
+  # digits of the TIME.
+  @spark-4.1
+  Scenario: a TIME(0) or TIME(3) shifted by a fractional interval keeps the fraction
+    Given config spark.sql.timeType.enabled = true
+    When query
+      """
+      SELECT
+        CAST(CAST(TIME '12:00:00' AS TIME(0)) + INTERVAL '0.5' SECOND AS STRING) AS added,
+        CAST(INTERVAL '0.5' SECOND + CAST(TIME '12:00:00' AS TIME(0)) AS STRING) AS reversed,
+        CAST(CAST(TIME '12:00:00' AS TIME(0)) - INTERVAL '0.5' SECOND AS STRING) AS subtracted,
+        CAST(CAST(TIME '12:00:00' AS TIME(3)) + INTERVAL '0.0005' SECOND AS STRING) AS millis,
+        typeof(CAST(TIME '12:00:00' AS TIME(0)) + INTERVAL '0.5' SECOND) AS result_type
+      """
+    Then query result
+      | added      | reversed   | subtracted | millis        | result_type |
+      | 12:00:00.5 | 12:00:00.5 | 11:59:59.5 | 12:00:00.0005 | time(6)     |
+
+  @spark-4.1
+  Scenario: a TIME(0) column shifted by a fractional interval keeps the fraction on every row
+    Given config spark.sql.timeType.enabled = true
+    When query
+      """
+      SELECT CAST(t + INTERVAL '0.25' SECOND AS STRING) AS r
+      FROM (
+        SELECT id, CAST(make_time(12, 0, CAST(id AS DECIMAL(16, 6))) AS TIME(0)) AS t
+        FROM range(0, 4, 1, 2)
+      )
+      ORDER BY id
+      """
+    Then query result ordered
+      | r           |
+      | 12:00:00.25 |
+      | 12:00:01.25 |
+      | 12:00:02.25 |
+      | 12:00:03.25 |
+
   # NOT this PR's work -- the fix belongs with the ANSI/overflow PR. Pinned here because the
   # `TIME +- interval` arms above turn a hard error into a WRONG VALUE: DataFusion wraps within
   # the 24-hour clock, Spark raises `[DATETIME_OVERFLOW]` in both ANSI modes

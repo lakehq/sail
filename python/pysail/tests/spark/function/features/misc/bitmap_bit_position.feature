@@ -70,3 +70,19 @@ Feature: bitmap_bit_position output schema
       Then query result
         | result |
         | 122    |
+
+    # `BitmapExpressionUtils.bitmapBitPosition` is `(-value) % NUM_BITS` on a Java long, which wraps
+    # on the minimum and gives 0 (`BitmapExpressionUtils.java:37-43`).
+    Scenario: bitmap_bit_position of negative values
+      When query
+        """
+        SELECT
+          bitmap_bit_position(-9223372036854775808) AS a,
+          bitmap_bit_position(CAST(-9223372036854775808 AS BIGINT)) AS b,
+          bitmap_bit_position(-5) AS c,
+          bitmap_bit_position(-32768) AS d,
+          bitmap_bit_position(-32769) AS e
+        """
+      Then query result
+        | a | b | c | d | e |
+        | 0 | 0 | 5 | 0 | 1 |

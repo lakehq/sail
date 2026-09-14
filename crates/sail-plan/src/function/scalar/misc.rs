@@ -153,7 +153,9 @@ fn bitmap_bit_position(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         value.clone().gt(lit(0)),
         (value.clone() - lit(1)) % lit(num_bits),
     )
-    .when(lit(true), (-value) % lit(num_bits))
+    // `(-value) % NUM_BITS` on a Java long (`BitmapExpressionUtils.java:37-43`); negating after the
+    // remainder gives the same answer without overflowing on the BIGINT minimum.
+    .when(lit(true), -(value % lit(num_bits)))
     .end()?)
 }
 

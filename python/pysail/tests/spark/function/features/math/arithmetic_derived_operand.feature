@@ -77,6 +77,64 @@ Feature: arithmetic operands whose type is derived, vs Spark 4.2.0
         | substr of a binary | false | substr(encode('Spark SQL', 'utf-8'), 5) |
         | left of a binary   | true  | left(encode('Spark SQL', 'utf-8'), 3)   |
 
+    # `negative(x)` is `UnaryMinus` too (`FunctionRegistry.scala:467`), and it is what PySpark's
+    # `-col` calls, so it refuses the same operands as `-x`.
+    Scenario Outline: negative over <case> is refused with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT negative(<operand>) AS result
+        """
+      Then query error (?i)cannot resolve
+
+      Examples:
+        | case               | ansi  | operand                                 |
+        | substr of a binary | false | substr(encode('Spark SQL', 'utf-8'), 5) |
+        | left of a binary   | true  | left(encode('Spark SQL', 'utf-8'), 3)   |
+        | a date             | false | DATE'2024-01-15'                        |
+        | a boolean          | true  | true                                    |
+
+    # A cast the user writes around the input or the result of a binary `substr`/`left`/`overlay`
+    # yields a STRING (`Substring.dataType = str.dataType`, `stringExpressions.scala:2309`), which
+    # string promotion makes a number. Only the casts Sail inserts itself mark the BINARY shape.
+    Scenario Outline: a STRING cast around <case> is an arithmetic operand with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT (<expression>) = <value> AS ok
+        """
+      Then query result
+        | ok   |
+        | true |
+
+      Examples:
+        | case                 | ansi  | expression                                              | value |
+        | a substr result      | false | CAST(substr(X'3132', 1, 2) AS STRING) / 2               | 6     |
+        | a substr result      | true  | CAST(substr(X'3132', 1, 2) AS STRING) / 2               | 6     |
+        | a substr input       | false | substr(CAST(X'3132' AS STRING), 1, 2) + 1               | 13    |
+        | a substring input    | true  | substring(CAST(X'3132' AS STRING), 1, 2) * 2            | 24    |
+        | a left result        | false | CAST(left(X'3132', 1) AS STRING) * 2                    | 2     |
+        | a left input         | true  | left(CAST(X'3132' AS STRING), 2) % 5                    | 2     |
+        | an overlay input     | false | overlay(CAST(X'3132' AS STRING) PLACING '9' FROM 1) - 2 | 90    |
+        | a substr try_cast    | true  | TRY_CAST(substr(X'3132', 1, 2) AS STRING) / 4           | 3     |
+        | a unary minus result | false | -CAST(substr(X'3132', 1, 2) AS STRING)                  | -12   |
+        | a unary plus input   | true  | +substr(CAST(X'3132' AS STRING), 1, 2)                  | 12    |
+        | a negative result    | false | negative(CAST(left(X'3132', 2) AS STRING))              | -12   |
+
+    Scenario Outline: a BINARY cast around <case> is still refused with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT <expression> AS result
+        """
+      Then query error (?i)cannot resolve
+
+      Examples:
+        | case              | ansi  | expression                              |
+        | a substr result   | false | CAST(substr(X'3132', 1) AS BINARY) + 1  |
+        | a divisor         | true  | 2 / substr(X'3132', 1)                  |
+        | a left under a -  | false | -left(X'3132', 1)                       |
+
   Rule: a function returning an ARRAY is an ARRAY operand
 
     # `nvl`/`ifnull` are `Coalesce(Seq(left, right))` in Spark (`nullExpressions.scala:246`), so a

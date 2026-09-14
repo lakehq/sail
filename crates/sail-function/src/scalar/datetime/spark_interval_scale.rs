@@ -430,10 +430,18 @@ macro_rules! calendar_scale_udf {
                 let interval = interval.as_primitive::<IntervalMonthDayNanoType>();
                 let number = number.as_primitive::<Float64Type>();
                 let ansi_mode = self.ansi_mode;
-                let scaled: IntervalMonthDayNanoArray =
-                    try_binary(interval, number, |interval, number| {
-                        scale_calendar(interval, number, $divide, ansi_mode)
-                    })?;
+                // Not `try_binary`: with ANSI off a zero divisor is NULL, which only a
+                // null-producing kernel can return.
+                let scaled = interval
+                    .iter()
+                    .zip(number.iter())
+                    .map(|pair| match pair {
+                        (Some(interval), Some(number)) => {
+                            scale_calendar(interval, number, $divide, ansi_mode)
+                        }
+                        _ => Ok(None),
+                    })
+                    .collect::<std::result::Result<IntervalMonthDayNanoArray, ArrowError>>()?;
                 Ok(ColumnarValue::Array(Arc::new(scaled) as ArrayRef))
             }
 
@@ -492,11 +500,15 @@ fn scale_calendar(
     number: f64,
     divide: bool,
     ansi_mode: bool,
-) -> std::result::Result<IntervalMonthDayNano, ArrowError> {
+) -> std::result::Result<Option<IntervalMonthDayNano>, ArrowError> {
+    // `IntervalUtils.divide` tests `num == 0` (`IntervalUtils.scala:742-745`), which a negative zero
+    // satisfies too.
     if divide && number == 0.0 {
-        // With ANSI off Spark returns NULL here, but `try_binary` cannot produce one, so the
-        // caller sees the error; the plan keeps the NULL by testing the divisor before the call.
-        return Err(divided_by_zero());
+        return if ansi_mode {
+            Err(divided_by_zero())
+        } else {
+            Ok(None)
+        };
     }
     let scale = |field: f64| {
         if divide {
@@ -518,11 +530,11 @@ fn scale_calendar(
     // The fraction of a day that truncating threw away is not lost: Spark folds it into the time
     // part, and rounds ONLY there.
     let micros = micros + MICROS_PER_DAY * (days - f64::from(truncated_days));
-    Ok(IntervalMonthDayNano::new(
+    Ok(Some(IntervalMonthDayNano::new(
         truncate_field(months, ansi_mode)?,
         truncated_days,
         java_round(micros).saturating_mul(NANOS_PER_MICRO),
-    ))
+    )))
 }
 
 /// Java's `Math.round(double)`: the floor of `x + 1/2` computed exactly, so a tie goes toward

@@ -692,16 +692,11 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
     if let Ok(DataType::Duration(TimeUnit::Microsecond)) = &dividend_type {
         return Ok(ScalarUDF::from(SparkDivideDtInterval::new()).call(vec![dividend, divisor]));
     }
-    // `DivideInterval` (`:166`). This one DOES read the ANSI flag: with it off a zero divisor
-    // gives NULL, so the divisor goes through `nullif` and the UDF never sees the zero -- which
-    // also keeps the result typed as an interval, where the shared short-circuit below would
-    // return an untyped NULL.
+    // `DivideInterval` (`:166`). This one DOES read the ANSI flag: with it off a zero divisor -- a
+    // negative zero included -- gives NULL, which the UDF produces itself. Returning here also keeps
+    // the result typed as an interval, where the shared short-circuit below would return an untyped
+    // NULL.
     if let Ok(DataType::Interval(IntervalUnit::MonthDayNano)) = &dividend_type {
-        let divisor = if ansi_mode {
-            divisor
-        } else {
-            expr_fn::nullif(cast(divisor, DataType::Float64), lit(0.0))
-        };
         return Ok(ScalarUDF::from(SparkDivideCalendarInterval::new(ansi_mode))
             .call(vec![dividend, divisor]));
     }
@@ -1112,17 +1107,18 @@ fn spark_positive(input: ScalarFunctionInput) -> PlanResult<Expr> {
     })
 }
 
+/// `negative(x)` is `UnaryMinus` (`FunctionRegistry.scala:467`), and PySpark's `-col` calls it, so it
+/// takes the unary `-` path: the same guard and the same negation.
 fn spark_negative(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let ScalarFunctionInput {
         arguments,
         function_context,
     } = input;
     let arg = arguments.one()?;
-    Ok(spark_unary_negate(
-        arg,
-        function_context.plan_config.ansi_mode,
-        function_context.schema,
-    ))
+    spark_minus(ScalarFunctionInput {
+        arguments: vec![arg],
+        function_context,
+    })
 }
 
 pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunction)> {
@@ -1480,27 +1476,37 @@ fn interval_scale_number(number: Expr, number_type: &DataType, ansi_mode: bool) 
 /// TODO: Sail reads that input as a STRING, because most of its string functions do not take a
 ///   BINARY yet and a BINARY result broke them downstream (`trim(substr(b, 2))`). The operand is
 ///   recognised by shape meanwhile, so a column a subquery projects from it is still a STRING.
+///
+/// Only the casts Sail inserts are looked through: `substr`/`substring` read their input through one
+/// cast and return through another (`string.rs`), while `left` and `overlay` add none. A cast the user
+/// writes around the input or the result is a STRING (`stringExpressions.scala:2309`), an operand.
 fn is_binary_string_function(expr: &Expr, schema: &DFSchemaRef) -> bool {
-    fn peel(expr: &Expr) -> &Expr {
+    fn peel_alias(expr: &Expr) -> &Expr {
         match expr {
-            Expr::Alias(alias) => peel(&alias.expr),
-            Expr::Cast(cast) => peel(&cast.expr),
-            Expr::TryCast(cast) => peel(&cast.expr),
+            Expr::Alias(alias) => peel_alias(&alias.expr),
             _ => expr,
         }
     }
-    let Expr::ScalarFunction(function) = peel(expr) else {
-        return false;
-    };
-    matches!(
-        function.func.name(),
-        "substr" | "substring" | "left" | "overlay"
-    ) && function.args.first().is_some_and(|input| {
+    let is_binary = |expr: &Expr| {
         matches!(
-            peel(input).get_type(schema),
+            expr.get_type(schema),
             Ok(DataType::Binary | DataType::LargeBinary | DataType::BinaryView)
         )
-    })
+    };
+    match peel_alias(expr) {
+        Expr::Cast(output) => match output.expr.as_ref() {
+            Expr::ScalarFunction(function)
+                if matches!(function.func.name(), "substr" | "substring") =>
+            {
+                matches!(function.args.first(), Some(Expr::Cast(input)) if is_binary(&input.expr))
+            }
+            _ => false,
+        },
+        Expr::ScalarFunction(function) if matches!(function.func.name(), "left" | "overlay") => {
+            function.args.first().is_some_and(is_binary)
+        }
+        _ => false,
+    }
 }
 
 fn rejects_binary_string_operand(
