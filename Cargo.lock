@@ -8021,6 +8021,7 @@ dependencies = [
  "fastrace",
  "futures",
  "log",
+ "mimalloc",
  "pyo3",
  "sail-catalog",
  "sail-catalog-glue",
