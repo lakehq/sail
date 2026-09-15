@@ -4,7 +4,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::{ArrayData, ArrayRef, make_array};
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{DataType, FieldRef};
-use datafusion::common::Result;
+use datafusion::common::{Result, ScalarValue};
 use datafusion::logical_expr::{Accumulator, Signature, Volatility};
 use datafusion_expr::AggregateUDFImpl;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -127,6 +127,21 @@ impl PySparkGroupAggregateUDF {
         })?;
         Ok(udf.clone_ref(py))
     }
+
+    fn batch_accumulator(&self) -> Result<BatchAggregateAccumulator> {
+        let udf = Python::attach(|py| self.udf(py))?;
+        let aggregator = Box::new(PySparkGroupAggregator {
+            udf,
+            output_type: self.output_type.clone(),
+            large_var_types: self.config.arrow_use_large_var_types,
+        });
+        Ok(BatchAggregateAccumulator::new(
+            self.input_types.clone(),
+            self.output_type.clone(),
+            aggregator,
+            self.actual_arg_count,
+        ))
+    }
 }
 
 impl AggregateUDFImpl for PySparkGroupAggregateUDF {
@@ -143,18 +158,11 @@ impl AggregateUDFImpl for PySparkGroupAggregateUDF {
     }
 
     fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let udf = Python::attach(|py| self.udf(py))?;
-        let aggregator = Box::new(PySparkGroupAggregator {
-            udf,
-            output_type: self.output_type.clone(),
-            large_var_types: self.config.arrow_use_large_var_types,
-        });
-        Ok(Box::new(BatchAggregateAccumulator::new(
-            self.input_types.clone(),
-            self.output_type.clone(),
-            aggregator,
-            self.actual_arg_count,
-        )))
+        Ok(Box::new(self.batch_accumulator()?))
+    }
+
+    fn default_value(&self, _data_type: &DataType) -> Result<ScalarValue> {
+        self.batch_accumulator()?.evaluate()
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
