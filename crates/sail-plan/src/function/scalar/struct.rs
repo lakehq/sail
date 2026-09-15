@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use datafusion::functions::expr_fn;
 use datafusion_expr::{Expr, ScalarUDF, expr};
+use sail_function::scalar::spark_named_struct::SparkNamedStruct;
 use sail_function::scalar::struct_function::StructFunction;
 
 use crate::error::{PlanError, PlanResult};
@@ -34,7 +34,7 @@ pub(super) fn list_built_in_struct_functions() -> Vec<(&'static str, ScalarFunct
     use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
-        ("named_struct", F::var_arg(expr_fn::named_struct)),
+        ("named_struct", F::udf(SparkNamedStruct::new())),
         ("struct", F::custom(r#struct)),
     ]
 }

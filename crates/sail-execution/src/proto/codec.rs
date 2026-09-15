@@ -224,6 +224,8 @@ use sail_function::scalar::misc::version::SparkVersion;
 use sail_function::scalar::multi_expr::MultiExpr;
 use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
 use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
+use sail_function::scalar::spark_named_struct::SparkNamedStruct;
+use sail_function::scalar::spark_ordering_key::SparkOrderingKey;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 use sail_function::scalar::string::format_number::FormatNumber;
@@ -3350,6 +3352,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "spark_expm1" | "expm1" => Ok(Arc::new(ScalarUDF::from(SparkExpm1::new()))),
             "spark_sqrt" | "sqrt" => Ok(Arc::new(ScalarUDF::from(SparkSqrt::new()))),
+            "named_struct" => Ok(Arc::new(ScalarUDF::from(SparkNamedStruct::new()))),
+            "spark_ordering_key" => Ok(Arc::new(ScalarUDF::from(SparkOrderingKey::new()))),
             "spark_to_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8::new()))),
             "spark_to_large_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToLargeUtf8::new()))),
             "spark_to_utf8_view" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8View::new()))),
@@ -3476,6 +3480,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkSplit>()
             || node_inner.is::<SparkToBinary>()
             || node_inner.is::<SparkToLargeUtf8>()
+            || node_inner.is::<SparkNamedStruct>()
+            || node_inner.is::<SparkOrderingKey>()
             || node_inner.is::<SparkToUtf8>()
             || node_inner.is::<SparkToUtf8View>()
             || node_inner.is::<SparkTryAdd>()

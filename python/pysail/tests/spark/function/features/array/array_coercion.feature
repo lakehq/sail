@@ -87,3 +87,17 @@ Feature: array() type coercion with mixed element types
         SELECT array('a', 1, NULL, 1.0) AS result
         """
       Then query error \[CAST_INVALID_INPUT\] The value 'a' of the type "STRING" cannot be cast to "DECIMAL\(21,1\)"
+
+  Rule: A logical type does not mix with its storage type
+
+    # Spark types GEOMETRY and BINARY as different types, so `array` rejects them together
+    # (`DATA_DIFF_TYPES`). Sail carries GEOMETRY as BINARY plus field metadata; when the arguments'
+    # metadata disagree `array` drops it and accepts the call as `array<binary>`.
+    @sail-bug @spark-4.2
+    Scenario: array rejects mixing GEOMETRY with BINARY
+      When query
+        """
+        SELECT array(st_geomfromwkb(w), CAST(NULL AS BINARY)) AS result
+        FROM VALUES (X'0101000000000000000000F03F0000000000000040') AS t(w)
+        """
+      Then query error DATA_DIFF_TYPES

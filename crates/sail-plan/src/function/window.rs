@@ -41,7 +41,7 @@ use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::window::{spark_first_value_udwf, spark_last_value_udwf, spark_ntile_udwf};
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::aggregate::coerce_string_sum_arguments;
+use crate::function::aggregate::{check_max_min_by_call, coerce_string_sum_arguments};
 use crate::function::common::{
     WinFunction, WinFunctionInput, count_min_sketch_args, get_arguments_and_null_treatment,
     get_null_treatment, hll_args_with_default_lg, hll_union_args_with_default_allow_different_lg,
@@ -268,6 +268,51 @@ fn aggregate_udf_window_expr(
             distinct,
         },
     }))
+}
+
+/// `max_by`/`min_by` as window functions. Spark's analysis checks apply to the function itself,
+/// so the window form rejects `IGNORE NULLS` and an out-of-range `k` as well. The window's own
+/// `ORDER BY` is not `WITHIN GROUP`, so it is not passed to the check.
+fn max_min_by_window(
+    function_name: &str,
+    func: Arc<AggregateUDF>,
+    input: WinFunctionInput,
+) -> PlanResult<expr::Expr> {
+    let WinFunctionInput {
+        arguments,
+        partition_by,
+        order_by,
+        window_frame,
+        ignore_nulls,
+        distinct,
+        function_context: _,
+    } = input;
+    check_max_min_by_call(function_name, ignore_nulls, &[], &arguments)?;
+    Ok(aggregate_udf_window_expr(
+        func,
+        arguments,
+        partition_by,
+        order_by,
+        window_frame,
+        ignore_nulls,
+        distinct,
+    ))
+}
+
+fn max_by(input: WinFunctionInput) -> PlanResult<expr::Expr> {
+    max_min_by_window(
+        "max_by",
+        Arc::new(AggregateUDF::from(MaxByFunction::new())),
+        input,
+    )
+}
+
+fn min_by(input: WinFunctionInput) -> PlanResult<expr::Expr> {
+    max_min_by_window(
+        "min_by",
+        Arc::new(AggregateUDF::from(MinByFunction::new())),
+        input,
+    )
 }
 
 fn product(input: WinFunctionInput) -> PlanResult<expr::Expr> {
@@ -761,17 +806,11 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
         ("last_value", F::custom(last_value)),
         ("listagg", F::custom(listagg)),
         ("max", F::aggregate(min_max::max_udaf)),
-        (
-            "max_by",
-            F::aggregate(|| Arc::new(AggregateUDF::from(MaxByFunction::new()))),
-        ),
+        ("max_by", F::custom(max_by)),
         ("mean", F::aggregate(average::avg_udaf)),
         ("median", F::custom(median)),
         ("min", F::aggregate(min_max::min_udaf)),
-        (
-            "min_by",
-            F::aggregate(|| Arc::new(AggregateUDF::from(MinByFunction::new()))),
-        ),
+        ("min_by", F::custom(min_by)),
         (
             "mode",
             F::aggregate(|| Arc::new(AggregateUDF::from(ModeFunction::new()))),
