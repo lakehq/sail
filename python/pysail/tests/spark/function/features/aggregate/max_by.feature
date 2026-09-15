@@ -801,7 +801,20 @@ Feature: max_by function
         | INT           | i                                   | result: integer (nullable = true)       |
         | DECIMAL       | CAST(i AS DECIMAL(5, 2))            | result: decimal(5,2) (nullable = true)  |
         | TIMESTAMP_NTZ | TIMESTAMP_NTZ '2024-01-01 00:00:00' | result: timestamp_ntz (nullable = true) |
-        | VOID          | NULL                                | result: void (nullable = true)          |
+
+    # PySpark renders `NullType` as `void` in the schema tree from 4.0 and as `null` before.
+    @spark-4
+    Scenario: max_by returns a nullable result for a VOID value argument
+      When query
+        """
+        SELECT max_by(NULL, y) AS result
+        FROM VALUES ('a', 10, 1), ('b', 50, 2), ('c', 20, 3) AS t(x, y, i)
+        """
+      Then query schema
+        """
+        root
+         |-- result: void (nullable = true)
+        """
 
     # The nested nullability flags come from the value argument unchanged.
     Scenario: max_by keeps the nested nullability of an ARRAY value argument
@@ -1109,6 +1122,8 @@ Feature: max_by function
         | k1 | a   | 1   | b    | 1   |
         | k2 | d   | 2   | NULL | 0   |
 
+    # Spark's PIVOT wraps every argument of the aggregate in `IF(pivot_col <=> value, arg, NULL)`
+    # (`PivotTransformer`), `k` included, so `k` stops being foldable and MaxMinByK rejects it.
     @spark-4.2
     Scenario: max_by top-k as the PIVOT aggregate
       When query
@@ -1117,10 +1132,7 @@ Feature: max_by function
         PIVOT (max_by(v, o, 2) FOR (p) IN ('x', 'y'))
         ORDER BY k
         """
-      Then query result ordered
-        | k  | x      | y    |
-        | k1 | [a]    | [b]  |
-        | k2 | [d, c] | NULL |
+      Then query error (?s)DATATYPE_MISMATCH.NON_FOLDABLE_INPUT.*foldable int expression
 
   Rule: Shuffled input across partitions
 

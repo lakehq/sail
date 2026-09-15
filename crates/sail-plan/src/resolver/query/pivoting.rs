@@ -64,6 +64,7 @@ impl PlanResolver<'_> {
         // aggregate function.
         for agg in &aggregates {
             check_valid_pivot_aggregate(&agg.expr, state)?;
+            check_pivot_aggregate_foldable_arguments(&agg.expr)?;
         }
 
         // For SQL pivots the grouping list is absent; the implicit grouping columns are
@@ -470,6 +471,33 @@ fn pivot_column_display_name(expr: &expr::Expr, state: &PlanResolverState) -> Pl
         Ok(state.get_field_info(column.name())?.name().to_string())
     } else {
         Ok(expr.to_string())
+    }
+}
+
+/// Spark's pivot rewrite wraps every argument of an aggregate function in
+/// `If(pivot_column <=> value, argument, NULL)` (`PivotTransformer`), so an argument the
+/// function requires to be foldable is no longer foldable. `max_by`/`min_by` require `k` to be,
+/// so Spark rejects their top-k form inside PIVOT. Sail pivots with an aggregate FILTER and keeps
+/// the arguments intact, so the rejection is reproduced here.
+fn check_pivot_aggregate_foldable_arguments(expr: &expr::Expr) -> PlanResult<()> {
+    let mut error = None;
+    expr.apply(|e| {
+        if let expr::Expr::AggregateFunction(func) = e
+            && matches!(func.func.name(), "max_by" | "min_by")
+            && let [_, _, k] = func.params.args.as_slice()
+        {
+            error = Some(PlanError::AnalysisError(format!(
+                "[DATATYPE_MISMATCH.NON_FOLDABLE_INPUT] Cannot resolve `{}` due to data type mismatch: \
+                 the input k should be a foldable int expression; however, got {k} inside PIVOT.",
+                func.func.name()
+            )));
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    match error {
+        Some(error) => Err(error),
+        None => Ok(()),
     }
 }
 

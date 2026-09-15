@@ -358,7 +358,8 @@ Feature: PIVOT rotates rows into columns
         | 2012 | 10000  | 20000 |
         | 2013 | 48000  | NULL  |
 
-    # Accepting a bare identifier must not make a malformed pivot column valid.
+    # Accepting a bare identifier must not make a malformed pivot column valid: Spark reports
+    # `test-test` as an INVALID_IDENTIFIER.
     Scenario: a pivot column that is not an identifier is still a syntax error
       When query
         """
@@ -368,5 +369,5 @@ Feature: PIVOT rotates rows into columns
           sum(earnings) FOR test-test IN ('dotNET')
         )
         """
-      Then query error (?i)(PARSE_SYNTAX_ERROR|invalid argument)
+      Then query error (?i)(INVALID_IDENTIFIER|invalid argument)
 

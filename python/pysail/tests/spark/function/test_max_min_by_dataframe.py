@@ -83,3 +83,16 @@ def test_default_column_names_and_schema(df):
     assert result.columns == ["max_by(x, y)", "min_by(x, y, 2)"]
     assert result.schema.simpleString() == "struct<max_by(x, y):string,min_by(x, y, 2):array<string>>"
     assert [f.nullable for f in result.schema.fields] == [True, True]
+
+
+def test_pivot(df):
+    rows = df.groupBy("g").pivot("x", ["a", "c"]).agg(F.max_by("i", "y")).orderBy("g").collect()
+    assert [tuple(r) for r in rows] == [("g1", 1, None), ("g2", None, 3)]
+
+
+@requires_top_k
+@pytest.mark.parametrize("values", [["a", "c"], None], ids=["explicit values", "inferred values"])
+def test_pivot_rejects_the_top_k_form(df, values):
+    """Spark's pivot wraps `k` in `IF(pivot_col <=> value, k, NULL)`, so it is no longer foldable."""
+    with pytest.raises(Exception, match="NON_FOLDABLE_INPUT"):
+        df.groupBy("g").pivot("x", values).agg(F.max_by("i", "y", 2)).collect()
