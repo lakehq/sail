@@ -14,6 +14,7 @@ use datafusion_common::{Column, ExprSchema, ScalarValue};
 use datafusion_expr::expr::{AggregateFunctionParams, ScalarFunction};
 use datafusion_expr::{
     Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, ScalarUDF, and, col, expr, lit, or,
+    try_cast,
 };
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -78,12 +79,22 @@ impl PlanResolver<'_> {
                 // but Spark's `summary` preserves the input column's integer type for
                 // percentile rows, so we cast back when the source is integer.
                 let percentile_cast = original_dtype.is_integer().then(|| original_dtype.clone());
-                if field.data_type().is_numeric() {
+                let numeric_expr = if original_dtype.is_numeric() {
+                    Some(Expr::Column(column.clone()))
+                } else if matches!(
+                    original_dtype,
+                    DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+                ) {
+                    Some(try_cast(Expr::Column(column.clone()), DataType::Float64))
+                } else {
+                    None
+                };
+                if let Some(numeric_expr) = numeric_expr {
                     if statistics.contains("mean") {
                         let mean = Expr::AggregateFunction(expr::AggregateFunction {
                             func: avg_udaf(),
                             params: AggregateFunctionParams {
-                                args: vec![Expr::Column(column.clone())],
+                                args: vec![numeric_expr.clone()],
                                 distinct: false,
                                 filter: None,
                                 order_by: vec![],
@@ -97,7 +108,7 @@ impl PlanResolver<'_> {
                         let stddev = Expr::AggregateFunction(expr::AggregateFunction {
                             func: stddev_udaf(),
                             params: AggregateFunctionParams {
-                                args: vec![Expr::Column(column.clone())],
+                                args: vec![numeric_expr.clone()],
                                 distinct: false,
                                 filter: None,
                                 order_by: vec![],
@@ -112,7 +123,7 @@ impl PlanResolver<'_> {
                             func: approx_percentile_cont_udaf(),
                             params: AggregateFunctionParams {
                                 args: vec![
-                                    Expr::Column(column.clone()),
+                                    numeric_expr.clone(),
                                     Expr::Literal(ScalarValue::Float64(Some(0.25_f64)), None),
                                 ],
                                 distinct: false,
@@ -135,7 +146,7 @@ impl PlanResolver<'_> {
                         let percentile_50_expr = Expr::AggregateFunction(expr::AggregateFunction {
                             func: approx_median_udaf(),
                             params: AggregateFunctionParams {
-                                args: vec![Expr::Column(column.clone())],
+                                args: vec![numeric_expr.clone()],
                                 distinct: false,
                                 filter: None,
                                 order_by: vec![],
@@ -157,7 +168,7 @@ impl PlanResolver<'_> {
                             func: approx_percentile_cont_udaf(),
                             params: AggregateFunctionParams {
                                 args: vec![
-                                    Expr::Column(column.clone()),
+                                    numeric_expr.clone(),
                                     Expr::Literal(ScalarValue::Float64(Some(0.75_f64)), None),
                                 ],
                                 distinct: false,
