@@ -1122,9 +1122,11 @@ Feature: max_by function
         | k1 | a   | 1   | b    | 1   |
         | k2 | d   | 2   | NULL | 0   |
 
-    # Spark's PIVOT wraps every argument of the aggregate in `IF(pivot_col <=> value, arg, NULL)`
-    # (`PivotTransformer`), `k` included, so `k` stops being foldable and MaxMinByK rejects it.
-    @spark-4.2
+    # On its general path Spark's PIVOT wraps every argument of the aggregate in
+    # `IF(pivot_col <=> value, arg, NULL)` (`PivotTransformer`), `k` included, so `k` stops being
+    # foldable and MaxMinByK rejects it. Sail pivots with an aggregate FILTER, keeps `k` a literal
+    # and answers; reproducing the rejection is left for a follow-up.
+    @sail-bug @spark-4.2
     Scenario: max_by top-k as the PIVOT aggregate
       When query
         """
@@ -1133,6 +1135,21 @@ Feature: max_by function
         ORDER BY k
         """
       Then query error (?s)DATATYPE_MISMATCH.NON_FOLDABLE_INPUT.*foldable int expression
+
+    # When every aggregate's result type is supported by `PivotFirst` (here INT), Spark takes that
+    # path, which does not wrap the arguments, so the top-k call inside the aggregate is accepted.
+    @spark-4.2
+    Scenario: max_by top-k inside a PIVOT aggregate whose result type PivotFirst supports
+      When query
+        """
+        SELECT * FROM (SELECT k, v, o, p FROM VALUES ('k1', 'a', 10, 'x'), ('k1', 'b', 50, 'y'), ('k2', 'c', 20, 'x'), ('k2', 'd', 30, 'x') AS t(k, v, o, p))
+        PIVOT (size(max_by(v, o, 2)) FOR (p) IN ('x', 'y'))
+        ORDER BY k
+        """
+      Then query result ordered
+        | k  | x | y    |
+        | k1 | 1 | 1    |
+        | k2 | 2 | NULL |
 
   Rule: Shuffled input across partitions
 

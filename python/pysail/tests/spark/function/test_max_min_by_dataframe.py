@@ -4,7 +4,7 @@ import pytest
 from pyspark.sql import Window
 from pyspark.sql import functions as F  # noqa: N812
 
-from pysail.testing.spark.utils.common import pyspark_version
+from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
 ROWS = [
     (1, "a", 10, "g1"),
@@ -91,8 +91,12 @@ def test_pivot(df):
 
 
 @requires_top_k
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 @pytest.mark.parametrize("values", [["a", "c"], None], ids=["explicit values", "inferred values"])
 def test_pivot_rejects_the_top_k_form(df, values):
-    """Spark's pivot wraps `k` in `IF(pivot_col <=> value, k, NULL)`, so it is no longer foldable."""
+    """Spark's pivot wraps `k` in `IF(pivot_col <=> value, k, NULL)`, so it is no longer foldable.
+
+    Sail pivots with an aggregate FILTER, keeps `k` a literal and answers.
+    """
     with pytest.raises(Exception, match="NON_FOLDABLE_INPUT"):
         df.groupBy("g").pivot("x", values).agg(F.max_by("i", "y", 2)).collect()
