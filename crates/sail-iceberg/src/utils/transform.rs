@@ -14,7 +14,6 @@
 ///
 /// This module contains pure computational functions for applying Iceberg partition
 /// transforms like bucket, truncate, year, month, day, and hour.
-use chrono::Datelike;
 use uuid::Uuid;
 
 use crate::spec::transform::Transform;
@@ -180,8 +179,7 @@ pub fn apply_transform(
                     _ => us_or_ns,
                 };
                 let hours = micros.div_euclid(3_600_000_000);
-                // safe downcast in typical ranges
-                let hours_i32 = i32::try_from(hours).unwrap_or(i32::MAX);
+                let hours_i32 = hours as i32;
                 Some(Literal::Primitive(PrimitiveLiteral::Int(hours_i32)))
             }
             _ => value,
@@ -191,40 +189,49 @@ pub fn apply_transform(
 
 // ==== Helpers for temporal transforms ====
 const UNIX_EPOCH_YEAR: i32 = 1970;
+const MICROSECONDS_PER_DAY: i64 = 86_400_000_000;
+
+/// Convert a count of days since 1970-01-01 to a proleptic Gregorian year and
+/// one-based month. This covers the full Iceberg date and timestamp ranges,
+/// including dates before the Unix epoch.
+fn civil_year_month_from_days(days: i64) -> (i32, i32) {
+    // Shift from 1970-01-01 to the civil calendar epoch. The negative adjustment
+    // implements floor division because Rust integer division truncates toward zero.
+    let shifted_days = days + 719_468;
+    let era = if shifted_days >= 0 {
+        shifted_days
+    } else {
+        shifted_days - 146_096
+    } / 146_097;
+    let day_of_era = shifted_days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let shifted_month = (5 * day_of_year + 2) / 153;
+    let month = shifted_month + if shifted_month < 10 { 3 } else { -9 };
+    year += i64::from(month <= 2);
+    (year as i32, month as i32)
+}
 
 pub fn days_to_year(days: i32) -> i32 {
-    #[expect(clippy::unwrap_used)]
-    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-    let date = epoch + chrono::Days::new(days as u64);
-    date.year() - UNIX_EPOCH_YEAR
+    let (year, _) = civil_year_month_from_days(i64::from(days));
+    year - UNIX_EPOCH_YEAR
 }
 
 pub fn micros_to_year(micros: i64) -> i32 {
-    chrono::DateTime::from_timestamp_micros(micros)
-        .map(|dt| dt.year() - UNIX_EPOCH_YEAR)
-        .unwrap_or(0)
+    let (year, _) = civil_year_month_from_days(micros.div_euclid(MICROSECONDS_PER_DAY));
+    year - UNIX_EPOCH_YEAR
 }
 
 pub fn days_to_months(days: i32) -> i32 {
-    #[expect(clippy::unwrap_used)]
-    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-    let date = epoch + chrono::Days::new(days as u64);
-    (date.year() - UNIX_EPOCH_YEAR) * 12 + (date.month0() as i32)
+    let (year, month) = civil_year_month_from_days(i64::from(days));
+    (year - UNIX_EPOCH_YEAR) * 12 + month - 1
 }
 
 pub fn micros_to_months(micros: i64) -> i32 {
-    let date = match chrono::DateTime::from_timestamp_micros(micros) {
-        Some(dt) => dt,
-        None => return 0,
-    };
-    #[expect(clippy::unwrap_used)]
-    let epoch = chrono::DateTime::from_timestamp_micros(0).unwrap();
-    if date > epoch {
-        (date.year() - UNIX_EPOCH_YEAR) * 12 + (date.month0() as i32)
-    } else {
-        let delta = (12 - date.month0() as i32) + 12 * (UNIX_EPOCH_YEAR - date.year() - 1);
-        -delta
-    }
+    let (year, month) = civil_year_month_from_days(micros.div_euclid(MICROSECONDS_PER_DAY));
+    (year - UNIX_EPOCH_YEAR) * 12 + month - 1
 }
 
 // ==== Helpers for bucket transform (Murmur3) ====
@@ -297,6 +304,18 @@ mod tests {
         assert_eq!(days_to_year(365), 1);
         // 730 days = 1972
         assert_eq!(days_to_year(730), 2);
+        // The day before the epoch is in 1969.
+        assert_eq!(days_to_year(-1), -1);
+        assert_eq!(days_to_year(-365), -1);
+    }
+
+    #[test]
+    fn test_month_transforms_before_epoch() {
+        assert_eq!(days_to_months(0), 0);
+        assert_eq!(days_to_months(-1), -1);
+        assert_eq!(days_to_months(-365), -12);
+        assert_eq!(micros_to_months(-1), -1);
+        assert_eq!(micros_to_year(-1), -1);
     }
 
     #[test]

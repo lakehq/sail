@@ -13,6 +13,7 @@
 pub mod expressions;
 pub mod provider;
 pub mod pruning;
+mod scan_partitioning;
 pub mod type_converter;
 
 pub use provider::*;
