@@ -10,6 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -32,7 +33,7 @@ use futures::stream::once;
 use parquet::file::properties::WriterProperties;
 use sail_common_datafusion::catalog::{CatalogPartitionField, LakehouseExecutionContext};
 use sail_common_datafusion::datasource::{
-    MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, PhysicalSinkMode,
+    MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, PhysicalSinkMode, RowLevelWriteMode,
 };
 use url::Url;
 
@@ -63,7 +64,7 @@ pub struct IcebergWriterExec {
     table_exists: bool,
     options: IcebergWriterExecOptions,
     write_context: IcebergWriteContext,
-    merge_row_intents: bool,
+    row_level_mode: Option<RowLevelWriteMode>,
     merge_distribution_keys: Option<Vec<Arc<dyn PhysicalExpr>>>,
     cache: Arc<PlanProperties>,
 }
@@ -96,7 +97,7 @@ impl IcebergWriterExec {
             table_exists,
             options,
             write_context,
-            merge_row_intents: false,
+            row_level_mode: None,
             merge_distribution_keys: None,
             cache,
         })
@@ -122,8 +123,38 @@ impl IcebergWriterExec {
             options,
             write_context,
         )?;
-        writer.merge_row_intents = true;
+        writer.row_level_mode = Some(RowLevelWriteMode::MergeOnRead);
         writer.merge_distribution_keys = Some(merge_distribution_keys);
+        Ok(writer)
+    }
+
+    pub fn new_copy_on_write(
+        input: Arc<dyn ExecutionPlan>,
+        table_url: Url,
+        partition_columns: Vec<CatalogPartitionField>,
+        options: IcebergWriterExecOptions,
+        write_context: IcebergWriteContext,
+    ) -> Result<Self> {
+        let mut writer = Self::new(
+            input,
+            table_url,
+            partition_columns,
+            PhysicalSinkMode::Append,
+            true,
+            options,
+            write_context,
+        )?;
+        if writer
+            .write_context
+            .base_table
+            .as_ref()
+            .is_some_and(|base| base.format_version == FormatVersion::V3)
+        {
+            return datafusion_common::not_impl_err!(
+                "Iceberg v3 copy-on-write requires row lineage preservation"
+            );
+        }
+        writer.row_level_mode = Some(RowLevelWriteMode::CopyOnWrite);
         Ok(writer)
     }
 
@@ -236,8 +267,8 @@ impl IcebergWriterExec {
         &self.write_context
     }
 
-    pub fn reads_merge_row_intents(&self) -> bool {
-        self.merge_row_intents
+    pub fn row_level_mode(&self) -> Option<RowLevelWriteMode> {
+        self.row_level_mode
     }
 }
 
@@ -286,7 +317,15 @@ impl ExecutionPlan for IcebergWriterExec {
             return internal_err!("IcebergWriterExec requires exactly one child");
         }
         let input = Arc::clone(&children[0]);
-        let writer = if self.merge_row_intents {
+        let writer = if self.row_level_mode == Some(RowLevelWriteMode::CopyOnWrite) {
+            Self::new_copy_on_write(
+                input,
+                self.table_url.clone(),
+                self.partition_columns.clone(),
+                self.options.clone(),
+                self.write_context.clone(),
+            )?
+        } else if self.row_level_mode == Some(RowLevelWriteMode::MergeOnRead) {
             Self::new_merge(
                 input,
                 self.table_url.clone(),
@@ -330,11 +369,12 @@ impl ExecutionPlan for IcebergWriterExec {
         let table_url = self.table_url.clone();
         let sink_mode = self.sink_mode.clone();
         let table_exists = self.table_exists;
-        let merge_projection = self
-            .merge_row_intents
+        let row_level_mode = self.row_level_mode;
+        let merge_projection = row_level_mode
+            .is_some()
             .then(|| IcebergMergeRowProjection::try_new(self.input.schema()))
             .transpose()?;
-        let writes_position_deletes = merge_projection.is_some()
+        let writes_position_deletes = row_level_mode == Some(RowLevelWriteMode::MergeOnRead)
             && self
                 .input
                 .schema()
@@ -419,6 +459,7 @@ impl ExecutionPlan for IcebergWriterExec {
             };
 
             let mut total_rows = 0u64;
+            let mut removed_data_file_paths = BTreeSet::new();
             let mut data = stream;
             while let Some(batch_result) = data.next().await {
                 let input_batch = batch_result?;
@@ -439,7 +480,11 @@ impl ExecutionPlan for IcebergWriterExec {
                             MERGE_ROW_INDEX_COLUMN,
                         )?;
                     }
-                    merge_projection.project_data_rows(&input_batch)?
+                    if row_level_mode == Some(RowLevelWriteMode::CopyOnWrite) {
+                        removed_data_file_paths
+                            .extend(merge_projection.removed_file_paths(&input_batch)?);
+                    }
+                    merge_projection.project_data_rows(&input_batch, row_level_mode)?
                 } else {
                     input_batch
                 };
@@ -469,6 +514,8 @@ impl ExecutionPlan for IcebergWriterExec {
             let commit_meta = CommitMeta {
                 table_uri: table_url.to_string(),
                 row_count: total_rows,
+                removed_data_file_paths: removed_data_file_paths.into_iter().collect(),
+                skip_empty_commit: row_level_mode == Some(RowLevelWriteMode::CopyOnWrite),
                 requirements: write_context.requirements.clone(),
                 table_properties: options.table_properties,
                 lakehouse_table: options.lakehouse_table,
@@ -505,16 +552,16 @@ impl DisplayAs for IcebergWriterExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "IcebergWriterExec(table_path={}", self.table_url)?;
-                if self.merge_row_intents {
-                    write!(f, ", merge_row_intents=true")?;
+                if let Some(mode) = self.row_level_mode {
+                    write!(f, ", row_level_mode={mode:?}")?;
                 }
                 write!(f, ")")
             }
             DisplayFormatType::TreeRender => {
                 writeln!(f, "format: iceberg")?;
                 write!(f, "table_path={}", self.table_url)?;
-                if self.merge_row_intents {
-                    write!(f, ", merge_row_intents=true")?;
+                if let Some(mode) = self.row_level_mode {
+                    write!(f, ", row_level_mode={mode:?}")?;
                 }
                 Ok(())
             }

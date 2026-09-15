@@ -266,6 +266,8 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
             let commit_meta = CommitMeta {
                 table_uri: writer_config.table_url().to_string(),
                 row_count: total_rows,
+                removed_data_file_paths: vec![],
+                skip_empty_commit: false,
                 requirements,
                 table_properties: writer_config.table_properties().to_vec(),
                 lakehouse_table,

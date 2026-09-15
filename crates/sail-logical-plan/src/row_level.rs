@@ -319,6 +319,7 @@ impl RowLevelWriteNode {
     pub fn new_delete(
         raw_target: Arc<LogicalPlan>,
         mode: RowLevelWriteMode,
+        effects: RowLevelEffectPlans,
         condition: Option<ExprWithSource>,
         target: RowLevelTarget,
     ) -> Self {
@@ -326,7 +327,7 @@ impl RowLevelWriteNode {
             target,
             raw_target,
             mode,
-            effects: RowLevelEffectPlans::default(),
+            effects,
             commit: RowLevelCommitInfo::Delete {
                 predicate: condition,
             },
@@ -673,7 +674,7 @@ pub fn expand_update(
         .collect::<HashMap<_, _>>();
     let mut write_projection = Vec::with_capacity(normalized.field_names.len() + 2);
     for (index, name) in normalized.field_names.iter().enumerate() {
-        let current = col(name);
+        let current = Expr::Column(Column::from_name(name));
         let value = assignment_map
             .get(&row_level_name_key(name, case_sensitive))
             .map(|value| {
@@ -857,7 +858,7 @@ fn apply_update_generation(
                 let generated_value = if assigned_columns
                     .contains(&row_level_name_key(name, case_sensitive))
                 {
-                    let current_value = col(name);
+                    let current_value = Expr::Column(Column::from_name(name));
                     let matches_generation = Expr::BinaryExpr(
                         datafusion_expr::expr::BinaryExpr::new(
                             Box::new(current_value.clone()),
@@ -877,10 +878,10 @@ fn apply_update_generation(
                     (*generation_expr).clone()
                 };
                 when(update_row.clone(), generated_value)
-                    .otherwise(col(name))
+                    .otherwise(Expr::Column(Column::from_name(name)))
                     .map(|expr| expr.alias(name))
             } else {
-                Ok(col(name))
+                Ok(Expr::Column(Column::from_name(name)))
             }
         })
         .collect::<Result<Vec<_>>>()?;
@@ -968,9 +969,14 @@ mod tests {
             options: vec![],
             lakehouse_table: None,
         };
-        let node =
-            RowLevelWriteNode::new_delete(plan, RowLevelWriteMode::MergeOnRead, None, target)
-                .with_expected_snapshot_id(Some(None));
+        let node = RowLevelWriteNode::new_delete(
+            plan,
+            RowLevelWriteMode::MergeOnRead,
+            RowLevelEffectPlans::default(),
+            None,
+            target,
+        )
+        .with_expected_snapshot_id(Some(None));
 
         assert_eq!(node.command(), RowLevelCommand::Delete);
         assert_eq!(node.mode(), RowLevelWriteMode::MergeOnRead);
@@ -994,8 +1000,13 @@ mod tests {
             options: vec![],
             lakehouse_table: None,
         };
-        let node =
-            RowLevelWriteNode::new_delete(plan, RowLevelWriteMode::CopyOnWrite, None, target);
+        let node = RowLevelWriteNode::new_delete(
+            plan,
+            RowLevelWriteMode::CopyOnWrite,
+            RowLevelEffectPlans::default(),
+            None,
+            target,
+        );
         let mut distinct_commit = node.clone();
         distinct_commit.commit = RowLevelCommitInfo::Delete {
             predicate: Some(ExprWithSource::new(lit(true), Some("true".into()))),

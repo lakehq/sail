@@ -10,6 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub(crate) mod copy_on_write;
 pub mod expressions;
 pub mod provider;
 pub mod pruning;

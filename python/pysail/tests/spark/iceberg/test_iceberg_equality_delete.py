@@ -359,38 +359,6 @@ def test_iceberg_sql_delete_rejects_partitioned_equality_delete_without_metadata
         _drop_table(spark, table_name)
 
 
-@pytest.mark.parametrize("delete_mode", [None, "copy-on-write"], ids=["default", "explicit-cow"])
-def test_iceberg_sql_delete_rejects_copy_on_write_before_scanning_empty_table(spark, tmp_path, delete_mode):
-    table_name = "iceberg_delete_copy_on_write_reject"
-    table_path = tmp_path / table_name
-    mode_property = "" if delete_mode is None else f", 'write.delete.mode' = '{delete_mode}'"
-
-    _drop_table(spark, table_name)
-    try:
-        spark.sql(
-            f"""
-            CREATE TABLE {table_name} (
-              id BIGINT,
-              name STRING
-            )
-            USING iceberg
-            LOCATION '{_uri_sql(table_path)}'
-            TBLPROPERTIES ('format-version' = '2'{mode_property})
-            """
-        )
-        before_metadata_path = _latest_metadata_path(table_path)
-        before_parquet_files = _parquet_file_paths(table_path)
-
-        with pytest.raises(Exception, match=r"write\.delete\.mode=copy-on-write|copy-on-write.*not supported"):
-            spark.sql("DELETE FROM iceberg_delete_copy_on_write_reject WHERE id = 1").collect()
-
-        assert spark.sql("SELECT * FROM iceberg_delete_copy_on_write_reject").collect() == []
-        assert _latest_metadata_path(table_path) == before_metadata_path
-        assert _parquet_file_paths(table_path) == before_parquet_files
-    finally:
-        _drop_table(spark, table_name)
-
-
 @pytest.mark.parametrize("column_type", ["FLOAT", "DOUBLE"])
 def test_iceberg_sql_delete_rejects_floating_equality_keys_without_file_side_effects(spark, tmp_path, column_type):
     table_name = "iceberg_delete_floating_key_reject"
