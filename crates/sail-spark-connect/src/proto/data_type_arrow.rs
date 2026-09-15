@@ -114,8 +114,15 @@ impl TryFrom<adt::Field> for sdt::StructField {
         } else {
             field.data_type().clone().try_into()?
         };
+        // Restore the original field name if it was deduplicated for the Arrow
+        // representation (Spark allows duplicate nested field names).
+        let name = field
+            .metadata()
+            .get(spec::SAIL_ORIGINAL_FIELD_NAME_METADATA_KEY)
+            .cloned()
+            .unwrap_or_else(|| field.name().clone());
         Ok(sdt::StructField {
-            name: field.name().clone(),
+            name,
             data_type: Some(data_type),
             nullable: field.is_nullable(),
             metadata: field.metadata().get(spec::SPARK_METADATA_JSON_KEY).cloned(),
@@ -509,5 +516,22 @@ mod tests {
         // Time64 Nanosecond - valid Arrow but rejected by Spark (only precision 0, 3, 6 supported)
         let arrow_type = adt::DataType::Time64(adt::TimeUnit::Nanosecond);
         assert!(DataType::try_from(arrow_type).is_err());
+    }
+
+    #[test]
+    fn test_restore_deduplicated_field_name() -> SparkResult<()> {
+        // A field deduplicated for the Arrow representation reports its original
+        // (pre-deduplication) name back to the client.
+        let field =
+            adt::Field::new("x_0", adt::DataType::Int32, true).with_metadata(HashMap::from([(
+                spec::SAIL_ORIGINAL_FIELD_NAME_METADATA_KEY.to_string(),
+                "x".to_string(),
+            )]));
+        assert_eq!(sdt::StructField::try_from(field)?.name, "x");
+
+        // A field without the metadata key keeps its own name.
+        let field = adt::Field::new("y", adt::DataType::Int32, true);
+        assert_eq!(sdt::StructField::try_from(field)?.name, "y");
+        Ok(())
     }
 }
