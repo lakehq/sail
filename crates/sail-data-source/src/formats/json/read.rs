@@ -2,7 +2,7 @@ use std::io::BufReader;
 use std::sync::Arc;
 
 use bytes::Buf;
-use datafusion::arrow::datatypes::{Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::json::reader::{ValueIter, infer_json_schema_from_iterator};
 use datafusion::catalog::Session;
 use datafusion::datasource::physical_plan::JsonSource;
@@ -88,7 +88,13 @@ impl ReadFormat for JsonReadFormat {
             }
         }
 
-        Ok(Arc::new(Schema::try_merge(schemas)?))
+        let schema = Schema::try_merge(schemas)?;
+        let schema = if self.options.drop_field_if_all_null {
+            drop_all_null_fields(schema)
+        } else {
+            schema
+        };
+        Ok(Arc::new(schema))
     }
 
     async fn scan(&self, _ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {
@@ -120,6 +126,42 @@ impl ReadFormat for JsonReadFormat {
     fn path_glob_filter(&self) -> Option<&str> {
         self.options.path_glob_filter.as_deref()
     }
+}
+
+/// Removes fields whose inferred JSON type contains no concrete value.
+fn drop_all_null_fields(schema: Schema) -> Schema {
+    let fields = schema
+        .fields()
+        .iter()
+        .filter_map(|field| canonicalize_inferred_field(field))
+        .collect::<Vec<_>>();
+    Schema::new_with_metadata(fields, schema.metadata().clone())
+}
+
+/// Canonicalizes one field using Spark's `dropFieldIfAllNull` behavior.
+fn canonicalize_inferred_field(field: &Field) -> Option<Field> {
+    let data_type = match field.data_type() {
+        DataType::Null => return None,
+        DataType::List(element) => {
+            let element = canonicalize_inferred_field(element)?;
+            DataType::List(Arc::new(element))
+        }
+        DataType::Struct(fields) => {
+            let fields = fields
+                .iter()
+                .filter_map(|field| canonicalize_inferred_field(field))
+                .collect::<Vec<_>>();
+            if fields.is_empty() {
+                return None;
+            }
+            DataType::Struct(fields.into())
+        }
+        data_type => data_type.clone(),
+    };
+    Some(
+        Field::new(field.name(), data_type, field.is_nullable())
+            .with_metadata(field.metadata().clone()),
+    )
 }
 
 /// A tuple of (Schema, records_consumed) where records_consumed is the number of records that were
