@@ -214,3 +214,74 @@ pub fn contains_float(data_type: &DataType) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::datatypes::Fields;
+    use datafusion::arrow::error::ArrowError;
+    use parquet_variant_compute::VariantType;
+    use sail_common::geoarrow::extension::GeoArrowMetadata;
+
+    use super::*;
+
+    /// A VARIANT as read from a lakehouse table: the `arrow.parquet.variant` extension on the
+    /// field, but no Sail marker on its `metadata` child, so the `DataType` alone looks like an
+    /// ordinary struct. SQL cannot build one, which is why this is not a BDD scenario.
+    fn extension_only_variant(name: &str) -> Result<Field, ArrowError> {
+        let storage = DataType::Struct(Fields::from(vec![
+            Field::new("metadata", DataType::Binary, false),
+            Field::new("value", DataType::Binary, true),
+        ]));
+        let mut field = Field::new(name, storage, true);
+        field.try_with_extension_type(VariantType)?;
+        Ok(field)
+    }
+
+    fn geometry(name: &str) -> Result<Field, ArrowError> {
+        let mut field = Field::new(name, DataType::Binary, true);
+        field.try_with_extension_type(GeoArrowWkbType {
+            metadata: GeoArrowMetadata::default(),
+        })?;
+        Ok(field)
+    }
+
+    #[test]
+    fn extension_only_variant_is_not_orderable() -> Result<(), ArrowError> {
+        let variant = extension_only_variant("v")?;
+        assert!(is_orderable(variant.data_type()));
+        assert!(!is_orderable_field(&variant));
+        Ok(())
+    }
+
+    #[test]
+    fn extension_only_variant_nested_in_a_struct_is_not_orderable() -> Result<(), ArrowError> {
+        let nested = Field::new(
+            "s",
+            DataType::Struct(Fields::from(vec![extension_only_variant("v")?])),
+            true,
+        );
+        assert!(!is_orderable_field(&nested));
+        Ok(())
+    }
+
+    #[test]
+    fn geometry_is_not_orderable() -> Result<(), ArrowError> {
+        let geometry = geometry("g")?;
+        assert!(is_orderable(geometry.data_type()));
+        assert!(!is_orderable_field(&geometry));
+        Ok(())
+    }
+
+    #[test]
+    fn an_unmarked_struct_with_variant_field_names_is_orderable() {
+        let shaped = Field::new(
+            "s",
+            DataType::Struct(Fields::from(vec![
+                Field::new("metadata", DataType::Binary, false),
+                Field::new("value", DataType::Binary, true),
+            ])),
+            true,
+        );
+        assert!(is_orderable_field(&shaped));
+    }
+}
