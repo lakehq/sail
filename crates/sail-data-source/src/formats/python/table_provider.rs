@@ -91,9 +91,9 @@ impl TableProvider for PythonTableProvider {
         // Get partitions from Python via executor, passing filters to push
         // This ensures pushFilters() and partitions() are called on the same reader instance
         // Returns PartitionPlan with pickled reader (filters applied) and partitions
-        let partition_plan = self
+        let (partition_plan, execution_schema) = self
             .executor
-            .get_partitions(
+            .get_partitions_with_projection(
                 &self.command,
                 &self.schema,
                 required_schema.as_ref(),
@@ -103,11 +103,11 @@ impl TableProvider for PythonTableProvider {
 
         let needs_projection = required_schema
             .as_ref()
-            .is_some_and(|required| required != &partition_plan.schema);
+            .is_some_and(|required| required != &execution_schema);
         // Create execution plan with pickled reader (filters already applied)
         let exec = PythonDataSourceExec::new(
             partition_plan.pickled_reader,
-            partition_plan.schema,
+            execution_schema,
             partition_plan.partitions,
         );
         let exec = Arc::new(exec) as Arc<dyn ExecutionPlan>;
