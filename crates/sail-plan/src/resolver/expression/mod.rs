@@ -28,7 +28,7 @@ mod window;
 pub(super) struct NamedExpr {
     /// The name of the expression to be used in projection.
     /// The name can be empty if the expression is not supposed to exist in the resolved
-    /// projection (a wildcard expression, a sort expression, etc.).
+    /// projection (a sort expression, etc.).
     /// A list of names may be present for multi-expression (a temporary expression
     /// to be expanded into multiple ones in the projection).
     pub name: Vec<String>,
@@ -406,9 +406,10 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use arrow::datatypes::{DataType, Field};
     use datafusion::execution::SessionStateBuilder;
     use datafusion::prelude::SessionContext;
-    use datafusion_common::{DFSchema, ScalarValue};
+    use datafusion_common::{DFSchema, ScalarValue, TableReference};
     use datafusion_expr::expr::{Alias, Expr};
     use datafusion_expr::{BinaryExpr, Operator};
     use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
@@ -418,10 +419,11 @@ mod tests {
     use sail_common::spec;
     use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
     use sail_common_datafusion::session::plan::PlanService;
+    use sail_function::scalar::multi_expr::MultiExpr;
 
     use crate::catalog::SparkCatalogObjectDisplay;
     use crate::config::PlanConfig;
-    use crate::error::PlanResult;
+    use crate::error::{PlanError, PlanResult};
     use crate::formatter::SparkPlanFormatter;
     use crate::resolver::PlanResolver;
     use crate::resolver::expression::NamedExpr;
@@ -449,6 +451,77 @@ mod tests {
         state.config_mut().set_extension(Arc::new(catalog_manager));
         state.config_mut().set_extension(Arc::new(plan_service));
         Ok(SessionContext::new_with_state(state))
+    }
+
+    #[tokio::test]
+    async fn test_wildcard_resolves_to_visible_column_expressions() -> PlanResult<()> {
+        let ctx = create_session()?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let mut state = PlanResolverState::new();
+        let a = state.register_field_name("a");
+        let hidden = state.register_hidden_field_name("hidden");
+        let b = state.register_field_name("b");
+        let schema = Arc::new(DFSchema::new_with_metadata(
+            vec![
+                (
+                    Some(TableReference::bare("t")),
+                    Arc::new(Field::new(a, DataType::Int32, true)),
+                ),
+                (
+                    Some(TableReference::bare("t")),
+                    Arc::new(Field::new(hidden, DataType::Int32, true)),
+                ),
+                (
+                    Some(TableReference::bare("u")),
+                    Arc::new(Field::new(b, DataType::Int32, true)),
+                ),
+            ],
+            HashMap::new(),
+        )?);
+        for (target, names, indices) in [
+            (None, vec!["a", "b"], vec![0, 2]),
+            (Some(spec::ObjectName::bare("t")), vec!["a"], vec![0]),
+        ] {
+            for outer in [false, true] {
+                let mut scope = state.enter_query_scope(schema.clone());
+                let input_schema = if outer {
+                    Arc::new(DFSchema::empty())
+                } else {
+                    schema.clone()
+                };
+                let resolved = resolver
+                    .resolve_named_expression(
+                        spec::Expr::UnresolvedStar {
+                            target: target.clone(),
+                            plan_id: None,
+                            wildcard_options: Default::default(),
+                        },
+                        &input_schema,
+                        scope.state(),
+                    )
+                    .await?;
+                assert_eq!(resolved.name, names);
+                let Expr::ScalarFunction(function) = resolved.expr else {
+                    return Err(PlanError::internal(
+                        "wildcard must resolve to a list of concrete expressions",
+                    ));
+                };
+                assert!(function.func.inner().is::<MultiExpr>());
+                let expected = indices
+                    .iter()
+                    .map(|&index| {
+                        let column = schema.columns()[index].clone();
+                        if outer {
+                            Expr::OuterReferenceColumn(schema.field(index).clone(), column)
+                        } else {
+                            Expr::Column(column)
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(function.args, expected);
+            }
+        }
+        Ok(())
     }
 
     #[tokio::test]

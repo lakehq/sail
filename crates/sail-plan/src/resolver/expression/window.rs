@@ -143,7 +143,13 @@ impl PlanResolver<'_> {
                     (window, function_name, argument_display_names, is_distinct)
                 } else {
                     let (argument_display_names, arguments) = self
-                        .resolve_expressions_and_names(arguments, schema, state)
+                        .resolve_aggregate_arguments(
+                            &canonical_function_name,
+                            arguments,
+                            is_distinct,
+                            schema,
+                            state,
+                        )
                         .await?;
                     let function = get_built_in_window_function(&canonical_function_name)?;
                     let input = WinFunctionInput {

@@ -43,6 +43,17 @@ def test_struct_wildcard_after_join(spark):
     ]
 
 
+def test_struct_wildcard_after_using_join(spark):
+    left = spark.createDataFrame([(1,), (2,)], "id INT")
+    right = spark.createDataFrame([(2,), (3,)], "id INT")
+    out = left.join(right, "id", "full").select(F.struct("*").alias("record")).orderBy("record.id")
+
+    assert out.schema == StructType(
+        [StructField("record", StructType([StructField("id", IntegerType(), True)]), False)]
+    )
+    assert out.collect() == [Row(record=Row(id=1)), Row(record=Row(id=2)), Row(record=Row(id=3))]
+
+
 def test_struct_wildcard_on_struct_column(spark):
     df = spark.createDataFrame(
         data=[(1, "A"), (2, "B")],

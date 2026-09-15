@@ -4,8 +4,6 @@ use std::sync::Arc;
 use chrono::FixedOffset;
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::catalog::TableFunction;
-use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
-use datafusion_expr::expr::Expr;
 use lazy_static::lazy_static;
 use sail_common_datafusion::catalog::FunctionStatus;
 
@@ -77,29 +75,6 @@ pub(crate) fn list_built_in_function_statuses() -> Vec<FunctionStatus> {
 }
 
 pub use generator::get_outer_built_in_generator_functions;
-
-/// This function is temporary and should ONLY be used for COUNT(*).
-/// [`Expr::Wildcard`]
-///
-/// Only aware of this being applicable to [`datafusion::functions_aggregate::count`],
-/// although it may be applicable elsewhere as well.
-/// Similarly, this function may need to be adjusted if there are other possible pattern matches
-/// that were not considered.
-#[inline(always)]
-pub(super) fn transform_count_star_wildcard_expr(arguments: Vec<Expr>) -> Vec<Expr> {
-    match arguments.as_slice() {
-        #[expect(deprecated)]
-        [
-            Expr::Wildcard {
-                qualifier: None,
-                options: _,
-            },
-        ] => {
-            vec![Expr::Literal(COUNT_STAR_EXPANSION, None)]
-        }
-        _ => arguments,
-    }
-}
 
 pub fn is_spark_compatible_arrow_fixed_offset(timezone: &str) -> bool {
     if !timezone.starts_with('+') && !timezone.starts_with('-') {

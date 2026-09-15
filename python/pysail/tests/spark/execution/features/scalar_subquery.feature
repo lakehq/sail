@@ -1,4 +1,14 @@
 Feature: Scalar subqueries in distributed execution
+
+  Scenario: Local wildcard qualifier shadows the outer query
+    When query
+      """
+      SELECT (SELECT t.* FROM VALUES (9) AS t(id)) AS value FROM VALUES (1) AS t(id)
+      """
+    Then query result collected
+      | value |
+      | 9     |
+
   Scenario: Scalar subquery in filter before aggregate
     When query
       """

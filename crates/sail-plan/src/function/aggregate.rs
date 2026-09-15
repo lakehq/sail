@@ -47,7 +47,6 @@ use crate::function::common::{
     get_null_treatment, hll_args_with_default_lg, hll_union_args_with_default_allow_different_lg,
     theta_args_with_default_lg,
 };
-use crate::function::transform_count_star_wildcard_expr;
 
 lazy_static! {
     static ref BUILT_IN_AGGREGATE_FUNCTIONS: HashMap<&'static str, AggFunction> =
@@ -462,9 +461,7 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         function_context,
     } = input;
     let null_treatment = get_null_treatment(ignore_nulls);
-    // For COUNT(DISTINCT *), the resolver already expanded the wildcard to column references
-    // (with hidden-column filtering). For COUNT(*), convert to COUNT(1).
-    let mut args = transform_count_star_wildcard_expr(arguments);
+    let mut args = arguments;
     if args.is_empty() {
         if function_context
             .plan_config

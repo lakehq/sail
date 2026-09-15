@@ -47,7 +47,6 @@ use crate::function::common::{
     get_null_treatment, hll_args_with_default_lg, hll_union_args_with_default_allow_different_lg,
     theta_args_with_default_lg,
 };
-use crate::function::transform_count_star_wildcard_expr;
 
 lazy_static! {
     static ref BUILT_IN_WINDOW_FUNCTIONS: HashMap<&'static str, WinFunction> =
@@ -445,11 +444,10 @@ fn count(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         distinct,
         function_context: _,
     } = input;
-    let args = transform_count_star_wildcard_expr(arguments);
     Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
         fun: WindowFunctionDefinition::AggregateUDF(count::count_udaf()),
         params: WindowFunctionParams {
-            args,
+            args: arguments,
             partition_by,
             order_by,
             window_frame,

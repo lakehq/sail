@@ -125,7 +125,7 @@ impl PlanResolver<'_> {
         let expr = self
             .resolve_named_expression(expression, &schema, state)
             .await?;
-        let (input, expr) = self.rewrite_wildcard(input, vec![expr], state)?;
+        let expr = self.normalize_projection_expressions(vec![expr], &input)?;
         let (input, expr) = self.rewrite_projection::<MonotonicIdRewriter>(input, expr, state)?;
         let (input, expr) =
             self.rewrite_projection::<SparkPartitionIdRewriter>(input, expr, state)?;

@@ -1,5 +1,49 @@
 Feature: count aggregate function
 
+  Rule: count star counts rows independently of column nullability
+
+    Scenario: count star includes null rows
+      When query
+        """
+        SELECT COUNT(*), COUNT(value)
+        FROM VALUES (NULL), (1), (NULL) AS t(value)
+        """
+      Then query result
+        | count(1) | count(value) |
+        | 3        | 1            |
+
+    Scenario: count star without an input relation
+      When query
+        """
+        SELECT COUNT(*)
+        """
+      Then query result
+        | count(1) |
+        | 1        |
+
+    Scenario: count star over empty input
+      When query
+        """
+        SELECT COUNT(*) FROM (SELECT 1 AS value WHERE FALSE)
+        """
+      Then query result
+        | count(1) |
+        | 0        |
+
+    Scenario: count star window includes null rows in each partition
+      When query
+        """
+        SELECT g, COUNT(*) OVER (PARTITION BY g) AS rows,
+          COUNT(value) OVER (PARTITION BY g) AS non_nulls
+        FROM VALUES ('x', NULL), ('x', 1), ('y', NULL) AS t(g, value)
+        ORDER BY g
+        """
+      Then query result ordered
+        | g | rows | non_nulls |
+        | x | 2    | 1         |
+        | x | 2    | 1         |
+        | y | 1    | 0         |
+
   Rule: count handles literal inputs
 
     Scenario: count distinguishes non-null, null, distinct, and filtered literals
