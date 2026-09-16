@@ -871,7 +871,6 @@ impl<'a> TaskInputBuilder<'a> {
     fn build_task_input_keys(&self) -> ExecutionResult<Vec<Vec<TaskInputKey>>> {
         let input_partitions = self.producer.plan.output_partitioning().partition_count();
         let input_channels = self.producer.distribution.channels();
-        let output_partitions = self.consumer.plan.output_partitioning().partition_count();
 
         match self.input.mode {
             InputMode::Forward | InputMode::Merge => {
@@ -921,9 +920,12 @@ impl<'a> TaskInputBuilder<'a> {
                 }
                 Ok(vec![keys])
             }
-            InputMode::Rescale => {
+            InputMode::Rescale {
+                partitions: output_partitions,
+            } => {
                 // Keep rescale input expansion aligned with CoalesceExec's contiguous partition
-                // grouping, where each output partition consumes an evenly divided input range.
+                // grouping. A parent such as UnionExec can change the containing stage's
+                // partition count, so use the target count recorded on this input edge.
                 let mut groups = Vec::with_capacity(output_partitions);
                 for output_partition in 0..output_partitions {
                     let start = output_partition * input_partitions / output_partitions;

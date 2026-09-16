@@ -706,7 +706,13 @@ fn create_rescale_input(
         OutputMode::Pipelined,
     )?;
     let properties = stage_properties_with_unknown_partitioning(graph, stage, output_partitions);
-    Ok(stage_input_exec(stage, InputMode::Rescale, properties))
+    Ok(stage_input_exec(
+        stage,
+        InputMode::Rescale {
+            partitions: output_partitions,
+        },
+        properties,
+    ))
 }
 
 fn create_shuffle(
@@ -1150,7 +1156,7 @@ mod tests {
             graph.stages()[1].inputs.as_slice(),
             [StageInput {
                 stage: 0,
-                mode: InputMode::Rescale,
+                mode: InputMode::Rescale { partitions: 2 },
             }]
         ));
     }
