@@ -2,7 +2,7 @@ import gzip
 
 import pytest
 from pyspark.sql import Row
-from pyspark.sql.types import IntegerType, StringType, StructField, StructType
+from pyspark.sql.types import IntegerType, LongType, StringType, StructField, StructType
 
 from pysail.testing.spark.utils.sql import escape_sql_identifier
 
@@ -55,6 +55,23 @@ def test_json_read_options(spark, sample_df, tmp_path):
     read_df = spark.read.option("schemaInferMaxRecords", 1).json(path).select("col1", "col2")
     assert read_df.count() == sample_df.count()
     assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
+
+
+def test_json_read_drop_field_if_all_null(spark, tmp_path):
+    """Drop fields containing only nulls from an inferred JSON schema."""
+    data_path = tmp_path / "drop_field_if_all_null.json"
+    data_path.write_text(
+        '{"a": null, "b": 1, "c": 3.0}\n{"a": null, "b": null, "c": "string"}\n{"a": null, "b": null, "c": null}\n'
+    )
+
+    df = spark.read.option("dropFieldIfAllNull", True).json(str(data_path))
+
+    assert df.schema == StructType(
+        [
+            StructField("b", LongType(), nullable=True),
+            StructField("c", StringType(), nullable=True),
+        ]
+    )
 
 
 def test_json_format_path(spark, tmp_path):
