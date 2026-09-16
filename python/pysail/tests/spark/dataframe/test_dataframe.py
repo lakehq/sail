@@ -73,6 +73,29 @@ def test_dataframe_drop(spark):
     )
 
 
+def test_dataframe_describe_and_summary_string_column(spark):
+    """Compute Spark-compatible statistics for a string column."""
+    df = spark.createDataFrame([("Alice",), ("Bob",), (None,)], "name STRING")
+
+    assert {row.summary: row.name for row in df.describe("name").collect()} == {
+        "count": "2",
+        "mean": None,
+        "stddev": None,
+        "min": "Alice",
+        "max": "Bob",
+    }
+    assert {row.summary: row.name for row in df.summary().collect()} == {
+        "count": "2",
+        "mean": None,
+        "stddev": None,
+        "min": "Alice",
+        "25%": None,
+        "50%": None,
+        "75%": None,
+        "max": "Bob",
+    }
+
+
 def test_dataframe_with_column_alias(spark):
     df = spark.createDataFrame(
         schema="id INTEGER, value STRING",
