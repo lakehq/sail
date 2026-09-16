@@ -10,8 +10,13 @@ from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 def test_correlated_exists_rejects_nested_limit_before_grouping(spark, negated):
     candidate = spark.createDataFrame([(1,), (2,), (3,)], "id INT").alias("c")
     lookup = spark.createDataFrame([(1,), (1,), (2,), (2,)], "id INT").alias("l")
+    # PySpark 4.0 resolves string grouping keys before the outer query is bound.
     subquery = (
-        lookup.where(F.col("l.id") == F.col("c.id").outer()).limit(1).groupBy("id").count().where(F.col("count") > 1)
+        lookup.where(F.col("l.id") == F.col("c.id").outer())
+        .limit(1)
+        .groupBy(F.col("id"))
+        .count()
+        .where(F.col("count") > 1)
     )
     present = subquery.exists()
     if negated:
