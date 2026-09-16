@@ -16,6 +16,7 @@ use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::PlanRewriter;
+use crate::resolver::tree::exists::ExistsRewriter;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
 use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
@@ -52,6 +53,7 @@ impl PlanResolver<'_> {
         if has_aggregate {
             self.rewrite_aggregate(input, expr, vec![], None, false, state)
         } else {
+            let (input, expr) = self.rewrite_projection::<ExistsRewriter>(input, expr, state)?;
             let expr = self.rewrite_named_expressions(expr, state)?;
             Ok(LogicalPlan::Projection(Projection::try_new(
                 expr,

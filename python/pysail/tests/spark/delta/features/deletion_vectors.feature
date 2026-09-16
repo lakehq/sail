@@ -140,6 +140,93 @@ Feature: Delta Lake Deletion Vectors (Merge-on-Read)
         | 3  | Gamma |
         | 4  | Delta |
 
+    Scenario: SQL row existence counts live rows after a deletion vector
+      Given statement
+        """
+        DELETE FROM delta_dv_read WHERE id < 4
+        """
+      Then file tree in location matches
+        """
+        📂 <hex-prefix>
+          📄 deletion_vector_<uuid>.bin
+        📄 part-<id>.<codec>.parquet
+        """
+      When query
+        """
+        SELECT 1 AS present FROM delta_dv_read LIMIT 1
+        """
+      Then query result collected
+        | present |
+        | 1       |
+      When query
+        """
+        SELECT 1 AS present WHERE EXISTS(SELECT * FROM delta_dv_read WHERE id < 4)
+        """
+      Then query result collected
+        | present |
+      When query
+        """
+        SELECT 1 AS absent WHERE NOT EXISTS(SELECT * FROM delta_dv_read WHERE id < 4)
+        """
+      Then query result collected
+        | absent |
+        | 1      |
+      When query
+        """
+        EXPLAIN SELECT 1 AS present FROM delta_dv_read LIMIT 1
+        """
+      Then query plan matches snapshot
+
+    Scenario: SQL row existence preserves empty and historical deletion vector snapshots
+      Given statement
+        """
+        DELETE FROM delta_dv_read WHERE id < 4
+        """
+      Given statement
+        """
+        DELETE FROM delta_dv_read WHERE id = 4
+        """
+      When query
+        """
+        SELECT 1 AS present FROM delta_dv_read LIMIT 1
+        """
+      Then query result collected
+        | present |
+      When query
+        """
+        SELECT 1 AS present WHERE EXISTS(SELECT * FROM delta_dv_read)
+        """
+      Then query result collected
+        | present |
+      When query
+        """
+        SELECT 1 AS absent WHERE NOT EXISTS(SELECT * FROM delta_dv_read)
+        """
+      Then query result collected
+        | absent |
+        | 1      |
+      When query
+        """
+        SELECT 1 AS present FROM delta_dv_read VERSION AS OF 2 LIMIT 1
+        """
+      Then query result collected
+        | present |
+        | 1       |
+      When query
+        """
+        SELECT
+          EXISTS(SELECT * FROM delta_dv_read) AS current_present,
+          EXISTS(SELECT * FROM delta_dv_read VERSION AS OF 2) AS previous_present
+        """
+      Then query result collected
+        | current_present | previous_present |
+        | false           | true             |
+      When query
+        """
+        EXPLAIN SELECT 1 AS present FROM delta_dv_read LIMIT 1
+        """
+      Then query plan matches snapshot
+
     Scenario: Existing deletion vectors remain active after disabling new deletion vectors
       Given statement
         """

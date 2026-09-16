@@ -714,3 +714,113 @@ Feature: Scalar subqueries in distributed execution
       ORDER BY outer_t.k
       """
     Then query plan matches snapshot
+
+  Rule: Projected EXISTS returns a non-null scalar boolean
+    Scenario Outline: Projected EXISTS preserves subquery row existence
+      When query
+        """
+        SELECT EXISTS(<subquery>) AS present, NOT EXISTS(<subquery>) AS absent
+        """
+      Then query result collected
+        | present   | absent   |
+        | <present> | <absent> |
+      Then query schema
+        """
+        root
+         |-- present: boolean (nullable = false)
+         |-- absent: boolean (nullable = false)
+        """
+
+      Examples:
+        | subquery                                                             | present | absent |
+        | SELECT * FROM VALUES (1), (2) AS t(v)                                | true    | false  |
+        | SELECT CAST(NULL AS INT)                                             | true    | false  |
+        | SELECT * FROM VALUES (1) AS t(v) WHERE v > 1                         | false   | true   |
+        | SELECT * FROM VALUES (1), (2) AS t(v) LIMIT 0                        | false   | true   |
+        | SELECT * FROM VALUES (1), (2) AS t(v) LIMIT 1 OFFSET 1               | true    | false  |
+        | SELECT * FROM VALUES (1), (2) AS t(v) LIMIT 1 OFFSET 2               | false   | true   |
+        | SELECT COUNT(*) FROM VALUES (1) AS t(v) WHERE v > 1                  | true    | false  |
+        | SELECT v FROM VALUES (1), (2) AS t(v) GROUP BY v HAVING COUNT(*) > 2 | false   | true   |
+
+    Scenario: Projected EXISTS composes with conditional and boolean expressions
+      When query
+        """
+        SELECT
+          CASE WHEN EXISTS(SELECT * FROM VALUES (1) AS t(v)) THEN 'present' ELSE 'empty' END AS state,
+          EXISTS(SELECT * FROM VALUES (1) AS t(v) WHERE v > 1)
+            OR EXISTS(SELECT * FROM VALUES (1) AS t(v)) AS any_rows,
+          NOT (EXISTS(SELECT * FROM VALUES (1) AS t(v) WHERE v > 1)) AS absent
+        """
+      Then query result collected
+        | state   | any_rows | absent |
+        | present | true     | true   |
+
+    Scenario: Projected EXISTS beside an aggregate preserves the aggregate result
+      When query
+        """
+        SELECT COUNT(*) AS row_count,
+          EXISTS(SELECT * FROM VALUES (1) AS lookup(v)) AS present
+        FROM VALUES (1), (2) AS t(v)
+        """
+      Then query result collected
+        | row_count | present |
+        | 2         | true    |
+
+    Scenario: Projected correlated EXISTS preserves duplicates and null keys
+      When query
+        """
+        SELECT candidate.id,
+          EXISTS(
+            SELECT * FROM VALUES (1), (1), (CAST(NULL AS INT)) AS lookup(id)
+            WHERE lookup.id = candidate.id
+          ) AS present,
+          NOT EXISTS(
+            SELECT * FROM VALUES (1), (1), (CAST(NULL AS INT)) AS lookup(id)
+            WHERE lookup.id = candidate.id
+          ) AS absent
+        FROM VALUES (1), (1), (2), (CAST(NULL AS INT)) AS candidate(id)
+        ORDER BY candidate.id NULLS LAST
+        """
+      Then query result collected ordered
+        | id   | present | absent |
+        | 1    | true    | false  |
+        | 1    | true    | false  |
+        | 2    | false   | true   |
+        | NULL | false   | true   |
+      Then query schema
+        """
+        root
+         |-- id: integer (nullable = true)
+         |-- present: boolean (nullable = false)
+         |-- absent: boolean (nullable = false)
+        """
+
+    Scenario Outline: Projected correlated EXISTS preserves predicates and row bounds
+      When query
+        """
+        SELECT candidate.id, EXISTS(<subquery>) AS present
+        FROM VALUES (1), (2), (3) AS candidate(id)
+        ORDER BY candidate.id
+        """
+      Then query result collected ordered
+        | id | present  |
+        | 1  | <first>  |
+        | 2  | <second> |
+        | 3  | <third>  |
+      Then query schema
+        """
+        root
+         |-- id: integer (nullable = false)
+         |-- present: boolean (nullable = false)
+        """
+
+      Examples:
+        | subquery                                                                                                    | first | second | third |
+        | SELECT * FROM VALUES (1), (1), (2) AS lookup(id) WHERE lookup.id < candidate.id                             | false | true   | true  |
+        | SELECT * FROM VALUES (1), (1), (2) AS lookup(id) WHERE lookup.id = candidate.id OR lookup.id > candidate.id | true  | true   | false |
+        | SELECT * FROM VALUES (1), (1), (2) AS lookup(id) WHERE lookup.id = candidate.id LIMIT 0                     | false | false  | false |
+        | SELECT * FROM VALUES (1), (1), (2) AS lookup(id) WHERE lookup.id = candidate.id LIMIT 1                     | true  | true   | false |
+        | SELECT * FROM VALUES (1), (1), (2) AS lookup(id) WHERE lookup.id = candidate.id LIMIT 1 OFFSET 1            | true  | false  | false |
+        | SELECT * FROM VALUES (1), (1), (2) AS lookup(id) WHERE lookup.id = candidate.id LIMIT 1 OFFSET 3            | false | false  | false |
+        | SELECT COUNT(*) FROM VALUES (1) AS lookup(id) WHERE lookup.id = candidate.id                                | true  | true   | true  |
+        | SELECT COUNT(*) FROM VALUES (1) AS lookup(id) WHERE lookup.id = candidate.id LIMIT 1 OFFSET 1               | false | false  | false |
