@@ -824,3 +824,110 @@ Feature: Scalar subqueries in distributed execution
         | SELECT * FROM VALUES (1), (1), (2) AS lookup(id) WHERE lookup.id = candidate.id LIMIT 1 OFFSET 3            | false | false  | false |
         | SELECT COUNT(*) FROM VALUES (1) AS lookup(id) WHERE lookup.id = candidate.id                                | true  | true   | true  |
         | SELECT COUNT(*) FROM VALUES (1) AS lookup(id) WHERE lookup.id = candidate.id LIMIT 1 OFFSET 1               | false | false  | false |
+
+    @sail-bug
+    Scenario: Sorted projected EXISTS supports a smaller lookup
+      When query
+        """
+        SELECT candidate.id,
+          EXISTS(
+            SELECT * FROM VALUES (1) AS lookup(id) WHERE lookup.id = candidate.id
+          ) AS present
+        FROM VALUES (1), (1), (2), (CAST(NULL AS INT)) AS candidate(id)
+        ORDER BY candidate.id NULLS LAST
+        """
+      Then query result collected ordered
+        | id   | present |
+        | 1    | true    |
+        | 1    | true    |
+        | 2    | false   |
+        | NULL | false   |
+      Then query schema
+        """
+        root
+         |-- id: integer (nullable = true)
+         |-- present: boolean (nullable = false)
+        """
+
+    Scenario: Sorted projected NOT EXISTS supports a smaller lookup
+      When query
+        """
+        SELECT candidate.id,
+          NOT EXISTS(
+            SELECT * FROM VALUES (1) AS lookup(id) WHERE lookup.id = candidate.id
+          ) AS present
+        FROM VALUES (1), (1), (2), (CAST(NULL AS INT)) AS candidate(id)
+        ORDER BY candidate.id NULLS LAST
+        """
+      Then query result collected ordered
+        | id   | present |
+        | 1    | false   |
+        | 1    | false   |
+        | 2    | true    |
+        | NULL | true    |
+      Then query schema
+        """
+        root
+         |-- id: integer (nullable = true)
+         |-- present: boolean (nullable = false)
+        """
+
+    @sail-bug
+    Scenario: Sorted projected EXISTS supports a single-row lookup
+      When query
+        """
+        SELECT candidate.id,
+          EXISTS(SELECT * FROM VALUES (1) AS lookup(id) WHERE lookup.id = candidate.id) AS present
+        FROM VALUES (1), (2), (3) AS candidate(id)
+        ORDER BY candidate.id
+        """
+      Then query result collected ordered
+        | id | present |
+        | 1  | true    |
+        | 2  | false   |
+        | 3  | false   |
+
+    Scenario: Sorted projected EXISTS composes with grouping and LIMIT
+      When query
+        """
+        SELECT candidate.id, COUNT(*) AS row_count,
+          EXISTS(SELECT * FROM VALUES (1) AS lookup(id) WHERE lookup.id = candidate.id) AS present
+        FROM VALUES (1), (1), (2) AS candidate(id)
+        GROUP BY candidate.id
+        ORDER BY candidate.id DESC
+        LIMIT 1
+        """
+      Then query result collected ordered
+        | id | row_count | present |
+        | 2  | 1         | false   |
+
+    @sail-bug
+    Scenario: Projected EXISTS can order by the boolean result
+      When query
+        """
+        SELECT candidate.id,
+          EXISTS(SELECT * FROM VALUES (1) AS lookup(id) WHERE lookup.id = candidate.id) AS present
+        FROM VALUES (2), (1), (3) AS candidate(id)
+        ORDER BY present DESC, candidate.id DESC
+        """
+      Then query result collected ordered
+        | id | present |
+        | 1  | true    |
+        | 3  | false   |
+        | 2  | false   |
+
+    Scenario: Projected EXISTS preserves a nested limit below the correlated filter
+      When query
+        """
+        SELECT candidate.id,
+          EXISTS(
+            SELECT * FROM (SELECT * FROM VALUES (1), (1) AS lookup(id) LIMIT 1) limited
+            WHERE limited.id = candidate.id
+          ) AS present
+        FROM VALUES (1), (2), (3) AS candidate(id)
+        """
+      Then query result collected
+        | id | present |
+        | 1  | true    |
+        | 2  | false   |
+        | 3  | false   |

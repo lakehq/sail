@@ -127,15 +127,16 @@ impl ExistsRewriter<'_> {
                 LogicalPlan::Aggregate(aggregate) => aggregate.group_expr.is_empty(),
                 LogicalPlan::Limit(limit) => {
                     !matches!(limit.get_skip_type()?, SkipType::Literal(0))
+                        || !limit.input.all_out_ref_exprs().is_empty()
                 }
                 _ => false,
             })
         })? {
             return not_impl_err!(
-                "projected correlated EXISTS with nested scalar aggregation or OFFSET"
+                "projected correlated EXISTS with nested scalar aggregation or LIMIT/OFFSET"
             );
         }
-        let mut pull_up = PullUpCorrelatedExpr::new().with_exists_sub_query(true);
+        let mut pull_up = PullUpCorrelatedExpr::new();
         let query = query.rewrite(&mut pull_up).data()?;
         if !pull_up.can_pull_up {
             return not_impl_err!("projected EXISTS with unsupported correlation");
@@ -159,6 +160,7 @@ impl ExistsRewriter<'_> {
             .alias(alias.clone())?
             .build()?;
         let input = mem::replace(&mut self.plan, empty_logical_plan());
+        // FIXME: Swapped RightMark hash joins panic when sort requirements are pushed down.
         self.plan = LogicalPlanBuilder::from(input)
             .join_on(query, JoinType::LeftMark, Some(predicate))?
             .build()?;
