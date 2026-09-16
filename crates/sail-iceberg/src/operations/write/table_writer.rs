@@ -21,7 +21,6 @@ use object_store::ObjectStoreExt;
 use object_store::path::Path as ObjectPath;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
-use url::Url;
 
 use crate::operations::write::arrow_parquet::ArrowParquetWriter;
 use crate::operations::write::base_writer::DataFileWriter;
@@ -58,7 +57,7 @@ pub struct IcebergTableWriter {
     pub store: Arc<dyn object_store::ObjectStore>,
     pub config: WriterConfig,
     pub generator: DefaultLocationGenerator,
-    pub data_url: Url,
+    data_location: String,
     // Typed partition tuple -> writer.
     // TODO: Roll each partition writer using the `target-file-size-bytes` write option or
     // `write.target-file-size-bytes` table property.
@@ -73,13 +72,13 @@ impl IcebergTableWriter {
         root: ObjectPath,
         config: WriterConfig,
         partition_spec_id: i32,
-        data_url: Url,
+        data_location: String,
     ) -> Self {
         Self {
             generator: DefaultLocationGenerator::new(root),
             store,
             config,
-            data_url,
+            data_location,
             writers: HashMap::new(),
             written: Vec::new(),
             partition_spec_id,
@@ -266,13 +265,7 @@ impl IcebergTableWriter {
             rel,
             full
         );
-        // Prevent a leading partition segment containing ':' from being parsed as a URI scheme.
-        let file_path = match self.data_url.join(&format!("./{rel}")) {
-            Ok(u) => u.to_string(),
-            Err(_) => {
-                format!("{}{}", self.data_url.as_str(), rel)
-            }
-        };
+        let file_path = format!("{}{rel}", self.data_location);
         let df = DataFileWriter::new(self.partition_spec_id, file_path, partition_values)
             .finish_with_schema(meta, self.config.iceberg_schema.as_ref())?
             .data_file;

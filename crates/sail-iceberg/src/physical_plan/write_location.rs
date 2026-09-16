@@ -29,16 +29,36 @@ pub(crate) fn resolve_data_location_from_property_value(
         return Ok(None);
     }
 
-    let normalized_path = raw.replace('\\', "/");
-    let mut data_url = match (
-        crate::utils::parse_absolute_url(raw),
-        crate::utils::file_url_from_absolute_path(&normalized_path),
-    ) {
-        (Some(property_url), _) => property_url,
-        (None, Some(file_url)) => file_url,
-        (None, None) => table_url.join(&normalized_path).map_err(|error| {
-            DataFusionError::Plan(format!("Invalid Iceberg data path: {error}"))
-        })?,
+    let mut data_url = if let Some(property_url) = crate::utils::parse_absolute_url(raw) {
+        property_url
+    } else {
+        let normalized_path = raw.replace('\\', "/");
+        if let Some(file_url) = crate::utils::file_url_from_absolute_path(&normalized_path) {
+            file_url
+        } else {
+            let mut data_url = table_url.clone();
+            data_url.set_query(None);
+            data_url.set_fragment(None);
+            {
+                let mut segments = data_url.path_segments_mut().map_err(|()| {
+                    DataFusionError::Plan(format!("Invalid Iceberg table URL: {table_url}"))
+                })?;
+                segments.pop_if_empty();
+                // Relative locations are physical paths, so encode each raw segment once.
+                for segment in normalized_path.split('/') {
+                    match segment {
+                        "." => {}
+                        ".." => {
+                            segments.pop();
+                        }
+                        segment => {
+                            segments.push(segment);
+                        }
+                    }
+                }
+            }
+            data_url
+        }
     };
 
     let schemes_are_compatible = data_url.scheme() == table_url.scheme()
@@ -82,13 +102,6 @@ pub(crate) fn resolve_data_location_from_properties(
 
 pub(crate) fn parquet_file_name(file_prefix: &str) -> String {
     format!("{file_prefix}-{}.parquet", uuid::Uuid::new_v4())
-}
-
-pub(crate) fn manifest_file_path(data_url: &Url, relative_path: &str) -> String {
-    data_url.join(&format!("./{relative_path}")).map_or_else(
-        |_| format!("{}{relative_path}", data_url.as_str()),
-        |url| url.to_string(),
-    )
 }
 
 #[cfg(test)]

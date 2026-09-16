@@ -23,28 +23,29 @@ pub use append::*;
 pub use bootstrap::*;
 pub use overwrite::*;
 pub use snapshot::*;
+use url::Url;
 
 use crate::spec::{FormatVersion, Snapshot};
 
 pub struct Transaction {
-    table_uri: String,
+    table_url: Url,
     snapshot: Snapshot,
     last_sequence_number: i64,
     actions: Vec<std::sync::Arc<dyn action::TransactionAction>>,
 }
 
 impl Transaction {
-    pub fn new(table_uri: String, snapshot: Snapshot, last_sequence_number: i64) -> Self {
+    pub fn new(table_url: Url, snapshot: Snapshot, last_sequence_number: i64) -> Self {
         Self {
-            table_uri,
+            table_url,
             snapshot,
             last_sequence_number,
             actions: Vec::new(),
         }
     }
 
-    pub fn table_uri(&self) -> &str {
-        &self.table_uri
+    pub fn table_url(&self) -> &Url {
+        &self.table_url
     }
 
     pub fn snapshot(&self) -> &Snapshot {

@@ -2,10 +2,58 @@ import math
 from datetime import datetime, timedelta
 
 import pyarrow as pa
+import pyarrow.parquet as pq
+import pytest
+from pyiceberg.manifest import DataFile, DataFileContent, FileFormat
 from pyiceberg.schema import Schema
+from pyiceberg.typedef import Record
 from pyiceberg.types import BooleanType, DoubleType, LongType, NestedField, StringType, TimestampType
 
 from pysail.tests.spark.iceberg.utils import create_sql_catalog
+
+
+@pytest.mark.parametrize("path_kind", ["absolute", "relative", "file_location"])
+@pytest.mark.parametrize("metadata_as_data", [False, True])
+def test_manifest_paths_preserve_percent_literals(spark, tmp_path, path_kind, metadata_as_data):
+    catalog = create_sql_catalog(tmp_path)
+    table_path = tmp_path / "manifest_paths"
+    identifier = "default.manifest_paths"
+    table = catalog.create_table(
+        identifier=identifier,
+        location=table_path.as_uri(),
+        schema=Schema(NestedField(1, "id", LongType(), required=False)),
+    )
+    try:
+        data_path = table_path / "data" / "part=a+%2B%252F+%E4%B8%AD" / "12%3A34%3A56.parquet"
+        data_path.parent.mkdir(parents=True, exist_ok=True)
+        schema = pa.schema([pa.field("id", pa.int64(), metadata={"PARQUET:field_id": "1"})])
+        pq.write_table(pa.Table.from_pydict({"id": [1, 2]}, schema=schema), data_path)
+        paths = {
+            "absolute": data_path.as_posix(),
+            "relative": data_path.relative_to(table_path).as_posix(),
+            "file_location": "file:///" + data_path.as_posix().lstrip("/"),
+        }
+        data_file = DataFile.from_args(
+            content=DataFileContent.DATA,
+            file_path=paths[path_kind],
+            file_format=FileFormat.PARQUET,
+            partition=Record(),
+            record_count=2,
+            file_size_in_bytes=data_path.stat().st_size,
+        )
+        data_file.spec_id = 0
+        with table.transaction() as transaction, transaction.update_snapshot().fast_append() as append:
+            append.append_data_file(data_file)
+        result = (
+            spark.read.format("iceberg")
+            .option("metadataAsDataRead", str(metadata_as_data).lower())
+            .load(table.location())
+            .orderBy("id")
+            .collect()
+        )
+        assert [row.id for row in result] == [1, 2]
+    finally:
+        catalog.drop_table(identifier)
 
 
 def test_nan_reads(spark, tmp_path):

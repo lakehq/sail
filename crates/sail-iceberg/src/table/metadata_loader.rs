@@ -23,6 +23,8 @@ use object_store::ObjectStoreExt;
 use object_store::path::Path as ObjectPath;
 use url::Url;
 
+use crate::utils::location_to_object_path;
+
 const METADATA_COMPRESSION_PROPERTY: &str = "write.metadata.compression-codec";
 const METADATA_COMPRESSION_NONE: &str = "none";
 const METADATA_COMPRESSION_GZIP: &str = "gzip";
@@ -86,18 +88,6 @@ pub(crate) fn metadata_file_version_from_path(path: &str) -> Option<i32> {
         .next()
         .and_then(parse_metadata_file_name)
         .map(|file| file.version)
-}
-
-pub(crate) fn metadata_location_to_object_path(metadata_location: &str) -> Result<ObjectPath> {
-    match crate::utils::parse_absolute_url(metadata_location) {
-        Some(url) => crate::utils::url_to_object_path(&url),
-        None => ObjectPath::parse(metadata_location.trim_start_matches('/'))
-            .map_err(|e| DataFusionError::External(Box::new(e))),
-    }
-}
-
-pub(crate) fn metadata_location_to_object_path_string(metadata_location: &str) -> Result<String> {
-    Ok(metadata_location_to_object_path(metadata_location)?.to_string())
 }
 
 fn metadata_file_codec_from_path(path: &str) -> Option<MetadataFileCodec> {
@@ -164,7 +154,7 @@ pub(crate) async fn load_metadata_file_bytes(
     object_store: &Arc<dyn object_store::ObjectStore>,
     metadata_location: &str,
 ) -> Result<Vec<u8>> {
-    let metadata_path = metadata_location_to_object_path(metadata_location)?;
+    let metadata_path = location_to_object_path(metadata_location)?;
     let metadata_data = object_store
         .get(&metadata_path)
         .await
@@ -241,8 +231,7 @@ mod tests {
 
     use super::{
         MetadataFileCodec, MetadataFileName, decode_metadata_file, encode_metadata_file,
-        metadata_file_extension_from_properties, metadata_location_to_object_path,
-        parse_metadata_file_name,
+        location_to_object_path, metadata_file_extension_from_properties, parse_metadata_file_name,
     };
 
     #[test]
@@ -295,14 +284,14 @@ mod tests {
     #[test]
     fn parses_windows_drive_metadata_locations_as_object_paths() -> Result<()> {
         assert_eq!(
-            metadata_location_to_object_path(
+            location_to_object_path(
                 "C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/metadata/v1.metadata.json",
             )?
             .as_ref(),
             "C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/metadata/v1.metadata.json"
         );
         assert_eq!(
-            metadata_location_to_object_path(
+            location_to_object_path(
                 "file:///C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/metadata/v1.metadata.json",
             )?
             .as_ref(),

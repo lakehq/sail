@@ -46,12 +46,8 @@ impl StoreContext {
         &'a self,
         raw: &str,
     ) -> Result<(&'a Arc<dyn object_store::ObjectStore>, ObjectPath), DataFusionError> {
-        if let Some(url) = crate::utils::parse_absolute_url(raw) {
-            return Ok((&self.base, crate::utils::url_to_object_path(&url)?));
-        }
-        if raw.starts_with(object_store::path::DELIMITER) {
-            let no_leading = raw.strip_prefix('/').unwrap_or(raw);
-            return Ok((&self.base, ObjectPath::from(no_leading)));
+        if let Some(path) = crate::utils::absolute_location_to_object_path(raw)? {
+            return Ok((&self.base, path));
         }
         Ok((
             &self.prefixed,
@@ -60,20 +56,11 @@ impl StoreContext {
     }
 
     pub fn resolve_to_absolute_path(&self, raw_path: &str) -> Result<ObjectPath, DataFusionError> {
-        if let Some(url) = crate::utils::parse_absolute_url(raw_path) {
-            return crate::utils::url_to_object_path(&url);
+        if let Some(path) = crate::utils::absolute_location_to_object_path(raw_path)? {
+            return Ok(path);
         }
-
-        if raw_path.starts_with(object_store::path::DELIMITER) {
-            let no_leading = raw_path.strip_prefix('/').unwrap_or(raw_path);
-            return Ok(ObjectPath::from(no_leading));
-        }
-
-        let mut full = self.prefix_path.clone();
-        for comp in raw_path.split('/').filter(|s| !s.is_empty()) {
-            full = full.join(comp);
-        }
-        Ok(full)
+        ObjectPath::parse(format!("{}/{raw_path}", self.prefix_path))
+            .map_err(|error| DataFusionError::External(Box::new(error)))
     }
 }
 
@@ -105,4 +92,49 @@ pub async fn load_manifest(
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     Manifest::parse_avro(&bytes).map_err(DataFusionError::Execution)
+}
+
+#[cfg(test)]
+mod tests {
+    use object_store::memory::InMemory;
+    use object_store::{ObjectStore, PutPayload};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn resolves_manifest_locations_without_reencoding_path_characters()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let relative = "data/part=a+%2B%252F+%E4%B8%AD/file #?中.parquet";
+        let payload = bytes::Bytes::from_static(b"file contents");
+        for (table_url, table_path) in [
+            ("memory:///table%20%2520/", "table %20"),
+            ("memory:///C:/table%20%2520/", "C:/table %20"),
+        ] {
+            let context = StoreContext::new(store.clone(), &Url::parse(table_url)?)?;
+            let absolute = format!("{table_path}/{relative}");
+            let expected_path = ObjectPath::parse(&absolute)?;
+            store
+                .put(&expected_path, PutPayload::from(payload.clone()))
+                .await?;
+
+            let mut locations = vec![
+                relative.to_string(),
+                format!("/{absolute}"),
+                format!("memory:///{absolute}"),
+            ];
+            if table_path.starts_with("C:") {
+                locations.push(absolute.replace('/', "\\"));
+                locations.push(absolute);
+            }
+            for location in locations {
+                let (resolved_store, path) = context.resolve(&location)?;
+                assert_eq!(resolved_store.get(&path).await?.bytes().await?, payload);
+                let absolute_path = context.resolve_to_absolute_path(&location)?;
+                assert_eq!(absolute_path, expected_path);
+                assert_eq!(store.get(&absolute_path).await?.bytes().await?, payload);
+            }
+        }
+        Ok(())
+    }
 }
