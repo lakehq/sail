@@ -25,6 +25,17 @@ use super::discovery::DATA_SOURCE_REGISTRY;
 use super::executor::InProcessExecutor;
 use super::table_provider::PythonTableProvider;
 
+fn sink_mode_name(mode: &SinkMode) -> &'static str {
+    match mode {
+        SinkMode::ErrorIfExists => "errorifexists",
+        SinkMode::IgnoreIfExists => "ignore",
+        SinkMode::Append => "append",
+        SinkMode::Overwrite | SinkMode::OverwriteIf { .. } | SinkMode::OverwritePartitions => {
+            "overwrite"
+        }
+    }
+}
+
 /// DataSource implementation for a Python data source.
 ///
 /// Each registered Python datasource gets its own PythonDataSourceAdapter instance,
@@ -334,12 +345,16 @@ impl ExtensionPlanner for PythonPhysicalPlanner {
             node.mode,
             SinkMode::Overwrite | SinkMode::OverwriteIf { .. } | SinkMode::OverwritePartitions
         );
-        let opaque_options: Vec<HashMap<String, String>> = node
+        let mut opaque_options: Vec<HashMap<String, String>> = node
             .options
             .clone()
             .into_iter()
             .map(|l| l.into_opaque_options())
             .collect();
+        opaque_options.push(HashMap::from([(
+            "__sail_save_mode".to_string(),
+            sink_mode_name(&node.mode).to_string(),
+        )]));
         let adapter = PythonDataSourceAdapter {
             name: node.name.clone(),
             pickled_class: node.pickled_class.clone(),
@@ -378,5 +393,13 @@ mod tests {
     fn test_python_data_source_adapter_name() {
         let source = PythonDataSourceAdapter::new("test_datasource".to_string());
         assert_eq!(source.name(), "test_datasource");
+    }
+
+    #[test]
+    fn test_sink_mode_name_preserves_all_v1_modes() {
+        assert_eq!(sink_mode_name(&SinkMode::ErrorIfExists), "errorifexists");
+        assert_eq!(sink_mode_name(&SinkMode::IgnoreIfExists), "ignore");
+        assert_eq!(sink_mode_name(&SinkMode::Append), "append");
+        assert_eq!(sink_mode_name(&SinkMode::Overwrite), "overwrite");
     }
 }

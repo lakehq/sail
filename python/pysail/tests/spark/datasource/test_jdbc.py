@@ -244,10 +244,17 @@ def test_null_values_handling(spark, jdbc_opts):
 # ---------------------------------------------------------------------------
 
 
-def test_empty_table(spark, jdbc_opts):
+def test_empty_table_append(spark, jdbc_opts):
     df = spark.read.format("jdbc").option("dbtable", "empty_table").options(**jdbc_opts).load()
     assert df.count() == 0
     assert df.filter("id > 0").collect() == []
+
+    spark.createDataFrame([(1, "written by Sail")], "id int, name string").write.format("jdbc").mode("append").option(
+        "dbtable", "empty_table"
+    ).options(**jdbc_opts).save()
+
+    rows = spark.read.format("jdbc").option("dbtable", "empty_table").options(**jdbc_opts).load().collect()
+    assert [(row.id, row.name) for row in rows] == [(1, "written by Sail")]
 
 
 # ---------------------------------------------------------------------------
