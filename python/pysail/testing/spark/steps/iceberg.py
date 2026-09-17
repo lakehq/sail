@@ -20,6 +20,7 @@ from pyiceberg.manifest import (
     MANIFEST_ENTRY_SCHEMAS,
     MANIFEST_LIST_FILE_SCHEMAS,
     ManifestContent,
+    ManifestEntryStatus,
     PartitionFieldSummary,
 )
 from pyspark.sql import Row
@@ -860,7 +861,7 @@ def check_iceberg_schema_history_matches_snapshot(variables, snapshot: SnapshotA
 
 def _current_row_lineage(table_path: Path) -> dict[int, tuple[int, int]]:
     metadata = _find_latest_metadata(table_path)
-    assert metadata["format-version"] == 3
+    assert metadata["format-version"] == 3  # noqa: PLR2004
     io = PyArrowFileIO()
     result = {}
     schema = MANIFEST_ENTRY_SCHEMAS[3]
@@ -877,7 +878,7 @@ def _current_row_lineage(table_path: Path) -> dict[int, tuple[int, int]]:
                     first_row_id = next_row_id
                     if next_row_id is not None:
                         next_row_id += data_file["record_count"]
-                if entry[0] == 2:
+                if entry[0] == ManifestEntryStatus.DELETED:
                     continue
                 sequence = entry[2] if entry[2] is not None else manifest["sequence-number"]
                 parsed = urlparse(data_file["file_path"])
