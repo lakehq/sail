@@ -46,15 +46,14 @@ impl TryFrom<Expression> for spec::Expr {
                 // analyzer does for an attribute name. It is deliberately not parsed as SQL:
                 // nothing is folded and no whitespace is skipped, so a name keeps the spaces it
                 // was written with, and a raw identifier such as `array(1)` is one whole part.
-                let name = parse_attribute_name(unparsed_identifier.as_str())
-                    .ok_or_else(|| {
-                        SparkError::AnalysisError(format!(
-                            "[INVALID_ATTRIBUTE_NAME_SYNTAX] Syntax error in the attribute name: \
+                let name = parse_attribute_name(unparsed_identifier.as_str()).ok_or_else(|| {
+                    SparkError::AnalysisError(format!(
+                        "[INVALID_ATTRIBUTE_NAME_SYNTAX] Syntax error in the attribute name: \
                              {unparsed_identifier}. Check that backticks appear in pairs, a quoted \
                              string is a complete name part and use a backtick only inside quoted \
                              name parts."
-                        ))
-                    })?;
+                    ))
+                })?;
                 Ok(spec::Expr::UnresolvedAttribute {
                     name,
                     plan_id,

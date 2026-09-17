@@ -14,6 +14,7 @@ use sail_sql_parser::parser::{
     create_named_expression_parser, create_object_name_parser, create_parser,
     create_qualified_wildcard_parser,
 };
+use sail_sql_parser::string::create_attribute_name_parser;
 use sail_sql_parser::token::{Punctuation, Token};
 
 use crate::error::{SqlError, SqlResult};
@@ -99,62 +100,17 @@ pub fn parse_object_name(s: &str) -> SqlResult<ObjectName> {
     parse!(s, create_object_name_parser)
 }
 
-/// Splits the name of an attribute the way the Spark analyzer does, on dots outside of
-/// backticks. This is not the SQL grammar of [`parse_object_name`]: no token is recognized,
-/// nothing is folded and no whitespace is skipped, so a name such as `" a "` keeps its spaces.
-/// Backticks must come in pairs and can only quote a whole part, so `` a`b `` is rejected while
-/// ``  `a``b`  `` is the part `` a`b ``.
-///
-/// Spark Connect parses an attribute name this way and keeps the SQL grammar for table and
-/// function names, so the two parsers are not interchangeable.
+/// Splits the name of an attribute the way Spark's `AttributeNameParser` does. This is not the SQL
+/// grammar of [`parse_object_name`]: Spark Connect parses an attribute name this way and keeps the
+/// SQL grammar for table and function names, so the two parsers are not interchangeable.
 ///
 /// Returns `None` when the name is malformed, which is the single syntax error the Spark parser
 /// raises. The caller reports it, so that the error class and the message stay with the rest of
 /// the Spark errors.
-///
-/// Ported from `AttributeNameParser.parseAttributeName`.
 pub fn parse_attribute_name(name: &str) -> Option<spec::ObjectName> {
-    let mut parts: Vec<String> = Vec::new();
-    let mut part = String::new();
-    let mut in_backtick = false;
-    let characters = name.chars().collect::<Vec<_>>();
-    let mut i = 0;
-    while i < characters.len() {
-        let character = characters[i];
-        if in_backtick {
-            if character == '`' {
-                if characters.get(i + 1) == Some(&'`') {
-                    part.push('`');
-                    i += 1;
-                } else {
-                    in_backtick = false;
-                    if characters.get(i + 1).is_some_and(|x| *x != '.') {
-                        return None;
-                    }
-                }
-            } else {
-                part.push(character);
-            }
-        } else if character == '`' {
-            if !part.is_empty() {
-                return None;
-            }
-            in_backtick = true;
-        } else if character == '.' {
-            if i == 0 || characters[i - 1] == '.' || i == characters.len() - 1 {
-                return None;
-            }
-            parts.push(std::mem::take(&mut part));
-        } else {
-            part.push(character);
-        }
-        i += 1;
-    }
-    if in_backtick {
-        return None;
-    }
-    parts.push(part);
-    Some(spec::ObjectName::from(parts))
+    parse_simple!(name, create_attribute_name_parser)
+        .ok()
+        .map(spec::ObjectName::from)
 }
 
 pub fn parse_qualified_wildcard(s: &str) -> SqlResult<QualifiedWildcard> {

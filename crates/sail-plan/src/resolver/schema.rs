@@ -276,8 +276,7 @@ impl PlanResolver<'_> {
         }
         // The name is the one the user wrote, so it is split the way a column reference is
         // before it is reported.
-        let object =
-            parse_attribute_name(name).unwrap_or_else(|| spec::ObjectName::bare(name));
+        let object = parse_attribute_name(name).unwrap_or_else(|| spec::ObjectName::bare(name));
         Err(unresolved_column_fields_error(
             &object,
             &Self::get_field_names(schema, state)?,

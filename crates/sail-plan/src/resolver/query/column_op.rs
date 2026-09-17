@@ -400,8 +400,8 @@ impl PlanResolver<'_> {
             .map(|name| {
                 // The name is parsed before it is looked up, so a malformed one is a syntax error
                 // rather than a column that could not be found.
-                let object = parse_attribute_name(name)
-                    .ok_or_else(|| invalid_attribute_name_error(name))?;
+                let object =
+                    parse_attribute_name(name).ok_or_else(|| invalid_attribute_name_error(name))?;
                 let [leading, rest @ ..] = object.parts() else {
                     return Err(invalid_attribute_name_error(name));
                 };
