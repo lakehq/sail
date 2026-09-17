@@ -59,6 +59,9 @@ pub(crate) fn materialize_lineage(
             .ok_or_else(|| exec_datafusion_err!("Iceberg lineage column {name} must be long"))?;
         let values = (0..batch.num_rows())
             .map(|row| {
+                if lineage.first_row_id.is_none() {
+                    return Ok(None);
+                }
                 if values.is_valid(row) {
                     return Ok(Some(values.value(row)));
                 }

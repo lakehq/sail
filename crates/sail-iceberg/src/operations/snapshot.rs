@@ -687,12 +687,17 @@ impl<'a> SnapshotProducer<'a> {
                     )
                 })?;
             if let Some(current) = &self.manifest_metadata {
-                metadata.schema = current.schema.clone();
-                metadata.schema_id = current.schema_id;
+                // Dropped partition source columns still need their historical types.
+                if partition_spec
+                    .fields()
+                    .iter()
+                    .all(|field| current.schema.field_by_id(field.source_id).is_some())
+                {
+                    metadata.schema = current.schema.clone();
+                }
                 metadata.format_version = current.format_version;
-            } else {
-                metadata.schema_id = metadata.schema.schema_id();
             }
+            metadata.schema_id = metadata.schema.schema_id();
             metadata.partition_spec = partition_spec;
             let mut writer = ManifestWriterBuilder::new(Some(snapshot_id), None, metadata).build();
             let mut inherited_next_row_id = parent_manifest_file.first_row_id;

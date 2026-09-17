@@ -333,3 +333,69 @@ def test_cow_preserves_evolved_schema_and_writes_current_partition_spec(spark, s
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {name}")
         sql_catalog.drop_table(identifier)
+
+
+@pytest.mark.parametrize("format_version", [2, 3])
+@pytest.mark.parametrize("operation", ["delete", "update", "merge"])
+def test_cow_after_dropping_partition_source(spark, sql_catalog, format_version, operation):
+    from pyiceberg.partitioning import PartitionField, PartitionSpec
+    from pyiceberg.transforms import IdentityTransform
+
+    name = "cow_dropped_partition_source"
+    identifier = f"default.{name}"
+    table = sql_catalog.create_table(
+        identifier,
+        Schema(
+            NestedField(1, "id", LongType(), required=False),
+            NestedField(2, "value", LongType(), required=False),
+            NestedField(3, "p", LongType(), required=False),
+        ),
+        partition_spec=PartitionSpec(PartitionField(3, 1000, IdentityTransform(), "p")),
+        properties={"format-version": "2"},
+    )
+    spark.sql(f"DROP TABLE IF EXISTS {name}")
+    try:
+        table.append(pa.table({"id": [1, 2, 3], "value": [10, 20, 30], "p": [1, 1, 2]}))
+        with table.update_spec() as update:
+            update.remove_field("p")
+        with table.update_schema() as update:
+            update.delete_column("p")
+        path = _local_file_path(table.location())
+        spark.sql(f"CREATE TABLE {name} USING iceberg LOCATION '{path.as_uri()}'")
+        if format_version == 3:
+            spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('format-version' = '3')")
+        before = _find_latest_metadata(path)
+        before_paths = {entry.data_file.file_path for entry in _current_manifest_entries(path, ManifestContent.DATA)}
+        statements = {
+            "delete": f"DELETE FROM {name} WHERE id = 1",
+            "update": f"UPDATE {name} SET value = 100 WHERE id = 1",
+            "merge": f"""MERGE INTO {name} AS t USING (SELECT 1L AS id) AS s ON t.id = s.id
+                        WHEN MATCHED THEN UPDATE SET value = 100""",
+        }
+        spark.sql(statements[operation]).collect()
+        expected = [(2, 20), (3, 30)]
+        if operation != "delete":
+            expected.insert(0, (1, 100))
+        assert [tuple(row) for row in spark.table(name).orderBy("id").collect()] == expected
+        after = _find_latest_metadata(path)
+        assert after["schemas"] == before["schemas"]
+        assert after["partition-specs"] == before["partition-specs"]
+        assert _current_snapshot(after)["schema-id"] == before["current-schema-id"]
+        added_entries = [
+            entry
+            for entry in _current_manifest_entries(path, ManifestContent.DATA)
+            if entry.data_file.file_path not in before_paths
+        ]
+        assert added_entries
+        assert all(entry.data_file.spec_id == before["default-spec-id"] for entry in added_entries)
+        historical = (
+            spark.read.format("iceberg").option("snapshotId", before["current-snapshot-id"]).load(path.as_uri())
+        )
+        assert [tuple(row) for row in historical.select("id", "value").orderBy("id").collect()] == [
+            (1, 10),
+            (2, 20),
+            (3, 30),
+        ]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+        sql_catalog.drop_table(identifier)

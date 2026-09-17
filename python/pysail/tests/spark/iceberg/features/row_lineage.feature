@@ -1,5 +1,55 @@
 Feature: Iceberg v3 copy-on-write row lineage
 
+  Scenario: First COW after upgrading to v3 assigns lineage to surviving rows
+    Given variable location for temporary directory iceberg_lineage_upgrade
+    Given final statement
+      """
+      DROP TABLE IF EXISTS iceberg_lineage_upgrade
+      """
+    Given statement template
+      """
+      CREATE TABLE iceberg_lineage_upgrade (id INT, value INT) USING iceberg
+      LOCATION {{ location.uri }} TBLPROPERTIES ('format-version' = '2')
+      """
+    Given statement
+      """
+      INSERT INTO iceberg_lineage_upgrade
+      SELECT /*+ COALESCE(1) */ * FROM VALUES (1, 10), (2, 20), (3, 30)
+      """
+    Given statement
+      """
+      ALTER TABLE iceberg_lineage_upgrade SET TBLPROPERTIES ('format-version' = '3')
+      """
+    Given statement
+      """
+      UPDATE iceberg_lineage_upgrade SET value = 100 WHERE id = 1
+      """
+    Given remember current iceberg row lineage
+    Then iceberg row lineage matches
+      | id | original_id | sequence |
+      | 1  | 1           | 2        |
+      | 2  | 2           | 2        |
+      | 3  | 3           | 2        |
+    Given statement
+      """
+      UPDATE iceberg_lineage_upgrade SET value = 200 WHERE id = 2
+      """
+    Then iceberg row lineage matches
+      | id | original_id | sequence |
+      | 1  | 1           | 2        |
+      | 2  | 2           | 3        |
+      | 3  | 3           | 2        |
+    When query
+      """
+      SELECT * FROM iceberg_lineage_upgrade ORDER BY id
+      """
+    Then query result ordered
+      | id | value |
+      | 1  | 100   |
+      | 2  | 200   |
+      | 3  | 30    |
+    Then iceberg snapshot count is 3
+
   Scenario Outline: COW preserves row IDs and updates sequence numbers across rewrites
     Given variable location for temporary directory iceberg_lineage
     Given final statement
