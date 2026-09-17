@@ -5,6 +5,7 @@ use datafusion_common::{Column, DFSchemaRef, TableReference};
 use sail_common::spec;
 use sail_common::utils::string::{equals_ignore_case, to_lowercase};
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_sql_analyzer::parser::parse_attribute_name;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -276,7 +277,7 @@ impl PlanResolver<'_> {
         // The name is the one the user wrote, so it is split the way a column reference is
         // before it is reported.
         let object =
-            spec::ObjectName::parse_attribute(name).unwrap_or_else(|| spec::ObjectName::bare(name));
+            parse_attribute_name(name).unwrap_or_else(|| spec::ObjectName::bare(name));
         Err(unresolved_column_fields_error(
             &object,
             &Self::get_field_names(schema, state)?,

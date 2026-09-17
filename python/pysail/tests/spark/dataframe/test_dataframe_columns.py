@@ -1709,6 +1709,9 @@ PARSER = {
     "double dot": ("a", "a..b"),
     "only a dot": ("a", "."),
     "only backticks": ("a", "``"),
+    # Whitespace is part of a name rather than something to skip, so ` a` is not the column `a`.
+    # The SQL identifier grammar drops it, and would resolve the wrong column without an error.
+    "leading space": ("a", " a"),
 }
 
 
@@ -1719,6 +1722,9 @@ def _parser_cases(spark):
 
     cases = {name: (lambda c=column, p=probe: named(c).select(col(p))) for name, (column, probe) in PARSER.items()}
     cases["three parts"] = lambda: spark.sql("SELECT named_struct('b', named_struct('c', 1)) AS a").select(col("a.b.c"))
+    # A dot still separates parts when a part is not a valid SQL identifier. The SQL grammar cannot
+    # parse `a.b c`, and falling back to the whole string made it one column named `a.b c`.
+    cases["space after a dot"] = lambda: spark.sql("SELECT named_struct('b c', 1) AS a").select(col("a.b c"))
     return cases
 
 
@@ -1756,6 +1762,7 @@ PARSER_RESULTS = [
     ("escaped backtick", ["a`b"], ["{'a`b': 1}"]),
     ("two quoted parts", ["a b"], ["{'a b': 1}"]),
     ("three parts", ["c"], ["{'c': 1}"]),
+    ("space after a dot", ["b c"], ["{'b c': 1}"]),
 ]
 
 # (case, error condition)
@@ -1768,6 +1775,7 @@ PARSER_ERRORS = [
     _error_param("double dot", "INVALID_ATTRIBUTE_NAME_SYNTAX"),
     _error_param("only a dot", "INVALID_ATTRIBUTE_NAME_SYNTAX"),
     ("only backticks", "UNRESOLVED_COLUMN.WITH_SUGGESTION"),
+    ("leading space", "UNRESOLVED_COLUMN.WITH_SUGGESTION"),
 ]
 
 # (case, caseSensitive, columns, rows)

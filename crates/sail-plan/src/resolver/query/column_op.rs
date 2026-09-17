@@ -7,6 +7,7 @@ use datafusion_expr::{
 };
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_sql_analyzer::parser::parse_attribute_name;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -399,7 +400,7 @@ impl PlanResolver<'_> {
             .map(|name| {
                 // The name is parsed before it is looked up, so a malformed one is a syntax error
                 // rather than a column that could not be found.
-                let object = spec::ObjectName::parse_attribute(name)
+                let object = parse_attribute_name(name)
                     .ok_or_else(|| invalid_attribute_name_error(name))?;
                 let [leading, rest @ ..] = object.parts() else {
                     return Err(invalid_attribute_name_error(name));

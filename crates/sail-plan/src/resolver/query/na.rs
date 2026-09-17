@@ -9,6 +9,7 @@ use datafusion_expr::{
 use datafusion_functions::expr_fn::isnan;
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_sql_analyzer::parser::parse_attribute_name;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -130,7 +131,7 @@ impl PlanResolver<'_> {
     /// reference, so a quoted name matches the part it parses to, while a name that walks into a
     /// column is not a column and matches nothing.
     fn na_column_name(name: &str) -> Option<String> {
-        match spec::ObjectName::parse_attribute(name) {
+        match parse_attribute_name(name) {
             Some(object) => match object.parts() {
                 [part] => Some(part.as_ref().to_string()),
                 _ => None,
@@ -150,7 +151,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<()> {
         // The name is parsed before it is looked up, so a malformed one is a syntax error rather
         // than a column that could not be found.
-        let object = spec::ObjectName::parse_attribute(name)
+        let object = parse_attribute_name(name)
             .ok_or_else(|| invalid_attribute_name_error(name))?;
         let [leading, rest @ ..] = object.parts() else {
             self.resolve_one_column(schema, name, state)?;

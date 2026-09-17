@@ -7,6 +7,7 @@ use datafusion_expr::{ScalarUDF, UNNAMED_TABLE, col, expr, lit};
 use datafusion_functions::core::get_field;
 use sail_common::spec;
 use sail_function::scalar::array_struct_field::ArrayStructField;
+use sail_sql_analyzer::parser::parse_attribute_name;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -82,7 +83,7 @@ fn quote_identifier_parts<'a>(parts: impl Iterator<Item = &'a str>) -> String {
 /// as several quoted parts, and a name that is already quoted keeps its back quotes single. A
 /// name the parser rejects is quoted whole, since its syntax has an error condition of its own.
 pub(in crate::resolver) fn quote_identifier_name(name: &str) -> String {
-    match spec::ObjectName::parse_attribute(name) {
+    match parse_attribute_name(name) {
         Some(object) => quote_identifier(&object),
         None => quote_identifier_part(name),
     }
