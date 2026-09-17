@@ -160,7 +160,6 @@ impl ExistsRewriter<'_> {
             .alias(alias.clone())?
             .build()?;
         let input = mem::replace(&mut self.plan, empty_logical_plan());
-        // FIXME: Swapped RightMark hash joins panic when sort requirements are pushed down.
         self.plan = LogicalPlanBuilder::from(input)
             .join_on(query, JoinType::LeftMark, Some(predicate))?
             .build()?;

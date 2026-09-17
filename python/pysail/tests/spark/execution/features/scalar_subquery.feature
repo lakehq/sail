@@ -825,7 +825,6 @@ Feature: Scalar subqueries in distributed execution
         | SELECT COUNT(*) FROM VALUES (1) AS lookup(id) WHERE lookup.id = candidate.id                                | true  | true   | true  |
         | SELECT COUNT(*) FROM VALUES (1) AS lookup(id) WHERE lookup.id = candidate.id LIMIT 1 OFFSET 1               | false | false  | false |
 
-    @sail-bug
     Scenario: Sorted projected EXISTS supports a smaller lookup
       When query
         """
@@ -872,7 +871,6 @@ Feature: Scalar subqueries in distributed execution
          |-- present: boolean (nullable = false)
         """
 
-    @sail-bug
     Scenario: Sorted projected EXISTS supports a single-row lookup
       When query
         """
@@ -901,7 +899,6 @@ Feature: Scalar subqueries in distributed execution
         | id | row_count | present |
         | 2  | 1         | false   |
 
-    @sail-bug
     Scenario: Projected EXISTS can order by the boolean result
       When query
         """
