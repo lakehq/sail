@@ -362,7 +362,7 @@ def test_cow_after_dropping_partition_source(spark, sql_catalog, format_version,
             update.delete_column("p")
         path = _local_file_path(table.location())
         spark.sql(f"CREATE TABLE {name} USING iceberg LOCATION '{path.as_uri()}'")
-        if format_version == 3:
+        if format_version == 3:  # noqa: PLR2004
             spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('format-version' = '3')")
         before = _find_latest_metadata(path)
         before_paths = {entry.data_file.file_path for entry in _current_manifest_entries(path, ManifestContent.DATA)}
@@ -399,3 +399,31 @@ def test_cow_after_dropping_partition_source(spark, sql_catalog, format_version,
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {name}")
         sql_catalog.drop_table(identifier)
+
+
+def test_cow_commit_preserves_main_reference_retention(spark, tmp_path):
+    from pysail.testing.spark.steps.iceberg import _metadata_file_version, _write_metadata_file
+
+    name = "cow_main_retention"
+    path = tmp_path / name
+    try:
+        spark.createDataFrame([(1, 10)], "id INT, value INT").write.format("iceberg").option(
+            "format-version", "3"
+        ).save(path.as_uri())
+        metadata = _find_latest_metadata(path)
+        metadata["refs"]["main"].update({"min-snapshots-to-keep": 5, "max-snapshot-age-ms": 86400000})
+        previous_path = _latest_metadata_path(path)
+        metadata["metadata-log"].append(
+            {"metadata-file": previous_path.as_uri(), "timestamp-ms": metadata["last-updated-ms"]}
+        )
+        version = _metadata_file_version(previous_path) + 1
+        _write_metadata_file(path / "metadata" / f"v{version}.metadata.json", metadata)
+        spark.sql(f"CREATE TABLE {name} USING iceberg LOCATION '{path.as_uri()}'")
+        spark.sql(f"UPDATE {name} SET value = 100 WHERE id = 1")
+        reference = _find_latest_metadata(path)["refs"]["main"]
+        assert reference["min-snapshots-to-keep"] == 5  # noqa: PLR2004
+        assert reference["max-snapshot-age-ms"] == 86400000  # noqa: PLR2004
+        assert reference["snapshot-id"] != metadata["current-snapshot-id"]
+        assert [tuple(row) for row in spark.table(name).collect()] == [(1, 100)]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")

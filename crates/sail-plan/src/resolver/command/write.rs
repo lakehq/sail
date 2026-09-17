@@ -1615,7 +1615,7 @@ impl PlanResolver<'_> {
             } => {
                 let name: Vec<String> = name.into();
                 Ok(CatalogPartitionField {
-                    column: name.one()?,
+                    column: name.join("."),
                     transform: None,
                 })
             }
@@ -1740,7 +1740,7 @@ fn extract_partition_column_from_args(args: &[spec::Expr], index: usize) -> Plan
             is_metadata_column: false,
         } => {
             let name: Vec<String> = name.clone().into();
-            Ok(name.one()?)
+            Ok(name.join("."))
         }
         _ => Err(PlanError::invalid(
             "partition transform function argument must be a column reference",

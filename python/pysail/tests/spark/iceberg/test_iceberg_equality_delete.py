@@ -553,3 +553,23 @@ def test_iceberg_partitioned_equality_delete_only_applies_within_delete_partitio
         assert entries[0].data_file.partition == Record("A")
     finally:
         catalog.drop_table(identifier)
+
+
+def test_limit_counts_survivors_after_equality_deletes(spark, tmp_path):
+    catalog = create_sql_catalog(tmp_path)
+    identifier = "default.limit_after_deletes"
+    table = catalog.create_table(
+        identifier=identifier,
+        schema=Schema(NestedField(1, "id", LongType(), required=False)),
+        properties={"format-version": "2"},
+    )
+    try:
+        table.append(pa.table({"id": [1, 2, 3]}))
+        table.append(pa.table({"id": [4, 5, 6]}))
+        _append_equality_delete_snapshot(table, pa.table({"id": [4, 5, 6]}), [1])
+        survivors = spark.read.format("iceberg").load(table.location())
+        rows = survivors.limit(2).collect()
+        assert len(rows) == 2  # noqa: PLR2004
+        assert {row.id for row in rows} <= {1, 2, 3}
+    finally:
+        catalog.drop_table(identifier)

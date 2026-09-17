@@ -1,5 +1,3 @@
-# ruff: noqa: S608
-
 import copy
 import json
 
@@ -119,7 +117,7 @@ def test_missing_fields_use_initial_defaults_and_writes_use_only_write_defaults(
         )
 
     rows = read().orderBy("id").collect()
-    assert rows[0].payload.extra == 13
+    assert rows[0].payload.extra == 13  # noqa: PLR2004
     assert rows[1].payload is None
     assert [row.required_value for row in rows] == [7, 7]
     assert [row.read_only for row in rows] == [11, 11]
@@ -127,14 +125,14 @@ def test_missing_fields_use_initial_defaults_and_writes_use_only_write_defaults(
     assert [bytes(row.bytes) for row in rows] == [b"\x00\xff", b"\x00\xff"]
     assert [row.tags for row in rows] == [[1, 2], [1, 2]]
     assert [row.lookup for row in rows] == [{"a": 2}, {"a": 2}]
-    assert read().filter("required_value = 7").count() == 2
+    assert read().filter("required_value = 7").count() == 2  # noqa: PLR2004
     assert read().filter("required_value IS NULL").count() == 0
     assert read().filter("payload.extra = 13").select("id").collect()[0].id == 1
     spark.createDataFrame([(3, (30,)), (4, None)], "id LONG, payload STRUCT<x: LONG>").write.format("iceberg").mode(
         "append"
     ).save(path.as_uri())
     rows = read().orderBy("id").collect()
-    assert rows[2].payload.extra == 17
+    assert rows[2].payload.extra == 17  # noqa: PLR2004
     assert rows[3].payload is None
     assert [row.required_value for row in rows] == [7, 7, 9, 9]
     assert [row.read_only for row in rows] == [11, 11, None, None]
@@ -145,7 +143,8 @@ def test_missing_fields_use_initial_defaults_and_writes_use_only_write_defaults(
     assert bytes(rows[2].bytes) == b"\xff\x00"
     written_schema = _find_latest_metadata(path)["schemas"][-1]
     null_field = next(field for field in written_schema["fields"] if field["name"] == "explicit_null")
-    assert "write-default" in null_field and null_field["write-default"] is None
+    assert "write-default" in null_field
+    assert null_field["write-default"] is None
 
 
 @pytest.mark.parametrize("metadata_as_data", [False, True])
@@ -225,9 +224,9 @@ def test_name_mapping_handles_list_elements_and_map_values(spark, sql_catalog, t
             update.rename_column(("items", "element", "old"), "value")
             update.rename_column(("lookup", "value", "old"), "value")
         rows = spark.read.format("iceberg").load(table.location()).orderBy("id").collect()
-        assert rows[0].items[0].value == 10 and rows[0].items[1] is None
-        assert rows[0].lookup["a"].value == 20 and rows[0].lookup["b"] is None
-        assert rows[1].items is None and rows[1].lookup is None
+        assert (rows[0].items[0].value, rows[0].items[1]) == (10, None)
+        assert (rows[0].lookup["a"].value, rows[0].lookup["b"]) == (20, None)
+        assert (rows[1].items, rows[1].lookup) == (None, None)
     finally:
         sql_catalog.drop_table("default.imported_containers")
 
@@ -302,7 +301,7 @@ def test_equality_delete_nested_keys_preserve_parent_nulls_and_dropped_fields(sp
         if drop_key == "parent":
             assert result.columns == ["id"]
         else:
-            assert result.collect()[0].payload.kept == 2
+            assert result.collect()[0].payload.kept == 2  # noqa: PLR2004
         spark.sql(f"CREATE TABLE nested_eq_target USING iceberg LOCATION '{path.as_uri()}'")
         try:
             spark.sql("UPDATE nested_eq_target SET id = 20 WHERE id = 2").collect()
@@ -415,3 +414,17 @@ def test_invalid_required_default_rejected_before_commit(spark, tmp_path, defaul
         spark.createDataFrame([(2,)], "id LONG").write.format("iceberg").mode("append").save(path.as_uri())
     assert _latest_metadata_path(path) == head
     assert head.read_bytes() == content
+
+
+@pytest.mark.parametrize("metadata_as_data", [False, True])
+def test_identity_partition_pruning_after_int_to_long_promotion(spark, tmp_path, metadata_as_data):
+    path = tmp_path / "promoted_partition"
+    spark.createDataFrame([(1, 7)], "id INT, p INT").write.format("iceberg").option("format-version", "3").partitionBy(
+        "p"
+    ).save(path.as_uri())
+    metadata = _find_latest_metadata(path)
+    fields = copy.deepcopy(metadata["schemas"][-1]["fields"])
+    fields[1]["type"] = "long"
+    _evolve_schema(path, fields)
+    table = spark.read.format("iceberg").option("metadataAsDataRead", str(metadata_as_data).lower()).load(path.as_uri())
+    assert [tuple(row) for row in table.filter("p = 7L").collect()] == [(1, 7)]

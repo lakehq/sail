@@ -6,7 +6,9 @@ use sail_common_datafusion::datasource::{
     DeleteInfo, MERGE_FILE_COLUMN, OPERATION_COLUMN, RowLevelCommand, RowLevelOperationType,
     RowLevelWriteMode,
 };
-use sail_logical_plan::row_level::{RowLevelWriteNode, rewrite_row_level_target_condition};
+use sail_logical_plan::row_level::{
+    RowLevelWriteNode, rewrite_row_level_target_condition, row_level_expr_contains_subquery,
+};
 
 use crate::logical::merge::ensure_merge_metadata_columns;
 use crate::logical::row_level::target_write_state;
@@ -72,14 +74,29 @@ pub(crate) fn expand_delete_node(info: DeleteInfo) -> Result<LogicalPlan> {
             .into_iter()
             .map(datafusion_expr::Expr::Column)
             .collect::<Vec<_>>();
-        projections.push(
-            when(predicate, lit(RowLevelOperationType::Delete.as_i32()))
-                .otherwise(lit(RowLevelOperationType::Copy.as_i32()))?
-                .alias(OPERATION_COLUMN),
-        );
-        let rows = LogicalPlanBuilder::from(target_plan.clone())
-            .project(projections)?
-            .build()?;
+        let rows = if row_level_expr_contains_subquery(&predicate)? {
+            let mut copy_projection = projections.clone();
+            projections.push(lit(RowLevelOperationType::Delete.as_i32()).alias(OPERATION_COLUMN));
+            copy_projection.push(lit(RowLevelOperationType::Copy.as_i32()).alias(OPERATION_COLUMN));
+            let deleted = LogicalPlanBuilder::from(target_plan.clone())
+                .filter(predicate.clone())?
+                .project(projections)?
+                .build()?;
+            let copied = LogicalPlanBuilder::from(target_plan.clone())
+                .filter(predicate.is_not_true())?
+                .project(copy_projection)?
+                .build()?;
+            LogicalPlanBuilder::from(deleted).union(copied)?.build()?
+        } else {
+            projections.push(
+                when(predicate, lit(RowLevelOperationType::Delete.as_i32()))
+                    .otherwise(lit(RowLevelOperationType::Copy.as_i32()))?
+                    .alias(OPERATION_COLUMN),
+            );
+            LogicalPlanBuilder::from(target_plan.clone())
+                .project(projections)?
+                .build()?
+        };
         super::row_level::select_copy_on_write_rows(rows)?
     } else {
         let predicate = condition.as_ref().ok_or_else(|| {

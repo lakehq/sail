@@ -696,8 +696,7 @@ impl IcebergTableProvider {
                     partition_spec_id,
                     is_unpartitioned_spec: is_unpartitioned,
                 };
-                // TODO(V3): Implement Puffin metadata parsing and RoaringBitmap delete application.
-                // Guard: reject v3 deletion vectors explicitly. Silently skipping would corrupt read results.
+                // TODO: Read and apply v3 Puffin deletion vectors before enabling DV tables.
                 if file_ref.is_deletion_vector() {
                     return plan_err!(
                         "Iceberg v3 deletion vectors are not yet supported \
@@ -1043,12 +1042,12 @@ impl IcebergTableProvider {
                 max_value: max_scalars[i]
                     .clone()
                     .filter(|_| !missing_max[i])
-                    .map(Precision::Exact)
+                    .map(Self::bound_precision)
                     .unwrap_or(Precision::Absent),
                 min_value: min_scalars[i]
                     .clone()
                     .filter(|_| !missing_min[i])
-                    .map(Precision::Exact)
+                    .map(Self::bound_precision)
                     .unwrap_or(Precision::Absent),
                 distinct_count: Precision::Absent,
                 sum_value: Precision::Absent,
@@ -1090,14 +1089,14 @@ impl IcebergTableProvider {
                     .lower_bounds()
                     .get(&field_id)
                     .and_then(|datum| self.statistic_scalar(data_file, field_id, datum))
-                    .map(Precision::Exact)
+                    .map(Self::bound_precision)
                     .unwrap_or(Precision::Absent);
 
                 let max_value = data_file
                     .upper_bounds()
                     .get(&field_id)
                     .and_then(|datum| self.statistic_scalar(data_file, field_id, datum))
-                    .map(Precision::Exact)
+                    .map(Self::bound_precision)
                     .unwrap_or(Precision::Absent);
 
                 ColumnStatistics {
@@ -1115,6 +1114,23 @@ impl IcebergTableProvider {
             num_rows,
             total_byte_size,
             column_statistics,
+        }
+    }
+
+    fn bound_precision(value: ScalarValue) -> Precision<ScalarValue> {
+        // Bounds from older files may be truncated regardless of the current metrics mode.
+        if matches!(
+            value.data_type(),
+            DataType::Utf8
+                | DataType::LargeUtf8
+                | DataType::Utf8View
+                | DataType::Binary
+                | DataType::LargeBinary
+                | DataType::BinaryView
+        ) {
+            Precision::Inexact(value)
+        } else {
+            Precision::Exact(value)
         }
     }
 }
@@ -1186,7 +1202,14 @@ impl TableProvider for IcebergTableProvider {
         // Build filter conjunction and run DataFusion-based pruning on Iceberg metrics.
         // Preserve per-file sequence numbers through the prune.
         let filter_expr = conjunction(pruning_filters.iter().cloned());
-        if filter_expr.is_some() || limit.is_some() {
+        let file_limit = limit.filter(|_| {
+            filters.is_empty()
+                && !manifest_list
+                    .entries()
+                    .iter()
+                    .any(|manifest| manifest.content == ManifestContentType::Deletes)
+        });
+        if filter_expr.is_some() || file_limit.is_some() {
             let (files_only, seqs_only): (Vec<DataFile>, Vec<i64>) =
                 data_files_with_seq.iter().cloned().unzip();
             let seq_by_path: HashMap<String, i64> = files_only
@@ -1197,7 +1220,7 @@ impl TableProvider for IcebergTableProvider {
             let (kept, _mask) = prune_files(
                 session,
                 &pruning_filters,
-                limit,
+                file_limit,
                 self.rebuild_logical_schema_for_filters(projection, filters),
                 files_only,
                 &self.schema,
@@ -1445,7 +1468,14 @@ impl IcebergTableProvider {
         }
 
         let filter_expr = conjunction(pruning_filters.iter().cloned());
-        if filter_expr.is_some() || limit.is_some() {
+        let file_limit = limit.filter(|_| {
+            filters.is_empty()
+                && !manifest_list
+                    .entries()
+                    .iter()
+                    .any(|manifest| manifest.content == ManifestContentType::Deletes)
+        });
+        if filter_expr.is_some() || file_limit.is_some() {
             let (files_only, seqs_only): (Vec<DataFile>, Vec<i64>) =
                 data_files_with_seq.iter().cloned().unzip();
             let seq_by_path: HashMap<String, i64> = files_only
@@ -1456,7 +1486,7 @@ impl IcebergTableProvider {
             let (kept, _mask) = prune_files(
                 session,
                 &pruning_filters,
-                limit,
+                file_limit,
                 self.rebuild_logical_schema_for_filters(None, filters),
                 files_only,
                 &self.schema,
@@ -1734,7 +1764,6 @@ impl IcebergTableProvider {
 
     fn strip_expr(expr: &Expr) -> &Expr {
         match expr {
-            Expr::Cast(c) => Self::strip_expr(&c.expr),
             Expr::Alias(a) => Self::strip_expr(&a.expr),
             _ => expr,
         }

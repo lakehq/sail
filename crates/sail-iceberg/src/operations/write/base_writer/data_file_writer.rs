@@ -246,6 +246,39 @@ fn aggregate_from_parquet_metadata(
     // producing Iceberg data-file metrics.
     let row_groups = parquet_meta.row_groups();
     let schema_descr = parquet_meta.file_metadata().schema_descr();
+    let metric_fields = schema_descr
+        .columns()
+        .iter()
+        .map(|column| {
+            let mut node = schema_descr.root_schema();
+            let mut field_id = None;
+            let mut variant_depth = None;
+            for (depth, name) in column.path().parts().iter().enumerate() {
+                node = node
+                    .get_fields()
+                    .iter()
+                    .find(|field| field.name() == name)?
+                    .as_ref();
+                let info = node.get_basic_info();
+                if info.has_id() {
+                    field_id = Some(info.id());
+                    if iceberg_schema.field_by_id(info.id()).is_some_and(|field| {
+                        matches!(
+                            field.field_type.as_ref(),
+                            Type::Primitive(PrimitiveType::Variant)
+                        )
+                    }) {
+                        variant_depth = Some(depth);
+                    }
+                }
+            }
+            let count_values = variant_depth.is_none_or(|depth| {
+                column.path().parts().len() == depth + 2
+                    && column.path().parts()[depth + 1] == "metadata"
+            });
+            field_id.map(|id| (id, count_values))
+        })
+        .collect::<Vec<_>>();
 
     let mut col_sizes: HashMap<i32, u64> = HashMap::new();
     let mut val_counts: HashMap<i32, u64> = HashMap::new();
@@ -262,16 +295,13 @@ fn aggregate_from_parquet_metadata(
             split_offsets.push(off);
         }
         for (column_index, column) in rg.columns().iter().enumerate() {
-            let leaf_info = column.column_descr().self_type().get_basic_info();
-            let Some(field_id) = (if leaf_info.has_id() {
-                Some(leaf_info.id())
-            } else {
-                let root_info = schema_descr.get_column_root(column_index).get_basic_info();
-                root_info.has_id().then(|| root_info.id())
-            }) else {
+            let Some((field_id, count_values)) = metric_fields[column_index] else {
                 continue;
             };
             *col_sizes.entry(field_id).or_insert(0) += column.compressed_size() as u64;
+            if !count_values {
+                continue;
+            }
             *val_counts.entry(field_id).or_insert(0) += column.num_values() as u64;
 
             let statistics = column.statistics();
@@ -411,6 +441,84 @@ mod tests {
             .map_err(|error| error.to_string())?;
             assert!(kept.is_empty());
             assert_eq!(mask, Some(vec![false]));
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn variant_metrics_and_unknown_fields_follow_logical_storage() -> Result<(), String> {
+        use datafusion::arrow::array::{BinaryArray, NullArray, StructArray};
+        use datafusion::arrow::buffer::NullBuffer;
+        use parquet::basic::LogicalType;
+
+        futures::executor::block_on(async {
+            let children = vec![
+                Arc::new(Field::new("metadata", DataType::Binary, false)),
+                Arc::new(Field::new("value", DataType::Binary, false)),
+            ];
+            let variant = StructArray::try_new(
+                children.clone().into(),
+                vec![
+                    Arc::new(BinaryArray::from(vec![Some(&[1, 0, 0][..]), None])),
+                    Arc::new(BinaryArray::from(vec![Some(&[0][..]), None])),
+                ],
+                Some(NullBuffer::from(vec![true, false])),
+            )
+            .map_err(|error| error.to_string())?;
+            let schema = Arc::new(ArrowSchema::new(vec![
+                Field::new("v", DataType::Struct(children.into()), true).with_metadata(
+                    HashMap::from([
+                        (PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string()),
+                        (
+                            "ARROW:extension:name".to_string(),
+                            "arrow.parquet.variant".to_string(),
+                        ),
+                    ]),
+                ),
+                Field::new("unknown", DataType::Null, true).with_metadata(HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    "2".to_string(),
+                )])),
+            ]));
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(variant), Arc::new(NullArray::new(2))],
+            )
+            .map_err(|error| error.to_string())?;
+            let mut writer =
+                ArrowParquetWriter::try_new(&schema, WriterProperties::builder().build())?;
+            writer.write_batch(&batch).await?;
+            let (_, metadata) = writer.close().await?;
+            let fields = metadata
+                .parquet_metadata
+                .file_metadata()
+                .schema_descr()
+                .root_schema()
+                .get_fields();
+            assert_eq!(fields.len(), 1);
+            assert!(matches!(
+                fields[0].get_basic_info().logical_type_ref(),
+                Some(LogicalType::Variant(_))
+            ));
+            let iceberg_schema = Schema::builder()
+                .with_fields(vec![
+                    Arc::new(NestedField::optional(
+                        1,
+                        "v",
+                        Type::Primitive(PrimitiveType::Variant),
+                    )),
+                    Arc::new(NestedField::optional(
+                        2,
+                        "unknown",
+                        Type::Primitive(PrimitiveType::Unknown),
+                    )),
+                ])
+                .build()?;
+            let outcome = DataFileWriter::new(0, "data.parquet".to_string(), vec![])
+                .finish_with_schema(metadata, &iceberg_schema)?;
+            assert_eq!(outcome.data_file.record_count, 2);
+            assert_eq!(outcome.data_file.value_counts, HashMap::from([(1, 2)]));
+            assert_eq!(outcome.data_file.null_value_counts, HashMap::from([(1, 1)]));
             Ok(())
         })
     }

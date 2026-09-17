@@ -289,6 +289,8 @@ impl IcebergTableWriter {
     }
 
     pub async fn close(mut self) -> Result<Vec<DataFile>, String> {
+        // FIXME: Retain ownership of uploaded files across partial close failures and task cancellation.
+        // Cleanup must wait for the job outcome so retries can safely reuse successful task output.
         for (partition_values, writer) in std::mem::take(&mut self.writers) {
             self.flush_partition(writer.state, &writer.partition_dir, partition_values)
                 .await?;

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::{DFSchema, DFSchemaRef, ScalarValue};
-use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, lit};
+use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, ScalarUDF, lit};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::column_features::ColumnFeatures;
@@ -11,12 +11,57 @@ use sail_common_datafusion::datasource::{DataSourceRegistry, UpdateAssignment, U
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakesource::RowLevelOperation;
 use sail_common_datafusion::logical_expr::ExprWithSource;
+use sail_function::scalar::struct_function::StructFunction;
 use sail_logical_plan::row_level::{StructFieldAlignment, align_row_level_value};
 
 use crate::config::StoreAssignmentPolicy;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
+
+enum UpdateAssignmentValue {
+    Expression(spec::Expr),
+    Struct(Vec<(String, UpdateAssignmentValue)>),
+}
+
+fn rebuild_update_struct(
+    original: spec::Expr,
+    data_type: &DataType,
+    assignments: &[(Vec<String>, spec::Expr)],
+) -> PlanResult<UpdateAssignmentValue> {
+    if assignments.is_empty() {
+        return Ok(UpdateAssignmentValue::Expression(original));
+    }
+    if let Some((_, value)) = assignments.iter().find(|(path, _)| path.is_empty()) {
+        return Ok(UpdateAssignmentValue::Expression(value.clone()));
+    }
+    let DataType::Struct(fields) = data_type else {
+        return Err(PlanError::invalid(
+            "nested UPDATE assignment requires a struct",
+        ));
+    };
+    let children = fields
+        .iter()
+        .map(|field| {
+            let child = spec::Expr::UnresolvedExtractValue {
+                child: Box::new(original.clone()),
+                extraction: Box::new(spec::Expr::Literal(spec::Literal::Utf8 {
+                    value: Some(field.name().clone()),
+                })),
+            };
+            let child_assignments = assignments
+                .iter()
+                .filter(|(path, _)| path.first() == Some(field.name()))
+                .map(|(path, value)| (path[1..].to_vec(), value.clone()))
+                .collect::<Vec<_>>();
+            Ok((
+                field.name().clone(),
+                rebuild_update_struct(child, field.data_type(), &child_assignments)?,
+            ))
+        })
+        .collect::<PlanResult<Vec<_>>>()?;
+    Ok(UpdateAssignmentValue::Struct(children))
+}
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_command_update(
@@ -95,7 +140,9 @@ impl PlanResolver<'_> {
                     "UPDATE assigns column '{column}' more than once"
                 )));
             }
-            let mut value = self.resolve_expression(value, &input_schema, state).await?;
+            let mut value = self
+                .resolve_update_assignment_value(value, &input_schema, state)
+                .await?;
             let target_index = resolved_target_field_names
                 .iter()
                 .position(|name| {
@@ -209,6 +256,32 @@ impl PlanResolver<'_> {
             .map_err(PlanError::from)
     }
 
+    #[async_recursion::async_recursion]
+    async fn resolve_update_assignment_value(
+        &self,
+        value: UpdateAssignmentValue,
+        input_schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Expr> {
+        match value {
+            UpdateAssignmentValue::Expression(expr) => {
+                self.resolve_expression(expr, input_schema, state).await
+            }
+            UpdateAssignmentValue::Struct(children) => {
+                let mut names = Vec::with_capacity(children.len());
+                let mut expressions = Vec::with_capacity(children.len());
+                for (name, value) in children {
+                    names.push(name);
+                    expressions.push(
+                        self.resolve_update_assignment_value(value, input_schema, state)
+                            .await?,
+                    );
+                }
+                Ok(ScalarUDF::from(StructFunction::new(names)).call(expressions))
+            }
+        }
+    }
+
     fn normalize_update_assignment_targets(
         &self,
         assignments: Vec<(spec::ObjectName, spec::Expr)>,
@@ -216,7 +289,7 @@ impl PlanResolver<'_> {
         target_identifier: &[String],
         input_schema: &DFSchemaRef,
         resolved_target_field_names: &[String],
-    ) -> PlanResult<Vec<(spec::ObjectName, spec::Expr)>> {
+    ) -> PlanResult<Vec<(spec::ObjectName, UpdateAssignmentValue)>> {
         let names_equal = |left: &str, right: &str| {
             if self.config.case_sensitive {
                 left == right
@@ -225,7 +298,7 @@ impl PlanResolver<'_> {
             }
         };
         let mut paths = Vec::<Vec<String>>::new();
-        let mut grouped = Vec::<(String, spec::Expr)>::new();
+        let mut grouped = Vec::<(String, DataType, Vec<(Vec<String>, spec::Expr)>)>::new();
 
         for (column, value) in assignments {
             let mut parts = column
@@ -302,30 +375,32 @@ impl PlanResolver<'_> {
             }
             paths.push(canonical_path.clone());
 
-            if canonical_path.len() == 1 {
-                grouped.push((root_name, value));
-                continue;
+            if let Some((_, _, assignments)) =
+                grouped.iter_mut().find(|(root, _, _)| root == &root_name)
+            {
+                assignments.push((canonical_path[1..].to_vec(), value));
+            } else {
+                grouped.push((
+                    root_name,
+                    input_schema.fields()[root_index].data_type().clone(),
+                    vec![(canonical_path[1..].to_vec(), value)],
+                ));
             }
-            let previous = grouped
-                .iter()
-                .position(|(root, _)| names_equal(root, &root_name))
-                .map(|index| grouped.remove(index).1)
-                .unwrap_or_else(|| spec::Expr::UnresolvedAttribute {
-                    name: spec::ObjectName::bare(root_name.clone()),
-                    plan_id: None,
-                    is_metadata_column: false,
-                });
-            let updated = spec::Expr::UpdateFields {
-                struct_expression: Box::new(previous),
-                field_name: spec::ObjectName::from(canonical_path[1..].to_vec()),
-                value_expression: Some(Box::new(value)),
-            };
-            grouped.push((root_name, updated));
         }
 
-        Ok(grouped
+        grouped
             .into_iter()
-            .map(|(column, value)| (spec::ObjectName::bare(column), value))
-            .collect())
+            .map(|(column, data_type, assignments)| {
+                let original = spec::Expr::UnresolvedAttribute {
+                    name: spec::ObjectName::bare(column.clone()),
+                    plan_id: None,
+                    is_metadata_column: false,
+                };
+                Ok((
+                    spec::ObjectName::bare(column),
+                    rebuild_update_struct(original, &data_type, &assignments)?,
+                ))
+            })
+            .collect()
     }
 }

@@ -27,7 +27,6 @@ use crate::operations::SnapshotUpdateKind;
 use crate::physical_plan::write_context::IcebergWriteContext;
 use crate::physical_plan::writer_exec::IcebergWriterExec;
 use crate::physical_plan::writer_options::IcebergWriterExecOptions;
-use crate::utils::partition_transform::format_partition_expr;
 
 pub struct IcebergTableConfig {
     pub table_url: Url,
@@ -94,11 +93,10 @@ impl<'a> IcebergPlanBuilder<'a> {
 
     fn add_projection_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
         let schema = input.schema();
-        if self
-            .table_config
-            .partition_columns
+        let source_columns = self.partition_source_columns()?;
+        if source_columns
             .iter()
-            .all(|field| schema.index_of(&field.column).is_ok())
+            .all(|name| schema.index_of(name).is_ok())
         {
             return Ok(input);
         }
@@ -114,11 +112,11 @@ impl<'a> IcebergPlanBuilder<'a> {
             })
             .collect::<Vec<_>>();
         let writer_schema = self.table_config.write_context.writer_arrow_schema()?;
-        for field in &self.table_config.partition_columns {
-            if expressions.iter().any(|(_, name)| name == &field.column) {
+        for source_name in source_columns {
+            if expressions.iter().any(|(_, name)| name == &source_name) {
                 continue;
             }
-            let target = writer_schema.field_with_name(&field.column)?;
+            let target = writer_schema.field_with_name(&source_name)?;
             let value = match sail_common_datafusion::schema_evolution::field_default(target)? {
                 Some(value) => value,
                 None if target.is_nullable() => {
@@ -127,13 +125,13 @@ impl<'a> IcebergPlanBuilder<'a> {
                 None => {
                     return Err(datafusion::common::DataFusionError::Plan(format!(
                         "Required partition column '{}' is missing and has no write default",
-                        format_partition_expr(field)
+                        source_name
                     )));
                 }
             };
             expressions.push((
                 Arc::new(datafusion::physical_expr::expressions::Literal::new(value)),
-                field.column.clone(),
+                source_name,
             ));
         }
         Ok(Arc::new(
@@ -149,19 +147,7 @@ impl<'a> IcebergPlanBuilder<'a> {
             Partitioning::RoundRobinBatch(4)
         } else {
             let schema = input.schema();
-            let mut seen = std::collections::HashSet::new();
-            let partition_source_columns = self
-                .table_config
-                .partition_columns
-                .iter()
-                .filter_map(|field| {
-                    if seen.insert(field.column.clone()) {
-                        Some(field.column.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>();
+            let partition_source_columns = self.partition_source_columns()?;
             let exprs: Vec<Arc<dyn PhysicalExpr>> = partition_source_columns
                 .iter()
                 .map(|name| {
@@ -178,6 +164,33 @@ impl<'a> IcebergPlanBuilder<'a> {
         };
 
         Ok(Arc::new(RepartitionExec::try_new(input, repartitioning)?))
+    }
+
+    fn partition_source_columns(&self) -> Result<Vec<String>> {
+        let context = &self.table_config.write_context;
+        let mut columns = Vec::new();
+        if let Some(spec) = &context.writer_partition_spec {
+            for field in spec.fields() {
+                let path = context
+                    .writer_schema
+                    .field_path_by_id(field.source_id)
+                    .ok_or_else(|| {
+                        datafusion::common::DataFusionError::Plan(format!(
+                            "Cannot resolve partition source field ID {}",
+                            field.source_id
+                        ))
+                    })?;
+                let source = path.first().ok_or_else(|| {
+                    datafusion::common::DataFusionError::Internal(
+                        "Empty partition source path".to_string(),
+                    )
+                })?;
+                if !columns.contains(&source.name) {
+                    columns.push(source.name.clone());
+                }
+            }
+        }
+        Ok(columns)
     }
 
     fn add_sort_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {

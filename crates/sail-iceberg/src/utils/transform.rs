@@ -46,6 +46,12 @@ pub fn apply_transform(
                 let rem = v.rem_euclid(w);
                 Some(Literal::Primitive(PrimitiveLiteral::Long(v - rem)))
             }
+            Some(Literal::Primitive(PrimitiveLiteral::Int128(v))) => {
+                let width = i128::from(w);
+                Some(Literal::Primitive(PrimitiveLiteral::Int128(
+                    v - v.rem_euclid(width),
+                )))
+            }
             other => other,
         },
         Transform::Bucket(n) => match value {
@@ -248,11 +254,16 @@ fn hash_long(v: i64) -> i32 {
 #[inline]
 fn hash_decimal(v: i128) -> i32 {
     let bytes = v.to_be_bytes();
-    if let Some(start) = bytes.iter().position(|&x| x != 0) {
-        hash_bytes(&bytes[start..])
-    } else {
-        hash_bytes(&[0])
+    let mut start = 0;
+    while start < bytes.len() - 1 {
+        let redundant = (bytes[start] == 0 && bytes[start + 1] & 0x80 == 0)
+            || (bytes[start] == 0xff && bytes[start + 1] & 0x80 != 0);
+        if !redundant {
+            break;
+        }
+        start += 1;
     }
+    hash_bytes(&bytes[start..])
 }
 
 #[inline]
@@ -288,6 +299,41 @@ pub fn bucket_bytes(b: &[u8], n: u32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decimal_bucket_preserves_twos_complement_sign() {
+        for (value, bytes) in [
+            (0, vec![0]),
+            (127, vec![127]),
+            (128, vec![0, 128]),
+            (255, vec![0, 255]),
+            (256, vec![1, 0]),
+            (-1, vec![255]),
+            (-128, vec![128]),
+            (-129, vec![255, 127]),
+        ] {
+            assert_eq!(hash_decimal(value), hash_bytes(&bytes), "{value}");
+        }
+        assert_eq!(bucket_decimal(128, 100), 49);
+    }
+
+    #[test]
+    fn decimal_truncate_uses_floor_on_unscaled_values() {
+        let data_type = Type::Primitive(PrimitiveType::Decimal {
+            precision: 9,
+            scale: 2,
+        });
+        for (value, expected) in [(1065, 1050), (-1065, -1100), (-1050, -1050), (0, 0)] {
+            assert_eq!(
+                apply_transform(
+                    Transform::Truncate(50),
+                    &data_type,
+                    Some(Literal::Primitive(PrimitiveLiteral::Int128(value)))
+                ),
+                Some(Literal::Primitive(PrimitiveLiteral::Int128(expected)))
+            );
+        }
+    }
 
     #[test]
     fn test_days_to_year() {

@@ -25,7 +25,7 @@ use rust_decimal::prelude::ToPrimitive;
 use sail_common::spec::{SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME};
 use sail_common_datafusion::variant::{
     is_marked_variant_storage_type, is_variant_arrow_field,
-    is_variant_storage_type as is_variant_arrow_storage_type,
+    is_variant_storage_type as is_variant_arrow_storage_type, variant_metadata_field,
 };
 use serde_json;
 
@@ -376,7 +376,8 @@ pub fn iceberg_primitive_to_arrow(primitive: &PrimitiveType) -> Result<ArrowData
         }
         PrimitiveType::Variant => ArrowDataType::Struct(
             vec![
-                ArrowField::new("metadata", ArrowDataType::Binary, false),
+                // Keep Variant identity when scalar folding drops the parent field metadata.
+                variant_metadata_field(ArrowDataType::Binary, false),
                 ArrowField::new("value", ArrowDataType::Binary, false),
             ]
             .into(),

@@ -11,6 +11,7 @@
 // limitations under the License.
 
 use std::cell::RefCell;
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -327,7 +328,6 @@ pub fn prune_manifest_entries(
 fn collect_source_eq_filters(schema: &Schema, filters: &[Expr]) -> Vec<(i32, PrimitiveLiteral)> {
     fn strip(expr: &Expr) -> &Expr {
         match expr {
-            Expr::Cast(c) => strip(&c.expr),
             Expr::Alias(a) => strip(&a.expr),
             _ => expr,
         }
@@ -386,7 +386,6 @@ fn collect_source_in_filters(
 ) -> HashMap<i32, Vec<PrimitiveLiteral>> {
     fn strip(expr: &Expr) -> &Expr {
         match expr {
-            Expr::Cast(c) => strip(&c.expr),
             Expr::Alias(a) => strip(&a.expr),
             _ => expr,
         }
@@ -636,9 +635,30 @@ fn partition_predicate_may_match_value(
         return true;
     };
     match &predicate.constraint {
-        PartitionConstraint::Eq(expected) => value == expected,
-        PartitionConstraint::In(values) => values.contains(value),
+        PartitionConstraint::Eq(expected) => {
+            compare_partition_literals(value, expected).is_none_or(|order| order.is_eq())
+        }
+        PartitionConstraint::In(values) => values.iter().any(|expected| {
+            compare_partition_literals(value, expected).is_none_or(|order| order.is_eq())
+        }),
         PartitionConstraint::Range(range) => literal_may_match_range(value, range),
+    }
+}
+
+fn compare_partition_literals(
+    left: &PrimitiveLiteral,
+    right: &PrimitiveLiteral,
+) -> Option<Ordering> {
+    use PrimitiveLiteral::{Double, Float, Int, Long};
+    match (left, right) {
+        (Int(left), Long(right)) => Some(i64::from(*left).cmp(right)),
+        (Long(left), Int(right)) => Some(left.cmp(&i64::from(*right))),
+        (Float(left), Double(right)) => f64::from(left.0).partial_cmp(&right.0),
+        (Double(left), Float(right)) => left.0.partial_cmp(&f64::from(right.0)),
+        _ if std::mem::discriminant(left) == std::mem::discriminant(right) => {
+            left.partial_cmp(right)
+        }
+        _ => None,
     }
 }
 
@@ -648,12 +668,12 @@ fn literal_may_match_bounds(
     upper: Option<&PrimitiveLiteral>,
 ) -> bool {
     if let Some(lower) = lower
-        && value < lower
+        && compare_partition_literals(value, lower).is_some_and(|order| order.is_lt())
     {
         return false;
     }
     if let Some(upper) = upper
-        && value > upper
+        && compare_partition_literals(value, upper).is_some_and(|order| order.is_gt())
     {
         return false;
     }
@@ -666,12 +686,14 @@ fn range_may_match_bounds(
     upper: Option<&PrimitiveLiteral>,
 ) -> bool {
     if let (Some((min, inclusive)), Some(upper)) = (&range.min, upper)
-        && (min > upper || (min == upper && !inclusive))
+        && compare_partition_literals(min, upper)
+            .is_some_and(|order| order.is_gt() || (order.is_eq() && !inclusive))
     {
         return false;
     }
     if let (Some((max, inclusive)), Some(lower)) = (&range.max, lower)
-        && (max < lower || (max == lower && !inclusive))
+        && compare_partition_literals(max, lower)
+            .is_some_and(|order| order.is_lt() || (order.is_eq() && !inclusive))
     {
         return false;
     }
@@ -680,12 +702,14 @@ fn range_may_match_bounds(
 
 fn literal_may_match_range(value: &PrimitiveLiteral, range: &RangeConstraint) -> bool {
     if let Some((min, inclusive)) = &range.min
-        && (value < min || (value == min && !inclusive))
+        && compare_partition_literals(value, min)
+            .is_some_and(|order| order.is_lt() || (order.is_eq() && !inclusive))
     {
         return false;
     }
     if let Some((max, inclusive)) = &range.max
-        && (value > max || (value == max && !inclusive))
+        && compare_partition_literals(value, max)
+            .is_some_and(|order| order.is_gt() || (order.is_eq() && !inclusive))
     {
         return false;
     }
@@ -698,7 +722,6 @@ fn collect_source_range_filters(
 ) -> HashMap<i32, RangeConstraint> {
     fn strip(expr: &Expr) -> &Expr {
         match expr {
-            Expr::Cast(c) => strip(&c.expr),
             Expr::Alias(a) => strip(&a.expr),
             _ => expr,
         }

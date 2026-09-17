@@ -189,9 +189,15 @@ pub fn prepare_iceberg_write_context(
             if !partition_columns.is_empty() {
                 let current_schema = &schema_outcome.iceberg_schema;
                 let mut builder = PartitionSpec::builder();
-                if let Some(existing) = &partition_spec {
-                    builder = builder.with_spec_id(existing.spec_id());
-                }
+                let next_spec_id = table_metadata
+                    .partition_specs
+                    .iter()
+                    .map(PartitionSpec::spec_id)
+                    .max()
+                    .unwrap_or(-1)
+                    + 1;
+                builder = builder.with_spec_id(next_spec_id);
+                let mut next_partition_id = table_metadata.last_partition_id + 1;
                 for field in partition_columns {
                     let field_id =
                         current_schema
@@ -202,13 +208,36 @@ pub fn prepare_iceberg_write_context(
                                     format_partition_expr(field)
                                 ))
                             })?;
-                    builder = builder.add_field(
+                    let transform = iceberg_transform_from_partition_field(field);
+                    let partition_id = table_metadata
+                        .partition_specs
+                        .iter()
+                        .flat_map(|spec| spec.fields())
+                        .find(|previous| {
+                            previous.source_id == field_id && previous.transform == transform
+                        })
+                        .map(|previous| previous.field_id)
+                        .unwrap_or_else(|| {
+                            let id = next_partition_id;
+                            next_partition_id += 1;
+                            id
+                        });
+                    builder = builder.add_field_with_id(
                         field_id,
+                        partition_id,
                         partition_field_name(field),
-                        iceberg_transform_from_partition_field(field),
+                        transform,
                     );
                 }
-                partition_spec = Some(builder.build());
+                let candidate = builder.build();
+                partition_spec = Some(
+                    table_metadata
+                        .partition_specs
+                        .iter()
+                        .find(|previous| previous.is_compatible_with(&candidate))
+                        .cloned()
+                        .unwrap_or(candidate),
+                );
             }
         } else {
             let current_schema = table_metadata.current_schema().ok_or_else(|| {
@@ -322,15 +351,15 @@ fn extract_partition_columns(
         .fields()
         .iter()
         .map(|partition_field| {
-            let field = iceberg_schema
-                .field_by_id(partition_field.source_id)
+            let name = iceberg_schema
+                .name_by_field_id(partition_field.source_id)
                 .ok_or_else(|| {
                     DataFusionError::Plan(format!(
                         "Partition column mismatch: field id {} missing in schema",
                         partition_field.source_id
                     ))
                 })?;
-            catalog_partition_field_from_iceberg(field.name.clone(), partition_field.transform)
+            catalog_partition_field_from_iceberg(name.to_string(), partition_field.transform)
                 .map_err(DataFusionError::Plan)
         })
         .collect()

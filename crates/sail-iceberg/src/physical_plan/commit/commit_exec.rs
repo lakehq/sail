@@ -242,23 +242,29 @@ impl IcebergCommitExec {
             .max(format_version_for_schema(&new_schema));
     }
 
-    fn apply_partition_spec_update(table_meta: &mut TableMetadata, new_spec: PartitionSpec) {
+    fn apply_partition_spec_update(
+        table_meta: &mut TableMetadata,
+        new_spec: PartitionSpec,
+    ) -> Result<()> {
         let spec_id = new_spec.spec_id();
-        let mut replaced = false;
-        for spec in table_meta.partition_specs.iter_mut() {
-            if spec.spec_id() == spec_id {
-                *spec = new_spec.clone();
-                replaced = true;
-                break;
+        if let Some(previous) = table_meta
+            .partition_specs
+            .iter()
+            .find(|spec| spec.spec_id() == spec_id)
+        {
+            if previous != &new_spec {
+                return Err(DataFusionError::Plan(format!(
+                    "Cannot replace Iceberg partition spec {spec_id} with a different definition"
+                )));
             }
-        }
-        if !replaced {
+        } else {
             table_meta.partition_specs.push(new_spec.clone());
         }
         table_meta.default_spec_id = spec_id;
         table_meta.last_partition_id = table_meta
             .last_partition_id
             .max(new_spec.last_assigned_field_id());
+        Ok(())
     }
 
     fn validate_requirements(
@@ -975,18 +981,14 @@ impl ExecutionPlan for IcebergCommitExec {
                     .cloned()
                     .unwrap_or_else(PartitionSpec::unpartitioned_spec);
                 if let Some(new_spec) = commit_info.partition_spec.clone() {
-                    let spec = if new_spec.spec_id() == 0 && table_meta.default_spec_id != 0 {
-                        new_spec.with_spec_id(table_meta.default_spec_id)
-                    } else {
-                        new_spec
-                    };
+                    let spec = new_spec;
                     let spec_id = spec.spec_id();
                     let should_add_spec = !table_meta
                         .partition_specs
                         .iter()
                         .any(|partition_spec| partition_spec.spec_id() == spec_id);
                     let should_set_default_spec = table_meta.default_spec_id != spec_id;
-                    Self::apply_partition_spec_update(&mut table_meta, spec.clone());
+                    Self::apply_partition_spec_update(&mut table_meta, spec.clone())?;
                     partition_spec_for_commit = spec;
                     if should_add_spec {
                         metadata_updates.push(TableUpdate::AddSpec {
@@ -1215,7 +1217,14 @@ impl ExecutionPlan for IcebergCommitExec {
                     prepared_snapshot.cleanup().await;
                     return Err(error);
                 }
-                let action_updates = prepared_snapshot.action_commit().updates().to_vec();
+                let mut action_updates = prepared_snapshot.action_commit().updates().to_vec();
+                for update in &mut action_updates {
+                    if let TableUpdate::SetSnapshotRef { ref_name, reference } = update
+                        && let Some(previous) = table_meta.refs.get(ref_name)
+                    {
+                        reference.retention = previous.retention.clone();
+                    }
+                }
                 if let Some(catalog_table) = catalog_commit_table {
                     let requirements = catalog_requirements(
                         &table_meta,

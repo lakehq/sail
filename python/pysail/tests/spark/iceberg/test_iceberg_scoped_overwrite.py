@@ -472,3 +472,21 @@ def test_iceberg_v1_append_preserves_non_main_snapshot_ref(spark, sql_catalog):
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
         sql_catalog.drop_table(identifier)
+
+
+def test_iceberg_dynamic_overwrite_option_preserves_other_partitions(spark, tmp_path):
+    table_name = "iceberg_dynamic_overwrite_option"
+    location = tmp_path / table_name
+    _create_partitioned_table(spark, table_name, location)
+    try:
+        spark.createDataFrame([(1, "A", 10), (2, "B", 20)], "id BIGINT, category STRING, value BIGINT").writeTo(
+            table_name
+        ).append()
+        original_files = _live_data_file_paths(location)
+        spark.createDataFrame([(3, "A", 30)], "id BIGINT, category STRING, value BIGINT").writeTo(table_name).option(
+            "overwrite-mode", "dynamic"
+        ).overwrite(F.lit(True))
+        assert _rows(spark, table_name) == [(2, "B", 20), (3, "A", 30)]
+        assert original_files & _live_data_file_paths(location)
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")

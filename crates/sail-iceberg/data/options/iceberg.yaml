@@ -89,6 +89,19 @@
 
 ### Write-Only Options ###
 
+- key: overwrite_mode
+  description: Select overwrite mode.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_string
+  supported: true
+  rust_type: "Option<String>"
+  scopes: [write]
+  origins:
+    - type: option
+      keys: [overwrite-mode]
+      parser: crate::options::parsers::parse_optional_string
+
 - key: overwrite_schema
   description: |
     If `true`, allows overwriting the schema of the table when using overwrite mode.
@@ -514,16 +527,6 @@
     - type: option
       keys: [output-sort-order-id]
       parser: crate::options::parsers::parse_optional_i64
-
-- key: overwrite_mode
-  description: Select overwrite mode.
-  supported: false
-  rust_type: "Option<String>"
-  scopes: [write]
-  origins:
-    - type: option
-      keys: [overwrite-mode]
-      parser: crate::options::parsers::parse_optional_string
 
 - key: distribution_mode
   description: Override write distribution mode.

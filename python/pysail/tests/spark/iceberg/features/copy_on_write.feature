@@ -307,3 +307,92 @@ Feature: Iceberg copy-on-write row operations
     Then query result
       | Key | Value | Part |
       | 1   | 11    | NULL |
+
+  Scenario: COW subquery UPDATE preserves null and false predicate rows
+    Given remember current iceberg data manifest paths
+    Given statement
+      """
+      UPDATE iceberg_cow SET value = 99
+      WHERE id IN (SELECT id FROM VALUES (1), (1), (NULL) AS source(id))
+      """
+    Then iceberg current data manifests reuse 1 remembered paths
+    When query
+      """
+      SELECT * FROM iceberg_cow ORDER BY id
+      """
+    Then query result ordered
+      | id | value | part |
+      | 1  | 99    | A    |
+      | 2  | NULL  | A    |
+      | 3  | 30    | B    |
+      | 4  | 40    | B    |
+
+  Scenario: COW subquery DELETE removes an entire matching file
+    Given remember current iceberg data manifest paths
+    Given statement
+      """
+      DELETE FROM iceberg_cow
+      WHERE id IN (SELECT id FROM VALUES (1), (2), (NULL) AS source(id))
+      """
+    Then iceberg current data manifests reuse 1 remembered paths
+    When query
+      """
+      SELECT * FROM iceberg_cow ORDER BY id
+      """
+    Then query result ordered
+      | id | value | part |
+      | 3  | 30    | B    |
+      | 4  | 40    | B    |
+
+  Scenario: COW NOT IN with null has no matching rows
+    Given statement
+      """
+      UPDATE iceberg_cow SET value = 99
+      WHERE id NOT IN (SELECT id FROM VALUES (1), (NULL) AS source(id))
+      """
+    Then iceberg snapshot count is 2
+    When query
+      """
+      SELECT * FROM iceberg_cow ORDER BY id
+      """
+    Then query result ordered
+      | id | value | part |
+      | 1  | 10    | A    |
+      | 2  | NULL  | A    |
+      | 3  | 30    | B    |
+      | 4  | 40    | B    |
+
+  Scenario: COW correlated scalar UPDATE binds the original target alias
+    Given statement
+      """
+      UPDATE iceberg_cow AS t
+      SET value = (SELECT MAX(s.value) FROM VALUES (1, 99), (1, 101) AS s(id, value) WHERE s.id = t.id)
+      WHERE t.id <= 2
+      """
+    When query
+      """
+      SELECT * FROM iceberg_cow ORDER BY id
+      """
+    Then query result ordered
+      | id | value | part |
+      | 1  | 101   | A    |
+      | 2  | NULL  | A    |
+      | 3  | 30    | B    |
+      | 4  | 40    | B    |
+
+  Scenario: COW correlated EXISTS preserves the self-subquery scope
+    Given statement
+      """
+      UPDATE iceberg_cow AS t SET value = 99
+      WHERE EXISTS (SELECT 1 FROM iceberg_cow AS s WHERE s.id = t.id AND s.value = 10)
+      """
+    When query
+      """
+      SELECT * FROM iceberg_cow ORDER BY id
+      """
+    Then query result ordered
+      | id | value | part |
+      | 1  | 99    | A    |
+      | 2  | NULL  | A    |
+      | 3  | 30    | B    |
+      | 4  | 40    | B    |

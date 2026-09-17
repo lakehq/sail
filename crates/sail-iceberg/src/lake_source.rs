@@ -402,7 +402,7 @@ pub(crate) async fn plan_iceberg_write(
         lakehouse_table,
     } = node.options().clone();
 
-    let mode = match mode {
+    let mut mode = match mode {
         SinkMode::ErrorIfExists => PhysicalSinkMode::ErrorIfExists,
         SinkMode::IgnoreIfExists => PhysicalSinkMode::IgnoreIfExists,
         SinkMode::Append => PhysicalSinkMode::Append,
@@ -421,6 +421,19 @@ pub(crate) async fn plan_iceberg_write(
     let variant_shredding_option_presence =
         IcebergWriterExecOptions::variant_shredding_option_presence(&clean_options);
     let iceberg_options = IcebergWriteOptions::resolve(ctx, clean_options)?;
+    if let Some(overwrite_mode) = iceberg_options.overwrite_mode.as_deref() {
+        match overwrite_mode.to_ascii_lowercase().as_str() {
+            "dynamic"
+                if matches!(mode, PhysicalSinkMode::Overwrite)
+                    || matches!(&mode, PhysicalSinkMode::OverwriteIf { condition: Some(condition), .. }
+                    if matches!(condition.expr, Expr::Literal(datafusion_common::ScalarValue::Boolean(Some(true)), _))) =>
+            {
+                mode = PhysicalSinkMode::OverwritePartitions;
+            }
+            "dynamic" | "static" => {}
+            _ => return plan_err!("Invalid Iceberg overwrite-mode: {overwrite_mode}"),
+        }
+    }
 
     let sort_order = create_sort_order(ctx, sort_order, logical_input.schema())?;
     let physical_sort = sort_order.map(|req| {
@@ -858,8 +871,8 @@ fn partition_columns_from_table_metadata(
     let mut columns = Vec::with_capacity(spec.fields().len());
     for field in spec.fields() {
         let col_name = schema
-            .field_by_id(field.source_id)
-            .map(|f| f.name.clone())
+            .name_by_field_id(field.source_id)
+            .map(str::to_string)
             .ok_or_else(|| {
                 DataFusionError::Plan(format!(
                     "Partition field references unknown source column id {}",

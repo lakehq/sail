@@ -10,7 +10,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use datafusion::arrow::array::UInt32Array;
+use datafusion::arrow::array::{Array, ArrayRef, StructArray, UInt32Array, make_array};
+use datafusion::arrow::buffer::NullBuffer;
 use datafusion::arrow::compute;
 use datafusion::arrow::record_batch::RecordBatch;
 
@@ -77,7 +78,6 @@ pub(super) fn split_record_batch_by_partition(
 
     use std::collections::HashMap;
     let mut groups: HashMap<Vec<Option<Literal>>, Vec<u32>> = HashMap::new();
-    let batch_schema = batch.schema();
     let partition_inputs = spec
         .fields
         .iter()
@@ -85,24 +85,29 @@ pub(super) fn split_record_batch_by_partition(
             let source_field = iceberg_schema
                 .field_by_id(field.source_id)
                 .ok_or_else(|| format!("Unknown partition source field id {}", field.source_id))?;
-            let column_index = batch_schema
-                .index_of(&source_field.name)
-                .map_err(|error| error.to_string())?;
-            Ok((field, source_field.field_type.as_ref(), column_index))
+            let path = iceberg_schema
+                .field_path_by_id(field.source_id)
+                .ok_or_else(|| {
+                    format!(
+                        "Partition source {} is nested inside a collection",
+                        field.source_id
+                    )
+                })?;
+            let column = partition_source_column(batch, &path)?;
+            Ok((field, source_field.field_type.as_ref(), column))
         })
         .collect::<Result<Vec<_>, String>>()?;
 
     let num_rows = batch.num_rows();
     for row in 0..num_rows {
         let mut vals: Vec<Option<Literal>> = Vec::with_capacity(spec.fields.len());
-        for (field, source_type, column_index) in &partition_inputs {
-            let literal = array_value_to_literal(batch.column(*column_index), row, source_type)
-                .map_err(|error| {
-                    format!(
-                        "Failed to extract partition field '{}' at row {row}: {error}",
-                        field.name
-                    )
-                })?;
+        for (field, source_type, column) in &partition_inputs {
+            let literal = array_value_to_literal(column, row, source_type).map_err(|error| {
+                format!(
+                    "Failed to extract partition field '{}' at row {row}: {error}",
+                    field.name
+                )
+            })?;
             vals.push(apply_transform(field.transform, source_type, literal));
         }
         groups.entry(vals).or_default().push(row as u32);
@@ -121,6 +126,40 @@ pub(super) fn split_record_batch_by_partition(
     }
 
     Ok(out)
+}
+
+fn partition_source_column(
+    batch: &RecordBatch,
+    path: &[crate::spec::NestedFieldRef],
+) -> Result<ArrayRef, String> {
+    let (root, children) = path.split_first().ok_or("Empty partition source path")?;
+    let mut column = batch
+        .column_by_name(&root.name)
+        .cloned()
+        .ok_or_else(|| format!("Missing partition source column '{}'", root.name))?;
+    for field in children {
+        let parent = column
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| {
+                format!(
+                    "Partition source parent of '{}' is not a struct",
+                    field.name
+                )
+            })?;
+        let child = parent
+            .column_by_name(&field.name)
+            .ok_or_else(|| format!("Missing partition source field '{}'", field.name))?;
+        column = make_array(
+            child
+                .to_data()
+                .into_builder()
+                .nulls(NullBuffer::union(parent.nulls(), child.nulls()))
+                .build()
+                .map_err(|error| error.to_string())?,
+        );
+    }
+    Ok(column)
 }
 
 #[cfg(test)]
