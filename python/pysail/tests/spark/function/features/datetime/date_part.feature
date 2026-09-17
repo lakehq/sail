@@ -1,5 +1,16 @@
 Feature: date_part / extract output schema
 
+  Rule: Interval components
+
+    Scenario: date_part returns the minute component of an interval
+      When query
+        """
+        SELECT date_part('minutes', INTERVAL '5 hours 30 seconds 1 milliseconds 1 microseconds') AS result
+        """
+      Then query result
+        | result |
+        | 0      |
+
   @function(nullability)
   Rule: Output schema
 
