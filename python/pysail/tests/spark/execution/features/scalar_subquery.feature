@@ -1,4 +1,53 @@
 Feature: Scalar subqueries in distributed execution
+  Scenario: Scalar subquery in Parquet scan predicate
+    Given variable location for temporary directory scalar_subquery_parquet
+    Given statement template
+      """
+      INSERT OVERWRITE DIRECTORY {{ location.sql }} USING parquet
+      SELECT * FROM VALUES (1), (2), (3) AS t(v)
+      """
+    When query template
+      """
+      SELECT v FROM parquet.`{{ location.string }}`
+      WHERE v = (SELECT MAX(x) FROM VALUES (1), (2) AS s(x))
+      """
+    Then query result collected
+      | v |
+      | 2 |
+
+  Scenario Outline: Scalar subqueries in Parquet scan before aggregate
+    Given variable location for temporary directory scalar_subquery_parquet_aggregate
+    Given statement template
+      """
+      INSERT OVERWRITE DIRECTORY {{ location.sql }} USING parquet
+      SELECT * FROM VALUES (1), (2), (3) AS t(v)
+      """
+    Given final statement
+      """
+      DROP VIEW IF EXISTS scalar_subquery_scan
+      """
+    Given statement template
+      """
+      CREATE TEMPORARY VIEW scalar_subquery_scan USING parquet
+      OPTIONS (path {{ location.sql }}, pushdown_filters 'true')
+      """
+    When query
+      """
+      SELECT COUNT(*) AS n FROM scalar_subquery_scan
+      WHERE v > (<subquery>)
+      """
+    Then query result collected
+      | n   |
+      | <n> |
+
+    Examples:
+      | subquery                                                                                       | n |
+      | SELECT MAX(x) FROM VALUES (1), (2) AS s(x)                                                     | 1 |
+      | SELECT MIN(x) + (SELECT MIN(y) FROM VALUES (1), (2) AS u(y)) FROM VALUES (1), (2) AS s(x)      | 1 |
+      | SELECT MIN(v) FROM scalar_subquery_scan WHERE v > (SELECT MIN(x) FROM VALUES (1), (2) AS s(x)) | 1 |
+      | SELECT MAX(x) FROM VALUES (CAST(NULL AS INT)) AS s(x)                                          | 0 |
+      | SELECT x FROM VALUES (1) AS s(x) WHERE x > 10                                                  | 0 |
+
   Scenario: Scalar subquery in filter before aggregate
     When query
       """

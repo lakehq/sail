@@ -114,9 +114,10 @@ use sail_data_source::listing::delete::FileDeleteExec;
 use sail_data_source::options::r#gen::RateReadOptions;
 use sail_delta_lake::physical_plan::{
     DeletionVectorRowOperationMode, DeletionVectorRowsWriterConfig, DeletionVectorRowsWriterExec,
-    DeletionVectorWriterExec, DeltaCommitContext, DeltaCommitExec, DeltaDiscoveryExec,
-    DeltaLogReplayExec, DeltaLogReplayMode, DeltaMetadataStatsExec, DeltaRemoveActionsExec,
-    DeltaScanByAddsExec, DeltaSnapshotContext, DeltaWriteContext, DeltaWriterExec,
+    DeletionVectorWriterExec, DeltaCommitContext, DeltaCommitExec, DeltaDecodePath,
+    DeltaDiscoveryExec, DeltaLogReplayExec, DeltaLogReplayMode, DeltaMetadataStatsExec,
+    DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaSnapshotContext, DeltaWriteContext,
+    DeltaWriterExec,
 };
 use sail_delta_lake::schema::PhysicalPartitionColumn;
 use sail_delta_lake::spec::{
@@ -3374,6 +3375,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "try_url_decode" => Ok(Arc::new(ScalarUDF::from(TryUrlDecode::new()))),
             "url_decode" => Ok(Arc::new(ScalarUDF::from(UrlDecode::new()))),
             "url_encode" => Ok(Arc::new(ScalarUDF::from(UrlEncode::new()))),
+            "delta_decode_path" => Ok(Arc::new(ScalarUDF::from(DeltaDecodePath::default()))),
             _ => plan_err!("could not find scalar function: {name}"),
         }
     }
@@ -3382,6 +3384,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         // TODO: Implement custom registry to avoid codec for built-in functions
         let node_inner = node.inner();
         let udf_kind: UdfKind = if node_inner.is::<ArrayElement>()
+            || node_inner.is::<DeltaDecodePath>()
             || node_inner.is::<MapExtract>()
             || node_inner.is::<ArrayItemWithPosition>()
             || node_inner.is::<ArrayStructField>()
