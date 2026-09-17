@@ -27,6 +27,7 @@ pub struct IcebergMergeMetadataExec {
     data_file_partition_json: Option<String>,
     file_column_name: Option<String>,
     row_index_column_name: Option<String>,
+    row_lineage: Option<crate::row_lineage::RowLineage>,
     output_schema: SchemaRef,
     cache: Arc<PlanProperties>,
 }
@@ -39,6 +40,7 @@ impl IcebergMergeMetadataExec {
         data_file_partition_json: String,
         file_column_name: Option<String>,
         row_index_column_name: Option<String>,
+        row_lineage: Option<crate::row_lineage::RowLineage>,
     ) -> Result<Self> {
         Self::try_new_with_path_source(
             input,
@@ -47,6 +49,7 @@ impl IcebergMergeMetadataExec {
             Some(data_file_partition_json),
             file_column_name,
             row_index_column_name,
+            row_lineage,
         )
     }
 
@@ -73,6 +76,7 @@ impl IcebergMergeMetadataExec {
             None,
             Some(file_column_name),
             row_index_column_name,
+            None,
         )
     }
 
@@ -83,6 +87,7 @@ impl IcebergMergeMetadataExec {
         data_file_partition_json: Option<String>,
         file_column_name: Option<String>,
         row_index_column_name: Option<String>,
+        row_lineage: Option<crate::row_lineage::RowLineage>,
     ) -> Result<Self> {
         let appended_file_column = data_file_path
             .is_some()
@@ -96,9 +101,14 @@ impl IcebergMergeMetadataExec {
             metadata_columns
         };
         let output_schema = Arc::new(metadata_columns.append_to_schema(input.schema().as_ref())?);
+        let equivalence = EquivalenceProperties::new(output_schema.clone());
+        let equivalence = if row_lineage.is_some() {
+            equivalence
+        } else {
+            equivalence.extend(input.equivalence_properties().clone())?
+        };
         let cache = Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(output_schema.clone())
-                .extend(input.equivalence_properties().clone())?,
+            equivalence,
             input.output_partitioning().clone(),
             input.pipeline_behavior(),
             input.boundedness(),
@@ -110,9 +120,14 @@ impl IcebergMergeMetadataExec {
             data_file_partition_json,
             file_column_name,
             row_index_column_name,
+            row_lineage,
             output_schema,
             cache,
         })
+    }
+
+    pub fn row_lineage(&self) -> Option<crate::row_lineage::RowLineage> {
+        self.row_lineage
     }
 
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
@@ -202,6 +217,7 @@ impl ExecutionPlan for IcebergMergeMetadataExec {
             self.data_file_partition_json.clone(),
             self.file_column_name.clone(),
             self.row_index_column_name.clone(),
+            self.row_lineage,
         )?))
     }
 
@@ -229,6 +245,7 @@ impl ExecutionPlan for IcebergMergeMetadataExec {
         let file_column_name = self.file_column_name.clone();
         let include_file = data_file_path.is_some() && file_column_name.is_some();
         let include_row_index = self.row_index_column_name.is_some();
+        let row_lineage = self.row_lineage;
 
         let stream = try_stream! {
             // The provider keeps complete, naturally ordered files in each input
@@ -238,7 +255,10 @@ impl ExecutionPlan for IcebergMergeMetadataExec {
             let mut stream = child;
             while let Some(batch) = stream.try_next().await? {
                 let rows = batch.num_rows();
-                let mut columns = batch.columns().to_vec();
+                let mut columns = match row_lineage {
+                    Some(lineage) => crate::row_lineage::materialize_lineage(&batch, lineage, row_offset)?,
+                    None => batch.columns().to_vec(),
+                };
                 if include_file {
                     let values = (0..rows)
                         .map(|_| data_file_path.as_deref())
@@ -291,6 +311,9 @@ impl ExecutionPlan for IcebergMergeMetadataExec {
                         values
                     };
                     columns.push(Arc::new(Int64Array::from(values)) as ArrayRef);
+                } else if row_lineage.is_some() {
+                    row_offset = row_offset.checked_add(i64::try_from(rows).map_err(|error| DataFusionError::Execution(error.to_string()))?)
+                        .ok_or_else(|| DataFusionError::Execution("Iceberg row position overflow".to_string()))?;
                 }
 
                 yield RecordBatch::try_new(output_schema.clone(), columns)?;

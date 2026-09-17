@@ -94,8 +94,9 @@ use sail_common_datafusion::catalog::{
 };
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::schema_evolution::{
-    SchemaEvolutionCastColumnExpr, SchemaEvolutionPhysicalExprAdapterFactoryWithMatching,
-    SchemaEvolutionTimezoneMode, StructFieldMatching,
+    SchemaEvolutionCastColumnExpr, SchemaEvolutionDefaultExpr,
+    SchemaEvolutionPhysicalExprAdapterFactoryWithMatching, SchemaEvolutionTimezoneMode,
+    StructFieldMatching,
 };
 use sail_common_datafusion::udf::StreamUDF;
 use sail_data_source::formats::binary::source::BinarySource;
@@ -1703,6 +1704,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 row_index_column_name,
                 data_file_partition_spec_id,
                 data_file_partition_json,
+                row_lineage,
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -1732,6 +1734,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         })?,
                         file_column_name,
                         row_index_column_name,
+                        row_lineage.map(|lineage| sail_iceberg::physical_plan::RowLineage {
+                            first_row_id: lineage.first_row_id,
+                            data_sequence_number: lineage.data_sequence_number,
+                        }),
                     )?
                 };
                 Ok(Arc::new(merge_metadata))
@@ -2820,6 +2826,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 row_index_column_name: merge_metadata
                     .row_index_column_name()
                     .map(ToString::to_string),
+                row_lineage: merge_metadata
+                    .row_lineage()
+                    .map(|lineage| r#gen::IcebergRowLineage {
+                        first_row_id: lineage.first_row_id,
+                        data_sequence_number: lineage.data_sequence_number,
+                    }),
                 data_file_partition_spec_id: merge_metadata.data_file_partition_spec_id(),
                 data_file_partition_json: merge_metadata
                     .data_file_partition_json()
@@ -4064,6 +4076,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             .expr_kind
             .ok_or_else(|| plan_datafusion_err!("missing physical expr node"))?;
         match expr_kind {
+            ExprKind::SchemaEvolutionDefault(node) => {
+                if !inputs.is_empty() {
+                    return plan_err!("SchemaEvolutionDefaultExpr has no inputs");
+                }
+                Ok(Arc::new(SchemaEvolutionDefaultExpr::try_new(
+                    try_decode_field_ref(&node.field)?,
+                )?))
+            }
             ExprKind::SchemaEvolutionCast(node) => {
                 let (input, input_field, target_field, matching, timezone_mode) = self
                     .try_decode_cast_column_expr(&node, inputs, "SchemaEvolutionCastColumnExpr")?;
@@ -4154,6 +4174,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 cast.timezone_mode(),
             )?;
             ExprKind::SchemaEvolutionCast(node)
+        } else if let Some(default) = node.downcast_ref::<SchemaEvolutionDefaultExpr>() {
+            ExprKind::SchemaEvolutionDefault(r#gen::SchemaEvolutionDefaultExprNode {
+                field: try_encode_field_ref(default.field())?,
+            })
         } else if let Some(lambda) = node.downcast_ref::<LambdaExpr>() {
             ExprKind::Lambda(LambdaExprNode {
                 params: lambda.params().to_vec(),
@@ -6139,6 +6163,82 @@ mod tests {
             format!("{:?}", scan_filter.current()?),
             format!("{:?}", lit(false))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_schema_evolution_default_preserves_nested_fields() -> Result<()> {
+        use datafusion::arrow::array::{Int64Array, ListArray};
+        use datafusion::arrow::buffer::OffsetBuffer;
+        use sail_common_datafusion::schema_evolution::{
+            FIELD_DEFAULT_METADATA_KEY, encode_field_default,
+        };
+
+        let element = Arc::new(Field::new("element", DataType::Int64, true).with_metadata(
+            HashMap::from([("PARQUET:field_id".to_string(), "2".to_string())]),
+        ));
+        let array = Arc::new(ListArray::new(
+            element.clone(),
+            OffsetBuffer::new(vec![0, 2].into()),
+            Arc::new(Int64Array::from(vec![7, 9])),
+            None,
+        ));
+        let field = Arc::new(
+            Field::new("values", DataType::List(element), true).with_metadata(HashMap::from([(
+                FIELD_DEFAULT_METADATA_KEY.to_string(),
+                encode_field_default(&ScalarValue::List(array))?,
+            )])),
+        );
+        let expression =
+            Arc::new(SchemaEvolutionDefaultExpr::try_new(field.clone())?) as Arc<dyn PhysicalExpr>;
+        let schema = Schema::new(vec![Field::new("id", DataType::Int64, true)]);
+        let decoded = round_trip_expr(&expression, &schema)?;
+        assert_eq!(decoded.return_field(&schema)?, field);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(Int64Array::from(vec![1, 2]))],
+        )?;
+        assert_eq!(
+            decoded.evaluate(&batch)?.into_array(2)?.to_data(),
+            expression.evaluate(&batch)?.into_array(2)?.to_data()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_iceberg_merge_lineage() -> Result<()> {
+        use datafusion::physical_plan::empty::EmptyExec;
+        use sail_iceberg::physical_plan::RowLineage;
+
+        for first_row_id in [None, Some(123)] {
+            let input = Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![
+                Field::new("_row_id", DataType::Int64, true),
+                Field::new("_last_updated_sequence_number", DataType::Int64, true),
+            ]))));
+            let plan = IcebergMergeMetadataExec::try_new(
+                input,
+                "file:///tmp/data.parquet".to_string(),
+                0,
+                "[]".to_string(),
+                Some("__file".to_string()),
+                Some("__position".to_string()),
+                Some(RowLineage {
+                    first_row_id,
+                    data_sequence_number: 7,
+                }),
+            )?;
+            let codec = RemoteExecutionCodec;
+            let bytes = try_encode_physical_plan(&codec, Arc::new(plan))?;
+            let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+            let decoded = decoded
+                .downcast_ref::<IcebergMergeMetadataExec>()
+                .ok_or_else(|| plan_datafusion_err!("Expected merge metadata"))?;
+            let lineage = decoded
+                .row_lineage()
+                .ok_or_else(|| plan_datafusion_err!("Missing row lineage"))?;
+            assert_eq!(lineage.first_row_id, first_row_id);
+            assert_eq!(lineage.data_sequence_number, 7);
+        }
         Ok(())
     }
 

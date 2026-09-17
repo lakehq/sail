@@ -11,7 +11,7 @@ from pysail.testing.spark.steps.iceberg import _current_snapshot, _find_latest_m
 from pysail.tests.spark.iceberg.test_iceberg_merge import _current_manifest_entries, _local_file_path
 
 
-@pytest.mark.parametrize("format_version", [1, 2])
+@pytest.mark.parametrize("format_version", [1, 2, 3])
 @pytest.mark.parametrize("predicate", ["part = 'A'", "id < 3", "true"])
 def test_cow_metadata_delete_does_not_read_parquet(spark, tmp_path, format_version, predicate):
     name = "cow_metadata_delete"
@@ -48,7 +48,7 @@ def test_cow_metadata_delete_does_not_read_parquet(spark, tmp_path, format_versi
         spark.sql(f"DROP TABLE IF EXISTS {name}")
 
 
-@pytest.mark.parametrize("format_version", [1, 2])
+@pytest.mark.parametrize("format_version", [1, 2, 3])
 @pytest.mark.parametrize("operation", ["delete", "update", "merge"])
 def test_cow_prunes_unrelated_files_without_filtering_survivors(spark, tmp_path, format_version, operation):
     name = "cow_pruned_files"
@@ -88,7 +88,7 @@ def test_cow_prunes_unrelated_files_without_filtering_survivors(spark, tmp_path,
         spark.sql(f"DROP TABLE IF EXISTS {name}")
 
 
-@pytest.mark.parametrize("format_version", [1, 2])
+@pytest.mark.parametrize("format_version", [1, 2, 3])
 @pytest.mark.parametrize("operation", ["delete", "update", "merge"])
 def test_cow_rewrites_only_affected_files_and_preserves_history(spark, tmp_path, format_version, operation):
     name = "cow_file_history"
@@ -149,7 +149,7 @@ def test_cow_rewrites_only_affected_files_and_preserves_history(spark, tmp_path,
         for file_path in set(before_by_path) & set(after_by_path):
             assert after_by_path[file_path].sequence_number == before_by_path[file_path].sequence_number
             assert after_by_path[file_path].file_sequence_number == before_by_path[file_path].file_sequence_number
-        if format_version == 2:  # noqa: PLR2004
+        if format_version >= 2:  # noqa: PLR2004
             assert after["last-sequence-number"] == before["last-sequence-number"] + 1
             assert after["refs"]["main"]["snapshot-id"] == snapshot["snapshot-id"]
             for file_path in set(after_by_path) - set(before_by_path):
@@ -254,11 +254,10 @@ def test_cow_rewrites_complete_file_when_match_is_in_a_later_batch(spark, sql_ca
 @pytest.mark.parametrize(
     ("table_properties", "error"),
     [
-        ("'format-version' = '3'", "row lineage"),
         ("'write.{operation}.mode' = 'invalid'", "Unknown Iceberg row-level operation mode"),
     ],
 )
-def test_cow_rejects_unsupported_mode_or_format_before_writing(spark, tmp_path, operation, table_properties, error):
+def test_cow_rejects_unsupported_mode_before_writing(spark, tmp_path, operation, table_properties, error):
     name = "cow_rejected"
     path = tmp_path / name
     spark.sql(f"DROP TABLE IF EXISTS {name}")

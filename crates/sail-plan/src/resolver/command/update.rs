@@ -127,6 +127,10 @@ impl PlanResolver<'_> {
                     ));
                 }
                 value = if let Some(default) =
+                    ColumnFeatures::from_field(target_field).current_default_value()?
+                {
+                    lit(default)
+                } else if let Some(default) =
                     ColumnFeatures::from_field(target_field).current_default()
                 {
                     self.resolve_column_default_expression(

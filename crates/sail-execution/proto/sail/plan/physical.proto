@@ -99,7 +99,12 @@ message ExtendedPhysicalExprNode {
     LambdaExprNode lambda = 3;
     LambdaVariableExprNode lambda_variable = 4;
     IcebergPartitionTransformExprNode iceberg_partition_transform = 5;
+    SchemaEvolutionDefaultExprNode schema_evolution_default = 6;
   }
+}
+
+message SchemaEvolutionDefaultExprNode {
+  bytes field = 1;
 }
 
 message IcebergPartitionTransformExprNode {
@@ -1059,6 +1064,11 @@ message IcebergDeleteApplyExecNode {
   string iceberg_schema_json = 6;
 }
 
+message IcebergRowLineage {
+  optional int64 first_row_id = 1;
+  int64 data_sequence_number = 2;
+}
+
 message IcebergMergeMetadataExecNode {
   bytes input = 1;
   string data_file_path = 2;
@@ -1066,6 +1076,7 @@ message IcebergMergeMetadataExecNode {
   optional string row_index_column_name = 4;
   optional int32 data_file_partition_spec_id = 5;
   optional string data_file_partition_json = 6;
+  IcebergRowLineage row_lineage = 7;
 }
 
 message IcebergEqualityDeleteWriterExecNode {

@@ -52,6 +52,11 @@ pub(crate) fn expand_delete_node(info: DeleteInfo) -> Result<LogicalPlan> {
         .collect::<Vec<_>>();
     if mode == RowLevelWriteMode::CopyOnWrite {
         projection.push(col(MERGE_FILE_COLUMN));
+        projection.extend(
+            super::row_level::lineage_columns(&target_plan)?
+                .iter()
+                .map(|name| col(*name)),
+        );
     }
     let target_plan = LogicalPlanBuilder::from(target_plan)
         .project(projection)?

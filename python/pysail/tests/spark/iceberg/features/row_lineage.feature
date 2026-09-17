@@ -1,0 +1,86 @@
+Feature: Iceberg v3 copy-on-write row lineage
+
+  Scenario Outline: COW preserves row IDs and updates sequence numbers across rewrites
+    Given variable location for temporary directory iceberg_lineage
+    Given final statement
+      """
+      DROP TABLE IF EXISTS iceberg_lineage
+      """
+    Given statement template
+      """
+      CREATE TABLE iceberg_lineage (id INT, value INT) USING iceberg
+      LOCATION {{ location.uri }} TBLPROPERTIES ('format-version' = '<version>')
+      """
+    Given statement
+      """
+      INSERT INTO iceberg_lineage VALUES (1, 10), (2, 20), (3, 30)
+      """
+    Given statement
+      """
+      ALTER TABLE iceberg_lineage SET TBLPROPERTIES ('format-version' = '3')
+      """
+    Given statement
+      """
+      INSERT INTO iceberg_lineage VALUES (99, 99)
+      """
+    Given remember current iceberg row lineage
+    Given statement
+      """
+      UPDATE iceberg_lineage SET value = 100 WHERE id = 1
+      """
+    Then iceberg row lineage matches
+      | id | original_id | sequence |
+      | 1  | 1           | 3        |
+      | 2  | 2           | 1        |
+      | 3  | 3           | 1        |
+      | 99 | 99          | 2        |
+    Given statement
+      """
+      DELETE FROM iceberg_lineage WHERE id = 2
+      """
+    Then iceberg row lineage matches
+      | id | original_id | sequence |
+      | 1  | 1           | 3        |
+      | 3  | 3           | 1        |
+      | 99 | 99          | 2        |
+    Given statement
+      """
+      MERGE INTO iceberg_lineage AS t
+      USING (SELECT * FROM VALUES (1, 101), (4, 40) AS s(id, value)) AS s
+      ON t.id = s.id
+      WHEN MATCHED THEN UPDATE SET id = 10, value = s.value
+      WHEN NOT MATCHED THEN INSERT *
+      WHEN NOT MATCHED BY SOURCE AND t.id = 99 THEN DELETE
+      """
+    Then iceberg row lineage matches
+      | id | original_id | sequence |
+      | 10 | 1           | 5        |
+      | 3  | 3           | 1        |
+      | 4  | NEW         | 5        |
+    Given statement
+      """
+      MERGE INTO iceberg_lineage AS t USING (SELECT 5 AS id, 50 AS value) s
+      ON t.id = s.id WHEN NOT MATCHED THEN INSERT *
+      """
+    Then iceberg row lineage matches
+      | id | original_id | sequence |
+      | 10 | 1           | 5        |
+      | 3  | 3           | 1        |
+      | 4  | NEW         | 5        |
+      | 5  | NEW         | 6        |
+    When query
+      """
+      SELECT * FROM iceberg_lineage ORDER BY id
+      """
+    Then query result ordered
+      | id | value |
+      | 3  | 30    |
+      | 4  | 40    |
+      | 5  | 50    |
+      | 10 | 101   |
+    Then iceberg snapshot count is 6
+
+    Examples:
+      | version |
+      | 2       |
+      | 3       |

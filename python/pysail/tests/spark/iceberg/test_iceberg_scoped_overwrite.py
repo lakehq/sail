@@ -138,7 +138,7 @@ def test_iceberg_predicate_overwrite_rejects_non_partition_column(spark, tmp_pat
 
 
 @pytest.mark.parametrize("mode", ["predicate", "dynamic"])
-def test_iceberg_scoped_overwrite_rejects_v3_table(spark, tmp_path, mode):
+def test_iceberg_scoped_overwrite_assigns_v3_lineage(spark, tmp_path, mode):
     table_name = f"iceberg_scoped_overwrite_v3_{mode}"
     location = tmp_path / table_name
     _create_partitioned_table(spark, table_name, location)
@@ -154,8 +154,12 @@ def test_iceberg_scoped_overwrite_rejects_v3_table(spark, tmp_path, mode):
             else:
                 writer.overwritePartitions()
 
-        with pytest.raises(Exception, match=r"v3.*overwrite"):
-            overwrite()
+        overwrite()
+        from pysail.testing.spark.steps.iceberg import _current_row_lineage, _find_latest_metadata
+
+        lineage = _current_row_lineage(location)
+        assert set(lineage) == {2}
+        assert lineage[2][1] == _find_latest_metadata(location)["last-sequence-number"]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 

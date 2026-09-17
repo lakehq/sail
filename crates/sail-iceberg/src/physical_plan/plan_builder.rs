@@ -93,19 +93,52 @@ impl<'a> IcebergPlanBuilder<'a> {
     }
 
     fn add_projection_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
-        // Validate that partition transform expressions refer to real source columns.
-        // Do not reorder columns here: BDD "query result ordered" checks expect the original
-        // table column order from `SELECT *`.
         let schema = input.schema();
-        for field in &self.table_config.partition_columns {
-            if schema.index_of(&field.column).is_err() {
-                return Err(datafusion::common::DataFusionError::Plan(format!(
-                    "Partition column '{}' not found in schema",
-                    format_partition_expr(field)
-                )));
-            }
+        if self
+            .table_config
+            .partition_columns
+            .iter()
+            .all(|field| schema.index_of(&field.column).is_ok())
+        {
+            return Ok(input);
         }
-        Ok(input)
+        let mut expressions = schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(index, field)| {
+                (
+                    Arc::new(Column::new(field.name(), index)) as Arc<dyn PhysicalExpr>,
+                    field.name().clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let writer_schema = self.table_config.write_context.writer_arrow_schema()?;
+        for field in &self.table_config.partition_columns {
+            if expressions.iter().any(|(_, name)| name == &field.column) {
+                continue;
+            }
+            let target = writer_schema.field_with_name(&field.column)?;
+            let value = match sail_common_datafusion::schema_evolution::field_default(target)? {
+                Some(value) => value,
+                None if target.is_nullable() => {
+                    datafusion_common::ScalarValue::try_from(target.data_type())?
+                }
+                None => {
+                    return Err(datafusion::common::DataFusionError::Plan(format!(
+                        "Required partition column '{}' is missing and has no write default",
+                        format_partition_expr(field)
+                    )));
+                }
+            };
+            expressions.push((
+                Arc::new(datafusion::physical_expr::expressions::Literal::new(value)),
+                field.column.clone(),
+            ));
+        }
+        Ok(Arc::new(
+            datafusion::physical_plan::projection::ProjectionExec::try_new(expressions, input)?,
+        ))
     }
 
     fn add_repartition_node(

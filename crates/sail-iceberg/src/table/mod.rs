@@ -114,7 +114,7 @@ impl Table {
                 self.metadata.partition_specs.clone(),
                 self.metadata.default_spec_id,
             )?;
-            provider.row_level_options = (&self.metadata).into();
+            provider.set_table_metadata(&self.metadata)?;
             return Ok(provider.with_metadata_as_data_read(options.metadata_as_data_read));
         }
         let (schema, snapshot, partition_specs) = self.scan_state(options)?;
@@ -125,7 +125,7 @@ impl Table {
             partition_specs,
             self.metadata.default_spec_id,
         )?;
-        provider.row_level_options = (&self.metadata).into();
+        provider.set_table_metadata(&self.metadata)?;
         Ok(provider.with_metadata_as_data_read(options.metadata_as_data_read))
     }
 

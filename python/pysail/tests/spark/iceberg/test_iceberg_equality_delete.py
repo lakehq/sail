@@ -77,6 +77,7 @@ def _append_equality_delete_snapshot(
     equality_ids: list[int],
     *,
     partition: Record | None = None,
+    assign_root_ids: bool = True,
 ) -> Path:
     table_path = _local_table_path(table.location())
     metadata_dir = table_path / "metadata"
@@ -84,13 +85,14 @@ def _append_equality_delete_snapshot(
     data_dir.mkdir(parents=True, exist_ok=True)
 
     delete_file_path = data_dir / f"equality-delete-{uuid.uuid4()}.parquet"
-    assert delete_rows.num_columns == len(equality_ids)
-    fields = []
-    for field, field_id in zip(delete_rows.schema, equality_ids, strict=True):
-        metadata = dict(field.metadata or {})
-        metadata[b"PARQUET:field_id"] = str(field_id).encode()
-        fields.append(field.with_metadata(metadata))
-    delete_rows = pa.Table.from_arrays(delete_rows.columns, schema=pa.schema(fields))
+    if assign_root_ids:
+        assert delete_rows.num_columns == len(equality_ids)
+        fields = []
+        for field, field_id in zip(delete_rows.schema, equality_ids, strict=True):
+            metadata = dict(field.metadata or {})
+            metadata[b"PARQUET:field_id"] = str(field_id).encode()
+            fields.append(field.with_metadata(metadata))
+        delete_rows = pa.Table.from_arrays(delete_rows.columns, schema=pa.schema(fields))
     pq.write_table(delete_rows, delete_file_path)
 
     metadata = _find_latest_metadata(table_path)

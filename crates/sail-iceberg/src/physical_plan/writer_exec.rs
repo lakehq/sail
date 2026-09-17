@@ -144,16 +144,6 @@ impl IcebergWriterExec {
             options,
             write_context,
         )?;
-        if writer
-            .write_context
-            .base_table
-            .as_ref()
-            .is_some_and(|base| base.format_version == FormatVersion::V3)
-        {
-            return datafusion_common::not_impl_err!(
-                "Iceberg v3 copy-on-write requires row lineage preservation"
-            );
-        }
         writer.row_level_mode = Some(RowLevelWriteMode::CopyOnWrite);
         Ok(writer)
     }
@@ -406,7 +396,15 @@ impl ExecutionPlan for IcebergWriterExec {
             }
 
             let data_location = write_context.data_location()?;
-            let table_schema = write_context.writer_arrow_schema()?;
+            let preserve_lineage = row_level_mode == Some(RowLevelWriteMode::CopyOnWrite)
+                && write_context
+                    .base_table
+                    .as_ref()
+                    .is_some_and(|base| base.format_version == FormatVersion::V3);
+            let mut table_schema = write_context.writer_arrow_schema()?;
+            if preserve_lineage {
+                table_schema = Arc::new(crate::row_lineage::append_lineage_fields(&table_schema)?);
+            }
             let iceberg_schema = write_context.writer_schema.clone();
             let spec_id_val = write_context.writer_partition_spec_id();
             let variant_shredding = write_context.variant_shredding.clone();
@@ -484,7 +482,11 @@ impl ExecutionPlan for IcebergWriterExec {
                         removed_data_file_paths
                             .extend(merge_projection.removed_file_paths(&input_batch)?);
                     }
-                    merge_projection.project_data_rows(&input_batch, row_level_mode)?
+                    merge_projection.project_data_rows(
+                        &input_batch,
+                        row_level_mode,
+                        preserve_lineage,
+                    )?
                 } else {
                     input_batch
                 };

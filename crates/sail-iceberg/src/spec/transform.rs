@@ -186,7 +186,9 @@ impl Transform {
                 (_, Literal::Primitive(PrimitiveLiteral::Binary(value))) => {
                     BASE64_STANDARD.encode(value)
                 }
-                (_, Literal::Struct(_) | Literal::List(_) | Literal::Map(_)) => "null".to_string(),
+                (_, Literal::Null | Literal::Struct(_) | Literal::List(_) | Literal::Map(_)) => {
+                    "null".to_string()
+                }
             }
         }
 

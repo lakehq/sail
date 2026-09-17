@@ -57,7 +57,7 @@ use crate::physical_plan::write_context::{
     input_schema_with_logical_metadata, prepare_iceberg_write_context,
 };
 use crate::schema_evolution::SchemaEvolver;
-use crate::spec::{FormatVersion, MetadataLog, PartitionSpec, Schema, Snapshot, TableMetadata};
+use crate::spec::{MetadataLog, PartitionSpec, Schema, Snapshot, TableMetadata};
 use crate::table::metadata_loader::{
     encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
     metadata_file_version_from_path, metadata_location_to_object_path_string, write_version_hint,
@@ -486,11 +486,6 @@ pub(crate) async fn plan_iceberg_write(
                 "Iceberg predicate overwrite requires an existing table".to_string(),
             )
         })?;
-        if matches!(table.metadata().format_version, FormatVersion::V3) {
-            return not_impl_err!(
-                "Iceberg v3 predicate overwrite is not supported until row lineage is preserved"
-            );
-        }
         let read_options = IcebergReadOptions::resolve(ctx, vec![])?;
         table
             .to_provider(&read_options)?

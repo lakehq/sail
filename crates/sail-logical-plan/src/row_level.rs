@@ -498,6 +498,7 @@ fn normalize_row_level_target(
     resolved_field_names: &[String],
     path_column: &str,
     row_index_column: Option<&str>,
+    metadata_columns: &[&str],
 ) -> Result<NormalizedRowLevelTarget> {
     let rename_map =
         row_level_target_rename_map(input_schema, plan.schema(), resolved_field_names)?;
@@ -515,6 +516,9 @@ fn normalize_row_level_target(
         append_metadata_projection(&plan, &mut projections, row_index_column)?;
     }
 
+    for column in metadata_columns {
+        append_metadata_projection(&plan, &mut projections, column)?;
+    }
     let plan = LogicalPlanBuilder::from(plan)
         .project(projections)?
         .build()?;
@@ -614,6 +618,7 @@ pub fn expand_update(
     requirements: RowLevelEffectRequirements,
     path_column: &str,
     row_index_column: Option<&str>,
+    metadata_columns: &[&str],
 ) -> Result<RowLevelWriteNode> {
     let UpdateInfo {
         target_plan,
@@ -639,6 +644,7 @@ pub fn expand_update(
         &resolved_target_field_names,
         path_column,
         row_index_column,
+        metadata_columns,
     )?;
     let condition = condition
         .map(|condition| -> Result<_> {
@@ -697,6 +703,7 @@ pub fn expand_update(
         write_projection.push(value);
     }
     write_projection.push(col(path_column).alias(path_column));
+    write_projection.extend(metadata_columns.iter().map(|name| col(*name).alias(*name)));
     write_projection.push(
         when(
             predicate.clone(),

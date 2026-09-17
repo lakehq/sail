@@ -57,8 +57,8 @@ use crate::spec::metadata::table_metadata::SnapshotLog;
 use crate::spec::partition::{UnboundPartitionField, UnboundPartitionSpec};
 use crate::spec::snapshots::MAIN_BRANCH;
 use crate::spec::{
-    DataContentType, DataFile, FormatVersion, Literal, PartitionKey, PartitionSpec,
-    Schema as IcebergSchema, StructType, TableMetadata, TableRequirement, Type,
+    DataContentType, DataFile, Literal, PartitionKey, PartitionSpec, Schema as IcebergSchema,
+    StructType, TableMetadata, TableRequirement, Type,
 };
 use crate::table::metadata_loader::{
     encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
@@ -132,19 +132,6 @@ fn expected_snapshot_requirement(
         r#ref: MAIN_BRANCH.to_string(),
         snapshot_id,
     })
-}
-
-fn validate_scoped_overwrite_format(
-    snapshot_update_kind: SnapshotUpdateKind,
-    format_version: FormatVersion,
-) -> Result<()> {
-    if snapshot_update_kind.is_targeted_rewrite() && matches!(format_version, FormatVersion::V3) {
-        return Err(DataFusionError::NotImplemented(
-            "Iceberg v3 scoped overwrite is not supported until row lineage is preserved"
-                .to_string(),
-        ));
-    }
-    Ok(())
 }
 
 #[derive(Debug)]
@@ -937,10 +924,6 @@ impl ExecutionPlan for IcebergCommitExec {
                 let mut table_meta = TableMetadata::from_json(&bytes)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 Self::validate_requirements(Some(&table_meta), &commit_info.requirements)?;
-                validate_scoped_overwrite_format(
-                    snapshot_update_kind,
-                    table_meta.format_version,
-                )?;
                 if dynamic_partition_overwrite {
                     let default_spec = table_meta.default_partition_spec().ok_or_else(|| {
                         DataFusionError::Plan(
@@ -1029,12 +1012,6 @@ impl ExecutionPlan for IcebergCommitExec {
                         },
                     );
                 }
-                // Schema evolution can raise a loaded v2 table to v3. Re-check the effective
-                // version before row-lineage resolution or any manifest work.
-                validate_scoped_overwrite_format(
-                    snapshot_update_kind,
-                    table_meta.format_version,
-                )?;
                 let row_lineage_start_row_id = table_meta.row_lineage_start_row_id();
 
                 // If metadata exists but there is no current snapshot (e.g. from a CREATE TABLE),
@@ -1554,34 +1531,7 @@ mod tests {
     };
 
     #[test]
-    fn scoped_overwrite_rejects_effective_v3_after_schema_evolution() {
-        let schema = IcebergSchema::builder()
-            .with_schema_id(1)
-            .with_fields(vec![Arc::new(NestedField::required(
-                1,
-                "event_time",
-                Type::Primitive(PrimitiveType::TimestampNs),
-            ))])
-            .build()
-            .expect("v3 schema");
-        let effective = FormatVersion::V2.max(format_version_for_schema(&schema));
-        assert_eq!(effective, FormatVersion::V3);
-
-        for kind in [
-            SnapshotUpdateKind::CopyOnWrite,
-            SnapshotUpdateKind::RowLevelRewrite,
-        ] {
-            let error =
-                validate_scoped_overwrite_format(kind, effective).expect_err("v3 rewrite rejected");
-            assert!(
-                error.to_string().contains("v3 scoped overwrite"),
-                "{kind:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn scoped_overwrite_execute_rechecks_format_after_schema_evolution() {
+    fn scoped_overwrite_initializes_lineage_after_schema_evolution() {
         futures::executor::block_on(async {
             let table_url = Url::parse("file:///tmp/scoped-overwrite-v3/").expect("table URL");
             let memory = Arc::new(object_store::memory::InMemory::new());
@@ -1636,23 +1586,36 @@ mod tests {
                 None,
             )
             .expect("memory input");
-            let commit =
-                IcebergCommitExec::new(input, table_url, None, SnapshotUpdateKind::CopyOnWrite)
-                    .with_removed_data_file_paths(vec!["old.parquet".to_string()]);
+            let commit = IcebergCommitExec::new(
+                input,
+                table_url.clone(),
+                None,
+                SnapshotUpdateKind::CopyOnWrite,
+            );
             let context = SessionContext::new();
-            context
-                .runtime_env()
-                .register_object_store(&Url::parse("file:///").expect("file store URL"), memory);
+            context.runtime_env().register_object_store(
+                &Url::parse("file:///").expect("file store URL"),
+                memory.clone(),
+            );
 
             let mut output = commit
                 .execute(0, context.task_ctx())
                 .expect("commit stream");
-            let error = output
+            output
                 .next()
                 .await
                 .expect("commit result")
-                .expect_err("effective v3 scoped overwrite must fail");
-            assert!(error.to_string().contains("v3 scoped overwrite"));
+                .expect("v3 scoped overwrite");
+            let store: Arc<dyn ObjectStore> = memory;
+            let location = crate::table::find_latest_metadata_file(&store, &table_url)
+                .await
+                .expect("metadata location");
+            let bytes = load_metadata_file_bytes(&store, &location)
+                .await
+                .expect("metadata bytes");
+            let metadata = TableMetadata::from_json(&bytes).expect("metadata");
+            assert_eq!(metadata.format_version, FormatVersion::V3);
+            assert!(metadata.next_row_id.is_some());
         });
     }
 

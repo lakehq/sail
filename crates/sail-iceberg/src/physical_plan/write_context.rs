@@ -86,7 +86,10 @@ impl IcebergWriteContext {
     }
 
     pub fn writer_arrow_schema(&self) -> Result<SchemaRef> {
-        Ok(Arc::new(iceberg_schema_to_arrow(&self.writer_schema)?))
+        Ok(Arc::new(crate::schema_defaults::write_default_schema(
+            &iceberg_schema_to_arrow(&self.writer_schema)?,
+            &self.writer_schema,
+        )?))
     }
 
     pub fn writer_partition_spec_id(&self) -> i32 {

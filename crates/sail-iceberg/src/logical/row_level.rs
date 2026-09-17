@@ -59,6 +59,8 @@ pub(crate) fn validate_row_level_columns(
     case_sensitive: bool,
 ) -> Result<()> {
     for column in [
+        crate::row_lineage::ROW_ID_COLUMN,
+        crate::row_lineage::LAST_UPDATED_SEQUENCE_COLUMN,
         MERGE_FILE_COLUMN,
         MERGE_ROW_INDEX_COLUMN,
         MERGE_SOURCE_METRIC_COLUMN,
@@ -166,4 +168,12 @@ pub(crate) fn write_effects(
     plan: LogicalPlan,
 ) -> sail_logical_plan::row_level::RowLevelEffectPlans {
     sail_logical_plan::row_level::RowLevelEffectPlans::new(Some(Arc::new(plan)), None, None)
+}
+
+pub(crate) fn lineage_columns(plan: &LogicalPlan) -> Result<&'static [&'static str]> {
+    Ok(if target_provider(plan)?.has_row_lineage() {
+        &crate::row_lineage::LINEAGE_COLUMNS
+    } else {
+        &[]
+    })
 }

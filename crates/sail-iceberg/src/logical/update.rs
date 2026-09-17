@@ -41,12 +41,14 @@ pub(crate) fn expand_update_node(mut info: UpdateInfo) -> Result<LogicalPlan> {
             predicate.expr,
         )?);
     }
+    let lineage_columns = super::row_level::lineage_columns(&info.target_plan)?;
     let expanded = expand_update(
         info,
         mode,
         RowLevelEffectRequirements::default(),
         MERGE_FILE_COLUMN,
         None,
+        lineage_columns,
     )?;
     let write_rows = expanded.effects().write_rows().ok_or_else(|| {
         datafusion_common::internal_datafusion_err!(

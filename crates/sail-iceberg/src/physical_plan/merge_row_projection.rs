@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, BooleanArray, Int32Array, Int64Array, StringArray};
+use datafusion::arrow::array::{
+    Array, ArrayRef, BooleanArray, Int32Array, Int64Array, StringArray,
+};
 use datafusion::arrow::compute::{cast, filter_record_batch};
 use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
@@ -29,6 +31,8 @@ impl IcebergMergeRowProjection {
             OPERATION_COLUMN,
             MERGE_PARTITION_SPEC_ID_COLUMN,
             MERGE_PARTITION_COLUMN,
+            crate::row_lineage::ROW_ID_COLUMN,
+            crate::row_lineage::LAST_UPDATED_SEQUENCE_COLUMN,
         ];
         let data_indices = input_schema
             .fields()
@@ -61,6 +65,7 @@ impl IcebergMergeRowProjection {
         &self,
         batch: &RecordBatch,
         mode: Option<RowLevelWriteMode>,
+        preserve_lineage: bool,
     ) -> Result<RecordBatch> {
         let mask = merge_operation_mask(batch, self.operation_index, |value| {
             merge_operation_writes_data(value)
@@ -70,15 +75,55 @@ impl IcebergMergeRowProjection {
         })?;
         let filtered = filter_record_batch(batch, &mask)
             .map_err(|error| DataFusionError::ArrowError(Box::new(error), None))?;
-        let columns = self
+        let mut columns = self
             .data_indices
             .iter()
             .map(|index| filtered.column(*index).clone())
             .collect::<Vec<_>>();
-        Ok(RecordBatch::try_new(
-            Arc::clone(&self.data_schema),
-            columns,
-        )?)
+        let schema = if preserve_lineage {
+            let operations = cast(filtered.column(self.operation_index), &DataType::Int32)?;
+            let operations = operations
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .ok_or_else(|| {
+                    datafusion_common::internal_datafusion_err!(
+                        "Expected Iceberg operation integers"
+                    )
+                })?;
+            for name in crate::row_lineage::LINEAGE_COLUMNS {
+                let values = filtered
+                    .column_by_name(name)
+                    .map(|array| cast(array, &DataType::Int64))
+                    .transpose()?;
+                let values = values
+                    .as_ref()
+                    .and_then(|array| array.as_any().downcast_ref::<Int64Array>());
+                let retained = (0..filtered.num_rows())
+                    .map(|row| {
+                        let operation = operations.value(row);
+                        let retain = operation != RowLevelOperationType::Insert.as_i32()
+                            && (name == crate::row_lineage::ROW_ID_COLUMN
+                                || operation == RowLevelOperationType::Copy.as_i32());
+                        if !retain {
+                            return Ok(None);
+                        }
+                        let values = values.ok_or_else(|| {
+                            datafusion_common::exec_datafusion_err!(
+                                "Iceberg COW input is missing lineage column {name}"
+                            )
+                        })?;
+                        Ok(values.is_valid(row).then(|| values.value(row)))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                columns.push(Arc::new(Int64Array::from(retained)) as ArrayRef);
+            }
+            Arc::new(crate::row_lineage::append_lineage_fields(
+                &self.data_schema,
+            )?)
+        } else {
+            self.data_schema.clone()
+        };
+        Ok(RecordBatch::try_new(schema, columns)?)
     }
 
     pub(crate) fn removed_file_paths(&self, batch: &RecordBatch) -> Result<Vec<String>> {
@@ -201,7 +246,7 @@ mod tests {
         let projection = IcebergMergeRowProjection::try_new(schema).expect("merge projection");
 
         let data_rows = projection
-            .project_data_rows(&batch, Some(RowLevelWriteMode::MergeOnRead))
+            .project_data_rows(&batch, Some(RowLevelWriteMode::MergeOnRead), false)
             .expect("data rows");
         let data_ids = data_rows
             .column_by_name("id")

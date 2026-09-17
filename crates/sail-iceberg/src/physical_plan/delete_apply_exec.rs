@@ -6,7 +6,8 @@ use std::sync::Arc;
 use async_stream::try_stream;
 use async_trait::async_trait;
 use bytes::Bytes;
-use datafusion::arrow::array::{Array, ArrayRef, RecordBatch};
+use datafusion::arrow::array::{Array, ArrayRef, RecordBatch, StructArray, make_array};
+use datafusion::arrow::buffer::NullBuffer;
 use datafusion::arrow::compute::filter_record_batch;
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::arrow::row::{OwnedRow, RowConverter, SortField};
@@ -403,7 +404,7 @@ struct LoadedEqualityDelete {
 
 struct EqualityKeyField {
     field_id: i32,
-    data_column_name: String,
+    data_column_path: Vec<String>,
     data_type: DataType,
 }
 
@@ -419,6 +420,13 @@ fn resolve_equality_key_fields(
                 "equality delete references unknown field id {field_id}"
             ))
         })?;
+        if !matches!(field.field_type.as_ref(), crate::spec::Type::Primitive(ty) if !matches!(ty, crate::spec::PrimitiveType::Float | crate::spec::PrimitiveType::Double | crate::spec::PrimitiveType::Variant | crate::spec::PrimitiveType::Unknown | crate::spec::PrimitiveType::Geometry { .. } | crate::spec::PrimitiveType::Geography { .. }))
+        {
+            return Err(DataFusionError::Plan(format!(
+                "Unsupported equality-delete key type {} for field {field_id}",
+                field.field_type
+            )));
+        }
         let arrow_type = crate::datasource::type_converter::iceberg_type_to_arrow(
             &field.field_type,
         )
@@ -430,7 +438,18 @@ fn resolve_equality_key_fields(
         })?;
         key_fields.push(EqualityKeyField {
             field_id: *field_id,
-            data_column_name: field.name.clone(),
+            data_column_path: crate::equality_schema::equality_field_path(
+                iceberg_schema.as_struct().fields(),
+                *field_id,
+            )
+            .ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "Equality field {field_id} must be a primitive field outside lists and maps"
+                ))
+            })?
+            .iter()
+            .map(|field| field.name.clone())
+            .collect(),
             data_type: arrow_type,
         });
     }
@@ -492,31 +511,68 @@ async fn load_equality_deletes(
     Ok(equality_deletes)
 }
 
+fn equality_key_column(
+    batch: &RecordBatch,
+    path: &[String],
+    expected: &DataType,
+) -> std::result::Result<ArrayRef, String> {
+    let (root, children) = path.split_first().ok_or("Empty equality key path")?;
+    let mut column = batch
+        .column_by_name(root)
+        .cloned()
+        .ok_or_else(|| format!("missing equality column {root}"))?;
+    for name in children {
+        let parent = column
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| format!("Equality key parent is not a struct: {name}"))?;
+        let child = parent
+            .column_by_name(name)
+            .ok_or_else(|| format!("missing equality key child {name}"))?;
+        let nulls = NullBuffer::union(parent.nulls(), child.nulls());
+        column = make_array(
+            child
+                .to_data()
+                .into_builder()
+                .nulls(nulls)
+                .build()
+                .map_err(|error| error.to_string())?,
+        );
+    }
+    if column.data_type() == expected {
+        return Ok(column);
+    }
+    let compatible = matches!(
+        (column.data_type(), expected),
+        (DataType::Int32, DataType::Int64)
+            | (DataType::Utf8View | DataType::LargeUtf8, DataType::Utf8)
+            | (
+                DataType::BinaryView | DataType::LargeBinary,
+                DataType::Binary
+            )
+    ) || matches!((column.data_type(), expected), (DataType::Decimal128(p, s), DataType::Decimal128(q, t)) if p <= q && s == t);
+    if !compatible {
+        return Err(format!(
+            "equality column {path:?} has type {}, expected {expected}",
+            column.data_type()
+        ));
+    }
+    datafusion::arrow::compute::cast(&column, expected).map_err(|error| error.to_string())
+}
+
 fn project_equality_key_columns(
     batch: &RecordBatch,
     key_fields: &[EqualityKeyField],
-) -> std::result::Result<Vec<datafusion::arrow::array::ArrayRef>, String> {
-    let mut key_columns = Vec::with_capacity(key_fields.len());
-    for field in key_fields {
-        let column = batch
-            .column_by_name(&field.data_column_name)
-            .ok_or_else(|| format!("missing column '{}'", field.data_column_name))?;
-        if column.data_type() != &field.data_type {
-            return Err(format!(
-                "column '{name}' has type {:?}, expected {:?}",
-                column.data_type(),
-                field.data_type,
-                name = field.data_column_name,
-            ));
-        }
-        key_columns.push(column.clone());
-    }
-    Ok(key_columns)
+) -> std::result::Result<Vec<ArrayRef>, String> {
+    key_fields
+        .iter()
+        .map(|field| equality_key_column(batch, &field.data_column_path, &field.data_type))
+        .collect()
 }
 
 struct EqualityDeleteProjection {
     mask: ProjectionMask,
-    key_column_indices: Vec<usize>,
+    key_column_paths: Vec<Vec<String>>,
 }
 
 impl EqualityDeleteProjection {
@@ -524,42 +580,41 @@ impl EqualityDeleteProjection {
         parquet_schema: &SchemaDescriptor,
         key_fields: &[EqualityKeyField],
     ) -> std::result::Result<Self, String> {
-        let root_fields = parquet_schema.root_schema().get_fields();
-        let mut root_indices = Vec::with_capacity(key_fields.len());
+        let mut leaf_indices = Vec::with_capacity(key_fields.len());
+        let mut key_column_paths = Vec::with_capacity(key_fields.len());
         for key_field in key_fields {
-            let mut matching_roots = root_fields.iter().enumerate().filter_map(|(index, field)| {
-                let basic_info = field.get_basic_info();
-                (basic_info.has_id() && basic_info.id() == key_field.field_id).then_some(index)
-            });
-            let root_index = matching_roots.next().ok_or_else(|| {
+            let mut matching = parquet_schema
+                .columns()
+                .iter()
+                .enumerate()
+                .filter(|(_, column)| {
+                    let info = column.self_type().get_basic_info();
+                    info.has_id() && info.id() == key_field.field_id
+                });
+            let (index, column) = matching.next().ok_or_else(|| {
                 format!(
                     "missing column with Iceberg field id {}",
                     key_field.field_id
                 )
             })?;
-            if matching_roots.next().is_some() {
+            if matching.next().is_some() {
                 return Err(format!(
                     "multiple columns have Iceberg field id {}",
                     key_field.field_id
                 ));
             }
-            root_indices.push(root_index);
+            if column.max_rep_level() != 0 {
+                return Err(format!(
+                    "Equality key {} cannot be nested in a list or map",
+                    key_field.field_id
+                ));
+            }
+            leaf_indices.push(index);
+            key_column_paths.push(column.path().parts().to_vec());
         }
-
-        let mut projected_roots = root_indices.clone();
-        projected_roots.sort_unstable();
-        projected_roots.dedup();
-        let key_column_indices = root_indices
-            .iter()
-            .map(|root_index| {
-                projected_roots
-                    .binary_search(root_index)
-                    .map_err(|_| "failed to map projected equality-delete column".to_string())
-            })
-            .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(Self {
-            mask: ProjectionMask::roots(parquet_schema, projected_roots),
-            key_column_indices,
+            mask: ProjectionMask::leaves(parquet_schema, leaf_indices),
+            key_column_paths,
         })
     }
 
@@ -568,25 +623,11 @@ impl EqualityDeleteProjection {
         batch: &RecordBatch,
         key_fields: &[EqualityKeyField],
     ) -> std::result::Result<Vec<ArrayRef>, String> {
-        let mut columns = Vec::with_capacity(key_fields.len());
-        for (column_index, key_field) in self.key_column_indices.iter().zip(key_fields) {
-            let column = batch.columns().get(*column_index).ok_or_else(|| {
-                format!(
-                    "missing projected column with Iceberg field id {}",
-                    key_field.field_id
-                )
-            })?;
-            if column.data_type() != &key_field.data_type {
-                return Err(format!(
-                    "column with Iceberg field id {} has type {:?}, expected {:?}",
-                    key_field.field_id,
-                    column.data_type(),
-                    key_field.data_type
-                ));
-            }
-            columns.push(column.clone());
-        }
-        Ok(columns)
+        self.key_column_paths
+            .iter()
+            .zip(key_fields)
+            .map(|(path, field)| equality_key_column(batch, path, &field.data_type))
+            .collect()
     }
 }
 
@@ -739,12 +780,12 @@ mod tests {
         let key_fields = vec![
             EqualityKeyField {
                 field_id: 1,
-                data_column_name: "first".to_string(),
+                data_column_path: vec!["first".to_string()],
                 data_type: DataType::Int64,
             },
             EqualityKeyField {
                 field_id: 2,
-                data_column_name: "second".to_string(),
+                data_column_path: vec!["second".to_string()],
                 data_type: DataType::Utf8,
             },
         ];
@@ -755,7 +796,10 @@ mod tests {
             projection.mask,
             ProjectionMask::roots(&parquet_schema, [1, 2])
         );
-        assert_eq!(projection.key_column_indices, vec![1, 0]);
+        assert_eq!(
+            projection.key_column_paths,
+            vec![vec!["first"], vec!["second"]]
+        );
     }
 
     #[test]
@@ -771,7 +815,7 @@ mod tests {
         ));
         let key_fields = vec![EqualityKeyField {
             field_id: 1,
-            data_column_name: "first".to_string(),
+            data_column_path: vec!["first".to_string()],
             data_type: DataType::Int64,
         }];
 
@@ -812,7 +856,7 @@ mod tests {
         let batch = make_batch();
         let key_fields = vec![EqualityKeyField {
             field_id: 1,
-            data_column_name: "id".to_string(),
+            data_column_path: vec!["id".to_string()],
             data_type: DataType::Int64,
         }];
         let converter = RowConverter::new(vec![SortField::new(DataType::Int64)]).unwrap();
@@ -844,7 +888,7 @@ mod tests {
 
         let key_fields = vec![EqualityKeyField {
             field_id: 1,
-            data_column_name: "id".to_string(),
+            data_column_path: vec!["id".to_string()],
             data_type: DataType::Int64,
         }];
         let converter = RowConverter::new(vec![SortField::new(DataType::Int64)]).unwrap();

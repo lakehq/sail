@@ -37,6 +37,8 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
             MERGE_ROW_INDEX_COLUMN,
             MERGE_PARTITION_SPEC_ID_COLUMN,
             MERGE_PARTITION_COLUMN,
+            crate::row_lineage::ROW_ID_COLUMN,
+            crate::row_lineage::LAST_UPDATED_SEQUENCE_COLUMN,
         ],
     )?;
     let (mode, snapshot_id) =
@@ -74,11 +76,14 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         "iceberg merge target schema after metadata columns: {:?}",
         target_fields
     );
+    let mut row_metadata_columns = vec![MERGE_PARTITION_SPEC_ID_COLUMN, MERGE_PARTITION_COLUMN];
+    row_metadata_columns.extend(super::row_level::lineage_columns(&target_plan)?);
     let mut required_metadata_columns = vec![
         MERGE_FILE_COLUMN,
         MERGE_PARTITION_SPEC_ID_COLUMN,
         MERGE_PARTITION_COLUMN,
     ];
+    required_metadata_columns.extend(super::row_level::lineage_columns(&target_plan)?);
     if let Some(row_index_column) = row_index_column {
         required_metadata_columns.push(row_index_column);
     }
@@ -111,7 +116,7 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         info,
         MERGE_FILE_COLUMN,
         row_index_column,
-        &[MERGE_PARTITION_SPEC_ID_COLUMN, MERGE_PARTITION_COLUMN],
+        &row_metadata_columns,
         MergePlanRequirements {
             preserve_unmodified_target_rows: mode == RowLevelWriteMode::CopyOnWrite,
             source_metrics: false,
@@ -216,6 +221,8 @@ pub(crate) fn ensure_merge_metadata_columns(
         file_col,
         MERGE_PARTITION_SPEC_ID_COLUMN,
         MERGE_PARTITION_COLUMN,
+        crate::row_lineage::ROW_ID_COLUMN,
+        crate::row_lineage::LAST_UPDATED_SEQUENCE_COLUMN,
     ];
     if let Some(row_index_col) = row_index_col {
         metadata_cols.push(row_index_col);

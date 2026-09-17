@@ -180,11 +180,6 @@ async fn plan_iceberg_copy_on_write(
     let table =
         Table::load_with_metadata_location(session, table_url.clone(), metadata_location).await?;
     ensure_current_row_level_mode(&table, node)?;
-    if table.metadata().format_version == crate::spec::FormatVersion::V3 {
-        return not_impl_err!(
-            "Iceberg v3 copy-on-write operations are not supported until row lineage is preserved"
-        );
-    }
     let [input] = physical_inputs else {
         return plan_err!("Iceberg copy-on-write requires exactly one write-plan input");
     };
