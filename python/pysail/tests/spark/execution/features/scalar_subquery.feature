@@ -928,3 +928,158 @@ Feature: Scalar subqueries in distributed execution
         | 1  | true    |
         | 2  | false   |
         | 3  | false   |
+
+    @sail-only
+    Scenario Outline: Projected correlated EXISTS rejects correlation below a window
+      When query
+        """
+        SELECT candidate.id,
+          <exists>(
+            SELECT * FROM (
+              SELECT lookup.id, <window> AS n
+              FROM VALUES (1), (1), (2) AS lookup(id)
+              WHERE lookup.id = candidate.id
+            ) AS numbered
+            WHERE numbered.n = 1
+            <bound>
+          ) AS present
+        FROM VALUES (1), (2), (3) AS candidate(id)
+        """
+      Then query error projected correlated EXISTS with correlation below a window
+
+      Examples:
+        | exists     | window                                      | bound            |
+        | EXISTS     | ROW_NUMBER() OVER (ORDER BY lookup.id)       |                  |
+        | NOT EXISTS | ROW_NUMBER() OVER (ORDER BY lookup.id)       |                  |
+        | EXISTS     | COUNT(*) OVER ()                            |                  |
+        | NOT EXISTS | COUNT(*) OVER ()                            |                  |
+        | EXISTS     | ROW_NUMBER() OVER (ORDER BY lookup.id)       | LIMIT 1 OFFSET 1 |
+        | NOT EXISTS | ROW_NUMBER() OVER (ORDER BY lookup.id)       | LIMIT 1 OFFSET 1 |
+        | EXISTS     | COUNT(*) OVER ()                            | LIMIT 1 OFFSET 1 |
+        | NOT EXISTS | COUNT(*) OVER ()                            | LIMIT 1 OFFSET 1 |
+
+    @sail-only
+    Scenario Outline: Projected correlated EXISTS rejects cast correlation below aggregation
+      When query
+        """
+        SELECT candidate.id,
+          <exists>(
+            SELECT lookup.g
+            FROM VALUES (1.1, 0), (1.2, 0), (2.1, 0) AS lookup(x, g)
+            WHERE <key> = candidate.id
+            GROUP BY lookup.g
+            HAVING COUNT(*) > 1
+            <bound>
+          ) AS present
+        FROM VALUES (1), (2), (3) AS candidate(id)
+        """
+      Then query error projected correlated EXISTS with cast correlation below aggregation
+
+      Examples:
+        | exists     | key                        | bound            |
+        | EXISTS     | CAST(lookup.x AS INT)       |                  |
+        | NOT EXISTS | CAST(lookup.x AS INT)       |                  |
+        | EXISTS     | TRY_CAST(lookup.x AS INT)   |                  |
+        | EXISTS     | CAST(lookup.x AS INT)       | LIMIT 1 OFFSET 1 |
+        | NOT EXISTS | CAST(lookup.x AS INT)       | LIMIT 1 OFFSET 1 |
+
+    @sail-only
+    Scenario Outline: Projected correlated EXISTS rejects cast correlation before counting offset rows
+      When query
+        """
+        SELECT candidate.id,
+          <exists>(
+            SELECT <projection>
+            FROM VALUES (1.1, 0), (1.2, 0), (2.1, 0) AS lookup(x, g)
+            WHERE CAST(lookup.x AS INT) = candidate.id
+            LIMIT 1 OFFSET 1
+          ) AS present
+        FROM VALUES (1), (2), (3) AS candidate(id)
+        """
+      Then query error projected correlated EXISTS with cast correlation below aggregation
+
+      Examples:
+        | exists     | projection        |
+        | EXISTS     | lookup.g          |
+        | NOT EXISTS | lookup.g          |
+        | EXISTS     | DISTINCT lookup.g |
+
+    Scenario: Projected correlated EXISTS preserves correlation above a window
+      When query
+        """
+        SELECT candidate.id,
+          EXISTS(
+            SELECT * FROM (
+              SELECT lookup.id, ROW_NUMBER() OVER (ORDER BY lookup.id) AS n
+              FROM VALUES (1), (2), (3) AS lookup(id)
+            ) AS numbered
+            WHERE numbered.id = candidate.id AND numbered.n = 1
+          ) AS present
+        FROM VALUES (1), (2), (3) AS candidate(id)
+        ORDER BY candidate.id
+        """
+      Then query result collected ordered
+        | id | present |
+        | 1  | true    |
+        | 2  | false   |
+        | 3  | false   |
+
+    Scenario: Projected correlated EXISTS preserves cast correlation without aggregation
+      When query
+        """
+        SELECT candidate.id,
+          EXISTS(
+            SELECT *
+            FROM VALUES (1.1), (1.2), (2.1) AS lookup(x)
+            WHERE CAST(lookup.x AS INT) = candidate.id
+            LIMIT 1
+          ) AS present
+        FROM VALUES (1), (2), (3) AS candidate(id)
+        ORDER BY candidate.id
+        """
+      Then query result collected ordered
+        | id | present |
+        | 1  | true    |
+        | 2  | true    |
+        | 3  | false   |
+
+    Scenario: Projected correlated EXISTS preserves casts of outer grouping keys
+      When query
+        """
+        SELECT candidate.id,
+          EXISTS(
+            SELECT lookup.g
+            FROM VALUES (1, 0), (1, 0), (2, 0) AS lookup(x, g)
+            WHERE lookup.x = CAST(candidate.id AS INT)
+            GROUP BY lookup.g
+            HAVING COUNT(*) > 1
+          ) AS present
+        FROM VALUES (1.1), (1.2), (2.1), (CAST(NULL AS DECIMAL(2, 1))) AS candidate(id)
+        ORDER BY candidate.id NULLS LAST
+        """
+      Then query result collected ordered
+        | id   | present |
+        | 1.1  | true    |
+        | 1.2  | true    |
+        | 2.1  | false   |
+        | NULL | false   |
+
+    Scenario: Projected correlated EXISTS preserves an independent cast predicate before grouping
+      When query
+        """
+        SELECT candidate.id,
+          EXISTS(
+            SELECT lookup.g
+            FROM VALUES (1, 0, 1.1), (1, 0, 1.2), (2, 0, 0.1) AS lookup(x, g, v)
+            WHERE lookup.x = candidate.id AND CAST(lookup.v AS INT) > 0
+            GROUP BY lookup.g
+            HAVING COUNT(*) > 1
+          ) AS present
+        FROM VALUES (1), (2), (3) AS candidate(id)
+        ORDER BY candidate.id
+        """
+      Then query result collected ordered
+        | id | present |
+        | 1  | true    |
+        | 2  | false   |
+        | 3  | false   |

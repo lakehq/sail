@@ -5,10 +5,12 @@ use std::sync::Arc;
 use datafusion::functions::core::expr_fn::coalesce;
 use datafusion::functions_aggregate::expr_fn::count;
 use datafusion::optimizer::decorrelate::PullUpCorrelatedExpr;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
+};
 use datafusion_common::{Column, Result, not_impl_err, plan_datafusion_err};
 use datafusion_expr::logical_plan::{FetchType, SkipType};
-use datafusion_expr::utils::conjunction;
+use datafusion_expr::utils::{conjunction, split_conjunction};
 use datafusion_expr::{Expr, JoinType, LogicalPlan, LogicalPlanBuilder, expr_fn, ident, lit};
 use sail_common_datafusion::literal::{LiteralEvaluator, LiteralValue};
 
@@ -63,6 +65,7 @@ impl ExistsRewriter<'_> {
             .aggregate(Vec::<Expr>::new(), vec![count(lit(1_i64)).alias(&output)])?
             .project(vec![ident(output).gt(lit(skip))])?
             .build()?;
+        Self::validate_correlated_operators(&query)?;
         Ok(coalesce(vec![
             expr_fn::scalar_subquery(Arc::new(query)),
             lit(false),
@@ -136,6 +139,7 @@ impl ExistsRewriter<'_> {
                 "projected correlated EXISTS with nested scalar aggregation or LIMIT/OFFSET"
             );
         }
+        Self::validate_correlated_operators(&query)?;
         let mut pull_up = PullUpCorrelatedExpr::new();
         let query = query.rewrite(&mut pull_up).data()?;
         if !pull_up.can_pull_up {
@@ -167,6 +171,49 @@ impl ExistsRewriter<'_> {
             Expr::Column(Column::new(Some(alias), "mark")),
             lit(false),
         ]))
+    }
+
+    fn validate_correlated_operators(query: &LogicalPlan) -> Result<()> {
+        query.apply(|plan| {
+            match plan {
+                LogicalPlan::Window(window) if !window.input.all_out_ref_exprs().is_empty() => {
+                    // Correlation must remain part of the window's input or partitioning.
+                    return not_impl_err!(
+                        "projected correlated EXISTS with correlation below a window"
+                    );
+                }
+                LogicalPlan::Aggregate(aggregate) => {
+                    let has_correlated_cast = aggregate.input.exists(|plan| {
+                        let LogicalPlan::Filter(filter) = plan else {
+                            return Ok(false);
+                        };
+                        for predicate in split_conjunction(&filter.predicate) {
+                            if predicate.contains_outer()
+                                && predicate.exists(|expr| {
+                                    Ok(match expr {
+                                        Expr::Cast(cast) => cast.expr.any_column_refs(),
+                                        Expr::TryCast(cast) => cast.expr.any_column_refs(),
+                                        _ => false,
+                                    })
+                                })?
+                            {
+                                return Ok(true);
+                            }
+                        }
+                        Ok(false)
+                    })?;
+                    if has_correlated_cast {
+                        // Grouping by the source column can split equal cast results.
+                        return not_impl_err!(
+                            "projected correlated EXISTS with cast correlation below aggregation"
+                        );
+                    }
+                }
+                _ => {}
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        Ok(())
     }
 
     fn is_scalar_aggregate(query: &LogicalPlan) -> bool {
