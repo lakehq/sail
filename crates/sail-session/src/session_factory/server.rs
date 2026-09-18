@@ -148,6 +148,7 @@ impl ServerSessionFactory {
             .with_optimizer_rules(default_optimizer_rules())
             .with_physical_optimizer_rules(get_physical_optimizers(PhysicalOptimizerOptions {
                 enable_join_reorder: self.config.optimizer.enable_join_reorder,
+                enable_plan_reuse: self.config.optimizer.enable_plan_reuse,
                 ..Default::default()
             }))
             .with_query_planner(new_query_planner());

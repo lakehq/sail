@@ -31,11 +31,23 @@ mod collect_left;
 mod explicit_repartition;
 mod join_reorder;
 mod projection_pushdown;
+pub mod reuse;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct PhysicalOptimizerOptions {
     pub enable_join_reorder: bool,
+    pub enable_plan_reuse: bool,
     pub join_reorder: JoinReorderOptions,
+}
+
+impl Default for PhysicalOptimizerOptions {
+    fn default() -> Self {
+        Self {
+            enable_join_reorder: false,
+            enable_plan_reuse: true,
+            join_reorder: Default::default(),
+        }
+    }
 }
 
 pub fn get_physical_optimizers(
@@ -73,6 +85,9 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(RewriteCollectLeftHashJoin::new()));
     rules.push(Arc::new(EnforceBarrierPartitioning::new()));
     rules.push(Arc::new(SanityCheckPlan::new()));
+    if options.enable_plan_reuse {
+        rules.push(Arc::new(reuse::ReuseSubplans));
+    }
 
     rules
 }

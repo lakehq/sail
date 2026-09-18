@@ -10,9 +10,11 @@ use datafusion::datasource::physical_plan::parquet::metadata::{
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{DataFusionError, Result, plan_err};
+use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use futures::{StreamExt, TryStreamExt};
 use object_store::{ObjectMeta, ObjectStore};
+use sail_common_datafusion::file_scan_identity::ParquetScanIdentity;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 
 use crate::listing::source::{ListingFileMeta, ListingFileSample, ListingScanInput, ReadFormat};
@@ -145,19 +147,46 @@ impl ReadFormat for ParquetReadFormat {
         let store = ctx
             .runtime_env()
             .object_store(input.object_store_url.clone())?;
-        let cached_parquet_read_factory =
-            Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
+        let cached_parquet_read_factory = Arc::new(CachedParquetFileReaderFactory::new(
+            store.clone(),
+            metadata_cache,
+        ));
+        let identity = Arc::new(ParquetScanIdentity {
+            reader_factory: cached_parquet_read_factory.clone(),
+            adapter_factory: Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {}),
+            store,
+        });
         source = source.with_parquet_file_reader_factory(cached_parquet_read_factory);
 
         if let Some(metadata_size_hint) = options.global.metadata_size_hint {
             source = source.with_metadata_size_hint(metadata_size_hint)
         }
 
+        let groups = input
+            .file_groups
+            .into_iter()
+            .map(|group| {
+                let statistics = group.file_statistics(None).cloned();
+                let files = group
+                    .into_inner()
+                    .into_iter()
+                    .map(|mut file| {
+                        file.extensions.insert_arc(identity.clone());
+                        file
+                    })
+                    .collect();
+                let group = FileGroup::new(files);
+                match statistics {
+                    Some(statistics) => group.with_statistics(Arc::new(statistics)),
+                    None => group,
+                }
+            })
+            .collect();
         let config = FileScanConfigBuilder::new(input.object_store_url, Arc::new(source))
-            .with_file_groups(input.file_groups)
+            .with_file_groups(groups)
             .with_constraints(input.constraints)
             .with_statistics(input.statistics)
-            .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})))
+            .with_expr_adapter(Some(identity.adapter_factory.clone()))
             .with_projection_indices(input.projection)?
             .with_limit(input.limit)
             .with_output_ordering(input.output_ordering)

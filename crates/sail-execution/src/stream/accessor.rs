@@ -156,6 +156,24 @@ impl TaskStreamAccessor {
         .await
     }
 
+    async fn create_replay_stream(
+        &self,
+        key: TaskStreamKey,
+        schema: SchemaRef,
+    ) -> Result<Box<dyn TaskStreamChannelSink>> {
+        let (result, rx) = oneshot::channel();
+        self.receive(
+            TaskRunnerMessage::CreateReplayStream {
+                key,
+                schema,
+                context: self.context.clone(),
+                result,
+            },
+            rx,
+        )
+        .await
+    }
+
     async fn create_celeborn_stream(
         &self,
         key: TaskKey,
@@ -385,6 +403,15 @@ impl TaskStreamWriter for MultiChannelTaskStreamWriter {
         }
         let channels = self.output.channels();
         let sinks = match &self.output.locator {
+            TaskOutputLocator::Replay => {
+                try_join_all((0..channels).map(|channel| {
+                    self.streams.create_replay_stream(
+                        self.key.task_stream_key(channel),
+                        self.schema.clone(),
+                    )
+                }))
+                .await?
+            }
             TaskOutputLocator::Pipelined { replicas } => {
                 try_join_all((0..channels).map(|channel| {
                     self.streams.create_local_stream(

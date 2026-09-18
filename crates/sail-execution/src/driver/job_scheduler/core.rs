@@ -465,7 +465,7 @@ impl JobScheduler {
             if let Some(attempt) = Self::get_latest_task_attempt(job, t.stage, t.partition) {
                 let stage = &job.graph.stages()[t.stage];
                 let output = match stage.mode {
-                    OutputMode::Pipelined => TaskOutputKind::Local,
+                    OutputMode::Pipelined | OutputMode::Replay => TaskOutputKind::Local,
                     OutputMode::Blocking => match job.graph.shuffle_backend() {
                         ShuffleBackendKind::Storage { .. } => TaskOutputKind::Storage,
                         ShuffleBackendKind::Celeborn { .. } => TaskOutputKind::External,
@@ -777,7 +777,7 @@ impl<'a> TaskInputBuilder<'a> {
 
     fn build(&self) -> ExecutionResult<TaskInput> {
         let locator = match self.producer.mode {
-            OutputMode::Pipelined => match self.producer.placement {
+            OutputMode::Pipelined | OutputMode::Replay => match self.producer.placement {
                 TaskPlacement::Driver => self.build_driver_locator()?,
                 TaskPlacement::Worker => self.build_worker_locator()?,
             },
@@ -1027,6 +1027,7 @@ impl<'a> TaskOutputBuilder<'a> {
                 replicas: self.job.graph.replicas(self.key.stage),
             },
             OutputMode::Blocking => TaskOutputLocator::Blocking,
+            OutputMode::Replay => TaskOutputLocator::Replay,
         };
         Ok(TaskOutput {
             distribution,
