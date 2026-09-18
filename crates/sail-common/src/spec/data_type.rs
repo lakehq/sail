@@ -24,6 +24,17 @@ pub const SPARK_METADATA_JSON_KEY: &str = "SPARK::metadata::json";
 /// This is internal to Sail and should not be exposed as Spark column metadata.
 pub const SAIL_SPARK_UDT_METADATA_KEY: &str = "SAIL::spark::udt";
 
+/// Sail metadata key holding the original (pre-deduplication) name of a nested
+/// struct field.
+///
+/// Spark allows duplicate field names in a struct but Arrow addresses fields by
+/// name, so duplicates are deduplicated (`x`, `x` -> `x_0`, `x_1`) in the Arrow
+/// representation. The original name is preserved here so the logical Spark
+/// schema reported back to the client keeps the user-visible name.
+///
+/// This is internal to Sail and should not be exposed as Spark column metadata.
+pub const SAIL_ORIGINAL_FIELD_NAME_METADATA_KEY: &str = "SAIL::original_field_name";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkUdtMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
