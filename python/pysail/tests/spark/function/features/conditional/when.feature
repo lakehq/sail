@@ -81,3 +81,49 @@ Feature: when output schema
         root
          |-- result: decimal(11,1) (nullable = false)
         """
+
+  Rule: Numeric branches use a common type
+
+    Scenario: CASE widens branches independently of order
+      When query
+        """
+        SELECT
+          typeof(CASE WHEN false THEN 1 ELSE CAST(1 AS BIGINT) END) AS narrow_first,
+          typeof(CASE WHEN false THEN CAST(1 AS BIGINT) ELSE 1 END) AS wide_first,
+          CASE WHEN false THEN 1 ELSE CAST(3000000000 AS BIGINT) END AS value
+        """
+      Then query result
+        | narrow_first | wide_first | value      |
+        | bigint       | bigint     | 3000000000 |
+
+    Scenario Outline: CASE finds the common numeric type: <case>
+      When query
+        """
+        SELECT typeof(CASE WHEN false THEN <narrow> ELSE <wide> END) AS result_type
+        """
+      Then query result
+        | result_type |
+        | <type>      |
+
+      Examples:
+        | case               | narrow              | wide                     | type          |
+        | INT to DOUBLE      | 1                   | CAST(1 AS DOUBLE)        | double        |
+        | INT to DECIMAL     | 1                   | CAST(1 AS DECIMAL(20,0)) | decimal(20,0) |
+        | SMALLINT to BIGINT | CAST(1 AS SMALLINT) | CAST(1 AS BIGINT)        | bigint        |
+
+    Scenario: CASE common type remains valid for downstream kernels
+      When query
+        """
+        SELECT count(*) AS count
+        FROM (
+          SELECT explode(sequence(0, CASE WHEN c <= 0 THEN 1 ELSE c END - 1))
+          FROM VALUES
+            (CAST(3 AS BIGINT)),
+            (CAST(1 AS BIGINT)),
+            (CAST(5 AS BIGINT))
+          AS t(c)
+        )
+        """
+      Then query result
+        | count |
+        | 9     |

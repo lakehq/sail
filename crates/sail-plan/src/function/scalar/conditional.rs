@@ -3,6 +3,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
+use datafusion_expr::binary::try_type_union_resolution;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::spark_date::SparkDate;
@@ -33,7 +34,7 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             }
         }
     }
-    let branch_values = coerce_string_temporal_values(branch_values, &function_context)?;
+    let branch_values = coerce_case_values(branch_values, &function_context)?;
     let when_then_expr = conditions
         .into_iter()
         .zip(branch_values)
@@ -53,7 +54,7 @@ fn if_expr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     let (when_expr, then_expr, else_expr) = arguments.three()?;
     let (then_expr, else_expr) =
-        coerce_string_temporal_values(vec![then_expr, else_expr], &function_context)?.two()?;
+        coerce_case_values(vec![then_expr, else_expr], &function_context)?.two()?;
     Ok(expr::Expr::Case(expr::Case {
         expr: None,
         when_then_expr: vec![(Box::new(when_expr), Box::new(then_expr))],
@@ -68,6 +69,29 @@ fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     let arguments = coerce_string_temporal_values(arguments, &function_context)?;
     Ok(expr_fn::coalesce(arguments))
+}
+
+fn coerce_case_values(
+    arguments: Vec<expr::Expr>,
+    function_context: &FunctionContextInput<'_>,
+) -> PlanResult<Vec<expr::Expr>> {
+    let arguments = coerce_string_temporal_values(arguments, function_context)?;
+    let data_types = arguments
+        .iter()
+        .map(|arg| arg.get_type(function_context.schema))
+        .collect::<Result<Vec<_>, _>>()?;
+    if !data_types
+        .iter()
+        .all(|data_type| data_type.is_numeric() || matches!(data_type, DataType::Null))
+    {
+        return Ok(arguments);
+    }
+    let target_types = try_type_union_resolution(&data_types)?;
+    arguments
+        .into_iter()
+        .zip(target_types)
+        .map(|(arg, target_type)| Ok(arg.cast_to(&target_type, function_context.schema)?))
+        .collect()
 }
 
 fn coerce_string_temporal_values(
