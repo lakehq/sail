@@ -27,6 +27,50 @@ Feature: String casts to integer types respect ANSI mode
       | int8 | int16 | int32 | int64 |
       | NULL | NULL  | NULL  | NULL  |
 
+  Scenario: legacy casts to different integer types remain distinct grouping keys
+    Given config spark.sql.ansi.enabled = false
+    When query
+      """
+      SELECT CAST(value AS TINYINT) AS i8, CAST(value AS INT) AS i32, count(*) AS n
+      FROM VALUES ('128'), ('1') AS data(value)
+      GROUP BY CAST(value AS TINYINT), CAST(value AS INT)
+      """
+    Then query result
+      | i8   | i32 | n |
+      | NULL | 128 | 1 |
+      | 1    | 1   | 1 |
+
+  Scenario: aggregates retain the target types of legacy integer casts
+    Given config spark.sql.ansi.enabled = false
+    When query
+      """
+      SELECT max(CAST(value AS TINYINT)) AS i8, max(CAST(value AS INT)) AS i32
+      FROM VALUES ('128'), ('1') AS data(value)
+      """
+    Then query result
+      | i8 | i32 |
+      | 1  | 128 |
+
+  @sail-only
+  Scenario: legacy casts of the same string retain distinct integer targets
+    Given config spark.sql.ansi.enabled = false
+    When query
+      """
+      SELECT value,
+             CAST(value AS INT8) AS i8, CAST(value AS INT16) AS i16,
+             CAST(value AS INT32) AS i32, CAST(value AS INT64) AS i64,
+             CAST(value AS UINT8) AS u8, CAST(value AS UINT16) AS u16,
+             CAST(value AS UINT32) AS u32, CAST(value AS UINT64) AS u64
+      FROM VALUES ('-1'), ('128'), ('65536'), ('4294967295'), ('9223372036854775808') AS data(value)
+      """
+    Then query result
+      | value               | i8   | i16  | i32   | i64        | u8   | u16  | u32        | u64                 |
+      | -1                  | -1   | -1   | -1    | -1         | NULL | NULL | NULL       | NULL                |
+      | 128                 | NULL | 128  | 128   | 128        | 128  | 128  | 128        | 128                 |
+      | 65536               | NULL | NULL | 65536 | 65536      | NULL | NULL | 65536      | 65536               |
+      | 4294967295          | NULL | NULL | NULL  | 4294967295 | NULL | NULL | 4294967295 | 4294967295          |
+      | 9223372036854775808 | NULL | NULL | NULL  | NULL       | NULL | NULL | NULL       | 9223372036854775808 |
+
   Scenario Outline: legacy string parsing for <type> columns
     Given config spark.sql.ansi.enabled = false
     When query

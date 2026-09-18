@@ -3177,6 +3177,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     target_type,
                 ))));
             }
+            UdfKind::SparkCastStringToInteger(r#gen::SparkCastStringToIntegerUdf {
+                target_type,
+            }) => {
+                let target_type = self.try_decode_data_type(&target_type)?;
+                return Ok(Arc::new(ScalarUDF::from(
+                    SparkCastStringToInteger::try_new(target_type)?,
+                )));
+            }
         };
         match name {
             "array_element" => Ok(Arc::new(ScalarUDF::from(ArrayElement::new()))),
@@ -3194,30 +3202,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkArrayPosition::new())))
             }
             "spark_array_compact" => Ok(Arc::new(ScalarUDF::from(SparkArrayCompact::new()))),
-            "spark_cast_string_to_int8" => Ok(Arc::new(ScalarUDF::from(
-                SparkCastStringToInteger::try_new(DataType::Int8)?,
-            ))),
-            "spark_cast_string_to_int16" => Ok(Arc::new(ScalarUDF::from(
-                SparkCastStringToInteger::try_new(DataType::Int16)?,
-            ))),
-            "spark_cast_string_to_int32" => Ok(Arc::new(ScalarUDF::from(
-                SparkCastStringToInteger::try_new(DataType::Int32)?,
-            ))),
-            "spark_cast_string_to_int64" => Ok(Arc::new(ScalarUDF::from(
-                SparkCastStringToInteger::try_new(DataType::Int64)?,
-            ))),
-            "spark_cast_string_to_uint8" => Ok(Arc::new(ScalarUDF::from(
-                SparkCastStringToInteger::try_new(DataType::UInt8)?,
-            ))),
-            "spark_cast_string_to_uint16" => Ok(Arc::new(ScalarUDF::from(
-                SparkCastStringToInteger::try_new(DataType::UInt16)?,
-            ))),
-            "spark_cast_string_to_uint32" => Ok(Arc::new(ScalarUDF::from(
-                SparkCastStringToInteger::try_new(DataType::UInt32)?,
-            ))),
-            "spark_cast_string_to_uint64" => Ok(Arc::new(ScalarUDF::from(
-                SparkCastStringToInteger::try_new(DataType::UInt64)?,
-            ))),
             "vector_cosine_similarity" => {
                 Ok(Arc::new(ScalarUDF::from(VectorCosineSimilarity::new())))
             }
@@ -3414,7 +3398,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<ArrayIntersect>()
             || node_inner.is::<SparkArrayPosition>()
             || node_inner.is::<SparkArrayCompact>()
-            || node_inner.is::<SparkCastStringToInteger>()
             || node_inner.is::<VectorCosineSimilarity>()
             || node_inner.is::<VectorInnerProduct>()
             || node_inner.is::<BitmapCount>()
@@ -3716,6 +3699,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<SparkStructRename>() {
             let target_type = self.try_encode_data_type(func.target_type())?;
             UdfKind::SparkStructRename(r#gen::SparkStructRenameUdf { target_type })
+        } else if let Some(func) = node_inner.downcast_ref::<SparkCastStringToInteger>() {
+            let target_type = self.try_encode_data_type(func.target_type())?;
+            UdfKind::SparkCastStringToInteger(r#gen::SparkCastStringToIntegerUdf { target_type })
         } else {
             return Ok(());
         };
@@ -6187,23 +6173,23 @@ mod tests {
 
     #[test]
     fn test_round_trip_spark_cast_string_to_integer_udf() -> Result<()> {
-        for (data_type, name) in [
-            (DataType::Int8, "spark_cast_string_to_int8"),
-            (DataType::Int16, "spark_cast_string_to_int16"),
-            (DataType::Int32, "spark_cast_string_to_int32"),
-            (DataType::Int64, "spark_cast_string_to_int64"),
-            (DataType::UInt8, "spark_cast_string_to_uint8"),
-            (DataType::UInt16, "spark_cast_string_to_uint16"),
-            (DataType::UInt32, "spark_cast_string_to_uint32"),
-            (DataType::UInt64, "spark_cast_string_to_uint64"),
+        for data_type in [
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+            DataType::UInt64,
         ] {
-            let decoded = round_trip_udf(ScalarUDF::from(SparkCastStringToInteger::try_new(
-                data_type.clone(),
-            )?))?;
+            let udf = ScalarUDF::from(SparkCastStringToInteger::try_new(data_type.clone())?);
+            let decoded = round_trip_udf(udf.clone())?;
 
             downcast_udf::<SparkCastStringToInteger>(&decoded, "SparkCastStringToInteger")?;
-            assert_eq!(decoded.name(), name);
+            assert_eq!(decoded.name(), "spark_cast_string_to_integer");
             assert_eq!(decoded.return_type(&[DataType::Utf8])?, data_type);
+            assert_eq!(decoded.as_ref(), &udf);
         }
 
         Ok(())

@@ -8,7 +8,7 @@ use datafusion::arrow::datatypes::{
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::{Result, plan_err};
 use datafusion_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
@@ -18,22 +18,13 @@ use crate::functions_utils::make_scalar_function;
 pub struct SparkCastStringToInteger {
     signature: Signature,
     data_type: DataType,
-    name: &'static str,
 }
 
 impl SparkCastStringToInteger {
     pub fn try_new(data_type: DataType) -> Result<Self> {
-        let name = match data_type {
-            DataType::Int8 => "spark_cast_string_to_int8",
-            DataType::Int16 => "spark_cast_string_to_int16",
-            DataType::Int32 => "spark_cast_string_to_int32",
-            DataType::Int64 => "spark_cast_string_to_int64",
-            DataType::UInt8 => "spark_cast_string_to_uint8",
-            DataType::UInt16 => "spark_cast_string_to_uint16",
-            DataType::UInt32 => "spark_cast_string_to_uint32",
-            DataType::UInt64 => "spark_cast_string_to_uint64",
-            _ => return plan_err!("expected integer cast target, got {data_type}"),
-        };
+        if !data_type.is_integer() {
+            return plan_err!("expected integer cast target, got {data_type}");
+        }
         Ok(Self {
             signature: Signature::uniform(
                 1,
@@ -41,14 +32,30 @@ impl SparkCastStringToInteger {
                 Volatility::Immutable,
             ),
             data_type,
-            name,
         })
+    }
+
+    pub fn target_type(&self) -> &DataType {
+        &self.data_type
     }
 }
 
 impl ScalarUDFImpl for SparkCastStringToInteger {
     fn name(&self) -> &str {
-        self.name
+        "spark_cast_string_to_integer"
+    }
+
+    fn schema_name(&self, args: &[Expr]) -> Result<String> {
+        let [arg] = args else {
+            return plan_err!("{} expects one argument", self.name());
+        };
+        // Grouping and aggregate fields must distinguish casts to different types.
+        Ok(format!(
+            "{}({} AS {})",
+            self.name(),
+            arg.schema_name(),
+            self.data_type
+        ))
     }
 
     fn signature(&self) -> &Signature {
