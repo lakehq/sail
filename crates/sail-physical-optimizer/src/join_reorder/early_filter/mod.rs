@@ -11,6 +11,7 @@ use std::sync::Arc;
 use datafusion::common::NullEquality;
 use datafusion::common::tree_node::TreeNode;
 use datafusion::config::ConfigOptions;
+use datafusion::datasource::physical_plan::FileScanConfig;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::error::Result;
 use datafusion::logical_expr::{JoinType, Operator};
@@ -28,23 +29,59 @@ use datafusion::physical_plan::{ExecutionPlan, replace_children_if_necessary};
 // single pass over the original tree, never a fixed point over the added joins.
 const MAX_REDUCTIONS: usize = 64;
 
+mod benefit;
+mod cleanup;
+
+pub(super) fn prune(
+    plan: Arc<dyn ExecutionPlan>,
+    reductions: &Reductions,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    cleanup::prune(plan, reductions)
+}
+
+/// Optimizer-local provenance. Non-inner joins remain reorder boundaries, so
+/// rebuilding their children preserves the identity of their key expressions.
+/// Keeping the Arc alive also prevents pointer reuse. No execution state or
+/// column-name convention is used to identify generated reductions.
+pub(super) struct Reductions {
+    generated: Vec<GeneratedReduction>,
+}
+
+struct GeneratedReduction {
+    marker: Arc<dyn PhysicalExpr>,
+    source: Arc<dyn ExecutionPlan>,
+    source_keys: Vec<usize>,
+}
+
+struct Context<'a> {
+    remaining: usize,
+    reductions: Reductions,
+    options: &'a super::JoinReorderOptions,
+}
+
 pub(super) fn propagate(
     plan: Arc<dyn ExecutionPlan>,
     config: &ConfigOptions,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    let mut remaining = MAX_REDUCTIONS;
-    visit(plan, config, &mut remaining)
+    options: &super::JoinReorderOptions,
+) -> Result<(Arc<dyn ExecutionPlan>, Reductions)> {
+    let mut context = Context {
+        remaining: MAX_REDUCTIONS,
+        reductions: Reductions { generated: vec![] },
+        options,
+    };
+    let plan = visit(plan, config, &mut context)?;
+    Ok((plan, context.reductions))
 }
 
 fn visit(
     plan: Arc<dyn ExecutionPlan>,
     config: &ConfigOptions,
-    remaining: &mut usize,
+    context: &mut Context<'_>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let children = plan
         .children()
         .into_iter()
-        .map(|child| visit(Arc::clone(child), config, remaining))
+        .map(|child| visit(Arc::clone(child), config, context))
         .collect::<Result<Vec<_>>>()?;
     let plan = replace_children_if_necessary(plan, children)?;
     let Some(join) = plan.downcast_ref::<HashJoinExec>() else {
@@ -53,7 +90,7 @@ fn visit(
     if !matches!(
         join.join_type(),
         JoinType::Inner | JoinType::LeftSemi | JoinType::RightSemi
-    ) || *remaining == 0
+    ) || context.remaining == 0
     {
         return Ok(plan);
     }
@@ -63,13 +100,19 @@ fn visit(
         // A semi join only requires its output side to have matches in the other
         // side. Filtering the non-output side by its own matches is redundant too.
         let source = &children[source_side];
-        if !is_filtered_scan(source, false)? {
+        let Some(scan_rows) = filtered_scan_rows(source, false)? else {
+            continue;
+        };
+        // Each reduction executes the source independently. A small filtered
+        // result bounds the hash table, but does not make a large scan cheap.
+        let max_rows = config.optimizer.hash_join_single_partition_threshold_rows;
+        if scan_rows > max_rows {
             continue;
         }
         let Some(rows) = row_count(source)? else {
             continue;
         };
-        if rows > config.optimizer.hash_join_single_partition_threshold_rows {
+        if rows > max_rows {
             continue;
         }
         let mut source_keys = Vec::new();
@@ -101,40 +144,44 @@ fn visit(
             })
             .collect();
         let keys = Arc::new(ProjectionExec::try_new(expr, Arc::clone(source))?);
+        let (source, source_keys) = source_lineage(Arc::clone(source), source_keys);
         let restriction = Restriction {
             keys,
             rows,
+            scan_rows,
+            source,
+            source_keys,
             null_equality: join.null_equality(),
         };
         children[1 - source_side] = push(
             Arc::clone(&children[1 - source_side]),
             &target_keys,
             &restriction,
-            false,
-            remaining,
+            0.0,
+            context,
         )?;
     }
     replace_children_if_necessary(plan, children)
 }
 
-/// Only duplicate deterministic filtered scans, not arbitrary subqueries or UDFs
-/// with volatile evaluation. IS NOT NULL introduced by join planning is not enough
-/// to justify an additional scan and hash table.
-fn is_filtered_scan(plan: &Arc<dyn ExecutionPlan>, filtered: bool) -> Result<bool> {
+/// Return the pre-filter row count of a deterministic filtered file scan.
+/// IS NOT NULL introduced by join planning is not enough to justify duplication.
+/// Unknown scan sizes and sources without pre-filter statistics are ineligible.
+fn filtered_scan_rows(plan: &Arc<dyn ExecutionPlan>, filtered: bool) -> Result<Option<usize>> {
     if plan.fetch().is_some() {
-        return Ok(false);
+        return Ok(None);
     }
     if let Some(projection) = plan.downcast_ref::<ProjectionExec>() {
         for expr in projection.expr() {
             if volatile(&expr.expr)? {
-                return Ok(false);
+                return Ok(None);
             }
         }
-        return is_filtered_scan(projection.input(), filtered);
+        return filtered_scan_rows(projection.input(), filtered);
     }
     if let Some(filter) = plan.downcast_ref::<FilterExec>() {
         if volatile(filter.predicate())? {
-            return Ok(false);
+            return Ok(None);
         }
         let selective = filter.predicate().exists(|expr| {
             Ok(expr.is::<InListExpr>()
@@ -149,14 +196,28 @@ fn is_filtered_scan(plan: &Arc<dyn ExecutionPlan>, filtered: bool) -> Result<boo
                     )
                 }))
         })?;
-        return is_filtered_scan(filter.input(), filtered || selective);
+        return filtered_scan_rows(filter.input(), filtered || selective);
     }
-    Ok(filtered && plan.is::<DataSourceExec>())
+    if !filtered {
+        return Ok(None);
+    }
+    let Some(scan) = plan.downcast_ref::<DataSourceExec>() else {
+        return Ok(None);
+    };
+    let Some(config) = scan.data_source().downcast_ref::<FileScanConfig>() else {
+        return Ok(None);
+    };
+    // FileScanConfig retains the input counts even when a predicate is pushed
+    // into the file source; statistics() only marks those counts as inexact.
+    Ok(config.statistics().num_rows.get_value().copied())
 }
 
 struct Restriction {
     keys: Arc<dyn ExecutionPlan>,
     rows: usize,
+    scan_rows: usize,
+    source: Arc<dyn ExecutionPlan>,
+    source_keys: Vec<usize>,
     null_equality: NullEquality,
 }
 
@@ -164,10 +225,10 @@ fn push(
     plan: Arc<dyn ExecutionPlan>,
     keys: &[usize],
     restriction: &Restriction,
-    crossed_boundary: bool,
-    remaining: &mut usize,
+    downstream_work: f64,
+    context: &mut Context<'_>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    if *remaining == 0 || plan.fetch().is_some() {
+    if context.remaining == 0 || plan.fetch().is_some() {
         return Ok(plan);
     }
     if let Some(projection) = plan.downcast_ref::<ProjectionExec>() {
@@ -192,13 +253,19 @@ fn push(
                 Arc::clone(projection.input()),
                 &mapped,
                 restriction,
-                crossed_boundary,
-                remaining,
+                downstream_work,
+                context,
             )?;
             return replace_children_if_necessary(plan, vec![child]);
         }
     } else if let Some(filter) = plan.downcast_ref::<FilterExec>() {
         if !volatile(filter.predicate())? {
+            // Preserve existing scan filters below the reduction. Besides avoiding
+            // extra probes, this costs the candidate using the filtered target's
+            // key domain (e.g. facts already restricted to the selected year).
+            if is_scan_pipeline(filter.input())? {
+                return insert(plan, keys, restriction, downstream_work, context);
+            }
             let mapped = keys
                 .iter()
                 .map(|&i| filter.projection().as_ref().map_or(i, |p| p[i]))
@@ -207,8 +274,8 @@ fn push(
                 Arc::clone(filter.input()),
                 &mapped,
                 restriction,
-                crossed_boundary,
-                remaining,
+                downstream_work,
+                context,
             )?;
             return replace_children_if_necessary(plan, vec![child]);
         }
@@ -233,8 +300,8 @@ fn push(
                     Arc::clone(aggregate.input()),
                     &mapped,
                     restriction,
-                    true,
-                    remaining,
+                    context.options.build_side_weight + context.options.output_weight,
+                    context,
                 )?;
                 return replace_children_if_necessary(plan, vec![child]);
             }
@@ -252,41 +319,101 @@ fn push(
                         Arc::clone(&children[side]),
                         &keys,
                         restriction,
-                        true,
-                        remaining,
+                        context.options.output_weight
+                            + if side == 0 {
+                                context.options.build_side_weight
+                            } else {
+                                context.options.probe_side_weight
+                            },
+                        context,
                     )?;
                 }
             }
             return replace_children_if_necessary(plan, children);
         }
-    } else if plan.is::<DataSourceExec>() && crossed_boundary {
-        // Do not add a second join next to a dimension/fact join already at a
-        // scan. Require a substantially larger target to amortize the extra work.
-        if row_count(&plan)?.is_some_and(|rows| rows > restriction.rows.saturating_mul(4)) {
-            let on = keys
-                .iter()
-                .enumerate()
-                .map(|(i, &key)| (column(&restriction.keys, i), column(&plan, key)))
-                .collect();
-            *remaining -= 1;
-            return Ok(Arc::new(HashJoinExec::try_new(
-                // A cloned DataSourceExec shares its work-stealing file queue.
-                // Each use must scan the entire eligible-key set independently.
-                reset_plan_states(Arc::clone(&restriction.keys))?,
-                plan,
-                on,
-                None,
-                &JoinType::RightSemi,
-                None,
-                PartitionMode::Auto,
-                restriction.null_equality,
-                false,
-            )?));
-        }
+    } else if plan.is::<DataSourceExec>() {
+        return insert(plan, keys, restriction, downstream_work, context);
     }
     // Outer/anti/mark joins, limits, windows, computed keys and unknown operators
     // are boundaries. Never infer equality through casts or aggregate results.
     Ok(plan)
+}
+
+fn insert(
+    plan: Arc<dyn ExecutionPlan>,
+    keys: &[usize],
+    restriction: &Restriction,
+    downstream_work: f64,
+    context: &mut Context<'_>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    if downstream_work <= 0.0
+        || !benefit::worthwhile(&plan, keys, restriction, downstream_work, context.options)?
+    {
+        return Ok(plan);
+    }
+    let on: Vec<_> = keys
+        .iter()
+        .enumerate()
+        .map(|(i, &key)| (column(&restriction.keys, i), column(&plan, key)))
+        .collect();
+    context.reductions.generated.push(GeneratedReduction {
+        marker: Arc::clone(&on[0].0),
+        source: Arc::clone(&restriction.source),
+        source_keys: restriction.source_keys.clone(),
+    });
+    context.remaining -= 1;
+    Ok(Arc::new(HashJoinExec::try_new(
+        // Each independent consumer needs the complete key set, not a shared
+        // work-stealing scan queue. Key-set materialization is a separate concern.
+        reset_plan_states(Arc::clone(&restriction.keys))?,
+        plan,
+        on,
+        None,
+        &JoinType::RightSemi,
+        None,
+        PartitionMode::Auto,
+        restriction.null_equality,
+        false,
+    )?))
+}
+
+fn is_scan_pipeline(plan: &Arc<dyn ExecutionPlan>) -> Result<bool> {
+    if plan.fetch().is_some() {
+        return Ok(false);
+    }
+    if let Some(projection) = plan.downcast_ref::<ProjectionExec>() {
+        if projection.expr().iter().all(|p| p.expr.is::<Column>()) {
+            return is_scan_pipeline(projection.input());
+        }
+    } else if let Some(filter) = plan.downcast_ref::<FilterExec>()
+        && !volatile(filter.predicate())?
+    {
+        return is_scan_pipeline(filter.input());
+    }
+    Ok(plan.is::<DataSourceExec>())
+}
+
+fn source_lineage(
+    mut plan: Arc<dyn ExecutionPlan>,
+    mut keys: Vec<usize>,
+) -> (Arc<dyn ExecutionPlan>, Vec<usize>) {
+    while let Some(projection) = plan.downcast_ref::<ProjectionExec>() {
+        let Some(mapped) = keys
+            .iter()
+            .map(|&i| {
+                projection.expr()[i]
+                    .expr
+                    .downcast_ref::<Column>()
+                    .map(Column::index)
+            })
+            .collect::<Option<Vec<_>>>()
+        else {
+            break;
+        };
+        keys = mapped;
+        plan = Arc::clone(projection.input());
+    }
+    (plan, keys)
 }
 
 /// Map each key to both inputs using column equality. Keeping the incoming null

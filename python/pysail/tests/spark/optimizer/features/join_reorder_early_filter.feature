@@ -63,6 +63,144 @@ Feature: Join reorder propagates selective dimension keys before fact joins
       """
     Then query plan matches snapshot
 
+  Scenario Outline: A selective filter does not make an expensive dimension scan cheap to duplicate
+    Given variable large_dimension for temporary directory early_filter_large_dimension
+    Given statement template
+      """
+      INSERT OVERWRITE DIRECTORY {{ large_dimension.sql }} USING parquet
+      SELECT id % 10 AS k, id AS marker FROM range(<rows>)
+      """
+    Given statement template
+      """
+      CREATE OR REPLACE TEMP VIEW early_filter_large_dimension AS
+      SELECT * FROM parquet.`{{ large_dimension.string }}`
+      """
+    When query
+      """
+      EXPLAIN
+      SELECT d.k, g.total
+      FROM early_filter_large_dimension d
+      JOIN (
+        SELECT a.k, SUM(a.amount) AS total
+        FROM early_filter_facts a JOIN early_filter_facts b
+          ON a.k = b.k AND a.ticket = b.ticket
+        GROUP BY a.k HAVING SUM(a.amount) > 5
+      ) g ON d.k = g.k
+      WHERE d.marker = 1
+      """
+    Then query plan matches snapshot
+    When query
+      """
+      SELECT d.k, g.total
+      FROM early_filter_large_dimension d
+      JOIN (
+        SELECT a.k, SUM(a.amount) AS total
+        FROM early_filter_facts a JOIN early_filter_facts b
+          ON a.k = b.k AND a.ticket = b.ticket
+        GROUP BY a.k HAVING SUM(a.amount) > 5
+      ) g ON d.k = g.k
+      WHERE d.marker = 1
+      """
+    Then query result collected
+      | k | total |
+      | 1 | 10    |
+
+    Examples:
+      | rows   |
+      | 131072 |
+      | 131073 |
+
+  Scenario: Early reductions avoid fact inputs already restricted to eligible keys
+    When query
+      """
+      EXPLAIN
+      SELECT d.k, g.total
+      FROM early_filter_dimension d
+      JOIN (
+        SELECT a.k, SUM(a.amount) AS total
+        FROM early_filter_facts a JOIN early_filter_facts b
+          ON a.k = b.k AND a.ticket = b.ticket
+        WHERE a.k = 1
+        GROUP BY a.k
+      ) g ON d.k = g.k
+      WHERE d.color = 'red'
+      """
+    Then query plan matches snapshot
+    When query
+      """
+      SELECT d.k, g.total
+      FROM early_filter_dimension d
+      JOIN (
+        SELECT a.k, SUM(a.amount) AS total
+        FROM early_filter_facts a JOIN early_filter_facts b
+          ON a.k = b.k AND a.ticket = b.ticket
+        WHERE a.k = 1
+        GROUP BY a.k
+      ) g ON d.k = g.k
+      WHERE d.color = 'red'
+      """
+    Then query result collected
+      | k | total |
+      | 1 | 10    |
+      | 1 | 10    |
+
+  Scenario: Reordering removes a generated reduction adjacent to the original dimension join
+    Given statement template
+      """
+      INSERT OVERWRITE DIRECTORY {{ facts.sql }} USING parquet
+      SELECT id % 100 AS k, id AS ticket, CAST(1 AS BIGINT) AS amount FROM range(1000)
+      """
+    Given statement template
+      """
+      INSERT OVERWRITE DIRECTORY {{ dimension.sql }} USING parquet
+      SELECT id AS k, CASE WHEN id = 1 THEN 'red' ELSE 'blue' END AS color FROM range(100)
+      """
+    Given statement template
+      """
+      CREATE OR REPLACE TEMP VIEW early_filter_facts AS
+      SELECT * FROM parquet.`{{ facts.string }}`
+      """
+    Given statement template
+      """
+      CREATE OR REPLACE TEMP VIEW early_filter_dimension AS
+      SELECT * FROM parquet.`{{ dimension.string }}`
+      """
+    When query
+      """
+      EXPLAIN
+      SELECT a.ticket, a.amount
+      FROM early_filter_facts a
+      JOIN early_filter_facts b ON a.k = b.k AND a.ticket = b.ticket
+      JOIN early_filter_dimension d ON a.k = d.k
+      WHERE d.color = 'red'
+      """
+    Then query plan matches snapshot
+    When query
+      """
+      SELECT SUM(a.amount) AS total, COUNT(*) AS n
+      FROM early_filter_facts a
+      JOIN early_filter_facts b ON a.k = b.k AND a.ticket = b.ticket
+      JOIN early_filter_dimension d ON a.k = d.k
+      WHERE d.color = 'red'
+      """
+    Then query result collected
+      | total | n  |
+      | 10    | 10 |
+
+  Scenario: Cleanup preserves user semijoins whose aliases resemble generated keys
+    When query
+      """
+      SELECT SUM(a.amount) AS total, COUNT(*) AS n
+      FROM early_filter_facts a
+      LEFT SEMI JOIN (
+        SELECT k AS __early_join_key_0 FROM early_filter_dimension WHERE color = 'red'
+      ) d ON a.k <=> d.__early_join_key_0
+      JOIN early_filter_facts b ON a.k <=> b.k AND a.ticket = b.ticket
+      """
+    Then query result collected
+      | total | n  |
+      | 20    | 20 |
+
   Scenario: Early filters propagate through semi joins without multiplying fact rows
     When query
       """

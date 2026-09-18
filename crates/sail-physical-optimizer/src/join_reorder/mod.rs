@@ -143,15 +143,16 @@ impl PhysicalOptimizerRule for JoinReorder {
             displayable(plan.as_ref()).indent(true)
         );
 
-        // Propagate selective dimension keys before discovering reorderable regions. This
-        // can cross projection and aggregation boundaries that deliberately remain opaque
-        // to join enumeration. Push filters down before costing the resulting regions.
-        let plan = early_filter::propagate(plan, config)?;
+        // Establish scan filters before estimating the benefit of reductions. Keep
+        // generation, reordering, and cleanup together so optimizer-local provenance
+        // survives: non-inner joins remain opaque to join enumeration.
         let plan = FilterPushdown::new().optimize(plan, config)?;
+        let (plan, reductions) = early_filter::propagate(plan, config, &self.options)?;
 
         // Search and optimize reorderable regions. We traverse bottom-up so nested reorderable
         // regions inside "leaf" plans (as seen by a higher-level region) are also visited.
-        self.find_and_optimize_regions(plan)
+        let plan = self.find_and_optimize_regions(plan)?;
+        early_filter::prune(plan, &reductions)
     }
 
     fn name(&self) -> &str {
