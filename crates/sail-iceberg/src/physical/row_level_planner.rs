@@ -185,6 +185,25 @@ async fn plan_iceberg_copy_on_write(
     };
     let partition_columns = IcebergLakeSource::partition_columns_from_metadata(&table)?;
     let writer_options = resolve_row_level_writer_options(session, node)?;
+    let distribution_key = match node.command() {
+        RowLevelCommand::Delete => "write.delete.distribution-mode",
+        RowLevelCommand::Update => "write.update.distribution-mode",
+        RowLevelCommand::Merge => "write.merge.distribution-mode",
+    };
+    let mode = table
+        .metadata()
+        .properties
+        .get(distribution_key)
+        .or_else(|| table.metadata().properties.get("write.distribution-mode"))
+        .map(String::as_str)
+        .unwrap_or("hash");
+    let mut writer_options = writer_options;
+    writer_options.copy_on_write_partitioning = match mode.to_ascii_lowercase().as_str() {
+        "none" => false,
+        "hash" => true,
+        "range" => return not_impl_err!("Iceberg copy-on-write range distribution"),
+        _ => return plan_err!("Unknown Iceberg write distribution mode: {mode}"),
+    };
     let data_schema = IcebergMergeRowProjection::try_new(input.schema())?.data_schema();
     let write_context = prepare_iceberg_write_context(
         &table_url,

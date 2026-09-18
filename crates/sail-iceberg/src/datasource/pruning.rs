@@ -304,6 +304,97 @@ pub fn prune_data_files_by_partition_values(
         .collect()
 }
 
+/// Inclusive partition projection: an unknown expression must retain the file.
+pub(crate) enum PartitionFilter {
+    Constant(bool),
+    And(Box<Self>, Box<Self>),
+    Or(Box<Self>, Box<Self>),
+    Predicate(Vec<PartitionPredicate>),
+    Null { indexes: Vec<usize>, is_null: bool },
+}
+
+impl PartitionFilter {
+    pub(crate) fn new(schema: &Schema, spec: &PartitionSpec, expr: &Expr) -> Self {
+        match expr {
+            Expr::Literal(datafusion_common::ScalarValue::Boolean(value), _) => {
+                Self::Constant(value.unwrap_or(false))
+            }
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::And,
+                right,
+            }) => Self::And(
+                Box::new(Self::new(schema, spec, left)),
+                Box::new(Self::new(schema, spec, right)),
+            ),
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::Or,
+                right,
+            }) => Self::Or(
+                Box::new(Self::new(schema, spec, left)),
+                Box::new(Self::new(schema, spec, right)),
+            ),
+            Expr::IsNull(value) | Expr::IsNotNull(value) => {
+                let Expr::Column(column) = value.as_ref() else {
+                    return Self::Constant(true);
+                };
+                let Some(field) = schema.field_by_name(&column.name) else {
+                    return Self::Constant(true);
+                };
+                let indexes = spec
+                    .fields()
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, partition)| {
+                        (partition.source_id == field.id
+                            && !matches!(partition.transform, Transform::Void | Transform::Unknown))
+                        .then_some(index)
+                    })
+                    .collect();
+                Self::Null {
+                    indexes,
+                    is_null: matches!(expr, Expr::IsNull(_)),
+                }
+            }
+            Expr::InList(list)
+                if list
+                    .list
+                    .iter()
+                    .any(|value| !matches!(value, Expr::Literal(_, _))) =>
+            {
+                Self::Constant(true)
+            }
+            _ => Self::Predicate(partition_predicates_for_spec(
+                schema,
+                spec,
+                std::slice::from_ref(expr),
+            )),
+        }
+    }
+
+    pub(crate) fn may_match(&self, values: &[Option<Literal>]) -> bool {
+        match self {
+            Self::Constant(value) => *value,
+            Self::And(left, right) => left.may_match(values) && right.may_match(values),
+            Self::Or(left, right) => left.may_match(values) || right.may_match(values),
+            Self::Predicate(predicates) => predicates.iter().all(|predicate| {
+                values.get(predicate.field_index).is_none_or(|value| {
+                    // Supported comparisons are null-intolerant.
+                    value.as_ref().is_some_and(|value| {
+                        partition_predicate_may_match_value(predicate, Some(value))
+                    })
+                })
+            }),
+            Self::Null { indexes, is_null } => indexes.iter().all(|index| {
+                values
+                    .get(*index)
+                    .is_none_or(|value| value.is_none() == *is_null)
+            }),
+        }
+    }
+}
+
 /// Load a manifest and prune entries by partition+metrics
 pub fn prune_manifest_entries(
     manifest: &Manifest,
@@ -429,7 +520,7 @@ fn collect_source_in_filters(
 }
 
 #[derive(Clone)]
-struct PartitionPredicate {
+pub(crate) struct PartitionPredicate {
     field_index: usize,
     constraint: PartitionConstraint,
 }

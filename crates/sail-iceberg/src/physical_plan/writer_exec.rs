@@ -14,20 +14,23 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::compute::concat_batches;
+use datafusion::arrow::compute::{SortOptions, concat_batches};
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_expr::expressions::{Column, Literal as PhysicalLiteral};
-use datafusion::physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
+use datafusion::physical_expr::{
+    Distribution, EquivalenceProperties, LexOrdering, OrderingRequirements, PhysicalExpr,
+    PhysicalSortExpr,
+};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
-use datafusion_common::{DataFusionError, Result, ScalarValue, internal_err};
+use datafusion_common::{DataFusionError, Result, ScalarValue, ToDFSchema, internal_err};
 use futures::StreamExt;
 use futures::stream::once;
 use parquet::file::properties::WriterProperties;
@@ -65,7 +68,10 @@ pub struct IcebergWriterExec {
     options: IcebergWriterExecOptions,
     write_context: IcebergWriteContext,
     row_level_mode: Option<RowLevelWriteMode>,
-    merge_distribution_keys: Option<Vec<Arc<dyn PhysicalExpr>>>,
+    distribution_keys: Option<Vec<Arc<dyn PhysicalExpr>>>,
+    sort_order: Option<LexOrdering>,
+    parquet_properties: WriterProperties,
+    target_file_size_bytes: u64,
     cache: Arc<PlanProperties>,
 }
 
@@ -89,6 +95,14 @@ impl IcebergWriterExec {
         };
         let output_partitions = input.output_partitioning().partition_count().max(1);
         let cache = Self::compute_properties(schema.clone(), output_partitions);
+        let properties = write_context
+            .base_table
+            .as_ref()
+            .map(|base| base.properties.clone())
+            .unwrap_or_else(|| options.table_properties.iter().cloned().collect());
+        let parquet_properties = options.parquet_properties(&properties)?;
+        let target_file_size_bytes = options.target_file_size(&properties)?;
+        let sort_order = Self::data_sort_order(input.schema().as_ref(), &write_context)?;
         Ok(Self {
             input,
             table_url,
@@ -98,7 +112,10 @@ impl IcebergWriterExec {
             options,
             write_context,
             row_level_mode: None,
-            merge_distribution_keys: None,
+            distribution_keys: None,
+            sort_order,
+            parquet_properties,
+            target_file_size_bytes,
             cache,
         })
     }
@@ -124,7 +141,7 @@ impl IcebergWriterExec {
             write_context,
         )?;
         writer.row_level_mode = Some(RowLevelWriteMode::MergeOnRead);
-        writer.merge_distribution_keys = Some(merge_distribution_keys);
+        writer.distribution_keys = Some(merge_distribution_keys);
         Ok(writer)
     }
 
@@ -135,6 +152,7 @@ impl IcebergWriterExec {
         options: IcebergWriterExecOptions,
         write_context: IcebergWriteContext,
     ) -> Result<Self> {
+        let distribution_keys = Self::data_partition_keys(input.schema().as_ref(), &write_context)?;
         let mut writer = Self::new(
             input,
             table_url,
@@ -145,7 +163,98 @@ impl IcebergWriterExec {
             write_context,
         )?;
         writer.row_level_mode = Some(RowLevelWriteMode::CopyOnWrite);
+        if writer.options.copy_on_write_partitioning && !distribution_keys.is_empty() {
+            writer.distribution_keys = Some(distribution_keys);
+        }
         Ok(writer)
+    }
+
+    fn data_partition_keys(
+        schema: &Schema,
+        context: &IcebergWriteContext,
+    ) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
+        context
+            .writer_partition_spec
+            .iter()
+            .flat_map(|spec| spec.fields())
+            .map(|field| {
+                let source = Self::source_field_expr(schema, context, field.source_id)?;
+                Self::transform_key(source, field.transform, schema)
+            })
+            .collect()
+    }
+
+    fn source_field_expr(
+        schema: &Schema,
+        context: &IcebergWriteContext,
+        source_id: i32,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let path = context
+            .writer_schema
+            .field_path_by_id(source_id)
+            .ok_or_else(|| {
+                datafusion_common::plan_datafusion_err!(
+                    "Missing scalar Iceberg write field {source_id}"
+                )
+            })?;
+        let Some((root, children)) = path.split_first() else {
+            return internal_err!("Empty Iceberg write field path");
+        };
+        let mut expr =
+            datafusion_expr::Expr::Column(datafusion_common::Column::from_name(&root.name));
+        for field in children {
+            expr = datafusion::functions::core::expr_fn::get_field(expr, field.name.as_str());
+        }
+        datafusion::physical_expr::create_physical_expr(
+            &expr,
+            &schema.clone().to_dfschema()?,
+            &Default::default(),
+            &Default::default(),
+        )
+    }
+
+    fn transform_key(
+        source: Arc<dyn PhysicalExpr>,
+        transform: Transform,
+        schema: &Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        if transform == Transform::Identity {
+            return Ok(source);
+        }
+        let expr: Arc<dyn PhysicalExpr> =
+            Arc::new(IcebergPartitionTransformExpr::new(source, transform));
+        expr.data_type(schema)?;
+        Ok(expr)
+    }
+
+    fn data_sort_order(
+        schema: &Schema,
+        context: &IcebergWriteContext,
+    ) -> Result<Option<LexOrdering>> {
+        if context.sort_order.is_unsorted() {
+            return Ok(None);
+        }
+        context
+            .sort_order
+            .fields
+            .iter()
+            .map(|field| {
+                if !field.source_ids.is_empty() {
+                    return datafusion_common::not_impl_err!(
+                        "Iceberg multi-source sort transforms"
+                    );
+                }
+                let source = Self::source_field_expr(schema, context, field.source_id)?;
+                Ok(PhysicalSortExpr {
+                    expr: Self::transform_key(source, field.transform, schema)?,
+                    options: SortOptions {
+                        descending: field.direction == crate::spec::SortDirection::Descending,
+                        nulls_first: field.null_order == crate::spec::NullOrder::First,
+                    },
+                })
+            })
+            .collect::<Result<Vec<_>>>()
+            .map(LexOrdering::new)
     }
 
     fn merge_distribution_keys(
@@ -273,10 +382,18 @@ impl ExecutionPlan for IcebergWriterExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        match &self.merge_distribution_keys {
+        match &self.distribution_keys {
             Some(expressions) => vec![Distribution::KeyPartitioned(expressions.clone())],
             None => vec![Distribution::UnspecifiedDistribution],
         }
+    }
+
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
+        vec![self.sort_order.clone().map(OrderingRequirements::from)]
+    }
+
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -372,6 +489,8 @@ impl ExecutionPlan for IcebergWriterExec {
                 .is_ok();
         let options = self.options.clone();
         let write_context = self.write_context.clone();
+        let parquet_properties = self.parquet_properties.clone();
+        let target_file_size_bytes = self.target_file_size_bytes;
 
         let schema = self.schema();
         let future = async move {
@@ -412,9 +531,10 @@ impl ExecutionPlan for IcebergWriterExec {
 
             let writer_config = WriterConfig {
                 table_schema: table_schema.clone(),
-                // TODO: Resolve `write.parquet.*` table properties and write-option overrides
-                // into the Parquet writer properties.
-                writer_properties: WriterProperties::default(),
+                writer_properties: parquet_properties,
+                target_file_size_bytes,
+                sort_order_id: (!write_context.sort_order.is_unsorted())
+                    .then_some(write_context.sort_order.order_id as i32),
                 iceberg_schema: Arc::new(iceberg_schema.clone()),
                 partition_spec: write_context.unbound_writer_partition_spec(),
                 variant_shredding,

@@ -1706,6 +1706,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 data_file_partition_spec_id,
                 data_file_partition_json,
                 row_lineage,
+                file_lineage,
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -1718,6 +1719,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                             )
                         })?,
                         row_index_column_name,
+                        file_lineage
+                            .into_iter()
+                            .map(|(path, lineage)| {
+                                (
+                                    path,
+                                    sail_iceberg::physical_plan::RowLineage {
+                                        first_row_id: lineage.first_row_id,
+                                        data_sequence_number: lineage.data_sequence_number,
+                                    },
+                                )
+                            })
+                            .collect(),
                     )?
                 } else {
                     IcebergMergeMetadataExec::try_new(
@@ -2819,6 +2832,19 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             )?;
             NodeKind::IcebergMergeMetadata(r#gen::IcebergMergeMetadataExecNode {
                 input,
+                file_lineage: merge_metadata
+                    .file_lineage()
+                    .iter()
+                    .map(|(path, lineage)| {
+                        (
+                            path.clone(),
+                            r#gen::IcebergRowLineage {
+                                first_row_id: lineage.first_row_id,
+                                data_sequence_number: lineage.data_sequence_number,
+                            },
+                        )
+                    })
+                    .collect(),
                 data_file_path: merge_metadata
                     .data_file_path()
                     .unwrap_or_default()

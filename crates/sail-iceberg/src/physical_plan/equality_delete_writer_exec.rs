@@ -239,6 +239,7 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
                         ArrowParquetWriter::try_new(
                             delete_spec.arrow_schema.as_ref(),
                             WriterProperties::default(),
+                            Vec::new(),
                         )
                         .map_err(DataFusionError::Execution)?,
                     ),

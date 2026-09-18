@@ -1077,6 +1077,7 @@ message IcebergMergeMetadataExecNode {
   optional int32 data_file_partition_spec_id = 5;
   optional string data_file_partition_json = 6;
   IcebergRowLineage row_lineage = 7;
+  map<string, IcebergRowLineage> file_lineage = 8;
 }
 
 message IcebergEqualityDeleteWriterExecNode {

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
@@ -7,7 +7,7 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::utils::split_conjunction;
 use datafusion_expr::{BinaryExpr, Expr, Operator, lit};
 
-use crate::datasource::pruning::prune_files;
+use crate::datasource::pruning::{PartitionFilter, prune_files};
 use crate::spec::transform::Transform;
 use crate::spec::types::{PrimitiveType, Type};
 use crate::spec::{DataFile, Datum, Literal, PartitionSpec, Schema};
@@ -27,6 +27,27 @@ pub(crate) fn select_copy_on_write_files(
     specs: &[PartitionSpec],
     files: Vec<(DataFile, i64)>,
 ) -> Result<CopyOnWriteFileSelection> {
+    let survivors = non_matching_rows(predicate);
+    let partition_filters = specs
+        .iter()
+        .map(|spec| {
+            (
+                spec.spec_id(),
+                (
+                    PartitionFilter::new(schema, spec, predicate),
+                    PartitionFilter::new(schema, spec, &survivors),
+                ),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let files = files
+        .into_iter()
+        .filter(|(file, _)| {
+            partition_filters
+                .get(&file.partition_spec_id)
+                .is_none_or(|(matches, _)| matches.may_match(&file.partition))
+        })
+        .collect::<Vec<_>>();
     let statistics = files
         .iter()
         .map(|(file, _)| file_statistics(file, schema, specs))
@@ -46,10 +67,18 @@ pub(crate) fn select_copy_on_write_files(
     )?;
     let (possible_survivors, _) = prune_files(
         session,
-        &[non_matching_rows(predicate)],
+        &[survivors],
         None,
         arrow_schema,
-        candidates.clone(),
+        candidates
+            .iter()
+            .filter(|file| {
+                partition_filters
+                    .get(&file.partition_spec_id)
+                    .is_none_or(|(_, survivors)| survivors.may_match(&file.partition))
+            })
+            .cloned()
+            .collect(),
         schema,
     )?;
     let paths = candidates
@@ -120,7 +149,7 @@ fn file_statistics(file: &DataFile, schema: &Schema, specs: &[PartitionSpec]) ->
     statistics
 }
 
-fn can_prune(expr: &Expr) -> bool {
+pub(crate) fn can_prune(expr: &Expr) -> bool {
     match expr {
         Expr::Column(_) | Expr::Literal(_, _) => true,
         Expr::BinaryExpr(BinaryExpr {

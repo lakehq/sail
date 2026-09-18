@@ -65,6 +65,7 @@ pub struct IcebergWriteContext {
     pub commit_writer_partition_spec: bool,
     pub requirements: Vec<TableRequirement>,
     pub variant_shredding: VariantShreddingConfig,
+    pub sort_order: crate::spec::SortOrder,
 }
 
 impl IcebergWriteContext {
@@ -336,6 +337,15 @@ pub fn prepare_iceberg_write_context(
         commit_writer_partition_spec,
         requirements,
         variant_shredding,
+        sort_order: base_metadata
+            .and_then(|metadata| {
+                metadata
+                    .sort_orders
+                    .iter()
+                    .find(|order| Some(order.order_id as i32) == metadata.default_sort_order_id)
+            })
+            .cloned()
+            .unwrap_or_else(crate::spec::SortOrder::unsorted_order),
     })
 }
 

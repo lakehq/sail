@@ -405,6 +405,7 @@ mod tests {
             let mut parquet_writer = ArrowParquetWriter::try_new(
                 arrow_schema.as_ref(),
                 WriterProperties::builder().build(),
+                Vec::new(),
             )?;
             parquet_writer.write_batch(&batch).await?;
             let (_, metadata) = parquet_writer.close().await?;
@@ -485,8 +486,11 @@ mod tests {
                 vec![Arc::new(variant), Arc::new(NullArray::new(2))],
             )
             .map_err(|error| error.to_string())?;
-            let mut writer =
-                ArrowParquetWriter::try_new(&schema, WriterProperties::builder().build())?;
+            let mut writer = ArrowParquetWriter::try_new(
+                &schema,
+                WriterProperties::builder().build(),
+                Vec::new(),
+            )?;
             writer.write_batch(&batch).await?;
             let (_, metadata) = writer.close().await?;
             let fields = metadata

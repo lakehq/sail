@@ -568,8 +568,34 @@ impl IcebergTableProvider {
             .iter()
             .map(|s| (s.spec_id(), s.clone()))
             .collect();
-        let manifest_files =
-            prune_manifests_by_partition_summaries(manifest_list, &self.schema, &spec_map, filters);
+        let candidate_filters = self.copy_on_write_predicate.as_ref().map(|predicate| {
+            datafusion_expr::utils::split_conjunction(predicate)
+                .into_iter()
+                .filter(|expr| {
+                    crate::datasource::copy_on_write::can_prune(expr)
+                        && expr.column_refs().iter().all(|column| {
+                            self.schema
+                                .field_by_name(&column.name)
+                                .is_some_and(|field| {
+                                    !matches!(
+                                        field.field_type.as_ref(),
+                                        crate::spec::types::Type::Primitive(
+                                            crate::spec::types::PrimitiveType::Float
+                                                | crate::spec::types::PrimitiveType::Double
+                                        )
+                                    )
+                                })
+                        })
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        });
+        let manifest_files = prune_manifests_by_partition_summaries(
+            manifest_list,
+            &self.schema,
+            &spec_map,
+            candidate_filters.as_deref().unwrap_or(filters),
+        );
 
         let mut out: Vec<(DataFile, i64)> = Vec::new();
         for manifest_file in manifest_files {
@@ -1516,11 +1542,21 @@ impl IcebergTableProvider {
             )
         })?;
         let mut clean_files = Vec::new();
+        let mut file_lineage = HashMap::new();
         let mut dirty_units = Vec::new();
 
         for (data_file, sequence_number) in data_files_with_seq {
             let matched = delete_index.for_data_file(&data_file, sequence_number);
-            if matched.is_empty() && !self.has_row_lineage() {
+            if matched.is_empty() {
+                if self.has_row_lineage() {
+                    file_lineage.insert(
+                        data_file.file_path.clone(),
+                        crate::row_lineage::RowLineage {
+                            first_row_id: data_file.first_row_id,
+                            data_sequence_number: sequence_number,
+                        },
+                    );
+                }
                 clean_files.push(data_file);
             } else {
                 dirty_units.push((
@@ -1541,8 +1577,14 @@ impl IcebergTableProvider {
                 .into_iter()
                 .map(|file| FileGroup::from(vec![file]))
                 .collect::<Vec<_>>();
+            let mut scan_provider = self.clone();
+            if self.has_row_lineage() {
+                scan_provider.arrow_schema = Arc::new(crate::row_lineage::append_lineage_fields(
+                    &self.arrow_schema,
+                )?);
+            }
             let parquet_source =
-                self.build_merge_parquet_source(session, file_column_name.as_str());
+                scan_provider.build_merge_parquet_source(session, file_column_name.as_str());
             let output_partitioning = output_partitioning_from_partition_fields(
                 parquet_source.table_schema().table_schema(),
                 parquet_source.table_schema().table_partition_cols(),
@@ -1565,6 +1607,7 @@ impl IcebergTableProvider {
                     data_scan,
                     file_column_name.clone(),
                     self.row_index_column_name.clone(),
+                    file_lineage,
                 )?,
             ));
         }

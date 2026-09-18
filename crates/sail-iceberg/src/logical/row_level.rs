@@ -5,7 +5,8 @@ use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{DFSchemaRef, Result, plan_err};
 use datafusion_expr::expr::{WindowFunction, WindowFunctionParams};
 use datafusion_expr::{
-    Expr, LogicalPlan, LogicalPlanBuilder, WindowFrame, WindowFunctionDefinition, col, lit,
+    Expr, LogicalPlan, LogicalPlanBuilder, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    WindowFunctionDefinition, col, lit,
 };
 use sail_common_datafusion::datasource::{
     MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, MERGE_SOURCE_METRIC_COLUMN, OPERATION_COLUMN,
@@ -130,7 +131,8 @@ pub(crate) fn select_copy_on_write_candidates(
 }
 
 /// Retain every row of a touched file, including delete intents, and new inserts.
-/// A window keeps file selection and row values on the same evaluation of the input.
+/// Changed rows sort before copies, so a running maximum selects whole files
+/// without buffering every row in the execution partition.
 pub(crate) fn select_copy_on_write_rows(plan: LogicalPlan) -> Result<LogicalPlan> {
     let columns = plan
         .schema()
@@ -143,8 +145,12 @@ pub(crate) fn select_copy_on_write_rows(plan: LogicalPlan) -> Result<LogicalPlan
         params: WindowFunctionParams {
             args: vec![col(OPERATION_COLUMN)],
             partition_by: vec![col(MERGE_FILE_COLUMN)],
-            order_by: vec![],
-            window_frame: WindowFrame::new(None),
+            order_by: vec![col(OPERATION_COLUMN).sort(false, false)],
+            window_frame: WindowFrame::new_bounds(
+                WindowFrameUnits::Rows,
+                WindowFrameBound::Preceding(datafusion_common::ScalarValue::UInt64(None)),
+                WindowFrameBound::CurrentRow,
+            ),
             filter: None,
             null_treatment: None,
             distinct: false,

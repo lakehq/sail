@@ -214,6 +214,23 @@ Feature: Iceberg copy-on-write row operations
       | UPDATE iceberg_cow SET value = value + 1 WHERE id = 1                                                                                   |
       | MERGE INTO iceberg_cow AS t USING (SELECT 1 AS id) AS s ON t.id = s.id WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT (id) VALUES (s.id) |
 
+  Scenario: EXPLAIN groups v3 COW files in one lineage scan
+    Given statement
+      """
+      ALTER TABLE iceberg_cow SET TBLPROPERTIES ('format-version' = '3')
+      """
+    Given statement
+      """
+      INSERT INTO iceberg_cow VALUES (5, 50, 'C')
+      """
+    When query
+      """
+      EXPLAIN MERGE INTO iceberg_cow t USING (SELECT 1 AS id) s ON t.id = s.id
+      WHEN MATCHED THEN UPDATE SET value = value + 1
+      """
+    Then query plan matches snapshot
+    Then iceberg snapshot count is 3
+
   Scenario: COW MERGE rejects ambiguous updates before committing
     When query
       """

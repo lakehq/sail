@@ -16,10 +16,13 @@ use std::sync::Arc;
 use bytes::Bytes;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use futures::future::BoxFuture;
+use object_store::buffered::BufWriter;
 use parquet::arrow::ArrowSchemaConverter;
 use parquet::arrow::arrow_writer::ArrowWriterOptions;
-use parquet::arrow::async_writer::AsyncArrowWriter;
+use parquet::arrow::async_writer::{AsyncArrowWriter, AsyncFileWriter};
 use parquet::basic::LogicalType;
+use parquet::errors::ParquetError;
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::WriterProperties;
 use parquet::schema::types::{SchemaDescriptor, Type, TypePtr};
@@ -27,8 +30,57 @@ use parquet_variant_compute::VariantType;
 use sail_common_datafusion::schema_evolution::{
     StructFieldMatching, cast_array_with_schema_evolution_relaxed_tz,
 };
+use tokio::io::AsyncWriteExt;
 
 use crate::datasource::type_converter::iceberg_field_id;
+
+/// Abort uploads abandoned before completion starts.
+pub(crate) struct ParquetObjectSink {
+    output: Option<BufWriter>,
+}
+
+impl ParquetObjectSink {
+    pub(crate) fn new(output: BufWriter) -> Self {
+        Self {
+            output: Some(output),
+        }
+    }
+}
+
+impl AsyncFileWriter for ParquetObjectSink {
+    fn write(&mut self, bytes: Bytes) -> BoxFuture<'_, parquet::errors::Result<()>> {
+        Box::pin(async move {
+            let output = self.output.as_mut().ok_or_else(|| {
+                ParquetError::General("Iceberg Parquet sink is closed".to_string())
+            })?;
+            output.write_all(&bytes).await.map_err(ParquetError::from)
+        })
+    }
+
+    fn complete(&mut self) -> BoxFuture<'_, parquet::errors::Result<()>> {
+        Box::pin(async move {
+            let mut output = self.output.take().ok_or_else(|| {
+                ParquetError::General("Iceberg Parquet sink is closed".to_string())
+            })?;
+            output.shutdown().await?;
+            Ok(())
+        })
+    }
+}
+
+impl Drop for ParquetObjectSink {
+    fn drop(&mut self) {
+        if let Some(mut output) = self.output.take()
+            && let Ok(runtime) = tokio::runtime::Handle::try_current()
+        {
+            runtime.spawn(async move {
+                if let Err(error) = output.abort().await {
+                    log::warn!("Failed to abort Iceberg Parquet upload: {error}");
+                }
+            });
+        }
+    }
+}
 
 pub struct ParquetFileMeta {
     pub num_rows: u64,
@@ -36,18 +88,17 @@ pub struct ParquetFileMeta {
     pub parquet_metadata: ParquetMetaData,
 }
 
-pub struct ArrowParquetWriter {
-    // FIXME: Stream Parquet output to object storage instead of retaining the full file in memory.
-    writer: Option<AsyncArrowWriter<Vec<u8>>>,
+pub struct ArrowParquetWriter<W: AsyncFileWriter = Vec<u8>> {
+    writer: AsyncArrowWriter<W>,
     storage_schema: SchemaRef,
 }
 
-impl ArrowParquetWriter {
+impl<W: AsyncFileWriter> ArrowParquetWriter<W> {
     pub fn try_new(
         schema: &datafusion::arrow::datatypes::Schema,
         props: WriterProperties,
+        output: W,
     ) -> Result<Self, String> {
-        let buffer = Vec::new();
         let fields = schema
             .fields()
             .iter()
@@ -62,10 +113,10 @@ impl ArrowParquetWriter {
             .with_properties(props)
             .with_parquet_schema(parquet_schema);
         let writer =
-            AsyncArrowWriter::try_new_with_options(buffer, storage_schema.clone(), options)
+            AsyncArrowWriter::try_new_with_options(output, storage_schema.clone(), options)
                 .map_err(|e| format!("parquet writer error: {e}"))?;
         Ok(Self {
-            writer: Some(writer),
+            writer,
             storage_schema,
         })
     }
@@ -103,25 +154,28 @@ impl ArrowParquetWriter {
             .map_err(|error| error.to_string())?;
             &projected
         };
-        let writer = self.writer.as_mut().ok_or("writer closed")?;
-        writer
+        self.writer
             .write(batch)
             .await
             .map_err(|e| format!("parquet write: {e}"))
     }
 
-    pub async fn close(mut self) -> Result<(Bytes, ParquetFileMeta), String> {
-        let mut writer = self.writer.take().ok_or("writer already closed")?;
-        let metadata = writer
+    pub fn estimated_size(&self) -> u64 {
+        self.writer
+            .bytes_written()
+            .saturating_add(self.writer.in_progress_size()) as u64
+    }
+
+    pub async fn close(mut self) -> Result<(W, ParquetFileMeta), String> {
+        let metadata = self
+            .writer
             .finish()
             .await
             .map_err(|e| format!("parquet finish: {e}"))?;
-        let buf = writer.into_inner();
-        let file_size = buf.len() as u64;
-        let bytes = Bytes::from(buf);
+        let file_size = self.writer.bytes_written() as u64;
         let num_rows = metadata.file_metadata().num_rows() as u64;
         Ok((
-            bytes,
+            self.writer.into_inner(),
             ParquetFileMeta {
                 num_rows,
                 file_size,
