@@ -220,6 +220,32 @@ pub(in crate::resolver) fn unresolved_column_error(
             Some(parts)
         })
         .collect::<Vec<_>>();
+    // The candidates of the schema reach the analyzer through `AttributeSet.toSeq`, which sorts
+    // them by name.
+    let mut candidates = candidates;
+    candidates.sort_by_cached_key(|parts| utf16_key(parts.last().map(|x| x.as_str())));
+    // Inside a `HAVING` clause the aggregate expressions are names of their own, and they come
+    // BEFORE the columns rather than through that sorted set, so one of them wins a tie in
+    // distance. The grouping expressions are the columns themselves, which are already there.
+    let grouping = state
+        .get_grouping_for_having()
+        .iter()
+        .flat_map(|x| x.name.iter())
+        .collect::<Vec<_>>();
+    let candidates = state
+        .get_projections_for_having()
+        .iter()
+        .filter_map(|x| match x.name.as_slice() {
+            [name] if !grouping.iter().any(|x| *x == name) => Some(vec![name.clone()]),
+            _ => None,
+        })
+        .chain(candidates)
+        .fold(Vec::new(), |mut out, parts| {
+            if !out.contains(&parts) {
+                out.push(parts);
+            }
+            out
+        });
     // The analyzer measures the distance against `a.sql`, the name rendered with `quoteIfNeeded`.
     let base = name
         .parts()
@@ -227,7 +253,7 @@ pub(in crate::resolver) fn unresolved_column_error(
         .map(|x| quote_if_needed(x.as_ref()))
         .collect::<Vec<_>>()
         .join(".");
-    let proposal = order_candidates_by_similarity(name, &base, candidates, true)
+    let proposal = order_candidates_by_similarity(name, &base, candidates, false)
         .into_iter()
         .take(5)
         .collect::<Vec<_>>();
@@ -405,67 +431,100 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<Option<(String, expr::Expr)>> {
-        let candidates = Self::generate_qualified_nested_field_candidates(name.parts());
-        let candidates = schema
-            .iter()
-            .flat_map(|(qualifier, field)| {
-                let Ok(info) = state.get_field_info(field.name()) else {
-                    return vec![];
-                };
-                if info.is_hidden() {
-                    return vec![];
-                }
-                candidates
-                    .iter()
-                    .filter_map(|(q, name, inner)| {
-                        if self.match_attribute_qualifier(q.as_ref(), qualifier)
-                            && self.match_field(info, name.as_ref(), plan_id)
-                        {
-                            let expr = match self.resolve_potentially_nested_field(
-                                col((qualifier, field)),
-                                field.data_type(),
-                                inner,
-                            ) {
-                                Ok(Some(expr)) => expr,
-                                Ok(None) => return None,
-                                Err(e) => return Some(Err(e)),
-                            };
-                            // A plan that the user did not name carries DataFusion's placeholder
-                            // qualifier, while the matching attribute in Spark has no qualifier
-                            // at all, so it must not reach the reference list.
-                            let mut reference = qualifier_parts(qualifier);
-                            reference.push(name.as_ref().to_string());
-                            let name = inner.last().unwrap_or(name).as_ref().to_string();
-                            Some(Ok((reference, name, expr)))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
-            })
-            .collect::<Vec<_>>();
-        // A field that cannot be extracted only fails the interpretation that reaches it, since
-        // another one may still resolve the name. The error is reported only when no
-        // interpretation succeeded, which is the order in which Spark resolves the name.
-        let (mut candidates, errors): (Vec<_>, Vec<_>) =
-            candidates.into_iter().partition(Result::is_ok);
-        if candidates.is_empty() {
-            if let Some(error) = errors.into_iter().next() {
-                error?;
-            }
-            return Ok(None);
-        }
-        if candidates.len() > 1 {
-            let references = candidates
+        // The analyzer tries the interpretations of the name from the longest qualifier down and
+        // stops at the first one whose attribute matches anything, so a qualifier wins over a
+        // struct that is named like it, and the struct field is never considered. Once the
+        // attribute has matched, a part that names no field of what it reached is a missing field
+        // rather than a name that did not resolve.
+        for (qualifier_name, field_name, inner) in
+            Self::generate_qualified_nested_field_candidates(name.parts())
                 .into_iter()
-                .filter_map(|x| x.ok().map(|(reference, _, _)| reference))
-                .collect();
-            return Err(ambiguous_attribute_error(name, plan_id, references));
+                .rev()
+        {
+            let matched = schema
+                .iter()
+                .filter(|(qualifier, field)| {
+                    let Ok(info) = state.get_field_info(field.name()) else {
+                        return false;
+                    };
+                    !info.is_hidden()
+                        && self.match_attribute_qualifier(qualifier_name.as_ref(), *qualifier)
+                        && self.match_field(info, field_name.as_ref(), plan_id)
+                })
+                .collect::<Vec<_>>();
+            let [(qualifier, field)] = matched.as_slice() else {
+                if matched.is_empty() {
+                    continue;
+                }
+                let references = matched
+                    .iter()
+                    .map(|(qualifier, _)| {
+                        // A plan that the user did not name carries DataFusion's placeholder
+                        // qualifier, while the matching attribute in Spark has no qualifier at
+                        // all, so it must not reach the reference list.
+                        let mut reference = qualifier_parts(*qualifier);
+                        reference.push(field_name.as_ref().to_string());
+                        reference
+                    })
+                    .collect();
+                return Err(ambiguous_attribute_error(name, plan_id, references));
+            };
+            let column = col((*qualifier, *field));
+            let Some(expr) =
+                self.resolve_potentially_nested_field(column, field.data_type(), inner)?
+            else {
+                return Err(self.missing_struct_field_error(field.data_type(), inner));
+            };
+            let display = inner.last().unwrap_or(field_name).as_ref().to_string();
+            return Ok(Some((display, expr)));
         }
-        candidates
-            .pop()
-            .map(|x| x.map(|(_, name, expr)| (name, expr)))
-            .transpose()
+        Ok(None)
+    }
+
+    /// The error for a part of the name that does not name a field of the struct it reached, as
+    /// Spark reports it once the attribute itself has matched.
+    fn missing_struct_field_error<T: AsRef<str>>(
+        &self,
+        data_type: &DataType,
+        inner: &[T],
+    ) -> PlanError {
+        let mut data_type = data_type.clone();
+        for part in inner {
+            let fields = match &data_type {
+                DataType::Struct(fields) => fields.clone(),
+                DataType::List(field)
+                | DataType::LargeList(field)
+                | DataType::FixedSizeList(field, _) => match field.data_type() {
+                    DataType::Struct(fields) => fields.clone(),
+                    _ => return Self::field_not_found_error(part.as_ref(), &[]),
+                },
+                _ => return Self::field_not_found_error(part.as_ref(), &[]),
+            };
+            match self.resolve_struct_field(&fields, part.as_ref()) {
+                Ok(Some(field)) => data_type = field.data_type().clone(),
+                _ => {
+                    let names = fields
+                        .iter()
+                        .map(|x| x.name().to_string())
+                        .collect::<Vec<_>>();
+                    return Self::field_not_found_error(part.as_ref(), &names);
+                }
+            }
+        }
+        PlanError::internal("the nested field was resolved after all")
+    }
+
+    fn field_not_found_error(name: &str, fields: &[String]) -> PlanError {
+        let fields = fields
+            .iter()
+            .map(|x| quote_identifier_part(x))
+            .collect::<Vec<_>>()
+            .join(", ");
+        PlanError::AnalysisError(format!(
+            "[FIELD_NOT_FOUND] No such struct field {} in {}.",
+            quote_identifier_part(name),
+            fields
+        ))
     }
 
     fn resolve_aggregate_field(

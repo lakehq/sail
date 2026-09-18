@@ -119,7 +119,6 @@ Feature: identifier resolution beyond ASCII
     # A field that matches no name is not an error on its own, since the name may still resolve
     # through another candidate, so Sail reports the attribute that failed to resolve rather than
     # the field lookup: it names the column instead of the field, and reports the other condition.
-    @sail-bug
     Scenario: a struct field is not matched when the analysis is case sensitive
       Given config spark.sql.caseSensitive = true
       When query
@@ -255,7 +254,6 @@ Feature: identifier resolution beyond ASCII
     # The alias belongs to the output of the aggregate, which is the input of the filter that
     # carries the `HAVING`, so Spark offers it. Sail builds the candidates from the input of the
     # aggregate instead and loses it.
-    @sail-bug
     Scenario: the suggestion for an unresolved alias offers the alias itself
       When query
         """
@@ -423,6 +421,24 @@ Feature: identifier resolution beyond ASCII
         """
       Then query error Did you mean one of the following\? \[`zz`, `😀`\]\.
 
+    Scenario: two names at the same distance are ordered the way a Java string compares
+      # Both names are two units away once a supplementary character counts as two, so what is
+      # left to order them is the comparison itself, which is by UTF-16 code unit.
+      When query
+        """
+        SELECT a FROM (SELECT 1 AS `ﬀx`, 2 AS `😀`)
+        """
+      Then query error Did you mean one of the following\? \[`😀`, `ﬀx`\]\.
+
+    Scenario: ambiguous references are ordered the way a Java string compares
+      # The references of an ambiguous column are ordered by a path of their own, separate from the
+      # one that orders the suggestions.
+      When query
+        """
+        SELECT id FROM (SELECT 1 AS id) AS `ﬀ` CROSS JOIN (SELECT 2 AS id) AS `😀`
+        """
+      Then query error could be: \[`😀`\.`id`, `ﬀ`\.`id`\]\.
+
     Scenario: names are ordered the way a Java string compares
       When query
         """
@@ -444,7 +460,6 @@ Feature: identifier resolution beyond ASCII
         """
       Then query error Did you mean one of the following\? \[`a`, `b`\]\.
 
-    @sail-bug
     Scenario: the key of a USING join keeps its qualifier in the suggestion
       # The key is materialised as a column of its own, which loses the qualifier it had. That
       # also shortens it, so it moves to the front of the order by distance.
@@ -484,7 +499,6 @@ Feature: identifier resolution beyond ASCII
 
   Rule: A qualified interpretation of a name wins over a nested one
 
-    @sail-bug
     Scenario: a qualifier is preferred over a struct of the same name
       # The analyzer tries the interpretations from the longest qualifier down and stops at the
       # first one that matches anything, so the struct field is never considered.
@@ -498,7 +512,6 @@ Feature: identifier resolution beyond ASCII
 
   Rule: A nested field that matches nothing is reported as a missing field
 
-    @sail-bug
     Scenario: a struct field that matches nothing is not an unresolved column
       # Once one attribute has matched, the remaining parts walk into it, and a part that names
       # no field is a missing field rather than a name that did not resolve.

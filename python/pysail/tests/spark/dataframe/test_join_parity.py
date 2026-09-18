@@ -455,29 +455,23 @@ RESULTS = [
         "struct<k:int,lv:string>",
         ["{'k': 1, 'lv': 'x'}", "{'k': 2, 'lv': 'y'}"],
     ),
-    pytest.param(*("key/qualified key on the left", "false", ["k"], "struct<k:int>", ["{'k': 1}"]), marks=_SAIL_BUG),
-    pytest.param(*("key/qualified key on the left", "true", ["k"], "struct<k:int>", ["{'k': 1}"]), marks=_SAIL_BUG),
+    ("key/qualified key on the left", "false", ["k"], "struct<k:int>", ["{'k': 1}"]),
+    ("key/qualified key on the left", "true", ["k"], "struct<k:int>", ["{'k': 1}"]),
     pytest.param(*("key/qualified key on the right", "false", ["k"], "struct<k:int>", ["{'k': 1}"]), marks=_SAIL_BUG),
     pytest.param(*("key/qualified key on the right", "true", ["k"], "struct<k:int>", ["{'k': 1}"]), marks=_SAIL_BUG),
-    pytest.param(
-        *(
-            "key/star then qualified key",
-            "false",
-            ["k", "lv", "rv", "k"],
-            "struct<k:int,lv:string,rv:string,k:int>",
-            ["{'k#1': 1, 'lv': 'x', 'rv': 'p', 'k#2': 1}"],
-        ),
-        marks=_SAIL_BUG,
+    (
+        "key/star then qualified key",
+        "false",
+        ["k", "lv", "rv", "k"],
+        "struct<k:int,lv:string,rv:string,k:int>",
+        ["{'k#1': 1, 'lv': 'x', 'rv': 'p', 'k#2': 1}"],
     ),
-    pytest.param(
-        *(
-            "key/star then qualified key",
-            "true",
-            ["k", "lv", "rv", "k"],
-            "struct<k:int,lv:string,rv:string,k:int>",
-            ["{'k#1': 1, 'lv': 'x', 'rv': 'p', 'k#2': 1}"],
-        ),
-        marks=_SAIL_BUG,
+    (
+        "key/star then qualified key",
+        "true",
+        ["k", "lv", "rv", "k"],
+        "struct<k:int,lv:string,rv:string,k:int>",
+        ["{'k#1': 1, 'lv': 'x', 'rv': 'p', 'k#2': 1}"],
     ),
     (
         "key/key in a where clause",

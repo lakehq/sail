@@ -287,7 +287,12 @@ impl PlanResolver<'_> {
                     .map(|(_, (left, right))| {
                         let column = if uses_right { right } else { left };
                         let name = Self::joined_column_name(&column, state)?;
-                        Ok(Expr::Column(column).alias(state.register_field_name(name)))
+                        // The key is one column of the output, and it keeps the qualifier of
+                        // the side it was taken from, which is what a reference to it and the
+                        // suggestions of an unresolved name report.
+                        let qualifier = column.relation.clone();
+                        Ok(Expr::Column(column)
+                            .alias_qualified(qualifier, state.register_field_name(name)))
                     })
                     .collect::<PlanResult<Vec<_>>>()?;
                 builder.project(projections.into_iter().chain(hidden_columns))?
