@@ -92,6 +92,9 @@ impl fmt::Display for JobGraph {
             )?;
             writeln!(f, "distribution={}", stage.distribution)?;
             writeln!(f, "placement={}", stage.placement)?;
+            if stage.retry_policy == TaskRetryPolicy::Never {
+                writeln!(f, "retry={}", stage.retry_policy)?;
+            }
             writeln!(f, "{}", displayable.indent(true))?;
         }
         Ok(())
@@ -107,6 +110,23 @@ pub struct Stage {
     pub mode: OutputMode,
     pub distribution: OutputDistribution,
     pub placement: TaskPlacement,
+    pub retry_policy: TaskRetryPolicy,
+}
+
+/// Automatic task retry policy for a stage.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub enum TaskRetryPolicy {
+    Default,
+    Never,
+}
+
+impl fmt::Display for TaskRetryPolicy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Default => write!(f, "Default"),
+            Self::Never => write!(f, "Never"),
+        }
+    }
 }
 
 /// Specifies whether a task must run on the driver or on any available worker node.
@@ -176,7 +196,10 @@ impl fmt::Display for InputMode {
 
 #[derive(Debug, Clone, Copy)]
 pub enum OutputMode {
+    /// The consumer may be scheduled in the same retry region as the producer.
     Pipelined,
+    /// The consumer waits for the producer to succeed and runs in a separate retry region.
+    /// Physical materialization is selected by the shuffle backend.
     Blocking,
 }
 

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
 
@@ -48,6 +49,7 @@ pub struct IcebergManifestScanExec {
     table_url: String,
     snapshot: Snapshot,
     output_schema: SchemaRef,
+    selected_data_file_paths: Option<Vec<String>>,
     cache: Arc<PlanProperties>,
 }
 
@@ -64,8 +66,14 @@ impl IcebergManifestScanExec {
             table_url,
             snapshot,
             output_schema,
+            selected_data_file_paths: None,
             cache,
         }
+    }
+
+    pub fn with_selected_data_file_paths(mut self, paths: Vec<String>) -> Self {
+        self.selected_data_file_paths = Some(paths);
+        self
     }
 
     pub fn table_url(&self) -> &str {
@@ -74,6 +82,10 @@ impl IcebergManifestScanExec {
 
     pub fn snapshot(&self) -> &Snapshot {
         &self.snapshot
+    }
+
+    pub fn selected_data_file_paths(&self) -> Option<&[String]> {
+        self.selected_data_file_paths.as_deref()
     }
 }
 
@@ -152,6 +164,7 @@ impl ExecutionPlan for IcebergManifestScanExec {
     ) -> Result<SendableRecordBatchStream> {
         let table_url = self.table_url.clone();
         let snapshot = self.snapshot.clone();
+        let selected_data_file_paths = self.selected_data_file_paths.clone();
         let schema = self.output_schema.clone();
 
         // Phase 1: Load the manifest list (a single lightweight metadata file).
@@ -180,16 +193,24 @@ impl ExecutionPlan for IcebergManifestScanExec {
                 .cloned()
                 .collect();
 
-            Ok::<_, DataFusionError>((store_ctx, data_manifests, schema))
+            let selected_data_file_paths =
+                selected_data_file_paths.map(|paths| paths.into_iter().collect::<HashSet<_>>());
+            Ok::<_, DataFusionError>((store_ctx, data_manifests, schema, selected_data_file_paths))
         };
 
         // Phase 2: Stream one RecordBatch per manifest file to cap peak memory usage
         // and improve time-to-first-row for large tables.
         let stream = stream::once(init)
-            .map_ok(|(store_ctx, manifests, schema)| {
+            .map_ok(|(store_ctx, manifests, schema, selected_data_file_paths)| {
                 stream::try_unfold(
-                    (store_ctx, manifests, 0usize, schema),
-                    |(store_ctx, manifests, mut idx, schema)| async move {
+                    (
+                        store_ctx,
+                        manifests,
+                        0usize,
+                        schema,
+                        selected_data_file_paths,
+                    ),
+                    |(store_ctx, manifests, mut idx, schema, selected_data_file_paths)| async move {
                         while idx < manifests.len() {
                             let manifest_path = manifests[idx].manifest_path.clone();
                             let partition_spec_id = manifests[idx].partition_spec_id;
@@ -215,6 +236,12 @@ impl ExecutionPlan for IcebergManifestScanExec {
                                 }
 
                                 let df = &entry.data_file;
+                                if selected_data_file_paths
+                                    .as_ref()
+                                    .is_some_and(|paths| !paths.contains(df.file_path()))
+                                {
+                                    continue;
+                                }
                                 file_paths.push(df.file_path().to_string());
                                 file_formats.push(df.file_format().as_action_str().to_string());
                                 record_counts.push(df.record_count());
@@ -238,7 +265,10 @@ impl ExecutionPlan for IcebergManifestScanExec {
                                     Arc::new(StringArray::from(content_types)),
                                 ],
                             )?;
-                            return Ok(Some((batch, (store_ctx, manifests, idx, schema))));
+                            return Ok(Some((
+                                batch,
+                                (store_ctx, manifests, idx, schema, selected_data_file_paths),
+                            )));
                         }
                         Ok(None)
                     },

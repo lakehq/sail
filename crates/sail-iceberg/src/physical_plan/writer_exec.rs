@@ -258,6 +258,10 @@ impl ExecutionPlan for IcebergWriterExec {
         }
     }
 
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![self.options.fixed_write_partitions.is_none()]
+    }
+
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
     }
@@ -732,6 +736,15 @@ mod tests {
             input_distributions(&iceberg_writer(false, vec![])).as_slice(),
             [Distribution::UnspecifiedDistribution]
         ));
+    }
+
+    #[test]
+    fn fixed_write_partitions_disable_optimizer_parallelism() {
+        let mut writer = iceberg_writer(false, vec![]);
+        assert_eq!(writer.benefits_from_input_partitioning(), vec![true]);
+
+        writer.options.fixed_write_partitions = Some(1);
+        assert_eq!(writer.benefits_from_input_partitioning(), vec![false]);
     }
 
     #[test]

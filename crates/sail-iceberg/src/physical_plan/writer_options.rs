@@ -51,6 +51,9 @@ pub struct IcebergWriterExecOptions {
     pub shred_variants_explicit: bool,
     pub variant_inference_buffer_size: usize,
     pub variant_inference_buffer_size_explicit: bool,
+    pub target_file_size: u64,
+    #[serde(default)]
+    pub fixed_write_partitions: Option<usize>,
 }
 
 impl Default for IcebergWriterExecOptions {
@@ -66,6 +69,8 @@ impl Default for IcebergWriterExecOptions {
             shred_variants_explicit: false,
             variant_inference_buffer_size: 100,
             variant_inference_buffer_size_explicit: false,
+            target_file_size: 134_217_728,
+            fixed_write_partitions: None,
         }
     }
 }
@@ -83,6 +88,8 @@ impl From<IcebergWriteOptions> for IcebergWriterExecOptions {
             shred_variants_explicit: false,
             variant_inference_buffer_size: options.variant_inference_buffer_size,
             variant_inference_buffer_size_explicit: false,
+            target_file_size: 134_217_728,
+            fixed_write_partitions: None,
         }
     }
 }

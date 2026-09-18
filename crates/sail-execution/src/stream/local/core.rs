@@ -31,10 +31,15 @@ impl LocalStreamManager {
         &mut self,
         key: TaskStreamKey,
         replicas: usize,
+        buffered: bool,
         _schema: SchemaRef,
     ) -> ExecutionResult<Box<dyn TaskStreamChannelSink>> {
         let create = |senders: Vec<_>| -> ExecutionResult<_> {
-            let mut stream = Self::create_stream_with_senders(replicas, senders, &self.options);
+            let mut stream = if buffered && senders.is_empty() {
+                MemoryStream::new_buffered(replicas)
+            } else {
+                Self::create_stream_with_senders(replicas, senders, &self.options)
+            };
             let sink = stream.publish()?;
             Ok((stream, sink))
         };
