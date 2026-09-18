@@ -1,0 +1,37 @@
+# serializer version: 1
+---
+name: "test_selective_grouping_keys_reach_both_fact_inputs_in_the_physical_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#10@0 as k, #11@1 as total]
+      ProjectionExec: expr=[#0@0 as #10, #9@1 as #11]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#8@0, #0@0)], projection=[#0@2, #9@1]
+          CoalescePartitionsExec
+            ProjectionExec: expr=[#2@0 as #8, sum(a.#4)@1 as #9]
+              FilterExec: sum(a.#4)@1 > 5
+                AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(a.#4)]
+                  RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=4
+                    AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(a.#4)]
+                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#2@0, #5@0), (#3@1, #6@1)], projection=[#2@0, #4@2]
+                        ProjectionExec: expr=[k@0 as #2, ticket@1 as #3, amount@2 as #4]
+                          HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(__early_join_key_0@0, k@0)]
+                            CoalescePartitionsExec
+                              ProjectionExec: expr=[k@0 as __early_join_key_0]
+                                FilterExec: color@1 = red, projection=[k@0]
+                                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                    DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k, color], file_type=parquet, predicate=color@1 = red AND color@1 = red, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1 AND color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (red)]
+                            DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet]]}, projection=[k, ticket, amount], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                          ProjectionExec: expr=[k@0 as #5, ticket@1 as #6]
+                            HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(__early_join_key_0@0, k@0)]
+                              CoalescePartitionsExec
+                                ProjectionExec: expr=[k@0 as __early_join_key_0]
+                                  FilterExec: color@1 = red, projection=[k@0]
+                                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                                      DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k, color], file_type=parquet, predicate=color@1 = red AND color@1 = red, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1 AND color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (red)]
+                              DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet]]}, projection=[k, ticket], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+          ProjectionExec: expr=[k@0 as #0]
+            FilterExec: color@1 = red, projection=[k@0]
+              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k, color], file_type=parquet, predicate=color@1 = red AND color@1 = red AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1 AND color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (red)]

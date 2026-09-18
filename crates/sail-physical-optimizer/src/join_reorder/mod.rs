@@ -7,6 +7,7 @@ use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::config::ConfigOptions;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::{ExecutionPlan, displayable, replace_children_if_necessary};
 use log::{trace, warn};
@@ -23,6 +24,7 @@ mod builder;
 mod cardinality_estimator;
 mod cost_model;
 mod dp_plan;
+mod early_filter;
 mod enumerator;
 mod graph;
 mod join_set;
@@ -133,13 +135,19 @@ impl PhysicalOptimizerRule for JoinReorder {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _config: &ConfigOptions,
+        config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         trace!("JoinReorder: Entering optimization rule.");
         trace!(
             "JoinReorder: Input plan:\n{}",
             displayable(plan.as_ref()).indent(true)
         );
+
+        // Propagate selective dimension keys before discovering reorderable regions. This
+        // can cross projection and aggregation boundaries that deliberately remain opaque
+        // to join enumeration. Push filters down before costing the resulting regions.
+        let plan = early_filter::propagate(plan, config)?;
+        let plan = FilterPushdown::new().optimize(plan, config)?;
 
         // Search and optimize reorderable regions. We traverse bottom-up so nested reorderable
         // regions inside "leaf" plans (as seen by a higher-level region) are also visited.
