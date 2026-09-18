@@ -35,6 +35,7 @@ pub const COMMIT_VERSION_COLUMN: &str = "_commit_version";
 pub const COMMIT_TIMESTAMP_COLUMN: &str = "_commit_timestamp";
 
 pub mod actions;
+pub(crate) mod deletion_vector;
 pub mod expressions;
 pub mod pruning;
 pub mod scan;
