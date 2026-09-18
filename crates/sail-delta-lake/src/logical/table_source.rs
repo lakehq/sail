@@ -45,6 +45,7 @@ pub struct DeltaTableSource {
 #[derive(Debug, Clone)]
 pub(crate) struct DeltaMetadataAggregateSource {
     pub table: DeltaTableSource,
+    pub filters: Vec<Expr>,
     pub group_columns: Vec<String>,
     pub schema: SchemaRef,
 }

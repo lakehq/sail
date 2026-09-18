@@ -1,21 +1,30 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use datafusion::arrow::array::{Array, UInt64Array};
+use datafusion::arrow::compute::take_record_batch;
 use datafusion::arrow::datatypes::DataType;
+use datafusion::catalog::Session;
 use datafusion::common::stats::Precision;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{Column, DFSchema, DataFusionError, Result, ScalarValue};
 use datafusion::functions::core::getfield::GetFieldFunc;
 use datafusion::functions_aggregate::expr_fn::sum;
+use datafusion::logical_expr::expr_rewriter::unnormalize_cols;
 use datafusion::logical_expr::logical_plan::{
-    Aggregate, EmptyRelation, FetchType, Limit, Projection, SkipType, TableScan, Union,
+    Aggregate, EmptyRelation, Extension, FetchType, Limit, Projection, SkipType, TableScan, Union,
 };
+use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{
-    Expr, LogicalPlan, LogicalPlanBuilder, TableScanBuilder, TableSource, when,
+    Expr, LogicalPlan, LogicalPlanBuilder, TableProviderFilterPushDown, TableScanBuilder,
+    TableSource, when,
 };
 use log::debug;
 use sail_common_datafusion::logical_rewriter::LogicalRewriter;
+use sail_logical_plan::range::RangeNode;
 
+use crate::datasource::get_pushdown_filters;
+use crate::datasource::pruning::partition_filter_mask;
 use crate::logical::table_source::{
     DeltaFileSelection, DeltaMetadataAggregateSource, DeltaTableSource,
 };
@@ -27,10 +36,17 @@ const LARGE_METADATA_SAVINGS_ROWS: u64 = 8192;
 const COUNT_WEIGHT_COLUMN: &str = "__sail_delta_count_weight";
 const COUNT_SUM_COLUMN: &str = "__sail_delta_count_sum";
 
-#[derive(Debug, Default)]
-pub struct DeltaMetadataAggregateRewriter;
+pub struct DeltaMetadataAggregateRewriter<'a> {
+    session: &'a dyn Session,
+}
 
-impl LogicalRewriter for DeltaMetadataAggregateRewriter {
+impl<'a> DeltaMetadataAggregateRewriter<'a> {
+    pub fn new(session: &'a dyn Session) -> Self {
+        Self { session }
+    }
+}
+
+impl LogicalRewriter for DeltaMetadataAggregateRewriter<'_> {
     fn name(&self) -> &str {
         "delta_metadata_aggregate"
     }
@@ -39,12 +55,12 @@ impl LogicalRewriter for DeltaMetadataAggregateRewriter {
         plan.transform_up_with_subqueries(|plan| {
             let rewritten = match &plan {
                 LogicalPlan::Aggregate(aggregate) => {
-                    match rewrite_exact_ungrouped_aggregate(aggregate)? {
+                    match rewrite_exact_ungrouped_aggregate(aggregate, self.session)? {
                         Some(rewritten) => Some(rewritten),
-                        None => rewrite_metadata_grouping(aggregate)?,
+                        None => rewrite_metadata_grouping(aggregate, self.session)?,
                     }
                 }
-                LogicalPlan::Limit(limit) => rewrite_empty_projection_limit(limit)?,
+                LogicalPlan::Limit(limit) => rewrite_empty_projection_limit(limit, self.session)?,
                 _ => None,
             };
             match rewritten {
@@ -55,40 +71,63 @@ impl LogicalRewriter for DeltaMetadataAggregateRewriter {
     }
 }
 
-fn rewrite_empty_projection_limit(limit: &Limit) -> Result<Option<LogicalPlan>> {
-    if !limit.input.schema().fields().is_empty()
-        || !matches!(limit.get_skip_type()?, SkipType::Literal(0))
-        || !matches!(limit.get_fetch_type()?, FetchType::Literal(Some(1)))
-    {
+fn rewrite_empty_projection_limit(
+    limit: &Limit,
+    session: &dyn Session,
+) -> Result<Option<LogicalPlan>> {
+    if !limit.input.schema().fields().is_empty() {
         return Ok(None);
     }
+    let (SkipType::Literal(skip), FetchType::Literal(Some(fetch))) =
+        (limit.get_skip_type()?, limit.get_fetch_type()?)
+    else {
+        return Ok(None);
+    };
+    let Some(required) = skip.checked_add(fetch) else {
+        return Ok(None);
+    };
     let Some(input) = DeltaAggregateInput::try_new(limit.input.as_ref()) else {
         return Ok(None);
     };
     let scan = input.scan();
-    if !scan.filters.is_empty() {
-        return Ok(None);
-    }
     let Some(source) = scan.source.downcast_ref::<DeltaTableSource>() else {
         return Ok(None);
     };
-    if !source.snapshot().load_config().require_files
-        || !matches!(source.file_selection(), DeltaFileSelection::Snapshot)
-    {
+    let Some(indices) = input.metadata_file_indices(source, session)? else {
+        return Ok(None);
+    };
+    let mut known_rows = 0usize;
+    let mut complete = true;
+    for index in indices {
+        match source.snapshot().adds()[index].num_logical_records() {
+            Some(rows) => known_rows = known_rows.saturating_add(rows),
+            None => complete = false,
+        }
+        if known_rows >= required {
+            break;
+        }
+    }
+    let known_rows = known_rows.min(scan.fetch.unwrap_or(usize::MAX));
+    if !complete && known_rows < required {
         return Ok(None);
     }
-    let Ok(snapshot_stats) = source.snapshot().pruning_stats() else {
+    let output_rows = known_rows.saturating_sub(skip).min(fetch);
+    if output_rows <= 1 {
+        return Ok(Some(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: output_rows == 1,
+            schema: Arc::clone(limit.input.schema()),
+        })));
+    }
+    let Ok(end) = i64::try_from(output_rows) else {
         return Ok(None);
     };
-    let Some(row_count) = snapshot_stats.exact_num_records() else {
-        return Ok(None);
-    };
-
-    // Empty projections carry only row existence. Exact snapshot counts already subtract DVs.
-    Ok(Some(LogicalPlan::EmptyRelation(EmptyRelation {
-        produce_one_row: row_count > 0 && scan.fetch != Some(0),
-        schema: Arc::clone(limit.input.schema()),
-    })))
+    // A range carries the cardinality without allocating a row per log record during planning.
+    let rows = LogicalPlan::Extension(Extension {
+        node: Arc::new(RangeNode::try_new("__sail_delta_row".into(), 0, end, 1, 1)?),
+    });
+    Ok(Some(LogicalPlan::Projection(
+        Projection::try_new_with_schema(vec![], Arc::new(rows), Arc::clone(limit.input.schema()))?,
+    )))
 }
 
 struct DeltaAggregateInput<'a> {
@@ -111,6 +150,64 @@ impl<'a> DeltaAggregateInput<'a> {
 
     fn scan(&self) -> &'a TableScan {
         self.scan
+    }
+
+    fn has_partition_filters(&self, source: &DeltaTableSource) -> bool {
+        if self
+            .scan
+            .filters
+            .iter()
+            .flat_map(Expr::column_refs)
+            .any(|column| {
+                source
+                    .schema()
+                    .field_with_name(&column.name)
+                    .ok()
+                    .map(|field| field.data_type().clone())
+                    != source
+                        .snapshot()
+                        .schema()
+                        .field_with_name(&column.name)
+                        .ok()
+                        .map(|field| field.data_type().clone())
+            })
+        {
+            return false;
+        }
+        get_pushdown_filters(
+            &self.scan.filters.iter().collect::<Vec<_>>(),
+            source.snapshot().metadata().partition_columns(),
+        )
+        .iter()
+        .all(|pushdown| *pushdown == TableProviderFilterPushDown::Exact)
+    }
+
+    fn metadata_file_indices(
+        &self,
+        source: &DeltaTableSource,
+        session: &dyn Session,
+    ) -> Result<Option<Vec<usize>>> {
+        let snapshot = source.snapshot();
+        if !snapshot.load_config().require_files || !self.has_partition_filters(source) {
+            return Ok(None);
+        }
+        let indices = match source.file_selection() {
+            DeltaFileSelection::Snapshot => (0..snapshot.adds().len()).collect::<Vec<_>>(),
+            DeltaFileSelection::Selected(indices) => indices.to_vec(),
+        };
+        let Some(predicate) = conjunction(unnormalize_cols(self.scan.filters.clone())) else {
+            return Ok(Some(indices));
+        };
+        if indices.is_empty() {
+            return Ok(Some(indices));
+        }
+        let values = partition_filter_mask(session, snapshot, snapshot.adds(), predicate)?;
+        Ok(Some(
+            indices
+                .into_iter()
+                .filter(|&index| values.is_valid(index) && values.value(index))
+                .collect(),
+        ))
     }
 
     fn source_column(&self, aggregate_column: &Column) -> Option<String> {
@@ -272,7 +369,10 @@ fn resolve_expression(
     }
 }
 
-fn rewrite_exact_ungrouped_aggregate(aggregate: &Aggregate) -> Result<Option<LogicalPlan>> {
+fn rewrite_exact_ungrouped_aggregate(
+    aggregate: &Aggregate,
+    session: &dyn Session,
+) -> Result<Option<LogicalPlan>> {
     if !aggregate.group_expr.is_empty() || aggregate.aggr_expr.is_empty() {
         return Ok(None);
     }
@@ -280,20 +380,25 @@ fn rewrite_exact_ungrouped_aggregate(aggregate: &Aggregate) -> Result<Option<Log
         return Ok(None);
     };
     let scan = input.scan();
-    if !scan.filters.is_empty() || scan.fetch.is_some() {
+    if scan.fetch.is_some() {
         return Ok(None);
     }
     let Some(source) = scan.source.downcast_ref::<DeltaTableSource>() else {
         return Ok(None);
     };
-    if !source.snapshot().load_config().require_files
-        || !matches!(source.file_selection(), DeltaFileSelection::Snapshot)
-    {
-        return Ok(None);
-    }
-    let Ok(snapshot_stats) = source.snapshot().pruning_stats() else {
+    let Some(indices) = input.metadata_file_indices(source, session)? else {
         return Ok(None);
     };
+    let Ok(files) = source.snapshot().files_batch() else {
+        return Ok(None);
+    };
+    let selected = if indices.len() == files.num_rows() {
+        files.clone()
+    } else {
+        let indices = UInt64Array::from_iter_values(indices.into_iter().map(|index| index as u64));
+        take_record_batch(files, &indices)?
+    };
+    let snapshot_stats = SnapshotPruningStats::try_new(&selected, source.snapshot())?;
     let Some(row_count) = snapshot_stats.exact_num_records() else {
         return Ok(None);
     };
@@ -738,7 +843,10 @@ fn constant_scalar(expression: &Expr) -> Option<ScalarValue> {
     }
 }
 
-fn rewrite_metadata_grouping(aggregate: &Aggregate) -> Result<Option<LogicalPlan>> {
+fn rewrite_metadata_grouping(
+    aggregate: &Aggregate,
+    session: &dyn Session,
+) -> Result<Option<LogicalPlan>> {
     let distinct = !aggregate.group_expr.is_empty() && aggregate.aggr_expr.is_empty();
     let count = aggregate.aggr_expr.len() == 1 && is_row_count(&aggregate.aggr_expr[0]);
     if !distinct && !count {
@@ -748,13 +856,13 @@ fn rewrite_metadata_grouping(aggregate: &Aggregate) -> Result<Option<LogicalPlan
         return Ok(None);
     };
     let scan = input.scan();
-    if !scan.filters.is_empty() || scan.fetch.is_some() {
+    if scan.fetch.is_some() {
         return Ok(None);
     }
     let Some(source) = scan.source.downcast_ref::<DeltaTableSource>() else {
         return Ok(None);
     };
-    if !matches!(source.file_selection(), DeltaFileSelection::Snapshot) {
+    if !input.has_partition_filters(source) {
         return Ok(None);
     }
 
@@ -798,10 +906,23 @@ fn rewrite_metadata_grouping(aggregate: &Aggregate) -> Result<Option<LogicalPlan
     }
 
     let weighted_input = if source.snapshot().load_config().require_files {
-        let Some(metadata) = source
-            .snapshot()
-            .grouped_count_metadata(&group_columns, MAX_METADATA_GROUPS)
-        else {
+        let Some(indices) = input.metadata_file_indices(source, session)? else {
+            return Ok(None);
+        };
+        let metadata = if indices.len() == source.snapshot().adds().len() {
+            source
+                .snapshot()
+                .grouped_count_metadata(&group_columns, MAX_METADATA_GROUPS)
+        } else {
+            let adds = indices
+                .iter()
+                .map(|&index| source.snapshot().adds()[index].clone())
+                .collect::<Vec<_>>();
+            source
+                .snapshot()
+                .summarize_metadata_files(&adds, &group_columns, MAX_METADATA_GROUPS)
+        };
+        let Some(metadata) = metadata else {
             return Ok(None);
         };
         if !worth_rewriting(&metadata) {
@@ -812,7 +933,13 @@ fn rewrite_metadata_grouping(aggregate: &Aggregate) -> Result<Option<LogicalPlan
             None
         } else {
             let selected_source = source
-                .try_select_files(metadata.residual_file_indices)
+                .try_select_files(
+                    metadata
+                        .residual_file_indices
+                        .into_iter()
+                        .map(|index| indices[index])
+                        .collect(),
+                )
                 .map_err(|error| DataFusionError::External(Box::new(error)))?;
             let residual_input = input.replace_source(Arc::new(selected_source))?;
             Some(LogicalPlan::Projection(Projection::try_new(
@@ -835,6 +962,7 @@ fn rewrite_metadata_grouping(aggregate: &Aggregate) -> Result<Option<LogicalPlan
     } else {
         let metadata_source = DeltaMetadataAggregateSource {
             table: source.clone(),
+            filters: unnormalize_cols(scan.filters.clone()),
             group_columns,
             schema: Arc::new(weighted_schema.as_arrow().clone()),
         };

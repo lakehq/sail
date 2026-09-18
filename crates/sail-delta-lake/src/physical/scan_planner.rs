@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use datafusion::arrow::array::Array;
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result, ToDFSchema};
@@ -15,6 +16,7 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use sail_data_source::options::ResolveOptions;
 
+use crate::datasource::pruning::{partition_filter_mask, select_files_for_limit};
 use crate::datasource::scan::{
     FileScanParams, TableStatsMode, build_file_scan_config, file_scan_projection_for_schema,
     map_statistics_to_schema,
@@ -144,6 +146,9 @@ pub(crate) async fn plan_delta_scan(
     let predicates: Vec<&Expr> = filters.iter().collect();
     let pushdown_filters =
         crate::datasource::get_pushdown_filters(&predicates, partition_cols.as_slice());
+    let exact_filters = pushdown_filters
+        .iter()
+        .all(|pushdown| *pushdown == datafusion::logical_expr::TableProviderFilterPushDown::Exact);
 
     let mut pruning_filters = Vec::new();
     let mut parquet_pushdown_filters = Vec::new();
@@ -179,12 +184,26 @@ pub(crate) async fn plan_delta_scan(
     let file_source = match file_source {
         DeltaFileSource::Eager(files) => {
             if let Some(predicate) = pruning_predicate.as_ref() {
-                let pruning_mask = crate::datasource::pruning::prune_adds_by_physical_predicate(
-                    files.as_ref(),
-                    Arc::clone(&logical_schema),
-                    Arc::clone(predicate),
-                    kmode,
-                )?;
+                let pruning_mask = if exact_filters {
+                    let values = partition_filter_mask(
+                        session,
+                        snapshot,
+                        &files,
+                        pruning_expr.clone().ok_or_else(|| {
+                            DataFusionError::Internal("missing Delta partition predicate".into())
+                        })?,
+                    )?;
+                    (0..values.len())
+                        .map(|index| values.is_valid(index) && values.value(index))
+                        .collect()
+                } else {
+                    crate::datasource::pruning::prune_adds_by_physical_predicate(
+                        files.as_ref(),
+                        Arc::clone(&logical_schema),
+                        Arc::clone(predicate),
+                        kmode,
+                    )?
+                };
                 let pruned_files = files
                     .iter()
                     .zip(pruning_mask.iter().copied())
@@ -197,6 +216,12 @@ pub(crate) async fn plan_delta_scan(
             }
         }
         DeltaFileSource::Replay => DeltaFileSource::Replay,
+    };
+    let file_source = match (file_source, limit) {
+        (DeltaFileSource::Eager(files), Some(limit)) if exact_filters => {
+            DeltaFileSource::Eager(Arc::new(select_files_for_limit(&files, limit)))
+        }
+        (source, _) => source,
     };
 
     // Build physical file schema (non-partition columns)
@@ -378,9 +403,15 @@ pub(crate) async fn plan_delta_metadata_aggregate(
     config.metadata_aggregate = Some(DeltaMetadataAggregateConfig {
         group_columns: source.group_columns.clone(),
     });
-    let find_files =
-        build_replayed_adds_input(session, snapshot, table.log_store(), &config, None, true)
-            .await?;
+    let find_files = build_replayed_adds_input(
+        session,
+        snapshot,
+        table.log_store(),
+        &config,
+        conjunction(source.filters.clone()),
+        true,
+    )
+    .await?;
     Ok(Arc::new(DeltaScanByAddsExec::new(
         find_files,
         table.log_store().config().location.clone(),

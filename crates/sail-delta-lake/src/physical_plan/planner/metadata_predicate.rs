@@ -45,12 +45,13 @@ pub(crate) fn build_metadata_filter(
     let stats_schema = needs_stats
         .then(|| build_metadata_stats_schema(snapshot, &predicate))
         .transpose()?;
-    let rewritten = rewrite_predicate_for_metadata(predicate, &partition_columns, &stats_paths);
     if !needs_stats {
         let df_schema = input.schema().to_dfschema()?;
-        let physical_expr = simplify_expr(session, &df_schema, rewritten)?;
+        // Partition values are exact; preserve comparisons between columns and boolean logic.
+        let physical_expr = simplify_expr(session, &df_schema, predicate)?;
         return Ok(Arc::new(FilterExec::try_new(physical_expr, input)?));
     }
+    let rewritten = rewrite_predicate_for_metadata(predicate, &partition_columns, &stats_paths);
 
     let input: Arc<dyn ExecutionPlan> = Arc::new(DeltaMetadataStatsExec::new(
         input,

@@ -73,6 +73,48 @@ Feature: Delta Lake read path (driver vs metadata-as-data)
         | false            |
         | true             |
 
+    Scenario: Partition filtered extrema and bounded row existence use metadata
+      Given statement template
+        """
+        CREATE TABLE delta_metadata_grouping (id INT, part STRING)
+        USING DELTA PARTITIONED BY (part) LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_metadata_grouping VALUES (1, 'a'), (2, 'a'), (3, 'b'), (NULL, 'a')
+        """
+      Given statement
+        """
+        CREATE TEMP VIEW metadata_grouping_alias AS SELECT id AS value, part AS p FROM delta_metadata_grouping
+        """
+      When query
+        """
+        SELECT COUNT(*) AS n, COUNT(value) AS nonnull, MIN(value) AS lo, MAX(value) AS hi
+        FROM metadata_grouping_alias WHERE p = 'a'
+        """
+      Then query result collected
+        | n | nonnull | lo | hi |
+        | 3 | 2       | 1  | 2  |
+      When query
+        """
+        SELECT 1 AS present FROM metadata_grouping_alias WHERE p = 'a' LIMIT 2 OFFSET 1
+        """
+      Then query result collected
+        | present |
+        | 1       |
+        | 1       |
+      When query
+        """
+        EXPLAIN SELECT COUNT(*) AS n, COUNT(value) AS nonnull, MIN(value) AS lo, MAX(value) AS hi
+        FROM metadata_grouping_alias WHERE p = 'a'
+        """
+      Then query plan matches snapshot
+      When query
+        """
+        EXPLAIN SELECT 1 AS present FROM metadata_grouping_alias WHERE p = 'a' LIMIT 2 OFFSET 1
+        """
+      Then query plan matches snapshot
+
   Rule: EXPLAIN shows driver path when table has no metadataAsDataRead option
     Background:
       Given variable location for temporary directory delta_read_driver
