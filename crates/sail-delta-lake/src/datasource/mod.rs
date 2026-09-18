@@ -245,6 +245,7 @@ impl DeltaScanConfigBuilder {
             commit_version_column_name,
             commit_timestamp_column_name,
             delta_log_replay_strategy: self.delta_log_replay_strategy,
+            metadata_aggregate: None,
         })
     }
 }
@@ -269,4 +270,11 @@ pub struct DeltaScanConfig {
     /// Strategy for log replay planning.
     #[serde(default)]
     pub delta_log_replay_strategy: DeltaLogReplayStrategy,
+    /// Emit file-level group values and row-count weights for metadata aggregation.
+    pub metadata_aggregate: Option<DeltaMetadataAggregateConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeltaMetadataAggregateConfig {
+    pub group_columns: Vec<String>,
 }
