@@ -636,6 +636,122 @@ def test_python_session_isolation(remote: str):
 
 
 # ============================================================================
+# Projection pruning tests
+# ============================================================================
+
+
+@pytest.fixture(params=["tuple", "arrow"])
+def python_projection_source(spark, request):
+    """Readers must actually receive and honor pruning, not just return correct rows."""
+    import pyarrow as pa
+    from pyspark.sql.datasource import DataSource, InputPartition
+
+    output_format = request.param
+    table_schema = pa.schema(
+        [("id", pa.int64()), ("unused", pa.string()), ("label", pa.string()), ("score", pa.int64())]
+    )
+
+    def create_source(required_columns, hook="supported"):
+        datasource_name = f"projection_test_{uuid4().hex}"
+
+        class FullSchemaReader:
+            # Duck typing deliberately avoids inheriting an optional hook.
+            def __init__(self):
+                self.schema = table_schema
+                self.prune_called = False
+
+            def partitions(self):
+                return [InputPartition(0)]
+
+            def read(self, partition):  # noqa: ARG002
+                assert self.prune_called == (hook != "absent")
+                if hook == "supported":
+                    assert set(self.schema.names) == set(required_columns)
+                else:
+                    assert self.schema == table_schema
+                # Multiple batches exercise row counts even with no output columns.
+                for start, end in [(0, 3), (3, 7)]:
+                    batch = pa.RecordBatch.from_pydict(
+                        {
+                            "id": list(range(start, end)),
+                            "unused": ["not requested"] * (end - start),
+                            "label": [f"row-{i}" for i in range(start, end)],
+                            "score": list(range(start, end)),
+                        },
+                        schema=table_schema,
+                    )
+                    if output_format == "arrow":
+                        # select([]) preserves the nonzero row count of a zero-column batch.
+                        yield batch.select(self.schema.names)
+                    else:
+                        for row in batch.to_pylist():
+                            yield tuple(row[name] for name in self.schema.names)
+
+        class PruningReader(FullSchemaReader):
+            def pruneColumns(self, required_schema):  # noqa: N802
+                self.prune_called = True
+                assert isinstance(required_schema, pa.Schema)
+                assert set(required_schema.names) == set(required_columns)
+                for field in required_schema:
+                    assert field == table_schema.field(field.name)
+                if hook == "not_implemented":
+                    raise NotImplementedError
+                self.schema = required_schema
+
+        class ProjectionDataSource(DataSource):
+            @classmethod
+            def name(cls):
+                return datasource_name
+
+            def schema(self):
+                return table_schema
+
+            def reader(self, schema):
+                # The initial reader contract stays full-schema; pruning is separate.
+                assert schema == table_schema
+                return FullSchemaReader() if hook == "absent" else PruningReader()
+
+        assert not hasattr(FullSchemaReader, "pruneColumns")
+        spark.dataSource.register(ProjectionDataSource)
+        return spark.read.format(datasource_name).load()
+
+    return create_source
+
+
+def test_python_projection_pruning_order(python_projection_source):
+    """Reordered output must map correctly after unused columns are removed."""
+    df = python_projection_source(["id", "label"])
+    projected = df.select("label", "id")
+
+    assert projected.columns == ["label", "id"]
+    assert sorted(tuple(row) for row in projected.collect()) == [(f"row-{i}", i) for i in range(7)]
+
+
+def test_python_projection_pruning_residual_filter(python_projection_source):
+    """A filter-only column must survive pruning until the residual is evaluated."""
+    df = python_projection_source(["id", "label", "score"])
+    rows = df.filter("score % 2 = 1").select("label", "id").collect()
+
+    assert sorted(tuple(row) for row in rows) == [("row-1", 1), ("row-3", 3), ("row-5", 5)]
+
+
+def test_python_projection_pruning_count_star(python_projection_source):
+    """COUNT(*) must retain every row from empty tuples and zero-column Arrow batches."""
+    df = python_projection_source([])
+
+    assert [tuple(row) for row in df.selectExpr("count(*) AS n").collect()] == [(7,)]
+
+
+@pytest.mark.parametrize("hook", ["absent", "not_implemented"])
+def test_python_projection_pruning_fallback(python_projection_source, hook):
+    """Readers without pruning support still return full-width rows safely."""
+    df = python_projection_source(["id", "label", "score"], hook=hook)
+    rows = df.filter("score % 2 = 1").select("label", "id").collect()
+
+    assert sorted(tuple(row) for row in rows) == [("row-1", 1), ("row-3", 3), ("row-5", 5)]
+
+
+# ============================================================================
 # Filter pushdown tests
 # ============================================================================
 
