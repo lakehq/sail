@@ -169,8 +169,9 @@ def test_partition_filtered_exact_aggregates_do_not_read_files(spark, tmp_path, 
         ).collect() == [Row(0, None, None)]
     finally:
         spark.catalog.dropTempView("filtered_metadata_alias")
-    assert frame.where("p = 'a'").isEmpty() is False
-    assert frame.where("p = 'absent'").isEmpty() is True
+    # Spark Connect 3.5's isEmpty() retains columns unless explicitly projected away.
+    assert frame.where("p = 'a'").select().isEmpty() is False
+    assert frame.where("p = 'absent'").select().isEmpty() is True
     assert frame.where("q IN (1, 3)").select().limit(2).collect() == [(), ()]
 
 
@@ -245,5 +246,5 @@ def test_metadata_grouping_uses_deletion_vector_cardinality(spark, tmp_path, met
     assert frame.where("p = 'a'").count() == 1
     assert frame.where("p = 'a'").groupBy("p").count().collect() == [Row("a", 1)]
     if metadata_as_data == "false":
-        assert frame.where("p = 'a'").isEmpty() is False
+        assert frame.where("p = 'a'").select().isEmpty() is False
         assert frame.select().limit(4).collect() == [(), (), ()]

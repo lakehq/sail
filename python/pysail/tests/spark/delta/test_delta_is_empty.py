@@ -74,7 +74,8 @@ def test_empty_projection_limit_uses_sufficient_known_rows(spark, tmp_path, part
     for data_file in table_path.glob("*.parquet"):
         data_file.unlink()
     frame = spark.read.format("delta").load(str(table_path))
-    assert frame.isEmpty() is False
+    # Spark Connect 3.5's isEmpty() retains columns unless explicitly projected away.
+    assert frame.select().isEmpty() is False
     for count in [0, 1, 2, 3]:
         assert frame.select().limit(count).collect() == [()] * count
     assert frame.select().offset(1).limit(2).collect() == [(), ()]
