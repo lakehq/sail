@@ -4,8 +4,10 @@ from pandas.testing import assert_frame_equal
 from pyspark.errors import AnalysisException
 from pyspark.sql import Row
 from pyspark.sql.functions import col, lit, row_number
-from pyspark.sql.types import IntegerType, LongType, StructField, StructType
+from pyspark.sql.types import ArrayType, IntegerType, LongType, MapType, StringType, StructField, StructType
 from pyspark.sql.window import Window
+
+from pysail.testing.spark.utils.common import is_jvm_spark
 
 
 def test_dataframe_drop(spark):
@@ -211,6 +213,29 @@ def test_to_schema_drops_the_qualifier_of_a_column_it_casts(spark):
     assert out.select("t.*").columns == ["b"]
 
 
+def test_to_schema_drops_the_qualifier_of_a_container_it_does_not_change(spark):
+    # A container is never a pass-through for Spark: `reconcileColumnType` rebuilds an array with
+    # `ArrayTransform` and a map with `MapFromArrays` even when the type already matches, so the
+    # column ends up in an `Alias` and loses the qualifier, unlike a flat column of the same type.
+    df = spark.createDataFrame([([1, 2], {"k": 1}, 3)], "v array<int>, m map<string,int>, a int").alias("t")
+    unchanged = StructType(
+        [
+            StructField("v", ArrayType(IntegerType())),
+            StructField("m", MapType(StringType(), IntegerType())),
+            StructField("a", IntegerType()),
+        ]
+    )
+    out = df.to(unchanged)
+
+    with pytest.raises(AnalysisException):
+        out.select("t.v").collect()
+    with pytest.raises(AnalysisException):
+        out.select("t.m").collect()
+    # The flat column of the same type is still an attribute, so it keeps the qualifier.
+    assert out.select("t.a").collect() == [Row(a=3)]
+    assert out.select("t.*").columns == ["a"]
+
+
 def test_to_schema_rejects_an_ambiguous_input_column(spark):
     # `Project.matchSchema` raises `AMBIGUOUS_COLUMN_OR_FIELD` when more than one input column
     # matches a field of the target schema, rather than reading the first one.
@@ -293,6 +318,26 @@ def test_to_schema_matches_an_exact_name_when_case_sensitive(spark):
         assert df.to(StructType([StructField("a", LongType())])).collect() == [Row(a=1)]
     finally:
         spark.conf.set("spark.sql.caseSensitive", original)
+
+
+@pytest.mark.xfail(
+    not is_jvm_spark(),
+    reason="the target field left unmatched by case sensitivity is rejected instead of filled with NULL",
+    strict=True,
+)
+def test_to_schema_fills_a_target_field_that_case_sensitivity_leaves_unmatched(spark):
+    # Case sensitivity feeds the match count of `reorderFields`; it is not a branch of its own. A
+    # target field that matches nothing is not an error when it is nullable: Spark fills it with
+    # `Literal.create(null, f.dataType)`. So turning case sensitivity on does not make `NAME` fail
+    # to resolve, it makes it resolve to NULL, and only the value tells the two apart.
+    df = spark.createDataFrame([(1,)], "name int")
+    target = StructType([StructField("NAME", IntegerType())])
+
+    spark.conf.set("spark.sql.caseSensitive", "true")
+    try:
+        assert df.to(target).collect() == [Row(NAME=None)]
+    finally:
+        spark.conf.unset("spark.sql.caseSensitive")
 
 
 def test_sort_by_an_alias_that_shadows_the_column_it_reads(spark):

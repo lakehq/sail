@@ -77,7 +77,7 @@ impl PlanResolver<'_> {
             // reading the first one: `Project.matchSchema` raises `AMBIGUOUS_COLUMN_OR_FIELD`.
             if matched.len() > 1 {
                 return Err(PlanError::AnalysisError(format!(
-                    "[AMBIGUOUS_COLUMN_OR_FIELD] Column or field {target_name} is ambiguous and has {} matches.",
+                    "[AMBIGUOUS_COLUMN_OR_FIELD] Column or field `{target_name}` is ambiguous and has {} matches.",
                     matched.len()
                 )));
             }
@@ -91,8 +91,18 @@ impl PlanResolver<'_> {
             // and loses it, which is what Spark does: `Project.matchSchema` renames a
             // pass-through column with `Attribute.withName`, which carries the qualifier over,
             // and wraps a reconciled one in an `Alias`, which is built without one.
+            //
+            // A container is never a pass-through for Spark: `reconcileColumnType` rebuilds
+            // every struct, array and map with `CreateStruct`, `ArrayTransform` or
+            // `MapFromArrays` even when the type already matches, so the column always ends up
+            // in an `Alias` and always loses the qualifier.
             let (expr, qualifier) = if input_field.data_type() == target_field.data_type() {
-                (expr, input_qualifier.cloned())
+                let qualifier = if input_field.data_type().is_nested() {
+                    None
+                } else {
+                    input_qualifier.cloned()
+                };
+                (expr, qualifier)
             } else {
                 (
                     expr.cast_to(target_field.data_type(), &input.schema())?,
