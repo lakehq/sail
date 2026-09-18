@@ -12,6 +12,7 @@
 
 pub(crate) mod copy_on_write;
 pub mod expressions;
+mod partition_defaults;
 pub mod provider;
 pub mod pruning;
 pub mod type_converter;

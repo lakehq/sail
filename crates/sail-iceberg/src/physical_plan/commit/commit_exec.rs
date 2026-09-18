@@ -728,7 +728,9 @@ impl ExecutionPlan for IcebergCommitExec {
             let task_file_paths = task_file_paths(&added_data_files, &added_delete_files);
             let mut task_files_may_be_committed = false;
             // FIXME: Move task-file cleanup to the job terminal state. Attempt-local cleanup is
-            // unsafe when blocking-shuffle retries replay these actions.
+            // unsafe when blocking-shuffle retries replay these actions. Reconcile unknown
+            // publication outcomes before retrying; a later stale-snapshot failure must not
+            // delete files published by an earlier attempt.
             let commit_result: Result<RecordBatch> = async {
 
             // No-op path (e.g. IgnoreIfExists on existing table): no rows, no meta.
@@ -1168,8 +1170,13 @@ impl ExecutionPlan for IcebergCommitExec {
                 let current_version = metadata_file_version_from_path(&latest_meta).unwrap_or(0);
                 let next_version = current_version + 1;
 
-                let existing_for_next =
-                    metadata_files_for_version(&store_ctx, next_version).await?;
+                // Catalog commits are ordered by their expected metadata pointer, not
+                // by unreferenced metadata objects left in the table directory.
+                let existing_for_next = if catalog_commit_mode.uses_catalog_metadata() {
+                    vec![]
+                } else {
+                    metadata_files_for_version(&store_ctx, next_version).await?
+                };
                 if !existing_for_next.is_empty() {
                     log::warn!(
                         "Detected existing metadata files for version {}: {:?}. Retrying attempt {}",
@@ -1411,7 +1418,11 @@ impl ExecutionPlan for IcebergCommitExec {
                         return Err(DataFusionError::External(Box::new(error)));
                     }
                 }
-                let version_files = metadata_files_for_version(&store_ctx, next_version).await?;
+                let version_files = if catalog_commit_mode.uses_catalog_metadata() {
+                    vec![]
+                } else {
+                    metadata_files_for_version(&store_ctx, next_version).await?
+                };
                 let conflict_after_write = version_files.iter().any(|path| path != &metadata_file);
                 if conflict_after_write {
                     log::warn!(

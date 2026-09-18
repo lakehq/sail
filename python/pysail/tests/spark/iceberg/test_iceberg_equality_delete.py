@@ -22,7 +22,7 @@ from pyiceberg.partitioning import PartitionField, PartitionSpec
 from pyiceberg.schema import Schema
 from pyiceberg.transforms import IdentityTransform
 from pyiceberg.typedef import Record
-from pyiceberg.types import LongType, NestedField, StringType
+from pyiceberg.types import BinaryType, LongType, NestedField, StringType
 
 from pysail.testing.spark.steps.iceberg import (
     _current_manifest_list,
@@ -37,6 +37,29 @@ from pysail.testing.spark.utils.sql import escape_sql_string_literal
 from pysail.tests.spark.iceberg.utils import WindowsLocalPyArrowFileIO, create_sql_catalog
 
 UNPARTITIONED_LAST_PARTITION_ID = 999
+
+
+def test_binary_equality_delete_keys_are_applied_before_cow(spark, sql_catalog):
+    identifier = "default.binary_equality"
+    name = "binary_equality"
+    table = sql_catalog.create_table(
+        identifier,
+        Schema(
+            NestedField(1, "id", LongType(), required=False),
+            NestedField(2, "key", BinaryType(), required=False),
+        ),
+    )
+    try:
+        table.append(pa.table({"id": [1, 2, 3], "key": [b"\x01", b"\x02", None]}))
+        path = _append_equality_delete_snapshot(table, pa.table({"key": [b"\x01", None]}), [2])
+        spark.sql(f"CREATE TABLE {name} USING iceberg LOCATION '{path.as_uri()}'")
+        assert [row.id for row in spark.table(name).collect()] == [2]
+        spark.sql(f"UPDATE {name} SET id = 4 WHERE id = 2").collect()  # noqa: S608
+        rows = spark.table(name).collect()
+        assert [(row.id, bytes(row.key)) for row in rows] == [(4, b"\x02")]
+    finally:
+        _drop_table(spark, name)
+        sql_catalog.drop_table(identifier)
 
 
 def _uri_sql(path: Path) -> str:

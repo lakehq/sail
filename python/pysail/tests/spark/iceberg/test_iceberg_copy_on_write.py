@@ -255,6 +255,8 @@ def test_cow_rewrites_complete_file_when_match_is_in_a_later_batch(spark, sql_ca
     ("table_properties", "error"),
     [
         ("'write.{operation}.mode' = 'invalid'", "Unknown Iceberg row-level operation mode"),
+        ("'write.{operation}.isolation-level' = 'bogus'", "Unknown Iceberg isolation level"),
+        ("'write.wap.enabled' = 'true'", "write-audit-publish"),
     ],
 )
 def test_cow_rejects_unsupported_mode_before_writing(spark, tmp_path, operation, table_properties, error):
@@ -330,6 +332,52 @@ def test_cow_preserves_evolved_schema_and_writes_current_partition_spec(spark, s
         assert added_entries
         for entry in added_entries:
             assert entry.data_file.spec_id == before["default-spec-id"]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+        sql_catalog.drop_table(identifier)
+
+
+def test_branch_write_option_is_rejected_before_creating_files(spark, tmp_path):
+    path = tmp_path / "branch_write"
+    with pytest.raises(Exception, match="branch and WAP writes are not supported"):
+        spark.range(1).write.format("iceberg").option("branch", "audit").save(path.as_uri())
+    assert list(path.rglob("*")) == []
+
+
+def test_cow_preserves_void_partition_fields_after_v1_upgrade(spark, sql_catalog):
+    from pyiceberg.partitioning import PartitionField, PartitionSpec
+    from pyiceberg.transforms import IdentityTransform, VoidTransform
+    from pyiceberg.types import StringType
+
+    identifier = "default.void_partition"
+    name = "void_partition"
+    table = sql_catalog.create_table(
+        identifier,
+        Schema(
+            NestedField(1, "id", LongType(), required=False),
+            NestedField(2, "part", StringType(), required=False),
+            NestedField(3, "value", LongType(), required=False),
+        ),
+        partition_spec=PartitionSpec(PartitionField(2, 1000, IdentityTransform(), "part")),
+        properties={"format-version": "1"},
+    )
+    try:
+        table.append(pa.table({"id": [1, 2], "part": ["x", "x"], "value": [10, 20]}))
+        with table.update_spec() as update:
+            update.remove_field("part")
+        assert isinstance(table.spec().fields[0].transform, VoidTransform)
+        path = _local_file_path(table.location())
+        spark.sql(f"CREATE TABLE {name} USING iceberg LOCATION '{path.as_uri()}'")
+        spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('format-version'='3')")
+        before = _find_latest_metadata(path)
+        spark.sql(f"UPDATE {name} SET value = 11 WHERE id = 1").collect()
+        assert [tuple(row) for row in spark.table(name).orderBy("id").collect()] == [(1, "x", 11), (2, "x", 20)]
+        after = _find_latest_metadata(path)
+        assert after["partition-specs"] == before["partition-specs"]
+        assert after["default-spec-id"] == before["default-spec-id"]
+        for entry in _current_manifest_entries(path, ManifestContent.DATA):
+            assert entry.data_file.spec_id == before["default-spec-id"]
+            assert entry.data_file.partition[0] is None
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {name}")
         sql_catalog.drop_table(identifier)

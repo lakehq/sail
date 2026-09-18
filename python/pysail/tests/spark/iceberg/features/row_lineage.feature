@@ -1,5 +1,42 @@
 Feature: Iceberg v3 copy-on-write row lineage
 
+  Scenario: Partitioned COW preserves file-local row IDs across input batches
+    Given variable location for temporary directory iceberg_lineage_batches
+    Given final statement
+      """
+      DROP TABLE IF EXISTS iceberg_lineage_batches
+      """
+    Given statement template
+      """
+      CREATE TABLE iceberg_lineage_batches (id BIGINT, value BIGINT, part INT) USING iceberg
+      PARTITIONED BY (part) LOCATION {{ location.uri }} TBLPROPERTIES ('format-version' = '3')
+      """
+    Given statement
+      """
+      INSERT INTO iceberg_lineage_batches
+      SELECT /*+ COALESCE(1) */ id, id AS value, CASE WHEN id < 9000 THEN 0 ELSE 1 END AS part
+      FROM range(18000)
+      """
+    Given remember current iceberg row lineage
+    Given statement
+      """
+      UPDATE iceberg_lineage_batches SET value = -1 WHERE id IN (8999, 17999)
+      """
+    Then iceberg row lineage preserves IDs and only changes these sequences
+      | id    | sequence |
+      | 8999  | 2        |
+      | 17999 | 2        |
+    When query
+      """
+      SELECT count(*) AS total, count(DISTINCT id) AS ids,
+             sum(CASE WHEN value = -1 THEN 1 ELSE 0 END) AS updated
+      FROM iceberg_lineage_batches
+      """
+    Then query result
+      | total | ids   | updated |
+      | 18000 | 18000 | 2       |
+    Then iceberg snapshot count is 2
+
   Scenario: First COW after upgrading to v3 assigns lineage to surviving rows
     Given variable location for temporary directory iceberg_lineage_upgrade
     Given final statement

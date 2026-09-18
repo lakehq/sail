@@ -177,6 +177,7 @@ impl IcebergWriterExec {
             .writer_partition_spec
             .iter()
             .flat_map(|spec| spec.fields())
+            .filter(|field| field.transform != Transform::Void)
             .map(|field| {
                 let source = Self::source_field_expr(schema, context, field.source_id)?;
                 Self::transform_key(source, field.transform, schema)

@@ -390,7 +390,8 @@ def test_glue_rejects_stale_iceberg_metadata_location_update(
 
 
 @pytest.mark.parametrize("operation", ["delete", "update", "merge"])
-def test_copy_on_write_advances_glue_metadata_pointer(spark, moto_endpoint, tmp_path, operation):
+@pytest.mark.parametrize("unpublished_metadata", [False, True])
+def test_copy_on_write_advances_glue_metadata_pointer(spark, moto_endpoint, tmp_path, operation, unpublished_metadata):
     database = "glue_iceberg_cow_db"
     table = "cow_t"
     table_fqn = f"{database}.{table}"
@@ -402,6 +403,9 @@ def test_copy_on_write_advances_glue_metadata_pointer(spark, moto_endpoint, tmp_
         spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 10), (2, 20)")
         before_location = _metadata_location(moto_endpoint, database, table)
         before = _load_metadata_json(before_location)
+        if unpublished_metadata:
+            orphan = tmp_path / table / "metadata" / "00002-00000000-0000-0000-0000-000000000000.metadata.json"
+            orphan.write_text(json.dumps(before))
         statements = {
             "delete": f"DELETE FROM {table_fqn} WHERE id = 1",
             "update": f"UPDATE {table_fqn} SET value = 100 WHERE id = 1",
@@ -413,6 +417,9 @@ def test_copy_on_write_advances_glue_metadata_pointer(spark, moto_endpoint, tmp_
         assert after_location != before_location
         _assert_uuid_metadata_location(after_location, 2)
         after = _load_metadata_json(after_location)
+        if unpublished_metadata:
+            assert orphan.read_text() == json.dumps(before)
+            assert after_location != orphan.as_uri()
         assert after["table-uuid"] == before["table-uuid"]
         assert after["metadata-log"][-1]["metadata-file"] == before_location
         assert after["snapshots"][-1]["parent-snapshot-id"] == before["current-snapshot-id"]

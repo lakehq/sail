@@ -547,8 +547,8 @@ fn equality_key_column(
         (DataType::Int32, DataType::Int64)
             | (DataType::Utf8View | DataType::LargeUtf8, DataType::Utf8)
             | (
-                DataType::BinaryView | DataType::LargeBinary,
-                DataType::Binary
+                DataType::Binary | DataType::BinaryView | DataType::LargeBinary,
+                DataType::Binary | DataType::BinaryView | DataType::LargeBinary
             )
     ) || matches!((column.data_type(), expected), (DataType::Decimal128(p, s), DataType::Decimal128(q, t)) if p <= q && s == t);
     if !compatible {

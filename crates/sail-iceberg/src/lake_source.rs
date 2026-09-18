@@ -870,6 +870,9 @@ fn partition_columns_from_table_metadata(
 
     let mut columns = Vec::with_capacity(spec.fields().len());
     for field in spec.fields() {
+        if field.transform == crate::spec::Transform::Void {
+            continue;
+        }
         let col_name = schema
             .name_by_field_id(field.source_id)
             .map(str::to_string)

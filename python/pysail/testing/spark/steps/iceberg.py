@@ -943,3 +943,13 @@ def check_iceberg_row_lineage(variables, datatable):
             assert row_id not in previous_ids
         else:
             assert row_id == remembered[int(original)][0], (key, row_id)
+
+
+@then("iceberg row lineage preserves IDs and only changes these sequences")
+def check_iceberg_row_lineage_sequences(variables, datatable):
+    expected = variables["remembered_iceberg_row_lineage"].copy()
+    header, *rows = datatable
+    assert header == ["id", "sequence"]
+    for key, sequence in rows:
+        expected[int(key)] = (expected[int(key)][0], int(sequence))
+    assert _current_row_lineage(Path(variables["location"].path)) == expected

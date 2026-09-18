@@ -41,6 +41,13 @@ pub(super) fn build_partition_dir(
     }
     let mut segs = Vec::new();
     for (i, field) in spec.fields.iter().enumerate() {
+        if field.transform == crate::spec::Transform::Void {
+            segs.push(format!(
+                "{}=null",
+                encode_partition_path_component(&field.name)
+            ));
+            continue;
+        }
         let source_field = iceberg_schema
             .field_by_id(field.source_id)
             .ok_or_else(|| format!("Unknown partition source field id {}", field.source_id))?;
@@ -82,6 +89,9 @@ pub(super) fn split_record_batch_by_partition(
         .fields
         .iter()
         .map(|field| {
+            if field.transform == crate::spec::Transform::Void {
+                return Ok(None);
+            }
             let source_field = iceberg_schema
                 .field_by_id(field.source_id)
                 .ok_or_else(|| format!("Unknown partition source field id {}", field.source_id))?;
@@ -94,14 +104,18 @@ pub(super) fn split_record_batch_by_partition(
                     )
                 })?;
             let column = partition_source_column(batch, &path)?;
-            Ok((field, source_field.field_type.as_ref(), column))
+            Ok(Some((field, source_field.field_type.as_ref(), column)))
         })
         .collect::<Result<Vec<_>, String>>()?;
 
     let num_rows = batch.num_rows();
     for row in 0..num_rows {
         let mut vals: Vec<Option<Literal>> = Vec::with_capacity(spec.fields.len());
-        for (field, source_type, column) in &partition_inputs {
+        for input in &partition_inputs {
+            let Some((field, source_type, column)) = input else {
+                vals.push(None);
+                continue;
+            };
             let literal = array_value_to_literal(column, row, source_type).map_err(|error| {
                 format!(
                     "Failed to extract partition field '{}' at row {row}: {error}",

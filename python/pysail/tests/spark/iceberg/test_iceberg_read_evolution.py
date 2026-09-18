@@ -16,6 +16,92 @@ from pysail.testing.spark.steps.iceberg import (
 from pysail.tests.spark.iceberg.test_iceberg_equality_delete import _append_equality_delete_snapshot
 
 
+@pytest.mark.parametrize(("format_version", "with_deletes"), [(2, False), (2, True), (3, False)])
+def test_identity_partition_defaults_survive_reads_and_cow(spark, sql_catalog, tmp_path, format_version, with_deletes):
+    from pyiceberg.manifest import DataFile, DataFileContent, FileFormat, ManifestContent
+    from pyiceberg.partitioning import PartitionField, PartitionSpec
+    from pyiceberg.transforms import IdentityTransform
+    from pyiceberg.typedef import Record
+
+    from pysail.tests.spark.iceberg.test_iceberg_merge import _current_manifest_entries, _local_file_path
+
+    identifier = "default.identity_defaults"
+    name = "identity_defaults"
+    table = sql_catalog.create_table(
+        identifier,
+        Schema(
+            NestedField(1, "id", LongType(), required=False),
+            NestedField(2, "p", StringType(), required=False),
+            NestedField(3, "value", LongType(), required=False),
+        ),
+        partition_spec=PartitionSpec(PartitionField(2, 1000, IdentityTransform(), "p")),
+    )
+    try:
+        for index, (partition, ids, values, physical_partition) in enumerate(
+            [("x", [1, 2], [10, 20], False), ("y", [3], [30], True), (None, [4, 5], [40, 50], False)]
+        ):
+            fields = [pa.field("id", pa.int64(), metadata={b"PARQUET:field_id": b"1"})]
+            arrays = [pa.array(ids)]
+            if physical_partition:
+                fields.append(pa.field("p", pa.string(), metadata={b"PARQUET:field_id": b"2"}))
+                arrays.append(pa.array([partition] * len(ids)))
+            fields.append(pa.field("value", pa.int64(), metadata={b"PARQUET:field_id": b"3"}))
+            arrays.append(pa.array(values))
+            imported = tmp_path / f"imported-{index}.parquet"
+            pq.write_table(pa.Table.from_arrays(arrays, schema=pa.schema(fields)), imported)
+            data_file = DataFile.from_args(
+                content=DataFileContent.DATA,
+                file_path=imported.as_uri(),
+                file_format=FileFormat.PARQUET,
+                partition=Record(partition),
+                record_count=len(ids),
+                file_size_in_bytes=imported.stat().st_size,
+                spec_id=table.spec().spec_id,
+            )
+            with table.transaction() as transaction, transaction.update_snapshot().fast_append() as append:
+                append.append_data_file(data_file)
+        with table.update_schema() as update:
+            update.rename_column("p", "part")
+        path = _local_file_path(table.location())
+        if with_deletes:
+            _append_equality_delete_snapshot(table, pa.table({"id": [5]}), [1], partition=Record(None))
+        spark.sql(f"CREATE TABLE {name} USING iceberg LOCATION '{path.as_uri()}'")
+        if format_version == 3:  # noqa: PLR2004
+            spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('format-version'='3')")
+        expected = [(1, "x", 10), (2, "x", 20), (3, "y", 30), (4, None, 40)]
+        if not with_deletes:
+            expected.append((5, None, 50))
+        for metadata_as_data in [False, True]:
+            if with_deletes and metadata_as_data:
+                continue
+            frame = (
+                spark.read.format("iceberg")
+                .option("metadataAsDataRead", str(metadata_as_data).lower())
+                .load(path.as_uri())
+                .select("id", "part", "value")
+            )
+            assert [tuple(row) for row in frame.orderBy("id").collect()] == expected
+            assert [row.id for row in frame.filter("part = 'x'").orderBy("id").collect()] == [1, 2]
+            assert frame.filter("part IS NULL").count() == (1 if with_deletes else 2)
+            assert frame.limit(1).count() == 1
+        before = _find_latest_metadata(path)
+        spark.sql(f"UPDATE {name} SET value = value + 1 WHERE id IN (1, 4)").collect()  # noqa: S608
+        expected = [(i, p, v + (i in (1, 4))) for i, p, v in expected]
+        assert [
+            tuple(row) for row in spark.table(name).select("id", "part", "value").orderBy("id").collect()
+        ] == expected
+        after = _find_latest_metadata(path)
+        assert after["snapshots"][:-1] == before["snapshots"]
+        for entry in _current_manifest_entries(path, ManifestContent.DATA):
+            if entry.data_file.file_path.startswith(path.as_uri()):
+                rows = pq.ParquetFile(_local_file_path(entry.data_file.file_path)).read().to_pylist()
+                assert rows
+                assert all(row["part"] == ("x" if row["id"] in (1, 2) else None) for row in rows)
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+        sql_catalog.drop_table(identifier)
+
+
 def _evolve_schema(path, fields):
     metadata = _find_latest_metadata(path)
     schema_id = max(schema["schema-id"] for schema in metadata["schemas"]) + 1

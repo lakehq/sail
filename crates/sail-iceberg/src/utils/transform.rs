@@ -14,7 +14,6 @@
 ///
 /// This module contains pure computational functions for applying Iceberg partition
 /// transforms like bucket, truncate, year, month, day, and hour.
-use chrono::Datelike;
 use uuid::Uuid;
 
 use crate::spec::transform::Transform;
@@ -30,11 +29,16 @@ pub fn apply_transform(
     value: Option<Literal>,
 ) -> Option<Literal> {
     match transform {
-        Transform::Identity | Transform::Unknown | Transform::Void => value,
+        Transform::Identity | Transform::Unknown => value,
+        Transform::Void => None,
         Transform::Truncate(w) => match value {
             Some(Literal::Primitive(PrimitiveLiteral::String(s))) => {
                 let taken = s.chars().take(w as usize).collect::<String>();
                 Some(Literal::Primitive(PrimitiveLiteral::String(taken)))
+            }
+            Some(Literal::Primitive(PrimitiveLiteral::Binary(mut bytes))) => {
+                bytes.truncate(w as usize);
+                Some(Literal::Primitive(PrimitiveLiteral::Binary(bytes)))
             }
             Some(Literal::Primitive(PrimitiveLiteral::Int(v))) => {
                 let w = w as i32;
@@ -199,38 +203,36 @@ pub fn apply_transform(
 const UNIX_EPOCH_YEAR: i32 = 1970;
 
 pub fn days_to_year(days: i32) -> i32 {
-    #[expect(clippy::unwrap_used)]
-    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-    let date = epoch + chrono::Days::new(days as u64);
-    date.year() - UNIX_EPOCH_YEAR
+    let (year, _) = year_month_from_days(days);
+    year - UNIX_EPOCH_YEAR
 }
 
 pub fn micros_to_year(micros: i64) -> i32 {
-    chrono::DateTime::from_timestamp_micros(micros)
-        .map(|dt| dt.year() - UNIX_EPOCH_YEAR)
-        .unwrap_or(0)
+    days_to_year(micros.div_euclid(86_400_000_000) as i32)
 }
 
 pub fn days_to_months(days: i32) -> i32 {
-    #[expect(clippy::unwrap_used)]
-    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-    let date = epoch + chrono::Days::new(days as u64);
-    (date.year() - UNIX_EPOCH_YEAR) * 12 + (date.month0() as i32)
+    let (year, month) = year_month_from_days(days);
+    (year - UNIX_EPOCH_YEAR) * 12 + month - 1
 }
 
 pub fn micros_to_months(micros: i64) -> i32 {
-    let date = match chrono::DateTime::from_timestamp_micros(micros) {
-        Some(dt) => dt,
-        None => return 0,
-    };
-    #[expect(clippy::unwrap_used)]
-    let epoch = chrono::DateTime::from_timestamp_micros(0).unwrap();
-    if date > epoch {
-        (date.year() - UNIX_EPOCH_YEAR) * 12 + (date.month0() as i32)
-    } else {
-        let delta = (12 - date.month0() as i32) + 12 * (UNIX_EPOCH_YEAR - date.year() - 1);
-        -delta
-    }
+    days_to_months(micros.div_euclid(86_400_000_000) as i32)
+}
+
+fn year_month_from_days(days: i32) -> (i32, i32) {
+    // March-based Gregorian eras cover the full Date32 range, including dates
+    // outside chrono's supported years. Euclidean division handles pre-epoch dates.
+    let days = i64::from(days) + 719_468;
+    let era = days.div_euclid(146_097);
+    let day_of_era = days.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let march_month = (5 * day_of_year + 2) / 153;
+    let month = march_month + if march_month < 10 { 3 } else { -9 };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    (year as i32, month as i32)
 }
 
 // ==== Helpers for bucket transform (Murmur3) ====
@@ -299,6 +301,28 @@ pub fn bucket_bytes(b: &[u8], n: u32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[expect(clippy::expect_used)]
+    fn temporal_transforms_match_signed_gregorian_dates() {
+        use chrono::Datelike;
+
+        let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("epoch");
+        for days in (-800_000..800_000).step_by(31).chain([-1, 0, 1, -3653]) {
+            let date = epoch + chrono::TimeDelta::days(i64::from(days));
+            let year = date.year() - 1970;
+            let months = year * 12 + date.month0() as i32;
+            assert_eq!(days_to_year(days), year);
+            assert_eq!(days_to_months(days), months);
+            assert_eq!(micros_to_year(i64::from(days) * 86_400_000_000), year);
+            assert_eq!(micros_to_months(i64::from(days) * 86_400_000_000), months);
+        }
+        assert_eq!(micros_to_year(-1), -1);
+        assert_eq!(micros_to_months(-1), -1);
+        // The complete Date32 domain fits in year/month offsets.
+        assert!(days_to_year(i32::MIN) < -5_000_000);
+        assert!(days_to_months(i32::MAX) > 60_000_000);
+    }
 
     #[test]
     fn decimal_bucket_preserves_twos_complement_sign() {

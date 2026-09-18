@@ -19,29 +19,45 @@ use crate::spec::TableMetadata;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct IcebergRowLevelOptions {
-    delete_mode: Option<String>,
-    update_mode: Option<String>,
-    merge_mode: Option<String>,
+    properties: std::collections::HashMap<String, String>,
 }
 
 impl From<&TableMetadata> for IcebergRowLevelOptions {
     fn from(metadata: &TableMetadata) -> Self {
         Self {
-            delete_mode: metadata.properties.get("write.delete.mode").cloned(),
-            update_mode: metadata.properties.get("write.update.mode").cloned(),
-            merge_mode: metadata.properties.get("write.merge.mode").cloned(),
+            properties: metadata.properties.clone(),
         }
     }
 }
 
 impl IcebergRowLevelOptions {
     pub(crate) fn mode(&self, command: RowLevelCommand) -> Result<RowLevelWriteMode> {
-        let (property, value) = match command {
-            RowLevelCommand::Delete => ("write.delete.mode", &self.delete_mode),
-            RowLevelCommand::Update => ("write.update.mode", &self.update_mode),
-            RowLevelCommand::Merge => ("write.merge.mode", &self.merge_mode),
+        crate::properties::validate_write_properties(&self.properties)?;
+        let isolation_property = match command {
+            RowLevelCommand::Delete => "write.delete.isolation-level",
+            RowLevelCommand::Update => "write.update.isolation-level",
+            RowLevelCommand::Merge => "write.merge.isolation-level",
         };
-        let value = value.as_deref().unwrap_or("copy-on-write");
+        if let Some(value) = self.properties.get(isolation_property)
+            && !value.eq_ignore_ascii_case("serializable")
+            && !value.eq_ignore_ascii_case("snapshot")
+        {
+            return plan_err!(
+                "Unknown Iceberg isolation level for `{isolation_property}`: {value}; expected `serializable` or `snapshot`"
+            );
+        }
+        // FIXME: Validate conflicting files and predicates for the selected isolation
+        // level. Until then, the expected-snapshot requirement rejects every advance.
+        let property = match command {
+            RowLevelCommand::Delete => "write.delete.mode",
+            RowLevelCommand::Update => "write.update.mode",
+            RowLevelCommand::Merge => "write.merge.mode",
+        };
+        let value = self
+            .properties
+            .get(property)
+            .map(String::as_str)
+            .unwrap_or("copy-on-write");
         if value.eq_ignore_ascii_case("copy-on-write") {
             Ok(RowLevelWriteMode::CopyOnWrite)
         } else if value.eq_ignore_ascii_case("merge-on-read") {

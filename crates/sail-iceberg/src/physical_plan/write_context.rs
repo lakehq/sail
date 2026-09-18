@@ -177,6 +177,7 @@ pub fn prepare_iceberg_write_context(
         requirements,
         variant_shredding,
     ) = if let Some(table_metadata) = base_metadata {
+        crate::properties::validate_write_properties(&table_metadata.properties)?;
         let data_location = write_location::resolve_data_location_from_options_and_properties(
             options.write_data_path.as_deref(),
             options.write_folder_storage_path.as_deref(),
@@ -284,6 +285,7 @@ pub fn prepare_iceberg_write_context(
             crate::properties::metadata_properties_from_table_properties(
                 &options.table_properties,
             )?;
+        crate::properties::validate_write_properties(&metadata_properties)?;
         let variant_shredding = options.variant_shredding_config(&metadata_properties)?;
         let mut writer_schema = arrow_schema_to_iceberg(input_schema)?;
         writer_schema = SchemaEvolver::assign_schema_field_ids(&writer_schema)?;
@@ -360,6 +362,7 @@ fn extract_partition_columns(
     partition_spec
         .fields()
         .iter()
+        .filter(|field| field.transform != crate::spec::Transform::Void)
         .map(|partition_field| {
             let name = iceberg_schema
                 .name_by_field_id(partition_field.source_id)

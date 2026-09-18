@@ -19,7 +19,6 @@ use datafusion::arrow::array::{Array, BooleanArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::catalog::Session;
-use datafusion::catalog::memory::DataSourceExec;
 use datafusion::common::scalar::ScalarValue;
 use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
 use datafusion::common::{Result, ToDFSchema, plan_err};
@@ -51,6 +50,7 @@ use sail_common_datafusion::schema_evolution::{
 use url::Url;
 
 use crate::datasource::expressions::simplify_expr;
+use crate::datasource::partition_defaults::{IdentityPartitionDefaults, create_data_scan};
 use crate::datasource::pruning::{
     prune_data_files_by_partition_values, prune_files, prune_manifests_by_partition_summaries,
 };
@@ -779,7 +779,7 @@ impl IcebergTableProvider {
                 })
                 .collect();
 
-            let partitioned_file = PartitionedFile {
+            let mut partitioned_file = PartitionedFile {
                 object_meta,
                 partition_values,
                 range: None,
@@ -790,6 +790,13 @@ impl IcebergTableProvider {
                 table_reference: None,
                 arrow_schema: None,
             };
+            partitioned_file
+                .extensions
+                .insert(IdentityPartitionDefaults::from_file(
+                    &data_file,
+                    &self.partition_specs,
+                    &self.schema,
+                )?);
 
             partitioned_files.push(partitioned_file);
         }
@@ -1200,7 +1207,15 @@ impl TableProvider for IcebergTableProvider {
                 .await;
         }
 
-        if self.metadata_as_data_read {
+        // The streaming manifest path does not carry partition tuples. Use the
+        // manifest-aware scan when missing columns may need identity constants.
+        if self.metadata_as_data_read
+            && !self.partition_specs.iter().any(|spec| {
+                spec.fields()
+                    .iter()
+                    .any(|field| field.transform == Transform::Identity)
+            })
+        {
             return self
                 .scan_metadata_as_data(session, projection, filters, limit)
                 .await;
@@ -1323,7 +1338,7 @@ impl TableProvider for IcebergTableProvider {
                 .with_limit(limit)
                 .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                 .build();
-            return Ok(DataSourceExec::from_data_source(file_scan_config));
+            return create_data_scan(file_scan_config);
         }
 
         // Delete-aware path: build clean + per-dirty-file branches. We apply
@@ -1351,13 +1366,14 @@ impl TableProvider for IcebergTableProvider {
                     .with_file_groups(file_groups)
                     .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                     .build();
-            branches.push(DataSourceExec::from_data_source(file_scan_config));
+            branches.push(create_data_scan(file_scan_config)?);
         }
 
         // Branch B: one branch per dirty file.
         for (df, pos_deletes, eq_deletes) in dirty_units {
             let scan_provider = self.equality_scan_provider(&eq_deletes)?;
-            let partitioned = self.create_partitioned_files(&store_ctx, vec![df.clone()])?;
+            let partitioned =
+                scan_provider.create_partitioned_files(&store_ctx, vec![df.clone()])?;
             // Single-file, single-partition scan — preserves row order for positional deletes.
             let parquet_source =
                 scan_provider.build_parquet_source(session, None, &[], &[], false)?;
@@ -1369,8 +1385,7 @@ impl TableProvider for IcebergTableProvider {
                     .with_preserve_order(true)
                     .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                     .build();
-            let data_scan: Arc<dyn ExecutionPlan> =
-                DataSourceExec::from_data_source(file_scan_config);
+            let data_scan: Arc<dyn ExecutionPlan> = create_data_scan(file_scan_config)?;
             let data_file_raw_path = df.file_path().to_string();
             // Wrap with DeleteApply.
             let apply: Arc<dyn ExecutionPlan> = Arc::new(IcebergDeleteApplyExec::new(
@@ -1601,7 +1616,7 @@ impl IcebergTableProvider {
                     .with_preserve_order(true)
                     .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                     .build();
-            let data_scan = DataSourceExec::from_data_source(file_scan_config);
+            let data_scan = create_data_scan(file_scan_config)?;
             branches.push(Arc::new(
                 IcebergMergeMetadataExec::try_new_partitioned_files(
                     data_scan,
@@ -1625,7 +1640,8 @@ impl IcebergTableProvider {
                     &scan_provider.arrow_schema,
                 )?);
             }
-            let partitioned = self.create_partitioned_files(&store_ctx, vec![df.clone()])?;
+            let partitioned =
+                scan_provider.create_partitioned_files(&store_ctx, vec![df.clone()])?;
             let parquet_source =
                 scan_provider.build_parquet_source(session, None, &[], &[], false)?;
             let file_scan_config =
@@ -1637,8 +1653,7 @@ impl IcebergTableProvider {
                     .with_preserve_order(true)
                     .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                     .build();
-            let data_scan: Arc<dyn ExecutionPlan> =
-                DataSourceExec::from_data_source(file_scan_config);
+            let data_scan: Arc<dyn ExecutionPlan> = create_data_scan(file_scan_config)?;
             let with_metadata: Arc<dyn ExecutionPlan> =
                 Arc::new(IcebergMergeMetadataExec::try_new(
                     data_scan,
@@ -1716,9 +1731,8 @@ impl IcebergTableProvider {
 
     fn classify_pushdown_for_expr(&self, expr: &Expr) -> TableProviderFilterPushDown {
         use TableProviderFilterPushDown as FP;
-        // Identity partition columns can satisfy Eq/IN at partition level. Transformed
-        // partition source columns are useful for pruning but remain inexact because the
-        // original row predicate must still be evaluated.
+        // Partition pruning is inclusive. Keep the row predicate for nulls,
+        // missing metrics, and historical specs without the partition field.
         match expr {
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 let (l, r) = (Self::strip_expr(left), Self::strip_expr(right));
@@ -1827,12 +1841,8 @@ impl IcebergTableProvider {
         &self,
         col_name: &str,
     ) -> Option<TableProviderFilterPushDown> {
-        let only_identity = self.partition_source_col_only_uses_identity(col_name)?;
-        if only_identity {
-            Some(TableProviderFilterPushDown::Exact)
-        } else {
-            Some(TableProviderFilterPushDown::Inexact)
-        }
+        self.partition_source_col_only_uses_identity(col_name)
+            .map(|_| TableProviderFilterPushDown::Inexact)
     }
 
     fn is_partition_source_col(&self, col_name: &str) -> bool {
