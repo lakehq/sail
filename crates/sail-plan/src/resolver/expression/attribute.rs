@@ -236,7 +236,7 @@ pub(in crate::resolver) fn unresolved_column_error(
         .get_projections_for_having()
         .iter()
         .filter_map(|x| match x.name.as_slice() {
-            [name] if !grouping.iter().any(|x| *x == name) => Some(vec![name.clone()]),
+            [name] if !grouping.contains(&name) => Some(vec![name.clone()]),
             _ => None,
         })
         .chain(candidates)
@@ -568,13 +568,18 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<Option<(String, expr::Expr)>> {
-        let [identifier] = name.parts() else {
-            return Ok(None);
+        // A hidden field is reachable by its name alone, and the key of a join also through the
+        // qualifier of the side it came from, which is what tells `l.k` from `r.k` once the join
+        // has merged them into one column.
+        let (written, identifier) = match name.parts() {
+            [identifier] => (None, identifier),
+            [qualifier, identifier] => (Some(TableReference::bare(qualifier.as_ref())), identifier),
+            _ => return Ok(None),
         };
         let mut candidates = schema
             .iter()
             .filter_map(|(qualifier, field)| {
-                if qualifier.is_some() {
+                if !self.match_attribute_qualifier(written.as_ref(), qualifier) {
                     return None;
                 }
                 let Ok(info) = state.get_field_info(field.name()) else {
@@ -584,8 +589,10 @@ impl PlanResolver<'_> {
                     return None;
                 }
                 if self.match_field(info, identifier.as_ref(), plan_id) {
+                    let mut reference = qualifier_parts(qualifier);
+                    reference.push(identifier.as_ref().to_string());
                     Some((
-                        vec![identifier.as_ref().to_string()],
+                        reference,
                         identifier.as_ref().to_string(),
                         expr::Expr::Column(Column::new_unqualified(field.name())),
                     ))

@@ -108,7 +108,6 @@ Feature: NATURAL and USING joins
 
   Rule: The join key stays reachable through the qualifier of each side
 
-    @sail-bug
     Scenario Outline: qualified key: <case>
       # An inner join cannot tell the two sides apart, since the keys are equal by definition, so
       # the rows that match only one side are what makes the qualifier observable.

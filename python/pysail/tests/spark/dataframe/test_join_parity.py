@@ -457,8 +457,8 @@ RESULTS = [
     ),
     ("key/qualified key on the left", "false", ["k"], "struct<k:int>", ["{'k': 1}"]),
     ("key/qualified key on the left", "true", ["k"], "struct<k:int>", ["{'k': 1}"]),
-    pytest.param(*("key/qualified key on the right", "false", ["k"], "struct<k:int>", ["{'k': 1}"]), marks=_SAIL_BUG),
-    pytest.param(*("key/qualified key on the right", "true", ["k"], "struct<k:int>", ["{'k': 1}"]), marks=_SAIL_BUG),
+    ("key/qualified key on the right", "false", ["k"], "struct<k:int>", ["{'k': 1}"]),
+    ("key/qualified key on the right", "true", ["k"], "struct<k:int>", ["{'k': 1}"]),
     (
         "key/star then qualified key",
         "false",

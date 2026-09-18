@@ -273,7 +273,10 @@ impl PlanResolver<'_> {
                     for plan_id in info.plan_ids() {
                         state.register_plan_id_for_field(&field_id, plan_id)?;
                     }
-                    Ok(Expr::Column(col).alias(field_id))
+                    // The key of each side stays reachable through the qualifier of that side,
+                    // which is what tells `l.k` from `r.k` once the join has merged them.
+                    let qualifier = col.relation.clone();
+                    Ok(Expr::Column(col).alias_qualified(qualifier, field_id))
                 } else {
                     Ok(Expr::Column(col))
                 }
