@@ -381,6 +381,22 @@ Feature: identifier resolution beyond ASCII
         """
       Then query error Did you mean one of the following\? \[`nope1`, `aaaaaa`, `bbbbbb`\]\.
 
+    Scenario: a character outside the BMP counts as two units of distance
+      # The distance comes from Commons Text, which walks a Java string, so a supplementary
+      # character is two code units rather than one and ties with a name two characters away.
+      When query
+        """
+        SELECT a FROM (SELECT 1 AS zz, 2 AS `😀`)
+        """
+      Then query error Did you mean one of the following\? \[`zz`, `😀`\]\.
+
+    Scenario: names are ordered the way a Java string compares
+      When query
+        """
+        SELECT nope.* FROM (SELECT 1 AS `ﬀ`, 2 AS `😀`)
+        """
+      Then query error given input columns `😀`, `ﬀ`\.
+
     Scenario: the distance is measured over characters rather than bytes
       When query
         """

@@ -1,10 +1,13 @@
+use std::sync::Arc;
+
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::expr::NullTreatment;
-use datafusion_common::{Column, JoinType, NullEquality, ScalarValue};
+use datafusion_common::{Column, DFSchemaRef, JoinType, NullEquality, ScalarValue};
 use datafusion_expr::builder::project;
-use datafusion_expr::expr::WindowFunctionParams;
+use datafusion_expr::expr::{FieldMetadata, WindowFunctionParams};
 use datafusion_expr::{
-    Expr, LogicalPlan, LogicalPlanBuilder, WindowFrame, WindowFunctionDefinition, cast, expr, lit,
+    Expr, LogicalPlan, LogicalPlanBuilder, Projection, WindowFrame, WindowFunctionDefinition, cast,
+    expr, lit,
 };
 use sail_common::spec;
 
@@ -113,13 +116,15 @@ impl PlanResolver<'_> {
                 } else {
                     (left, right)
                 };
-                if is_all {
-                    Ok(LogicalPlanBuilder::new(left).union(right)?.build()?)
+                let left_schema = left.schema().clone();
+                let plan = if is_all {
+                    LogicalPlanBuilder::new(left).union(right)?.build()?
                 } else {
-                    Ok(LogicalPlanBuilder::new(left)
+                    LogicalPlanBuilder::new(left)
                         .union_distinct(right)?
-                        .build()?)
-                }
+                        .build()?
+                };
+                Self::keep_left_metadata(plan, &left_schema)
             }
             SetOpType::Except => {
                 let left_len = left.schema().fields().len();
@@ -224,5 +229,38 @@ impl PlanResolver<'_> {
                 Ok(plan)
             }
         }
+    }
+}
+
+impl PlanResolver<'_> {
+    /// Spark reports the metadata of the first input for a set operation, where DataFusion keeps
+    /// only what every input agrees on, so the metadata of the left side is put back.
+    fn keep_left_metadata(plan: LogicalPlan, left_schema: &DFSchemaRef) -> PlanResult<LogicalPlan> {
+        let differs = plan
+            .schema()
+            .fields()
+            .iter()
+            .zip(left_schema.fields().iter())
+            .any(|(field, left_field)| {
+                field.metadata() != left_field.metadata() && !left_field.metadata().is_empty()
+            });
+        if !differs {
+            return Ok(plan);
+        }
+        let expr = plan
+            .schema()
+            .columns()
+            .into_iter()
+            .zip(left_schema.fields().iter())
+            .map(|(column, left_field)| {
+                let name = column.name.clone();
+                let metadata = FieldMetadata::from(left_field.metadata().clone());
+                Expr::Column(column).alias_with_metadata(name, Some(metadata))
+            })
+            .collect::<Vec<_>>();
+        Ok(LogicalPlan::Projection(Projection::try_new(
+            expr,
+            Arc::new(plan),
+        )?))
     }
 }

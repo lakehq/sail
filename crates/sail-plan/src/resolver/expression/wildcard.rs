@@ -13,7 +13,7 @@ use sail_function::scalar::multi_expr::MultiExpr;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
-use crate::resolver::expression::attribute::quote_identifier_name;
+use crate::resolver::expression::attribute::{quote_identifier_name, utf16_key};
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
@@ -134,7 +134,7 @@ impl PlanResolver<'_> {
             // The columns come from `AttributeSet.toSeq`, which sorts them by name.
             let columns = match Self::get_field_names(schema, state) {
                 Ok(mut names) => {
-                    names.sort();
+                    names.sort_by_cached_key(|x| utf16_key(Some(x.as_str())));
                     names
                         .iter()
                         .map(|x| quote_identifier_name(x))

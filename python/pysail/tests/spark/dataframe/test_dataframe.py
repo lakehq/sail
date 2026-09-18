@@ -4,7 +4,8 @@ import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql import Row
-from pyspark.sql.functions import col, expr, lit, row_number
+from pyspark.sql.functions import col, count, expr, first, lit, row_number, struct
+from pyspark.sql.functions import max as spark_max
 from pyspark.sql.types import IntegerType, LongType, StringType, StructField, StructType
 from pyspark.sql.window import Window
 
@@ -279,6 +280,18 @@ def test_with_columns_discards_alias_already_matched_by_another_alias(spark):
     assert df.withColumns({dotless_id: lit(1), "Id": lit(2)}).collect() == [Row(**{dotless_id: 1})]
 
 
+def test_with_columns_does_not_resolve_a_discarded_alias(spark):
+    # The alias that another alias already matched is discarded before its expression is resolved,
+    # so an expression that cannot be resolved never gets the chance to fail. Reversing the order
+    # makes the same expression the surviving alias, and then it does fail.
+    dotless_id = "ıd"
+    df = spark.range(1)
+
+    assert df.withColumns({"id": lit(1), dotless_id: col("missing")}).collect() == [Row(id=1)]
+    with pytest.raises(Exception, match="UNRESOLVED_COLUMN"):
+        df.withColumns({dotless_id: col("missing"), "id": lit(1)}).collect()
+
+
 def metadata_df(spark):
     return spark.range(1).select(col("id").alias("a")).withMetadata("a", {"k": "1"})
 
@@ -300,6 +313,239 @@ def test_with_column_does_not_inherit_metadata(spark):
     assert df.withColumn("A", col("a")).schema["A"].metadata == {}
     assert df.withColumn("c", col("a")).schema["c"].metadata == {}
     assert df.withColumns({"a": col("a")}).schema["a"].metadata == {}
+
+
+# An alias reports the metadata of its child only when that child is a named expression, which an
+# attribute and another alias are and an expression that computes a value is not
+# (`Alias.metadata` in `namedExpressions.scala`). The column of the frame carries `{"k": "1"}`, so
+# a case that keeps the metadata tells the two rules apart from one that clears it.
+# (case, the frame to build, the column to read, the metadata Spark reports)
+_ALIAS_METADATA = [
+    ("the column itself", lambda df: df.select(col("a")), "a", {"k": "1"}),
+    ("an alias of the column", lambda df: df.select(col("a").alias("c")), "c", {"k": "1"}),
+    ("an alias of an alias", lambda df: df.select(col("a").alias("b").alias("c")), "c", {"k": "1"}),
+    ("a SQL alias", lambda df: df.selectExpr("a AS c"), "c", {"k": "1"}),
+    ("a rename", lambda df: df.withColumnRenamed("a", "z"), "z", {"k": "1"}),
+    ("a cast", lambda df: df.select(col("a").cast("string").alias("c")), "c", {}),
+    ("a SQL cast", lambda df: df.selectExpr("CAST(a AS STRING) AS c"), "c", {}),
+    ("an aggregate", lambda df: df.groupBy("id").agg(first("a").alias("c")), "c", {}),
+    ("an aggregate over the whole frame", lambda df: df.agg(first("a").alias("c")), "c", {}),
+    ("a window function", lambda df: df.selectExpr("first(a) OVER (PARTITION BY id) AS c"), "c", {}),
+    # Metadata asked for by name replaces whatever the child had, and an empty ask erases it.
+    ("an explicit ask", lambda df: df.select(col("a").alias("c", metadata={"z": "2"})), "c", {"z": "2"}),
+    ("an explicit empty ask", lambda df: df.select(col("a").alias("c", metadata={})), "c", {}),
+    # `withColumn` builds a new column, which Spark Connect gives empty explicit metadata.
+    ("a replacement", lambda df: df.withColumn("a", col("a")), "a", {}),
+    ("a copy", lambda df: df.withColumn("c", col("a")), "c", {}),
+    ("the column beside a copy", lambda df: df.withColumn("c", col("a")), "a", {"k": "1"}),
+    ("several columns at once", lambda df: df.withColumns({"a": col("a"), "z": lit(1)}), "a", {}),
+    ("a column withColumns leaves alone", lambda df: df.withColumns({"z": lit(1)}), "a", {"k": "1"}),
+    (
+        "an ask after a replacement",
+        lambda df: df.withColumn("a", col("a")).withMetadata("a", {"z": "2"}),
+        "a",
+        {"z": "2"},
+    ),
+    # Operations that carry the column through rather than build a new one.
+    ("a filter", lambda df: df.filter("id = 0"), "a", {"k": "1"}),
+    ("a sort", lambda df: df.sort("id"), "a", {"k": "1"}),
+    ("a distinct", lambda df: df.distinct(), "a", {"k": "1"}),
+    ("a frame alias", lambda df: df.alias("x").select("x.a"), "a", {"k": "1"}),
+    ("a drop of another column", lambda df: df.drop("id"), "a", {"k": "1"}),
+    ("a limit", lambda df: df.limit(1), "a", {"k": "1"}),
+    ("a repartition", lambda df: df.repartition(2), "a", {"k": "1"}),
+    # `first` has a Spark implementation of its own in Sail, so another aggregate goes through
+    # different code on the way to the same rule.
+    ("another aggregate", lambda df: df.groupBy("id").agg(spark_max("a").alias("c")), "c", {}),
+    ("an aggregate of another column", lambda df: df.groupBy("a").agg(count("*").alias("c")), "a", {"k": "1"}),
+    # A chain: what the replacement cleared must stay cleared, and what it kept must stay kept.
+    ("a replacement twice", lambda df: df.withColumn("a", col("a")).withColumn("a", col("a")), "a", {}),
+    ("a replacement then an alias", lambda df: df.withColumn("a", col("a")).select(col("a").alias("c")), "c", {}),
+    (
+        "an alias then a replacement",
+        lambda df: df.select(col("a").alias("c")).withColumn("z", col("c")),
+        "c",
+        {"k": "1"},
+    ),
+]
+
+# A set operation reports the metadata of its first input, which is not the same as reporting what
+# the inputs agree on: the two sides here carry the same key with a different value.
+# (case, the frame to build, the metadata Spark reports)
+_SET_OP_METADATA = [
+    ("a union", lambda left, right: left.union(right), {"side": "L"}),
+    ("a union by name", lambda left, right: left.unionByName(right), {"side": "L"}),
+    ("an intersection", lambda left, right: left.intersect(right), {"side": "L"}),
+    ("a difference", lambda left, right: left.exceptAll(right), {"side": "L"}),
+]
+
+
+@pytest.mark.parametrize(("case", "build", "expected"), _SET_OP_METADATA)
+def test_a_set_operation_reports_the_metadata_of_its_first_input(spark, case, build, expected):  # noqa: ARG001
+    df = spark.range(2).select(col("id"), col("id").cast("string").alias("a"))
+    # The sides differ in their rows as well, so a difference is not empty.
+    left = df.withMetadata("a", {"side": "L"})
+    right = df.filter("id = 0").withMetadata("a", {"side": "R"})
+
+    result = build(left, right)
+
+    assert result.schema["a"].metadata == expected
+    assert len(result.collect()) >= 1
+
+
+# A join carries both sides through, and `withColumns` over one builds new columns there too.
+# (case, the frame to build, the column to read, the metadata Spark reports)
+_JOIN_METADATA = [
+    ("the passed through column", lambda j: j, "a", {"k": "1"}),
+    ("a replacement over a join", lambda j: j.withColumn("a", col("a")), "a", {}),
+    ("a copy over a join", lambda j: j.withColumn("c", col("a")), "c", {}),
+    ("several columns over a join", lambda j: j.withColumns({"a": col("a"), "z": lit(1)}), "a", {}),
+    ("a column withColumns leaves alone", lambda j: j.withColumns({"z": lit(1)}), "a", {"k": "1"}),
+    ("an alias over a join", lambda j: j.select(col("a").alias("c")), "c", {"k": "1"}),
+    ("a cast over a join", lambda j: j.select(col("a").cast("string").alias("c")), "c", {}),
+    ("a replacement of the join key", lambda j: j.withColumns({"id": col("id") + 1}), "a", {"k": "1"}),
+    (
+        "a replacement after a cast",
+        lambda j: j.select(col("a").cast("string").alias("a")).withColumn("z", lit(1)),
+        "a",
+        {},
+    ),
+    ("a join after withColumns", lambda j: j.withColumns({"z": lit(1)}), "a", {"k": "1"}),
+]
+
+
+# An outer join rebuilds its output columns as nullable, which is a path of its own, and a self
+# join brings the same metadata in twice.
+# (case, the frame to build, the column to read, the metadata Spark reports)
+_OUTER_JOIN_METADATA = [
+    ("an outer join", lambda left, right: left.join(right, "id", "left_outer"), "a", {"k": "1"}),
+    ("a full outer join", lambda left, right: left.join(right, "id", "full_outer"), "a", {"k": "1"}),
+    (
+        "a replacement over an outer join",
+        lambda left, right: left.join(right, "id", "left_outer").withColumn("a", col("a")),
+        "a",
+        {},
+    ),
+    (
+        "a self join",
+        lambda left, _: left.alias("l").join(left.alias("r"), "id").select(col("l.a").alias("c")),
+        "c",
+        {"k": "1"},
+    ),
+]
+
+
+@pytest.mark.parametrize(("case", "build", "column", "expected"), _OUTER_JOIN_METADATA)
+def test_an_outer_join_keeps_the_metadata_while_it_changes_nullability(spark, case, build, column, expected):  # noqa: ARG001
+    left = spark.range(2).select(col("id"), col("id").cast("string").alias("a")).withMetadata("a", {"k": "1"})
+    right = spark.range(1).select(col("id"), col("id").cast("string").alias("b"))
+
+    result = build(left, right)
+
+    assert result.schema[column].metadata == expected
+    assert len(result.collect()) >= 1
+
+
+def test_a_cast_to_a_struct_type_rebuilds_its_fields(spark):
+    # The target type is what the cast produces, so the metadata of the fields it reads is not
+    # part of it.
+    schema = StructType([StructField("s", StructType([StructField("f", IntegerType(), metadata={"k": "1"})]))])
+    df = spark.createDataFrame([((1,),)], schema)
+
+    cast = df.select(col("s").cast("struct<f:int>").alias("s"))
+
+    assert [dict(field.metadata) for field in cast.schema["s"].dataType.fields] == [{}]
+    assert len(cast.collect()) == 1
+
+
+@pytest.mark.parametrize(("case", "build", "column", "expected"), _JOIN_METADATA)
+def test_a_join_carries_the_metadata_of_both_sides(spark, case, build, column, expected):  # noqa: ARG001
+    rows = 2
+    left = spark.range(2).select(col("id"), col("id").cast("string").alias("a")).withMetadata("a", {"k": "1"})
+    right = spark.range(2).select(col("id"), col("id").cast("string").alias("b"))
+    joined = left.join(right, "id")
+
+    result = build(joined)
+
+    assert result.schema[column].metadata == expected
+    # The override rides on an alias over a plain column reference, which reaches the schema but
+    # not the physical projection, so the rows are what tells a working plan from a broken one.
+    assert len(result.collect()) == rows
+
+
+# Metadata inside a struct follows the same rule one level down: a field that is built anew gets
+# none, and the fields around it keep theirs.
+# (case, the frame to build, the metadata Spark reports for each field of the struct)
+_NESTED_METADATA = [
+    ("the struct itself", lambda df: df, {"f": {"k": "1"}, "g": {}}),
+    ("a replaced struct", lambda df: df.withColumn("s", col("s")), {"f": {"k": "1"}, "g": {}}),
+    (
+        "a field replaced by withField",
+        lambda df: df.withColumn("s", col("s").withField("f", lit(2))),
+        {"f": {}, "g": {}},
+    ),
+    (
+        "a field added by withField",
+        lambda df: df.withColumn("s", col("s").withField("h", lit(2))),
+        {"f": {"k": "1"}, "g": {}, "h": {}},
+    ),
+    (
+        "a struct built from the column",
+        lambda df: df.select(struct(col("s.f").alias("f")).alias("s")),
+        {"f": {"k": "1"}},
+    ),
+    ("a struct built from an expression", lambda df: df.select(struct(lit(1).alias("f")).alias("s")), {"f": {}}),
+]
+
+
+@pytest.mark.parametrize(("case", "build", "expected"), _NESTED_METADATA)
+def test_the_metadata_of_a_struct_field(spark, case, build, expected):  # noqa: ARG001
+    schema = StructType(
+        [
+            StructField(
+                "s",
+                StructType(
+                    [
+                        StructField("f", IntegerType(), metadata={"k": "1"}),
+                        StructField("g", IntegerType()),
+                    ]
+                ),
+            )
+        ]
+    )
+    df = spark.createDataFrame([((1, 2),)], schema)
+
+    result = build(df)
+
+    assert {field.name: dict(field.metadata) for field in result.schema["s"].dataType.fields} == expected
+    assert len(result.collect()) == 1
+
+
+def test_a_nested_field_read_as_a_column_keeps_its_metadata(spark):
+    # Reading `s.f` is not an attribute, but Spark reports the metadata of the struct field it
+    # reads (`Alias.metadata` has a branch of its own for it).
+    schema = StructType([StructField("s", StructType([StructField("f", IntegerType(), metadata={"k": "1"})]))])
+    df = spark.createDataFrame([((1,),)], schema)
+
+    assert df.select(col("s.f")).schema["f"].metadata == {"k": "1"}
+    assert df.select(col("s.f").alias("c")).schema["c"].metadata == {"k": "1"}
+    assert df.withColumn("c", col("s.f")).schema["c"].metadata == {}
+
+
+@pytest.mark.parametrize(("case", "build", "column", "expected"), _ALIAS_METADATA)
+def test_an_alias_reports_the_metadata_of_a_named_child_only(spark, case, build, column, expected):  # noqa: ARG001
+    df = spark.range(1).select(col("id"), col("id").cast("string").alias("a")).withMetadata("a", {"k": "1"})
+
+    assert build(df).schema[column].metadata == expected
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_a_generated_aggregate_name_is_marked_as_such(spark):
+    # Spark names the column of an aggregate that was not aliased, and marks that name in the
+    # metadata so that later rules can tell it from a name the user wrote.
+    df = spark.range(1).select(col("id"), col("id").cast("string").alias("a"))
+
+    assert df.groupBy("id").agg(first("a")).schema["first(a)"].metadata == {"__autoGeneratedAlias": "true"}
 
 
 def test_drop_matches_non_ascii_names(spark):
@@ -413,6 +659,33 @@ def test_to_schema_matches_name_like_the_analyzer(spark):
     # position rather than by name, so the schema is what tells the two spellings apart.
     assert src.to(target).schema.names == ["b", "ä"]
     assert [r.asDict() for r in src.to(target).collect()] == [{"b": 2, "ä": 1}]
+
+
+def test_to_schema_keeps_the_qualifier_of_an_unchanged_column(spark):
+    # `Project.reorderFields` keeps an unchanged scalar attribute as it is, so the alias it was
+    # read through still qualifies it afterwards.
+    df = spark.sql("SELECT 1 AS a, 2 AS b").alias("t")
+    reconciled = df.to(df.schema)
+
+    assert reconciled.select("t.a").collect() == [Row(a=1)]
+    assert [tuple(row) for row in reconciled.select("t.*").collect()] == [(1, 2)]
+
+
+@pytest.mark.parametrize(
+    ("expression", "target"),
+    [
+        ("1", StructType([StructField("a", LongType())])),
+        ("named_struct('x', 1)", None),
+    ],
+)
+def test_to_schema_does_not_qualify_a_column_it_rebuilds(spark, expression, target):
+    # A cast or a rebuilt container is a new expression rather than the attribute that was read,
+    # so the qualifier does not survive it.
+    df = spark.sql(f"SELECT {expression} AS a").alias("t")
+    reconciled = df.to(df.schema if target is None else target)
+
+    with pytest.raises(Exception, match="UNRESOLVED_COLUMN"):
+        reconciled.select("t.a").collect()
 
 
 def test_to_schema_fills_missing_nullable_field(spark):
@@ -926,6 +1199,28 @@ def test_select_orders_and_truncates_the_suggestion(spark):
         match=re.escape("Did you mean one of the following? [`nope1`, `c`, `d`, `e`, `f`]."),
     ):
         spark.sql(_SIX).select("nope").collect()
+
+
+def test_col_regex_does_not_fold_a_non_ascii_name(spark):
+    # Java's `(?i)` folds ASCII alone, so a capital A with a diaeresis reaches only the column
+    # spelled the same way, and the small one is left alone.
+    df = spark.sql("SELECT 1 AS `Ä`, 2 AS `ä`")
+
+    assert df.select(df.colRegex("`Ä`")).columns == ["Ä"]
+    assert df.select(df.colRegex("`ä`")).columns == ["ä"]
+
+
+@pytest.mark.parametrize("case_sensitive", ["false", "true"])
+def test_col_regex_accepts_a_trailing_extended_mode_comment(spark, case_sensitive):
+    # The pattern is grouped before it is anchored, and in extended mode a comment runs to the end
+    # of the line, so a pattern ending in one would swallow whatever is appended to it.
+    try:
+        spark.conf.set("spark.sql.caseSensitive", case_sensitive)
+        df = spark.sql("SELECT 1 AS a")
+
+        assert df.select(df.colRegex("`(?x)a#comment`")).columns == ["a"]
+    finally:
+        spark.conf.unset("spark.sql.caseSensitive")
 
 
 @pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)

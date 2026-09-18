@@ -44,7 +44,7 @@ impl PlanResolver<'_> {
             .zip(columns)
             .map(|(col, name)| NamedExpr::new(vec![name.into()], Expr::Column(col)))
             .collect();
-        let expr = self.rewrite_named_expressions(expr, state)?;
+        let expr = self.rewrite_named_expressions(expr, schema, state)?;
         Ok(LogicalPlan::Projection(Projection::try_new(
             expr,
             Arc::new(input),
@@ -108,7 +108,14 @@ impl PlanResolver<'_> {
             for plan_id in plan_ids {
                 state.register_plan_id_for_field(&field_id, plan_id)?;
             }
-            projected_exprs.push(expr.alias(field_id));
+            // An attribute the reconciliation leaves alone keeps the qualifier it was read
+            // through, so a reference such as `df.alias("t").to(schema).select("t.a")` still
+            // resolves. A cast or a rebuilt container is a new expression instead.
+            let qualifier = match &expr {
+                Expr::Column(_) if !input_field.data_type().is_nested() => input_qualifier.cloned(),
+                _ => None,
+            };
+            projected_exprs.push(expr.alias_qualified(qualifier, field_id));
         }
         let projected_plan =
             LogicalPlan::Projection(Projection::try_new(projected_exprs, Arc::new(input))?);
@@ -139,7 +146,7 @@ impl PlanResolver<'_> {
             .zip(names)
             .map(|(column, name)| NamedExpr::new(vec![name], Expr::Column(column)))
             .collect::<Vec<_>>();
-        let expr = self.rewrite_named_expressions(expr, state)?;
+        let expr = self.rewrite_named_expressions(expr, input.schema(), state)?;
         Ok(LogicalPlan::Projection(Projection::try_new(
             expr,
             Arc::new(input),
@@ -258,15 +265,33 @@ impl PlanResolver<'_> {
                 quote_identifier_name(name)
             )));
         }
+        let names = Self::get_field_names(schema, state)?;
+        // A column takes the first alias that matches it, so an alias that another one already
+        // matched is discarded. It is discarded before its expression is resolved, which is what
+        // makes an expression that cannot be resolved harmless there.
+        let selected = names
+            .iter()
+            .filter_map(|column| {
+                aliases
+                    .iter()
+                    .position(|(name, ..)| self.match_identifier(name, column))
+            })
+            .collect::<HashSet<_>>();
         let aliases = {
             let mut results: Vec<AliasEntry> = Vec::with_capacity(aliases.len());
-            for (name, expr, metadata) in aliases {
+            for (index, (name, expr, metadata)) in aliases.into_iter().enumerate() {
+                if !selected.contains(&index)
+                    && names
+                        .iter()
+                        .any(|column| self.match_identifier(&name, column))
+                {
+                    continue;
+                }
                 let expr = self.resolve_expression(expr, schema, state).await?;
                 results.push((name, expr, metadata));
             }
             results
         };
-        let names = Self::get_field_names(schema, state)?;
         // An alias is appended only when it matches no existing column, which is not the same as
         // the alias not having replaced one: when two aliases match the same column, the first
         // one replaces it and the other one is discarded instead of being appended.
@@ -293,15 +318,15 @@ impl PlanResolver<'_> {
                     .find(|(alias, ..)| self.match_identifier(alias, &name))
                 {
                     Some((alias, expr, metadata)) => {
-                        self.added_column(alias, expr, metadata, schema)
+                        Self::added_column(alias, expr, metadata, schema)
                     }
-                    None => Ok(NamedExpr::new(vec![name], Expr::Column(column))),
+                    None => NamedExpr::new(vec![name], Expr::Column(column)),
                 }
             })
-            .collect::<PlanResult<Vec<_>>>()?;
+            .collect::<Vec<_>>();
         for ((name, e, metadata), matched) in aliases.iter().zip(matched) {
             if !matched {
-                expr.push(self.added_column(name, e, metadata, schema)?);
+                expr.push(Self::added_column(name, e, metadata, schema));
             }
         }
         let (input, expr) = self.rewrite_projection::<MonotonicIdRewriter>(input, expr, state)?;
@@ -310,7 +335,7 @@ impl PlanResolver<'_> {
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<WindowRewriter>(input, expr, state)?;
         let expr = self.rewrite_multi_expr(expr)?;
-        let expr = self.rewrite_named_expressions(expr, state)?;
+        let expr = self.rewrite_named_expressions(expr, input.schema(), state)?;
         let result = LogicalPlan::Projection(Projection::try_new(expr, Arc::new(input))?);
         if let Some(alias) = input_alias {
             Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
@@ -323,37 +348,35 @@ impl PlanResolver<'_> {
     }
 
     /// Builds the named expression for a column added or replaced by `withColumn`.
-    /// Spark always sets explicit metadata for such columns, defaulting to empty metadata, so the
-    /// metadata of the expression is never inherited.
     fn added_column(
-        &self,
         name: &str,
         expr: &Expr,
         metadata: &Option<Vec<(String, String)>>,
         schema: &DFSchemaRef,
-    ) -> PlanResult<NamedExpr> {
+    ) -> NamedExpr {
         let named = NamedExpr::new(vec![name.to_string()], expr.clone());
         if let Some(metadata) = metadata
             && !metadata.is_empty()
         {
-            return Ok(named.with_metadata(metadata.clone()));
+            return named.with_metadata(metadata.clone());
         }
-        // The key is added on top of what the field already has, so it is only attached when
-        // there is Spark metadata to override: over a column comment it would make the logical
-        // schema differ from the physical one. TODO: it still fails over a plan that keeps the
-        // metadata out of the physical projection, as `withMetadata` does.
-        let inherited = expr.metadata(schema)?;
+        // A column `withColumn` builds is a new one rather than the one it replaces, and Spark
+        // gives it explicit metadata, empty unless the caller asked for some, so the metadata of
+        // the expression is never inherited. The empty override is only attached when the
+        // expression has Spark metadata to hide, since an override of its own keeps a projection
+        // from being merged into the one below it.
+        let inherited = expr.metadata(schema).unwrap_or_default();
         let overridden = inherited
             .inner()
             .get(spec::SPARK_METADATA_JSON_KEY)
             .is_some_and(|x| x != "{}");
         if !overridden {
-            return Ok(named);
+            return named;
         }
-        Ok(named.with_metadata(vec![(
+        named.with_metadata(vec![(
             spec::SPARK_METADATA_JSON_KEY.to_string(),
             "{}".to_string(),
-        )]))
+        )])
     }
 
     pub(super) async fn resolve_query_replace(
@@ -475,7 +498,7 @@ impl PlanResolver<'_> {
             .collect::<PlanResult<Vec<_>>>()?;
 
         Ok(LogicalPlan::Projection(Projection::try_new(
-            self.rewrite_named_expressions(replace_exprs, state)?,
+            self.rewrite_named_expressions(replace_exprs, input.schema(), state)?,
             Arc::new(input),
         )?))
     }

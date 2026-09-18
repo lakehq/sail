@@ -38,7 +38,7 @@ fn ambiguous_attribute_error(
         .iter()
         .map(|x| quote_identifier_parts(x.iter().map(|x| x.as_str())))
         .collect::<Vec<_>>();
-    references.sort();
+    references.sort_by_cached_key(|x| utf16_key(Some(x.as_str())));
     PlanError::AnalysisError(format!(
         "[AMBIGUOUS_REFERENCE] Reference {} is ambiguous, could be: [{}].",
         quote_identifier(name),
@@ -127,12 +127,19 @@ fn pretty_attribute(name: &spec::ObjectName) -> String {
         .join(".")
 }
 
+/// The sort key of a name, as a Java string compares: by UTF-16 code unit rather than by
+/// character, which orders a name outside the BMP before one in the high part of it.
+pub(in crate::resolver) fn utf16_key(name: Option<&str>) -> Option<Vec<u16>> {
+    name.map(|x| x.encode_utf16().collect())
+}
+
 /// The edit distance Spark orders the suggested names by
-/// (`org.apache.commons.text.similarity.LevenshteinDistance`).
+/// (`org.apache.commons.text.similarity.LevenshteinDistance`). It walks a Java string, so the
+/// units it counts are UTF-16 code units and a character outside the BMP counts as two.
 fn edit_distance(left: &str, right: &str) -> usize {
-    let right = right.chars().collect::<Vec<_>>();
+    let right = right.encode_utf16().collect::<Vec<_>>();
     let mut row = (0..=right.len()).collect::<Vec<_>>();
-    for (i, left_char) in left.chars().enumerate() {
+    for (i, left_char) in left.encode_utf16().enumerate() {
         let mut previous = row[0];
         row[0] = i + 1;
         for (j, right_char) in right.iter().enumerate() {
@@ -177,7 +184,7 @@ fn order_candidates_by_similarity(
     // and the sort by distance is stable, so an equal distance is broken by name there. The
     // candidates of a schema arrive in the order of the plan instead.
     if sorted_by_name {
-        candidates.sort_by(|a, b| a.last().cmp(&b.last()));
+        candidates.sort_by_cached_key(|parts| utf16_key(parts.last().map(|x| x.as_str())));
     }
     let mut candidates = candidates
         .into_iter()

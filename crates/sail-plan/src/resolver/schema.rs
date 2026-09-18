@@ -11,6 +11,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::attribute::{
     qualifier_parts, quote_identifier_name, quote_identifier_part, unresolved_column_fields_error,
+    utf16_key,
 };
 use crate::resolver::state::{FieldInfo, PlanResolverState};
 
@@ -251,7 +252,7 @@ impl PlanResolver<'_> {
                         .join(".")
                 })
                 .collect::<Vec<_>>();
-            references.sort();
+            references.sort_by_cached_key(|x| utf16_key(Some(x.as_str())));
             return Err(PlanError::AnalysisError(format!(
                 "[AMBIGUOUS_REFERENCE] Reference {} is ambiguous, could be: [{}].",
                 quote_identifier_part(name),

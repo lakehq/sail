@@ -335,7 +335,6 @@ def _annotated(spark):
     return spark.sql("SELECT * FROM VALUES (1, 'x'), (2, 'y') AS t(a, b)").withMetadata("a", {"k": "v"})
 
 
-@_SAIL_BUG
 def test_metadata_on_a_passed_through_column_reaches_collect(spark):
     # The metadata rides on an alias over a plain column reference, and it survives into the
     # schema but not into the physical projection, so the plan only fails once it has to produce
@@ -348,7 +347,6 @@ def test_metadata_on_a_passed_through_column_reaches_collect(spark):
     pyspark_version() < (4, 2),
     reason="The client carries the field metadata through `toArrow` from PySpark 4.2 on",
 )
-@_SAIL_BUG
 def test_metadata_on_a_passed_through_column_reaches_to_arrow(spark):
     table = _annotated(spark).toArrow()
 
@@ -392,13 +390,9 @@ def test_a_column_the_projection_reads_keeps_the_field_metadata_it_does_not_own(
         spark.sql("DROP TABLE IF EXISTS commented")
 
 
-@_SAIL_BUG
-def test_a_replacement_clears_the_metadata_a_using_join_passed_through(spark):
-    # The same shape as `test_metadata_on_a_passed_through_column_reaches_collect`: the override
-    # rides on an alias over a plain column reference and reaches the schema but not the physical
-    # projection. Here nothing asked for metadata -- the alias carries only the empty override that
-    # `withColumn` always sets -- and the metadata came from the input schema rather than from
-    # `withMetadata`, so no part of this is covered by the cases above.
+def _join_carrying_field_metadata(spark):
+    # The metadata comes from the input schema rather than from `withMetadata`, and a `USING` join
+    # passes the field through, so nothing in the plan asked for metadata.
     schema = StructType(
         [
             StructField("id", IntegerType()),
@@ -407,9 +401,32 @@ def test_a_replacement_clears_the_metadata_a_using_join_passed_through(spark):
     )
     left = spark.createDataFrame([(1, "a1")], schema)
     right = spark.createDataFrame([(1, "b1")], "id int, b string")
-    df = left.join(right, "id").withColumn("a", col("a"))
+    return left.join(right, "id")
 
-    assert [row.asDict() for row in df.collect()] == [{"id": 1, "a": "a1", "b": "b1"}]
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("a", [{"id": 1, "a": "a1", "b": "b1"}]),
+        ("c", [{"id": 1, "a": "a1", "b": "b1", "c": "a1"}]),
+    ],
+)
+def test_a_column_carrying_field_metadata_can_be_replaced_or_copied(spark, name, expected):
+    # Whatever `withColumn` does with the metadata, the rows still have to come out: the override
+    # rides on an alias over a plain column reference, and an override that reaches the schema but
+    # not the physical projection makes the plan fail once it has to produce rows.
+    df = _join_carrying_field_metadata(spark).withColumn(name, col("a"))
+
+    assert [row.asDict() for row in df.collect()] == expected
+
+
+def test_a_replacement_clears_the_metadata_a_using_join_passed_through(spark):
+    # The same shape as `test_metadata_on_a_passed_through_column_reaches_collect`: the override
+    # rides on an alias over a plain column reference and reaches the schema but not the physical
+    # projection. Here nothing asked for metadata -- the alias carries only the empty override that
+    # `withColumn` always sets -- so no part of this is covered by the cases above.
+    df = _join_carrying_field_metadata(spark).withColumn("a", col("a"))
+
     assert df.schema["a"].metadata == {}
 
 
@@ -642,7 +659,7 @@ COMPOSITION_RESULTS = [
     ),
     ("metadata_then_join", "false", ["a", "b", "c"], ["{'a': 1, 'b': 'x', 'c': 'p'}", "{'a': 1, 'b': 'z', 'c': 'p'}"]),
     ("metadata_then_join", "true", ["a", "b", "c"], ["{'a': 1, 'b': 'x', 'c': 'p'}", "{'a': 1, 'b': 'z', 'c': 'p'}"]),
-    pytest.param(*("metadata_then_select", "false", ["A"], ["{'A': 1}", "{'A': 1}", "{'A': 2}"]), marks=[_SAIL_BUG]),
+    ("metadata_then_select", "false", ["A"], ["{'A': 1}", "{'A': 1}", "{'A': 2}"]),
     ("metadata_then_group_by", "false", ["a", "count"], ["{'a': 1, 'count': 2}", "{'a': 2, 'count': 1}"]),
     ("metadata_then_group_by", "true", ["a", "count"], ["{'a': 1, 'count': 2}", "{'a': 2, 'count': 1}"]),
 ]
@@ -1253,15 +1270,12 @@ METADATA_RESULTS = [
         [{}, {}],
         ["{'a': 1, 'b': 'x'}", "{'a': 2, 'b': 'y'}"],
     ),
-    pytest.param(
-        *(
-            "expr-meta/column reference",
-            ["a", "b", "c"],
-            "struct<a:int,b:string,c:int>",
-            [{}, {}, {"k": "v"}],
-            ["{'a': 1, 'b': 'x', 'c': 1}", "{'a': 2, 'b': 'y', 'c': 2}"],
-        ),
-        marks=_SAIL_BUG,
+    (
+        "expr-meta/column reference",
+        ["a", "b", "c"],
+        "struct<a:int,b:string,c:int>",
+        [{}, {}, {"k": "v"}],
+        ["{'a': 1, 'b': 'x', 'c': 1}", "{'a': 2, 'b': 'y', 'c': 2}"],
     ),
     (
         "expr/arithmetic",
@@ -1277,15 +1291,12 @@ METADATA_RESULTS = [
         [{}, {}],
         ["{'a': 2, 'b': 'x'}", "{'a': 3, 'b': 'y'}"],
     ),
-    pytest.param(
-        *(
-            "expr-meta/arithmetic",
-            ["a", "b", "c"],
-            "struct<a:int,b:string,c:int>",
-            [{}, {}, {"k": "v"}],
-            ["{'a': 1, 'b': 'x', 'c': 2}", "{'a': 2, 'b': 'y', 'c': 3}"],
-        ),
-        marks=_SAIL_BUG,
+    (
+        "expr-meta/arithmetic",
+        ["a", "b", "c"],
+        "struct<a:int,b:string,c:int>",
+        [{}, {}, {"k": "v"}],
+        ["{'a': 1, 'b': 'x', 'c': 2}", "{'a': 2, 'b': 'y', 'c': 3}"],
     ),
     (
         "expr/case when",
@@ -1301,15 +1312,12 @@ METADATA_RESULTS = [
         [{}, {}],
         ["{'a': 'big', 'b': 'y'}", "{'a': 'small', 'b': 'x'}"],
     ),
-    pytest.param(
-        *(
-            "expr-meta/case when",
-            ["a", "b", "c"],
-            "struct<a:int,b:string,c:string>",
-            [{}, {}, {"k": "v"}],
-            ["{'a': 1, 'b': 'x', 'c': 'small'}", "{'a': 2, 'b': 'y', 'c': 'big'}"],
-        ),
-        marks=_SAIL_BUG,
+    (
+        "expr-meta/case when",
+        ["a", "b", "c"],
+        "struct<a:int,b:string,c:string>",
+        [{}, {}, {"k": "v"}],
+        ["{'a': 1, 'b': 'x', 'c': 'small'}", "{'a': 2, 'b': 'y', 'c': 'big'}"],
     ),
     (
         "expr/coalesce",
@@ -1325,15 +1333,12 @@ METADATA_RESULTS = [
         [{}, {}],
         ["{'a': 1, 'b': 'x'}", "{'a': 2, 'b': 'y'}"],
     ),
-    pytest.param(
-        *(
-            "expr-meta/coalesce",
-            ["a", "b", "c"],
-            "struct<a:int,b:string,c:int>",
-            [{}, {}, {"k": "v"}],
-            ["{'a': 1, 'b': 'x', 'c': 1}", "{'a': 2, 'b': 'y', 'c': 2}"],
-        ),
-        marks=_SAIL_BUG,
+    (
+        "expr-meta/coalesce",
+        ["a", "b", "c"],
+        "struct<a:int,b:string,c:int>",
+        [{}, {}, {"k": "v"}],
+        ["{'a': 1, 'b': 'x', 'c': 1}", "{'a': 2, 'b': 'y', 'c': 2}"],
     ),
     (
         "expr/nested field",
@@ -1349,15 +1354,12 @@ METADATA_RESULTS = [
         [{}, {}],
         ["{'a': 1, 'b': 'x'}", "{'a': 2, 'b': 'y'}"],
     ),
-    pytest.param(
-        *(
-            "expr-meta/nested field",
-            ["a", "b", "c"],
-            "struct<a:int,b:string,c:int>",
-            [{}, {}, {"k": "v"}],
-            ["{'a': 1, 'b': 'x', 'c': 1}", "{'a': 2, 'b': 'y', 'c': 2}"],
-        ),
-        marks=_SAIL_BUG,
+    (
+        "expr-meta/nested field",
+        ["a", "b", "c"],
+        "struct<a:int,b:string,c:int>",
+        [{}, {}, {"k": "v"}],
+        ["{'a': 1, 'b': 'x', 'c': 1}", "{'a': 2, 'b': 'y', 'c': 2}"],
     ),
     (
         "expr/window function",
@@ -1394,15 +1396,12 @@ METADATA_RESULTS = [
         [{}, {}],
         ["{'a': 0, 'b': 'x'}", "{'a': 0, 'b': 'y'}"],
     ),
-    pytest.param(
-        *(
-            "expr-meta/nondeterministic",
-            ["a", "b", "c"],
-            "struct<a:int,b:string,c:int>",
-            [{}, {}, {"k": "v"}],
-            ["{'a': 1, 'b': 'x', 'c': 0}", "{'a': 2, 'b': 'y', 'c': 0}"],
-        ),
-        marks=_SAIL_BUG,
+    (
+        "expr-meta/nondeterministic",
+        ["a", "b", "c"],
+        "struct<a:int,b:string,c:int>",
+        [{}, {}, {"k": "v"}],
+        ["{'a': 1, 'b': 'x', 'c': 0}", "{'a': 2, 'b': 'y', 'c': 0}"],
     ),
     (
         "expr/cast of itself",
@@ -1418,15 +1417,12 @@ METADATA_RESULTS = [
         [{}, {}],
         ["{'a': '1', 'b': 'x'}", "{'a': '2', 'b': 'y'}"],
     ),
-    pytest.param(
-        *(
-            "expr-meta/cast of itself",
-            ["a", "b", "c"],
-            "struct<a:int,b:string,c:string>",
-            [{}, {}, {"k": "v"}],
-            ["{'a': 1, 'b': 'x', 'c': '1'}", "{'a': 2, 'b': 'y', 'c': '2'}"],
-        ),
-        marks=_SAIL_BUG,
+    (
+        "expr-meta/cast of itself",
+        ["a", "b", "c"],
+        "struct<a:int,b:string,c:string>",
+        [{}, {}, {"k": "v"}],
+        ["{'a': 1, 'b': 'x', 'c': '1'}", "{'a': 2, 'b': 'y', 'c': '2'}"],
     ),
 ]
 
