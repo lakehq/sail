@@ -19,6 +19,8 @@ use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
 use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
+use sail_function::scalar::array::spark_array_zip_with::SparkArrayZipWith;
+use sail_function::scalar::map::spark_map_zip_with::SparkMapZipWith;
 use sail_function::scalar::array::spark_sequence::SparkSequenceLazy;
 use sail_function::scalar::datetime::convert_tz::ConvertTzLazy;
 use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
@@ -202,6 +204,10 @@ pub(super) fn try_encode_higher_order_udf(
         HigherOrderUdfKind::RegexpInstr(r#gen::SparkRegexpInstrUdf {
             ansi_mode: regexp_instr.ansi_mode(),
         })
+    } else if udf_inner.is::<SparkArrayZipWith>() {
+        HigherOrderUdfKind::ZipWith(r#gen::SparkArrayZipWithUdf {})
+    } else if udf_inner.is::<SparkMapZipWith>() {
+        HigherOrderUdfKind::MapZipWith(r#gen::SparkMapZipWithUdf {})
     } else {
         return plan_err!("unsupported higher-order function: {}", hof.name());
     };

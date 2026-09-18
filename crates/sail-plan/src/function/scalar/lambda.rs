@@ -16,7 +16,9 @@ use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
 use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
+use sail_function::scalar::array::spark_array_zip_with::SparkArrayZipWith;
 use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
+use sail_function::scalar::map::spark_map_zip_with::SparkMapZipWith;
 use sail_function::scalar::map::spark_transform_keys::SparkTransformKeys;
 use sail_function::scalar::map::spark_transform_values::SparkTransformValues;
 use sail_function::scalar::map::utils::map_type_from_key_value_types;
@@ -81,6 +83,12 @@ static SPARK_ARRAY_SORT_UDF: LazyLock<Arc<HigherOrderUDF>> =
 static SPARK_ARRAY_SORT_SWAPPED_UDF: LazyLock<Arc<HigherOrderUDF>> =
     LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new_swapped())));
 
+static SPARK_ARRAY_ZIP_WITH_UDF: LazyLock<Arc<HigherOrderUDF>> =
+    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArrayZipWith::new())));
+
+static SPARK_MAP_ZIP_WITH_UDF: LazyLock<Arc<HigherOrderUDF>> =
+    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkMapZipWith::new())));
+
 pub(crate) fn is_higher_order_function(name: &str) -> bool {
     matches!(
         name.trim().to_lowercase().as_str(),
@@ -88,12 +96,14 @@ pub(crate) fn is_higher_order_function(name: &str) -> bool {
             | "reduce"
             | "filter"
             | "map_filter"
+            | "map_zip_with"
             | "transform"
             | "transform_keys"
             | "transform_values"
             | "exists"
             | "forall"
             | "array_sort"
+            | "zip_with"
     )
 }
 
@@ -115,6 +125,8 @@ pub(crate) fn get_lambda_parameters(
         "exists" => &SPARK_ARRAY_EXISTS_UDF,
         "forall" => &SPARK_ARRAY_FORALL_UDF,
         "array_sort" => &SPARK_ARRAY_SORT_UDF,
+        "zip_with" => &SPARK_ARRAY_ZIP_WITH_UDF,
+        "map_zip_with" => &SPARK_MAP_ZIP_WITH_UDF,
         other => {
             return Err(PlanError::internal(format!(
                 "not a higher-order function: {other}"
@@ -559,11 +571,29 @@ pub(super) fn list_built_in_lambda_functions() -> Vec<(&'static str, ScalarFunct
         ("filter", F::custom(filter)),
         ("forall", F::custom(forall)),
         ("map_filter", F::custom(map_filter)),
-        ("map_zip_with", F::unknown("map_zip_with")),
+        ("map_zip_with", F::custom(map_zip_with)),
         ("reduce", F::custom(aggregate)),
         ("transform", F::custom(transform)),
         ("transform_keys", F::custom(transform_keys)),
         ("transform_values", F::custom(transform_values)),
-        ("zip_with", F::unknown("zip_with")),
+        ("zip_with", F::custom(zip_with)),
     ]
+}
+
+fn zip_with(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let arguments = input.arguments;
+    arguments.three()?;
+    Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
+        Arc::clone(&SPARK_ARRAY_ZIP_WITH_UDF),
+        arguments,
+    )))
+}
+
+fn map_zip_with(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let arguments = input.arguments;
+    arguments.three()?;
+    Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
+        Arc::clone(&SPARK_MAP_ZIP_WITH_UDF),
+        arguments,
+    )))
 }

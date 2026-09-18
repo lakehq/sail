@@ -1,4 +1,5 @@
 pub mod map_entries;
+pub mod spark_map_zip_with;
 pub mod map_from;
 pub mod spark_map_filter;
 pub mod spark_transform_keys;
