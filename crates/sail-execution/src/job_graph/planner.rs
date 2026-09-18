@@ -775,14 +775,16 @@ fn create_row_shuffle(
 
 fn shuffle_output_mode(graph: &JobGraph) -> OutputMode {
     match graph.options.shuffle_backend {
-        ShuffleBackendKind::Storage { .. } | ShuffleBackendKind::Flight => OutputMode::Pipelined,
+        ShuffleBackendKind::Storage { .. } | ShuffleBackendKind::Flight { .. } => {
+            OutputMode::Pipelined
+        }
         ShuffleBackendKind::Celeborn { .. } => OutputMode::Blocking,
     }
 }
 
 fn scalar_subquery_output_mode(graph: &JobGraph) -> OutputMode {
     match graph.options.shuffle_backend {
-        ShuffleBackendKind::Flight => OutputMode::Pipelined,
+        ShuffleBackendKind::Flight { .. } => OutputMode::Pipelined,
         ShuffleBackendKind::Storage { .. } | ShuffleBackendKind::Celeborn { .. } => {
             OutputMode::Blocking
         }
@@ -943,7 +945,9 @@ mod tests {
 
     fn flight_shuffle_options() -> JobGraphOptions {
         JobGraphOptions {
-            shuffle_backend: ShuffleBackendKind::Flight,
+            shuffle_backend: ShuffleBackendKind::Flight {
+                compression: ShuffleCompression::None,
+            },
         }
     }
 

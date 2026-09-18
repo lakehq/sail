@@ -469,7 +469,7 @@ impl JobScheduler {
                     OutputMode::Blocking => match job.graph.shuffle_backend() {
                         ShuffleBackendKind::Storage { .. } => TaskOutputKind::Storage,
                         ShuffleBackendKind::Celeborn { .. } => TaskOutputKind::External,
-                        ShuffleBackendKind::Flight => unreachable!(),
+                        ShuffleBackendKind::Flight { .. } => unreachable!(),
                     },
                 };
                 let key = StageGroupKey {
@@ -784,7 +784,7 @@ impl<'a> TaskInputBuilder<'a> {
             OutputMode::Blocking => match self.job.graph.shuffle_backend() {
                 ShuffleBackendKind::Storage { .. } => self.build_storage_locator()?,
                 ShuffleBackendKind::Celeborn { .. } => self.build_shuffle_service_locator()?,
-                ShuffleBackendKind::Flight => self.build_storage_locator()?,
+                ShuffleBackendKind::Flight { .. } => self.build_storage_locator()?,
             },
         };
         Ok(TaskInput {

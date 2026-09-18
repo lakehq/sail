@@ -1,7 +1,6 @@
 use std::fmt;
 use std::sync::Arc;
 
-use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result};
 use datafusion::execution::TaskContext;
@@ -14,7 +13,7 @@ use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
 use crate::stream::merge::merged_stream;
 use crate::stream::reader::{TaskStreamReader, TaskStreamSource};
 use crate::stream::writer::{
-    TaskStreamChannelSink, TaskStreamSink, TaskStreamWriteState, TaskStreamWriter,
+    MultiChannelTaskStreamSink, TaskStreamChannelSink, TaskStreamSink, TaskStreamWriter,
 };
 use crate::task::definition::{TaskInput, TaskInputLocator, TaskOutput, TaskOutputLocator};
 use crate::task_runner::{TaskRunnerActor, TaskRunnerExtensions, TaskRunnerMessage};
@@ -461,45 +460,5 @@ impl TaskStreamWriter for CelebornTaskStreamWriter {
                 self.schema.clone(),
             )
             .await
-    }
-}
-
-pub(crate) struct MultiChannelTaskStreamSink {
-    pub(crate) sinks: Vec<Option<Box<dyn TaskStreamChannelSink>>>,
-}
-
-#[tonic::async_trait]
-impl TaskStreamSink for MultiChannelTaskStreamSink {
-    async fn write(&mut self, channel: usize, batch: RecordBatch) -> Result<TaskStreamWriteState> {
-        let state = match self.sinks.get_mut(channel).ok_or_else(|| {
-            DataFusionError::Execution(format!("shuffle output channel {channel} not found"))
-        })? {
-            Some(sink) => sink.write(batch).await?,
-            None => TaskStreamWriteState::Closed,
-        };
-        if state == TaskStreamWriteState::Closed {
-            self.sinks[channel] = None;
-        }
-        Ok(if self.sinks.iter().any(Option::is_some) {
-            TaskStreamWriteState::Active
-        } else {
-            TaskStreamWriteState::Closed
-        })
-    }
-
-    async fn commit(self: Box<Self>) -> Result<()> {
-        // A consumer may finish without reading one channel (for example, an
-        // empty hash-join build partition). Do not let that channel's buffered
-        // data prevent other channels from reaching end-of-stream. Once the
-        // consumers finish, stage cleanup releases any unread channels.
-        try_join_all(self.sinks.into_iter().flatten().map(|sink| sink.commit())).await?;
-        Ok(())
-    }
-
-    async fn abort(self: Box<Self>) -> Result<()> {
-        for sink in self.sinks.into_iter().flatten() {
-            sink.abort().await?;
-        }
-        Ok(())
     }
 }

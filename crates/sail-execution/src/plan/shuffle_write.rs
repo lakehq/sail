@@ -278,12 +278,8 @@ async fn shuffle_write(
                 partitions[p] = Some(batch);
                 Ok(())
             })?;
-            for (channel, partition) in partitions.iter_mut().enumerate() {
-                if let Some(batch) = partition.take()
-                    && sink.write(channel, batch).await? == TaskStreamWriteState::Closed
-                {
-                    return Ok::<_, datafusion::error::DataFusionError>(false);
-                }
+            if sink.write(partitions).await? == TaskStreamWriteState::Closed {
+                return Ok::<_, datafusion::error::DataFusionError>(false);
             }
         }
         Ok(true)
