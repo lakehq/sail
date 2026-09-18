@@ -1,0 +1,15 @@
+# serializer version: 1
+---
+name: "test_empty_projection_limit_plan[exact-stats]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[]
+      PlaceholderRowExec
+---
+name: "test_empty_projection_limit_plan[missing-stats]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[]
+      DataSourceExec: file_groups={1 group: [[<tmp>/row_counts/part-0.parquet]]}, limit=1, file_type=parquet
