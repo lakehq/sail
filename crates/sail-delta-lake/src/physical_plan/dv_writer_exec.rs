@@ -246,6 +246,14 @@ struct RowLevelDvBitmaps {
 }
 
 impl RowLevelDvBitmaps {
+    fn union_with(&mut self, bitmaps: &Self) {
+        self.update_bitmap.union_with(&bitmaps.update_bitmap);
+        self.matched_delete_bitmap
+            .union_with(&bitmaps.matched_delete_bitmap);
+        self.not_matched_by_source_delete_bitmap
+            .union_with(&bitmaps.not_matched_by_source_delete_bitmap);
+    }
+
     fn insert(&mut self, operation: DeletionVectorRowOperation, row_index: u64) {
         match operation {
             DeletionVectorRowOperation::Update => {
@@ -570,6 +578,9 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
+        if matches!(self.operation, Some(DeltaOperation::Delete { .. })) {
+            return vec![None, None];
+        }
         let idx = match self.input.schema().index_of(&self.path_column) {
             Ok(i) => i,
             Err(_) => return vec![None, None],
@@ -613,6 +624,8 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
         let operation_mode = self.operation_mode;
         let classify_merge_operations =
             matches!(operation.as_ref(), Some(DeltaOperation::Merge { .. }));
+        let collect_file_bitmaps =
+            matches!(operation.as_ref(), Some(DeltaOperation::Delete { .. }));
 
         let output_rows = MetricBuilder::new(&self.metrics).output_rows(partition);
         let elapsed_compute = MetricBuilder::new(&self.metrics).elapsed_compute(partition);
@@ -650,6 +663,8 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
             let mut write_metrics = RowLevelDvWriteMetrics::default();
             let mut current_path: Option<String> = None;
             let mut current_bitmaps = RowLevelDvBitmaps::default();
+            // DELETE scans may interleave files. Buffer compressed positions, not sorted rows.
+            let mut file_bitmaps: HashMap<String, RowLevelDvBitmaps> = HashMap::new();
 
             let mut stream = input.execute(partition, context.clone())?;
             let mut scan_time_ms = 0u64;
@@ -716,7 +731,12 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
                                 DataFusionError::Internal("missing row-level DV path".into())
                             })?;
                         let flushed_bitmaps = std::mem::take(&mut current_bitmaps);
-                        if let Some(stats) = write_row_level_dv_actions_for_path(
+                        if collect_file_bitmaps {
+                            file_bitmaps
+                                .entry(flushed_path)
+                                .and_modify(|bitmaps| bitmaps.union_with(&flushed_bitmaps))
+                                .or_insert(flushed_bitmaps);
+                        } else if let Some(stats) = write_row_level_dv_actions_for_path(
                             flushed_path,
                             flushed_bitmaps,
                             &add_by_path,
@@ -762,10 +782,16 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
                 }
             }
 
-            if let Some(path) = current_path
-                && let Some(stats) = write_row_level_dv_actions_for_path(
+            if let Some(path) = current_path {
+                file_bitmaps
+                    .entry(path)
+                    .and_modify(|bitmaps| bitmaps.union_with(&current_bitmaps))
+                    .or_insert(current_bitmaps);
+            }
+            for (path, bitmaps) in file_bitmaps {
+                if let Some(stats) = write_row_level_dv_actions_for_path(
                     path,
-                    current_bitmaps,
+                    bitmaps,
                     &add_by_path,
                     &object_store,
                     &table_url,
@@ -774,8 +800,9 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
                     &mut output_actions,
                 )
                 .await?
-            {
-                write_metrics.record_file(stats);
+                {
+                    write_metrics.record_file(stats);
+                }
             }
 
             if output_actions.is_empty() {
@@ -864,6 +891,98 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn delete_dv_writer_merges_interleaved_files_across_batches() -> Result<()> {
+        use datafusion::arrow::array::{ArrayRef, RecordBatch};
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::physical_plan::collect;
+        use datafusion::prelude::SessionContext;
+        use object_store::memory::InMemory;
+
+        use crate::datasource::PATH_COLUMN;
+        use crate::physical_plan::decode_actions_and_meta_from_batch;
+
+        let first_path = "a+b%20c.parquet";
+        let batches = [
+            (vec![first_path, "b.parquet", first_path], vec![1, 2, 3]),
+            (vec!["b.parquet", first_path], vec![4, 1]),
+        ]
+        .into_iter()
+        .map(|(paths, indices)| {
+            RecordBatch::try_from_iter(vec![
+                (PATH_COLUMN, Arc::new(StringArray::from(paths)) as ArrayRef),
+                ("row_index", Arc::new(Int64Array::from(indices)) as ArrayRef),
+            ])
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+        let row_schema = batches[0].schema();
+        let input = MemorySourceConfig::try_new_exec(&[batches], row_schema, None)?;
+        let metadata = RecordBatch::try_from_iter(vec![(
+            PATH_COLUMN,
+            Arc::new(StringArray::from(vec!["a+b%2520c.parquet", "b.parquet"])) as ArrayRef,
+        )])?;
+        let adds_input =
+            MemorySourceConfig::try_new_exec(&[vec![metadata.clone()]], metadata.schema(), None)?;
+        let table_url = Url::parse("memory://dv/table/")
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let context = SessionContext::new();
+        context.register_object_store(&table_url, Arc::clone(&store));
+        let writer = DeletionVectorRowsWriterExec::new(
+            input,
+            adds_input,
+            table_url.clone(),
+            DeletionVectorRowsWriterConfig::new(
+                PATH_COLUMN,
+                "row_index",
+                DeletionVectorRowOperationMode::Delete,
+                0,
+                Some(vec![]),
+                Some(DeltaOperation::Delete { predicate: None }),
+            ),
+        )?;
+        assert!(writer.required_input_ordering().iter().all(Option::is_none));
+        let batches = collect(Arc::new(writer), context.task_ctx()).await?;
+        let mut adds = HashMap::new();
+        let mut removes = 0;
+        let mut deleted_rows = 0;
+        for batch in batches {
+            let (actions, metadata) = decode_actions_and_meta_from_batch(&batch)?;
+            for action in actions {
+                match action {
+                    Action::Add(add) => {
+                        assert!(adds.insert(add.path.clone(), add).is_none());
+                    }
+                    Action::Remove(_) => removes += 1,
+                    _ => return internal_err!("unexpected action from DV writer"),
+                }
+            }
+            if let Some(metadata) = metadata {
+                deleted_rows += metadata.row_count;
+            }
+        }
+        assert_eq!(removes, 2);
+        assert_eq!(adds.len(), 2);
+        assert_eq!(deleted_rows, 4);
+        for (path, expected) in [(first_path, vec![1, 3]), ("b.parquet", vec![2, 4])] {
+            let descriptor = adds
+                .get(path)
+                .and_then(|add| add.deletion_vector.as_ref())
+                .ok_or_else(|| {
+                    DataFusionError::Internal("missing output deletion vector".into())
+                })?;
+            let bitmap = crate::deletion_vector::read_deletion_vector(
+                store.as_ref(),
+                &table_url,
+                descriptor,
+            )
+            .await
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+            assert_eq!(bitmap.inner().iter().collect::<Vec<_>>(), expected);
+        }
+        Ok(())
+    }
 
     #[test]
     fn row_level_dv_distribution_uses_decoded_metadata_paths() -> Result<()> {

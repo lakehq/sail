@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use datafusion::common::{DataFusionError, Result, ToDFSchema};
 use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::utils::collect_columns;
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::projection::ProjectionExec;
@@ -26,7 +27,6 @@ use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapter
 use super::commit::assemble_commit_plan;
 use super::context::PlannerContext;
 use super::metadata_predicate::{build_metadata_filter, predicate_requires_stats};
-use super::op_merge::{hash_repartition_by_column, sort_by_column_preserving_partitioning};
 use super::utils::{
     LogReplayOptions, build_log_replay_pipeline_with_options, prepare_delta_writer_input,
 };
@@ -35,8 +35,8 @@ use crate::datasource::{
 };
 use crate::physical_plan::{
     DeletionVectorRowOperationMode, DeletionVectorRowsWriterConfig, DeletionVectorRowsWriterExec,
-    DeltaCommitContext, DeltaDiscoveryExec, DeltaScanByAddsExec, DeltaWriterExecOptions,
-    prepare_delta_write_context,
+    DeltaCommitContext, DeltaDecodePath, DeltaDiscoveryExec, DeltaScanByAddsExec,
+    DeltaWriterExecOptions, prepare_delta_write_context,
 };
 use crate::spec::DeltaOperation;
 
@@ -245,13 +245,16 @@ pub async fn build_delete_plan_mor(
         false,
     )?);
     let target_partitions = ctx.session().config().target_partitions().max(1);
+    // Assign files before scanning so matching rows stay with their metadata partition.
+    let discovery_path = DeltaDecodePath::expression(PATH_COLUMN, &find_files.schema())?;
     let find_files = Arc::new(RepartitionExec::try_new(
         find_files,
-        Partitioning::RoundRobinBatch(target_partitions),
+        Partitioning::Hash(vec![discovery_path], target_partitions),
     )?);
     let scan_config = DeltaScanConfig {
         file_column_name: Some(PATH_COLUMN.to_string()),
         row_index_column_name: Some(MERGE_ROW_INDEX_COLUMN.to_string()),
+        hash_partition_files: true,
         enable_parquet_pushdown: true,
         ..Default::default()
     };
@@ -264,6 +267,15 @@ pub async fn build_delete_plan_mor(
         Some(Arc::clone(&table_schema)),
     )
     .map_err(|error| DataFusionError::External(Box::new(error)))?;
+    let mut projection = collect_columns(&physical_condition)
+        .into_iter()
+        .map(|column| column.index())
+        .collect::<Vec<_>>();
+    projection.sort_unstable();
+    projection.dedup();
+    projection.push(scan_schema.index_of(PATH_COLUMN)?);
+    projection.push(scan_schema.index_of(MERGE_ROW_INDEX_COLUMN)?);
+    let scan_schema = Arc::new(scan_schema.project(&projection)?);
     let pushdown_filter = rewrite_predicate_for_column_mapping(
         Arc::clone(&physical_condition),
         &table_schema,
@@ -277,12 +289,15 @@ pub async fn build_delete_plan_mor(
         Arc::clone(&table_schema),
         Arc::clone(&scan_schema),
         scan_config,
-        None,
+        Some(projection),
         None,
         Some(pushdown_filter),
         ctx.lakehouse_table().cloned(),
         snapshot_state.load_config().catalog_managed_commits.clone(),
     ));
+    let physical_condition = SchemaEvolutionPhysicalExprAdapterFactory {}
+        .create(Arc::clone(&table_schema), Arc::clone(&scan_schema))?
+        .rewrite(physical_condition)?;
     let matches: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(physical_condition, scan)?);
     let positions = [PATH_COLUMN, MERGE_ROW_INDEX_COLUMN]
         .into_iter()
@@ -299,10 +314,7 @@ pub async fn build_delete_plan_mor(
     let metadata =
         build_log_replay_pipeline_with_options(ctx, snapshot_state, log_replay_options).await?;
     let metadata = build_metadata_filter(ctx.session(), metadata, snapshot_state, condition_expr)?;
-    let matches = hash_repartition_by_column(matches, PATH_COLUMN, target_partitions)?;
-    let matches = sort_by_column_preserving_partitioning(matches, PATH_COLUMN)?;
-    let metadata_path =
-        crate::physical_plan::DeltaDecodePath::expression(PATH_COLUMN, &metadata.schema())?;
+    let metadata_path = DeltaDecodePath::expression(PATH_COLUMN, &metadata.schema())?;
     let metadata = Arc::new(RepartitionExec::try_new(
         metadata,
         Partitioning::Hash(vec![metadata_path], target_partitions),

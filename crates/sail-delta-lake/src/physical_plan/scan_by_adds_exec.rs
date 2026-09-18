@@ -28,6 +28,7 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DataFusionError, Result, Statistics, internal_err};
+use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::stream::{self, TryStreamExt};
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
@@ -39,9 +40,9 @@ use crate::datasource::scan::{
     FileScanParams, TableStatsMode, file_scan_projection_for_schema, map_statistics_to_schema,
     sanitize_statistics_for_schema,
 };
-use crate::datasource::{DeltaScanConfig, build_file_scan_config};
+use crate::datasource::{DeltaScanConfig, PATH_COLUMN, build_file_scan_config};
 use crate::delta_log::LogStoreRef;
-use crate::physical_plan::{COL_ACTION, decode_adds_from_batch, meta_adds};
+use crate::physical_plan::{COL_ACTION, DeltaDecodePath, decode_adds_from_batch, meta_adds};
 use crate::schema::{arrow_field_physical_name, get_physical_schema, restore_logical_record_batch};
 use crate::session_extension::{DeltaTableCache, load_table_uncached, load_table_with_config};
 use crate::snapshot::{CatalogManagedCommitSet, DeltaSnapshotConfig};
@@ -423,10 +424,7 @@ impl DeltaScanByAddsExec {
         catalog_managed_commits: Option<CatalogManagedCommitSet>,
     ) -> Self {
         let statistics = Statistics::new_unknown(output_schema.as_ref());
-        let cache = Self::compute_properties(
-            output_schema.clone(),
-            input.output_partitioning().partition_count(),
-        );
+        let cache = Self::compute_properties(input.as_ref(), output_schema.clone(), &scan_config);
         Self {
             input,
             table_url,
@@ -513,10 +511,25 @@ impl DeltaScanByAddsExec {
         &self.statistics
     }
 
-    fn compute_properties(schema: SchemaRef, partition_count: usize) -> Arc<PlanProperties> {
+    fn compute_properties(
+        input: &dyn ExecutionPlan,
+        schema: SchemaRef,
+        scan_config: &DeltaScanConfig,
+    ) -> Arc<PlanProperties> {
+        // Each Add stays in its metadata partition, including all native file scan splits.
+        let partitioning = if let Some(path_column) = &scan_config.file_column_name
+            && let Ok(path_index) = schema.index_of(path_column)
+            && let Partitioning::Hash(expressions, count) = input.output_partitioning()
+            && let Ok(metadata_path) = DeltaDecodePath::expression(PATH_COLUMN, &input.schema())
+            && expressions.as_slice() == [metadata_path]
+        {
+            Partitioning::Hash(vec![Arc::new(Column::new(path_column, path_index))], *count)
+        } else {
+            Partitioning::UnknownPartitioning(input.output_partitioning().partition_count().max(1))
+        };
         Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
-            Partitioning::UnknownPartitioning(partition_count.max(1)),
+            partitioning,
             EmissionType::Incremental,
             Boundedness::Bounded,
         ))
@@ -534,7 +547,15 @@ impl ExecutionPlan for DeltaScanByAddsExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::UnspecifiedDistribution]
+        let distribution = if self.scan_config.hash_partition_files {
+            match DeltaDecodePath::expression(PATH_COLUMN, &self.input.schema()) {
+                Ok(path) => Distribution::KeyPartitioned(vec![path]),
+                Err(_) => Distribution::SinglePartition,
+            }
+        } else {
+            Distribution::UnspecifiedDistribution
+        };
+        vec![distribution]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -567,8 +588,9 @@ impl ExecutionPlan for DeltaScanByAddsExec {
         let mut cloned = (*self).clone();
         cloned.input = children[0].clone();
         cloned.cache = Self::compute_properties(
+            cloned.input.as_ref(),
             cloned.output_schema.clone(),
-            cloned.input.output_partitioning().partition_count(),
+            &cloned.scan_config,
         );
         Ok(Arc::new(cloned))
     }
@@ -774,6 +796,130 @@ mod tests {
 
     use super::DeltaScanByAddsExec;
     use crate::datasource::scan::map_statistics_to_schema;
+
+    #[test]
+    fn scan_preserves_only_decoded_file_path_hash_partitioning() -> Result<()> {
+        use datafusion::physical_expr::PhysicalExpr;
+        use datafusion::physical_expr::expressions::Column;
+        use datafusion::physical_plan::Partitioning;
+        use datafusion::physical_plan::repartition::RepartitionExec;
+
+        use crate::datasource::{DeltaScanConfig, PATH_COLUMN};
+        use crate::physical_plan::DeltaDecodePath;
+
+        let metadata_schema = Arc::new(Schema::new(vec![Field::new(
+            PATH_COLUMN,
+            DataType::Utf8,
+            true,
+        )]));
+        let output_schema = Arc::new(Schema::new(vec![
+            Field::new("value", DataType::Int64, true),
+            Field::new("file", DataType::Utf8, true),
+        ]));
+        let config = DeltaScanConfig {
+            file_column_name: Some("file".into()),
+            ..Default::default()
+        };
+        let decoded = DeltaDecodePath::expression(PATH_COLUMN, &metadata_schema)?;
+        let encoded: Arc<dyn PhysicalExpr> = Arc::new(Column::new(PATH_COLUMN, 0));
+        for (partitioning, preserves_hash) in [
+            (Partitioning::Hash(vec![decoded], 4), true),
+            (Partitioning::Hash(vec![encoded], 4), false),
+            (Partitioning::RoundRobinBatch(4), false),
+        ] {
+            let input = RepartitionExec::try_new(
+                Arc::new(EmptyExec::new(Arc::clone(&metadata_schema))),
+                partitioning,
+            )?;
+            let properties = DeltaScanByAddsExec::compute_properties(
+                &input,
+                Arc::clone(&output_schema),
+                &config,
+            );
+            if preserves_hash {
+                let expected: Arc<dyn PhysicalExpr> = Arc::new(Column::new("file", 1));
+                assert_eq!(
+                    properties.output_partitioning(),
+                    &Partitioning::Hash(vec![expected], 4)
+                );
+            } else {
+                assert!(matches!(
+                    properties.output_partitioning(),
+                    Partitioning::UnknownPartitioning(4)
+                ));
+            }
+            let projected_schema = Arc::new(output_schema.project(&[0])?);
+            let properties =
+                DeltaScanByAddsExec::compute_properties(&input, projected_schema, &config);
+            assert!(matches!(
+                properties.output_partitioning(),
+                Partitioning::UnknownPartitioning(4)
+            ));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn optimizer_keeps_file_partitioning_below_scan() -> Result<()> {
+        use datafusion::common::config::ConfigOptions;
+        use datafusion::physical_optimizer::PhysicalOptimizerRule;
+        use datafusion::physical_optimizer::ensure_requirements::EnsureRequirements;
+        use datafusion::physical_plan::repartition::RepartitionExec;
+        use datafusion::physical_plan::{ExecutionPlan, Partitioning};
+
+        use crate::datasource::{DeltaScanConfig, PATH_COLUMN};
+        use crate::physical_plan::DeltaDecodePath;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            PATH_COLUMN,
+            DataType::Utf8,
+            true,
+        )]));
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(Arc::clone(&schema)).with_partitions(4));
+        let path = DeltaDecodePath::expression(PATH_COLUMN, &schema)?;
+        let scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaScanByAddsExec::new(
+            input,
+            Url::parse("file:///tmp/delta-table")
+                .map_err(|error| DataFusionError::External(Box::new(error)))?,
+            0,
+            Arc::clone(&schema),
+            schema,
+            DeltaScanConfig {
+                file_column_name: Some(PATH_COLUMN.into()),
+                hash_partition_files: true,
+                ..Default::default()
+            },
+            None,
+            None,
+            None,
+            None,
+            None,
+        ));
+        let mut config = ConfigOptions::new();
+        config.execution.target_partitions = 4;
+        let optimized = EnsureRequirements::new().optimize(scan, &config)?;
+        let scan = optimized
+            .downcast_ref::<DeltaScanByAddsExec>()
+            .ok_or_else(|| DataFusionError::Internal("scan must remain the root".into()))?;
+        let repartition = scan
+            .input()
+            .downcast_ref::<RepartitionExec>()
+            .ok_or_else(|| {
+                DataFusionError::Internal(
+                    "file metadata must be partitioned before scanning".into(),
+                )
+            })?;
+        assert_eq!(
+            repartition.partitioning(),
+            &Partitioning::Hash(vec![path], 4)
+        );
+        assert!(matches!(
+            scan.properties().output_partitioning(),
+            Partitioning::Hash(_, 4)
+        ));
+        Ok(())
+    }
 
     #[test]
     fn test_map_statistics_to_schema_by_name() {

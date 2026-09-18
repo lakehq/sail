@@ -110,6 +110,8 @@ def test_dv_scan_pruning_projection_and_repeated_dml(spark, tmp_path, metadata_a
 
     spark.sql(f"DELETE FROM {target} WHERE id >= 512 AND id < 528")  # noqa: S608
     live = [i for i in live if not 512 <= i < 528]
+    spark.sql(f"DELETE FROM {target} WHERE value IN ('value-4097', 'value-4101')")  # noqa: S608
+    live = [i for i in live if i not in (4097, 4101)]
     spark.sql(f"UPDATE {target} SET value = 'updated' WHERE id >= 640 AND id < 656")  # noqa: S608
     assert [(row.id, row.value) for row in read().where("id >= 500 AND id < 700").orderBy("id").collect()] == [
         (i, "updated" if 640 <= i < 656 else f"value-{i}") for i in live if 500 <= i < 700
