@@ -8,7 +8,7 @@ use datafusion::common::{Column, DFSchema, DataFusionError, Result, ScalarValue}
 use datafusion::functions::core::getfield::GetFieldFunc;
 use datafusion::functions_aggregate::expr_fn::sum;
 use datafusion::logical_expr::logical_plan::{
-    Aggregate, EmptyRelation, Projection, TableScan, Union,
+    Aggregate, EmptyRelation, FetchType, Limit, Projection, SkipType, TableScan, Union,
 };
 use datafusion::logical_expr::{
     Expr, LogicalPlan, LogicalPlanBuilder, TableScanBuilder, TableSource,
@@ -34,12 +34,15 @@ impl LogicalRewriter for DeltaMetadataAggregateRewriter {
 
     fn rewrite(&self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         plan.transform_up_with_subqueries(|plan| {
-            let LogicalPlan::Aggregate(aggregate) = &plan else {
-                return Ok(Transformed::no(plan));
-            };
-            let rewritten = match rewrite_exact_ungrouped_aggregate(aggregate)? {
-                Some(rewritten) => Some(rewritten),
-                None => rewrite_grouped_count(aggregate)?,
+            let rewritten = match &plan {
+                LogicalPlan::Aggregate(aggregate) => {
+                    match rewrite_exact_ungrouped_aggregate(aggregate)? {
+                        Some(rewritten) => Some(rewritten),
+                        None => rewrite_grouped_count(aggregate)?,
+                    }
+                }
+                LogicalPlan::Limit(limit) => rewrite_empty_projection_limit(limit)?,
+                _ => None,
             };
             match rewritten {
                 Some(rewritten) => Ok(Transformed::yes(rewritten)),
@@ -47,6 +50,42 @@ impl LogicalRewriter for DeltaMetadataAggregateRewriter {
             }
         })
     }
+}
+
+fn rewrite_empty_projection_limit(limit: &Limit) -> Result<Option<LogicalPlan>> {
+    if !limit.input.schema().fields().is_empty()
+        || !matches!(limit.get_skip_type()?, SkipType::Literal(0))
+        || !matches!(limit.get_fetch_type()?, FetchType::Literal(Some(1)))
+    {
+        return Ok(None);
+    }
+    let Some(input) = DeltaAggregateInput::try_new(limit.input.as_ref()) else {
+        return Ok(None);
+    };
+    let scan = input.scan();
+    if !scan.filters.is_empty() {
+        return Ok(None);
+    }
+    let Some(source) = scan.source.downcast_ref::<DeltaTableSource>() else {
+        return Ok(None);
+    };
+    if !source.snapshot().load_config().require_files
+        || !matches!(source.file_selection(), DeltaFileSelection::Snapshot)
+    {
+        return Ok(None);
+    }
+    let Ok(snapshot_stats) = source.snapshot().pruning_stats() else {
+        return Ok(None);
+    };
+    let Some(row_count) = snapshot_stats.exact_num_records() else {
+        return Ok(None);
+    };
+
+    // Empty projections carry only row existence. Exact snapshot counts already subtract DVs.
+    Ok(Some(LogicalPlan::EmptyRelation(EmptyRelation {
+        produce_one_row: row_count > 0 && scan.fetch != Some(0),
+        schema: Arc::clone(limit.input.schema()),
+    })))
 }
 
 enum DeltaAggregateInput<'a> {
