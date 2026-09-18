@@ -50,6 +50,10 @@ FROM python:${PYTHON_VERSION}-slim
 
 ARG PYSPARK_VERSION
 
+RUN apt-get update && \
+    apt-get upgrade -y && \
+    rm -rf /var/lib/apt/lists/*
+
 RUN python3 -m pip install --no-cache-dir "pyspark-client==${PYSPARK_VERSION}"
 
 COPY --from=builder /usr/local/bin/sail /usr/local/bin
