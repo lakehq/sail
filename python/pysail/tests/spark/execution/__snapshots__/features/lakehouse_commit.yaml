@@ -112,6 +112,9 @@ data:
         Projection: range.id AS id
           TableScan: range projection=[id]
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -188,6 +191,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
@@ -463,6 +469,9 @@ data:
         Projection: range.id AS id
           TableScan: range projection=[id]
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -539,6 +548,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:

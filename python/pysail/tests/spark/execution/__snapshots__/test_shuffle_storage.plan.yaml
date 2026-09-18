@@ -143,6 +143,9 @@ data:
                 Projection: #3 AS k AS #4, #3 + Int64(1) AS v2 AS #5
                   Range: start=0, end=64, step=1, num_partitions=4
 
+    logical_plan after rewrite_binary_grouping:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
@@ -219,6 +222,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+
+    logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_lambda_variables:
