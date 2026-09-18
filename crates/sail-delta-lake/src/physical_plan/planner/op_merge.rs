@@ -42,7 +42,7 @@ use super::utils::{LogReplayOptions, prepare_delta_writer_input};
 use crate::datasource::PATH_COLUMN;
 use crate::physical_plan::{
     DeletionVectorRowOperationMode, DeletionVectorRowsWriterConfig, DeltaCommitExec,
-    DeltaWriterExec, prepare_delta_write_context,
+    DeltaDecodePath, DeltaWriterExec, prepare_delta_write_context,
 };
 use crate::spec::DeltaOperation;
 
@@ -293,8 +293,12 @@ pub(crate) async fn assemble_row_level_mor_plan(
             hash_repartition_by_column(deletion_vector_plan, PATH_COLUMN, target_partitions)?;
         let deletion_vector_plan =
             sort_by_column_preserving_partitioning(deletion_vector_plan, PATH_COLUMN)?;
-        let touched_adds =
-            hash_repartition_by_column(touched_adds, PATH_COLUMN, target_partitions)?;
+        // DV row paths are decoded, so metadata must hash the same representation.
+        let metadata_path = DeltaDecodePath::expression(PATH_COLUMN, &touched_adds.schema())?;
+        let touched_adds = Arc::new(RepartitionExec::try_new(
+            touched_adds,
+            Partitioning::Hash(vec![metadata_path], target_partitions),
+        )?);
         let dv_writer: Arc<dyn ExecutionPlan> =
             Arc::new(crate::physical_plan::DeletionVectorRowsWriterExec::new(
                 deletion_vector_plan,

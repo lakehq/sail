@@ -29,7 +29,7 @@ use url::Url;
 
 use crate::deletion_vector::{DeletionVectorBitmap, DeletionVectorWriter};
 use crate::physical_plan::{
-    COL_ACTION, ExecCommitMeta, current_timestamp_millis, decode_adds_from_batch,
+    COL_ACTION, DeltaDecodePath, ExecCommitMeta, current_timestamp_millis, decode_adds_from_batch,
     delta_action_schema, encode_actions, meta_adds,
 };
 use crate::schema::PhysicalPartitionColumn;
@@ -198,6 +198,7 @@ impl DeletionVectorRowsWriterConfig {
 pub struct DeletionVectorRowsWriterExec {
     input: Arc<dyn ExecutionPlan>,
     adds_input: Arc<dyn ExecutionPlan>,
+    metadata_path: Arc<dyn PhysicalExpr>,
     table_url: Url,
     path_column: String,
     row_index_column: String,
@@ -240,10 +241,7 @@ impl DeletionVectorRowsWriterExec {
                 .index_of(OPERATION_COLUMN)
                 .map_err(|e| DataFusionError::Plan(format!("{e}")))?;
         }
-        adds_input
-            .schema()
-            .index_of(&path_column)
-            .map_err(|e| DataFusionError::Plan(format!("{e}")))?;
+        let metadata_path = DeltaDecodePath::expression(&path_column, &adds_input.schema())?;
 
         let schema = delta_action_schema()?;
         let partition_count = input.output_partitioning().partition_count().max(1);
@@ -256,6 +254,7 @@ impl DeletionVectorRowsWriterExec {
         Ok(Self {
             input,
             adds_input,
+            metadata_path,
             table_url,
             path_column,
             row_index_column,
@@ -609,9 +608,9 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
 
     fn apply_expressions(
         &self,
-        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
+        apply_expression_roots([&self.metadata_path], f)
     }
 
     #[expect(deprecated)]
@@ -654,7 +653,10 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
             let expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new(&self.path_column, idx));
             Distribution::KeyPartitioned(vec![expr])
         };
-        vec![dist_for(&self.input), dist_for(&self.adds_input)]
+        vec![
+            dist_for(&self.input),
+            Distribution::KeyPartitioned(vec![Arc::clone(&self.metadata_path)]),
+        ]
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
@@ -1280,6 +1282,54 @@ async fn scan_file_for_matching_rows(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn row_level_dv_distribution_uses_decoded_metadata_paths() -> Result<()> {
+        use datafusion::arrow::array::{ArrayRef, RecordBatch};
+        use datafusion::physical_plan::empty::EmptyExec;
+        use datafusion_common::cast::as_string_array;
+
+        let decoded = "part=a+b%20c/file.parquet";
+        let rows = RecordBatch::try_from_iter(vec![
+            (
+                "path",
+                Arc::new(StringArray::from(vec![decoded])) as ArrayRef,
+            ),
+            ("row_index", Arc::new(Int64Array::from(vec![0])) as ArrayRef),
+        ])?;
+        let metadata = RecordBatch::try_from_iter(vec![(
+            "path",
+            Arc::new(StringArray::from(vec!["part=a+b%2520c/file.parquet"])) as ArrayRef,
+        )])?;
+        let writer = DeletionVectorRowsWriterExec::new(
+            Arc::new(EmptyExec::new(rows.schema())),
+            Arc::new(EmptyExec::new(metadata.schema())),
+            Url::parse("file:///tmp/delta-table")
+                .map_err(|error| DataFusionError::External(Box::new(error)))?,
+            DeletionVectorRowsWriterConfig::new(
+                "path",
+                "row_index",
+                DeletionVectorRowOperationMode::Update,
+                0,
+                None,
+                None,
+            ),
+        )?;
+        for (distribution, batch) in writer
+            .input_distribution_requirements()
+            .into_per_child()
+            .iter()
+            .zip([rows, metadata])
+        {
+            let Distribution::KeyPartitioned(expressions) = distribution else {
+                return internal_err!("DV inputs must be partitioned by their file path");
+            };
+            assert_eq!(expressions.len(), 1);
+            let paths = expressions[0].evaluate(&batch)?.into_array(1)?;
+            assert_eq!(as_string_array(&paths)?, &StringArray::from(vec![decoded]));
+        }
+        Ok(())
+    }
 
     #[test]
     fn row_level_dv_reconciliation_excludes_existing_and_duplicate_rows() -> Result<()> {

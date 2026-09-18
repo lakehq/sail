@@ -1,25 +1,19 @@
 use std::sync::Arc;
 
-use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion::common::{JoinType, Result, plan_datafusion_err};
 use datafusion::logical_expr::physical_planning_context::ScalarSubqueryResults;
 use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
-use datafusion::physical_expr::window::WindowExpr;
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
-use datafusion::physical_plan::aggregates::AggregateExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::coop::CooperativeExec;
-use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, PiecewiseMergeJoinExec,
 };
 use datafusion::physical_plan::limit::GlobalLimitExec;
-use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
-use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion::physical_plan::{
     ExecutionPlan, ExecutionPlanProperties, PlanProperties, replace_children_if_necessary,
 };
@@ -495,7 +489,7 @@ fn rebuild_subtree(
         .map(|child| child.plan)
         .collect::<Vec<_>>();
     let plan = replace_children_if_necessary(plan, children)?;
-    let node_has_scalar_subquery_expr = plan_node_has_scalar_subquery_expr(&plan);
+    let node_has_scalar_subquery_expr = plan_node_has_scalar_subquery_expr(&plan)?;
     let subtree_has_pending_scalar_subquery_expr =
         node_has_scalar_subquery_expr || child_has_pending_scalar_subquery_expr.iter().any(|x| *x);
     Ok(RebuiltSubtree {
@@ -639,101 +633,20 @@ fn wrap_pending_scalar_subqueries(
     ))
 }
 
-fn plan_node_has_scalar_subquery_expr(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    if let Some(filter) = plan.downcast_ref::<FilterExec>() {
-        return physical_expr_has_scalar_subquery(filter.predicate());
-    }
-    if let Some(projection) = plan.downcast_ref::<ProjectionExec>() {
-        return projection
-            .expr()
-            .iter()
-            .any(|expr| physical_expr_has_scalar_subquery(&expr.expr));
-    }
-    if let Some(aggregate) = plan.downcast_ref::<AggregateExec>() {
-        return aggregate_has_scalar_subquery_expr(aggregate);
-    }
-    if let Some(sort) = plan.downcast_ref::<SortExec>() {
-        return sort
-            .expr()
-            .iter()
-            .any(|sort| physical_expr_has_scalar_subquery(&sort.expr));
-    }
-    if let Some(sort) = plan.downcast_ref::<SortPreservingMergeExec>() {
-        return sort
-            .expr()
-            .iter()
-            .any(|sort| physical_expr_has_scalar_subquery(&sort.expr));
-    }
-    if let Some(join) = plan.downcast_ref::<HashJoinExec>() {
-        return hash_join_has_scalar_subquery_expr(join);
-    }
-    if let Some(join) = plan.downcast_ref::<NestedLoopJoinExec>() {
-        return join
-            .filter()
-            .is_some_and(|filter| physical_expr_has_scalar_subquery(filter.expression()));
-    }
-    if let Some(join) = plan.downcast_ref::<PiecewiseMergeJoinExec>() {
-        return physical_expr_has_scalar_subquery(&join.on.0)
-            || physical_expr_has_scalar_subquery(&join.on.1);
-    }
-    if let Some(window) = plan.downcast_ref::<WindowAggExec>() {
-        return window
-            .window_expr()
-            .iter()
-            .any(window_expr_has_scalar_subquery);
-    }
-    if let Some(window) = plan.downcast_ref::<BoundedWindowAggExec>() {
-        return window
-            .window_expr()
-            .iter()
-            .any(window_expr_has_scalar_subquery);
-    }
-    false
-}
-
-fn aggregate_has_scalar_subquery_expr(aggregate: &AggregateExec) -> bool {
-    aggregate
-        .group_expr()
-        .expr()
-        .iter()
-        .any(|(expr, _)| physical_expr_has_scalar_subquery(expr))
-        || aggregate
-            .group_expr()
-            .null_expr()
-            .iter()
-            .any(|(expr, _)| physical_expr_has_scalar_subquery(expr))
-        || aggregate.aggr_expr().iter().any(|expr| {
-            expr.expressions()
-                .iter()
-                .any(physical_expr_has_scalar_subquery)
-                || expr
-                    .order_bys()
-                    .iter()
-                    .any(|sort| physical_expr_has_scalar_subquery(&sort.expr))
-        })
-        || aggregate
-            .filter_expr()
-            .iter()
-            .flatten()
-            .any(physical_expr_has_scalar_subquery)
-}
-
-fn hash_join_has_scalar_subquery_expr(join: &HashJoinExec) -> bool {
-    join.on().iter().any(|(left, right)| {
-        physical_expr_has_scalar_subquery(left) || physical_expr_has_scalar_subquery(right)
-    }) || join
-        .filter()
-        .is_some_and(|filter| physical_expr_has_scalar_subquery(filter.expression()))
-}
-
-fn window_expr_has_scalar_subquery(expr: &Arc<dyn WindowExpr>) -> bool {
-    let expressions = expr.all_expressions();
-    expressions
-        .args
-        .iter()
-        .chain(expressions.partition_by_exprs.iter())
-        .chain(expressions.order_by_exprs.iter())
-        .any(physical_expr_has_scalar_subquery)
+fn plan_node_has_scalar_subquery_expr(plan: &Arc<dyn ExecutionPlan>) -> Result<bool> {
+    // Include expressions pushed into data sources, not just expressions on
+    // filters and projections. Every stage using a scalar result needs its own
+    // ScalarSubqueryExec, even if predicate pushdown removed the FilterExec.
+    let mut found = false;
+    plan.apply_expressions(&mut |expr| {
+        if physical_expr_has_scalar_subquery(expr) {
+            found = true;
+            Ok(TreeNodeRecursion::Stop)
+        } else {
+            Ok(TreeNodeRecursion::Continue)
+        }
+    })?;
+    Ok(found)
 }
 
 fn physical_expr_has_scalar_subquery(expr: &Arc<dyn PhysicalExpr>) -> bool {
@@ -793,7 +706,13 @@ fn create_rescale_input(
         OutputMode::Pipelined,
     )?;
     let properties = stage_properties_with_unknown_partitioning(graph, stage, output_partitions);
-    Ok(stage_input_exec(stage, InputMode::Rescale, properties))
+    Ok(stage_input_exec(
+        stage,
+        InputMode::Rescale {
+            partitions: output_partitions,
+        },
+        properties,
+    ))
 }
 
 fn create_shuffle(
@@ -1237,7 +1156,7 @@ mod tests {
             graph.stages()[1].inputs.as_slice(),
             [StageInput {
                 stage: 0,
-                mode: InputMode::Rescale,
+                mode: InputMode::Rescale { partitions: 2 },
             }]
         ));
     }

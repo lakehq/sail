@@ -407,6 +407,20 @@ impl DriverActor {
         debug!("job action: {action:?}");
         match action {
             JobAction::ScheduleTaskRegion { region } => {
+                if let Err(e) = self.task_assigner.enqueue_tasks(&region) {
+                    // Failing one task fails the entire region. Report this as a
+                    // separate message so that the current job actions finish first.
+                    if let Some(key) = region.tasks.iter().flat_map(|(_, set)| set.tasks()).next() {
+                        ctx.send(DriverMessage::UpdateTask {
+                            key: key.clone(),
+                            status: TaskStatus::Failed,
+                            message: Some(e.to_string()),
+                            cause: Some(CommonErrorCause::new::<PyErrExtractor>(&e)),
+                            sequence: None,
+                        });
+                    }
+                    return;
+                }
                 for (_, set) in &region.tasks {
                     for entry in &set.entries {
                         ctx.send_with_delay(
@@ -417,7 +431,6 @@ impl DriverActor {
                         );
                     }
                 }
-                self.task_assigner.enqueue_tasks(region);
             }
             JobAction::CancelTask { key } => {
                 self.task_assigner.exclude_task(&key);
