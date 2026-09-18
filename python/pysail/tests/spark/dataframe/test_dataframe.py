@@ -10,6 +10,7 @@ from pyspark.sql.types import IntegerType, LongType, StringType, StructField, St
 from pyspark.sql.window import Window
 
 from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
+from pysail.tests.spark.dataframe.udt import NamedPythonUDT
 
 # `ıd` and `ς` are deliberately confusable with ASCII names: they are what tells the resolver rule
 # apart from the lowercasing one.
@@ -539,6 +540,30 @@ def test_an_alias_reports_the_metadata_of_a_named_child_only(spark, case, build,
     assert build(df).schema[column].metadata == expected
 
 
+def test_clearing_the_metadata_keeps_the_user_defined_type(spark):
+    # The identity of a user defined type rides in the metadata of the field, so clearing the Spark
+    # metadata has to clear that one key and leave the rest: replacing the whole map would turn the
+    # column into its storage type without a single error. The column carries metadata of its own,
+    # which is what makes the clearing fire at all.
+    schema = StructType([StructField("id", IntegerType()), StructField("u", NamedPythonUDT())])
+    marked = spark.createDataFrame([], schema).withMetadata("u", {"k": "1"})
+
+    cleared = [
+        marked.groupBy("id").agg(first("u").alias("u")),
+        marked.selectExpr("first(u) OVER (PARTITION BY id) AS u"),
+        marked.withColumn("u", col("u")),
+    ]
+    for df in cleared:
+        field = df.schema["u"]
+        assert isinstance(field.dataType, NamedPythonUDT)
+        assert field.metadata == {}
+
+    # An alias reads the metadata of the attribute below it, so there both survive.
+    aliased = marked.select(col("u").alias("u")).schema["u"]
+    assert isinstance(aliased.dataType, NamedPythonUDT)
+    assert aliased.metadata == {"k": "1"}
+
+
 @pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_a_generated_aggregate_name_is_marked_as_such(spark):
     # Spark names the column of an aggregate that was not aliased, and marks that name in the
@@ -978,6 +1003,15 @@ def test_fillna_and_dropna_without_subset_are_unaffected(spark):
     df = spark.sql("SELECT CAST(NULL AS INT) AS a")
     assert df.fillna(0).collect() == [Row(a=0)]
     assert df.dropna().collect() == []
+
+
+def test_na_ambiguity_orders_the_references_like_a_java_string(spark):
+    # The references are reported through a path of their own, which sorts them by UTF-16 code unit
+    # as a Java string compares: a name outside the BMP comes before one in the high part of it.
+    df = spark.range(1).alias("\ufb00").crossJoin(spark.range(1).alias("\U0001f600"))
+
+    with pytest.raises(Exception, match=re.escape("could be: [`\U0001f600`.`id`, `\ufb00`.`id`].")):
+        df.fillna(0, subset=["id"]).collect()
 
 
 def test_fillna_rejects_an_ambiguous_subset_name(spark):

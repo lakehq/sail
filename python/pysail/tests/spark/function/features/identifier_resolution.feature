@@ -44,6 +44,39 @@ Feature: identifier resolution beyond ASCII
         | Cherokee               | `Ꭰ`       | `ꭰ`   |
         | lowercase forms differ | `ID`      | `ıd`  |
 
+    Scenario: a qualified wildcard expands every alias that matches without case
+      # The resolver matches a qualifier without case while the expansion compares it literally,
+      # so two aliases that differ only in case both have to be expanded.
+      When query
+        """
+        SELECT a.* FROM (SELECT 1 AS x) AS A CROSS JOIN (SELECT 2 AS y) AS a
+        """
+      Then query result
+        | x | y |
+        | 1 | 2 |
+
+    Scenario: the wildcard expansion does not depend on the kind of join
+      # The same shape reached through a plain join rather than a cross join, so the gap is in the
+      # expansion of the qualifier and not in how the two relations were put together.
+      When query
+        """
+        SELECT a.* FROM (SELECT 1 AS x) AS A JOIN (SELECT 2 AS y) AS a ON true
+        """
+      Then query result
+        | x | y |
+        | 1 | 2 |
+
+    Scenario: a qualified wildcard expands three aliases that match without case
+      # With three of them, picking one qualifier used to return the first and the last and leave
+      # out the one in the middle, which is what tells "it picks one" apart from "it picks wrong".
+      When query
+        """
+        SELECT a.* FROM (SELECT 1 AS x) AS A CROSS JOIN (SELECT 2 AS y) AS a CROSS JOIN (SELECT 3 AS z) AS `A`
+        """
+      Then query result
+        | x | y | z |
+        | 1 | 2 | 3 |
+
   Rule: A lambda parameter is matched by the lowercased name
 
     @function(lambda)

@@ -68,8 +68,34 @@ impl PlanResolver<'_> {
     ) -> PlanResult<NamedExpr> {
         for (q, remaining) in Self::generate_qualified_wildcard_candidates(name.parts()) {
             if remaining.is_empty() {
-                // The expansion of the wildcard compares the qualifier literally, so the one
-                // that the user wrote is replaced with the matching one in the schema.
+                // More than one qualifier of the input can match, since the resolver compares
+                // them without case while the expansion compares them literally. Each one is
+                // expanded, because picking a single one leaves the columns of the others out.
+                let mut qualifiers: Vec<Option<TableReference>> = vec![];
+                let mut names = vec![];
+                let mut columns = vec![];
+                for (qualifier, field) in schema.iter() {
+                    if !self.match_wildcard_qualifier(q.as_ref(), qualifier) {
+                        continue;
+                    }
+                    if !qualifiers.iter().any(|x| x.as_ref() == qualifier) {
+                        qualifiers.push(qualifier.cloned());
+                    }
+                    let info = state.get_field_info(field.name())?;
+                    if info.is_hidden() {
+                        continue;
+                    }
+                    names.push(info.name().to_string());
+                    columns.push(col((qualifier, field)));
+                }
+                if qualifiers.len() > 1 {
+                    return Ok(NamedExpr::new(
+                        names,
+                        ScalarUDF::from(MultiExpr::new()).call(columns),
+                    ));
+                }
+                // A single qualifier keeps the wildcard, which is what carries the expansion of
+                // an outer query and of the options.
                 let matched = |s: &DFSchemaRef| {
                     s.iter().find_map(|(qualifier, _)| {
                         self.match_wildcard_qualifier(q.as_ref(), qualifier)
