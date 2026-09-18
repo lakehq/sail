@@ -19,6 +19,12 @@ pub const ARROW_DECIMAL256_MAX_SCALE: i8 = arrow_schema::DECIMAL256_MAX_SCALE;
 /// (e.g. extension type keys).
 pub const SPARK_METADATA_JSON_KEY: &str = "SPARK::metadata::json";
 
+/// Prefix of every Arrow field metadata key that is internal to Sail.
+///
+/// Keys under this prefix must never reach a client: they are stripped from the schema of the
+/// Arrow stream (`sail-spark-connect/src/schema.rs`), and Spark sends no such metadata.
+pub const SAIL_INTERNAL_METADATA_PREFIX: &str = "SAIL::";
+
 /// Sail metadata key for Spark UDT information stored in Arrow field metadata.
 ///
 /// This is internal to Sail and should not be exposed as Spark column metadata.

@@ -167,12 +167,17 @@ use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkDayTimeIntervalToCalendarInterval,
     SparkYearMonthInterval,
 };
+use sail_function::scalar::datetime::spark_interval_scale::{
+    SparkDivideCalendarInterval, SparkDivideDtInterval, SparkDivideYmInterval,
+    SparkMultiplyCalendarInterval, SparkMultiplyDtInterval, SparkMultiplyYmInterval,
+};
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
 use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp_ntz::SparkMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use sail_function::scalar::datetime::spark_next_day::SparkNextDay;
 use sail_function::scalar::datetime::spark_time::SparkTime;
+use sail_function::scalar::datetime::spark_time_add_interval::SparkTimeAddDtInterval;
 use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
@@ -216,6 +221,7 @@ use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::misc::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
 };
+use sail_function::scalar::misc::spark_udt_storage::SparkUdtStorage;
 use sail_function::scalar::misc::theta_sketch::{
     ThetaDifferenceFunction, ThetaIntersectionFunction, ThetaSketchEstimateFunction,
     ThetaUnionFunction,
@@ -3098,6 +3104,20 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkTime(r#gen::SparkTimeUdf { is_try }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkTime::new(is_try))));
             }
+            UdfKind::SparkMultiplyCalendarInterval(r#gen::SparkMultiplyCalendarIntervalUdf {
+                ansi_mode,
+            }) => {
+                return Ok(Arc::new(ScalarUDF::from(
+                    SparkMultiplyCalendarInterval::new(ansi_mode),
+                )));
+            }
+            UdfKind::SparkDivideCalendarInterval(r#gen::SparkDivideCalendarIntervalUdf {
+                ansi_mode,
+            }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkDivideCalendarInterval::new(
+                    ansi_mode,
+                ))));
+            }
             UdfKind::SparkCeil(r#gen::SparkCeilUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkCeil::new(ansi_mode))));
             }
@@ -3308,6 +3328,22 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkLuhnCheck::new())))
             }
             "negate_duration" => Ok(Arc::new(ScalarUDF::from(NegateDuration::new()))),
+            "spark_udt_storage" => Ok(Arc::new(ScalarUDF::from(SparkUdtStorage::new()))),
+            "spark_multiply_ym_interval" => {
+                Ok(Arc::new(ScalarUDF::from(SparkMultiplyYmInterval::new())))
+            }
+            "spark_divide_ym_interval" => {
+                Ok(Arc::new(ScalarUDF::from(SparkDivideYmInterval::new())))
+            }
+            "spark_multiply_dt_interval" => {
+                Ok(Arc::new(ScalarUDF::from(SparkMultiplyDtInterval::new())))
+            }
+            "spark_divide_dt_interval" => {
+                Ok(Arc::new(ScalarUDF::from(SparkDivideDtInterval::new())))
+            }
+            "spark_time_add_dt_interval" => {
+                Ok(Arc::new(ScalarUDF::from(SparkTimeAddDtInterval::new())))
+            }
             "spark_make_dt_interval" | "make_dt_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeDtInterval::new())))
             }
@@ -3417,6 +3453,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<MapFromEntries>()
             || node_inner.is::<MultiExpr>()
             || node_inner.is::<NegateDuration>()
+            || node_inner.is::<SparkUdtStorage>()
+            || node_inner.is::<SparkMultiplyYmInterval>()
+            || node_inner.is::<SparkDivideYmInterval>()
+            || node_inner.is::<SparkMultiplyDtInterval>()
+            || node_inner.is::<SparkDivideDtInterval>()
+            || node_inner.is::<SparkTimeAddDtInterval>()
             || node_inner.is::<OverlayFunc>()
             || node_inner.is::<ParseUrl>()
             || node_inner.is::<RaiseError>()
@@ -3676,6 +3718,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<SparkNegative>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkNegative(r#gen::SparkNegativeUdf { ansi_mode })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkMultiplyCalendarInterval>() {
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkMultiplyCalendarInterval(r#gen::SparkMultiplyCalendarIntervalUdf {
+                ansi_mode,
+            })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkDivideCalendarInterval>() {
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkDivideCalendarInterval(r#gen::SparkDivideCalendarIntervalUdf {
+                ansi_mode,
+            })
         } else if let Some(func) = node.inner().downcast_ref::<SparkCeil>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkCeil(r#gen::SparkCeilUdf { ansi_mode })
@@ -7424,6 +7476,85 @@ mod tests {
         assert_eq!(decoded.timezone(), Some("America/Los_Angeles"));
         assert!(decoded.is_try());
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_time_add_dt_interval_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkTimeAddDtInterval::new()))?;
+        assert!(
+            decoded
+                .inner()
+                .downcast_ref::<SparkTimeAddDtInterval>()
+                .is_some()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_udt_storage_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkUdtStorage::new()))?;
+        assert!(decoded.inner().downcast_ref::<SparkUdtStorage>().is_some());
+        Ok(())
+    }
+
+    /// The four interval-scaling UDFs are stateless -- Spark's `MultiplyYMInterval` and its three
+    /// siblings do not read `spark.sql.ansi.enabled` -- so the name is the whole encoding.
+    #[test]
+    fn test_round_trip_interval_scale_udfs() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkMultiplyYmInterval::new()))?;
+        assert!(
+            decoded
+                .inner()
+                .downcast_ref::<SparkMultiplyYmInterval>()
+                .is_some()
+        );
+        let decoded = round_trip_udf(ScalarUDF::from(SparkDivideYmInterval::new()))?;
+        assert!(
+            decoded
+                .inner()
+                .downcast_ref::<SparkDivideYmInterval>()
+                .is_some()
+        );
+        let decoded = round_trip_udf(ScalarUDF::from(SparkMultiplyDtInterval::new()))?;
+        assert!(
+            decoded
+                .inner()
+                .downcast_ref::<SparkMultiplyDtInterval>()
+                .is_some()
+        );
+        let decoded = round_trip_udf(ScalarUDF::from(SparkDivideDtInterval::new()))?;
+        assert!(
+            decoded
+                .inner()
+                .downcast_ref::<SparkDivideDtInterval>()
+                .is_some()
+        );
+        Ok(())
+    }
+
+    /// The calendar pair DOES carry the ANSI flag (`MultiplyInterval`'s `failOnError`), so losing
+    /// it in the codec would make a distributed plan raise where a local one returns NULL.
+    #[test]
+    fn test_round_trip_calendar_interval_scale_preserves_ansi_mode() -> Result<()> {
+        for ansi_mode in [true, false] {
+            let decoded = round_trip_udf(ScalarUDF::from(SparkMultiplyCalendarInterval::new(
+                ansi_mode,
+            )))?;
+            let decoded = downcast_udf::<SparkMultiplyCalendarInterval>(
+                &decoded,
+                "SparkMultiplyCalendarInterval",
+            )?;
+            assert_eq!(decoded.ansi_mode(), ansi_mode);
+
+            let decoded =
+                round_trip_udf(ScalarUDF::from(SparkDivideCalendarInterval::new(ansi_mode)))?;
+            let decoded = downcast_udf::<SparkDivideCalendarInterval>(
+                &decoded,
+                "SparkDivideCalendarInterval",
+            )?;
+            assert_eq!(decoded.ansi_mode(), ansi_mode);
+        }
         Ok(())
     }
 

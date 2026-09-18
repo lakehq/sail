@@ -61,6 +61,125 @@ fn if_expr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
+/// `nvl`/`ifnull` are `Coalesce(Seq(left, right))` in Spark (`nullExpressions.scala:246`).
+/// DataFusion's `nvl` coerces every container to `Utf8` -- `nvl(array, array)` is a STRING, and so
+/// is `nvl(NULL, array('2'))` -- and a STRING is an arithmetic operand, so
+/// `2 / nvl(NULL, array('2'))` resolved where Spark refuses an ARRAY. A container therefore goes
+/// through `coalesce`, which keeps its type.
+///
+/// Scalars stay on `nvl`: `coalesce` refuses `nvl('a', 1)`, which Sail answers like Spark today.
+fn nvl(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let (left, right) = arguments.two()?;
+    let schema = function_context.schema;
+    let data_type = |expr: &expr::Expr| expr.get_type(schema).ok();
+    let (left_type, right_type) = (data_type(&left), data_type(&right));
+    let is_container = |expr: &expr::Expr| {
+        matches!(
+            expr.get_type(schema),
+            Ok(DataType::List(_)
+                | DataType::LargeList(_)
+                | DataType::FixedSizeList(_, _)
+                | DataType::ListView(_)
+                | DataType::LargeListView(_)
+                | DataType::Map(_, _)
+                | DataType::Struct(_))
+        )
+    };
+    if is_container(&left) || is_container(&right) {
+        // TODO: `coalesce` cannot widen two containers whose leaves need a string or datetime
+        //  promotion (`array<int>` beside `array<string>`, `array<date>` beside `array<timestamp>`,
+        //  `TypeCoercionHelper.scala:141`): it fails at analysis or at runtime, or panics. Such a
+        //  pair keeps DataFusion's `nvl`, which answers a STRING, until `coalesce` widens it.
+        let widens = match (&left_type, &right_type) {
+            (Some(left_type), Some(right_type)) => coalesce_widens_leaves(left_type, right_type),
+            _ => true,
+        };
+        if !widens {
+            return Ok(expr_fn::nvl(left, right));
+        }
+        return Ok(expr_fn::coalesce(vec![left, right]));
+    }
+    // DataFusion's `nvl` coerces an INTERVAL or a TIME to `Utf8` as well, so
+    // `DATE + nvl(NULL, INTERVAL '1' DAY)` was refused and `nvl(NULL, INTERVAL '1' DAY) * 2` answered
+    // NULL with ANSI off, where Spark's `Coalesce` keeps the interval or the TIME. A pair with a
+    // string stays on `nvl`: `coalesce` cannot type a TIME beside a string.
+    let is_interval_or_time = |expr: &expr::Expr| {
+        matches!(
+            expr.get_type(schema),
+            Ok(DataType::Duration(_)
+                | DataType::Interval(_)
+                | DataType::Time32(_)
+                | DataType::Time64(_))
+        )
+    };
+    let is_string = |expr: &expr::Expr| expr.get_type(schema).is_ok_and(|t| is_string_type(&t));
+    if (is_interval_or_time(&left) || is_interval_or_time(&right))
+        && !is_string(&left)
+        && !is_string(&right)
+    {
+        return Ok(expr_fn::coalesce(vec![left, right]));
+    }
+    // DataFusion's `nvl` coerces a DATE or TIMESTAMP to `Utf8`, so a datetime pair goes through
+    // `coalesce`, widened first the way Sail's `coalesce` widens it: `nvl(date, '...')` is a DATE
+    // with ANSI on and a STRING with it off, as in Spark.
+    // TODO: `coalesce` cannot type a TIMESTAMP beside a DATE yet, so that pair stays on `nvl`.
+    let is_temporal = |t: &Option<DataType>| t.as_ref().is_some_and(is_temporal_type);
+    let is_date = |t: &Option<DataType>| t.as_ref().is_some_and(is_date_type);
+    let is_timestamp = |t: &Option<DataType>| matches!(t, Some(DataType::Timestamp(_, _)));
+    let timestamp_beside_date = (is_timestamp(&left_type) && is_date(&right_type))
+        || (is_date(&left_type) && is_timestamp(&right_type));
+    if (is_temporal(&left_type) || is_temporal(&right_type)) && !timestamp_beside_date {
+        let arguments = coerce_string_temporal_values(vec![left, right], &function_context)?;
+        return Ok(expr_fn::coalesce(arguments));
+    }
+    Ok(expr_fn::nvl(left, right))
+}
+
+/// Whether `coalesce` types two containers: every pair of leaves is equal, numeric, string, timestamp
+/// or NULL. A leaf pair that needs a string or datetime promotion is not widened by it yet.
+fn coalesce_widens_leaves(left: &DataType, right: &DataType) -> bool {
+    match (left, right) {
+        (
+            DataType::List(left)
+            | DataType::LargeList(left)
+            | DataType::FixedSizeList(left, _)
+            | DataType::ListView(left)
+            | DataType::LargeListView(left),
+            DataType::List(right)
+            | DataType::LargeList(right)
+            | DataType::FixedSizeList(right, _)
+            | DataType::ListView(right)
+            | DataType::LargeListView(right),
+        ) => coalesce_widens_leaves(left.data_type(), right.data_type()),
+        (DataType::Map(left, _), DataType::Map(right, _)) => {
+            coalesce_widens_leaves(left.data_type(), right.data_type())
+        }
+        (DataType::Struct(left), DataType::Struct(right)) => {
+            left.len() == right.len()
+                && left.iter().zip(right.iter()).all(|(left, right)| {
+                    coalesce_widens_leaves(left.data_type(), right.data_type())
+                })
+        }
+        // A container beside a scalar is refused by `coalesce`, as Spark refuses it.
+        (left, right) if left.is_nested() || right.is_nested() => true,
+        (left, right) => {
+            left == right
+                || left.is_null()
+                || right.is_null()
+                || (left.is_numeric() && right.is_numeric())
+                || (is_string_type(left) && is_string_type(right))
+                || matches!(
+                    (left, right),
+                    (DataType::Timestamp(_, _), DataType::Timestamp(_, _))
+                )
+        }
+    }
+}
+
 fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
         arguments,
@@ -181,11 +300,11 @@ pub(super) fn list_built_in_conditional_functions() -> Vec<(&'static str, Scalar
     vec![
         ("coalesce", F::custom(coalesce)),
         ("if", F::custom(if_expr)),
-        ("ifnull", F::binary(expr_fn::nvl)),
+        ("ifnull", F::custom(nvl)),
         ("nanvl", F::binary(expr_fn::nanvl)),
         ("nullif", F::binary(expr_fn::nullif)),
         ("nullifzero", F::custom(nullifzero)),
-        ("nvl", F::binary(expr_fn::nvl)),
+        ("nvl", F::custom(nvl)),
         ("nvl2", F::ternary(expr_fn::nvl2)),
         ("zeroifnull", F::custom(zeroifnull)),
         ("when", F::custom(case)),

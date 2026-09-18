@@ -65,6 +65,10 @@ pub struct PlanConfig {
     /// Whether `COUNT()` is accepted with no arguments. Spark's legacy behavior returns zero;
     /// it does not interpret the call as `COUNT(*)`.
     pub legacy_allow_parameterless_count: bool,
+    /// Whether the TIME type is available (`spark.sql.timeType.enabled`). Spark keeps it off
+    /// outside its own tests and refuses the type in any Connect execution; Sail implements it
+    /// and defaults to on, so this is what a user sets to get Spark's answer instead.
+    pub time_type_enabled: bool,
 }
 
 impl PlanConfig {
@@ -96,6 +100,7 @@ impl Default for PlanConfig {
             pivot_max_values: 10000,
             tvf_allow_multiple_table_arguments: false,
             legacy_allow_parameterless_count: false,
+            time_type_enabled: true,
         }
     }
 }

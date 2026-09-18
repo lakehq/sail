@@ -3,7 +3,7 @@ use std::sync::Arc;
 use arrow::datatypes::DataType;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{ExprSchemable, Operator, ScalarUDF, cast, expr, lit, when};
+use datafusion_expr::{ExprSchemable, Operator, ScalarUDF, cast, expr, lit, try_cast, when};
 use datafusion_spark::function::bitmap::expr_fn as bitmap_fn;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::utils::quote_namespace_if_needed;
@@ -25,7 +25,9 @@ use sail_function::scalar::misc::version::SparkVersion;
 use sail_function::sketch::DEFAULT_THETA_LG_NOM_ENTRIES;
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+use crate::function::common::{
+    ScalarFunction, ScalarFunctionInput, is_spark_udt_field, spark_field_type_name,
+};
 
 fn assert_true(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput { arguments, .. } = input;
@@ -106,21 +108,62 @@ fn type_of(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Ok(lit(type_of))
 }
 
-fn bitmap_bit_position(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let ScalarFunctionInput { arguments, .. } = input;
+/// The BIGINT a `bitmap_*` position function reads. Its `inputTypes` is `Seq(LongType)`
+/// (`bitmapExpressions.scala`), and implicit casting reaches a BIGINT only from a NULL, a number or
+/// a STRING, so any other argument is refused at analysis instead of being cast.
+fn bitmap_position_argument(name: &str, input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
     let value = arguments.one()?;
+    let (_, field) = value.to_field(function_context.schema)?;
+    let data_type = field.data_type();
+    let accepted = !is_spark_udt_field(&field)
+        && (data_type.is_null()
+            || data_type.is_numeric()
+            || matches!(
+                data_type,
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+            ));
+    if !accepted {
+        return Err(PlanError::analysis(format!(
+            "cannot resolve {name} due to data type mismatch: the argument requires BIGINT, got {}",
+            spark_field_type_name(&field)
+        )));
+    }
+    // The implicit cast follows the ANSI flag like any `Cast` (`Cast.scala:886-905`): with it off a
+    // malformed string is NULL, never an error.
+    // TODO: with ANSI off Spark also saturates a DOUBLE past BIGINT, reads NaN as 0 and wraps a
+    //  DECIMAL; `try_cast` reads those as NULL.
+    if function_context.plan_config.ansi_mode {
+        Ok(cast(value, DataType::Int64))
+    } else {
+        Ok(try_cast(value, DataType::Int64))
+    }
+}
+
+fn bitmap_bit_position(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    // `inputTypes = Seq(LongType)` and `dataType = LongType` (`bitmapExpressions.scala`). As an INT
+    // it was a different arithmetic operand than Spark's: `DATE + bitmap_bit_position(1)` resolved here
+    // and is refused there, since `DateAdd` takes no BIGINT.
+    let value = bitmap_position_argument("bitmap_bit_position", input)?;
     let num_bits = 8 * 4 * 1024;
     Ok(when(
         value.clone().gt(lit(0)),
         (value.clone() - lit(1)) % lit(num_bits),
     )
-    .when(lit(true), (-value) % lit(num_bits))
+    // `(-value) % NUM_BITS` on a Java long (`BitmapExpressionUtils.java:37-43`); negating after the
+    // remainder gives the same answer without overflowing on the BIGINT minimum.
+    .when(lit(true), -(value % lit(num_bits)))
     .end()?)
 }
 
 fn bitmap_bucket_number(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let ScalarFunctionInput { arguments, .. } = input;
-    let value = arguments.one()?;
+    // `inputTypes = Seq(LongType)` and `dataType = LongType` (`bitmapExpressions.scala`). As an INT
+    // it was a different arithmetic operand than Spark's: `DATE + bitmap_bucket_number(1)` resolved here
+    // and is refused there, since `DateAdd` takes no BIGINT.
+    let value = bitmap_position_argument("bitmap_bucket_number", input)?;
     let num_bits = 8 * 4 * 1024;
     Ok(when(
         value.clone().gt(lit(0)),

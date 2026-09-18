@@ -27,7 +27,6 @@ Feature: regexp_instr output schema
          |-- result: integer (nullable = false)
         """
 
-    @sail-bug
     Scenario: a nullable column input to regexp_instr stays nullable
       When query
         """
