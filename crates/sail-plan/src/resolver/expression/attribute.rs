@@ -6,6 +6,8 @@ use datafusion_expr::expr::{LambdaVariable, ScalarFunction};
 use datafusion_expr::{ScalarUDF, UNNAMED_TABLE, col, expr, lit};
 use datafusion_functions::core::get_field;
 use sail_common::spec;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::session::plan::PlanService;
 use sail_function::scalar::array_struct_field::ArrayStructField;
 use sail_sql_analyzer::parser::parse_attribute_name;
 
@@ -473,7 +475,14 @@ impl PlanResolver<'_> {
             let Some(expr) =
                 self.resolve_potentially_nested_field(column, field.data_type(), inner)?
             else {
-                return Err(self.missing_struct_field_error(field.data_type(), inner));
+                let info = state.get_field_info(field.name())?;
+                let base = info.name().to_string();
+                return match self.missing_struct_field_error(&base, field.data_type(), inner) {
+                    Some(error) => Err(error),
+                    // The interpretation reached something this resolver cannot walk into, which
+                    // is reported as a name that did not resolve, the way it always was.
+                    None => Ok(None),
+                };
             };
             let display = inner.last().unwrap_or(field_name).as_ref().to_string();
             return Ok(Some((display, expr)));
@@ -481,13 +490,16 @@ impl PlanResolver<'_> {
         Ok(None)
     }
 
-    /// The error for a part of the name that does not name a field of the struct it reached, as
-    /// Spark reports it once the attribute itself has matched.
+    /// The error for a part of the name that does not name a field of what it reached, as Spark
+    /// reports it once the attribute itself has matched: a name that is not a field of the struct
+    /// is a missing field, and a base that is not a complex type at all is a different error.
     fn missing_struct_field_error<T: AsRef<str>>(
         &self,
+        base: &str,
         data_type: &DataType,
         inner: &[T],
-    ) -> PlanError {
+    ) -> Option<PlanError> {
+        let mut base = base.to_string();
         let mut data_type = data_type.clone();
         for part in inner {
             let fields = match &data_type {
@@ -496,22 +508,46 @@ impl PlanResolver<'_> {
                 | DataType::LargeList(field)
                 | DataType::FixedSizeList(field, _) => match field.data_type() {
                     DataType::Struct(fields) => fields.clone(),
-                    _ => return Self::field_not_found_error(part.as_ref(), &[]),
+                    _ => return self.invalid_extract_base_error(&base, &data_type),
                 },
-                _ => return Self::field_not_found_error(part.as_ref(), &[]),
+                // A map is a complex type that Spark walks into by key. Sail does not reach it
+                // through a dotted name, and that gap is reported the way it always was.
+                DataType::Map(..) => return None,
+                _ => return self.invalid_extract_base_error(&base, &data_type),
             };
             match self.resolve_struct_field(&fields, part.as_ref()) {
-                Ok(Some(field)) => data_type = field.data_type().clone(),
+                Ok(Some(field)) => {
+                    base = field.name().clone();
+                    data_type = field.data_type().clone();
+                }
                 _ => {
                     let names = fields
                         .iter()
                         .map(|x| x.name().to_string())
                         .collect::<Vec<_>>();
-                    return Self::field_not_found_error(part.as_ref(), &names);
+                    return Some(Self::field_not_found_error(part.as_ref(), &names));
                 }
             }
         }
-        PlanError::internal("the nested field was resolved after all")
+        None
+    }
+
+    /// The error for a name that walks into something that is not a complex type.
+    fn invalid_extract_base_error(&self, base: &str, data_type: &DataType) -> Option<PlanError> {
+        let rendered = self
+            .ctx
+            .extension::<PlanService>()
+            .and_then(|service| {
+                service
+                    .plan_formatter()
+                    .data_type_to_simple_string(data_type)
+            })
+            .map(|x| x.to_uppercase())
+            .unwrap_or_else(|_| format!("{data_type}").to_uppercase());
+        Some(PlanError::AnalysisError(format!(
+            "[INVALID_EXTRACT_BASE_FIELD_TYPE] Can't extract a value from \"{base}\". \
+             Need a complex type [STRUCT, ARRAY, MAP] but got \"{rendered}\"."
+        )))
     }
 
     fn field_not_found_error(name: &str, fields: &[String]) -> PlanError {

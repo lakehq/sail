@@ -66,6 +66,26 @@ Feature: identifier resolution beyond ASCII
         | x | y |
         | 1 | 2 |
 
+    Scenario: a qualified wildcard expands columns that are named the same on both sides
+      # The two sides bring a column with the same name, so the expansion has to keep both rather
+      # than let one stand for the other.
+      When query
+        """
+        SELECT a.* FROM (SELECT 1 AS k) AS A CROSS JOIN (SELECT 2 AS k) AS a
+        """
+      Then query result
+        | k | k |
+        | 1 | 2 |
+
+    Scenario: the same wildcard twice expands twice
+      When query
+        """
+        SELECT a.*, a.* FROM (SELECT 1 AS x) AS A CROSS JOIN (SELECT 2 AS y) AS a
+        """
+      Then query result
+        | x | y | x | y |
+        | 1 | 2 | 1 | 2 |
+
     Scenario: a qualified wildcard expands three aliases that match without case
       # With three of them, picking one qualifier used to return the first and the last and leave
       # out the one in the middle, which is what tells "it picks one" apart from "it picks wrong".
@@ -254,6 +274,22 @@ Feature: identifier resolution beyond ASCII
     # The alias belongs to the output of the aggregate, which is the input of the filter that
     # carries the `HAVING`, so Spark offers it. Sail builds the candidates from the input of the
     # aggregate instead and loses it.
+    Scenario: an aggregate alias wins a tie in distance against a column
+      # The aggregate expressions come before the columns, and the order by distance is stable, so
+      # two names at the same distance are separated by which list they came from.
+      When query
+        """
+        SELECT aa, count(*) AS bb FROM (SELECT 1 AS aa) GROUP BY aa HAVING cc > 0
+        """
+      Then query error Did you mean one of the following\? \[`bb`, `aa`\]\.
+
+    Scenario: the suggestion of a sort offers the names of the projection
+      When query
+        """
+        SELECT a, count(*) AS c FROM (SELECT 1 AS a) GROUP BY a ORDER BY nope
+        """
+      Then query error \[UNRESOLVED_COLUMN\.WITH_SUGGESTION\] A column, variable, or function parameter with name `nope` cannot be resolved\.
+
     Scenario: the suggestion for an unresolved alias offers the alias itself
       When query
         """
@@ -520,6 +556,40 @@ Feature: identifier resolution beyond ASCII
         SELECT s.missing FROM (SELECT named_struct('x', 1) AS s)
         """
       Then query error \[FIELD_NOT_FOUND\] No such struct field `missing` in `x`\.
+
+    Scenario: the missing field is reported against the struct that the walk reached
+      # The parts are walked one by one, so the fields listed are the ones of the struct that the
+      # part before reached, not those of the column at the top.
+      When query
+        """
+        SELECT s.x.missing FROM (SELECT named_struct('x', named_struct('y', 1)) AS s)
+        """
+      Then query error \[FIELD_NOT_FOUND\] No such struct field `missing` in `y`\.
+
+    Scenario: a field of a struct inside an array is reported the same way
+      When query
+        """
+        SELECT a.missing FROM (SELECT array(named_struct('x', 1)) AS a)
+        """
+      Then query error \[FIELD_NOT_FOUND\] No such struct field `missing` in `x`\.
+
+    Scenario: a field of a struct inside an array resolves through the array
+      When query
+        """
+        SELECT a.x FROM (SELECT array(named_struct('x', 1)) AS a)
+        """
+      Then query result
+        | x   |
+        | [1] |
+
+    Scenario: a name that walks into something that is not complex is a different error
+      # The base is not a struct, an array or a map, so there is no field to miss: Spark reports
+      # the type it got instead of listing fields.
+      When query
+        """
+        SELECT a.b FROM (SELECT 1 AS a)
+        """
+      Then query error \[INVALID_EXTRACT_BASE_FIELD_TYPE\] Can't extract a value from "a"\. Need a complex type \[STRUCT, ARRAY, MAP\] but got "INT"\.
 
   Rule: The columns listed by a failed wildcard are ordered the way the analyzer orders them
 

@@ -108,6 +108,51 @@ Feature: NATURAL and USING joins
 
   Rule: The join key stays reachable through the qualifier of each side
 
+    Scenario Outline: the key of a <kind> join is reachable from each side
+      # The key is one column of the output, and each side keeps its own through its qualifier.
+      When query
+        """
+        SELECT l.k, r.k FROM (VALUES (1, 'a')) AS l(k, lv)
+        <kind> JOIN (VALUES (1, 'x')) AS r(k, rv) USING (k)
+        """
+      Then query result
+        | k | k |
+        | 1 | 1 |
+
+      Examples:
+        | kind  |
+        | INNER |
+        | LEFT  |
+        | RIGHT |
+
+    Scenario: the key of a natural join is reachable from each side
+      When query
+        """
+        SELECT l.k, r.k FROM (VALUES (1, 'a')) AS l(k, lv) NATURAL JOIN (VALUES (1, 'x')) AS r(k, rv)
+        """
+      Then query result
+        | k | k |
+        | 1 | 1 |
+
+    Scenario: the key of a semi join is reachable through the qualifier of the side that is kept
+      When query
+        """
+        SELECT l.k FROM (VALUES (1, 'a')) AS l(k, lv) LEFT SEMI JOIN (VALUES (1, 'x')) AS r(k, rv) USING (k)
+        """
+      Then query result
+        | k |
+        | 1 |
+
+    Scenario: the key is still reachable without a qualifier
+      When query
+        """
+        SELECT k FROM (VALUES (1, 'a')) AS l(k, lv) JOIN (VALUES (1, 'x')) AS r(k, rv) USING (k)
+        """
+      Then query result
+        | k |
+        | 1 |
+
+
     Scenario Outline: qualified key: <case>
       # An inner join cannot tell the two sides apart, since the keys are equal by definition, so
       # the rows that match only one side are what makes the qualifier observable.
