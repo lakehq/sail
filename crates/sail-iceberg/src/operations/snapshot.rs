@@ -27,7 +27,7 @@ use crate::spec::{
     Operation, PartitionSpec, Schema, SnapshotBuilder, SnapshotReference, SnapshotRetention,
     TableRequirement, TableUpdate,
 };
-use crate::utils::join_table_uri;
+use crate::utils::join_table_location;
 
 fn active_file_count(manifest: &crate::spec::manifest_list::ManifestFile) -> Option<i64> {
     Some(i64::from(manifest.added_files_count?) + i64::from(manifest.existing_files_count?))
@@ -541,7 +541,8 @@ impl<'a> SnapshotProducer<'a> {
         let manifest_rel = format!("metadata/manifest-{}.avro", uuid::Uuid::new_v4());
         let manifest_path = ObjectPath::from(manifest_rel.as_str());
         let mut manifest_file = writer.into_manifest_file(
-            join_table_uri(self.tx.table_uri(), &manifest_rel, &self.write_path_mode),
+            join_table_location(self.tx.table_url(), &manifest_rel, &self.write_path_mode)
+                .map_err(|error| error.to_string())?,
             sequence_number,
             snapshot_id,
         )?;
@@ -1108,7 +1109,8 @@ impl<'a> SnapshotProducer<'a> {
         created_paths.push(list_path);
 
         let manifest_list_uri =
-            join_table_uri(self.tx.table_uri(), &list_rel, &self.write_path_mode);
+            join_table_location(self.tx.table_url(), &list_rel, &self.write_path_mode)
+                .map_err(|error| error.to_string())?;
 
         let schema_id = if let Some(meta) = &self.manifest_metadata {
             meta.schema_id
@@ -1425,7 +1427,7 @@ mod tests {
                 .with_summary(crate::spec::snapshots::Summary::new(Operation::Append))
                 .build()
                 .expect("parent snapshot");
-            let transaction = Transaction::new(table_url.to_string(), parent_snapshot, 1);
+            let transaction = Transaction::new(table_url.clone(), parent_snapshot, 1);
             let producer =
                 SnapshotProducer::new(&transaction, vec![], Some(store_ctx.clone()), None);
             let mut created_paths = Vec::new();
@@ -1542,11 +1544,8 @@ mod tests {
                 .with_summary(crate::spec::snapshots::Summary::new(Operation::Append))
                 .build()
                 .expect("parent snapshot");
-            let transaction = Transaction::new(
-                table_url.to_string(),
-                parent_snapshot,
-                parent_sequence_number,
-            );
+            let transaction =
+                Transaction::new(table_url.clone(), parent_snapshot, parent_sequence_number);
             let action_commit = SnapshotProducer::new(
                 &transaction,
                 vec![data_file("data/replacement.parquet", 1)],
@@ -1746,7 +1745,7 @@ mod tests {
                 .with_summary(crate::spec::snapshots::Summary::new(Operation::Append))
                 .build()
                 .expect("parent snapshot");
-            let transaction = Transaction::new(table_url.to_string(), parent_snapshot, 0);
+            let transaction = Transaction::new(table_url.clone(), parent_snapshot, 0);
 
             let result =
                 SnapshotProducer::new(&transaction, vec![], Some(store_ctx), Some(metadata))
@@ -1790,7 +1789,7 @@ mod tests {
                 .with_summary(crate::spec::snapshots::Summary::new(Operation::Append))
                 .build()
                 .expect("parent snapshot");
-            let transaction = Transaction::new(table_url.to_string(), parent_snapshot, 0);
+            let transaction = Transaction::new(table_url.clone(), parent_snapshot, 0);
             let mut data_file = delete_file("data.parquet", 0);
             data_file.content = DataContentType::Data;
             data_file.referenced_data_file = None;
@@ -1846,7 +1845,7 @@ mod tests {
                 .with_summary(crate::spec::snapshots::Summary::new(Operation::Append))
                 .build()
                 .expect("parent snapshot");
-            let transaction = Transaction::new(table_url.to_string(), parent_snapshot, 0);
+            let transaction = Transaction::new(table_url.clone(), parent_snapshot, 0);
             let mut data_file = delete_file("data.parquet", 0);
             data_file.content = DataContentType::Data;
             data_file.referenced_data_file = None;
@@ -1965,7 +1964,7 @@ mod tests {
                 .with_summary(crate::spec::snapshots::Summary::new(Operation::Append))
                 .build()
                 .expect("parent snapshot");
-            let transaction = Transaction::new(table_url.to_string(), parent_snapshot, 0);
+            let transaction = Transaction::new(table_url.clone(), parent_snapshot, 0);
             let mut added_data_file = delete_file("data.parquet", historical_spec.spec_id());
             added_data_file.content = DataContentType::Data;
             added_data_file.referenced_data_file = None;
@@ -2066,7 +2065,7 @@ mod tests {
                 .with_summary(crate::spec::snapshots::Summary::new(Operation::Append))
                 .build()
                 .expect("parent snapshot");
-            let transaction = Transaction::new(table_url.to_string(), parent_snapshot, 11);
+            let transaction = Transaction::new(table_url.clone(), parent_snapshot, 11);
             let mut historical_delete = delete_file("delete-1.parquet", 1);
             historical_delete.partition = vec![Some(Literal::Primitive(PrimitiveLiteral::Int(42)))];
             let action_commit = SnapshotProducer::new(

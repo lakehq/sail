@@ -11,7 +11,6 @@ use sail_common_datafusion::catalog::{
     CommitAuthority, LakehouseExecutionContext, TableKind, TableStatus,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use url::Url;
 
 use crate::lake_source::{
     catalog_managed_iceberg_from_properties, metadata_location_from_properties,
@@ -285,16 +284,6 @@ pub(crate) fn catalog_requirements(
             requirements.push(TableRequirement::UuidMatch { uuid });
         }
     requirements
-}
-
-pub(crate) fn table_metadata_location(table_url: &Url, metadata_file: &str) -> Result<String> {
-    if crate::utils::parse_absolute_url(metadata_file).is_some() {
-        return Ok(metadata_file.to_string());
-    }
-    Ok(table_url
-        .join(metadata_file)
-        .map_err(|e| DataFusionError::External(Box::new(e)))?
-        .to_string())
 }
 
 #[cfg(test)]

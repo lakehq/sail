@@ -1,5 +1,46 @@
 Feature: Iceberg Basic IO
 
+  Rule: Local locations preserve physical directory names
+    Scenario Outline: Read and append under a special-character table location
+      Given variable location for temporary directory <directory>
+      Given final statement
+        """
+        DROP TABLE IF EXISTS iceberg_special_location
+        """
+      Given statement template
+        """
+        CREATE TABLE iceberg_special_location (id INT, part STRING)
+        USING iceberg PARTITIONED BY (part)
+        LOCATION {{ location.<representation> }}
+        """
+      Given statement
+        """
+        INSERT INTO iceberg_special_location VALUES (1, 'a +%2F 中')
+        """
+      Then iceberg metadata contains current snapshot
+      Given statement
+        """
+        INSERT INTO iceberg_special_location VALUES (2, 'a +%2F 中')
+        """
+      Then iceberg snapshot count is 2
+      When query
+        """
+        SELECT * FROM iceberg_special_location ORDER BY id
+        """
+      Then query result ordered
+        | id | part     |
+        | 1  | a +%2F 中 |
+        | 2  | a +%2F 中 |
+
+      Examples:
+        | directory       | representation |
+        | table space     | sql            |
+        | 表              | sql            |
+        | table%20literal | sql            |
+        | table space     | uri            |
+        | 表              | uri            |
+        | table%20literal | uri            |
+
   Rule: Create table and basic operations
     Background:
       Given variable location for temporary directory iceberg_io

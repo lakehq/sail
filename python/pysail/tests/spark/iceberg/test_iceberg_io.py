@@ -158,9 +158,12 @@ def test_iceberg_io_create_table_materializes_empty_metadata(spark, tmp_path):
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
 
-def test_iceberg_merge_honors_external_write_data_path(spark, tmp_path):
+@pytest.mark.parametrize("data_directory", ["external_data", "external data %20 中"])
+@pytest.mark.parametrize("location_kind", ["uri", "relative"])
+def test_iceberg_merge_honors_external_write_data_path(spark, tmp_path, data_directory, location_kind):
     table_path = tmp_path / "iceberg_external_write_path"
-    external_data_path = tmp_path / "external_data"
+    external_data_path = tmp_path / data_directory
+    data_location = external_data_path.as_uri() if location_kind == "uri" else f"../{data_directory}"
     table_name = "iceberg_external_write_path_test"
 
     spark.sql(f"DROP TABLE IF EXISTS {table_name}")
@@ -173,7 +176,7 @@ def test_iceberg_merge_honors_external_write_data_path(spark, tmp_path):
             TBLPROPERTIES (
               'format-version' = '2',
               'write.merge.mode' = 'merge-on-read',
-              'write.data.path' = '{escape_sql_string_literal(external_data_path.as_uri())}'
+              'write.data.path' = '{escape_sql_string_literal(data_location)}'
             )
             """
         )

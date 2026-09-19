@@ -179,7 +179,7 @@ pub(crate) async fn prepare_bootstrap_snapshot(
         .map_err(DataFusionError::Execution)?;
 
     let transaction = Transaction::new(
-        table_url.to_string(),
+        table_url.clone(),
         empty_snapshot,
         table_metadata.last_sequence_number,
     );
@@ -264,7 +264,7 @@ pub async fn bootstrap_new_table_with_style(
         .build()
         .map_err(DataFusionError::Execution)?;
 
-    let transaction = Transaction::new(table_url.to_string(), empty_snapshot, 0);
+    let transaction = Transaction::new(table_url.clone(), empty_snapshot, 0);
     let manifest_metadata = crate::spec::manifest::ManifestMetadata::new(
         Arc::new(iceberg_schema.clone()),
         iceberg_schema.schema_id(),
@@ -313,7 +313,7 @@ pub async fn bootstrap_new_table_with_style(
     let mut table_metadata = TableMetadata {
         format_version,
         table_uuid: None,
-        location: table_url.to_string(),
+        location: crate::utils::url_to_location(table_url)?,
         last_sequence_number: snapshot.sequence_number(),
         last_updated_ms: commit_timestamp_ms,
         last_column_id: iceberg_schema.highest_field_id(),
@@ -388,7 +388,7 @@ pub async fn bootstrap_empty_table_metadata(
     let mut table_metadata = TableMetadata {
         format_version,
         table_uuid: None,
-        location: table_url.to_string(),
+        location: crate::utils::url_to_location(table_url)?,
         last_sequence_number: 0,
         last_updated_ms: commit_timestamp_ms,
         last_column_id: iceberg_schema.highest_field_id(),
@@ -456,7 +456,7 @@ pub async fn replace_empty_table_metadata(
 
     let mut replacement_metadata = previous_metadata.clone();
     replacement_metadata.format_version = format_version;
-    replacement_metadata.location = table_url.to_string();
+    replacement_metadata.location = crate::utils::url_to_location(table_url)?;
     replacement_metadata.last_updated_ms = commit_timestamp_ms;
     replacement_metadata.last_column_id = last_column_id;
     replacement_metadata.schemas.push(iceberg_schema.clone());

@@ -56,7 +56,7 @@ impl Table {
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let store_ctx = StoreContext::new(object_store.clone(), &table_url)?;
         let metadata_location = match metadata_location {
-            Some(location) => metadata_loader::metadata_location_to_object_path_string(&location)?,
+            Some(location) => location,
             None => metadata_loader::find_latest_metadata_file(&object_store, &table_url).await?,
         };
         log::trace!("Found Iceberg metadata file at {}", metadata_location);
@@ -131,7 +131,7 @@ impl Table {
     pub fn new_transaction(&self) -> Option<Transaction> {
         self.metadata.current_snapshot().cloned().map(|snapshot| {
             Transaction::new(
-                self.table_url.to_string(),
+                self.table_url.clone(),
                 snapshot,
                 self.metadata.last_sequence_number,
             )

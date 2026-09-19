@@ -36,12 +36,12 @@ use url::Url;
 
 use crate::catalog_support::commit::{
     CatalogCommitOutcome, CatalogTableInfo, IcebergCatalogCommitCoordinator,
-    IcebergCatalogCommitMode, catalog_requirements, table_metadata_location,
+    IcebergCatalogCommitMode, catalog_requirements,
 };
 use crate::io::{StoreContext, load_manifest, load_manifest_list};
 use crate::lake_source::{
     catalog_managed_iceberg_from_properties, metadata_location_from_properties,
-    resolve_iceberg_metadata_location,
+    resolve_iceberg_metadata_location, table_metadata_location,
 };
 use crate::operations::bootstrap::{
     NewTableMetadataStyle, PersistStrategy, bootstrap_first_snapshot,
@@ -62,10 +62,10 @@ use crate::spec::{
 };
 use crate::table::metadata_loader::{
     encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
-    metadata_file_version_from_path, metadata_location_to_object_path_string, write_version_hint,
+    metadata_file_version_from_path, write_version_hint,
 };
-use crate::utils::get_object_store_from_context;
 use crate::utils::metadata::metadata_files_for_version;
+use crate::utils::{get_object_store_from_context, location_to_object_path};
 const MAX_COMMIT_RETRIES: usize = 5;
 
 async fn cleanup_uncommitted_task_files(store_ctx: &StoreContext, file_paths: &[String]) {
@@ -467,10 +467,6 @@ impl IcebergCommitExec {
             .await
     }
 
-    fn table_metadata_location(table_url: &Url, metadata_file: &str) -> Result<String> {
-        table_metadata_location(table_url, metadata_file)
-    }
-
     async fn current_live_data_files(
         store_ctx: &StoreContext,
         table_metadata: &TableMetadata,
@@ -827,7 +823,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 None
             } else {
                 Some(match catalog_metadata_location.as_deref() {
-                    Some(location) => Ok(metadata_location_to_object_path_string(location)?),
+                    Some(location) => Ok(String::from(location_to_object_path(location)?)),
                     None => {
                         crate::table::find_latest_metadata_file(&object_store, &table_url).await
                     }
@@ -866,7 +862,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     .await?;
                     task_files_may_be_committed = true;
                     let new_metadata_location =
-                        Self::table_metadata_location(&table_url, &bootstrap_result.metadata_file)?;
+                        table_metadata_location(&table_url, &bootstrap_result.metadata_file)?;
                     Self::update_catalog_metadata_location(
                         &context,
                         catalog_table,
@@ -890,7 +886,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     .await?;
                     task_files_may_be_committed = true;
                     if let Some(catalog_table) = catalog_registered_metadata_table {
-                        let new_metadata_location = Self::table_metadata_location(
+                        let new_metadata_location = table_metadata_location(
                             &table_url,
                             &bootstrap_result.metadata_file,
                         )?;
@@ -921,7 +917,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 let latest_meta = if attempt == 1 {
                     initial_latest_meta.clone()
                 } else if let Some(location) = catalog_metadata_location.as_deref() {
-                    metadata_location_to_object_path_string(location)?
+                    String::from(location_to_object_path(location)?)
                 } else {
                     crate::table::find_latest_metadata_file(&object_store, &table_url).await?
                 };
@@ -1146,7 +1142,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     if let (Some(catalog_table), Some(previous_metadata_location)) =
                         (catalog_fallback_table, catalog_metadata_location.as_deref())
                     {
-                        let new_metadata_location = Self::table_metadata_location(
+                        let new_metadata_location = table_metadata_location(
                             &table_url,
                             &bootstrap_result.metadata_file,
                         )?;
@@ -1159,7 +1155,7 @@ impl ExecutionPlan for IcebergCommitExec {
                         )
                         .await?;
                     } else if let Some(catalog_table) = catalog_registered_metadata_table {
-                        let new_metadata_location = Self::table_metadata_location(
+                        let new_metadata_location = table_metadata_location(
                             &table_url,
                             &bootstrap_result.metadata_file,
                         )?;
@@ -1200,7 +1196,7 @@ impl ExecutionPlan for IcebergCommitExec {
 
                 // Build transaction and action based on the snapshot update algorithm.
                 let tx = Transaction::new(
-                    table_url.to_string(),
+                    table_url.clone(),
                     snapshot,
                     table_meta.last_sequence_number,
                 );
@@ -1366,7 +1362,7 @@ impl ExecutionPlan for IcebergCommitExec {
                         format!("metadata/v{next_version}{file_extension}")
                     };
                     let metadata_location =
-                        Self::table_metadata_location(&table_url, &metadata_file)?;
+                        table_metadata_location(&table_url, &metadata_file)?;
                     let metadata_bytes = encode_metadata_file(&metadata_file, &metadata_json)
                         .map_err(|error| DataFusionError::External(Box::new(error)))?;
                     Ok((metadata_file, metadata_location, metadata_bytes))

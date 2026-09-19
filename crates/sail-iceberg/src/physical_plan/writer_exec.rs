@@ -390,7 +390,7 @@ impl ExecutionPlan for IcebergWriterExec {
                 writer_root,
                 writer_config,
                 spec_id_val,
-                data_location.clone(),
+                crate::utils::url_to_location(&data_location)?,
             );
 
             let mut position_deletes = if writes_position_deletes {
