@@ -6371,6 +6371,49 @@ mod tests {
         assert_same_result(&physical, &decoded, schema_ref, vec![Arc::new(list)])
     }
 
+    #[test]
+    fn test_round_trip_distributed_map_filter_value_only() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion::arrow::array::{Int32Builder, MapBuilder};
+        use datafusion::arrow::datatypes::{DataType, Field};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
+        use datafusion::logical_expr::{Expr, HigherOrderUDF, col, lambda};
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
+
+        let mut builder = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new());
+        builder.keys().append_value(1);
+        builder.values().append_null();
+        builder.keys().append_value(2);
+        builder.values().append_value(20);
+        builder.append(true)?;
+        let map = builder.finish();
+
+        let fields = vec![Field::new("m", map.data_type().clone(), true)];
+        let schema = Arc::new(Schema::new(fields.clone()));
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+        let value = Expr::LambdaVariable(LambdaVariable::new(
+            "v".to_string(),
+            Some(Arc::new(Field::new("v", DataType::Int32, true))),
+        ));
+        let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            Arc::new(HigherOrderUDF::new_from_impl(SparkMapFilter::new())),
+            vec![col("m"), lambda(["k", "v"], value.is_not_null())],
+        ));
+        let physical = create_physical_expr(
+            &logical,
+            &dfschema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        let decoded = round_trip_expr(&physical, &schema)?;
+        assert_eq!(as_hof(&decoded)?.name(), "map_filter");
+        assert_same_result(&physical, &decoded, schema, vec![Arc::new(map)])
+    }
+
     /// Distributed round-trip for `exists(arr, v -> v > 2)` over `[[1, 2, 3]]`.
     /// Proves the `Exists` higher-order UDF kind survives remote encode/decode.
     #[test]
