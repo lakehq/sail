@@ -166,7 +166,8 @@ impl<'a> SnapshotPruningStats<'a> {
         // Delta numRecords remains the physical Parquet row count when a DV is present. Logical
         // output rows subtract the DV cardinality, while wide column stats still describe the
         // physical rows, so retain both counts.
-        let physical_rows = nested_struct_column_exact_or_path(stats, STATS_FIELD_NUM_RECORDS)?
+        let physical_rows = stats
+            .column_by_name(STATS_FIELD_NUM_RECORDS)?
             .as_any()
             .downcast_ref::<Int64Array>()?;
         if physical_rows.len() != data.num_rows() {
@@ -181,7 +182,8 @@ impl<'a> SnapshotPruningStats<'a> {
                 .column_by_name(DV_FIELD_CARDINALITY)
                 .and_then(|column| column.as_any().downcast_ref::<Int64Array>())
         });
-        let tight_bounds = nested_struct_column_exact_or_path(stats, STATS_FIELD_TIGHT_BOUNDS)
+        let tight_bounds = stats
+            .column_by_name(STATS_FIELD_TIGHT_BOUNDS)
             .and_then(|column| column.as_any().downcast_ref::<BooleanArray>());
 
         (0..physical_rows.len())
@@ -297,38 +299,39 @@ impl<'a> SnapshotPruningStats<'a> {
         }
         let null_counts = nested_stats_column(self.stats, STATS_FIELD_NULL_COUNT, physical_path)
             .and_then(|column| column.as_any().downcast_ref::<Int64Array>());
+        let mut contributing_files = Vec::with_capacity(file_rows.len());
         for (row, counts) in file_rows.iter().enumerate() {
-            if counts.logical == 0 || !array_ref.is_null(row) {
+            if counts.logical == 0 {
+                contributing_files.push(false);
                 continue;
             }
-            let Some(null_counts) = null_counts else {
-                return Precision::Absent;
-            };
-            if row >= null_counts.len() || null_counts.is_null(row) {
+            if let Some(null_counts) =
+                null_counts.filter(|values| row < values.len() && !values.is_null(row))
+            {
+                let Ok(nulls) = usize::try_from(null_counts.value(row)) else {
+                    return Precision::Absent;
+                };
+                let maximum_nulls = if counts.wide_bounds {
+                    counts.physical
+                } else {
+                    counts.logical
+                };
+                if nulls > maximum_nulls {
+                    return Precision::Absent;
+                }
+                // All-null files carry no information in their bounds, even when populated.
+                if nulls == maximum_nulls {
+                    contributing_files.push(false);
+                    continue;
+                }
+            }
+            if array_ref.is_null(row) {
                 return Precision::Absent;
             }
-            let Ok(physical_nulls) = usize::try_from(null_counts.value(row)) else {
-                return Precision::Absent;
-            };
-            let maximum_nulls = if counts.wide_bounds {
-                counts.physical
-            } else {
-                counts.logical
-            };
-            if physical_nulls > maximum_nulls {
-                return Precision::Absent;
-            }
-            let all_logical_rows_are_null = if counts.wide_bounds {
-                physical_nulls == counts.physical
-            } else {
-                physical_nulls == counts.logical
-            };
-            if !all_logical_rows_are_null {
-                return Precision::Absent;
-            }
+            contributing_files.push(true);
         }
 
-        exact_bounds_for_live_files(array, file_rows, fun_type)
+        exact_bounds_for_files(array, BooleanArray::from(contributing_files), fun_type)
     }
 
     fn partition_null_count(&self, physical_name: &str) -> Precision<usize> {
@@ -380,7 +383,9 @@ impl<'a> SnapshotPruningStats<'a> {
         if values.len() != file_rows.len() {
             return Precision::Absent;
         }
-        exact_bounds_for_live_files(values, file_rows, fun_type)
+        let live_files =
+            BooleanArray::from_iter(file_rows.iter().map(|counts| Some(counts.logical > 0)));
+        exact_bounds_for_files(values, live_files, fun_type)
     }
 
     fn num_records(&self) -> Precision<usize> {
@@ -551,24 +556,23 @@ impl<'a> SnapshotPruningStats<'a> {
                         return None;
                     }
                 };
-            return nested_struct_column_exact_or_path(partition_values, physical_name).cloned();
+            return partition_values.column_by_name(physical_name).cloned();
         }
 
         nested_stats_column(self.stats, stats_field, &[physical_name.to_string()]).cloned()
     }
 }
 
-fn exact_bounds_for_live_files(
+fn exact_bounds_for_files(
     values: &ArrayRef,
-    file_rows: &[FileRowCounts],
+    contributing_files: BooleanArray,
     accumulator_type: AccumulatorType,
 ) -> Precision<ScalarValue> {
-    if !file_rows.iter().any(|counts| counts.logical > 0) {
+    if contributing_files.true_count() == 0 {
         return Precision::Absent;
     }
-    let live_files =
-        BooleanArray::from_iter(file_rows.iter().map(|counts| Some(counts.logical > 0)));
-    let Ok(values) = ::datafusion::arrow::compute::filter(values.as_ref(), &live_files) else {
+    let Ok(values) = ::datafusion::arrow::compute::filter(values.as_ref(), &contributing_files)
+    else {
         return Precision::Absent;
     };
     let accumulator: Option<Box<dyn Accumulator>> =
@@ -619,24 +623,6 @@ fn nested_struct_column_path<'a>(
             .as_any()
             .downcast_ref::<StructArray>()?
             .column_by_name(segment)?;
-    }
-    Some(current)
-}
-
-fn nested_struct_column_exact_or_path<'a>(
-    array: &'a StructArray,
-    name: &str,
-) -> Option<&'a Arc<dyn Array>> {
-    if let Some(current) = array.column_by_name(name) {
-        return Some(current);
-    }
-
-    let mut path_iter = name.split('.');
-    let first = path_iter.next()?;
-    let mut current = array.column_by_name(first)?;
-    for segment in path_iter {
-        let struct_array = current.as_any().downcast_ref::<StructArray>()?;
-        current = struct_array.column_by_name(segment)?;
     }
     Some(current)
 }
@@ -705,8 +691,7 @@ impl PruningStatistics for SnapshotPruningStats<'_> {
     ///
     /// Note: the returned array must contain `num_containers()` rows
     fn row_counts(&self) -> Option<ArrayRef> {
-        let row_counts =
-            nested_struct_column_exact_or_path(self.stats, STATS_FIELD_NUM_RECORDS)?.clone();
+        let row_counts = self.stats.column_by_name(STATS_FIELD_NUM_RECORDS)?.clone();
         ::datafusion::arrow::compute::cast(row_counts.as_ref(), &ArrowDataType::UInt64).ok()
     }
 
