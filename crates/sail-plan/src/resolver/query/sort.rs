@@ -8,7 +8,6 @@ use datafusion_expr::{
     Aggregate, Expr, Extension, LogicalPlan, LogicalPlanBuilder, Projection, Window,
 };
 use sail_common::spec;
-use sail_common_datafusion::utils::items::ItemTaker;
 use sail_logical_plan::sort::SortWithinPartitionsNode;
 
 use crate::error::PlanResult;
@@ -247,24 +246,17 @@ impl PlanResolver<'_> {
             Err(error) => {
                 // A plan with several inputs has no single schema to fall back to, and resolving
                 // the sort against each of them would register names that are then discarded.
-                if plan.inputs().len() != 1 {
+                let inputs = plan.inputs();
+                let [input_plan] = inputs.as_slice() else {
                     return Err(error);
-                }
-                let mut sorts = Vec::with_capacity(plan.inputs().len());
-                for input_plan in plan.inputs() {
-                    match self
-                        .resolve_query_sort_order_by_plan(input_plan, sort, state)
-                        .await
-                    {
-                        Ok(sort_expr) => sorts.push(sort_expr),
-                        // The sort is resolved against the output of the plan first and against
-                        // its inputs only as a fallback, so when neither works the failure to
-                        // report is the one from the output: the fallback saw a narrower schema
-                        // and its message would name fewer columns.
-                        Err(_) => return Err(error),
-                    }
-                }
-                Ok(sorts.one()?)
+                };
+                // The sort is resolved against the output of the plan first and against its input
+                // only as a fallback, so when neither works the failure to report is the one from
+                // the output: the fallback saw a narrower schema and its message would name fewer
+                // columns.
+                self.resolve_query_sort_order_by_plan(input_plan, sort, state)
+                    .await
+                    .map_err(|_| error)
             }
         }
     }

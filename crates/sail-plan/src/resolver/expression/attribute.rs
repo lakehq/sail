@@ -6,13 +6,10 @@ use datafusion_expr::expr::{LambdaVariable, ScalarFunction};
 use datafusion_expr::{ScalarUDF, UNNAMED_TABLE, col, expr, lit};
 use datafusion_functions::core::get_field;
 use sail_common::spec;
-use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::plan::{PlanFormatter, PlanService};
 use sail_function::scalar::array_struct_field::ArrayStructField;
 use sail_sql_analyzer::parser::parse_attribute_name;
 
 use crate::error::{PlanError, PlanResult};
-use crate::formatter::SparkPlanFormatter;
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
@@ -27,12 +24,16 @@ fn ambiguous_attribute_error(
     references: Vec<Vec<String>>,
 ) -> PlanError {
     if plan_id.is_some() {
+        // The condition has four sentences in the catalog, and `ErrorClassesJSONReader` joins
+        // them with a newline rather than with a space, so the message is written on four lines.
         return PlanError::AnalysisError(format!(
             "[AMBIGUOUS_COLUMN_REFERENCE] Column \"{}\" is ambiguous. It's because you joined \
-             several DataFrame together, and some of these DataFrames are the same. This column \
-             points to one of the DataFrames but Spark is unable to figure out which one. \
+             several DataFrame together, and some of these DataFrames are the same.\n\
+             This column points to one of the DataFrames but Spark is unable to figure out \
+             which one.\n\
              Please alias the DataFrames with different names via `DataFrame.alias` before \
-             joining them, and specify the column using qualified name, e.g. \
+             joining them,\n\
+             and specify the column using qualified name, e.g. \
              `df.alias(\"a\").join(df.alias(\"b\"), col(\"a.id\") > col(\"b.id\"))`.",
             pretty_attribute(name)
         ));
@@ -202,7 +203,7 @@ pub(in crate::resolver) fn unresolved_column_error(
     schema: &DFSchemaRef,
     state: &PlanResolverState,
 ) -> PlanError {
-    let candidates = schema
+    let mut candidates = schema
         .columns()
         .into_iter()
         .filter_map(|column| {
@@ -219,7 +220,6 @@ pub(in crate::resolver) fn unresolved_column_error(
         .collect::<Vec<_>>();
     // The candidates of the schema reach the analyzer through `AttributeSet.toSeq`, which sorts
     // them by name.
-    let mut candidates = candidates;
     candidates.sort_by_cached_key(|parts| utf16_key(parts.last().map(|x| x.as_str())));
     // Inside a `HAVING` clause the aggregate expressions are names of their own, and they come
     // BEFORE the columns rather than through that sorted set, so one of them wins a tie in
@@ -392,12 +392,12 @@ impl PlanResolver<'_> {
             return Ok(NamedExpr::new(vec![display], expr));
         }
         if let Some((name, expr)) =
-            self.resolve_aggregate_field(&name, state.get_grouping_for_having())?
+            self.resolve_aggregate_field(&name, state.get_grouping_for_having(), true)?
         {
             return Ok(NamedExpr::new(vec![name], expr));
         }
         if let Some((name, expr)) =
-            self.resolve_aggregate_field(&name, state.get_projections_for_having())?
+            self.resolve_aggregate_field(&name, state.get_projections_for_having(), true)?
         {
             return Ok(NamedExpr::new(vec![name], expr));
         }
@@ -407,7 +407,7 @@ impl PlanResolver<'_> {
             return Ok(NamedExpr::new(vec![name], expr));
         }
         if let Some((name, expr)) =
-            self.resolve_aggregate_field(&name, state.get_projections_for_grouping())?
+            self.resolve_aggregate_field(&name, state.get_projections_for_grouping(), false)?
         {
             return Ok(NamedExpr::new(vec![name], expr));
         }
@@ -484,7 +484,7 @@ impl PlanResolver<'_> {
                 // Spark renders the base with `toSQLExpr`, which prints the name the user
                 // wrote rather than the one the attribute resolved to.
                 let base = field_name.as_ref().to_string();
-                return match self.missing_struct_field_error(&base, field.data_type(), inner) {
+                return match self.missing_struct_field_error(&base, field.data_type(), inner)? {
                     Some(error) => Err(error),
                     // The interpretation reached something this resolver cannot walk into, which
                     // is reported as a name that did not resolve, the way it always was.
@@ -505,7 +505,7 @@ impl PlanResolver<'_> {
         base: &str,
         data_type: &DataType,
         inner: &[T],
-    ) -> Option<PlanError> {
+    ) -> PlanResult<Option<PlanError>> {
         let mut base = base.to_string();
         let mut data_type = data_type.clone();
         for part in inner {
@@ -515,12 +515,12 @@ impl PlanResolver<'_> {
                 | DataType::LargeList(field)
                 | DataType::FixedSizeList(field, _) => match field.data_type() {
                     DataType::Struct(fields) => fields.clone(),
-                    _ => return self.invalid_extract_base_error(&base, &data_type),
+                    _ => return self.invalid_extract_base_error(&base, &data_type).map(Some),
                 },
                 // A map is a complex type that Spark walks into by key. Sail does not reach it
                 // through a dotted name, and that gap is reported the way it always was.
-                DataType::Map(..) => return None,
-                _ => return self.invalid_extract_base_error(&base, &data_type),
+                DataType::Map(..) => return Ok(None),
+                _ => return self.invalid_extract_base_error(&base, &data_type).map(Some),
             };
             match self.resolve_struct_field(&fields, part.as_ref()) {
                 Ok(Some(field)) => {
@@ -534,30 +534,21 @@ impl PlanResolver<'_> {
                         .iter()
                         .map(|x| x.name().to_string())
                         .collect::<Vec<_>>();
-                    return Some(Self::field_not_found_error(part.as_ref(), &names));
+                    return Ok(Some(Self::field_not_found_error(part.as_ref(), &names)));
                 }
             }
         }
-        None
+        Ok(None)
     }
 
     /// The error for a name that walks into something that is not a complex type.
-    fn invalid_extract_base_error(&self, base: &str, data_type: &DataType) -> Option<PlanError> {
-        // TODO: Spark renders the type with `toSQLType`, which is `DataType.sql`, not the
-        // upper cased `simpleString`: it writes `MAP<STRING, INT>` with a space, keeps the case
-        // of a struct field name and keeps `NOT NULL`. See `test_the_type_of_an_invalid_base`.
-        let rendered = self
-            .ctx
-            .extension::<PlanService>()
-            .and_then(|service| {
-                service
-                    .plan_formatter()
-                    .data_type_to_simple_string(data_type)
-            })
-            .or_else(|_| SparkPlanFormatter.data_type_to_simple_string(data_type))
-            .map(|x| x.to_uppercase())
-            .unwrap_or_else(|_| "INVALID".to_string());
-        Some(PlanError::AnalysisError(format!(
+    fn invalid_extract_base_error(
+        &self,
+        base: &str,
+        data_type: &DataType,
+    ) -> PlanResult<PlanError> {
+        let rendered = self.spark_type_name(data_type)?;
+        Ok(PlanError::AnalysisError(format!(
             "[INVALID_EXTRACT_BASE_FIELD_TYPE] Can't extract a value from \"{base}\". \
              Need a complex type [STRUCT, ARRAY, MAP] but got \"{rendered}\"."
         )))
@@ -576,10 +567,21 @@ impl PlanResolver<'_> {
         ))
     }
 
+    /// Resolves a name against the expressions of an aggregate.
+    ///
+    /// A name that matches more than one of them is an ambiguous reference when the aggregate has
+    /// already been built and the name reads its output, which is what a `HAVING` does. While the
+    /// grouping expressions are still being resolved there is no output to be ambiguous about:
+    /// Spark keeps the first match there (`ResolveReferencesInAggregate.resolveGroupByAlias` uses
+    /// `find`) and reports the query later on its own condition.
+    ///
+    /// TODO: keep the first match for the grouping instead of rejecting it, which needs the
+    /// condition Spark reports afterwards. See `test_a_repeated_alias_in_a_group_by`.
     fn resolve_aggregate_field(
         &self,
         name: &spec::ObjectName,
         expressions: &[NamedExpr],
+        ambiguity_is_a_reference: bool,
     ) -> PlanResult<Option<(String, expr::Expr)>> {
         let [name] = name.parts() else {
             return Ok(None);
@@ -602,6 +604,14 @@ impl PlanResolver<'_> {
             })
             .collect::<Vec<_>>();
         if candidates.len() > 1 {
+            if ambiguity_is_a_reference {
+                let references = vec![vec![name.as_ref().to_string()]; candidates.len()];
+                return Err(ambiguous_attribute_error(
+                    &spec::ObjectName::bare(name.as_ref()),
+                    None,
+                    references,
+                ));
+            }
             return Err(PlanError::AnalysisError(format!(
                 "ambiguous aggregate expression: `{}`",
                 name.as_ref()

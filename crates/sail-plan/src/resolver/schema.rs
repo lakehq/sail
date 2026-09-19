@@ -1,9 +1,11 @@
 use std::sync::Arc;
 
-use datafusion_common::arrow::datatypes::{FieldRef, Fields};
+use datafusion_common::arrow::datatypes::{DataType, FieldRef, Fields};
 use datafusion_common::{Column, DFSchemaRef, TableReference};
 use sail_common::spec;
 use sail_common::utils::string::{equals_ignore_case, to_lowercase};
+use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_sql_analyzer::parser::parse_attribute_name;
 
@@ -16,6 +18,19 @@ use crate::resolver::expression::attribute::{
 use crate::resolver::state::{FieldInfo, PlanResolverState};
 
 impl PlanResolver<'_> {
+    /// The name of a data type as Spark writes it inside an error message.
+    ///
+    /// TODO: Spark renders it with `toSQLType`, which is `DataType.sql` and not the upper cased
+    /// `simpleString`: it writes `MAP<STRING, INT>` with a space after the comma, keeps the case
+    /// of a struct field name and keeps `NOT NULL`.
+    pub(super) fn spark_type_name(&self, data_type: &DataType) -> PlanResult<String> {
+        let service = self.ctx.extension::<PlanService>()?;
+        let name = service
+            .plan_formatter()
+            .data_type_to_simple_string(data_type)?;
+        Ok(name.to_uppercase())
+    }
+
     /// Matches an identifier against another one the way the Spark analyzer resolver does.
     pub(super) fn match_identifier(&self, a: &str, b: &str) -> bool {
         if self.config.case_sensitive {
