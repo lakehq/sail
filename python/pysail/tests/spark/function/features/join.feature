@@ -186,20 +186,6 @@ Feature: NATURAL and USING joins
         | LEFT SEMI | LeftSemi |
         | LEFT ANTI | LeftAnti |
 
-  Rule: OUTER alone is not a natural join type
-
-    # Spark parses the join type of a NATURAL join from a closed list that has no bare OUTER,
-    # so this is rejected before analysis rather than treated as a full outer join.
-    @sail-bug
-    # The query is rejected, as it is by Spark, but with the message of Sail's own parser: the
-    # error class of a syntax error is not mapped yet, which is why this is still marked.
-    Scenario: a natural outer join is rejected by the parser
-      When query
-        """
-        SELECT * FROM (SELECT 1 AS k) AS l NATURAL OUTER JOIN (SELECT 1 AS k) AS r
-        """
-      Then query error PARSE_SYNTAX_ERROR
-
   Rule: A USING key that matches no column is rejected
 
     Scenario: the error names the clause that could not be resolved

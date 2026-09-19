@@ -4115,6 +4115,13 @@
                   {
                     "sequence": [
                       {
+                        "nonTerminal": "Keyword(Outer)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
                         "nonTerminal": "Keyword(Semi)"
                       }
                     ]
