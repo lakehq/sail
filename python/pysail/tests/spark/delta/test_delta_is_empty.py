@@ -37,7 +37,8 @@ def _write_row_count_table(table_path, file_rows, *, record_counts=True):
             "modificationTime": 0,
             "dataChange": True,
         }
-        if record_counts:
+        include_count = record_counts if isinstance(record_counts, bool) else record_counts[index]
+        if include_count:
             add["stats"] = json.dumps({"numRecords": len(rows)})
         actions.append({"add": add})
     log_dir = table_path / "_delta_log"
@@ -64,6 +65,53 @@ def test_is_empty_and_empty_projection_limit(spark, tmp_path, file_rows, record_
     assert limited.schema == StructType([])
     assert limited.collect() == ([()] if expected_count else [])
     assert df.select().limit(2).collect() == [()] * min(expected_count, 2)
+
+
+@pytest.mark.parametrize("partial", [False, True], ids=["complete-counts", "partial-counts"])
+def test_empty_projection_limit_uses_sufficient_known_rows(spark, tmp_path, partial):
+    table_path = tmp_path / "bounded_row_counts"
+    _write_row_count_table(table_path, [[], [1, 2, 3]], record_counts=[not partial, True])
+    for data_file in table_path.glob("*.parquet"):
+        data_file.unlink()
+    frame = spark.read.format("delta").load(str(table_path))
+    # Spark Connect 3.5's isEmpty() retains columns unless explicitly projected away.
+    assert frame.select().isEmpty() is False
+    for count in [0, 1, 2, 3]:
+        assert frame.select().limit(count).collect() == [()] * count
+    assert frame.select().offset(1).limit(2).collect() == [(), ()]
+    if not partial:
+        assert frame.select().limit(10).collect() == [(), (), ()]
+        assert frame.select().offset(4).limit(2).collect() == []
+    else:
+        with pytest.raises(Exception, match=r"(?i)(not found|no such file)"):
+            frame.select().limit(4).collect()
+
+
+def test_empty_projection_reads_unknown_files_when_counts_are_insufficient(spark, tmp_path):
+    table_path = tmp_path / "insufficient_row_counts"
+    _write_row_count_table(table_path, [[], [1, 2, 3]], record_counts=[True, False])
+    frame = spark.read.format("delta").load(str(table_path))
+    assert frame.isEmpty() is False
+    assert frame.select().limit(2).collect() == [(), ()]
+
+
+@pytest.mark.parametrize("count", [1, 2, 3])
+def test_limit_reads_only_enough_known_files(spark, tmp_path, count):
+    table_path = tmp_path / "limited_files"
+    _write_row_count_table(table_path, [[99], [], [1, 2], [3]], record_counts=[False, True, True, True])
+    (table_path / "part-0.parquet").unlink()
+    (table_path / "part-1.parquet").unlink()
+    rows = spark.read.format("delta").load(str(table_path)).limit(count).collect()
+    assert len(rows) == count
+    assert all(row.id in [1, 2, 3] for row in rows)
+
+
+def test_limit_preserves_row_filters_and_ordering(spark, tmp_path):
+    table_path = tmp_path / "filtered_limit"
+    _write_row_count_table(table_path, [[1, 2], [3, 4]])
+    frame = spark.read.format("delta").load(str(table_path))
+    assert sorted(row.id for row in frame.where("id > 2").limit(2).collect()) == [3, 4]
+    assert frame.orderBy("id", ascending=False).limit(2).collect() == [(4,), (3,)]
 
 
 @pytest.mark.yamlsnapshot(group="plan")

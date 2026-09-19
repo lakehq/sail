@@ -21,21 +21,20 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, StructArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt64Array,
+    Array, ArrayRef, BooleanArray, RecordBatch, StructArray, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt64Array,
+    new_empty_array,
 };
-use datafusion::arrow::datatypes::{DataType, SchemaRef, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef, TimeUnit};
 use datafusion::catalog::Session;
 use datafusion::common::{Result, ToDFSchema};
 use datafusion::logical_expr::Expr;
-use datafusion::logical_expr::utils::conjunction;
 use datafusion::physical_optimizer::pruning::PruningPredicateBuilder;
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, DataFusionError};
 
 use crate::conversion::{ScalarConverter, parse_optional_partition_value};
-use crate::delta_log::LogStoreRef;
 use crate::schema::arrow_field_physical_name;
 use crate::spec::statistics::Stats;
 use crate::spec::{Add, ColumnMappingMode};
@@ -124,94 +123,72 @@ pub(crate) fn arrow_type_contains_timestamp(data_type: &DataType) -> bool {
     }
 }
 
-/// Result of file pruning operation
-#[derive(Debug, Clone)]
-pub struct PruningResult {
-    /// Files that passed the pruning filters
-    pub files: Vec<Add>,
-    /// Pruning mask used for statistics calculation (None if no pruning was applied)
-    pub pruning_mask: Option<Vec<bool>>,
-}
-
-/// Core file pruning function that filters files based on predicates and limit
-pub async fn prune_files(
-    snapshot: &DeltaSnapshot,
-    _log_store: &LogStoreRef,
-    session: &dyn Session,
-    filters: &[Expr],
-    limit: Option<usize>,
-    logical_schema: SchemaRef,
-) -> Result<PruningResult> {
-    let filter_expr = conjunction(filters.iter().cloned());
-
-    // Early return if no filters and no limit
-    if filter_expr.is_none() && limit.is_none() {
-        let files = snapshot.adds().to_vec();
-        return Ok(PruningResult {
-            files,
-            pruning_mask: None,
-        });
-    }
-
-    let all_files = snapshot.adds().to_vec();
-    let num_containers = all_files.len();
-
-    // Apply predicate-based pruning
-    let files_to_prune = if let Some(predicate) = &filter_expr {
-        let df_schema = logical_schema.clone().to_dfschema()?;
-        let physical_predicate = session.create_physical_expr(predicate.clone(), &df_schema)?;
-        let referenced_columns = crate::datasource::collect_physical_columns(&physical_predicate);
-        let stats = AddStatsPruningStatistics::try_new(
-            logical_schema.clone(),
-            &all_files,
-            referenced_columns,
-            snapshot.effective_column_mapping_mode(),
-        )?;
-        let pruning_predicate = PruningPredicateBuilder::new()
-            .with_file_schema(logical_schema)
-            .try_build(physical_predicate)?;
-        pruning_predicate.prune(&stats)?
-    } else {
-        vec![true; num_containers]
-    };
-
-    // Apply limit-based pruning with statistics consideration
-    let mut pruned_without_stats = vec![];
-    let mut rows_collected = 0;
-    let mut files = vec![];
-
-    for (action, keep) in all_files.into_iter().zip(files_to_prune.iter()) {
-        if *keep {
-            if let Some(limit) = limit
-                && let Some(stats) = action
-                    .get_stats()
-                    .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?
-            {
-                if rows_collected <= limit as i64 {
-                    rows_collected += stats.num_records;
-                    files.push(action);
-                } else {
-                    break;
-                }
-            } else if limit.is_some() {
-                pruned_without_stats.push(action);
-            } else {
-                files.push(action);
+/// Select enough live rows for an unordered LIMIT after exact partition filtering.
+/// Unknown files are needed only when the known counts cannot satisfy the limit.
+pub(crate) fn select_files_for_limit(adds: &[Add], limit: usize) -> Vec<Add> {
+    let mut selected = Vec::new();
+    let mut unknown = Vec::new();
+    let mut rows = 0usize;
+    for add in adds {
+        if rows >= limit {
+            break;
+        }
+        match add.num_logical_records() {
+            Some(0) => {}
+            Some(count) => {
+                rows = rows.saturating_add(count);
+                selected.push(add.clone());
             }
+            None => unknown.push(add.clone()),
         }
     }
-
-    // Add files without stats if we haven't reached the limit
-    if let Some(limit) = limit
-        && rows_collected < limit as i64
-    {
-        files.extend(pruned_without_stats);
+    if rows < limit {
+        selected.extend(unknown);
     }
+    selected
+}
 
-    Ok(PruningResult {
-        files,
-        pruning_mask: Some(files_to_prune),
-    })
+/// Evaluate an exact partition predicate on one metadata row per file.
+pub(crate) fn partition_filter_mask(
+    session: &dyn Session,
+    snapshot: &DeltaSnapshot,
+    adds: &[Add],
+    predicate: Expr,
+) -> Result<BooleanArray> {
+    let mut fields = Vec::new();
+    let mut columns = Vec::new();
+    for name in snapshot.metadata().partition_columns() {
+        let field = snapshot.schema().field_with_name(name)?;
+        let physical_name =
+            arrow_field_physical_name(field, snapshot.effective_column_mapping_mode());
+        let values = adds
+            .iter()
+            .map(|add| {
+                let raw = add
+                    .partition_values
+                    .get(physical_name)
+                    .and_then(Option::as_deref);
+                parse_optional_partition_value(raw, field.data_type())
+            })
+            .collect::<crate::DeltaResult<Vec<_>>>()?;
+        let column = if values.is_empty() {
+            new_empty_array(field.data_type())
+        } else {
+            ScalarValue::iter_to_array(values)?
+        };
+        fields.push(field.clone().with_nullable(true));
+        columns.push(column);
+    }
+    let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)?;
+    let predicate = session.create_physical_expr(predicate, &batch.schema().to_dfschema()?)?;
+    let values = predicate.evaluate(&batch)?.into_array(batch.num_rows())?;
+    values
+        .as_any()
+        .downcast_ref::<BooleanArray>()
+        .cloned()
+        .ok_or_else(|| {
+            DataFusionError::Internal("Delta partition predicate must return Boolean".into())
+        })
 }
 
 /// Prune a set of `Add` actions using a DataFusion physical predicate and per-file stats.
@@ -655,8 +632,10 @@ mod tests {
     use datafusion_common::pruning::PruningStatistics;
     use datafusion_common::{Column, DataFusionError, Result, ScalarValue};
 
-    use super::{AddStatsPruningStatistics, prune_adds_by_physical_predicate};
-    use crate::spec::{Add, ColumnMappingMode};
+    use super::{
+        AddStatsPruningStatistics, prune_adds_by_physical_predicate, select_files_for_limit,
+    };
+    use crate::spec::{Add, ColumnMappingMode, DeletionVectorDescriptor};
 
     fn add_with_stats(stats_json: &str) -> Add {
         Add {
@@ -691,6 +670,63 @@ mod tests {
             clustering_provider: None,
             commit_version: None,
             commit_timestamp: None,
+        }
+    }
+
+    #[test]
+    fn limit_selection_uses_live_counts_and_keeps_unknown_files_when_needed() {
+        let unknown = add_with_stats(r#"{}"#);
+        let empty = add_with_stats(r#"{"numRecords":0}"#);
+        let mut deleted = add_with_stats(r#"{"numRecords":3}"#);
+        deleted.deletion_vector = Some(DeletionVectorDescriptor {
+            cardinality: 2,
+            ..Default::default()
+        });
+        let two_rows = add_with_stats(r#"{"numRecords":2}"#);
+        let adds = [unknown.clone(), empty, deleted.clone(), two_rows.clone()];
+        assert!(select_files_for_limit(&adds, 0).is_empty());
+        assert_eq!(select_files_for_limit(&adds, 1), vec![deleted.clone()]);
+        assert_eq!(
+            select_files_for_limit(&adds, 2),
+            vec![deleted.clone(), two_rows.clone()]
+        );
+        assert_eq!(
+            select_files_for_limit(&adds, 3),
+            vec![deleted.clone(), two_rows.clone()]
+        );
+        assert_eq!(
+            select_files_for_limit(&adds, 4),
+            vec![deleted, two_rows, unknown]
+        );
+    }
+
+    #[test]
+    fn invalid_row_counts_never_prove_limit_sufficiency() {
+        for json in [
+            r#"{}"#,
+            r#"{"numRecords":null}"#,
+            r#"{"numRecords":-1}"#,
+            r#"{"numRecords":1.5}"#,
+            r#"{"numRecords":9223372036854775808}"#,
+        ] {
+            let add = add_with_stats(json);
+            assert_eq!(add.num_logical_records(), None);
+            assert_eq!(
+                select_files_for_limit(std::slice::from_ref(&add), 1),
+                vec![add]
+            );
+        }
+        for cardinality in [-1, 4] {
+            let mut add = add_with_stats(r#"{"numRecords":3}"#);
+            add.deletion_vector = Some(DeletionVectorDescriptor {
+                cardinality,
+                ..Default::default()
+            });
+            assert_eq!(add.num_logical_records(), None);
+            assert_eq!(
+                select_files_for_limit(std::slice::from_ref(&add), 1),
+                vec![add]
+            );
         }
     }
 
