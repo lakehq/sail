@@ -13,12 +13,16 @@ use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
 use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
+use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
 static SPARK_ARRAY_FILTER_UDF: LazyLock<Arc<HigherOrderUDF>> =
     LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArrayFilter::new())));
+
+static SPARK_MAP_FILTER_UDF: LazyLock<Arc<HigherOrderUDF>> =
+    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkMapFilter::new())));
 
 static SPARK_ARRAY_AGGREGATE_UDF: LazyLock<Arc<HigherOrderUDF>> =
     LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArrayAggregate::new())));
@@ -60,7 +64,14 @@ static SPARK_ARRAY_SORT_SWAPPED_UDF: LazyLock<Arc<HigherOrderUDF>> =
 pub(crate) fn is_higher_order_function(name: &str) -> bool {
     matches!(
         name.trim().to_lowercase().as_str(),
-        "aggregate" | "reduce" | "filter" | "transform" | "exists" | "forall" | "array_sort"
+        "aggregate"
+            | "reduce"
+            | "filter"
+            | "map_filter"
+            | "transform"
+            | "exists"
+            | "forall"
+            | "array_sort"
     )
 }
 
@@ -75,6 +86,7 @@ pub(crate) fn get_lambda_parameters(
     let udf = match function_name.trim().to_lowercase().as_str() {
         "aggregate" | "reduce" => &SPARK_ARRAY_AGGREGATE_UDF,
         "filter" => &SPARK_ARRAY_FILTER_UDF,
+        "map_filter" => &SPARK_MAP_FILTER_UDF,
         "transform" => &SPARK_ARRAY_TRANSFORM_UDF,
         "exists" => &SPARK_ARRAY_EXISTS_UDF,
         "forall" => &SPARK_ARRAY_FORALL_UDF,
@@ -174,6 +186,30 @@ fn filter(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     )
 }
 
+fn map_filter(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (map, predicate) = input.arguments.two()?;
+    // Spark binds an ordinary expression as a hidden lambda whose parameters
+    // are unused. Avoid capturing variables from any enclosing lambda.
+    let predicate = if matches!(predicate, expr::Expr::Lambda(_)) {
+        predicate
+    } else {
+        let mut params = Vec::with_capacity(2);
+        for base in ["__map_key", "__map_value"] {
+            let mut name = base.to_string();
+            while lambda_body_uses_param(&predicate, &name)? {
+                name.push('_');
+            }
+            params.push(name);
+        }
+        expr::Expr::Lambda(Lambda::new(params, predicate))
+    };
+    expect_lambda_arity("map_filter", &predicate, 2)?;
+    Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
+        Arc::clone(&SPARK_MAP_FILTER_UDF),
+        vec![map, predicate],
+    )))
+}
+
 fn transform(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     array_lambda_with_index(
         "transform",
@@ -199,8 +235,8 @@ fn forall(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     )))
 }
 
-/// Enforces the exact lambda arity Spark requires for a higher-order
-/// `aggregate`/`reduce` argument, but only on a direct `Expr::Lambda` match.
+/// Enforces the exact lambda arity Spark requires for a higher-order function
+/// argument, but only on a direct `Expr::Lambda` match.
 ///
 /// The UDF binding only rejects lambdas with too many parameters, so a `merge`
 /// lambda with fewer than 2 parameters would otherwise bind silently to a prefix
@@ -359,7 +395,7 @@ pub(super) fn list_built_in_lambda_functions() -> Vec<(&'static str, ScalarFunct
         ("exists", F::custom(exists)),
         ("filter", F::custom(filter)),
         ("forall", F::custom(forall)),
-        ("map_filter", F::unknown("map_filter")),
+        ("map_filter", F::custom(map_filter)),
         ("map_zip_with", F::unknown("map_zip_with")),
         ("reduce", F::custom(aggregate)),
         ("transform", F::custom(transform)),
