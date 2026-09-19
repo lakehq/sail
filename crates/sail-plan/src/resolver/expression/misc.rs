@@ -191,6 +191,11 @@ impl PlanResolver<'_> {
         use regex::Regex;
         use sail_function::scalar::multi_expr::MultiExpr;
 
+        let schema = state
+            .get_filter_schemas(schema)
+            .and_then(|schemas| schemas.first())
+            .unwrap_or(schema);
+
         // Remove backticks from the pattern if present
         let pattern_str = col_name.trim_matches('`');
 

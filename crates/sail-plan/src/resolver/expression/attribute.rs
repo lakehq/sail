@@ -59,8 +59,10 @@ impl PlanResolver<'_> {
         {
             return Ok(NamedExpr::new(vec![name], expr));
         }
+        let filter_schemas = state.get_filter_schemas(schema).unwrap_or(&[]).to_vec();
+        let local_schema = filter_schemas.first().unwrap_or(schema);
         if let Some((name, expr)) =
-            self.resolve_field_or_nested_field(&name, plan_id, schema, state)?
+            self.resolve_field_or_nested_field(&name, plan_id, local_schema, state)?
         {
             return Ok(NamedExpr::new(vec![name], expr));
         }
@@ -69,8 +71,37 @@ impl PlanResolver<'_> {
         {
             return Ok(NamedExpr::new(vec![name], expr));
         }
-        if let Some((name, expr)) = self.resolve_hidden_field(&name, plan_id, schema, state)? {
+        if let Some((name, expr)) =
+            self.resolve_hidden_field(&name, plan_id, local_schema, state)?
+        {
             return Ok(NamedExpr::new(vec![name], expr));
+        }
+        // A projected struct with an invalid nested path shadows any older struct
+        // of the same name. Only an absent root can be recovered from a descendant.
+        if !filter_schemas.is_empty()
+            && Self::has_filter_attribute_root(&name, plan_id, local_schema, state)
+        {
+            return Err(PlanError::analysis(format!(
+                "attribute {name:?} is missing from the schema: cannot resolve attribute"
+            )));
+        }
+        // TODO: Spark can discard all tentative bindings at an invalid descendant
+        // and retry deeper. That requires name resolution before type resolution;
+        // until then, retain errors rather than mix bindings from a failed tier.
+        for schema in filter_schemas.iter().skip(1) {
+            if let Some((name, expr)) =
+                self.resolve_field_or_nested_field(&name, plan_id, schema, state)?
+            {
+                return Ok(NamedExpr::new(vec![name], expr));
+            }
+            if Self::has_filter_attribute_root(&name, plan_id, schema, state) {
+                return Err(PlanError::analysis(format!(
+                    "attribute {name:?} is missing from the schema: cannot resolve attribute"
+                )));
+            }
+            if let Some((name, expr)) = self.resolve_hidden_field(&name, plan_id, schema, state)? {
+                return Ok(NamedExpr::new(vec![name], expr));
+            }
         }
         let Some(outer_schema) = state.get_outer_query_schema().cloned() else {
             return Err(PlanError::AnalysisError(format!(
@@ -85,6 +116,24 @@ impl PlanResolver<'_> {
                 "attribute {name:?} is missing from the schema: cannot resolve attribute or outer attribute"
             ))),
         }
+    }
+
+    fn has_filter_attribute_root(
+        name: &spec::ObjectName,
+        plan_id: Option<i64>,
+        schema: &DFSchemaRef,
+        state: &PlanResolverState,
+    ) -> bool {
+        Self::generate_qualified_nested_field_candidates(name.parts())
+            .iter()
+            .any(|(q, root, _)| {
+                schema.iter().any(|(qualifier, field)| {
+                    qualifier_matches(q.as_ref(), qualifier)
+                        && state.get_field_info(field.name()).is_ok_and(|info| {
+                            !info.is_hidden() && info.matches(root.as_ref(), plan_id)
+                        })
+                })
+            })
     }
 
     fn resolve_field_or_nested_field(
