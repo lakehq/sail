@@ -310,6 +310,14 @@
     before running dependent stages.
   experimental: true
 
+- key: cluster.shuffle_backend.flight.compression
+  type: string
+  default: "zstd"
+  description: |
+    Arrow IPC compression for Arrow Flight shuffle streams. Valid values are `none`,
+    `lz4`, and `zstd`.
+  experimental: true
+
 - key: cluster.shuffle_backend.storage.path
   type: string
   default: ""

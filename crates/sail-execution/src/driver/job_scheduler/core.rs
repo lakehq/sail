@@ -444,22 +444,20 @@ impl JobScheduler {
             .iter()
             .map(|t| t.stage)
             .collect::<IndexSet<_>>();
-        let mut stage_groups: IndexMap<StageGroupKey, StageGroup> = IndexMap::new();
+        let mut stage_partitions: IndexMap<StageGroupKey, IndexMap<usize, usize>> = IndexMap::new();
         for s in stages {
             let stage = &job.graph.stages()[s];
             let key = StageGroupKey {
                 placement: stage.placement,
                 group: stage.group.clone(),
             };
-            let group: &mut StageGroup = stage_groups.entry(key).or_default();
-            group.stages.insert(s);
-            let n = group.buckets.len();
             let p = stage.plan.output_partitioning().partition_count();
-            // ensure that the number of buckets is the maximum partitions among the stages
-            if p > n {
-                group.buckets.resize(p, Vec::new());
-            }
+            stage_partitions.entry(key).or_default().insert(s, p);
         }
+        let mut stage_groups = stage_partitions
+            .into_iter()
+            .map(|(key, partitions)| (key, StageGroup::new(partitions)))
+            .collect::<IndexMap<_, _>>();
 
         for t in &region.tasks {
             if let Some(attempt) = Self::get_latest_task_attempt(job, t.stage, t.partition) {
@@ -469,7 +467,7 @@ impl JobScheduler {
                     OutputMode::Blocking => match job.graph.shuffle_backend() {
                         ShuffleBackendKind::Storage { .. } => TaskOutputKind::Storage,
                         ShuffleBackendKind::Celeborn { .. } => TaskOutputKind::External,
-                        ShuffleBackendKind::Flight => unreachable!(),
+                        ShuffleBackendKind::Flight { .. } => unreachable!(),
                     },
                 };
                 let key = StageGroupKey {
@@ -477,9 +475,7 @@ impl JobScheduler {
                     group: stage.group.clone(),
                 };
                 if let Some(group) = stage_groups.get_mut(&key) {
-                    let partitions = stage.plan.output_partitioning().partition_count();
-                    let b = t.partition * group.buckets.len() / partitions;
-                    group.buckets[b].push(TaskSetEntry {
+                    group.add_task(TaskSetEntry {
                         key: TaskKey {
                             job_id,
                             stage: t.stage,
@@ -784,7 +780,7 @@ impl<'a> TaskInputBuilder<'a> {
             OutputMode::Blocking => match self.job.graph.shuffle_backend() {
                 ShuffleBackendKind::Storage { .. } => self.build_storage_locator()?,
                 ShuffleBackendKind::Celeborn { .. } => self.build_shuffle_service_locator()?,
-                ShuffleBackendKind::Flight => self.build_storage_locator()?,
+                ShuffleBackendKind::Flight { .. } => self.build_storage_locator()?,
             },
         };
         Ok(TaskInput {
@@ -1041,8 +1037,112 @@ struct StageGroupKey {
     group: String,
 }
 
-#[derive(Default)]
 struct StageGroup {
-    stages: IndexSet<usize>,
+    partition_offsets: HashMap<usize, usize>,
     buckets: Vec<Vec<TaskSetEntry>>,
+}
+
+impl StageGroup {
+    fn new(stage_partitions: IndexMap<usize, usize>) -> Self {
+        let count = stage_partitions.values().copied().max().unwrap_or(0);
+        let mut partition_offsets = HashMap::new();
+        let mut offset = 0;
+        for (stage, partitions) in stage_partitions {
+            if partitions > 0 {
+                partition_offsets.insert(stage, offset);
+                offset = (offset + partitions) % count;
+            }
+        }
+        Self {
+            partition_offsets,
+            buckets: vec![vec![]; count],
+        }
+    }
+
+    fn add_task(&mut self, entry: TaskSetEntry) {
+        // Place each stage consecutively, continuing from the preceding stage's offset.
+        // Full regions have bucket sizes differing by at most one, with no two partitions
+        // of a stage sharing a bucket. For partition-sliced forward regions, all stages
+        // have the same partition count, so offsets are zero and matching partitions
+        // continue to share a bucket.
+        let bucket =
+            (self.partition_offsets[&entry.key.stage] + entry.key.partition) % self.buckets.len();
+        self.buckets[bucket].push(entry);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::StageGroup;
+    use crate::id::{JobId, TaskKey};
+    use crate::task::scheduling::{TaskOutputKind, TaskSetEntry};
+
+    fn task(stage: usize, partition: usize) -> TaskSetEntry {
+        TaskSetEntry {
+            key: TaskKey {
+                job_id: JobId::from(1),
+                stage,
+                partition,
+                attempt: 0,
+            },
+            output: TaskOutputKind::Local,
+        }
+    }
+
+    #[test]
+    fn stage_group_balances_buckets_without_sharing_stage_partitions() {
+        for partitions in [
+            vec![4, 4, 8],
+            vec![256, 256, 256, 768],
+            vec![5, 3, 7],
+            vec![8, 4, 4],
+            vec![4, 8, 4],
+        ] {
+            let mut group = StageGroup::new(partitions.iter().copied().enumerate().collect());
+            // Task insertion order must not affect the bucket offsets.
+            for (stage, count) in partitions.iter().copied().enumerate().rev() {
+                for partition in (0..count).rev() {
+                    group.add_task(task(stage, partition));
+                }
+            }
+
+            let count = partitions.iter().copied().max().unwrap_or(0);
+            let total = partitions.iter().sum::<usize>();
+            assert_eq!(group.buckets.len(), count);
+            let mut tasks = HashSet::new();
+            for bucket in &group.buckets {
+                assert!((total / count..=total.div_ceil(count)).contains(&bucket.len()));
+                let stages = bucket
+                    .iter()
+                    .map(|entry| entry.key.stage)
+                    .collect::<HashSet<_>>();
+                assert_eq!(stages.len(), bucket.len());
+                for entry in bucket {
+                    assert!(tasks.insert((entry.key.stage, entry.key.partition)));
+                }
+            }
+            assert_eq!(tasks.len(), total);
+        }
+    }
+
+    #[test]
+    fn stage_group_preserves_partition_sliced_forward_regions() {
+        for partition in 0..4 {
+            let mut group = StageGroup::new([(0, 4), (1, 4), (2, 4)].into());
+            for stage in 0..3 {
+                group.add_task(task(stage, partition));
+            }
+            assert_eq!(group.buckets[partition].len(), 3);
+            assert_eq!(
+                group
+                    .buckets
+                    .iter()
+                    .filter(|bucket| !bucket.is_empty())
+                    .count(),
+                1
+            );
+        }
+    }
 }

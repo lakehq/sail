@@ -185,7 +185,6 @@ def data(spark, tmp_path_factory):
         pq.write_table(file_table, tmp_dir / f"hits-{file_index:02}.parquet")
 
     df = spark.read.parquet(str(tmp_dir))
-    df = df.withColumn("EventTime", F.col("EventTime").cast("timestamp"))
     df = df.withColumn("EventDate", F.col("EventDate").cast("int").cast("date"))
     df.createOrReplaceTempView("hits")
     yield
