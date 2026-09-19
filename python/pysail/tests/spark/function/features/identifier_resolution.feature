@@ -292,6 +292,25 @@ Feature: identifier resolution beyond ASCII
         """
       Then query error Did you mean one of the following\? \[`total`, `a`\]\.
 
+    Scenario: a grouping expression the aggregate does not select is not offered
+      # The output of the aggregate is its SELECT list, not its grouping, so a column that is
+      # grouped by and never selected is not a name in the filter either. The scenario above
+      # cannot tell the two rules apart, because there the grouping column is also selected.
+      When query
+        """
+        SELECT count(*) AS n FROM (SELECT 1 AS a, 2 AS b) GROUP BY a HAVING zz > 1
+        """
+      Then query error Did you mean one of the following\? \[`n`\]\.
+
+    Scenario: only the grouping expressions the aggregate selects are offered
+      # With two grouping expressions and only one of them selected, the one left out must not
+      # reach the suggestion.
+      When query
+        """
+        SELECT a, count(*) AS n FROM (SELECT 1 AS a, 2 AS b) GROUP BY a, b HAVING zz > 1
+        """
+      Then query error Did you mean one of the following\? \[`n`, `a`\]\.
+
     Scenario: the suggestion of a sort offers the names of the projection
       # TODO: the names are the right ones, but their ORDER is not pinned here: both sit at the
       # same distance from the name that was asked for, and Spark breaks that tie with `c` first

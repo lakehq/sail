@@ -306,6 +306,18 @@ def test_with_columns_drops_the_second_alias_that_matches_a_column(spark):
     assert replaced.collect() == [Row(id=1)]
 
 
+def test_with_columns_reports_the_duplicate_a_java_string_orders_first(spark):
+    # `checkColumnNameDuplication` picks the duplicate with `sortBy`, which compares UTF-16 code
+    # units, so a name outside the basic plane comes BEFORE one that a comparison of UTF-8 bytes
+    # would put first. Two duplicated groups are what makes either answer wrong for the other.
+    df = spark.range(1)
+    deseret, deseret_small = "\U00010400", "\U00010428"
+    wide, wide_small = "\uff21", "\uff41"
+
+    with pytest.raises(Exception, match=re.escape(f"The column `{deseret_small}` already exists.")):
+        df.withColumns({deseret: lit(1), deseret_small: lit(2), wide: lit(3), wide_small: lit(4)}).collect()
+
+
 def test_with_columns_rejects_two_aliases_that_fold_to_the_same_name(spark):
     # The duplicate check runs BEFORE the expansion, so two names that fold together never reach
     # the rule above: they are an error rather than one of them winning.
@@ -1086,23 +1098,34 @@ def test_describe_names_the_column_as_written(spark):
     assert spark.sql("SELECT 1 AS `Ä`").describe("ä").columns == ["summary", "ä"]
 
 
-@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
-def test_dropna_takes_a_nested_name_as_a_key(spark):
-    # `dropna` resolves its subset with `df.resolve` and feeds whatever comes back to
-    # `AtLeastNNonNulls`, so a nested field is a key like any other. That is where it differs from
-    # `fillna`, which keeps only the names that resolve to an attribute and drops the rest.
-    df = spark.sql("SELECT named_struct('a', CAST(NULL AS INT)) AS s")
-
-    assert df.na.drop(subset=["s.a"]).count() == 0
-
-
 def test_fillna_leaves_a_nested_name_alone(spark):
-    # `fillna` collects only the subset names that resolve to an attribute, so a nested one is
-    # dropped from the list rather than filled or rejected, whichever way the value was given.
+    # `fill(value, cols)` keeps only the names that resolve to an attribute (`toAttributes` ends in
+    # `collect { case a: Attribute }`), so a nested one is dropped from the list rather than filled
+    # or rejected. A map of ONE entry is sent down that same path by the Connect planner, which
+    # splits on `values.length == 1`, so it behaves the same way.
+    df = spark.sql("SELECT named_struct('a', CAST(NULL AS INT)) AS s, CAST(NULL AS INT) AS b")
+
+    assert [tuple(row) for row in df.na.fill(1, subset=["s.a"]).collect()] == [(Row(a=None), None)]
+    assert [tuple(row) for row in df.na.fill({"s.a": 1}).collect()] == [(Row(a=None), None)]
+
+
+def test_fillna_rejects_a_nested_name_given_among_several(spark):
+    # A map of two entries goes to `fillMap` instead, which resolves each name and refuses the ones
+    # that are not an attribute. The same name is ignored with one entry and refused with two,
+    # which is what tells the two paths apart.
+    df = spark.sql("SELECT named_struct('a', CAST(NULL AS INT)) AS s, CAST(NULL AS INT) AS b")
+
+    with pytest.raises(Exception, match=re.escape("[UNSUPPORTED_FEATURE.REPLACE_NESTED_COLUMN]")):
+        df.na.fill({"s.a": 1, "b": 2}).collect()
+
+
+def test_replace_rejects_a_nested_name(spark):
+    # `replace` resolves every name it is given and refuses the ones that are not an attribute,
+    # with no path that ignores them.
     df = spark.sql("SELECT named_struct('a', CAST(NULL AS INT)) AS s")
 
-    assert [tuple(row) for row in df.na.fill({"s.a": 1}).collect()] == [(Row(a=None),)]
-    assert [tuple(row) for row in df.na.fill(1, subset=["s.a"]).collect()] == [(Row(a=None),)]
+    with pytest.raises(Exception, match=re.escape("[UNSUPPORTED_FEATURE.REPLACE_NESTED_COLUMN]")):
+        df.na.replace(1, 9, subset=["s.a"]).collect()
 
 
 def test_fillna_rejects_a_subset_name_that_matches_nothing(spark):
@@ -1180,7 +1203,6 @@ def test_fillna_accepts_a_nested_subset_name(spark):
     assert df.fillna(0, subset=["s.x"]).collect() == [Row(s=Row(x=None), a=1)]
 
 
-@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_dropna_filters_on_a_nested_subset_name(spark):
     # Unlike `fillna`, `dropna` keeps the resolved nested field and filters on it.
     df = spark.sql("SELECT named_struct('x', CAST(NULL AS INT)) AS s, 1 AS a")

@@ -14,7 +14,7 @@ use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::expression::attribute::{
     invalid_attribute_name_error, quote_identifier_name, replace_nested_column_error,
-    unresolved_column_fields_error, unresolved_column_name_error,
+    unresolved_column_fields_error, unresolved_column_name_error, utf16_key,
 };
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::explode::ExplodeRewriter;
@@ -248,12 +248,13 @@ impl PlanResolver<'_> {
             })
             .collect::<PlanResult<Vec<_>>>()?;
         // Names that differ only in case are duplicates, and the first one in alphabetical
-        // order is reported.
+        // order is reported. Spark sorts them with `sortBy`, which is `String.compareTo`, so the
+        // order is the one of the UTF-16 code units and not that of the UTF-8 bytes.
         let mut folded = aliases
             .iter()
             .map(|(name, _, _)| self.fold_identifier(name))
             .collect::<Vec<_>>();
-        folded.sort();
+        folded.sort_by_cached_key(|x| utf16_key(Some(x.as_str())));
         let duplicate = folded.windows(2).find_map(|names| match names {
             [a, b] if a == b => Some(a),
             _ => None,

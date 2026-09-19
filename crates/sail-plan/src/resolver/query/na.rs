@@ -15,7 +15,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::expression::attribute::{
-    invalid_attribute_name_error, unresolved_column_fields_error,
+    invalid_attribute_name_error, replace_nested_column_error, unresolved_column_fields_error,
 };
 use crate::resolver::state::PlanResolverState;
 
@@ -40,8 +40,11 @@ impl PlanResolver<'_> {
         // The names are resolved as attribute references, so a name that matches no column is an
         // error rather than being ignored. A name that resolves to a nested field is not a
         // column, and Spark discards it instead of filling it.
+        // Spark sends one value per column as soon as there is more than one, and that is the
+        // path that refuses a nested name.
+        let nested_is_rejected = values.len() > 1;
         for name in &columns {
-            self.validate_na_column(schema, name, state)?;
+            self.validate_na_column(schema, name, nested_is_rejected, state)?;
         }
 
         if values.is_empty() {
@@ -141,12 +144,17 @@ impl PlanResolver<'_> {
     }
 
     /// Validates a column name used by the `fillna` and `dropna` subsets. Spark resolves the name
-    /// the way a column reference is resolved, so a name that matches nothing is an error, while
-    /// a name that resolves to a nested field is simply not a column to fill.
+    /// the way a column reference is resolved, so a name that matches nothing is an error.
+    ///
+    /// What happens to a name that resolves to a NESTED field depends on the path it arrives
+    /// through: `fill(value, subset)` keeps only the names that resolve to an attribute and
+    /// silently drops the rest, while `fill(valueMap)`, which Spark takes as soon as there is
+    /// more than one value, resolves every name and refuses the ones that are not a column.
     fn validate_na_column(
         &self,
         schema: &DFSchemaRef,
         name: &str,
+        nested_is_rejected: bool,
         state: &PlanResolverState,
     ) -> PlanResult<()> {
         // The name is parsed before it is looked up, so a malformed one is a syntax error rather
@@ -173,6 +181,9 @@ impl PlanResolver<'_> {
                 &Self::get_field_names(schema, state)?,
             ));
         }
+        if nested_is_rejected {
+            return Err(replace_nested_column_error(&object));
+        }
         Ok(())
     }
 
@@ -188,7 +199,7 @@ impl PlanResolver<'_> {
         // The names are resolved as attribute references, so a name that matches no column is an
         // error rather than being ignored.
         for name in &columns {
-            self.validate_na_column(schema, name.as_ref(), state)?;
+            self.validate_na_column(schema, name.as_ref(), false, state)?;
         }
         let not_null_exprs = schema
             .columns()
@@ -212,6 +223,32 @@ impl PlanResolver<'_> {
                 .flatten()
             })
             .collect::<Vec<Expr>>();
+        // A subset entry that walks into a column is not a column, but `dropna` resolves its
+        // entries rather than keeping only the attributes, so a nested field is a key like any
+        // other. That is where it parts ways with `fillna`.
+        let mut not_null_exprs = not_null_exprs;
+        for name in &columns {
+            let Some(object) = parse_attribute_name(name.as_ref()) else {
+                continue;
+            };
+            if object.parts().len() < 2 {
+                continue;
+            }
+            let expr = self
+                .resolve_expression(
+                    spec::Expr::UnresolvedAttribute {
+                        name: object,
+                        plan_id: None,
+                        is_metadata_column: false,
+                    },
+                    schema,
+                    state,
+                )
+                .await?;
+            let expr_type = expr.get_type(schema)?;
+            let is_nan = self.is_nan_float(expr.clone(), &expr_type);
+            not_null_exprs.push(expr.is_not_null().and(is_false(is_nan)));
+        }
 
         let filter_expr = match min_non_nulls {
             Some(min_non_nulls) if min_non_nulls > 0 => {

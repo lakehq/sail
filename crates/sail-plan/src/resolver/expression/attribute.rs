@@ -229,15 +229,21 @@ pub(in crate::resolver) fn unresolved_column_error(
         .iter()
         .flat_map(|x| x.name.iter())
         .collect::<Vec<_>>();
-    // The filter that carries the `HAVING` reads the OUTPUT of the aggregate, so a column of its
-    // input that the aggregate does not carry through is not a name there and must not reach the
-    // suggestion. Outside a `HAVING` the schema is the input itself and every column is a name.
-    let candidates = if state.get_projections_for_having().is_empty() {
+    // The filter that carries the `HAVING` reads the OUTPUT of the aggregate, which is its SELECT
+    // list, so a column of its input that the list does not carry through is not a name there and
+    // must not reach the suggestion. A grouping expression is only one when it is selected too.
+    // Outside a `HAVING` the schema is the input itself and every column is a name.
+    let projections = state
+        .get_projections_for_having()
+        .iter()
+        .flat_map(|x| x.name.iter())
+        .collect::<Vec<_>>();
+    let candidates = if projections.is_empty() {
         candidates
     } else {
         candidates
             .into_iter()
-            .filter(|parts| parts.last().is_some_and(|x| grouping.contains(&x)))
+            .filter(|parts| parts.last().is_some_and(|x| projections.contains(&x)))
             .collect::<Vec<_>>()
     };
     let candidates = state
