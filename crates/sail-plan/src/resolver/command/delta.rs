@@ -180,6 +180,7 @@ impl PlanResolver<'_> {
         }
 
         let info = TableInfo {
+            default_values: Default::default(),
             lakehouse_table: info.lakehouse_table.clone(),
             columns,
             location: Some(path),
