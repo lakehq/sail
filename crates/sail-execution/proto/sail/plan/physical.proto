@@ -226,12 +226,11 @@ message ExtendedScalarUdf {
     SparkFromXmlUdf spark_from_xml = 32;
     SparkCeilUdf spark_ceil = 33;
     SparkFloorUdf spark_floor = 34;
-    SparkTryToTimestampUdf spark_try_to_timestamp = 35;
-    SparkDateFormatUdf spark_date_format = 36;
-    SparkMapFromArraysUdf spark_map_from_arrays = 37;
-    SparkMapFromEntriesUdf spark_map_from_entries = 38;
-    StrToMapUdf str_to_map = 39;
-    SparkSequenceUdf spark_sequence = 40;
+    SparkDateFormatUdf spark_date_format = 35;
+    SparkMapFromArraysUdf spark_map_from_arrays = 36;
+    SparkMapFromEntriesUdf spark_map_from_entries = 37;
+    StrToMapUdf str_to_map = 38;
+    SparkSequenceUdf spark_sequence = 39;
   }
 }
 
@@ -352,10 +351,6 @@ message SparkTimestampUdf {
 
 message SparkDateUdf {
   bool is_try = 1;
-}
-
-message SparkTryToTimestampUdf {
-  optional string timezone = 1;
 }
 
 message SparkVariantGetUdf {

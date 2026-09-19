@@ -116,11 +116,15 @@ impl TryFrom<Literal> for spec::Literal {
                     nanoseconds: x.microseconds * 1_000,
                 }),
             },
-            LiteralType::YearMonthInterval(x) => {
-                spec::Literal::IntervalYearMonth { months: Some(x) }
-            }
-            LiteralType::DayTimeInterval(x) => spec::Literal::DurationMicrosecond {
+            LiteralType::YearMonthInterval(x) => spec::Literal::IntervalYearMonth {
+                months: Some(x),
+                start_field: Some(spec::IntervalFieldType::Year),
+                end_field: Some(spec::IntervalFieldType::Month),
+            },
+            LiteralType::DayTimeInterval(x) => spec::Literal::IntervalDayTimeMicrosecond {
                 microseconds: Some(x),
+                start_field: Some(spec::IntervalFieldType::Day),
+                end_field: Some(spec::IntervalFieldType::Second),
             },
             #[expect(deprecated)]
             LiteralType::Array(Array {
