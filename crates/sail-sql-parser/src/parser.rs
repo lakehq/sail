@@ -2,6 +2,7 @@ use chumsky::extra::ParserExtra;
 use chumsky::input::{Input, ValueInput};
 use chumsky::label::LabelError;
 use chumsky::prelude::{Recursive, end};
+use chumsky::recursive::recursive;
 use chumsky::{IterParser, Parser};
 
 use crate::ast::data_type::DataType;
@@ -62,9 +63,9 @@ where
     E: ParserExtra<'a, I> + 'a,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
-    let mut data_type = Recursive::declare();
-    data_type.define(DataType::parser(data_type.clone(), options));
-    data_type
+    // `recursive()` builds the back edge weakly, so this grammar is freed on
+    // drop. The mutually recursive ones below cannot use it and still leak.
+    recursive(|data_type| DataType::parser(data_type, options))
 }
 
 fn object_name<'a, I, E>(options: &'a ParserOptions) -> impl Parser<'a, I, ObjectName, E> + Clone
