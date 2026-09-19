@@ -21,7 +21,7 @@ use tokio::sync::OnceCell;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::WorkerId;
-use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
+use crate::shuffle::ShuffleBackendKind;
 use crate::worker_manager::{WorkerLaunchOptions, WorkerManager};
 
 #[derive(Debug, Clone)]
@@ -243,7 +243,7 @@ impl KubernetesWorkerService {
                 name: ClusterConfigEnv::SHUFFLE_BACKEND__TYPE.to_string(),
                 value: Some(
                     match &shuffle_backend {
-                        ShuffleBackendKind::Flight => "flight",
+                        ShuffleBackendKind::Flight { .. } => "flight",
                         ShuffleBackendKind::Storage { .. } => "storage",
                         ShuffleBackendKind::Celeborn { .. } => "celeborn",
                     }
@@ -252,6 +252,13 @@ impl KubernetesWorkerService {
                 value_from: None,
             },
         ];
+        if let ShuffleBackendKind::Flight { compression } = &shuffle_backend {
+            env.push(EnvVar {
+                name: ClusterConfigEnv::SHUFFLE_BACKEND__FLIGHT__COMPRESSION.to_string(),
+                value: Some(compression.to_string()),
+                value_from: None,
+            });
+        }
         if let ShuffleBackendKind::Storage {
             path,
             max_file_size,
@@ -273,14 +280,7 @@ impl KubernetesWorkerService {
                 },
                 EnvVar {
                     name: ClusterConfigEnv::SHUFFLE_BACKEND__STORAGE__COMPRESSION.to_string(),
-                    value: Some(
-                        match compression {
-                            ShuffleCompression::None => "none",
-                            ShuffleCompression::Lz4 => "lz4",
-                            ShuffleCompression::Zstd => "zstd",
-                        }
-                        .to_string(),
-                    ),
+                    value: Some(compression.to_string()),
                     value_from: None,
                 },
             ]);
