@@ -16,7 +16,7 @@ use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
-    Partitioning, PlanProperties, SendableRecordBatchStream,
+    PlanProperties, SendableRecordBatchStream,
 };
 use datafusion_common::{DataFusionError, Result};
 use futures::future::BoxFuture;
@@ -120,7 +120,7 @@ impl IcebergDeleteApplyExec {
     fn compute_properties(input: &Arc<dyn ExecutionPlan>) -> Arc<PlanProperties> {
         Arc::new(PlanProperties::new(
             input.equivalence_properties().clone(),
-            Partitioning::UnknownPartitioning(1),
+            input.output_partitioning().clone(),
             input.pipeline_behavior(),
             input.boundedness(),
         ))
@@ -134,16 +134,6 @@ impl IcebergDeleteApplyExec {
         table_url: String,
         iceberg_schema: IcebergSchema,
     ) -> Self {
-        let input_partitions =
-            datafusion::physical_plan::ExecutionPlanProperties::output_partitioning(&input)
-                .partition_count();
-        if input_partitions != 1 {
-            log::warn!(
-                "IcebergDeleteApplyExec: child scan has {} partitions; \
-                 positional deletes may be incorrect",
-                input_partitions
-            );
-        }
         let cache = Self::compute_properties(&input);
         Self {
             input,
@@ -216,7 +206,7 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::SinglePartition]
+        vec![Distribution::UnspecifiedDistribution]
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -260,14 +250,15 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if partition != 0 {
+        let partition_count = self.input.output_partitioning().partition_count();
+        if partition >= partition_count {
             return Err(DataFusionError::Internal(format!(
-                "IcebergDeleteApplyExec only supports partition 0, got {partition}"
+                "IcebergDeleteApplyExec partition {partition} is outside its {partition_count} output partitions"
             )));
         }
 
         let output_schema = self.schema();
-        let child = self.input.execute(0, Arc::clone(&context))?;
+        let child = self.input.execute(partition, Arc::clone(&context))?;
         let data_file_path = self.data_file_path.clone();
         let positional_deletes = self.positional_deletes.clone();
         let equality_deletes = self.equality_deletes.clone();
@@ -276,6 +267,10 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
         let schema_for_adapter = output_schema.clone();
 
         let stream = try_stream! {
+            let mut stream = child;
+            let Some(first_batch) = stream.try_next().await? else {
+                return;
+            };
             let parsed_table_url = Url::parse(&table_url)
                 .map_err(|error| DataFusionError::External(Box::new(error)))?;
             let base_store = context
@@ -294,8 +289,15 @@ impl ExecutionPlan for IcebergDeleteApplyExec {
                 load_equality_deletes(&store_ctx, &equality_deletes, &iceberg_schema).await?;
 
             let mut row_offset: u64 = 0;
-            let mut stream = child;
-            while let Some(batch) = stream.try_next().await? {
+            let mut next_batch = Some(first_batch);
+            loop {
+                let batch = match next_batch.take() {
+                    Some(batch) => batch,
+                    None => match stream.try_next().await? {
+                        Some(batch) => batch,
+                        None => break,
+                    },
+                };
                 let batch_row_count = batch.num_rows() as u64;
                 let mask = compute_delete_mask(
                     &batch,
@@ -705,9 +707,13 @@ mod tests {
     use datafusion::arrow::array::{Int64Array, RecordBatch, StringArray};
     use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
     use datafusion::arrow::row::{RowConverter, SortField};
+    use datafusion::physical_plan::ExecutionPlanProperties;
+    use datafusion_datasource::memory::MemorySourceConfig;
+    use futures::TryStreamExt;
     use parquet::schema::parser::parse_message_type;
 
     use super::*;
+    use crate::spec::types::{NestedField, PrimitiveType, Type};
 
     fn make_batch() -> RecordBatch {
         let schema = Arc::new(ArrowSchema::new(vec![
@@ -871,5 +877,52 @@ mod tests {
         let batch = make_batch();
         let mask = compute_delete_mask(&batch, 0, &[], &[]).unwrap();
         assert!((0..mask.len()).all(|i| mask.value(i)));
+    }
+
+    #[test]
+    fn empty_input_partitions_preserve_layout_without_loading_deletes() {
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            DataType::Int64,
+            true,
+        )]));
+        let input = MemorySourceConfig::try_new_exec(
+            &[Vec::new(), Vec::new(), Vec::new()],
+            Arc::clone(&arrow_schema),
+            None,
+        )
+        .unwrap();
+        let iceberg_schema = IcebergSchema::builder()
+            .with_fields([Arc::new(NestedField::optional(
+                1,
+                "id",
+                Type::Primitive(PrimitiveType::Long),
+            ))])
+            .build()
+            .unwrap();
+        let delete_apply = IcebergDeleteApplyExec::new(
+            input,
+            "data.parquet".to_string(),
+            vec![],
+            vec![],
+            "not a table URL".to_string(),
+            iceberg_schema,
+        );
+
+        let plan: &dyn ExecutionPlan = &delete_apply;
+        assert_eq!(plan.output_partitioning().partition_count(), 3);
+        let mut empty_partition = delete_apply
+            .execute(1, Arc::new(TaskContext::default()))
+            .unwrap();
+        assert!(
+            futures::executor::block_on(empty_partition.try_next())
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            delete_apply
+                .execute(3, Arc::new(TaskContext::default()))
+                .is_err()
+        );
     }
 }
