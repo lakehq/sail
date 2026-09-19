@@ -74,6 +74,8 @@ pub(super) struct PlanResolverState {
     fields: HashMap<String, FieldInfo>,
     /// The outer query schema for the current subquery.
     outer_query_schema: Option<DFSchemaRef>,
+    /// The type-checking schema and ordered name-resolution schemas for a filter.
+    filter_resolution: Option<(DFSchemaRef, Vec<DFSchemaRef>)>,
     /// The aggregate state for the current query.
     aggregate_state: AggregateState,
     /// The CTEs for the current query.
@@ -109,6 +111,7 @@ impl PlanResolverState {
             next_id: 0,
             fields: HashMap::new(),
             outer_query_schema: None,
+            filter_resolution: None,
             aggregate_state: AggregateState::default(),
             ctes: HashMap::new(),
             subquery_references: HashMap::new(),
@@ -201,6 +204,25 @@ impl PlanResolverState {
 
     pub fn get_outer_query_schema(&self) -> Option<&DFSchemaRef> {
         self.outer_query_schema.as_ref()
+    }
+
+    pub fn get_filter_schemas(&self, schema: &DFSchemaRef) -> Option<&[DFSchemaRef]> {
+        self.filter_resolution
+            .as_ref()
+            .filter(|(input, _)| Arc::ptr_eq(input, schema))
+            .map(|(_, schemas)| schemas.as_slice())
+    }
+
+    pub fn enter_filter_scope(
+        &mut self,
+        schema: DFSchemaRef,
+        schemas: Vec<DFSchemaRef>,
+    ) -> FilterScope<'_> {
+        let previous = self.filter_resolution.replace((schema, schemas));
+        FilterScope {
+            state: self,
+            previous,
+        }
     }
 
     pub fn get_projections_for_grouping(&self) -> &[NamedExpr] {
@@ -376,6 +398,23 @@ impl Drop for ParamValuesScope<'_> {
     }
 }
 
+pub(crate) struct FilterScope<'a> {
+    state: &'a mut PlanResolverState,
+    previous: Option<(DFSchemaRef, Vec<DFSchemaRef>)>,
+}
+
+impl FilterScope<'_> {
+    pub(crate) fn state(&mut self) -> &mut PlanResolverState {
+        self.state
+    }
+}
+
+impl Drop for FilterScope<'_> {
+    fn drop(&mut self) {
+        self.state.filter_resolution = self.previous.take();
+    }
+}
+
 pub(crate) struct QueryScope<'a> {
     state: &'a mut PlanResolverState,
     previous_outer_query_schema: Option<DFSchemaRef>,
@@ -383,6 +422,12 @@ pub(crate) struct QueryScope<'a> {
 
 impl<'a> QueryScope<'a> {
     fn new(state: &'a mut PlanResolverState, schema: DFSchemaRef) -> Self {
+        // Missing local filter inputs must not become visible as outer references.
+        let schema = state
+            .get_filter_schemas(&schema)
+            .and_then(|schemas| schemas.first())
+            .cloned()
+            .unwrap_or(schema);
         let previous_outer_query_schema = state.outer_query_schema.replace(schema);
         Self {
             state,

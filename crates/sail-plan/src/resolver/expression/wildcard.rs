@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 use datafusion_common::{DFSchemaRef, TableReference};
@@ -25,6 +26,12 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        let schema = state
+            .get_filter_schemas(schema)
+            .and_then(|schemas| schemas.first())
+            .cloned()
+            .unwrap_or_else(|| Arc::clone(schema));
+        let schema = &schema;
         if plan_id.is_some() {
             return Err(PlanError::todo("wildcard with plan ID"));
         }
