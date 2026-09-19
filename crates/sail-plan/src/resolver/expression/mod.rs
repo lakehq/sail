@@ -10,7 +10,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
-mod attribute;
+pub(in crate::resolver) mod attribute;
 mod cast;
 mod function;
 mod grouping;

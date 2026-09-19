@@ -194,13 +194,37 @@ impl PlanResolver<'_> {
         // Remove backticks from the pattern if present
         let pattern_str = col_name.trim_matches('`');
 
-        // Add anchors to match the entire column name (like Spark does)
-        let anchored_pattern = format!("^{}$", pattern_str);
-
-        // Compile the regex pattern
+        // `String.matches` matches the whole name, so the pattern is grouped before it is
+        // anchored: an alternation would otherwise bind tighter than the anchors. It is printed
+        // back from its syntax tree first, since in extended mode a trailing comment would
+        // otherwise run over the parenthesis that closes the group.
+        let normalized_pattern = regex_syntax::ast::parse::Parser::new()
+            .parse(pattern_str)
+            .map_err(|e| {
+                PlanError::invalid(format!("invalid regex pattern '{}': {}", pattern_str, e))
+            })?
+            .to_string();
+        let anchored_pattern = format!("^(?:{normalized_pattern})$");
         let pattern = Regex::new(&anchored_pattern).map_err(|e| {
             PlanError::invalid(format!("invalid regex pattern '{}': {}", pattern_str, e))
         })?;
+
+        // Spark compiles the pattern case-insensitively unless the analysis is case sensitive, and
+        // Java's `(?i)` folds ASCII alone
+        // (`org.apache.spark.sql.catalyst.analysis.UnresolvedRegex#expandStar`), where Rust's folds
+        // all of Unicode. Turning the Unicode mode off gives the same folding, at the price of
+        // matching bytes rather than characters, so it is only used for a name that is ASCII.
+        //
+        // TODO: fold ASCII in a name that is not. See `test_col_regex_folds_only_ascii`.
+        let ascii_pattern = if self.config.case_sensitive {
+            None
+        } else {
+            regex::bytes::RegexBuilder::new(&anchored_pattern)
+                .case_insensitive(true)
+                .unicode(false)
+                .build()
+                .ok()
+        };
 
         // Collect all matching columns
         let mut matching_columns = Vec::new();
@@ -219,7 +243,11 @@ impl PlanResolver<'_> {
 
             // Check if the field name matches the pattern and plan_id
             let field_name = info.name();
-            if pattern.is_match(field_name) && info.matches(field_name, plan_id) {
+            let matched = match &ascii_pattern {
+                Some(ascii) if field_name.is_ascii() => ascii.is_match(field_name.as_bytes()),
+                _ => pattern.is_match(field_name),
+            };
+            if matched && info.has_plan_id(plan_id) {
                 matching_columns.push(expr::Expr::Column(Column::new(
                     qualifier.cloned(),
                     field.name(),

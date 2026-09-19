@@ -45,13 +45,10 @@ impl UpdateStructField {
                     if field.name() == current_field {
                         field_found = true;
                         if field_names.len() == 1 {
-                            new_fields.push(Arc::new(
-                                field
-                                    .as_ref()
-                                    .clone()
-                                    .with_data_type(new_field.data_type().clone())
-                                    .with_nullable(new_field.is_nullable()),
-                            ));
+                            // The field is replaced rather than edited, so it takes the metadata
+                            // of the value, which `withField` gives none, and keeps only its name.
+                            new_fields
+                                .push(Arc::new(new_field.clone().with_name(field.name().clone())));
                         } else {
                             let new_data_type = Self::update_nested_field(
                                 field.data_type(),

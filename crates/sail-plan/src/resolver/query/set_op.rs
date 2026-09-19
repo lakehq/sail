@@ -1,10 +1,13 @@
+use std::sync::Arc;
+
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::expr::NullTreatment;
-use datafusion_common::{Column, JoinType, NullEquality, ScalarValue};
+use datafusion_common::{Column, DFSchemaRef, JoinType, NullEquality, ScalarValue};
 use datafusion_expr::builder::project;
-use datafusion_expr::expr::WindowFunctionParams;
+use datafusion_expr::expr::{FieldMetadata, WindowFunctionParams};
 use datafusion_expr::{
-    Expr, LogicalPlan, LogicalPlanBuilder, WindowFrame, WindowFunctionDefinition, expr,
+    Expr, LogicalPlan, LogicalPlanBuilder, Projection, WindowFrame, WindowFunctionDefinition, cast,
+    expr, lit,
 };
 use sail_common::spec;
 
@@ -30,6 +33,13 @@ impl PlanResolver<'_> {
         } = op;
         let left = self.resolve_query_plan(*left, state).await?;
         let right = self.resolve_query_plan(*right, state).await?;
+        // An operation that has to compare whole rows rejects a column that holds a map, since a
+        // map has no order of its own. `UNION ALL` keeps every row as it is, compares nothing, and
+        // is the one that Spark allows.
+        if !(matches!(set_op_type, SetOpType::Union) && is_all) {
+            self.reject_map_column_in_set_operation(left.schema(), state)?;
+            self.reject_map_column_in_set_operation(right.schema(), state)?;
+        }
         match set_op_type {
             SetOpType::Intersect => Ok(LogicalPlanBuilder::intersect(left, right, is_all)?),
             SetOpType::Union => {
@@ -45,7 +55,7 @@ impl PlanResolver<'_> {
                         .map(|(left_idx, left_name)| {
                             match right_names
                                 .iter()
-                                .position(|right_name| left_name.eq_ignore_ascii_case(right_name))
+                                .position(|right_name| self.match_identifier(left_name, right_name))
                             {
                                 Some(right_idx) => Ok((
                                     Expr::Column(Column::from(
@@ -59,11 +69,17 @@ impl PlanResolver<'_> {
                                     Expr::Column(Column::from(
                                         left.schema().qualified_field(left_idx),
                                     )),
-                                    Expr::Literal(ScalarValue::Null, None)
-                                        .alias(state.register_field_name(left_name)),
+                                    // The padded column keeps the type of the side that has it.
+                                    cast(
+                                        lit(ScalarValue::Null),
+                                        left.schema().field(left_idx).data_type().clone(),
+                                    )
+                                    .alias(state.register_field_name(left_name)),
                                 )),
-                                None => Err(PlanError::invalid(format!(
-                                    "right column not found: {left_name}"
+                                None => Err(PlanError::AnalysisError(format!(
+                                    "[UNRESOLVED_COLUMN_AMONG_FIELD_NAMES] Cannot resolve column \
+                                     name \"{left_name}\" among ({}).",
+                                    right_names.join(", ")
                                 ))),
                             }
                         })
@@ -76,14 +92,17 @@ impl PlanResolver<'_> {
                                 .into_iter()
                                 .enumerate()
                                 .filter(|(_, right_name)| {
-                                    !left_names
-                                        .iter()
-                                        .any(|left_name| left_name.eq_ignore_ascii_case(right_name))
+                                    !left_names.iter().any(|left_name| {
+                                        self.match_identifier(left_name, right_name)
+                                    })
                                 })
                                 .map(|(right_idx, right_name)| {
                                     (
-                                        Expr::Literal(ScalarValue::Null, None)
-                                            .alias(state.register_field_name(right_name)),
+                                        cast(
+                                            lit(ScalarValue::Null),
+                                            right.schema().field(right_idx).data_type().clone(),
+                                        )
+                                        .alias(state.register_field_name(right_name)),
                                         Expr::Column(Column::from(
                                             right.schema().qualified_field(right_idx),
                                         )),
@@ -104,13 +123,15 @@ impl PlanResolver<'_> {
                 } else {
                     (left, right)
                 };
-                if is_all {
-                    Ok(LogicalPlanBuilder::new(left).union(right)?.build()?)
+                let left_schema = left.schema().clone();
+                let plan = if is_all {
+                    LogicalPlanBuilder::new(left).union(right)?.build()?
                 } else {
-                    Ok(LogicalPlanBuilder::new(left)
+                    LogicalPlanBuilder::new(left)
                         .union_distinct(right)?
-                        .build()?)
-                }
+                        .build()?
+                };
+                Self::keep_left_metadata(plan, &left_schema)
             }
             SetOpType::Except => {
                 let left_len = left.schema().fields().len();
@@ -215,5 +236,38 @@ impl PlanResolver<'_> {
                 Ok(plan)
             }
         }
+    }
+}
+
+impl PlanResolver<'_> {
+    /// Spark reports the metadata of the first input for a set operation, where DataFusion keeps
+    /// only what every input agrees on, so the metadata of the left side is put back.
+    fn keep_left_metadata(plan: LogicalPlan, left_schema: &DFSchemaRef) -> PlanResult<LogicalPlan> {
+        let differs = plan
+            .schema()
+            .fields()
+            .iter()
+            .zip(left_schema.fields().iter())
+            .any(|(field, left_field)| {
+                field.metadata() != left_field.metadata() && !left_field.metadata().is_empty()
+            });
+        if !differs {
+            return Ok(plan);
+        }
+        let expr = plan
+            .schema()
+            .columns()
+            .into_iter()
+            .zip(left_schema.fields().iter())
+            .map(|(column, left_field)| {
+                let name = column.name.clone();
+                let metadata = FieldMetadata::from(left_field.metadata().clone());
+                Expr::Column(column).alias_with_metadata(name, Some(metadata))
+            })
+            .collect::<Vec<_>>();
+        Ok(LogicalPlan::Projection(Projection::try_new(
+            expr,
+            Arc::new(plan),
+        )?))
     }
 }

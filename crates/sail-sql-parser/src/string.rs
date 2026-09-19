@@ -1,6 +1,6 @@
 use chumsky::container::{Container, OrderedSeq};
 use chumsky::extra::ParserExtra;
-use chumsky::prelude::{any, choice, just, none_of};
+use chumsky::prelude::{any, choice, end, just, none_of};
 use chumsky::{IterParser, Parser};
 
 use crate::options::ParserOptions;
@@ -253,12 +253,43 @@ where
     just("U&").ignore_then(text(delimiter, character))
 }
 
+/// A character inside backticks, where two backticks stand for one.
+fn backtick_quoted_char<'a, E>() -> impl Parser<'a, &'a str, char, E>
+where
+    E: ParserExtra<'a, &'a str> + 'a,
+{
+    none_of('`').or(just('`').repeated().exactly(2).map(|_| '`'))
+}
+
 fn backtick_quoted_string_value<'a, E>() -> impl Parser<'a, &'a str, StringValue, E>
 where
     E: ParserExtra<'a, &'a str> + 'a,
 {
-    let character = none_of('`').or(just('`').repeated().exactly(2).map(|_| '`'));
-    text('`', character)
+    text('`', backtick_quoted_char())
+}
+
+/// Splits the name of an attribute into its parts the way Spark's `AttributeNameParser` does.
+///
+/// This works on characters rather than SQL tokens, since an attribute name is not SQL: nothing
+/// is folded and no whitespace is skipped, so a name such as `" a "` keeps its spaces. A part is
+/// either quoted with backticks, as an identifier is, or runs up to the next dot or backtick.
+/// Parts are separated by dots, so a dot at either end or two dots in a row are rejected, and a
+/// backtick can only quote a whole part. An empty name is a single empty part.
+pub fn create_attribute_name_parser<'a, E>() -> impl Parser<'a, &'a str, Vec<String>, E>
+where
+    E: ParserExtra<'a, &'a str> + 'a,
+{
+    let quoted = backtick_quoted_char()
+        .repeated()
+        .collect::<String>()
+        .padded_by(just('`'));
+    let unquoted = none_of(".`").repeated().at_least(1).collect::<String>();
+    let name = quoted
+        .or(unquoted)
+        .separated_by(just('.'))
+        .at_least(1)
+        .collect::<Vec<_>>();
+    end().to(vec![String::new()]).or(name.then_ignore(end()))
 }
 
 fn dollar_quoted_string_value<'a, E>(tag: &'a str) -> impl Parser<'a, &'a str, StringValue, E>

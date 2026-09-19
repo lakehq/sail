@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::functions_aggregate::{average, bit_and_or_xor, bool_and_or, count, min_max, sum};
@@ -6,6 +7,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, Tre
 use datafusion_common::{
     Column, DFSchemaRef, DataFusionError, Result as DataFusionResult, ScalarValue,
 };
+use datafusion_expr::expr::FieldMetadata;
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::logical_plan::{FetchType, SkipType};
 use datafusion_expr::utils::find_aggregate_exprs;
@@ -251,7 +253,20 @@ impl PlanResolver<'_> {
                     expr,
                     metadata,
                 } = x;
+                // An aggregate is not a named expression, so Spark reports no metadata for it,
+                // while DataFusion carries over the metadata of the column it reads. The
+                // expression is read before it is rebased, since rebasing turns it into a
+                // reference to the output of the aggregation.
+                let inherits = Self::inherits_metadata(&expr);
                 let expr = Self::rebase_expression(expr, &aggregate_or_grouping_exprs, &plan)?;
+                let metadata = if metadata.is_empty()
+                    && !inherits
+                    && Self::has_spark_metadata(&expr, plan.schema())
+                {
+                    vec![(spec::SPARK_METADATA_JSON_KEY.to_string(), "{}".to_string())]
+                } else {
+                    metadata
+                };
                 Ok(NamedExpr {
                     name,
                     expr,
@@ -283,9 +298,15 @@ impl PlanResolver<'_> {
                 let NamedExpr {
                     name,
                     expr,
-                    metadata: _,
+                    metadata,
                 } = x;
-                Ok(expr.alias(state.register_field_name(name.one()?)))
+                let field_id = state.register_field_name(name.one()?);
+                if metadata.is_empty() {
+                    Ok(expr.alias(field_id))
+                } else {
+                    let metadata: HashMap<String, String> = metadata.into_iter().collect();
+                    Ok(expr.alias_with_metadata(field_id, Some(FieldMetadata::from(metadata))))
+                }
             })
             .collect::<PlanResult<Vec<_>>>()?;
         Ok(LogicalPlanBuilder::from(plan)
