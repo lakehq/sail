@@ -7,7 +7,6 @@ use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::config::ConfigOptions;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_expr::expressions::Column;
-use datafusion::physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::{ExecutionPlan, displayable, replace_children_if_necessary};
 use log::{trace, warn};
@@ -143,10 +142,8 @@ impl PhysicalOptimizerRule for JoinReorder {
             displayable(plan.as_ref()).indent(true)
         );
 
-        // Establish scan filters before estimating the benefit of reductions. Keep
-        // generation, reordering, and cleanup together so optimizer-local provenance
-        // survives: non-inner joins remain opaque to join enumeration.
-        let plan = FilterPushdown::new().optimize(plan, config)?;
+        // Keep generation, reordering, and cleanup together so optimizer-local
+        // provenance survives: non-inner joins remain opaque to join enumeration.
         let (plan, reductions) = early_filter::propagate(plan, config, &self.options)?;
 
         // Search and optimize reorderable regions. We traverse bottom-up so nested reorderable
