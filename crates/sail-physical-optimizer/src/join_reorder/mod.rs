@@ -23,6 +23,7 @@ mod builder;
 mod cardinality_estimator;
 mod cost_model;
 mod dp_plan;
+mod early_filter;
 mod enumerator;
 mod graph;
 mod join_set;
@@ -133,7 +134,7 @@ impl PhysicalOptimizerRule for JoinReorder {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _config: &ConfigOptions,
+        config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         trace!("JoinReorder: Entering optimization rule.");
         trace!(
@@ -141,9 +142,14 @@ impl PhysicalOptimizerRule for JoinReorder {
             displayable(plan.as_ref()).indent(true)
         );
 
+        // Keep generation, reordering, and cleanup together so optimizer-local
+        // provenance survives: non-inner joins remain opaque to join enumeration.
+        let (plan, reductions) = early_filter::propagate(plan, config, &self.options)?;
+
         // Search and optimize reorderable regions. We traverse bottom-up so nested reorderable
         // regions inside "leaf" plans (as seen by a higher-level region) are also visited.
-        self.find_and_optimize_regions(plan)
+        let plan = self.find_and_optimize_regions(plan)?;
+        early_filter::prune(plan, &reductions)
     }
 
     fn name(&self) -> &str {

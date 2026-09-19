@@ -46,11 +46,15 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(OutputRequirements::new_add_mode()));
     rules.push(Arc::new(AggregateStatistics::new()));
     if options.enable_join_reorder {
+        // Establish scan filters before estimating early join reductions.
+        rules.push(Arc::new(FilterPushdown::new()));
         rules.push(Arc::new(JoinReorder::new(options.join_reorder)));
     }
     rules.push(Arc::new(JoinSelection::new()));
     rules.push(Arc::new(LimitedDistinctAggregation::new()));
-    rules.push(Arc::new(FilterPushdown::new()));
+    if !options.enable_join_reorder {
+        rules.push(Arc::new(FilterPushdown::new()));
+    }
     // WindowTopN checks DataFusion's `enable_window_topn`, which defaults to false because
     // PartitionedTopKExec can regress memory and runtime for high-cardinality partition keys.
     // Revisit the opt-in default when that trade-off is addressed.
