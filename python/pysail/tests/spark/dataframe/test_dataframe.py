@@ -293,6 +293,58 @@ def test_with_columns_does_not_resolve_a_discarded_alias(spark):
         df.withColumns({dotless_id: col("missing"), "id": lit(1)}).collect()
 
 
+def test_with_columns_drops_the_second_alias_that_matches_a_column(spark):
+    # `expandStar` gives each existing column the FIRST alias that matches it, and appends only
+    # the aliases that matched nothing, so the second one is dropped rather than added. The names
+    # have to be ones the duplicate check lets through: it folds to lower case, where `ıd` and
+    # `id` differ, while the resolver matches them.
+    df = spark.range(1)
+
+    replaced = df.withColumns({"id": lit(1), "ıd": lit(2)})
+
+    assert replaced.columns == ["id"]
+    assert replaced.collect() == [Row(id=1)]
+
+
+def test_with_columns_rejects_two_aliases_that_fold_to_the_same_name(spark):
+    # The duplicate check runs BEFORE the expansion, so two names that fold together never reach
+    # the rule above: they are an error rather than one of them winning.
+    df = spark.range(1)
+
+    with pytest.raises(Exception, match=re.escape("[COLUMN_ALREADY_EXISTS]")):
+        df.withColumns({"id": lit(1), "ID": lit(2)}).collect()
+
+
+def test_with_columns_reads_the_column_it_replaces(spark):
+    # The aliases are resolved against the input, so one that reads a column another alias
+    # replaces sees the ORIGINAL value. Replacing and reading in the same call is what tells
+    # that apart from applying the aliases one after the other.
+    df = spark.sql("SELECT 5 AS k")
+
+    assert df.withColumns({"k": lit(9), "z": col("k")}).collect() == [Row(k=9, z=5)]
+
+
+def test_with_columns_appends_an_alias_that_matches_no_column(spark):
+    # An alias that matches nothing goes to the end, after the columns that were already there,
+    # whatever order it was given in.
+    df = spark.range(1)
+
+    assert df.withColumns({"z": lit(9), "id": lit(1)}).columns == ["id", "z"]
+    assert df.withColumns({"z": lit(9)}).columns == ["id", "z"]
+
+
+def test_with_columns_does_not_shadow_when_the_analysis_is_case_sensitive(spark):
+    # The resolver is what matches an alias to a column, so making it case sensitive stops the
+    # two from meeting and both reach the output.
+    df = spark.range(1)
+    try:
+        spark.conf.set("spark.sql.caseSensitive", "true")
+
+        assert df.withColumns({"id": lit(1), "ID": lit(2)}).columns == ["id", "ID"]
+    finally:
+        spark.conf.unset("spark.sql.caseSensitive")
+
+
 def metadata_df(spark):
     return spark.range(1).select(col("id").alias("a")).withMetadata("a", {"k": "1"})
 
@@ -705,6 +757,60 @@ def test_to_schema_keeps_the_qualifier_of_an_unchanged_column(spark):
 
     assert reconciled.select("t.a").collect() == [Row(a=1)]
     assert [tuple(row) for row in reconciled.select("t.*").collect()] == [(1, 2)]
+
+
+def test_to_schema_keeps_the_qualifier_of_a_column_it_only_reorders(spark):
+    # Reordering the fields does not rebuild them, so both keep the alias they were read through.
+    df = spark.sql("SELECT 1 AS a, 'x' AS b").alias("t")
+    target = StructType([StructField("b", StringType()), StructField("a", IntegerType())])
+
+    reconciled = df.to(target)
+
+    assert reconciled.select("t.a").collect() == [Row(a=1)]
+    assert reconciled.select("t.b").collect() == [Row(b="x")]
+
+
+def test_to_schema_drops_the_qualifier_only_of_the_column_it_rebuilds(spark):
+    # A column that has to be cast is a new expression, so the alias no longer qualifies it, while
+    # the column beside it is untouched and still does. Both in the same frame is what tells the
+    # rule apart from "the alias survives" and from "the alias is lost".
+    df = spark.sql("SELECT 1 AS a, 'x' AS b").alias("t")
+    target = StructType([StructField("a", StringType()), StructField("b", StringType())])
+
+    reconciled = df.to(target)
+
+    assert reconciled.select("t.b").collect() == [Row(b="x")]
+    with pytest.raises(Exception, match=re.escape("`t`.`a`")):
+        reconciled.select("t.a").collect()
+
+
+def test_to_schema_gives_no_qualifier_to_a_column_it_fills_with_null(spark):
+    # A target field that matches nothing is filled with a literal, which `createNewColumn` wraps
+    # in an alias rather than keeping an attribute, so the frame alias does not reach it. The
+    # column beside it is untouched and still carries the alias.
+    df = spark.sql("SELECT 1 AS a, 'x' AS b").alias("t")
+    target = StructType(
+        [StructField("a", IntegerType()), StructField("b", StringType()), StructField("c", IntegerType(), True)]
+    )
+
+    reconciled = df.to(target)
+
+    assert reconciled.select("c").collect() == [Row(c=None)]
+    assert reconciled.select("t.a").collect() == [Row(a=1)]
+    with pytest.raises(Exception, match=re.escape("`t`.`c`")):
+        reconciled.select("t.c").collect()
+
+
+def test_to_schema_keeps_the_qualifier_of_a_column_it_only_renames(spark):
+    # `createNewColumn` renames the attribute rather than rebuilding it, so the alias still
+    # qualifies it under the name the target asked for, and under the one it had.
+    df = spark.sql("SELECT 1 AS a, 'x' AS b").alias("t")
+    target = StructType([StructField("A", IntegerType()), StructField("b", StringType())])
+
+    reconciled = df.to(target)
+
+    assert reconciled.select("t.A").collect() == [Row(A=1)]
+    assert reconciled.select("t.a").collect() == [Row(a=1)]
 
 
 @pytest.mark.parametrize(
@@ -1267,17 +1373,54 @@ def test_col_regex_does_not_fold_a_non_ascii_name(spark):
     assert df.select(df.colRegex("`ä`")).columns == ["ä"]
 
 
+# Spark matches the name against the pattern with `String.matches`, which is a whole-string match
+# and appends nothing, so a pattern that ends in a comment or that alternates loses nothing. Sail
+# anchors the pattern itself, so it has to group it first.
+# (case, pattern, the columns of `a, ab, b, xb` that Spark selects)
+_COL_REGEX_ANCHORING = [
+    # Without the grouping the trailing comment would swallow the anchor and `ab` would match too.
+    ("a comment at the end", "(?x)a#comment", ["a"]),
+    ("a comment after a space", "(?x)a #comment", ["a"]),
+    # Without the grouping this reads as "starts with a" or "ends with b", which adds `ab` and `xb`.
+    ("an alternation", "a|b", ["a", "b"]),
+    ("an alternation and a comment", "(?x)a|b#comment", ["a", "b"]),
+    ("a plain name", "a", ["a"]),
+    # The comment is a comment only in extended mode, so here it is part of the name to match.
+    ("a hash without the extended mode", "a#comment", []),
+    ("an escaped hash", "(?x)a\\#", []),
+    ("only a comment", "(?x)#comment", []),
+]
+
+
+@pytest.mark.parametrize(("case", "pattern", "expected"), _COL_REGEX_ANCHORING)
 @pytest.mark.parametrize("case_sensitive", ["false", "true"])
-def test_col_regex_accepts_a_trailing_extended_mode_comment(spark, case_sensitive):
-    # The pattern is grouped before it is anchored, and in extended mode a comment runs to the end
-    # of the line, so a pattern ending in one would swallow whatever is appended to it.
+def test_col_regex_anchors_the_whole_pattern(spark, case_sensitive, case, pattern, expected):  # noqa: ARG001
     try:
         spark.conf.set("spark.sql.caseSensitive", case_sensitive)
-        df = spark.sql("SELECT 1 AS a")
+        df = spark.sql("SELECT 1 AS a, 2 AS ab, 3 AS b, 4 AS xb")
 
-        assert df.select(df.colRegex("`(?x)a#comment`")).columns == ["a"]
+        assert df.select(df.colRegex(f"`{pattern}`")).columns == expected
     finally:
         spark.conf.unset("spark.sql.caseSensitive")
+
+
+def test_col_regex_rejects_a_pattern_that_does_not_parse(spark):
+    # The pattern is read before it is anchored, so one that does not parse is an error rather
+    # than a selection that matches nothing.
+    # TODO: Spark reports the message of the JVM engine (`Unclosed group near index 6`), and Sail
+    # reports the one of its own, so only the rejection is pinned here.
+    df = spark.sql("SELECT 1 AS a")
+
+    with pytest.raises(Exception):  # noqa: B017, PT011
+        df.select(df.colRegex("`a(`")).collect()
+
+
+def test_col_regex_with_a_qualifier_selects_nothing(spark):
+    # Spark has a branch for a qualified pattern, but the client sends the whole string as the
+    # pattern, so the qualifier never reaches it and the name it compares contains a dot.
+    df = spark.sql("SELECT 1 AS a, 2 AS ab").alias("t")
+
+    assert df.select(df.colRegex("`t`.`a`")).columns == []
 
 
 @pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
