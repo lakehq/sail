@@ -334,7 +334,15 @@ _ALIAS_METADATA = [
     ("a window function", lambda df: df.selectExpr("first(a) OVER (PARTITION BY id) AS c"), "c", {}),
     # Metadata asked for by name replaces whatever the child had, and an empty ask erases it.
     ("an explicit ask", lambda df: df.select(col("a").alias("c", metadata={"z": "2"})), "c", {"z": "2"}),
-    ("an explicit empty ask", lambda df: df.select(col("a").alias("c", metadata={})), "c", {}),
+    # PySpark only sends an empty ask from 4.1 on: before that the client drops the field
+    # because an empty dict is falsy, so the alias reaches the server without metadata and
+    # inherits what the child had, which is what Spark reports with that client too.
+    (
+        "an explicit empty ask",
+        lambda df: df.select(col("a").alias("c", metadata={})),
+        "c",
+        {} if pyspark_version() >= (4, 1) else {"k": "1"},
+    ),
     # `withColumn` builds a new column, which Spark Connect gives empty explicit metadata.
     ("a replacement", lambda df: df.withColumn("a", col("a")), "a", {}),
     ("a copy", lambda df: df.withColumn("c", col("a")), "c", {}),
