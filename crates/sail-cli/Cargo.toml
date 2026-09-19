@@ -22,7 +22,10 @@ sail-telemetry = { path = "../sail-telemetry" }
 sail-spark-connect = { path = "../sail-spark-connect" }
 sail-session = { path = "../sail-session" }
 
-mimalloc = { workspace = true, optional = true }
+# TODO: Drop "v2" after:
+#       - libmimalloc-sys vendors the fix for https://github.com/microsoft/mimalloc/issues/1287 and
+#       - exposes MI_TLS_MODEL_LOCAL for macOS coexistence https://github.com/microsoft/mimalloc/issues/1301
+mimalloc = { workspace = true, optional = true, features = ["v2"] }
 clap = { workspace = true }
 tokio = { workspace = true }
 log = { workspace = true }
