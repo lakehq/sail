@@ -1086,6 +1086,25 @@ def test_describe_names_the_column_as_written(spark):
     assert spark.sql("SELECT 1 AS `Ä`").describe("ä").columns == ["summary", "ä"]
 
 
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_dropna_takes_a_nested_name_as_a_key(spark):
+    # `dropna` resolves its subset with `df.resolve` and feeds whatever comes back to
+    # `AtLeastNNonNulls`, so a nested field is a key like any other. That is where it differs from
+    # `fillna`, which keeps only the names that resolve to an attribute and drops the rest.
+    df = spark.sql("SELECT named_struct('a', CAST(NULL AS INT)) AS s")
+
+    assert df.na.drop(subset=["s.a"]).count() == 0
+
+
+def test_fillna_leaves_a_nested_name_alone(spark):
+    # `fillna` collects only the subset names that resolve to an attribute, so a nested one is
+    # dropped from the list rather than filled or rejected, whichever way the value was given.
+    df = spark.sql("SELECT named_struct('a', CAST(NULL AS INT)) AS s")
+
+    assert [tuple(row) for row in df.na.fill({"s.a": 1}).collect()] == [(Row(a=None),)]
+    assert [tuple(row) for row in df.na.fill(1, subset=["s.a"]).collect()] == [(Row(a=None),)]
+
+
 def test_fillna_rejects_a_subset_name_that_matches_nothing(spark):
     # A subset name that resolves to no column is an error rather than being ignored.
     df = spark.sql("SELECT CAST(NULL AS INT) AS a")
@@ -1288,6 +1307,104 @@ def test_ambiguous_column_reference_names_the_way_out(spark):
         ),
     ):
         df.join(df, df.name == df.name, "outer").select(df.name).collect()
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_a_column_of_a_join_of_two_frames_is_an_ambiguous_reference(spark):
+    # `AMBIGUOUS_COLUMN_REFERENCE` is for a plan id that names SEVERAL nodes of the tree, which is
+    # what a self join makes. Here the id names the join alone and two of its columns match, which
+    # is an ordinary ambiguous reference. Sail picks the condition by whether there is a plan id
+    # at all, and telling the two apart needs to know how many nodes carry it.
+    left = spark.createDataFrame([("Bob", 5)], ["name", "age"])
+    right = spark.createDataFrame([("Bob", 85)], ["name", "height"])
+    joined = left.join(right, left.name == right.name)
+
+    with pytest.raises(
+        Exception,
+        match=re.escape("[AMBIGUOUS_REFERENCE] Reference `name` is ambiguous, could be: [`name`, `name`]."),
+    ):
+        joined.select(joined["name"]).collect()
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_a_union_reports_the_metadata_of_its_first_input_only(spark):
+    # `Union.mergeChildOutputs` takes the metadata of the FIRST child verbatim, so a key that only
+    # the second one carries does not reach the output. The left side having none is what tells
+    # "reports the first" apart from "merges both".
+    left = spark.sql("SELECT 1 AS a")
+    right = spark.sql("SELECT 2 AS a").withMetadata("a", {"k": "v"})
+
+    union = left.union(right)
+    union._cached_schema = None  # noqa: SLF001
+
+    assert [dict(field.metadata) for field in union.schema.fields] == [{}]
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_an_intersection_is_nullable_only_where_both_sides_are(spark):
+    # `Intersect.mergeChildOutputs` ands the two nullabilities, so a column that cannot be null on
+    # one side cannot be null in the result either.
+    left = spark.sql("SELECT CAST(NULL AS INT) AS a")
+    right = spark.sql("SELECT 1 AS a")
+
+    result = left.intersect(right)
+    result._cached_schema = None  # noqa: SLF001
+
+    assert result.schema["a"].nullable is False
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_with_field_matches_the_existing_field_with_the_resolver(spark):
+    # `WithField` matches the field it replaces with the resolver and names it the way it was
+    # asked for, so asking in another case replaces the field rather than adding a second one.
+    df = spark.sql("SELECT named_struct('a', 1) AS s")
+
+    replaced = df.withColumn("s", col("s").withField("A", lit(9)))
+
+    assert replaced.schema["s"].dataType.simpleString() == "struct<A:int>"
+
+
+def test_a_join_key_does_not_shift_the_columns_of_a_later_operation(spark):
+    # A `USING` join keeps the key of each side as a hidden field, interleaved with the visible
+    # ones. An operation that pairs the names of the schema with its columns by POSITION would
+    # take the hidden key for a visible column and drop the last one, so this pins that the
+    # hidden fields are gone before any of them runs.
+    left = spark.sql("SELECT 1 AS k, 10 AS a")
+    right = spark.sql("SELECT 1 AS k, 20 AS b")
+    joined = left.join(right, ["k"])
+
+    assert [tuple(row) for row in joined.collect()] == [(1, 10, 20)]
+    assert [tuple(row) for row in joined.withColumnsRenamed({"b": "z"}).collect()] == [(1, 10, 20)]
+    assert joined.withColumn("x", lit(1)).columns == ["k", "a", "b", "x"]
+    assert [tuple(row) for row in joined.withColumn("x", lit(1)).collect()] == [(1, 10, 20, 1)]
+    assert [tuple(row) for row in joined.to(joined.schema).collect()] == [(1, 10, 20)]
+
+
+def test_ambiguous_column_reference_is_written_on_several_lines(spark):
+    # The condition has four sentences in the catalog and Spark joins them with a newline
+    # (`ErrorClassesJSONReader` does `message.mkString("\n")`), so the message the user reads is
+    # four lines rather than one long one.
+    df = spark.sql("SELECT 1 AS name")
+
+    with pytest.raises(Exception) as error:  # noqa: PT011
+        df.join(df, df.name == df.name, "outer").select(df.name).collect()
+
+    condition = str(error.value)
+    start = condition.index("[AMBIGUOUS_COLUMN_REFERENCE]")
+    end = condition.index('col("b.id"))`.') + len('col("b.id"))`.')
+    assert condition[start:end].count("\n") == 3  # noqa: PLR2004
+
+
+def test_an_ambiguous_aggregate_alias_reports_the_reference_condition(spark):
+    # A `HAVING` reads the output of the aggregate, so a name that two aliases both carry is an
+    # ambiguous reference there, reported with the same condition as any other one.
+    spark.sql("SELECT 1 AS a, 2 AS b").createOrReplaceTempView("t_ambiguous_alias")
+
+    with pytest.raises(
+        Exception,
+        match=re.escape("[AMBIGUOUS_REFERENCE] Reference `c` is ambiguous, could be: [`c`, `c`]."),
+    ):
+        spark.sql("SELECT count(*) AS c, sum(a) AS c FROM t_ambiguous_alias GROUP BY b HAVING c > 0").collect()
 
 
 def test_col_regex_is_case_sensitive_when_configured(spark):
