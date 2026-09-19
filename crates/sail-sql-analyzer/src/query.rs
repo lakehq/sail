@@ -935,9 +935,9 @@ fn query_plan_with_join(left: spec::QueryPlan, join: TableJoin) -> SqlResult<spe
         Some(JoinOperator::RightOuter(_, _)) | Some(JoinOperator::Right(_)) => {
             spec::JoinType::RightOuter
         }
-        Some(JoinOperator::FullOuter(_, _))
-        | Some(JoinOperator::Full(_))
-        | Some(JoinOperator::Outer(_)) => spec::JoinType::FullOuter,
+        Some(JoinOperator::FullOuter(_, _)) | Some(JoinOperator::Full(_)) => {
+            spec::JoinType::FullOuter
+        }
         Some(JoinOperator::Cross(_)) => spec::JoinType::Cross,
         Some(JoinOperator::Semi(_)) | Some(JoinOperator::LeftSemi(_, _)) => {
             spec::JoinType::LeftSemi

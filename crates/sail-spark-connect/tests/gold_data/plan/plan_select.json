@@ -3,38 +3,38 @@
     {
       "input": "\nSELECT *\nFROM\n(\n    SELECT *\n    FROM testData\n)\nWATERMARK ts DELAY OF INTERVAL 10 seconds AS tbl\nWHERE a > 1\n",
       "output": {
-        "failure": "invalid argument: found ts at 60:62 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found ts at 60:62 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "\nSELECT *\nFROM\nVALUES (1, 1), (2, 2)\nWATERMARK ts DELAY OF INTERVAL 10 seconds AS dst\nWHERE a > 1\n",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'ts'. SQLSTATE: 42601 (line 5, pos 10)\n\n== SQL ==\n\nSELECT *\nFROM\nVALUES (1, 1), (2, 2)\nWATERMARK ts DELAY OF INTERVAL 10 seconds AS dst\n----------^^^\nWHERE a > 1\n",
       "output": {
-        "failure": "invalid argument: found DELAY at 50:55 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found DELAY at 50:55 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "\nSELECT *\nFROM\nmock_tvf(1, 'a')\nWATERMARK ts DELAY OF INTERVAL 10 seconds AS dst\nWHERE a > 1\n",
       "output": {
-        "failure": "invalid argument: found ts at 42:44 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found ts at 42:44 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "\nSELECT *\nFROM testData\nWATERMARK timestamp_seconds(value) AS eventTime DELAY OF INTERVAL 10 seconds AS tbl\nWHERE a > 1\n",
       "output": {
-        "failure": "invalid argument: found timestamp_seconds at 34:51 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found timestamp_seconds at 34:51 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "\nSELECT *\nFROM testData\nWATERMARK timestamp_seconds(value) DELAY OF INTERVAL 10 seconds AS tbl\nWHERE a > 1\n",
       "output": {
-        "failure": "invalid argument: found timestamp_seconds at 34:51 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found timestamp_seconds at 34:51 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "\nSELECT *\nFROM testData\nWATERMARK ts DELAY OF INTERVAL 10 seconds AS tbl\nWHERE a > 1\n",
       "output": {
-        "failure": "invalid argument: found ts at 34:36 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found ts at 34:36 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
@@ -105,20 +105,20 @@
     {
       "input": "\nSELECT key, time\nFROM\n(\n    SELECT key, time\n    FROM\n    testData\n    WATERMARK timestamp_seconds(ts) AS time DELAY OF INTERVAL 10 seconds\n)\nAS tbl\nWHERE key = 'a'\n",
       "output": {
-        "failure": "invalid argument: found timestamp_seconds at 82:99 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', or ')'"
+        "failure": "invalid argument: found timestamp_seconds at 82:99 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', or ')'"
       }
     },
     {
       "input": "SELECT * FROM (INSERT INTO BAR VALUES (2))",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'BAR': missing ')'. SQLSTATE: 42601 (line 1, pos 27)\n\n== SQL ==\nSELECT * FROM (INSERT INTO BAR VALUES (2))\n---------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found INTO at 22:26 expected '.', '(', 'FOR', 'SYSTEM_VERSION', 'VERSION', 'SYSTEM_TIME', 'TIMESTAMP', 'TABLESAMPLE', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', or ')'"
+        "failure": "invalid argument: found INTO at 22:26 expected '.', '(', 'FOR', 'SYSTEM_VERSION', 'VERSION', 'SYSTEM_TIME', 'TIMESTAMP', 'TABLESAMPLE', 'PIVOT', 'UNPIVOT', 'AS', identifier, 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', or ')'"
       }
     },
     {
       "input": "SELECT * FROM (SELECT * FROM t CHANGES FROM VERSION 1 TO VERSION 5) sub",
       "output": {
-        "failure": "invalid argument: found FROM at 39:43 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', or ')'"
+        "failure": "invalid argument: found FROM at 39:43 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', or ')'"
       }
     },
     {
@@ -324,116 +324,116 @@
     {
       "input": "SELECT * FROM a.b.c CHANGES FROM SYSTEM_TIME '2026-01-01' TO SYSTEM_TIME '2026-02-01'",
       "output": {
-        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c CHANGES FROM SYSTEM_VERSION 10 TO SYSTEM_VERSION 20",
       "output": {
-        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c CHANGES FROM TIMESTAMP '2026-01-01'",
       "output": {
-        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c CHANGES FROM TIMESTAMP '2026-01-01' EXCLUSIVE TO TIMESTAMP '2026-02-01' EXCLUSIVE",
       "output": {
-        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c CHANGES FROM TIMESTAMP '2026-01-01' INCLUSIVE TO TIMESTAMP '2026-02-01' INCLUSIVE",
       "output": {
-        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c CHANGES FROM TIMESTAMP '2026-01-01' TO TIMESTAMP '2026-02-01'",
       "output": {
-        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c CHANGES FROM VERSION '5765898212649545898' TO VERSION '8439568982649545102'",
       "output": {
-        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c CHANGES FROM VERSION 10 EXCLUSIVE TO VERSION 20",
       "output": {
-        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c CHANGES FROM VERSION 10 EXCLUSIVE TO VERSION 20 EXCLUSIVE",
       "output": {
-        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c CHANGES FROM VERSION 10 INCLUSIVE TO VERSION 20 INCLUSIVE",
       "output": {
-        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c CHANGES FROM VERSION 10 TO VERSION 20",
       "output": {
-        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c CHANGES FROM VERSION 10 TO VERSION 20 EXCLUSIVE",
       "output": {
-        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c CHANGES FROM VERSION 10 TO VERSION 20 WITH (computeUpdates = 'true')",
       "output": {
-        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c CHANGES FROM VERSION 10 TO VERSION 20 WITH (deduplicationMode = 'DROPCARRYOVERS')",
       "output": {
-        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c CHANGES FROM VERSION 10 TO VERSION 20 WITH (deduplicationMode = 'invalid')",
       "exception": "\n[INVALID_CDC_OPTION.INVALID_DEDUPLICATION_MODE] Invalid Change Data Capture (CDC) option. Invalid `deduplicationMode`: 'invalid'. Expected one of: none, dropCarryovers, netChanges. SQLSTATE: 42K03\n== SQL ==\nSELECT * FROM a.b.c CHANGES FROM VERSION 10 TO VERSION 20 WITH (deduplicationMode = 'invalid')",
       "output": {
-        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c CHANGES FROM VERSION 10 TO VERSION 20 WITH (deduplicationMode = 'netChanges')",
       "output": {
-        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c CHANGES FROM VERSION 10 TO VERSION 20 WITH (deduplicationMode = 'none')",
       "output": {
-        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c CHANGES FROM VERSION 10 TO VERSION 20 WITH (deduplicationMode = 'none', computeUpdates = 'true')",
       "output": {
-        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM a.b.c CHANGES FROM VERSION 5",
       "output": {
-        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found FROM at 28:32 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
@@ -1754,7 +1754,7 @@
     {
       "input": "SELECT * FROM my_table CHANGES FROM VERSION 1",
       "output": {
-        "failure": "invalid argument: found FROM at 31:35 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found FROM at 31:35 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
@@ -2029,21 +2029,21 @@
       "input": "SELECT * FROM t CHANGES FROM TIMESTAMP '2026-01-01' TO TIMESTAMP (SELECT MAX(ts) FROM other_table)",
       "exception": "\n[INVALID_CDC_OPTION.INVALID_TIMESTAMP_EXPR] Invalid Change Data Capture (CDC) option. The timestamp expression for CDC queries must not contain subqueries. SQLSTATE: 42K03\n== SQL ==\nSELECT * FROM t CHANGES FROM TIMESTAMP '2026-01-01' TO TIMESTAMP (SELECT MAX(ts) FROM other_table)",
       "output": {
-        "failure": "invalid argument: found FROM at 24:28 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found FROM at 24:28 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM t CHANGES FROM TIMESTAMP (SELECT MAX(ts) FROM other_table)",
       "exception": "\n[INVALID_CDC_OPTION.INVALID_TIMESTAMP_EXPR] Invalid Change Data Capture (CDC) option. The timestamp expression for CDC queries must not contain subqueries. SQLSTATE: 42K03\n== SQL ==\nSELECT * FROM t CHANGES FROM TIMESTAMP (SELECT MAX(ts) FROM other_table)",
       "output": {
-        "failure": "invalid argument: found FROM at 24:28 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found FROM at 24:28 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT * FROM t CHANGES FROM TIMESTAMP col_name",
       "exception": "\nInvalid time travel spec: timestamp expression cannot refer to any columns.\n== SQL (line 1, position 15) ==\nSELECT * FROM t CHANGES FROM TIMESTAMP col_name\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found FROM at 24:28 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found FROM at 24:28 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
@@ -3007,7 +3007,7 @@
     {
       "input": "SELECT t.* FROM a.b.c CHANGES FROM VERSION 10 TO VERSION 20 AS t",
       "output": {
-        "failure": "invalid argument: found FROM at 30:34 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found FROM at 30:34 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', ',', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
@@ -3404,7 +3404,7 @@
     {
       "input": "select * from (from a select * select *)",
       "output": {
-        "failure": "invalid argument: found select at 22:28 expected '(', 'NATURAL', 'INNER', 'CROSS', 'OUTER', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', or ')'"
+        "failure": "invalid argument: found select at 22:28 expected '(', 'NATURAL', 'INNER', 'CROSS', 'SEMI', 'ANTI', 'LEFT', 'RIGHT', 'FULL', 'JOIN', or ')'"
       }
     },
     {

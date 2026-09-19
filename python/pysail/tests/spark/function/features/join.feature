@@ -174,7 +174,6 @@ Feature: NATURAL and USING joins
 
   Rule: A natural join is not defined for a semi or anti join
 
-    @sail-bug
     Scenario Outline: natural <join type> is rejected
       When query
         """
@@ -192,6 +191,8 @@ Feature: NATURAL and USING joins
     # Spark parses the join type of a NATURAL join from a closed list that has no bare OUTER,
     # so this is rejected before analysis rather than treated as a full outer join.
     @sail-bug
+    # The query is rejected, as it is by Spark, but with the message of Sail's own parser: the
+    # error class of a syntax error is not mapped yet, which is why this is still marked.
     Scenario: a natural outer join is rejected by the parser
       When query
         """

@@ -33,6 +33,13 @@ impl PlanResolver<'_> {
         } = op;
         let left = self.resolve_query_plan(*left, state).await?;
         let right = self.resolve_query_plan(*right, state).await?;
+        // An operation that has to compare whole rows rejects a column that holds a map, since a
+        // map has no order of its own. `UNION ALL` keeps every row as it is, compares nothing, and
+        // is the one that Spark allows.
+        if !(matches!(set_op_type, SetOpType::Union) && is_all) {
+            self.reject_map_column_in_set_operation(left.schema(), state)?;
+            self.reject_map_column_in_set_operation(right.schema(), state)?;
+        }
         match set_op_type {
             SetOpType::Intersect => Ok(LogicalPlanBuilder::intersect(left, right, is_all)?),
             SetOpType::Union => {

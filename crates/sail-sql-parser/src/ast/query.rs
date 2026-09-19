@@ -464,7 +464,8 @@ pub struct TableJoin {
 pub enum JoinOperator {
     Inner(Inner),
     Cross(Cross),
-    Outer(Outer),
+    // There is no join operator that is only `OUTER`: the keyword follows `LEFT`, `RIGHT` or
+    // `FULL`, and alone it is a syntax error, as it is for Spark.
     Semi(Semi),
     Anti(Anti),
     LeftOuter(Left, Outer),

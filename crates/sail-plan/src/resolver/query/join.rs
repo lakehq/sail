@@ -41,6 +41,19 @@ fn join_type_name(join_type: JoinType) -> &'static str {
     }
 }
 
+/// The name Spark uses for a join type that a natural join does not accept, if it is one of them.
+fn natural_join_type_name(join_type: JoinType) -> Option<&'static str> {
+    match join_type {
+        JoinType::LeftSemi => Some("LeftSemi"),
+        JoinType::LeftAnti => Some("LeftAnti"),
+        JoinType::RightSemi => Some("RightSemi"),
+        JoinType::RightAnti => Some("RightAnti"),
+        JoinType::LeftMark => Some("LeftMark"),
+        JoinType::RightMark => Some("RightMark"),
+        JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => None,
+    }
+}
+
 const IMPLICIT_CARTESIAN_PRODUCT_MSG: &str = "Detected implicit cartesian product for INNER join between logical plans. \
     Join condition is missing or trivial. \
     Either: use the CROSS JOIN syntax to allow cartesian products between \
@@ -143,6 +156,13 @@ impl PlanResolver<'_> {
                 Ok(plan)
             }
             (Some(join_type), Some(spec::JoinCriteria::Natural)) => {
+                // Spark builds a natural join from a closed list of join types, so a semi or an
+                // anti join is rejected instead of being turned into one on the common names.
+                if let Some(name) = natural_join_type_name(join_type) {
+                    return Err(PlanError::invalid(format!(
+                        "Unsupported natural join type {name}"
+                    )));
+                }
                 let left_names = Self::get_field_names(left.schema(), state)?;
                 let right_names = Self::get_field_names(right.schema(), state)?;
                 // The common names are the intersection of the two sides as multisets of
