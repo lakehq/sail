@@ -23,6 +23,26 @@ Feature: struct function
         | {1, x} |
         | {2, y} |
 
+  Rule: Struct field names
+
+    Scenario Outline: struct preserves <case> in HAVING
+      Given config spark.sql.caseSensitive = false
+      When query
+        """
+        SELECT max(id) AS foo
+        FROM range(1)
+        HAVING to_json(struct(<argument>)) = '<expected>'
+        """
+      Then query result
+        | foo |
+        | 0   |
+
+      Examples:
+        | case                       | argument       | expected      |
+        | alias reference spelling   | FOO            | {"FOO":0}     |
+        | alias declaration spelling | foo            | {"foo":0}     |
+        | explicit field alias       | FOO AS renamed | {"renamed":0} |
+
   Rule: Struct nullability — struct itself is never NULL
 
     Scenario: struct with NULL fields is not NULL
