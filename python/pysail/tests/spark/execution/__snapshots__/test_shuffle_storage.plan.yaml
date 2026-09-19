@@ -438,6 +438,25 @@ data:
     physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
+    physical_plan after reuse_subplans:
+    SortPreservingMergeExec: [#13@0 ASC]
+      ProjectionExec: expr=[#12@0 as #13, count(Int64(1))@1 as #14, sum(#10)@2 as #15, sum(#11)@3 as #16]
+        SortExec: expr=[#12@0 ASC], preserve_partitioning=[true]
+          AggregateExec: mode=FinalPartitioned, gby=[#12@0 as #12], aggr=[count(Int64(1)), sum(#10), sum(#11)]
+            RepartitionExec: partitioning=Hash([#12@0], 4), input_partitions=8
+              AggregateExec: mode=Partial, gby=[#12@2 as #12], aggr=[count(Int64(1)), sum(#10), sum(#11)]
+                ProjectionExec: expr=[#2@0 as #10, #5@1 as #11, #1@2 % 4 as #12]
+                  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@0, #4@0)], projection=[#2@1, #5@3, #1@0]
+                    RepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4
+                      ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2]
+                        SharedPlanExec: id=0
+                          RangeExec
+                    RepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4
+                      ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
+                        SharedPlanExec: id=0
+                          RangeExec
+
+
     physical_plan:
     ProjectionExec: expr=[#13@0 as g, #14@1 as count, #15@2 as s1, #16@3 as s2]
       SortPreservingMergeExec: [#13@0 ASC]
@@ -450,10 +469,12 @@ data:
                     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@0, #4@0)], projection=[#2@1, #5@3, #1@0]
                       RepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4
                         ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2]
-                          RangeExec
+                          SharedPlanExec: id=0
+                            RangeExec
                       RepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4
                         ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
-                          RangeExec
+                          SharedPlanExec: id=0
+                            RangeExec
 
 
     == Physical Plan ==
@@ -468,49 +489,59 @@ data:
                     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@0, #4@0)], projection=[#2@1, #5@3, #1@0]
                       RepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4
                         ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2]
-                          RangeExec
+                          SharedPlanExec: id=0
+                            RangeExec
                       RepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4
                         ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
-                          RangeExec
+                          SharedPlanExec: id=0
+                            RangeExec
 
 
     == Distributed Plan ==
     === stage 0 ===
     inputs=[]
+    mode=Blocking
+    partitions=4
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    RangeExec
+
+    === stage 1 ===
+    inputs=[StageInput(stage=0, mode=Forward)]
     mode=Pipelined
     partitions=4
     distribution=Hash(keys=[#1@0], channels=8)
     placement=Worker
     ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2]
-      RangeExec
+      StageInputExec: input=0, partitioning=RoundRobinBatch(4)
 
-    === stage 1 ===
-    inputs=[StageInput(stage=0, mode=Shuffle)]
+    === stage 2 ===
+    inputs=[StageInput(stage=1, mode=Shuffle)]
     mode=Blocking
     partitions=8
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
     StageInputExec: input=0, partitioning=Hash([#1@0], 8)
 
-    === stage 2 ===
-    inputs=[]
+    === stage 3 ===
+    inputs=[StageInput(stage=0, mode=Forward)]
     mode=Pipelined
     partitions=4
     distribution=Hash(keys=[#4@0], channels=8)
     placement=Worker
     ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
-      RangeExec
+      StageInputExec: input=0, partitioning=RoundRobinBatch(4)
 
-    === stage 3 ===
-    inputs=[StageInput(stage=2, mode=Shuffle)]
+    === stage 4 ===
+    inputs=[StageInput(stage=3, mode=Shuffle)]
     mode=Blocking
     partitions=8
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
     StageInputExec: input=0, partitioning=Hash([#4@0], 8)
 
-    === stage 4 ===
-    inputs=[StageInput(stage=1, mode=Forward), StageInput(stage=3, mode=Forward)]
+    === stage 5 ===
+    inputs=[StageInput(stage=2, mode=Forward), StageInput(stage=4, mode=Forward)]
     mode=Pipelined
     partitions=8
     distribution=Hash(keys=[#12@0], channels=4)
@@ -521,16 +552,16 @@ data:
           StageInputExec: input=0, partitioning=Hash([#1@0], 8)
           StageInputExec: input=1, partitioning=Hash([#4@0], 8)
 
-    === stage 5 ===
-    inputs=[StageInput(stage=4, mode=Shuffle)]
+    === stage 6 ===
+    inputs=[StageInput(stage=5, mode=Shuffle)]
     mode=Blocking
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
     StageInputExec: input=0, partitioning=Hash([#12@0], 4)
 
-    === stage 6 ===
-    inputs=[StageInput(stage=5, mode=Forward)]
+    === stage 7 ===
+    inputs=[StageInput(stage=6, mode=Forward)]
     mode=Pipelined
     partitions=4
     distribution=RoundRobinBatch(channels=1)
@@ -540,8 +571,8 @@ data:
         AggregateExec: mode=FinalPartitioned, gby=[#12@0 as #12], aggr=[count(Int64(1)), sum(#10), sum(#11)]
           StageInputExec: input=0, partitioning=Hash([#12@0], 4)
 
-    === stage 7 ===
-    inputs=[StageInput(stage=6, mode=Merge)]
+    === stage 8 ===
+    inputs=[StageInput(stage=7, mode=Merge)]
     mode=Pipelined
     partitions=1
     distribution=RoundRobinBatch(channels=1)

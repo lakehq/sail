@@ -285,6 +285,7 @@ use sail_physical_plan::remote_checkpoint::{
     CheckpointDataSource, RemoteCheckpointCommitExec, RemoteCheckpointWriteExec,
 };
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
+use sail_physical_plan::shared::SharedPlanExec;
 use sail_physical_plan::show_string::ShowStringExec;
 use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
 use sail_physical_plan::streaming::collector::StreamCollectorExec;
@@ -354,6 +355,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             None => return plan_err!("no physical plan node found"),
         };
         match node_kind {
+            NodeKind::SharedPlan(r#gen::SharedPlanExecNode { id, input }) => {
+                let input =
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
+                Ok(Arc::new(SharedPlanExec::new(id as usize, input)))
+            }
             NodeKind::Range(r#gen::RangeExecNode {
                 start,
                 end,
@@ -1858,6 +1864,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 style: self.try_encode_show_string_style(show_string.format().style())?,
                 truncate: show_string.format().truncate() as u64,
                 schema,
+            })
+        } else if let Some(shared) = node.downcast_ref::<SharedPlanExec>() {
+            NodeKind::SharedPlan(r#gen::SharedPlanExecNode {
+                id: shared.id() as u64,
+                input: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    shared.input().clone(),
+                )?,
             })
         } else if let Some(stage_input) = node.downcast_ref::<StageInputExec<usize>>() {
             let eq_properties = self.try_encode_equivalence_properties(

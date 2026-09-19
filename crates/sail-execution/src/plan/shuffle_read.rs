@@ -1,6 +1,7 @@
 use std::fmt::Formatter;
 use std::sync::Arc;
 
+use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::common::{Result, internal_err};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -78,10 +79,22 @@ impl ExecutionPlan for ShuffleReadExec {
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let reader = self.reader.clone();
+        let schema = self.schema();
         let output = futures::stream::once(async move {
             let source = reader.open(partition).await?;
-            Ok::<_, datafusion::error::DataFusionError>(source.map(|item| {
-                item.map_err(|error| datafusion::error::DataFusionError::External(Box::new(error)))
+            Ok::<_, datafusion::error::DataFusionError>(source.map(move |item| {
+                let batch = item.map_err(|error| {
+                    datafusion::error::DataFusionError::External(Box::new(error))
+                })?;
+                // Equivalent producers can have different output aliases.
+                if batch.schema() == schema {
+                    return Ok(batch);
+                }
+                Ok(RecordBatch::try_new_with_options(
+                    schema.clone(),
+                    batch.columns().to_vec(),
+                    &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
+                )?)
             }))
         })
         .try_flatten();

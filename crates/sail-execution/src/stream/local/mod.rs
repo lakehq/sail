@@ -1,6 +1,7 @@
 mod core;
 mod memory;
 mod options;
+mod replay;
 
 use std::collections::HashMap;
 
@@ -23,6 +24,9 @@ pub enum LocalStreamState {
     },
     Created {
         stream: memory::MemoryStream,
+    },
+    Replay {
+        stream: replay::ReplayStream,
     },
     Failed {
         cause: CommonErrorCause,

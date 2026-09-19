@@ -1,5 +1,6 @@
 mod planner;
 
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
@@ -29,6 +30,7 @@ pub struct JobGraph {
     /// The output schema of the job.
     schema: SchemaRef,
     options: JobGraphOptions,
+    shared_inputs: HashMap<usize, StageInput>,
 }
 
 impl JobGraph {
@@ -178,6 +180,9 @@ impl fmt::Display for InputMode {
 pub enum OutputMode {
     Pipelined,
     Blocking,
+    /// Completed, spillable output retained on its producer worker and served
+    /// through Flight. Unlike pipelined replicas it has unlimited independent readers.
+    Replay,
 }
 
 impl fmt::Display for OutputMode {
@@ -185,6 +190,7 @@ impl fmt::Display for OutputMode {
         match self {
             OutputMode::Pipelined => write!(f, "Pipelined"),
             OutputMode::Blocking => write!(f, "Blocking"),
+            OutputMode::Replay => write!(f, "Replay"),
         }
     }
 }

@@ -7609,6 +7609,7 @@ dependencies = [
  "either",
  "futures",
  "lexical-core",
+ "object_store",
  "parquet-variant",
  "parquet-variant-compute",
  "parquet-variant-json",
@@ -7970,7 +7971,10 @@ version = "0.7.1"
 dependencies = [
  "datafusion",
  "datafusion-physical-expr",
+ "datafusion-proto",
  "log",
+ "prost",
+ "sail-common-datafusion",
  "sail-physical-plan",
 ]
 

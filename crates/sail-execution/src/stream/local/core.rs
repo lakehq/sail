@@ -3,6 +3,8 @@ use std::collections::hash_map::Entry;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::execution::TaskContext;
+use futures::StreamExt;
 use sail_common::actor::ActorContext;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
@@ -20,6 +22,42 @@ use crate::stream::writer::TaskStreamChannelSink;
 use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage};
 
 impl LocalStreamManager {
+    pub fn create_replay_stream(
+        &mut self,
+        ctx: &mut ActorContext<TaskRunnerActor>,
+        key: TaskStreamKey,
+        schema: SchemaRef,
+        context: &TaskContext,
+    ) -> ExecutionResult<Box<dyn TaskStreamChannelSink>> {
+        let (stream, sink) = super::replay::ReplayStream::new(context, schema, key.partition);
+        match self.streams.entry(key) {
+            Entry::Occupied(mut entry) => {
+                let LocalStreamState::Pending { senders } = entry.get_mut() else {
+                    return Err(ExecutionError::InternalError(
+                        "shared stream is already created or failed".into(),
+                    ));
+                };
+                // A pipelined region may have opened an input before its shared
+                // producer starts. Replay has independent cursors even then.
+                for sender in std::mem::take(senders) {
+                    let mut source = stream.subscribe();
+                    ctx.spawn(async move {
+                        while let Some(batch) = source.next().await {
+                            if sender.send(batch).await.is_err() {
+                                break;
+                            }
+                        }
+                    });
+                }
+                entry.insert(LocalStreamState::Replay { stream });
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(LocalStreamState::Replay { stream });
+            }
+        }
+        Ok(sink)
+    }
+
     pub fn new(options: LocalStreamManagerOptions) -> Self {
         Self {
             options,
@@ -42,7 +80,7 @@ impl LocalStreamManager {
         match self.streams.entry(key.clone()) {
             Entry::Occupied(mut entry) => {
                 let senders = match entry.get_mut() {
-                    LocalStreamState::Created { .. } => {
+                    LocalStreamState::Created { .. } | LocalStreamState::Replay { .. } => {
                         return Err(ExecutionError::InternalError(format!(
                             "local stream {} is already created",
                             TaskStreamKeyDisplay(&key)
@@ -92,6 +130,7 @@ impl LocalStreamManager {
         match self.streams.entry(key.clone()) {
             Entry::Occupied(mut entry) => match entry.get_mut() {
                 LocalStreamState::Created { stream } => stream.subscribe(),
+                LocalStreamState::Replay { stream } => Ok(stream.subscribe()),
                 LocalStreamState::Pending { senders } => {
                     let (tx, rx) = mpsc::channel(self.options.task_stream_buffer);
                     senders.push(tx);

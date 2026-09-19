@@ -224,7 +224,15 @@ impl PlanResolver<'_> {
             .aggregate(vec![pivot_column.clone()], Vec::<expr::Expr>::new())?
             .limit(0, Some(max_pivot_values.saturating_add(1)))?
             .build()?;
-        let batches = self.ctx.execute_logical_plan(plan).await?.collect().await?;
+        let physical = self
+            .ctx
+            .execute_logical_plan(plan)
+            .await?
+            .create_physical_plan()
+            .await?;
+        let physical =
+            sail_physical_plan::shared::bind_shared_plans(physical, self.ctx.task_ctx())?;
+        let batches = datafusion::physical_plan::collect(physical, self.ctx.task_ctx()).await?;
         let mut values = Vec::new();
         for batch in &batches {
             let column = batch.column(0);

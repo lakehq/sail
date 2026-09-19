@@ -60,6 +60,19 @@ impl Actor for TaskRunnerActor {
                 context,
                 result,
             } => self.handle_create_storage_stream(key, schema, context, result),
+            TaskRunnerMessage::CreateReplayStream {
+                key,
+                schema,
+                context,
+                result,
+            } => {
+                let output = self
+                    .extensions
+                    .local_streams
+                    .create_replay_stream(ctx, key, schema, &context);
+                let _ = result.send(output);
+                ActorAction::Continue
+            }
             TaskRunnerMessage::CreateCelebornStream {
                 key,
                 mappers,

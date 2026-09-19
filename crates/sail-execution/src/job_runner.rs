@@ -70,6 +70,7 @@ impl JobRunner for LocalJobRunner {
             operator_id: None,
         };
         let plan = trace_execution_plan(plan, options)?;
+        let plan = sail_physical_plan::shared::bind_shared_plans(plan, ctx.task_ctx())?;
         Ok(execute_stream(plan, ctx.task_ctx())?)
     }
 

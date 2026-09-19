@@ -71,7 +71,13 @@ message ExtendedPhysicalPlanNode {
     IcebergMergeMetadataExecNode iceberg_merge_metadata = 56;
     IcebergEqualityDeleteWriterExecNode iceberg_equality_delete_writer = 57;
     PartitionedTopKExecNode partitioned_top_k = 58;
+    SharedPlanExecNode shared_plan = 59;
   }
+}
+
+message SharedPlanExecNode {
+  uint64 id = 1;
+  bytes input = 2;
 }
 
 message RemoteCheckpointWriteExecNode {

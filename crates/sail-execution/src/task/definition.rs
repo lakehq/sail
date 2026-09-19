@@ -87,6 +87,7 @@ pub enum TaskOutputDistribution {
 pub enum TaskOutputLocator {
     Pipelined { replicas: usize },
     Blocking,
+    Replay,
 }
 
 impl From<TaskDefinition> for r#gen::TaskDefinition {
@@ -511,6 +512,9 @@ impl From<TaskOutputLocator> for r#gen::TaskOutputLocator {
             TaskOutputLocator::Blocking => {
                 r#gen::task_output_locator::Kind::Blocking(r#gen::TaskOutputBlockingLocator {})
             }
+            TaskOutputLocator::Replay => {
+                r#gen::task_output_locator::Kind::Replay(r#gen::TaskOutputReplayLocator {})
+            }
         };
         r#gen::TaskOutputLocator { kind: Some(kind) }
     }
@@ -527,6 +531,7 @@ impl TryFrom<r#gen::TaskOutputLocator> for TaskOutputLocator {
                 replicas: replicas as usize,
             }),
             Some(r#gen::task_output_locator::Kind::Blocking(_)) => Ok(TaskOutputLocator::Blocking),
+            Some(r#gen::task_output_locator::Kind::Replay(_)) => Ok(TaskOutputLocator::Replay),
             None => Err(ExecutionError::InvalidArgument(
                 "cannot decode empty task output locator".to_string(),
             )),

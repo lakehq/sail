@@ -8,7 +8,10 @@ workspace = true
 
 [dependencies]
 sail-physical-plan = { path = "../sail-physical-plan" }
+sail-common-datafusion = { path = "../sail-common-datafusion" }
 
 datafusion = { workspace = true }
 datafusion-physical-expr = { workspace = true }
+datafusion-proto = { workspace = true }
+prost = { workspace = true }
 log = { workspace = true }

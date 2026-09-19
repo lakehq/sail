@@ -11,6 +11,7 @@ import pytest
 from pyspark.sql.types import Row
 
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
+from pysail.testing.spark.steps.plan import normalize_plan_text
 from pysail.testing.spark.utils.common import is_jvm_spark
 
 if TYPE_CHECKING:
@@ -81,6 +82,21 @@ def test_repartition_collect_with_celeborn_shuffle(remote):
         Row(group=1, count=10),
         Row(group=2, count=10),
     ]
+
+
+@pytest.mark.yamlsnapshot(group="plan")
+def test_shared_producer_with_celeborn_shuffle(spark, snapshot):
+    df = spark.sql("""
+        WITH t AS (
+            SELECT id % 8 AS k, SUM(id) AS v
+            FROM range(0, 40000, 1, 4) GROUP BY id % 8
+        )
+        SELECT a.k, a.v AS x, b.v AS y FROM t a JOIN t b ON a.k = b.k
+    """)
+    assert normalize_plan_text(df._explain_string()) == snapshot  # noqa: SLF001
+    expected = [Row(k=k, x=sum(range(k, 40000, 8)), y=sum(range(k, 40000, 8))) for k in range(8)]
+    assert sorted(df.collect()) == expected
+    assert sorted(df.collect()) == expected
 
 
 def test_consumed_celeborn_shuffle_data_is_removed(spark, celeborn_master: MasterService):

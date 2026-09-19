@@ -1,0 +1,883 @@
+# serializer version: 1
+---
+name: "test_common_aggregate_has_independent_readers[flight]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as total]
+      UnionExec
+        ProjectionExec: expr=[sum(totals.#2)@0 as #3]
+          SharedPlanExec: id=8
+            AggregateExec: mode=Final, gby=[], aggr=[sum(totals.#2)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(totals.#2)]
+                  ProjectionExec: expr=[sum(range.#0)@1 as #2]
+                    AggregateExec: mode=FinalPartitioned, gby=[range.#0 % CASE WHEN Int32(8) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(8) END@0 as range.#0 % CASE WHEN Int32(8) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(8) END], aggr=[sum(range.#0)]
+                      RepartitionExec: partitioning=Hash([range.#0 % CASE WHEN Int32(8) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(8) END@0], 4), input_partitions=4
+                        AggregateExec: mode=Partial, gby=[#0@0 % 8 as range.#0 % CASE WHEN Int32(8) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(8) END], aggr=[sum(range.#0)]
+                          ProjectionExec: expr=[id@0 as #0]
+                            RangeExec
+        ProjectionExec: expr=[sum(totals.#2)@0 + 1 as #3]
+          SharedPlanExec: id=8
+            AggregateExec: mode=Final, gby=[], aggr=[sum(totals.#2)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(totals.#2)]
+                  ProjectionExec: expr=[sum(range.#0)@1 as #2]
+                    AggregateExec: mode=FinalPartitioned, gby=[range.#0 % CASE WHEN Int32(8) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(8) END@0 as range.#0 % CASE WHEN Int32(8) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(8) END], aggr=[sum(range.#0)]
+                      RepartitionExec: partitioning=Hash([range.#0 % CASE WHEN Int32(8) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(8) END@0], 4), input_partitions=4
+                        AggregateExec: mode=Partial, gby=[#0@0 % 8 as range.#0 % CASE WHEN Int32(8) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(8) END], aggr=[sum(range.#0)]
+                          ProjectionExec: expr=[id@0 as #0]
+                            RangeExec
+---
+name: "test_common_aggregate_has_independent_readers[local]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as total]
+      UnionExec
+        ProjectionExec: expr=[sum(totals.#2)@0 as #3]
+          SharedPlanExec: id=8
+            AggregateExec: mode=Final, gby=[], aggr=[sum(totals.#2)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(totals.#2)]
+                  ProjectionExec: expr=[sum(range.#0)@1 as #2]
+                    AggregateExec: mode=FinalPartitioned, gby=[range.#0 % CASE WHEN Int32(8) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(8) END@0 as range.#0 % CASE WHEN Int32(8) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(8) END], aggr=[sum(range.#0)]
+                      RepartitionExec: partitioning=Hash([range.#0 % CASE WHEN Int32(8) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(8) END@0], 4), input_partitions=4
+                        AggregateExec: mode=Partial, gby=[#0@0 % 8 as range.#0 % CASE WHEN Int32(8) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(8) END], aggr=[sum(range.#0)]
+                          ProjectionExec: expr=[id@0 as #0]
+                            RangeExec
+        ProjectionExec: expr=[sum(totals.#2)@0 + 1 as #3]
+          SharedPlanExec: id=8
+            AggregateExec: mode=Final, gby=[], aggr=[sum(totals.#2)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(totals.#2)]
+                  ProjectionExec: expr=[sum(range.#0)@1 as #2]
+                    AggregateExec: mode=FinalPartitioned, gby=[range.#0 % CASE WHEN Int32(8) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(8) END@0 as range.#0 % CASE WHEN Int32(8) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(8) END], aggr=[sum(range.#0)]
+                      RepartitionExec: partitioning=Hash([range.#0 % CASE WHEN Int32(8) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(8) END@0], 4), input_partitions=4
+                        AggregateExec: mode=Partial, gby=[#0@0 % 8 as range.#0 % CASE WHEN Int32(8) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(8) END], aggr=[sum(range.#0)]
+                          ProjectionExec: expr=[id@0 as #0]
+                            RangeExec
+---
+name: "test_common_aggregate_has_independent_readers[storage]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as total]
+      UnionExec
+        ProjectionExec: expr=[sum(totals.#2)@0 as #3]
+          SharedPlanExec: id=8
+            AggregateExec: mode=Final, gby=[], aggr=[sum(totals.#2)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(totals.#2)]
+                  ProjectionExec: expr=[sum(range.#0)@1 as #2]
+                    AggregateExec: mode=FinalPartitioned, gby=[range.#0 % CASE WHEN Int32(8) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(8) END@0 as range.#0 % CASE WHEN Int32(8) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(8) END], aggr=[sum(range.#0)]
+                      RepartitionExec: partitioning=Hash([range.#0 % CASE WHEN Int32(8) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(8) END@0], 4), input_partitions=4
+                        AggregateExec: mode=Partial, gby=[#0@0 % 8 as range.#0 % CASE WHEN Int32(8) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(8) END], aggr=[sum(range.#0)]
+                          ProjectionExec: expr=[id@0 as #0]
+                            RangeExec
+        ProjectionExec: expr=[sum(totals.#2)@0 + 1 as #3]
+          SharedPlanExec: id=8
+            AggregateExec: mode=Final, gby=[], aggr=[sum(totals.#2)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(totals.#2)]
+                  ProjectionExec: expr=[sum(range.#0)@1 as #2]
+                    AggregateExec: mode=FinalPartitioned, gby=[range.#0 % CASE WHEN Int32(8) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(8) END@0 as range.#0 % CASE WHEN Int32(8) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(8) END], aggr=[sum(range.#0)]
+                      RepartitionExec: partitioning=Hash([range.#0 % CASE WHEN Int32(8) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(8) END@0], 4), input_partitions=4
+                        AggregateExec: mode=Partial, gby=[#0@0 % 8 as range.#0 % CASE WHEN Int32(8) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(8) END], aggr=[sum(range.#0)]
+                          ProjectionExec: expr=[id@0 as #0]
+                            RangeExec
+---
+name: "test_common_join_with_unused_dynamic_filter_is_shared[flight]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as n]
+      UnionExec
+        ProjectionExec: expr=[sum(a.#0 + b.#1)@0 as #3]
+          SharedPlanExec: id=8
+            AggregateExec: mode=Final, gby=[], aggr=[sum(a.#0 + b.#1)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(a.#0 + b.#1)]
+                  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a.#0 % Int64(5)@1, b.#1 % Int64(5)@1)], filter=#0@0 < #1@1, projection=[#0@0, #1@2]
+                    SharedPlanExec: id=4
+                      RepartitionExec: partitioning=Hash([a.#0 % Int64(5)@1], 4), input_partitions=4
+                        ProjectionExec: expr=[#0@0 as #0, #0@0 % 5 as a.#0 % Int64(5)]
+                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                            ProjectionExec: expr=[id@0 as #0]
+                              RangeExec
+                    SharedPlanExec: id=4
+                      RepartitionExec: partitioning=Hash([b.#1 % Int64(5)@1], 4), input_partitions=4
+                        ProjectionExec: expr=[#1@0 as #1, #1@0 % 5 as b.#1 % Int64(5)]
+                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                            ProjectionExec: expr=[id@0 as #1]
+                              RangeExec
+        ProjectionExec: expr=[sum(a.#0 + b.#1)@0 + 1 as #3]
+          SharedPlanExec: id=8
+            AggregateExec: mode=Final, gby=[], aggr=[sum(a.#0 + b.#1)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(a.#0 + b.#1)]
+                  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a.#0 % Int64(5)@1, b.#1 % Int64(5)@1)], filter=#0@0 < #1@1, projection=[#0@0, #1@2]
+                    SharedPlanExec: id=4
+                      RepartitionExec: partitioning=Hash([a.#0 % Int64(5)@1], 4), input_partitions=4
+                        ProjectionExec: expr=[#0@0 as #0, #0@0 % 5 as a.#0 % Int64(5)]
+                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                            ProjectionExec: expr=[id@0 as #0]
+                              RangeExec
+                    SharedPlanExec: id=4
+                      RepartitionExec: partitioning=Hash([b.#1 % Int64(5)@1], 4), input_partitions=4
+                        ProjectionExec: expr=[#1@0 as #1, #1@0 % 5 as b.#1 % Int64(5)]
+                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                            ProjectionExec: expr=[id@0 as #1]
+                              RangeExec
+---
+name: "test_common_join_with_unused_dynamic_filter_is_shared[local]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as n]
+      UnionExec
+        ProjectionExec: expr=[sum(a.#0 + b.#1)@0 as #3]
+          SharedPlanExec: id=8
+            AggregateExec: mode=Final, gby=[], aggr=[sum(a.#0 + b.#1)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(a.#0 + b.#1)]
+                  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a.#0 % Int64(5)@1, b.#1 % Int64(5)@1)], filter=#0@0 < #1@1, projection=[#0@0, #1@2]
+                    SharedPlanExec: id=4
+                      RepartitionExec: partitioning=Hash([a.#0 % Int64(5)@1], 4), input_partitions=4
+                        ProjectionExec: expr=[#0@0 as #0, #0@0 % 5 as a.#0 % Int64(5)]
+                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                            ProjectionExec: expr=[id@0 as #0]
+                              RangeExec
+                    SharedPlanExec: id=4
+                      RepartitionExec: partitioning=Hash([b.#1 % Int64(5)@1], 4), input_partitions=4
+                        ProjectionExec: expr=[#1@0 as #1, #1@0 % 5 as b.#1 % Int64(5)]
+                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                            ProjectionExec: expr=[id@0 as #1]
+                              RangeExec
+        ProjectionExec: expr=[sum(a.#0 + b.#1)@0 + 1 as #3]
+          SharedPlanExec: id=8
+            AggregateExec: mode=Final, gby=[], aggr=[sum(a.#0 + b.#1)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(a.#0 + b.#1)]
+                  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a.#0 % Int64(5)@1, b.#1 % Int64(5)@1)], filter=#0@0 < #1@1, projection=[#0@0, #1@2]
+                    SharedPlanExec: id=4
+                      RepartitionExec: partitioning=Hash([a.#0 % Int64(5)@1], 4), input_partitions=4
+                        ProjectionExec: expr=[#0@0 as #0, #0@0 % 5 as a.#0 % Int64(5)]
+                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                            ProjectionExec: expr=[id@0 as #0]
+                              RangeExec
+                    SharedPlanExec: id=4
+                      RepartitionExec: partitioning=Hash([b.#1 % Int64(5)@1], 4), input_partitions=4
+                        ProjectionExec: expr=[#1@0 as #1, #1@0 % 5 as b.#1 % Int64(5)]
+                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                            ProjectionExec: expr=[id@0 as #1]
+                              RangeExec
+---
+name: "test_common_join_with_unused_dynamic_filter_is_shared[storage]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as n]
+      UnionExec
+        ProjectionExec: expr=[sum(a.#0 + b.#1)@0 as #3]
+          SharedPlanExec: id=8
+            AggregateExec: mode=Final, gby=[], aggr=[sum(a.#0 + b.#1)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(a.#0 + b.#1)]
+                  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a.#0 % Int64(5)@1, b.#1 % Int64(5)@1)], filter=#0@0 < #1@1, projection=[#0@0, #1@2]
+                    SharedPlanExec: id=4
+                      RepartitionExec: partitioning=Hash([a.#0 % Int64(5)@1], 4), input_partitions=4
+                        ProjectionExec: expr=[#0@0 as #0, #0@0 % 5 as a.#0 % Int64(5)]
+                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                            ProjectionExec: expr=[id@0 as #0]
+                              RangeExec
+                    SharedPlanExec: id=4
+                      RepartitionExec: partitioning=Hash([b.#1 % Int64(5)@1], 4), input_partitions=4
+                        ProjectionExec: expr=[#1@0 as #1, #1@0 % 5 as b.#1 % Int64(5)]
+                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                            ProjectionExec: expr=[id@0 as #1]
+                              RangeExec
+        ProjectionExec: expr=[sum(a.#0 + b.#1)@0 + 1 as #3]
+          SharedPlanExec: id=8
+            AggregateExec: mode=Final, gby=[], aggr=[sum(a.#0 + b.#1)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(a.#0 + b.#1)]
+                  HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a.#0 % Int64(5)@1, b.#1 % Int64(5)@1)], filter=#0@0 < #1@1, projection=[#0@0, #1@2]
+                    SharedPlanExec: id=4
+                      RepartitionExec: partitioning=Hash([a.#0 % Int64(5)@1], 4), input_partitions=4
+                        ProjectionExec: expr=[#0@0 as #0, #0@0 % 5 as a.#0 % Int64(5)]
+                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                            ProjectionExec: expr=[id@0 as #0]
+                              RangeExec
+                    SharedPlanExec: id=4
+                      RepartitionExec: partitioning=Hash([b.#1 % Int64(5)@1], 4), input_partitions=4
+                        ProjectionExec: expr=[#1@0 as #1, #1@0 % 5 as b.#1 % Int64(5)]
+                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                            ProjectionExec: expr=[id@0 as #1]
+                              RangeExec
+---
+name: "test_common_parquet_scan[flight]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as n]
+      UnionExec
+        ProjectionExec: expr=[sum(shared_parquet.#0)@0 as #1]
+          SharedPlanExec: id=3
+            AggregateExec: mode=Final, gby=[], aggr=[sum(shared_parquet.#0)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(shared_parquet.#0)]
+                  DataSourceExec: file_groups={4 groups: [[<tmp>/input/<id>_0.zst.parquet], [<tmp>/input/<id>_1.zst.parquet], [<tmp>/input/<id>_2.zst.parquet], [<tmp>/input/<id>_3.zst.parquet]]}, projection=[id@0 as #0], file_type=parquet
+        ProjectionExec: expr=[sum(shared_parquet.#2)@0 + 1 as #1]
+          SharedPlanExec: id=3
+            AggregateExec: mode=Final, gby=[], aggr=[sum(shared_parquet.#2)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(shared_parquet.#2)]
+                  DataSourceExec: file_groups={4 groups: [[<tmp>/input/<id>_0.zst.parquet], [<tmp>/input/<id>_1.zst.parquet], [<tmp>/input/<id>_2.zst.parquet], [<tmp>/input/<id>_3.zst.parquet]]}, projection=[id@0 as #2], file_type=parquet
+---
+name: "test_common_parquet_scan[flight].1"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as n]
+      UnionExec
+        ProjectionExec: expr=[sum(shared_parquet.#0)@0 as #1]
+          AggregateExec: mode=Final, gby=[], aggr=[sum(shared_parquet.#0)]
+            CoalescePartitionsExec
+              AggregateExec: mode=Partial, gby=[], aggr=[sum(shared_parquet.#0)]
+                ProjectionExec: expr=[id@0 as #0]
+                  FilterExec: id@0 < 10
+                    DataSourceExec: file_groups={4 groups: [[<tmp>/input/<id>_0.zst.parquet], [<tmp>/input/<id>_1.zst.parquet], [<tmp>/input/<id>_2.zst.parquet], [<tmp>/input/<id>_3.zst.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 < 10, pruning_predicate=id_null_count@1 != row_count@2 AND id_min@0 < 10, required_guarantees=[]
+        ProjectionExec: expr=[sum(shared_parquet.#2)@0 as #1]
+          AggregateExec: mode=Final, gby=[], aggr=[sum(shared_parquet.#2)]
+            CoalescePartitionsExec
+              AggregateExec: mode=Partial, gby=[], aggr=[sum(shared_parquet.#2)]
+                ProjectionExec: expr=[id@0 as #2]
+                  FilterExec: id@0 > 9990
+                    DataSourceExec: file_groups={4 groups: [[<tmp>/input/<id>_0.zst.parquet], [<tmp>/input/<id>_1.zst.parquet], [<tmp>/input/<id>_2.zst.parquet], [<tmp>/input/<id>_3.zst.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 > 9990, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 9990, required_guarantees=[]
+---
+name: "test_common_parquet_scan[local]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as n]
+      UnionExec
+        ProjectionExec: expr=[sum(shared_parquet.#0)@0 as #1]
+          SharedPlanExec: id=3
+            AggregateExec: mode=Final, gby=[], aggr=[sum(shared_parquet.#0)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(shared_parquet.#0)]
+                  DataSourceExec: file_groups={4 groups: [[<tmp>/input/<id>_0.zst.parquet], [<tmp>/input/<id>_1.zst.parquet], [<tmp>/input/<id>_2.zst.parquet], [<tmp>/input/<id>_3.zst.parquet]]}, projection=[id@0 as #0], file_type=parquet
+        ProjectionExec: expr=[sum(shared_parquet.#2)@0 + 1 as #1]
+          SharedPlanExec: id=3
+            AggregateExec: mode=Final, gby=[], aggr=[sum(shared_parquet.#2)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(shared_parquet.#2)]
+                  DataSourceExec: file_groups={4 groups: [[<tmp>/input/<id>_0.zst.parquet], [<tmp>/input/<id>_1.zst.parquet], [<tmp>/input/<id>_2.zst.parquet], [<tmp>/input/<id>_3.zst.parquet]]}, projection=[id@0 as #2], file_type=parquet
+---
+name: "test_common_parquet_scan[local].1"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as n]
+      UnionExec
+        ProjectionExec: expr=[sum(shared_parquet.#0)@0 as #1]
+          AggregateExec: mode=Final, gby=[], aggr=[sum(shared_parquet.#0)]
+            CoalescePartitionsExec
+              AggregateExec: mode=Partial, gby=[], aggr=[sum(shared_parquet.#0)]
+                ProjectionExec: expr=[id@0 as #0]
+                  FilterExec: id@0 < 10
+                    DataSourceExec: file_groups={4 groups: [[<tmp>/input/<id>_0.zst.parquet], [<tmp>/input/<id>_1.zst.parquet], [<tmp>/input/<id>_2.zst.parquet], [<tmp>/input/<id>_3.zst.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 < 10, pruning_predicate=id_null_count@1 != row_count@2 AND id_min@0 < 10, required_guarantees=[]
+        ProjectionExec: expr=[sum(shared_parquet.#2)@0 as #1]
+          AggregateExec: mode=Final, gby=[], aggr=[sum(shared_parquet.#2)]
+            CoalescePartitionsExec
+              AggregateExec: mode=Partial, gby=[], aggr=[sum(shared_parquet.#2)]
+                ProjectionExec: expr=[id@0 as #2]
+                  FilterExec: id@0 > 9990
+                    DataSourceExec: file_groups={4 groups: [[<tmp>/input/<id>_0.zst.parquet], [<tmp>/input/<id>_1.zst.parquet], [<tmp>/input/<id>_2.zst.parquet], [<tmp>/input/<id>_3.zst.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 > 9990, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 9990, required_guarantees=[]
+---
+name: "test_common_parquet_scan[storage]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as n]
+      UnionExec
+        ProjectionExec: expr=[sum(shared_parquet.#0)@0 as #1]
+          SharedPlanExec: id=3
+            AggregateExec: mode=Final, gby=[], aggr=[sum(shared_parquet.#0)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(shared_parquet.#0)]
+                  DataSourceExec: file_groups={4 groups: [[<tmp>/input/<id>_0.zst.parquet], [<tmp>/input/<id>_1.zst.parquet], [<tmp>/input/<id>_2.zst.parquet], [<tmp>/input/<id>_3.zst.parquet]]}, projection=[id@0 as #0], file_type=parquet
+        ProjectionExec: expr=[sum(shared_parquet.#2)@0 + 1 as #1]
+          SharedPlanExec: id=3
+            AggregateExec: mode=Final, gby=[], aggr=[sum(shared_parquet.#2)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(shared_parquet.#2)]
+                  DataSourceExec: file_groups={4 groups: [[<tmp>/input/<id>_0.zst.parquet], [<tmp>/input/<id>_1.zst.parquet], [<tmp>/input/<id>_2.zst.parquet], [<tmp>/input/<id>_3.zst.parquet]]}, projection=[id@0 as #2], file_type=parquet
+---
+name: "test_common_parquet_scan[storage].1"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as n]
+      UnionExec
+        ProjectionExec: expr=[sum(shared_parquet.#0)@0 as #1]
+          AggregateExec: mode=Final, gby=[], aggr=[sum(shared_parquet.#0)]
+            CoalescePartitionsExec
+              AggregateExec: mode=Partial, gby=[], aggr=[sum(shared_parquet.#0)]
+                ProjectionExec: expr=[id@0 as #0]
+                  FilterExec: id@0 < 10
+                    DataSourceExec: file_groups={4 groups: [[<tmp>/input/<id>_0.zst.parquet], [<tmp>/input/<id>_1.zst.parquet], [<tmp>/input/<id>_2.zst.parquet], [<tmp>/input/<id>_3.zst.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 < 10, pruning_predicate=id_null_count@1 != row_count@2 AND id_min@0 < 10, required_guarantees=[]
+        ProjectionExec: expr=[sum(shared_parquet.#2)@0 as #1]
+          AggregateExec: mode=Final, gby=[], aggr=[sum(shared_parquet.#2)]
+            CoalescePartitionsExec
+              AggregateExec: mode=Partial, gby=[], aggr=[sum(shared_parquet.#2)]
+                ProjectionExec: expr=[id@0 as #2]
+                  FilterExec: id@0 > 9990
+                    DataSourceExec: file_groups={4 groups: [[<tmp>/input/<id>_0.zst.parquet], [<tmp>/input/<id>_1.zst.parquet], [<tmp>/input/<id>_2.zst.parquet], [<tmp>/input/<id>_3.zst.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 > 9990, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 9990, required_guarantees=[]
+---
+name: "test_different_sources_and_filters_are_not_merged[flight]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as n]
+      UnionExec
+        ProjectionExec: expr=[sum(shared_left.#0)@0 as #1]
+          AggregateExec: mode=Final, gby=[], aggr=[sum(shared_left.#0)]
+            CoalescePartitionsExec
+              AggregateExec: mode=Partial, gby=[], aggr=[sum(shared_left.#0)]
+                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                  ProjectionExec: expr=[v@0 as #0]
+                    FilterExec: v@0 < 2
+                      DataSourceExec: partitions=1, partition_sizes=[1]
+        ProjectionExec: expr=[sum(shared_right.#2)@0 as #1]
+          AggregateExec: mode=Final, gby=[], aggr=[sum(shared_right.#2)]
+            CoalescePartitionsExec
+              AggregateExec: mode=Partial, gby=[], aggr=[sum(shared_right.#2)]
+                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                  ProjectionExec: expr=[v@0 as #2]
+                    FilterExec: v@0 > 7
+                      DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_different_sources_and_filters_are_not_merged[local]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as n]
+      UnionExec
+        ProjectionExec: expr=[sum(shared_left.#0)@0 as #1]
+          AggregateExec: mode=Final, gby=[], aggr=[sum(shared_left.#0)]
+            CoalescePartitionsExec
+              AggregateExec: mode=Partial, gby=[], aggr=[sum(shared_left.#0)]
+                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                  ProjectionExec: expr=[v@0 as #0]
+                    FilterExec: v@0 < 2
+                      DataSourceExec: partitions=1, partition_sizes=[1]
+        ProjectionExec: expr=[sum(shared_right.#2)@0 as #1]
+          AggregateExec: mode=Final, gby=[], aggr=[sum(shared_right.#2)]
+            CoalescePartitionsExec
+              AggregateExec: mode=Partial, gby=[], aggr=[sum(shared_right.#2)]
+                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                  ProjectionExec: expr=[v@0 as #2]
+                    FilterExec: v@0 > 7
+                      DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_different_sources_and_filters_are_not_merged[storage]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as n]
+      UnionExec
+        ProjectionExec: expr=[sum(shared_left.#0)@0 as #1]
+          AggregateExec: mode=Final, gby=[], aggr=[sum(shared_left.#0)]
+            CoalescePartitionsExec
+              AggregateExec: mode=Partial, gby=[], aggr=[sum(shared_left.#0)]
+                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                  ProjectionExec: expr=[v@0 as #0]
+                    FilterExec: v@0 < 2
+                      DataSourceExec: partitions=1, partition_sizes=[1]
+        ProjectionExec: expr=[sum(shared_right.#2)@0 as #1]
+          AggregateExec: mode=Final, gby=[], aggr=[sum(shared_right.#2)]
+            CoalescePartitionsExec
+              AggregateExec: mode=Partial, gby=[], aggr=[sum(shared_right.#2)]
+                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                  ProjectionExec: expr=[v@0 as #2]
+                    FilterExec: v@0 > 7
+                      DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_early_reader_does_not_truncate_shared_output[flight]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#5@0 as branch, #6@1 as n]
+      UnionExec
+        ProjectionExec: expr=[0 as #5, sum(#4)@0 as #6]
+          AggregateExec: mode=Final, gby=[], aggr=[sum(#4)]
+            CoalescePartitionsExec
+              AggregateExec: mode=Partial, gby=[], aggr=[sum(#4)]
+                ProjectionExec: expr=[id@0 * 7 as #4]
+                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                    CoalescePartitionsExec: fetch=1
+                      LocalLimitExec: fetch=1
+                        SharedPlanExec: id=0
+                          RangeExec
+        ProjectionExec: expr=[1 as #5, sum(t.#2)@0 as #6]
+          AggregateExec: mode=Final, gby=[], aggr=[sum(t.#2)]
+            CoalescePartitionsExec
+              AggregateExec: mode=Partial, gby=[], aggr=[sum(t.#2)]
+                ProjectionExec: expr=[id@0 * 7 as #2]
+                  SharedPlanExec: id=0
+                    RangeExec
+---
+name: "test_early_reader_does_not_truncate_shared_output[local]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#5@0 as branch, #6@1 as n]
+      UnionExec
+        ProjectionExec: expr=[0 as #5, sum(#4)@0 as #6]
+          AggregateExec: mode=Final, gby=[], aggr=[sum(#4)]
+            CoalescePartitionsExec
+              AggregateExec: mode=Partial, gby=[], aggr=[sum(#4)]
+                ProjectionExec: expr=[id@0 * 7 as #4]
+                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                    CoalescePartitionsExec: fetch=1
+                      LocalLimitExec: fetch=1
+                        SharedPlanExec: id=0
+                          RangeExec
+        ProjectionExec: expr=[1 as #5, sum(t.#2)@0 as #6]
+          AggregateExec: mode=Final, gby=[], aggr=[sum(t.#2)]
+            CoalescePartitionsExec
+              AggregateExec: mode=Partial, gby=[], aggr=[sum(t.#2)]
+                ProjectionExec: expr=[id@0 * 7 as #2]
+                  SharedPlanExec: id=0
+                    RangeExec
+---
+name: "test_early_reader_does_not_truncate_shared_output[storage]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#5@0 as branch, #6@1 as n]
+      UnionExec
+        ProjectionExec: expr=[0 as #5, sum(#4)@0 as #6]
+          AggregateExec: mode=Final, gby=[], aggr=[sum(#4)]
+            CoalescePartitionsExec
+              AggregateExec: mode=Partial, gby=[], aggr=[sum(#4)]
+                ProjectionExec: expr=[id@0 * 7 as #4]
+                  RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                    CoalescePartitionsExec: fetch=1
+                      LocalLimitExec: fetch=1
+                        SharedPlanExec: id=0
+                          RangeExec
+        ProjectionExec: expr=[1 as #5, sum(t.#2)@0 as #6]
+          AggregateExec: mode=Final, gby=[], aggr=[sum(t.#2)]
+            CoalescePartitionsExec
+              AggregateExec: mode=Partial, gby=[], aggr=[sum(t.#2)]
+                ProjectionExec: expr=[id@0 * 7 as #2]
+                  SharedPlanExec: id=0
+                    RangeExec
+---
+name: "test_pivot_value_inference_with_shared_input[flight]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#6@0 as 0, #7@1 as 1]
+      ProjectionExec: expr=[CASE WHEN count(Int64(1)) FILTER (WHERE #1 = Int64(0))@0 > 0 THEN sum(#2) FILTER (WHERE #1 = Int64(0))@1 END as #6, CASE WHEN count(Int64(1)) FILTER (WHERE #1 = Int64(1))@2 > 0 THEN sum(#2) FILTER (WHERE #1 = Int64(1))@3 END as #7]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) FILTER (WHERE __common_expr_1 AS #1 = Int64(0)) as count(Int64(1)) FILTER (WHERE #1 = Int64(0)), sum(#2) FILTER (WHERE __common_expr_1 AS #1 = Int64(0)) as sum(#2) FILTER (WHERE #1 = Int64(0)), count(1) FILTER (WHERE __common_expr_2 AS #1 = Int64(1)) as count(Int64(1)) FILTER (WHERE #1 = Int64(1)), sum(#2) FILTER (WHERE __common_expr_2 AS #1 = Int64(1)) as sum(#2) FILTER (WHERE #1 = Int64(1))]
+          CoalescePartitionsExec
+            AggregateExec: mode=Partial, gby=[], aggr=[count(1) FILTER (WHERE __common_expr_1 AS #1 = Int64(0)) as count(Int64(1)) FILTER (WHERE #1 = Int64(0)), sum(#2) FILTER (WHERE __common_expr_1 AS #1 = Int64(0)) as sum(#2) FILTER (WHERE #1 = Int64(0)), count(1) FILTER (WHERE __common_expr_2 AS #1 = Int64(1)) as count(Int64(1)) FILTER (WHERE #1 = Int64(1)), sum(#2) FILTER (WHERE __common_expr_2 AS #1 = Int64(1)) as sum(#2) FILTER (WHERE #1 = Int64(1))]
+              ProjectionExec: expr=[#1@0 = 0 as __common_expr_1, #1@0 = 1 as __common_expr_2, #2@1 as #2]
+                UnionExec
+                  SharedPlanExec: id=2
+                    ProjectionExec: expr=[#0@0 % 2 as #1, #0@0 as #2]
+                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                        RangeExec
+                  SharedPlanExec: id=2
+                    ProjectionExec: expr=[#3@0 % 2 as #1, #3@0 as #2]
+                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                        RangeExec
+---
+name: "test_pivot_value_inference_with_shared_input[local]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#6@0 as 0, #7@1 as 1]
+      ProjectionExec: expr=[CASE WHEN count(Int64(1)) FILTER (WHERE #1 = Int64(0))@0 > 0 THEN sum(#2) FILTER (WHERE #1 = Int64(0))@1 END as #6, CASE WHEN count(Int64(1)) FILTER (WHERE #1 = Int64(1))@2 > 0 THEN sum(#2) FILTER (WHERE #1 = Int64(1))@3 END as #7]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) FILTER (WHERE __common_expr_1 AS #1 = Int64(0)) as count(Int64(1)) FILTER (WHERE #1 = Int64(0)), sum(#2) FILTER (WHERE __common_expr_1 AS #1 = Int64(0)) as sum(#2) FILTER (WHERE #1 = Int64(0)), count(1) FILTER (WHERE __common_expr_2 AS #1 = Int64(1)) as count(Int64(1)) FILTER (WHERE #1 = Int64(1)), sum(#2) FILTER (WHERE __common_expr_2 AS #1 = Int64(1)) as sum(#2) FILTER (WHERE #1 = Int64(1))]
+          CoalescePartitionsExec
+            AggregateExec: mode=Partial, gby=[], aggr=[count(1) FILTER (WHERE __common_expr_1 AS #1 = Int64(0)) as count(Int64(1)) FILTER (WHERE #1 = Int64(0)), sum(#2) FILTER (WHERE __common_expr_1 AS #1 = Int64(0)) as sum(#2) FILTER (WHERE #1 = Int64(0)), count(1) FILTER (WHERE __common_expr_2 AS #1 = Int64(1)) as count(Int64(1)) FILTER (WHERE #1 = Int64(1)), sum(#2) FILTER (WHERE __common_expr_2 AS #1 = Int64(1)) as sum(#2) FILTER (WHERE #1 = Int64(1))]
+              ProjectionExec: expr=[#1@0 = 0 as __common_expr_1, #1@0 = 1 as __common_expr_2, #2@1 as #2]
+                UnionExec
+                  SharedPlanExec: id=2
+                    ProjectionExec: expr=[#0@0 % 2 as #1, #0@0 as #2]
+                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                        RangeExec
+                  SharedPlanExec: id=2
+                    ProjectionExec: expr=[#3@0 % 2 as #1, #3@0 as #2]
+                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                        RangeExec
+---
+name: "test_pivot_value_inference_with_shared_input[storage]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#6@0 as 0, #7@1 as 1]
+      ProjectionExec: expr=[CASE WHEN count(Int64(1)) FILTER (WHERE #1 = Int64(0))@0 > 0 THEN sum(#2) FILTER (WHERE #1 = Int64(0))@1 END as #6, CASE WHEN count(Int64(1)) FILTER (WHERE #1 = Int64(1))@2 > 0 THEN sum(#2) FILTER (WHERE #1 = Int64(1))@3 END as #7]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) FILTER (WHERE __common_expr_1 AS #1 = Int64(0)) as count(Int64(1)) FILTER (WHERE #1 = Int64(0)), sum(#2) FILTER (WHERE __common_expr_1 AS #1 = Int64(0)) as sum(#2) FILTER (WHERE #1 = Int64(0)), count(1) FILTER (WHERE __common_expr_2 AS #1 = Int64(1)) as count(Int64(1)) FILTER (WHERE #1 = Int64(1)), sum(#2) FILTER (WHERE __common_expr_2 AS #1 = Int64(1)) as sum(#2) FILTER (WHERE #1 = Int64(1))]
+          CoalescePartitionsExec
+            AggregateExec: mode=Partial, gby=[], aggr=[count(1) FILTER (WHERE __common_expr_1 AS #1 = Int64(0)) as count(Int64(1)) FILTER (WHERE #1 = Int64(0)), sum(#2) FILTER (WHERE __common_expr_1 AS #1 = Int64(0)) as sum(#2) FILTER (WHERE #1 = Int64(0)), count(1) FILTER (WHERE __common_expr_2 AS #1 = Int64(1)) as count(Int64(1)) FILTER (WHERE #1 = Int64(1)), sum(#2) FILTER (WHERE __common_expr_2 AS #1 = Int64(1)) as sum(#2) FILTER (WHERE #1 = Int64(1))]
+              ProjectionExec: expr=[#1@0 = 0 as __common_expr_1, #1@0 = 1 as __common_expr_2, #2@1 as #2]
+                UnionExec
+                  SharedPlanExec: id=2
+                    ProjectionExec: expr=[#0@0 % 2 as #1, #0@0 as #2]
+                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                        RangeExec
+                  SharedPlanExec: id=2
+                    ProjectionExec: expr=[#3@0 % 2 as #1, #3@0 as #2]
+                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                        RangeExec
+---
+name: "test_shared_output_spills_and_replays_to_late_reader[flight]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as n]
+      ProjectionExec: expr=[sum(length(a.#2) + length(b.#2))@0 as #3]
+        AggregateExec: mode=Final, gby=[], aggr=[sum(length(a.#2) + length(b.#2))]
+          CoalescePartitionsExec
+            AggregateExec: mode=Partial, gby=[], aggr=[sum(length(a.#2) + length(b.#2))]
+              HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@0, #1@0)], projection=[#2@1, #2@3]
+                SharedPlanExec: id=3
+                  RepartitionExec: partitioning=Hash([#1@0], 4), input_partitions=4
+                    ProjectionExec: expr=[id@0 as #1, repeat(CAST(id@0 AS Utf8), 2048) as #2]
+                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                        RangeExec
+                SharedPlanExec: id=3
+                  RepartitionExec: partitioning=Hash([#1@0], 4), input_partitions=4
+                    ProjectionExec: expr=[id@0 as #1, repeat(CAST(id@0 AS Utf8), 2048) as #2]
+                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                        RangeExec
+---
+name: "test_shared_output_spills_and_replays_to_late_reader[flight].1"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as n], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, expr_<metric>_eval_time=<metric>], statistics=[Rows=Exact(1), Bytes=Exact(<bytes>), [(Col[0]:)]], schema=[n:Int64;N]
+      ProjectionExec: expr=[sum(length(a.#2) + length(b.#2))@0 as #3], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, expr_<metric>_eval_time=<metric>], statistics=[Rows=Exact(1), Bytes=Exact(<bytes>), [(Col[0]:)]], schema=[#3:Int64;N]
+        AggregateExec: mode=Final, gby=[], aggr=[sum(length(a.#2) + length(b.#2))], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>], statistics=[Rows=Exact(1), Bytes=Absent, [(Col[0]:)]], schema=[sum(length(a.#2) + length(b.#2)):Int64;N]
+          CoalescePartitionsExec, metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>], statistics=[Rows=Exact(4), Bytes=Absent, [(Col[0]:)]], schema=[sum(length(a.#2) + length(b.#2))[sum]:Int64;N]
+            AggregateExec: mode=Partial, gby=[], aggr=[sum(length(a.#2) + length(b.#2))], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>], statistics=[Rows=Exact(4), Bytes=Absent, [(Col[0]:)]], schema=[sum(length(a.#2) + length(b.#2))[sum]:Int64;N]
+              HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@0, #1@0)], projection=[#2@1, #2@3], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, build_mem_used=<metric>, array_map_created_count=<metric>, build_input_batches=<metric>, build_input_rows=<metric>, input_batches=<metric>, input_rows=<metric>, build_time=<metric>, join_time=<metric>, avg_fanout=<metric>, probe_hit_rate=<metric>], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]], schema=[#2:Utf8;N, #2:Utf8;N]
+                SharedReadExec: id=3, metrics=[spill_count=<metric>, spilled_bytes=<metric>, spilled_rows=<metric>, producer_executions=<metric>], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]], schema=[#1:Int64, #2:Utf8;N]
+                SharedReadExec: id=3, metrics=[spill_count=<metric>, spilled_bytes=<metric>, spilled_rows=<metric>, producer_executions=<metric>], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]], schema=[#1:Int64, #2:Utf8;N]
+---
+name: "test_shared_output_spills_and_replays_to_late_reader[local]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as n]
+      ProjectionExec: expr=[sum(length(a.#2) + length(b.#2))@0 as #3]
+        AggregateExec: mode=Final, gby=[], aggr=[sum(length(a.#2) + length(b.#2))]
+          CoalescePartitionsExec
+            AggregateExec: mode=Partial, gby=[], aggr=[sum(length(a.#2) + length(b.#2))]
+              HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@0, #1@0)], projection=[#2@1, #2@3]
+                SharedPlanExec: id=3
+                  RepartitionExec: partitioning=Hash([#1@0], 4), input_partitions=4
+                    ProjectionExec: expr=[id@0 as #1, repeat(CAST(id@0 AS Utf8), 2048) as #2]
+                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                        RangeExec
+                SharedPlanExec: id=3
+                  RepartitionExec: partitioning=Hash([#1@0], 4), input_partitions=4
+                    ProjectionExec: expr=[id@0 as #1, repeat(CAST(id@0 AS Utf8), 2048) as #2]
+                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                        RangeExec
+---
+name: "test_shared_output_spills_and_replays_to_late_reader[local].1"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as n], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, expr_<metric>_eval_time=<metric>], statistics=[Rows=Exact(1), Bytes=Exact(<bytes>), [(Col[0]:)]], schema=[n:Int64;N]
+      ProjectionExec: expr=[sum(length(a.#2) + length(b.#2))@0 as #3], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, expr_<metric>_eval_time=<metric>], statistics=[Rows=Exact(1), Bytes=Exact(<bytes>), [(Col[0]:)]], schema=[#3:Int64;N]
+        AggregateExec: mode=Final, gby=[], aggr=[sum(length(a.#2) + length(b.#2))], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>], statistics=[Rows=Exact(1), Bytes=Absent, [(Col[0]:)]], schema=[sum(length(a.#2) + length(b.#2)):Int64;N]
+          CoalescePartitionsExec, metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>], statistics=[Rows=Exact(4), Bytes=Absent, [(Col[0]:)]], schema=[sum(length(a.#2) + length(b.#2))[sum]:Int64;N]
+            AggregateExec: mode=Partial, gby=[], aggr=[sum(length(a.#2) + length(b.#2))], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>], statistics=[Rows=Exact(4), Bytes=Absent, [(Col[0]:)]], schema=[sum(length(a.#2) + length(b.#2))[sum]:Int64;N]
+              HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@0, #1@0)], projection=[#2@1, #2@3], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, build_mem_used=<metric>, array_map_created_count=<metric>, build_input_batches=<metric>, build_input_rows=<metric>, input_batches=<metric>, input_rows=<metric>, build_time=<metric>, join_time=<metric>, avg_fanout=<metric>, probe_hit_rate=<metric>], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]], schema=[#2:Utf8;N, #2:Utf8;N]
+                SharedReadExec: id=3, metrics=[spill_count=<metric>, spilled_bytes=<metric>, spilled_rows=<metric>, producer_executions=<metric>], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]], schema=[#1:Int64, #2:Utf8;N]
+                SharedReadExec: id=3, metrics=[spill_count=<metric>, spilled_bytes=<metric>, spilled_rows=<metric>, producer_executions=<metric>], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]], schema=[#1:Int64, #2:Utf8;N]
+---
+name: "test_shared_output_spills_and_replays_to_late_reader[storage]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as n]
+      ProjectionExec: expr=[sum(length(a.#2) + length(b.#2))@0 as #3]
+        AggregateExec: mode=Final, gby=[], aggr=[sum(length(a.#2) + length(b.#2))]
+          CoalescePartitionsExec
+            AggregateExec: mode=Partial, gby=[], aggr=[sum(length(a.#2) + length(b.#2))]
+              HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@0, #1@0)], projection=[#2@1, #2@3]
+                SharedPlanExec: id=3
+                  RepartitionExec: partitioning=Hash([#1@0], 4), input_partitions=4
+                    ProjectionExec: expr=[id@0 as #1, repeat(CAST(id@0 AS Utf8), 2048) as #2]
+                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                        RangeExec
+                SharedPlanExec: id=3
+                  RepartitionExec: partitioning=Hash([#1@0], 4), input_partitions=4
+                    ProjectionExec: expr=[id@0 as #1, repeat(CAST(id@0 AS Utf8), 2048) as #2]
+                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                        RangeExec
+---
+name: "test_shared_output_spills_and_replays_to_late_reader[storage].1"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as n], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, expr_<metric>_eval_time=<metric>], statistics=[Rows=Exact(1), Bytes=Exact(<bytes>), [(Col[0]:)]], schema=[n:Int64;N]
+      ProjectionExec: expr=[sum(length(a.#2) + length(b.#2))@0 as #3], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, expr_<metric>_eval_time=<metric>], statistics=[Rows=Exact(1), Bytes=Exact(<bytes>), [(Col[0]:)]], schema=[#3:Int64;N]
+        AggregateExec: mode=Final, gby=[], aggr=[sum(length(a.#2) + length(b.#2))], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>], statistics=[Rows=Exact(1), Bytes=Absent, [(Col[0]:)]], schema=[sum(length(a.#2) + length(b.#2)):Int64;N]
+          CoalescePartitionsExec, metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>], statistics=[Rows=Exact(4), Bytes=Absent, [(Col[0]:)]], schema=[sum(length(a.#2) + length(b.#2))[sum]:Int64;N]
+            AggregateExec: mode=Partial, gby=[], aggr=[sum(length(a.#2) + length(b.#2))], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>], statistics=[Rows=Exact(4), Bytes=Absent, [(Col[0]:)]], schema=[sum(length(a.#2) + length(b.#2))[sum]:Int64;N]
+              HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@0, #1@0)], projection=[#2@1, #2@3], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, build_mem_used=<metric>, array_map_created_count=<metric>, build_input_batches=<metric>, build_input_rows=<metric>, input_batches=<metric>, input_rows=<metric>, build_time=<metric>, join_time=<metric>, avg_fanout=<metric>, probe_hit_rate=<metric>], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]], schema=[#2:Utf8;N, #2:Utf8;N]
+                SharedReadExec: id=3, metrics=[spill_count=<metric>, spilled_bytes=<metric>, spilled_rows=<metric>, producer_executions=<metric>], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]], schema=[#1:Int64, #2:Utf8;N]
+                SharedReadExec: id=3, metrics=[spill_count=<metric>, spilled_bytes=<metric>, spilled_rows=<metric>, producer_executions=<metric>], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]], schema=[#1:Int64, #2:Utf8;N]
+---
+name: "test_shared_output_with_nulls_and_empty_partitions[flight]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as a]
+      UnionExec
+        SharedPlanExec: id=2
+          ProjectionExec: expr=[CASE WHEN id@0 = 0 THEN NULL ELSE id@0 END as #2]
+            CooperativeExec
+              RangeExec
+        SharedPlanExec: id=2
+          ProjectionExec: expr=[CASE WHEN id@0 = 0 THEN NULL ELSE id@0 END as #2]
+            CooperativeExec
+              RangeExec
+---
+name: "test_shared_output_with_nulls_and_empty_partitions[local]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as a]
+      UnionExec
+        SharedPlanExec: id=2
+          ProjectionExec: expr=[CASE WHEN id@0 = 0 THEN NULL ELSE id@0 END as #2]
+            CooperativeExec
+              RangeExec
+        SharedPlanExec: id=2
+          ProjectionExec: expr=[CASE WHEN id@0 = 0 THEN NULL ELSE id@0 END as #2]
+            CooperativeExec
+              RangeExec
+---
+name: "test_shared_output_with_nulls_and_empty_partitions[storage]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as a]
+      UnionExec
+        SharedPlanExec: id=2
+          ProjectionExec: expr=[CASE WHEN id@0 = 0 THEN NULL ELSE id@0 END as #2]
+            CooperativeExec
+              RangeExec
+        SharedPlanExec: id=2
+          ProjectionExec: expr=[CASE WHEN id@0 = 0 THEN NULL ELSE id@0 END as #2]
+            CooperativeExec
+              RangeExec
+---
+name: "test_shared_producer_error_does_not_hang_or_poison_next_query[flight]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as n]
+      UnionExec
+        ProjectionExec: expr=[sum(Int32(100) / CASE WHEN range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0) THEN raise_error(Utf8("Division by zero")) ELSE range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END END)@0 as #2]
+          SharedPlanExec: id=5
+            AggregateExec: mode=Final, gby=[], aggr=[sum(100 / CASE WHEN __common_expr_1 = 0 THEN raise_error(Utf8("Division by zero")) ELSE __common_expr_1 END) as sum(Int32(100) / CASE WHEN range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0) THEN raise_error(Utf8("Division by zero")) ELSE range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END END)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(100 / CASE WHEN __common_expr_1 = 0 THEN raise_error(Utf8("Division by zero")) ELSE __common_expr_1 END) as sum(Int32(100) / CASE WHEN range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0) THEN raise_error(Utf8("Division by zero")) ELSE range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END END)]
+                  ProjectionExec: expr=[id@0 % 2 as __common_expr_1]
+                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                      RangeExec
+        ProjectionExec: expr=[sum(Int32(100) / CASE WHEN range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0) THEN raise_error(Utf8("Division by zero")) ELSE range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END END)@0 + 1 as #2]
+          SharedPlanExec: id=5
+            AggregateExec: mode=Final, gby=[], aggr=[sum(100 / CASE WHEN __common_expr_2 = 0 THEN raise_error(Utf8("Division by zero")) ELSE __common_expr_2 END) as sum(Int32(100) / CASE WHEN range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0) THEN raise_error(Utf8("Division by zero")) ELSE range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END END)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(100 / CASE WHEN __common_expr_2 = 0 THEN raise_error(Utf8("Division by zero")) ELSE __common_expr_2 END) as sum(Int32(100) / CASE WHEN range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0) THEN raise_error(Utf8("Division by zero")) ELSE range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END END)]
+                  ProjectionExec: expr=[id@0 % 2 as __common_expr_2]
+                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                      RangeExec
+---
+name: "test_shared_producer_error_does_not_hang_or_poison_next_query[local]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as n]
+      UnionExec
+        ProjectionExec: expr=[sum(Int32(100) / CASE WHEN range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0) THEN raise_error(Utf8("Division by zero")) ELSE range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END END)@0 as #2]
+          SharedPlanExec: id=5
+            AggregateExec: mode=Final, gby=[], aggr=[sum(100 / CASE WHEN __common_expr_1 = 0 THEN raise_error(Utf8("Division by zero")) ELSE __common_expr_1 END) as sum(Int32(100) / CASE WHEN range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0) THEN raise_error(Utf8("Division by zero")) ELSE range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END END)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(100 / CASE WHEN __common_expr_1 = 0 THEN raise_error(Utf8("Division by zero")) ELSE __common_expr_1 END) as sum(Int32(100) / CASE WHEN range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0) THEN raise_error(Utf8("Division by zero")) ELSE range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END END)]
+                  ProjectionExec: expr=[id@0 % 2 as __common_expr_1]
+                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                      RangeExec
+        ProjectionExec: expr=[sum(Int32(100) / CASE WHEN range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0) THEN raise_error(Utf8("Division by zero")) ELSE range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END END)@0 + 1 as #2]
+          SharedPlanExec: id=5
+            AggregateExec: mode=Final, gby=[], aggr=[sum(100 / CASE WHEN __common_expr_2 = 0 THEN raise_error(Utf8("Division by zero")) ELSE __common_expr_2 END) as sum(Int32(100) / CASE WHEN range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0) THEN raise_error(Utf8("Division by zero")) ELSE range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END END)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(100 / CASE WHEN __common_expr_2 = 0 THEN raise_error(Utf8("Division by zero")) ELSE __common_expr_2 END) as sum(Int32(100) / CASE WHEN range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0) THEN raise_error(Utf8("Division by zero")) ELSE range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END END)]
+                  ProjectionExec: expr=[id@0 % 2 as __common_expr_2]
+                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                      RangeExec
+---
+name: "test_shared_producer_error_does_not_hang_or_poison_next_query[storage]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as n]
+      UnionExec
+        ProjectionExec: expr=[sum(Int32(100) / CASE WHEN range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0) THEN raise_error(Utf8("Division by zero")) ELSE range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END END)@0 as #2]
+          SharedPlanExec: id=5
+            AggregateExec: mode=Final, gby=[], aggr=[sum(100 / CASE WHEN __common_expr_1 = 0 THEN raise_error(Utf8("Division by zero")) ELSE __common_expr_1 END) as sum(Int32(100) / CASE WHEN range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0) THEN raise_error(Utf8("Division by zero")) ELSE range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END END)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(100 / CASE WHEN __common_expr_1 = 0 THEN raise_error(Utf8("Division by zero")) ELSE __common_expr_1 END) as sum(Int32(100) / CASE WHEN range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0) THEN raise_error(Utf8("Division by zero")) ELSE range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END END)]
+                  ProjectionExec: expr=[id@0 % 2 as __common_expr_1]
+                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                      RangeExec
+        ProjectionExec: expr=[sum(Int32(100) / CASE WHEN range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0) THEN raise_error(Utf8("Division by zero")) ELSE range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END END)@0 + 1 as #2]
+          SharedPlanExec: id=5
+            AggregateExec: mode=Final, gby=[], aggr=[sum(100 / CASE WHEN __common_expr_2 = 0 THEN raise_error(Utf8("Division by zero")) ELSE __common_expr_2 END) as sum(Int32(100) / CASE WHEN range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0) THEN raise_error(Utf8("Division by zero")) ELSE range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END END)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[sum(100 / CASE WHEN __common_expr_2 = 0 THEN raise_error(Utf8("Division by zero")) ELSE __common_expr_2 END) as sum(Int32(100) / CASE WHEN range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0) THEN raise_error(Utf8("Division by zero")) ELSE range.#0 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END END)]
+                  ProjectionExec: expr=[id@0 % 2 as __common_expr_2]
+                    RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                      RangeExec
+---
+name: "test_shared_producer_is_executed_once[flight]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as n], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, expr_<metric>_eval_time=<metric>], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]], schema=[n:Int64;N]
+      UnionExec, metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]], schema=[#2:Int64;N]
+        ProjectionExec: expr=[sum(range.#0)@0 as #2], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, expr_<metric>_eval_time=<metric>], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]], schema=[#2:Int64;N]
+          SharedReadExec: id=5, metrics=[spill_count=<metric>, spilled_bytes=<metric>, spilled_rows=<metric>, producer_executions=<metric>], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]], schema=[sum(range.#0):Int64;N]
+        ProjectionExec: expr=[sum(range.#0)@0 + 1 as #2], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, expr_<metric>_eval_time=<metric>], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]], schema=[#2:Int64;N]
+          SharedReadExec: id=5, metrics=[spill_count=<metric>, spilled_bytes=<metric>, spilled_rows=<metric>, producer_executions=<metric>], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]], schema=[sum(range.#0):Int64;N]
+---
+name: "test_shared_producer_is_executed_once[local]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as n], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, expr_<metric>_eval_time=<metric>], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]], schema=[n:Int64;N]
+      UnionExec, metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]], schema=[#2:Int64;N]
+        ProjectionExec: expr=[sum(range.#0)@0 as #2], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, expr_<metric>_eval_time=<metric>], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]], schema=[#2:Int64;N]
+          SharedReadExec: id=5, metrics=[spill_count=<metric>, spilled_bytes=<metric>, spilled_rows=<metric>, producer_executions=<metric>], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]], schema=[sum(range.#0):Int64;N]
+        ProjectionExec: expr=[sum(range.#0)@0 + 1 as #2], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, expr_<metric>_eval_time=<metric>], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]], schema=[#2:Int64;N]
+          SharedReadExec: id=5, metrics=[spill_count=<metric>, spilled_bytes=<metric>, spilled_rows=<metric>, producer_executions=<metric>], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]], schema=[sum(range.#0):Int64;N]
+---
+name: "test_shared_producer_is_executed_once[storage]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as n], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, expr_<metric>_eval_time=<metric>], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]], schema=[n:Int64;N]
+      UnionExec, metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]], schema=[#2:Int64;N]
+        ProjectionExec: expr=[sum(range.#0)@0 as #2], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, expr_<metric>_eval_time=<metric>], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]], schema=[#2:Int64;N]
+          SharedReadExec: id=5, metrics=[spill_count=<metric>, spilled_bytes=<metric>, spilled_rows=<metric>, producer_executions=<metric>], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]], schema=[sum(range.#0):Int64;N]
+        ProjectionExec: expr=[sum(range.#0)@0 + 1 as #2], metrics=[output_rows=<metric>, elapsed_compute=<metric>, output_bytes=<metric>, output_batches=<metric>, expr_<metric>_eval_time=<metric>], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]], schema=[#2:Int64;N]
+          SharedReadExec: id=5, metrics=[spill_count=<metric>, spilled_bytes=<metric>, spilled_rows=<metric>, producer_executions=<metric>], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]], schema=[sum(range.#0):Int64;N]
+---
+name: "test_shared_producer_preserves_aliases_and_duplicates[flight]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as left_key, #4@1 as right_key, #5@2 as left_value, #6@3 as right_value]
+      ProjectionExec: expr=[#1@0 as #3, #1@2 as #4, #2@1 as #5, #2@3 as #6]
+        HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@0, #1@0)]
+          SharedPlanExec: id=2
+            RepartitionExec: partitioning=Hash([#1@0], 4), input_partitions=4
+              ProjectionExec: expr=[id@0 % 5 as #1, id@0 * 3 as #2]
+                RangeExec
+          SharedPlanExec: id=2
+            RepartitionExec: partitioning=Hash([#1@0], 4), input_partitions=4
+              ProjectionExec: expr=[id@0 % 5 as #1, id@0 * 3 as #2]
+                RangeExec
+---
+name: "test_shared_producer_preserves_aliases_and_duplicates[local]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as left_key, #4@1 as right_key, #5@2 as left_value, #6@3 as right_value]
+      ProjectionExec: expr=[#1@0 as #3, #1@2 as #4, #2@1 as #5, #2@3 as #6]
+        HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@0, #1@0)]
+          SharedPlanExec: id=2
+            RepartitionExec: partitioning=Hash([#1@0], 4), input_partitions=4
+              ProjectionExec: expr=[id@0 % 5 as #1, id@0 * 3 as #2]
+                RangeExec
+          SharedPlanExec: id=2
+            RepartitionExec: partitioning=Hash([#1@0], 4), input_partitions=4
+              ProjectionExec: expr=[id@0 % 5 as #1, id@0 * 3 as #2]
+                RangeExec
+---
+name: "test_shared_producer_preserves_aliases_and_duplicates[storage]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as left_key, #4@1 as right_key, #5@2 as left_value, #6@3 as right_value]
+      ProjectionExec: expr=[#1@0 as #3, #1@2 as #4, #2@1 as #5, #2@3 as #6]
+        HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@0, #1@0)]
+          SharedPlanExec: id=2
+            RepartitionExec: partitioning=Hash([#1@0], 4), input_partitions=4
+              ProjectionExec: expr=[id@0 % 5 as #1, id@0 * 3 as #2]
+                RangeExec
+          SharedPlanExec: id=2
+            RepartitionExec: partitioning=Hash([#1@0], 4), input_partitions=4
+              ProjectionExec: expr=[id@0 % 5 as #1, id@0 * 3 as #2]
+                RangeExec
+---
+name: "test_volatile_projection_stays_outside_shared_producer[flight]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as id, #4@1 as x, #5@2 as y]
+      ProjectionExec: expr=[#1@0 as #3, #2@1 as #4, #2@2 as #5]
+        HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@0, #1@0)], projection=[#1@0, #2@1, #2@3]
+          RepartitionExec: partitioning=Hash([#1@0], 4), input_partitions=4
+            ProjectionExec: expr=[id@0 as #1, random(42) as #2]
+              SharedPlanExec: id=0
+                RangeExec
+          RepartitionExec: partitioning=Hash([#1@0], 4), input_partitions=4
+            ProjectionExec: expr=[id@0 as #1, random(42) as #2]
+              SharedPlanExec: id=0
+                RangeExec
+---
+name: "test_volatile_projection_stays_outside_shared_producer[local]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as id, #4@1 as x, #5@2 as y]
+      ProjectionExec: expr=[#1@0 as #3, #2@1 as #4, #2@2 as #5]
+        HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@0, #1@0)], projection=[#1@0, #2@1, #2@3]
+          RepartitionExec: partitioning=Hash([#1@0], 4), input_partitions=4
+            ProjectionExec: expr=[id@0 as #1, random(42) as #2]
+              SharedPlanExec: id=0
+                RangeExec
+          RepartitionExec: partitioning=Hash([#1@0], 4), input_partitions=4
+            ProjectionExec: expr=[id@0 as #1, random(42) as #2]
+              SharedPlanExec: id=0
+                RangeExec
+---
+name: "test_volatile_projection_stays_outside_shared_producer[storage]"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as id, #4@1 as x, #5@2 as y]
+      ProjectionExec: expr=[#1@0 as #3, #2@1 as #4, #2@2 as #5]
+        HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@0, #1@0)], projection=[#1@0, #2@1, #2@3]
+          RepartitionExec: partitioning=Hash([#1@0], 4), input_partitions=4
+            ProjectionExec: expr=[id@0 as #1, random(42) as #2]
+              SharedPlanExec: id=0
+                RangeExec
+          RepartitionExec: partitioning=Hash([#1@0], 4), input_partitions=4
+            ProjectionExec: expr=[id@0 as #1, random(42) as #2]
+              SharedPlanExec: id=0
+                RangeExec

@@ -794,6 +794,7 @@ mod system_catalog {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OptimizerConfig {
+    pub enable_plan_reuse: bool,
     pub enable_join_reorder: bool,
     pub enable_join_swap: bool,
     pub prefer_hash_join: bool,
