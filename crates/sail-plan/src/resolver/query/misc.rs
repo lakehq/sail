@@ -152,7 +152,15 @@ impl PlanResolver<'_> {
             .resolve_query_plan_with_hidden_fields(input, state)
             .await?;
 
-        if name.eq_ignore_ascii_case("COALESCE") {
+        let repartition_kind = if name.eq_ignore_ascii_case("COALESCE") {
+            Some(ExplicitRepartitionKind::Coalesce)
+        } else if name.eq_ignore_ascii_case("REPARTITION") {
+            Some(ExplicitRepartitionKind::RoundRobin)
+        } else {
+            None
+        };
+
+        if let Some(repartition_kind) = repartition_kind {
             let num_partitions = self
                 .resolve_hint_partition_count(&name, &parameters, input.schema(), state)
                 .await?;
@@ -160,7 +168,7 @@ impl PlanResolver<'_> {
                 node: Arc::new(ExplicitRepartitionNode::new(
                     Arc::new(input),
                     Some(num_partitions),
-                    ExplicitRepartitionKind::Coalesce,
+                    repartition_kind,
                     vec![],
                 )),
             }));
@@ -179,7 +187,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<usize> {
         let hint_name = hint_name.to_uppercase();
         let [parameter] = parameters else {
-            return Err(PlanError::invalid(format!(
+            return Err(PlanError::analysis(format!(
                 "{hint_name} hint requires exactly one partition count"
             )));
         };
@@ -189,7 +197,7 @@ impl PlanResolver<'_> {
             .await?;
         let value = literal_partition_count(&hint_name, &expr)?;
         if value < 1 {
-            return Err(PlanError::invalid(format!(
+            return Err(PlanError::analysis(format!(
                 "{hint_name} hint requires at least one partition"
             )));
         }
@@ -227,31 +235,31 @@ fn literal_partition_count(hint_name: &str, expr: &Expr) -> PlanResult<usize> {
     match expr {
         Expr::Literal(ScalarValue::Int8(Some(value)), _metadata) => {
             usize::try_from(i64::from(*value)).map_err(|_| {
-                PlanError::invalid(format!("{hint_name} hint requires at least one partition"))
+                PlanError::analysis(format!("{hint_name} hint requires at least one partition"))
             })
         }
         Expr::Literal(ScalarValue::Int16(Some(value)), _metadata) => {
             usize::try_from(i64::from(*value)).map_err(|_| {
-                PlanError::invalid(format!("{hint_name} hint requires at least one partition"))
+                PlanError::analysis(format!("{hint_name} hint requires at least one partition"))
             })
         }
         Expr::Literal(ScalarValue::Int32(Some(value)), _metadata) => {
             usize::try_from(i64::from(*value)).map_err(|_| {
-                PlanError::invalid(format!("{hint_name} hint requires at least one partition"))
+                PlanError::analysis(format!("{hint_name} hint requires at least one partition"))
             })
         }
         Expr::Literal(ScalarValue::Int64(Some(value)), _metadata) => usize::try_from(*value)
             .map_err(|_| {
-                PlanError::invalid(format!("{hint_name} hint requires at least one partition"))
+                PlanError::analysis(format!("{hint_name} hint requires at least one partition"))
             }),
         Expr::Literal(ScalarValue::UInt8(Some(value)), _metadata) => Ok(*value as usize),
         Expr::Literal(ScalarValue::UInt16(Some(value)), _metadata) => Ok(*value as usize),
         Expr::Literal(ScalarValue::UInt32(Some(value)), _metadata) => Ok(*value as usize),
         Expr::Literal(ScalarValue::UInt64(Some(value)), _metadata) => usize::try_from(*value)
             .map_err(|_| {
-                PlanError::invalid(format!("{hint_name} hint partition count is too large"))
+                PlanError::analysis(format!("{hint_name} hint partition count is too large"))
             }),
-        _ => Err(PlanError::invalid(format!(
+        _ => Err(PlanError::analysis(format!(
             "{hint_name} hint partition count must be an integer"
         ))),
     }
