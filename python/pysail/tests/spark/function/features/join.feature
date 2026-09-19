@@ -208,3 +208,14 @@ Feature: NATURAL and USING joins
         SELECT * FROM (SELECT 1 AS k) AS l JOIN (SELECT 1 AS k) AS r USING (nope)
         """
       Then query error UNRESOLVED_USING_COLUMN_FOR_JOIN
+
+    Scenario: the columns it offers are ordered the way a Java string compares
+      # Spark sorts them with `Array[String].sorted`, which compares UTF-16 code units, so a
+      # character outside the basic plane comes BEFORE one that a comparison of UTF-8 bytes
+      # would put first. The pair is what tells the two orders apart.
+      When query
+        """
+        SELECT * FROM (SELECT 1 AS `０`, 2 AS `𐐀`) AS l
+        JOIN (SELECT 1 AS `０`, 2 AS `𐐀`) AS r USING (nope)
+        """
+      Then query error The left-side columns: \[`𐐀`, `０`\]\.

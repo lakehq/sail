@@ -7,11 +7,12 @@ use datafusion_expr::{ScalarUDF, UNNAMED_TABLE, col, expr, lit};
 use datafusion_functions::core::get_field;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::plan::PlanService;
+use sail_common_datafusion::session::plan::{PlanFormatter, PlanService};
 use sail_function::scalar::array_struct_field::ArrayStructField;
 use sail_sql_analyzer::parser::parse_attribute_name;
 
 use crate::error::{PlanError, PlanResult};
+use crate::formatter::SparkPlanFormatter;
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
@@ -164,7 +165,6 @@ fn order_candidates_by_similarity(
     name: &spec::ObjectName,
     base: &str,
     candidates: Vec<Vec<String>>,
-    sorted_by_name: bool,
 ) -> Vec<String> {
     let parts = name.parts().len();
     let shared = |depth: usize| {
@@ -181,13 +181,8 @@ fn order_candidates_by_similarity(
     } else {
         usize::MAX
     };
-    let mut candidates = candidates;
-    // The analyzer reads its candidates through `AttributeSet.toSeq`, which sorts them by name,
-    // and the sort by distance is stable, so an equal distance is broken by name there. The
-    // candidates of a schema arrive in the order of the plan instead.
-    if sorted_by_name {
-        candidates.sort_by_cached_key(|parts| utf16_key(parts.last().map(|x| x.as_str())));
-    }
+    // The caller orders the candidates the way the analyzer reads them, since the sort by
+    // distance below is stable and so never undoes that order.
     let mut candidates = candidates
         .into_iter()
         .map(|parts| {
@@ -234,6 +229,17 @@ pub(in crate::resolver) fn unresolved_column_error(
         .iter()
         .flat_map(|x| x.name.iter())
         .collect::<Vec<_>>();
+    // The filter that carries the `HAVING` reads the OUTPUT of the aggregate, so a column of its
+    // input that the aggregate does not carry through is not a name there and must not reach the
+    // suggestion. Outside a `HAVING` the schema is the input itself and every column is a name.
+    let candidates = if state.get_projections_for_having().is_empty() {
+        candidates
+    } else {
+        candidates
+            .into_iter()
+            .filter(|parts| parts.last().is_some_and(|x| grouping.contains(&x)))
+            .collect::<Vec<_>>()
+    };
     let candidates = state
         .get_projections_for_having()
         .iter()
@@ -255,7 +261,7 @@ pub(in crate::resolver) fn unresolved_column_error(
         .map(|x| quote_if_needed(x.as_ref()))
         .collect::<Vec<_>>()
         .join(".");
-    let proposal = order_candidates_by_similarity(name, &base, candidates, false)
+    let proposal = order_candidates_by_similarity(name, &base, candidates)
         .into_iter()
         .take(5)
         .collect::<Vec<_>>();
@@ -291,7 +297,7 @@ pub(in crate::resolver) fn unresolved_column_name_error(
         .map(|x| x.as_ref())
         .collect::<Vec<&str>>()
         .join(".");
-    let proposal = order_candidates_by_similarity(name, &base, candidates, false)
+    let proposal = order_candidates_by_similarity(name, &base, candidates)
         .into_iter()
         .take(5)
         .collect::<Vec<_>>();
@@ -475,8 +481,9 @@ impl PlanResolver<'_> {
             let Some(expr) =
                 self.resolve_potentially_nested_field(column, field.data_type(), inner)?
             else {
-                let info = state.get_field_info(field.name())?;
-                let base = info.name().to_string();
+                // Spark renders the base with `toSQLExpr`, which prints the name the user
+                // wrote rather than the one the attribute resolved to.
+                let base = field_name.as_ref().to_string();
                 return match self.missing_struct_field_error(&base, field.data_type(), inner) {
                     Some(error) => Err(error),
                     // The interpretation reached something this resolver cannot walk into, which
@@ -517,7 +524,9 @@ impl PlanResolver<'_> {
             };
             match self.resolve_struct_field(&fields, part.as_ref()) {
                 Ok(Some(field)) => {
-                    base = field.name().clone();
+                    // The base of the next step is the whole path walked so far, as Spark
+                    // prints it, and not just the name of the field that was reached.
+                    base = format!("{base}.{}", part.as_ref());
                     data_type = field.data_type().clone();
                 }
                 _ => {
@@ -534,6 +543,9 @@ impl PlanResolver<'_> {
 
     /// The error for a name that walks into something that is not a complex type.
     fn invalid_extract_base_error(&self, base: &str, data_type: &DataType) -> Option<PlanError> {
+        // TODO: Spark renders the type with `toSQLType`, which is `DataType.sql`, not the
+        // upper cased `simpleString`: it writes `MAP<STRING, INT>` with a space, keeps the case
+        // of a struct field name and keeps `NOT NULL`. See `test_the_type_of_an_invalid_base`.
         let rendered = self
             .ctx
             .extension::<PlanService>()
@@ -542,8 +554,9 @@ impl PlanResolver<'_> {
                     .plan_formatter()
                     .data_type_to_simple_string(data_type)
             })
+            .or_else(|_| SparkPlanFormatter.data_type_to_simple_string(data_type))
             .map(|x| x.to_uppercase())
-            .unwrap_or_else(|_| format!("{data_type}").to_uppercase());
+            .unwrap_or_else(|_| "INVALID".to_string());
         Some(PlanError::AnalysisError(format!(
             "[INVALID_EXTRACT_BASE_FIELD_TYPE] Can't extract a value from \"{base}\". \
              Need a complex type [STRUCT, ARRAY, MAP] but got \"{rendered}\"."

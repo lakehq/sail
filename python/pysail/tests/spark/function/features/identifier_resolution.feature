@@ -272,8 +272,7 @@ Feature: identifier resolution beyond ASCII
         | Greek final sigma | `ς`   | `Σ`   |
 
     # The alias belongs to the output of the aggregate, which is the input of the filter that
-    # carries the `HAVING`, so Spark offers it. Sail builds the candidates from the input of the
-    # aggregate instead and loses it.
+    # carries the `HAVING`, so Spark offers it.
     Scenario: an aggregate alias wins a tie in distance against a column
       # The aggregate expressions come before the columns, and the order by distance is stable, so
       # two names at the same distance are separated by which list they came from.
@@ -283,7 +282,21 @@ Feature: identifier resolution beyond ASCII
         """
       Then query error Did you mean one of the following\? \[`bb`, `aa`\]\.
 
+    Scenario: the names a HAVING offers are the output of the aggregate
+      # The filter reads the OUTPUT of the aggregate, so only the grouping expressions and the
+      # aggregate aliases are names there. A column of the input that the aggregate does not
+      # carry through, like `c`, is not one, which is what this pins.
+      When query
+        """
+        SELECT a, sum(b) AS total FROM (SELECT 1 AS a, 2 AS b, 3 AS c) GROUP BY a HAVING totl > 0
+        """
+      Then query error Did you mean one of the following\? \[`total`, `a`\]\.
+
     Scenario: the suggestion of a sort offers the names of the projection
+      # TODO: the names are the right ones, but their ORDER is not pinned here: both sit at the
+      # same distance from the name that was asked for, and Spark breaks that tie with `c` first
+      # while Sail offers `a` first, so the candidates of a sort do not reach the analyzer in the
+      # order of the sorted attribute set.
       When query
         """
         SELECT a, count(*) AS c FROM (SELECT 1 AS a) GROUP BY a ORDER BY nope
@@ -590,6 +603,24 @@ Feature: identifier resolution beyond ASCII
         SELECT a.b FROM (SELECT 1 AS a)
         """
       Then query error \[INVALID_EXTRACT_BASE_FIELD_TYPE\] Can't extract a value from "a"\. Need a complex type \[STRUCT, ARRAY, MAP\] but got "INT"\.
+
+    Scenario: the base is the name as it was written, not the one it resolved to
+      # Spark renders it with `toSQLExpr`, which prints the reference the user wrote. The column
+      # is named in lower case, so asking for it in upper case is what tells the two apart.
+      When query
+        """
+        SELECT `A`.`B` FROM (SELECT 1 AS a)
+        """
+      Then query error Can't extract a value from "A"\.
+
+    Scenario: the base of a nested step keeps the whole path
+      # Once a part has been walked into, the base of the next step is the path so far and not
+      # just the last field, which is what a single-part base would report.
+      When query
+        """
+        SELECT a.b.c FROM (SELECT named_struct('b', 1) AS a)
+        """
+      Then query error Can't extract a value from "a\.b"\.
 
   Rule: The columns listed by a failed wildcard are ordered the way the analyzer orders them
 

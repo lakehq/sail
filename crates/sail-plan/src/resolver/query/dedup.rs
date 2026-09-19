@@ -5,9 +5,10 @@ use datafusion_common::{DFSchemaRef, ExprSchema};
 use datafusion_expr::{Distinct, DistinctOn, Expr, LogicalPlan};
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::plan::PlanService;
+use sail_common_datafusion::session::plan::{PlanFormatter, PlanService};
 
 use crate::error::{PlanError, PlanResult};
+use crate::formatter::SparkPlanFormatter;
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
@@ -97,6 +98,9 @@ impl PlanResolver<'_> {
             .get_field_info(field.name())
             .map(|x| x.name().to_string())
             .unwrap_or_else(|_| field.name().clone());
+        // TODO: Spark renders the type with `toSQLType`, which is `DataType.sql`, not the
+        // upper cased `simpleString`: it writes `MAP<STRING, INT>` with a space, keeps the case
+        // of a struct field name and keeps `NOT NULL`. See `set_operations.feature`.
         let data_type = self
             .ctx
             .extension::<PlanService>()
@@ -105,8 +109,9 @@ impl PlanResolver<'_> {
                     .plan_formatter()
                     .data_type_to_simple_string(field.data_type())
             })
+            .or_else(|_| SparkPlanFormatter.data_type_to_simple_string(field.data_type()))
             .map(|x| x.to_uppercase())
-            .unwrap_or_else(|_| format!("{}", field.data_type()).to_uppercase());
+            .unwrap_or_else(|_| "INVALID".to_string());
         Err(PlanError::AnalysisError(format!(
             "[UNSUPPORTED_FEATURE.SET_OPERATION_ON_MAP_TYPE] The feature is not supported: \
              Cannot have MAP type columns in DataFrame which calls set operations (INTERSECT, \

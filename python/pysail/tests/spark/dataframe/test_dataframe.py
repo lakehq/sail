@@ -688,10 +688,13 @@ def test_the_schema_of_an_expression_is_available_before_it_is_evaluated(spark):
 def test_to_schema_matches_name_like_the_analyzer(spark):
     src = spark.sql("SELECT 1 AS `Ä`, 2 AS b")
     target = StructType([StructField("b", IntegerType()), StructField("ä", IntegerType())])
-    # `columns` is derived by the client from the schema that it passed, and `Row` compares by
-    # position rather than by name, so the schema is what tells the two spellings apart.
-    assert src.to(target).schema.names == ["b", "ä"]
-    assert [r.asDict() for r in src.to(target).collect()] == [{"b": 2, "ä": 1}]
+    # `DataFrame.to` caches the requested schema on the client, so reading `.schema` straight
+    # after it answers from that cache and measures nothing. The cache has to go first.
+    out = src.to(target)
+    out._cached_schema = None  # noqa: SLF001
+
+    assert out.schema.names == ["b", "ä"]
+    assert [r.asDict() for r in out.collect()] == [{"b": 2, "ä": 1}]
 
 
 def test_to_schema_keeps_the_qualifier_of_an_unchanged_column(spark):
@@ -949,9 +952,17 @@ def test_union_by_name_is_case_sensitive_when_configured(spark):
 
 def test_drop_duplicates_matches_name_with_the_resolver(spark):
     # The subset name selects output columns by name, so it is matched by the resolver alone,
-    # which folds `ı` to `I` even though the lowercase forms differ.
-    assert spark.sql("SELECT 1 AS `ıd`").dropDuplicates(["Id"]).columns == ["ıd"]
-    assert spark.sql("SELECT 1 AS `ς`").dropDuplicates(["Σ"]).columns == ["ς"]
+    # which folds `ı` to `I` even though the lowercase forms differ. The rows differ in the
+    # column that is NOT the key, so deduplicating by it is what tells a subset that reached the
+    # plan apart from one that was ignored: without it both rows are already distinct.
+    rows = [("ıd", "Id", "SELECT * FROM VALUES (1, 'x'), (1, 'y') AS t(`ıd`, v)")]
+    rows.append(("ς", "Σ", "SELECT * FROM VALUES (1, 'x'), (1, 'y') AS t(`ς`, v)"))
+    for name, reference, query in rows:
+        df = spark.sql(query)
+
+        assert df.dropDuplicates([reference]).columns == [name, "v"]
+        assert len(df.dropDuplicates([reference]).collect()) == 1
+        assert len(df.dropDuplicates().collect()) == 2  # noqa: PLR2004
 
 
 @pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
@@ -999,8 +1010,12 @@ def test_names_are_folded_with_the_case_mappings_of_the_jvm(spark):
 
 def test_drop_duplicates_keeps_every_matching_column(spark):
     # The name selects output columns, so every column that matches becomes a key rather than
-    # the name being rejected as ambiguous.
-    assert spark.sql("SELECT 1 AS a, 1 AS a").dropDuplicates(["a"]).columns == ["a", "a"]
+    # the name being rejected as ambiguous. The two columns named `a` hold different values, so
+    # both rows survive only if BOTH of them are keys: keeping just the first would collapse them.
+    df = spark.sql("SELECT 1 AS a, 2 AS a UNION ALL SELECT 1, 3")
+
+    assert df.dropDuplicates(["a"]).columns == ["a", "a"]
+    assert sorted(tuple(row) for row in df.dropDuplicates(["a"]).collect()) == [(1, 2), (1, 3)]
     assert spark.sql("SELECT 1 AS a").dropDuplicates().columns == ["a"]
 
     with pytest.raises(Exception, match="Cannot resolve column name"):

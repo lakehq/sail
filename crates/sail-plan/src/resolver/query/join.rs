@@ -10,7 +10,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::function::common::{FunctionContextInput, ScalarFunctionInput};
 use crate::function::get_built_in_function;
 use crate::resolver::PlanResolver;
-use crate::resolver::expression::attribute::quote_identifier_name;
+use crate::resolver::expression::attribute::{quote_identifier_name, utf16_key};
 use crate::resolver::state::PlanResolverState;
 
 /// Returns `true` if the expression is itself a top-level Python scalar UDF call.
@@ -237,7 +237,9 @@ impl PlanResolver<'_> {
         // The names are sorted before they are quoted, so a name that is a prefix of another one
         // keeps its place: a back quote sorts above every character a name can start with.
         let mut names = Self::get_field_names(schema, state)?;
-        names.sort();
+        // Spark sorts them with `Array[String].sorted`, which is `String.compareTo`, so the
+        // order is the one of the UTF-16 code units and not that of the UTF-8 bytes.
+        names.sort_by_cached_key(|x| utf16_key(Some(x.as_str())));
         let suggestion = names
             .iter()
             .map(|x| quote_identifier_name(x))

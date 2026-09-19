@@ -180,6 +180,14 @@ def test_coalesce_hint(spark):
     assert_frame_equal(actual, expected)
 
 
+def test_coalesce_hint_rejects_zero_partitions_at_all(spark):
+    # The test below pins the wording, and an `xfail` is satisfied by ANY failure, so on its own
+    # it would stay green if Sail stopped rejecting zero partitions altogether. This one keeps
+    # the rejection itself pinned.
+    with pytest.raises(Exception):  # noqa: B017, PT011
+        partition_count(spark.range(0, 10, 1, 2).hint("COALESCE", 0))
+
+
 @pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_coalesce_hint_rejects_zero_partitions(spark):
     # Spark rejects this too, so it is a wording divergence rather than something Spark does not
