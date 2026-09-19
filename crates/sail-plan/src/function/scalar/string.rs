@@ -257,9 +257,9 @@ fn btrim(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .map(|arg| {
             // Spark implicitly casts either numeric argument to string in both ANSI modes.
             if arg.get_type(input.function_context.schema)?.is_numeric() {
-                // TODO: Match Spark's numeric string formatting for infinities,
-                //  scientific notation, and non-ANSI decimals.
-                Ok(cast(arg, DataType::Utf8))
+                // TODO: Match Spark's scientific notation for floats and non-ANSI decimals
+                //  once the shared numeric formatter supports it.
+                Ok(ScalarUDF::from(SparkToUtf8::new()).call(vec![arg]))
             } else {
                 Ok(arg)
             }
