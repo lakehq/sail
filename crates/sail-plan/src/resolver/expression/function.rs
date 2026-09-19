@@ -425,8 +425,9 @@ impl PlanResolver<'_> {
 
                 other => {
                     names.push(name.one()?);
+                    // A reference may resolve to an alias with different casing.
                     let other = match field_name {
-                        Some(field_name) if !matches!(other, Expr::Column(_) | Expr::Alias(_)) => {
+                        Some(field_name) if !matches!(other, Expr::Column(_)) => {
                             other.alias(field_name)
                         }
                         _ => other,
