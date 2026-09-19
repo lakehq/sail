@@ -73,7 +73,7 @@ impl Actor for DriverActor {
                 *max_file_size,
                 *compression,
             )),
-            ShuffleBackendKind::Flight | ShuffleBackendKind::Celeborn { .. } => None,
+            ShuffleBackendKind::Flight { .. } | ShuffleBackendKind::Celeborn { .. } => None,
         };
         let celeborn_streams = match &self.options.shuffle_backend {
             ShuffleBackendKind::Celeborn {
@@ -112,7 +112,7 @@ impl Actor for DriverActor {
                 let streams = CelebornStreamManager::new(client);
                 Some(streams)
             }
-            ShuffleBackendKind::Flight | ShuffleBackendKind::Storage { .. } => None,
+            ShuffleBackendKind::Flight { .. } | ShuffleBackendKind::Storage { .. } => None,
         };
         self.task_runner = Some(ctx.children_mut().spawn::<TaskRunnerActor>(
             TaskRunnerComponents {
