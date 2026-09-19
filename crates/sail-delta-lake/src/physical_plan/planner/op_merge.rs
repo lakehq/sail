@@ -331,7 +331,7 @@ pub(crate) async fn assemble_row_level_mor_plan(
     )))
 }
 
-fn hash_repartition_by_column(
+pub(super) fn hash_repartition_by_column(
     input: Arc<dyn ExecutionPlan>,
     column_name: &str,
     partition_count: usize,
@@ -348,7 +348,7 @@ fn hash_repartition_by_column(
     )?))
 }
 
-fn sort_by_column_preserving_partitioning(
+pub(super) fn sort_by_column_preserving_partitioning(
     input: Arc<dyn ExecutionPlan>,
     column_name: &str,
 ) -> Result<Arc<dyn ExecutionPlan>> {

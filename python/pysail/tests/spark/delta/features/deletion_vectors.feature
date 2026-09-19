@@ -427,7 +427,7 @@ Feature: Delta Lake Deletion Vectors (Merge-on-Read)
         AS t(id, name, value)
         """
 
-    Scenario: EXPLAIN DELETE on DV table shows DeletionVectorWriterExec
+    Scenario: EXPLAIN DELETE on DV table uses shared scan and row-level DV writer
       When query
         """
         EXPLAIN

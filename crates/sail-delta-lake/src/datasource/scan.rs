@@ -37,12 +37,14 @@ use datafusion::datasource::physical_plan::{
 use datafusion::datasource::table_schema::TableSchema;
 use datafusion::physical_expr::{LexOrdering, PhysicalExpr};
 use object_store::path::Path;
+use parquet::arrow::RowNumber;
 use sail_common_datafusion::schema_evolution::{
     SchemaEvolutionPhysicalExprAdapterFactoryWithMatching, StructFieldMatching,
 };
 use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
 
 use crate::conversion::ScalarConverter;
+use crate::datasource::deletion_vector::{DeltaFileDeletionVector, DeltaParquetSource};
 use crate::datasource::pruning::{arrow_type_contains_timestamp, widen_timestamp_max_scalar};
 use crate::datasource::{DeltaScanConfig, create_object_store_url, partitioned_file_from_action};
 use crate::delta_log::LogStoreRef;
@@ -109,6 +111,9 @@ pub(crate) fn file_scan_logical_names(
     }
     if let Some(commit_timestamp_column_name) = &scan_config.commit_timestamp_column_name {
         names.push(commit_timestamp_column_name.clone());
+    }
+    if let Some(row_index_column_name) = &scan_config.row_index_column_name {
+        names.push(row_index_column_name.clone());
     }
     names
 }
@@ -209,17 +214,25 @@ pub fn build_file_scan_config(
     let mut per_file_stats: Vec<Arc<Statistics>> = Vec::new();
 
     for action in files.iter() {
-        // Files with deletion vectors are accepted: DV filtering is applied post-scan
-        // by DeltaScanByAddsExec which tracks row indices and excludes deleted rows.
-        // Note: the physical numRecords in stats is the total file record count
-        // (not accounting for DV deletions), which is correct for scan planning.
-
         let mut part =
             partitioned_file_from_action(action, &partition_columns_mapped, &complete_schema)?;
         let action_stats = stats_for_add(action, &file_schema)?;
         if let Some(stats) = action_stats {
             per_file_stats.push(Arc::clone(&stats));
             part.statistics = Some(stats);
+        }
+        if let Some(descriptor) = &action.deletion_vector {
+            let physical_rows = part
+                .statistics
+                .as_ref()
+                .and_then(|stats| match stats.num_rows {
+                    Precision::Exact(rows) => Some(rows),
+                    _ => None,
+                });
+            part.extensions.insert(DeltaFileDeletionVector {
+                descriptor: descriptor.clone(),
+                physical_rows,
+            });
         }
 
         // Add file column if configured
@@ -329,9 +342,27 @@ pub fn build_file_scan_config(
         ..Default::default()
     };
 
-    let table_schema = TableSchema::builder(logical_file_schema)
+    let has_deletion_vectors = files.iter().any(|add| add.deletion_vector.is_some());
+    let mut table_schema = TableSchema::builder(logical_file_schema)
         .with_table_partition_cols(table_partition_cols_schema)
         .build();
+    let mut row_index_name = config.row_index_column_name.clone();
+    if row_index_name.is_none() && has_deletion_vectors {
+        let mut name = "__sail_delta_physical_row_index".to_string();
+        while table_schema.table_schema().field_with_name(&name).is_ok() {
+            name.push('_');
+        }
+        row_index_name = Some(name);
+    }
+    let row_index = table_schema.table_schema().fields().len();
+    if let Some(name) = &row_index_name {
+        table_schema = TableSchema::builder(Arc::clone(table_schema.file_schema()))
+            .with_table_partition_cols(table_schema.table_partition_cols().clone())
+            .with_virtual_columns(vec![Arc::new(
+                Field::new(name, ArrowDataType::Int64, false).with_extension_type(RowNumber),
+            )])
+            .build();
+    }
     // Calculate table statistics.
     //
     // `Statistics::column_statistics` expects the same length as the table schema
@@ -395,8 +426,15 @@ pub fn build_file_scan_config(
         parquet_source = parquet_source.with_predicate(predicate);
     }
 
-    let file_source: Arc<dyn datafusion::datasource::physical_plan::FileSource> =
+    let mut file_source: Arc<dyn datafusion::datasource::physical_plan::FileSource> =
         Arc::new(parquet_source);
+    if has_deletion_vectors {
+        file_source = Arc::new(DeltaParquetSource::new(
+            file_source,
+            row_index,
+            log_store.config().location.clone(),
+        ));
+    }
 
     // Build the final FileScanConfig
     let object_store_url = create_object_store_url(&log_store.config().location)?;
