@@ -742,6 +742,23 @@ class PySparkArrowBatchUdf:
         return output
 
 
+def _call_scalar_pandas_udf(
+    udf: Callable[..., Any],
+    args: list[pa.Array],
+    num_rows: int,
+    serializer: ArrowStreamPandasUDFSerializer,
+    max_records_per_batch: int,
+) -> pa.Array:
+    batch_size = max(1, min(num_rows, max_records_per_batch)) if max_records_per_batch > 0 else max(num_rows, 1)
+
+    def batches():
+        for start in range(0, max(num_rows, 1), batch_size):
+            yield tuple(_arrow_column_to_pandas(arg.slice(start, batch_size), serializer) for arg in args)
+
+    arrays = [_pandas_to_arrow_array(output, output_type, serializer) for output, output_type in udf(None, batches())]
+    return pa.concat_arrays(arrays) if arrays else pa.array([])
+
+
 class PySparkScalarPandasUdf:
     def __init__(
         self,
@@ -749,6 +766,7 @@ class PySparkScalarPandasUdf:
         config,
     ):
         self._udf = udf
+        self._max_records_per_batch = config.arrow_max_records_per_batch
         self._serializer = ArrowStreamPandasUDFSerializer(
             timezone=config.session_timezone,
             safecheck=config.arrow_convert_safely,
@@ -760,10 +778,8 @@ class PySparkScalarPandasUdf:
             **_pandas_serializer_kwargs(config),
         )
 
-    def __call__(self, args: list[pa.Array], _num_rows: int) -> pa.Array:
-        inputs = tuple(_arrow_column_to_pandas(x, self._serializer) for x in args)
-        [(output, output_type)] = list(self._udf(None, (inputs,)))
-        return _pandas_to_arrow_array(output, output_type, self._serializer)
+    def __call__(self, args: list[pa.Array], num_rows: int) -> pa.Array:
+        return _call_scalar_pandas_udf(self._udf, args, num_rows, self._serializer, self._max_records_per_batch)
 
 
 class PySparkScalarPandasIterUdf:
@@ -773,6 +789,7 @@ class PySparkScalarPandasIterUdf:
         config,
     ):
         self._udf = udf
+        self._max_records_per_batch = config.arrow_max_records_per_batch
         self._serializer = ArrowStreamPandasUDFSerializer(
             timezone=config.session_timezone,
             safecheck=config.arrow_convert_safely,
@@ -784,10 +801,8 @@ class PySparkScalarPandasIterUdf:
             **_pandas_serializer_kwargs(config),
         )
 
-    def __call__(self, args: list[pa.Array], _num_rows: int) -> pa.Array:
-        inputs = tuple(_arrow_column_to_pandas(x, self._serializer) for x in args)
-        [(output, output_type)] = list(self._udf(None, [inputs]))
-        return _pandas_to_arrow_array(output, output_type, self._serializer)
+    def __call__(self, args: list[pa.Array], num_rows: int) -> pa.Array:
+        return _call_scalar_pandas_udf(self._udf, args, num_rows, self._serializer, self._max_records_per_batch)
 
 
 class PySparkScalarArrowUdf:
@@ -928,7 +943,7 @@ class PySparkGroupMapUdf:
             timezone=config.session_timezone,
             safecheck=config.arrow_convert_safely,
             assign_cols_by_name=config.assign_columns_by_name,
-            df_for_struct=True,
+            df_for_struct=False,
             struct_in_pandas="dict",
             ndarray_as_list=False,
             arrow_cast=False,

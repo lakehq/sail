@@ -147,6 +147,7 @@ message HigherOrderUdf {
     SparkArraySortUdf sort = 6;
     SparkSequenceUdf spark_sequence_lazy = 7;
     ConvertTzUdf convert_tz_lazy = 8;
+    SparkRegexpInstrUdf regexp_instr = 9;
   }
 }
 
@@ -155,6 +156,10 @@ message SparkArrayAggregateUdf {
 }
 
 message SparkArrayExistsUdf {}
+
+message SparkRegexpInstrUdf {
+  bool ansi_mode = 1;
+}
 
 message SparkArrayForallUdf {}
 
