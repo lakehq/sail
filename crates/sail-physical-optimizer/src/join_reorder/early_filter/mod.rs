@@ -5,6 +5,11 @@
 //! predicate. Semijoins preserve fact multiplicity even when dimension keys repeat.
 //! Only direct column lineage and inner/semi equality joins are traversed; grouping
 //! keys are safe because removing entire groups leaves retained aggregates unchanged.
+//!
+//! A reduction is only generated below an aggregate or a semi join whose filter side
+//! is more than a scan, which join enumeration never reorders across. Among inner
+//! joins, enumeration can normally place the dimension next to a fact already, and a
+//! copy of its keys would only repeat the probe of the original join.
 
 use std::sync::Arc;
 
@@ -30,32 +35,9 @@ use datafusion::physical_plan::{ExecutionPlan, replace_children_if_necessary};
 const MAX_REDUCTIONS: usize = 64;
 
 mod benefit;
-mod cleanup;
-
-pub(super) fn prune(
-    plan: Arc<dyn ExecutionPlan>,
-    reductions: &Reductions,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    cleanup::prune(plan, reductions)
-}
-
-/// Optimizer-local provenance. Non-inner joins remain reorder boundaries, so
-/// rebuilding their children preserves the identity of their key expressions.
-/// Keeping the Arc alive also prevents pointer reuse. No execution state or
-/// column-name convention is used to identify generated reductions.
-pub(super) struct Reductions {
-    generated: Vec<GeneratedReduction>,
-}
-
-struct GeneratedReduction {
-    marker: Arc<dyn PhysicalExpr>,
-    source: Arc<dyn ExecutionPlan>,
-    source_keys: Vec<usize>,
-}
 
 struct Context<'a> {
     remaining: usize,
-    reductions: Reductions,
     options: &'a super::JoinReorderOptions,
 }
 
@@ -63,14 +45,12 @@ pub(super) fn propagate(
     plan: Arc<dyn ExecutionPlan>,
     config: &ConfigOptions,
     options: &super::JoinReorderOptions,
-) -> Result<(Arc<dyn ExecutionPlan>, Reductions)> {
+) -> Result<Arc<dyn ExecutionPlan>> {
     let mut context = Context {
         remaining: MAX_REDUCTIONS,
-        reductions: Reductions { generated: vec![] },
         options,
     };
-    let plan = visit(plan, config, &mut context)?;
-    Ok((plan, context.reductions))
+    visit(plan, config, &mut context)
 }
 
 fn visit(
@@ -105,6 +85,8 @@ fn visit(
         };
         // Each reduction executes the source independently. A small filtered
         // result bounds the hash table, but does not make a large scan cheap.
+        // TODO: This also caps the dimension itself. TPC-DS `item` exceeds the default
+        //   (131072 rows) from SF100, which disables the `item` reductions of q64 there.
         let max_rows = config.optimizer.hash_join_single_partition_threshold_rows;
         if scan_rows > max_rows {
             continue;
@@ -154,13 +136,10 @@ fn visit(
         if !can_collect {
             continue;
         }
-        let (source, source_keys) = source_lineage(Arc::clone(source), source_keys);
         let restriction = Restriction {
             keys,
             rows,
             scan_rows,
-            source,
-            source_keys,
             null_equality: join.null_equality(),
         };
         children[1 - source_side] = push(
@@ -226,8 +205,6 @@ struct Restriction {
     keys: Arc<dyn ExecutionPlan>,
     rows: usize,
     scan_rows: usize,
-    source: Arc<dyn ExecutionPlan>,
-    source_keys: Vec<usize>,
     null_equality: NullEquality,
 }
 
@@ -273,7 +250,7 @@ fn push(
             // Preserve existing scan filters below the reduction. Besides avoiding
             // extra probes, this costs the candidate using the filtered target's
             // key domain (e.g. facts already restricted to the selected year).
-            if is_scan_pipeline(filter.input())? {
+            if is_scan_pipeline(filter.input(), true)? {
                 return insert(plan, keys, restriction, downstream_work, context);
             }
             let mapped = keys
@@ -327,19 +304,28 @@ fn push(
             JoinType::Inner | JoinType::LeftSemi | JoinType::RightSemi
         ) {
             let mapped = join_input_keys(join, keys);
+            // Credit starts below a reorder boundary. Until one is crossed, the inputs
+            // of an inner join are relations that join enumeration can normally place
+            // the dimension next to itself.
+            let credited = downstream_work > 0.0 || reorder_boundary(join)?;
             let mut children = vec![Arc::clone(join.left()), Arc::clone(join.right())];
             for (side, keys) in mapped.into_iter().enumerate() {
                 if let Some(keys) = keys {
-                    children[side] = push(
-                        Arc::clone(&children[side]),
-                        &keys,
-                        restriction,
+                    let downstream_work = if credited {
                         context.options.output_weight
                             + if side == 0 {
                                 context.options.build_side_weight
                             } else {
                                 context.options.probe_side_weight
-                            },
+                            }
+                    } else {
+                        0.0
+                    };
+                    children[side] = push(
+                        Arc::clone(&children[side]),
+                        &keys,
+                        restriction,
+                        downstream_work,
                         context,
                     )?;
                 }
@@ -371,11 +357,6 @@ fn insert(
         .enumerate()
         .map(|(i, &key)| (column(&restriction.keys, i), column(&plan, key)))
         .collect();
-    context.reductions.generated.push(GeneratedReduction {
-        marker: Arc::clone(&on[0].0),
-        source: Arc::clone(&restriction.source),
-        source_keys: restriction.source_keys.clone(),
-    });
     context.remaining -= 1;
     // Hash semijoins enumerate duplicate build matches before discarding them.
     // Deduplicate only the copied keys; the original join retains multiplicity.
@@ -410,43 +391,39 @@ fn insert(
     )?))
 }
 
-fn is_scan_pipeline(plan: &Arc<dyn ExecutionPlan>) -> Result<bool> {
+/// Whether the inputs of `join` are out of reach of join enumeration. An inner join
+/// is not: enumeration normally orders inner joins itself. No semi join is reordered,
+/// but one that merely filters by a scan (e.g. a dimension join rewritten for
+/// DISTINCT) is as cheap to probe as the reduction. This shape test is conservative:
+/// only a filter side that is more than a projected and filtered scan, such as an
+/// aggregate, counts.
+fn reorder_boundary(join: &HashJoinExec) -> Result<bool> {
+    Ok(match join.join_type() {
+        JoinType::LeftSemi => !is_scan_pipeline(join.right(), false)?,
+        JoinType::RightSemi => !is_scan_pipeline(join.left(), false)?,
+        _ => false,
+    })
+}
+
+/// `column_only` rejects computed projections, which keys cannot be mapped through.
+fn is_scan_pipeline(plan: &Arc<dyn ExecutionPlan>, column_only: bool) -> Result<bool> {
     if plan.fetch().is_some() {
         return Ok(false);
     }
     if let Some(projection) = plan.downcast_ref::<ProjectionExec>() {
-        if projection.expr().iter().all(|p| p.expr.is::<Column>()) {
-            return is_scan_pipeline(projection.input());
+        let mut supported = true;
+        for p in projection.expr() {
+            supported &= p.expr.is::<Column>() || (!column_only && !volatile(&p.expr)?);
+        }
+        if supported {
+            return is_scan_pipeline(projection.input(), column_only);
         }
     } else if let Some(filter) = plan.downcast_ref::<FilterExec>()
         && !volatile(filter.predicate())?
     {
-        return is_scan_pipeline(filter.input());
+        return is_scan_pipeline(filter.input(), column_only);
     }
     Ok(plan.is::<DataSourceExec>())
-}
-
-fn source_lineage(
-    mut plan: Arc<dyn ExecutionPlan>,
-    mut keys: Vec<usize>,
-) -> (Arc<dyn ExecutionPlan>, Vec<usize>) {
-    while let Some(projection) = plan.downcast_ref::<ProjectionExec>() {
-        let Some(mapped) = keys
-            .iter()
-            .map(|&i| {
-                projection.expr()[i]
-                    .expr
-                    .downcast_ref::<Column>()
-                    .map(Column::index)
-            })
-            .collect::<Option<Vec<_>>>()
-        else {
-            break;
-        };
-        keys = mapped;
-        plan = Arc::clone(projection.input());
-    }
-    (plan, keys)
 }
 
 /// Map each key to both inputs using column equality. Keeping the incoming null
@@ -504,6 +481,7 @@ fn row_count(plan: &Arc<dyn ExecutionPlan>) -> Result<Option<usize>> {
 #[cfg(test)]
 mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::datasource::memory::MemorySourceConfig;
     use datafusion::physical_plan::empty::EmptyExec;
 
     use super::*;
@@ -540,6 +518,34 @@ mod tests {
         // The non-key column cannot be inferred on the other input, even when
         // another component of the restriction has an equality there.
         assert_eq!(join_input_keys(&join, &[0, 2]), [None, Some(vec![1, 2])]);
+        Ok(())
+    }
+
+    #[test]
+    fn only_a_semi_join_with_a_computed_filter_side_is_a_reorder_boundary() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Int64, true)]));
+        let scan: Arc<dyn ExecutionPlan> =
+            MemorySourceConfig::try_new_exec(&[vec![]], Arc::clone(&schema), None)?;
+        let computed: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema));
+        let boundary =
+            |left: &Arc<dyn ExecutionPlan>, right: &Arc<dyn ExecutionPlan>, join_type| {
+                reorder_boundary(&HashJoinExec::try_new(
+                    Arc::clone(left),
+                    Arc::clone(right),
+                    vec![(column(left, 0), column(right, 0))],
+                    None,
+                    &join_type,
+                    None,
+                    PartitionMode::Auto,
+                    NullEquality::NullEqualsNothing,
+                    false,
+                )?)
+            };
+        assert!(boundary(&scan, &computed, JoinType::LeftSemi)?);
+        assert!(!boundary(&computed, &scan, JoinType::LeftSemi)?);
+        assert!(boundary(&computed, &scan, JoinType::RightSemi)?);
+        assert!(!boundary(&scan, &computed, JoinType::RightSemi)?);
+        assert!(!boundary(&computed, &computed, JoinType::Inner)?);
         Ok(())
     }
 

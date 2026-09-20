@@ -142,14 +142,14 @@ impl PhysicalOptimizerRule for JoinReorder {
             displayable(plan.as_ref()).indent(true)
         );
 
-        // Keep generation, reordering, and cleanup together so optimizer-local
-        // provenance survives: non-inner joins remain opaque to join enumeration.
-        let (plan, reductions) = early_filter::propagate(plan, config, &self.options)?;
+        // Copy selective dimension keys below aggregates and semi joins whose filter side is
+        // more than a scan, which join enumeration never reorders across. This runs first so
+        // that enumeration sees the statistics of the reduced inputs.
+        let plan = early_filter::propagate(plan, config, &self.options)?;
 
         // Search and optimize reorderable regions. We traverse bottom-up so nested reorderable
         // regions inside "leaf" plans (as seen by a higher-level region) are also visited.
-        let plan = self.find_and_optimize_regions(plan)?;
-        early_filter::prune(plan, &reductions)
+        self.find_and_optimize_regions(plan)
     }
 
     fn name(&self) -> &str {
