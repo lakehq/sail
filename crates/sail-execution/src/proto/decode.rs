@@ -76,7 +76,7 @@ where
     Ok(message)
 }
 
-pub(crate) fn try_decode_schema(buf: &[u8]) -> Result<Schema> {
+pub(super) fn try_decode_schema(buf: &[u8]) -> Result<Schema> {
     let schema = try_decode_message::<gen_datafusion_common::Schema>(buf)?;
     Ok((&schema).try_into()?)
 }

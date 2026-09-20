@@ -62,7 +62,6 @@ impl TaskRunnerActor {
         let proto = Arc::new(PhysicalPlanNode::decode(definition.plan.as_ref()).map_err(
             |error| ExecutionError::InvalidArgument(format!("invalid physical plan: {error}")),
         )?);
-        let schema = Arc::new(crate::proto::try_decode_schema(&definition.schema)?);
         self.tasks.record_batch(job_id, stage, &tasks);
         for task in tasks {
             let key = task.task_key(job_id, stage);
@@ -75,7 +74,6 @@ impl TaskRunnerActor {
                 key.clone(),
                 definition.clone(),
                 proto.clone(),
-                schema.clone(),
                 context.clone(),
             );
             let (tx, rx) = oneshot::channel();

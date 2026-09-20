@@ -674,7 +674,6 @@ impl JobScheduler {
         let output = TaskOutputBuilder::new(job, key, stage, self.codec.as_ref()).build()?;
         let definition = TaskDefinition {
             plan: Arc::from(plan),
-            schema: Arc::from(crate::proto::try_encode_schema(&stage.plan.schema())?),
             inputs,
             output,
         };

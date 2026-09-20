@@ -35,17 +35,16 @@ pub(super) struct TaskPreparation {
 }
 
 impl TaskPreparation {
-    /// Schema belongs to ShuffleWriteExec's completion stream, not the stage's data.
+    /// The returned schema belongs to ShuffleWriteExec's completion stream, not the stage's data.
     pub fn stream(
         self,
         key: TaskKey,
         definition: Arc<TaskDefinition>,
         proto: Arc<PhysicalPlanNode>,
-        schema: Arc<Schema>,
         context: Arc<TaskContext>,
     ) -> SendableRecordBatchStream {
         preparation_stream(key.clone(), move |canceled| {
-            self.execute_plan(&key, &definition, &proto, &schema, &canceled, context)
+            self.execute_plan(&key, &definition, &proto, &canceled, context)
         })
     }
 
@@ -54,16 +53,10 @@ impl TaskPreparation {
         key: &TaskKey,
         definition: &TaskDefinition,
         proto: &PhysicalPlanNode,
-        schema: &Schema,
         canceled: &CancellationToken,
         context: Arc<TaskContext>,
     ) -> ExecutionResult<SendableRecordBatchStream> {
         let plan = proto_to_physical_plan(&context, &RemoteExecutionCodec, proto)?;
-        if plan.schema().as_ref() != schema {
-            return Err(ExecutionError::InvalidArgument(
-                "stage schema does not match plan".into(),
-            ));
-        }
         let plan = self.rewrite_file_scans(plan)?;
         let plan = self.rewrite_shuffle(
             key,

@@ -6,11 +6,6 @@ message TaskDefinition {
   bytes plan = 1;
   repeated TaskInput inputs = 2;
   TaskOutput output = 3;
-  // The driver's expected stage output schema, used to validate each task's
-  // independently decoded plan during asynchronous preparation. Carrying it
-  // separately lets batch admission decode the schema once without constructing
-  // an executable plan on the task runner actor.
-  bytes schema = 4;
 }
 
 message TaskInput {
