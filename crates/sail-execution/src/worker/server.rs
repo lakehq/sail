@@ -12,8 +12,8 @@ use crate::task::definition::TaskDefinition;
 use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage};
 use crate::worker::r#gen::worker_service_server::WorkerService;
 use crate::worker::r#gen::{
-    CleanUpJobRequest, CleanUpJobResponse, RunTaskRequest, RunTaskResponse, StopTaskRequest,
-    StopTaskResponse, StopWorkerRequest, StopWorkerResponse,
+    CleanUpJobRequest, CleanUpJobResponse, RunTaskBatchRequest, RunTaskBatchResponse,
+    StopTaskRequest, StopTaskResponse, StopWorkerRequest, StopWorkerResponse,
 };
 use crate::worker::{WorkerActor, WorkerMessage};
 
@@ -39,17 +39,16 @@ impl WorkerServer {
 
 #[tonic::async_trait]
 impl WorkerService for WorkerServer {
-    async fn run_task(
+    async fn run_task_batch(
         &self,
-        request: Request<RunTaskRequest>,
-    ) -> Result<Response<RunTaskResponse>, Status> {
+        request: Request<RunTaskBatchRequest>,
+    ) -> Result<Response<RunTaskBatchResponse>, Status> {
         let request = request.into_inner();
         debug!("{request:?}");
-        let RunTaskRequest {
+        let RunTaskBatchRequest {
             job_id,
             stage,
-            partition,
-            attempt,
+            tasks,
             definition,
             peers,
         } = request;
@@ -59,21 +58,34 @@ impl WorkerService for WorkerServer {
             .collect::<ExecutionResult<Vec<_>>>()?;
         let definition = crate::task::r#gen::TaskDefinition::decode(definition.as_slice())
             .map_err(|e| Status::invalid_argument(format!("invalid task definition: {e}")))?;
-        self.task_runner
-            .send(TaskRunnerMessage::RunTask {
-                key: TaskKey {
+        let keys = tasks
+            .into_iter()
+            .map(|task| {
+                Ok(TaskKey {
                     job_id: job_id.into(),
-                    stage: stage as usize,
-                    partition: partition as usize,
-                    attempt: attempt as usize,
-                },
-                definition: TaskDefinition::try_from(definition)?,
+                    stage: usize::try_from(stage)
+                        .map_err(|_| Status::invalid_argument("stage overflow"))?,
+                    partition: usize::try_from(task.partition)
+                        .map_err(|_| Status::invalid_argument("partition overflow"))?,
+                    attempt: usize::try_from(task.attempt)
+                        .map_err(|_| Status::invalid_argument("attempt overflow"))?,
+                })
+            })
+            .collect::<Result<Vec<_>, Status>>()?;
+        let (result, rx) = tokio::sync::oneshot::channel();
+        self.task_runner
+            .send(TaskRunnerMessage::RunTaskBatch {
+                keys,
+                definition: Arc::new(TaskDefinition::try_from(definition)?),
                 context: self.context.clone(),
                 peers,
+                result,
             })
             .await
             .map_err(ExecutionError::from)?;
-        let response = RunTaskResponse {};
+        rx.await
+            .map_err(|_| Status::unavailable("task runner stopped before admission"))??;
+        let response = RunTaskBatchResponse {};
         debug!("{response:?}");
         Ok(Response::new(response))
     }
@@ -115,6 +127,12 @@ impl WorkerService for WorkerServer {
         let CleanUpJobRequest { job_id, stage } = request;
         let job_id = job_id.into();
         let stage = stage.map(|x| x as usize);
+        if stage.is_none() {
+            self.task_runner
+                .send(TaskRunnerMessage::CloseJob { job_id })
+                .await
+                .map_err(ExecutionError::from)?;
+        }
         self.task_runner
             .send(TaskRunnerMessage::CleanUpLocalStreams { job_id, stage })
             .await

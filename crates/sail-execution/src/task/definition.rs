@@ -14,6 +14,7 @@ use crate::task::r#gen;
 #[derive(Debug, Clone)]
 pub struct TaskDefinition {
     pub plan: Arc<[u8]>,
+    pub schema: Arc<[u8]>,
     pub inputs: Vec<TaskInput>,
     pub output: TaskOutput,
 }
@@ -21,7 +22,7 @@ pub struct TaskDefinition {
 #[derive(Debug, Clone)]
 pub struct TaskInput {
     pub stage: usize,
-    pub locator: TaskInputLocator,
+    pub locator: Arc<TaskInputLocator>,
 }
 
 #[derive(Debug, Clone)]
@@ -93,11 +94,13 @@ impl From<TaskDefinition> for r#gen::TaskDefinition {
     fn from(value: TaskDefinition) -> Self {
         let TaskDefinition {
             plan,
+            schema,
             inputs,
             output,
         } = value;
         r#gen::TaskDefinition {
             plan: plan.to_vec(),
+            schema: schema.to_vec(),
             inputs: inputs.into_iter().map(|x| x.into()).collect(),
             output: Some(output.into()),
         }
@@ -123,6 +126,7 @@ impl TryFrom<r#gen::TaskDefinition> for TaskDefinition {
         };
         Ok(TaskDefinition {
             plan: Arc::from(value.plan),
+            schema: Arc::from(value.schema),
             inputs,
             output,
         })
@@ -134,7 +138,7 @@ impl From<TaskInput> for r#gen::TaskInput {
         let TaskInput { stage, locator } = value;
         r#gen::TaskInput {
             stage: stage as u64,
-            locator: Some(locator.into()),
+            locator: Some(locator.as_ref().clone().into()),
         }
     }
 }
@@ -153,7 +157,7 @@ impl TryFrom<r#gen::TaskInput> for TaskInput {
         };
         Ok(TaskInput {
             stage: value.stage as usize,
-            locator,
+            locator: Arc::new(locator),
         })
     }
 }

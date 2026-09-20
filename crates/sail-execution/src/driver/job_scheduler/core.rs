@@ -634,7 +634,19 @@ impl JobScheduler {
         actions
     }
 
-    /// Builds the serialized task definition and context for the given task key.
+    /// Returns the retry region containing a task partition.
+    pub fn task_region(&self, key: &TaskKey) -> Option<usize> {
+        let job = self.jobs.get(&key.job_id)?;
+        job.topology
+            .task_regions
+            .get(&super::topology::TaskTopology {
+                stage: key.stage,
+                partition: key.partition,
+            })
+            .copied()
+    }
+
+    /// Builds the stage definition against the current assignment snapshot.
     pub fn get_task_definition(
         &self,
         key: &TaskKey,
@@ -662,6 +674,7 @@ impl JobScheduler {
         let output = TaskOutputBuilder::new(job, key, stage, self.codec.as_ref()).build()?;
         let definition = TaskDefinition {
             plan: Arc::from(plan),
+            schema: Arc::from(crate::proto::try_encode_schema(&stage.plan.schema())?),
             inputs,
             output,
         };
@@ -785,7 +798,7 @@ impl<'a> TaskInputBuilder<'a> {
         };
         Ok(TaskInput {
             stage: self.input.stage,
-            locator,
+            locator: Arc::new(locator),
         })
     }
 
@@ -872,6 +885,30 @@ impl<'a> TaskInputBuilder<'a> {
             InputMode::Forward | InputMode::Merge => {
                 let mut groups = Vec::with_capacity(input_partitions);
                 for partition in 0..input_partitions {
+                    // Forward regions are assigned independently. Preserve input-local indices,
+                    // but do not resolve producers for consumer partitions outside this snapshot.
+                    if matches!(self.input.mode, InputMode::Forward)
+                        && input_partitions
+                            == self.consumer.plan.output_partitioning().partition_count()
+                        && !JobScheduler::get_latest_task_attempt(
+                            self.job,
+                            self.key.stage,
+                            partition,
+                        )
+                        .is_some_and(|attempt| {
+                            self.assignments
+                                .get(&TaskKey {
+                                    job_id: self.key.job_id,
+                                    stage: self.key.stage,
+                                    partition,
+                                    attempt,
+                                })
+                                .is_some()
+                        })
+                    {
+                        groups.push(vec![]);
+                        continue;
+                    }
                     let attempt = self.latest_attempt(partition)?;
                     let mut group = Vec::with_capacity(input_channels);
                     for channel in 0..input_channels {
@@ -1078,6 +1115,121 @@ mod tests {
     use super::StageGroup;
     use crate::id::{JobId, TaskKey};
     use crate::task::scheduling::{TaskOutputKind, TaskSetEntry};
+
+    #[test]
+    fn forward_routing_uses_only_assigned_consumers_and_refreshes_producer_attempts()
+    -> crate::error::ExecutionResult<()> {
+        use std::collections::HashMap;
+        use std::sync::Arc;
+
+        use datafusion::arrow::datatypes::Schema;
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::execution::TaskContext;
+        use datafusion::physical_expr::Partitioning;
+        use datafusion::physical_plan::repartition::RepartitionExec;
+
+        use super::{JobDescriptor, JobState, TaskAttemptDescriptor, TaskInputBuilder, TaskState};
+        use crate::id::WorkerId;
+        use crate::job_graph::{InputMode, JobGraph, JobGraphOptions, StageInput};
+        use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
+        use crate::task::definition::TaskInputLocator;
+        use crate::task::scheduling::{TaskAssignment, TaskAssignmentGetter};
+
+        struct Assignments(HashMap<TaskKey, TaskAssignment>);
+        impl TaskAssignmentGetter for Assignments {
+            fn get(&self, key: &TaskKey) -> Option<&TaskAssignment> {
+                self.0.get(key)
+            }
+        }
+        let input =
+            MemorySourceConfig::try_new_exec(&vec![vec![]; 4], Arc::new(Schema::empty()), None)?;
+        let graph = JobGraph::try_new(
+            Arc::new(RepartitionExec::try_new(
+                input,
+                Partitioning::RoundRobinBatch(4),
+            )?),
+            JobGraphOptions {
+                shuffle_backend: ShuffleBackendKind::Flight {
+                    compression: ShuffleCompression::None,
+                },
+            },
+        )?;
+        let mut job =
+            JobDescriptor::try_new(graph, JobState::Draining, Arc::new(TaskContext::default()))?;
+        let attempt = || TaskAttemptDescriptor {
+            state: TaskState::Created,
+            messages: vec![],
+            cause: None,
+            job_output_fetched: false,
+        };
+        for stage in &mut job.stages {
+            for task in &mut stage.tasks {
+                task.attempts.push(attempt());
+            }
+        }
+        let key = |stage, partition, attempt| TaskKey {
+            job_id: JobId::from(1),
+            stage,
+            partition,
+            attempt,
+        };
+        let worker = |id| TaskAssignment::Worker {
+            worker_id: WorkerId::from(id),
+            slot: 0,
+        };
+        let mut assignments = Assignments(HashMap::new());
+        for stage in 0..2 {
+            for partition in 0..2 {
+                assignments.0.insert(key(stage, partition, 0), worker(1));
+            }
+        }
+        // Exercise the routing builder with a forward edge of the same partition shape.
+        // Partitions 2 and 3 have attempts, but their regions have no assignments yet.
+        let edge = StageInput {
+            stage: 0,
+            mode: InputMode::Forward,
+        };
+        let consumer = key(1, 0, 0);
+        let original = TaskInputBuilder::try_new(&job, &consumer, &edge, &assignments)?.build()?;
+        let TaskInputLocator::Worker { keys } = original.locator.as_ref() else {
+            return Err(crate::error::ExecutionError::InternalError(
+                "expected worker routing".into(),
+            ));
+        };
+        assert_eq!(keys.len(), 4);
+        assert!(!keys[0].is_empty());
+        assert!(!keys[1].is_empty());
+        assert!(keys[2].is_empty());
+        assert!(keys[3].is_empty());
+
+        job.stages[0].tasks[0].attempts.push(attempt());
+        assignments.0.insert(key(0, 0, 1), worker(2));
+        let retried = TaskInputBuilder::try_new(&job, &consumer, &edge, &assignments)?.build()?;
+        let TaskInputLocator::Worker { keys: updated } = retried.locator.as_ref() else {
+            return Err(crate::error::ExecutionError::InternalError(
+                "expected worker routing".into(),
+            ));
+        };
+        assert!(
+            updated[0]
+                .iter()
+                .all(|(worker, key)| *worker == WorkerId::from(2) && key.attempt == 1)
+        );
+        assert!(
+            keys[0]
+                .iter()
+                .all(|(worker, key)| *worker == WorkerId::from(1) && key.attempt == 0)
+        );
+
+        // Missing routing for an assigned consumer is still an error, not an empty input.
+        assignments.0.remove(&key(0, 0, 1));
+        assert!(
+            TaskInputBuilder::try_new(&job, &consumer, &edge, &assignments)?
+                .build()
+                .is_err()
+        );
+        Ok(())
+    }
 
     fn task(stage: usize, partition: usize) -> TaskSetEntry {
         TaskSetEntry {

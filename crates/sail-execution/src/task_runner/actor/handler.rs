@@ -1,45 +1,44 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema;
-use datafusion::catalog::memory::DataSourceExec;
-use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion::common::{DataFusionError, internal_err};
-use datafusion::datasource::physical_plan::{FileScanConfig, FileScanConfigBuilder, ParquetSource};
-use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
-use datafusion::physical_plan::display::DisplayableExecutionPlan;
-use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
-use log::{debug, error, warn};
+use datafusion::common::DataFusionError;
+use datafusion::execution::TaskContext;
+use datafusion_proto::protobuf::PhysicalPlanNode;
+use log::{error, warn};
+use prost::Message;
 use sail_common::actor::{ActorAction, ActorContext};
 use sail_common_datafusion::error::CommonErrorCause;
-use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
-use sail_python_udf::error::PyErrExtractor;
-use sail_telemetry::telemetry::global_metrics;
-use sail_telemetry::{TracingExecOptions, trace_execution_plan};
 use tokio::sync::oneshot;
 
 use crate::driver::{DriverMessage, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, WorkerId};
-use crate::plan::{ShuffleReadExec, ShuffleWriteExec, StageInputExec};
-use crate::proto::decode_remote_physical_plan;
-use crate::stream::accessor::TaskStreamFactory;
+use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{TaskStreamChannelSink, TaskStreamSink};
-use crate::task::definition::{TaskDefinition, TaskInput, TaskOutput};
+use crate::task::definition::TaskDefinition;
 use crate::task_runner::monitor::TaskMonitor;
-use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage, TaskRunnerPlacement};
+use crate::task_runner::preparation::TaskPreparation;
+use crate::task_runner::{TaskRunnerActor, TaskRunnerPlacement};
 use crate::worker::{WorkerLocation, WorkerMessage};
 
 impl TaskRunnerActor {
-    pub(super) fn handle_run_task(
+    pub(super) fn handle_run_task_batch(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        key: TaskKey,
-        definition: TaskDefinition,
+        keys: Vec<TaskKey>,
+        definition: Arc<TaskDefinition>,
         context: Arc<TaskContext>,
         peers: Vec<WorkerLocation>,
-    ) -> ActorAction {
+    ) -> ExecutionResult<()> {
+        if !self.tasks.check_batch(&keys)? {
+            return Ok(());
+        }
+        // Validate shared descriptions before admitting any task. Only descriptions are shared;
+        // every task gets a fresh converter, executable plan, and shuffle reader/writer.
+        let proto = Arc::new(PhysicalPlanNode::decode(definition.plan.as_ref()).map_err(
+            |error| ExecutionError::InvalidArgument(format!("invalid physical plan: {error}")),
+        )?);
+        let schema = Arc::new(crate::proto::try_decode_schema(&definition.schema)?);
         if !peers.is_empty()
             && let TaskRunnerPlacement::Worker {
                 worker_id,
@@ -61,28 +60,39 @@ impl TaskRunnerActor {
                 }
             });
         }
-        let stream = match self.execute_plan(ctx, &key, definition, context) {
-            Ok(stream) => stream,
-            Err(error) => {
-                ctx.send(TaskRunnerMessage::ReportTaskStatus {
-                    key,
-                    status: TaskStatus::Failed,
-                    message: Some(format!("failed to execute plan: {error}")),
-                    cause: Some(CommonErrorCause::new::<PyErrExtractor>(&error)),
-                });
-                return ActorAction::Continue;
+        self.tasks.record_batch(&keys);
+        for key in keys {
+            let stream = TaskPreparation {
+                session_id: self.session_id.clone(),
+                handle: ctx.handle().clone(),
+                celeborn: self.extensions.celeborn_streams.is_some(),
             }
-        };
-        let (tx, rx) = oneshot::channel();
-        self.signals.insert(key.clone(), tx);
-        ctx.spawn(TaskMonitor::new(ctx.handle().clone(), key, stream, rx).supervise());
-        ActorAction::Continue
+            .stream(
+                key.clone(),
+                definition.clone(),
+                proto.clone(),
+                schema.clone(),
+                context.clone(),
+            );
+            let (tx, rx) = oneshot::channel();
+            self.signals.insert(key.clone(), tx);
+            ctx.spawn(TaskMonitor::new(ctx.handle().clone(), key, stream, rx).supervise());
+        }
+        Ok(())
     }
 
     pub(super) fn handle_stop_task(&mut self, key: TaskKey) -> ActorAction {
+        self.tasks.cancel(&key);
         if let Some(signal) = self.signals.remove(&key) {
             let _ = signal.send(());
         }
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_close_job(&mut self, job_id: JobId) -> ActorAction {
+        self.tasks.close_job(job_id);
+        self.extensions.local_streams.remove_streams(job_id, None);
+        self.signals.retain(|key, _| key.job_id != job_id);
         ActorAction::Continue
     }
 
@@ -94,6 +104,9 @@ impl TaskRunnerActor {
         message: Option<String>,
         cause: Option<CommonErrorCause>,
     ) -> ActorAction {
+        if !matches!(status, TaskStatus::Running) {
+            self.signals.remove(&key);
+        }
         match &mut self.placement {
             TaskRunnerPlacement::Driver { driver } => {
                 let driver = driver.clone();
@@ -163,6 +176,14 @@ impl TaskRunnerActor {
         schema: Arc<Schema>,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
     ) -> ActorAction {
+        if self.tasks.is_job_closed(key.job_id)
+            || self.tasks.is_canceled(&TaskKey::from(key.clone()))
+        {
+            let _ = result.send(Err(ExecutionError::InvalidArgument(
+                "task or job has been canceled".into(),
+            )));
+            return ActorAction::Continue;
+        }
         let _ = result.send(
             self.extensions
                 .local_streams
@@ -178,6 +199,14 @@ impl TaskRunnerActor {
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
     ) -> ActorAction {
+        if self.tasks.is_job_closed(key.job_id)
+            || self.tasks.is_canceled(&TaskKey::from(key.clone()))
+        {
+            let _ = result.send(Err(ExecutionError::InvalidArgument(
+                "task or job has been canceled".into(),
+            )));
+            return ActorAction::Continue;
+        }
         let output = self
             .extensions
             .storage_streams()
@@ -195,6 +224,12 @@ impl TaskRunnerActor {
         schema: Arc<Schema>,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     ) -> ActorAction {
+        if self.tasks.is_job_closed(key.job_id) || self.tasks.is_canceled(&key) {
+            let _ = result.send(Err(ExecutionError::InvalidArgument(
+                "task or job has been canceled".into(),
+            )));
+            return ActorAction::Continue;
+        }
         if let Some(streams) = self.extensions.celeborn_streams.clone() {
             ctx.spawn(async move {
                 let output = streams
@@ -218,6 +253,12 @@ impl TaskRunnerActor {
         schema: Arc<Schema>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
+        if self.tasks.is_job_closed(key.job_id) {
+            let _ = result.send(Err(ExecutionError::InvalidArgument(
+                "task or job has been canceled".into(),
+            )));
+            return ActorAction::Continue;
+        }
         match &self.placement {
             TaskRunnerPlacement::Driver { .. } => {
                 let _ = result.send(self.extensions.local_streams.fetch_stream(ctx, &key));
@@ -240,6 +281,12 @@ impl TaskRunnerActor {
         schema: Arc<Schema>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
+        if self.tasks.is_job_closed(key.job_id) {
+            let _ = result.send(Err(ExecutionError::InvalidArgument(
+                "task or job has been canceled".into(),
+            )));
+            return ActorAction::Continue;
+        }
         match &mut self.placement {
             TaskRunnerPlacement::Driver { driver } => {
                 let driver = driver.clone();
@@ -281,6 +328,12 @@ impl TaskRunnerActor {
         key: TaskStreamKey,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
+        if self.tasks.is_job_closed(key.job_id) {
+            let _ = result.send(Err(ExecutionError::InvalidArgument(
+                "task or job has been canceled".into(),
+            )));
+            return ActorAction::Continue;
+        }
         let _ = result.send(self.extensions.local_streams.fetch_stream(ctx, &key));
         ActorAction::Continue
     }
@@ -292,6 +345,12 @@ impl TaskRunnerActor {
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
+        if self.tasks.is_job_closed(key.job_id) {
+            let _ = result.send(Err(ExecutionError::InvalidArgument(
+                "task or job has been canceled".into(),
+            )));
+            return ActorAction::Continue;
+        }
         let output = self
             .extensions
             .storage_streams()
@@ -309,6 +368,12 @@ impl TaskRunnerActor {
         schema: Arc<Schema>,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
+        if self.tasks.is_job_closed(job_id) {
+            let _ = result.send(Err(ExecutionError::InvalidArgument(
+                "task or job has been canceled".into(),
+            )));
+            return ActorAction::Continue;
+        }
         let streams = self.extensions.celeborn_streams.clone();
         ctx.spawn(async move {
             let output = match streams {
@@ -367,116 +432,5 @@ impl TaskRunnerActor {
 
     pub(super) fn handle_shutdown(&mut self) -> ActorAction {
         ActorAction::Stop
-    }
-
-    fn execute_plan(
-        &mut self,
-        ctx: &mut ActorContext<Self>,
-        key: &TaskKey,
-        definition: TaskDefinition,
-        context: Arc<TaskContext>,
-    ) -> ExecutionResult<SendableRecordBatchStream> {
-        let plan =
-            decode_remote_physical_plan(&context, self.codec.as_ref(), definition.plan.as_ref())?;
-        let plan = self.rewrite_file_scans(plan)?;
-        let plan = self.rewrite_shuffle(
-            ctx,
-            key,
-            &definition.inputs,
-            &definition.output,
-            plan,
-            context.clone(),
-        )?;
-        debug!(
-            "{} execution plan\n{}",
-            TaskKeyDisplay(key),
-            DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
-        );
-        let plan = trace_execution_plan(
-            plan,
-            TracingExecOptions {
-                metrics: global_metrics(),
-                session_id: Some(self.session_id.clone()),
-                job_id: Some(key.job_id.into()),
-                stage: Some(key.stage),
-                attempt: Some(key.attempt),
-                operator_id: None,
-            },
-        )?;
-        Ok(plan.execute(key.partition, context)?)
-    }
-
-    fn rewrite_file_scans(
-        &mut self,
-        plan: Arc<dyn ExecutionPlan>,
-    ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
-        let result = plan.transform(|node| {
-            if let Some(ds) = node.downcast_ref::<DataSourceExec>()
-                && let Some(base_config) = ds.data_source().downcast_ref::<FileScanConfig>()
-            {
-                // DataFusion file scans can use process-local sibling state to let
-                // partitions steal work from a shared queue of all file groups. In Sail
-                // cluster mode each partition runs as an isolated task with its own
-                // deserialized plan, so that queue would be recreated in every task and
-                // every task would scan every file. Preserve-order disables sibling
-                // work sharing and keeps each task on its own file group.
-                let mut builder =
-                    FileScanConfigBuilder::from(base_config.clone()).with_preserve_order(true);
-                if ds.downcast_to_file_source::<ParquetSource>().is_some()
-                    && base_config.expr_adapter_factory.is_none()
-                {
-                    let adapter_factory: Arc<dyn PhysicalExprAdapterFactory> =
-                        Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {});
-                    builder = builder.with_expr_adapter(Some(adapter_factory));
-                }
-                return Ok(Transformed::yes(
-                    DataSourceExec::from_data_source(builder.build()) as Arc<dyn ExecutionPlan>,
-                ));
-            }
-            Ok(Transformed::no(node))
-        });
-        Ok(result.data()?)
-    }
-
-    fn rewrite_shuffle(
-        &mut self,
-        ctx: &mut ActorContext<Self>,
-        key: &TaskKey,
-        inputs: &[TaskInput],
-        output: &TaskOutput,
-        plan: Arc<dyn ExecutionPlan>,
-        context: Arc<TaskContext>,
-    ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
-        let mappers = plan.output_partitioning().partition_count();
-        let streams = TaskStreamFactory::new(
-            ctx.handle().clone(),
-            context.clone(),
-            &self.extensions,
-            mappers,
-        );
-        let result = {
-            let streams = streams.clone();
-            plan.transform(move |node| {
-                if let Some(placeholder) = node.downcast_ref::<StageInputExec<usize>>() {
-                    let Some(input) = inputs.get(*placeholder.input()) else {
-                        return internal_err!(
-                            "stage input index {} out of bounds for {}",
-                            placeholder.input(),
-                            TaskKeyDisplay(key)
-                        );
-                    };
-                    return Ok(Transformed::yes(Arc::new(ShuffleReadExec::new(
-                        streams.reader(key.clone(), input.clone(), placeholder.schema()),
-                        placeholder.properties().clone(),
-                    ))));
-                }
-                Ok(Transformed::no(node))
-            })
-        };
-        let plan = result.data()?;
-        let schema = plan.schema();
-        let partitioning = output.shuffle_partitioning(&context, &schema, self.codec.as_ref())?;
-        let writer = streams.writer(key.clone(), output.clone(), schema.clone());
-        Ok(Arc::new(ShuffleWriteExec::new(plan, writer, partitioning)))
     }
 }

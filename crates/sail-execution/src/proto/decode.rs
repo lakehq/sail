@@ -29,6 +29,7 @@ use crate::plan::r#gen;
 use crate::plan::r#gen::higher_order_udf::HigherOrderUdfKind;
 use crate::proto::converter::RemotePhysicalProtoConverter;
 
+#[cfg(test)]
 pub fn decode_remote_physical_plan(
     ctx: &TaskContext,
     codec: &dyn PhysicalExtensionCodec,
@@ -75,7 +76,7 @@ where
     Ok(message)
 }
 
-pub(super) fn try_decode_schema(buf: &[u8]) -> Result<Schema> {
+pub(crate) fn try_decode_schema(buf: &[u8]) -> Result<Schema> {
     let schema = try_decode_message::<gen_datafusion_common::Schema>(buf)?;
     Ok((&schema).try_into()?)
 }
@@ -86,6 +87,7 @@ pub(super) fn try_decode_field_ref(buf: &[u8]) -> Result<FieldRef> {
     Ok(Arc::new(field))
 }
 
+#[cfg(test)]
 pub(super) fn try_decode_physical_plan(
     ctx: &TaskContext,
     codec: &dyn PhysicalExtensionCodec,
@@ -105,7 +107,7 @@ pub(super) fn try_decode_physical_plan_with_converter(
     proto_to_physical_plan_with_converter(ctx, codec, proto_converter, &plan)
 }
 
-pub(super) fn proto_to_physical_plan(
+pub(crate) fn proto_to_physical_plan(
     ctx: &TaskContext,
     codec: &dyn PhysicalExtensionCodec,
     plan: &PhysicalPlanNode,

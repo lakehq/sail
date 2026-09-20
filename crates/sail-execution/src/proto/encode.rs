@@ -73,7 +73,7 @@ where
     Ok(message.encode_to_vec())
 }
 
-pub(super) fn try_encode_schema(schema: &Schema) -> Result<Vec<u8>> {
+pub(crate) fn try_encode_schema(schema: &Schema) -> Result<Vec<u8>> {
     try_encode_message::<gen_datafusion_common::Schema>(schema.try_into()?)
 }
 
