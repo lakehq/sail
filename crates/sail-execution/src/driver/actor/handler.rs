@@ -609,7 +609,7 @@ impl DriverActor {
         self.task_assigner.track_streams(&assignments);
         let mut batches = indexmap::IndexMap::<_, Vec<TaskKey>>::new();
         for assignment in assignments {
-            let worker = match assignment.assignment {
+            let worker_id = match assignment.assignment {
                 TaskAssignment::Driver => None,
                 TaskAssignment::Worker { worker_id, .. } => Some(worker_id),
             };
@@ -625,13 +625,13 @@ impl DriverActor {
                     continue;
                 };
                 batches
-                    .entry((entry.key.job_id, region, entry.key.stage, worker))
+                    .entry((entry.key.job_id, region, entry.key.stage, worker_id))
                     .or_default()
                     .push(entry.key);
             }
         }
         let mut definitions = std::collections::HashMap::new();
-        for ((job_id, _, stage, worker), keys) in batches {
+        for ((job_id, _, stage, worker_id), keys) in batches {
             let Some(first) = keys.first() else { continue };
             let definition = definitions.entry((job_id, stage)).or_insert_with(|| {
                 let started = Instant::now();
@@ -677,7 +677,7 @@ impl DriverActor {
                     attempt: key.attempt,
                 })
                 .collect::<Vec<_>>();
-            if let Some(worker_id) = worker {
+            if let Some(worker_id) = worker_id {
                 self.worker_pool
                     .run_task_batch(ctx, worker_id, job_id, stage, tasks, definition);
             } else {
