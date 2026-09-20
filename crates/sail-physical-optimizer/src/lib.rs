@@ -33,21 +33,11 @@ mod join_reorder;
 mod projection_pushdown;
 pub mod reuse;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PhysicalOptimizerOptions {
     pub enable_join_reorder: bool,
     pub enable_plan_reuse: bool,
     pub join_reorder: JoinReorderOptions,
-}
-
-impl Default for PhysicalOptimizerOptions {
-    fn default() -> Self {
-        Self {
-            enable_join_reorder: false,
-            enable_plan_reuse: true,
-            join_reorder: Default::default(),
-        }
-    }
 }
 
 pub fn get_physical_optimizers(

@@ -2,23 +2,26 @@
 
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::common::{DataFusionError, Result, internal_err};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_plan::execution_plan::EmissionType;
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
     replace_children_if_necessary,
 };
-use futures::future::{BoxFuture, Shared, try_join_all};
-use futures::{FutureExt, StreamExt, TryStreamExt};
-use sail_common_datafusion::replay::{ReplayBuffer, ReplayOutput};
+use futures::{StreamExt, TryStreamExt};
+use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::session::repartition::{
+    DEFAULT_REPARTITION_BUFFER_SIZE, RepartitionBufferConfig,
+};
+use sail_common_datafusion::spillable_stream::{SpillableStream, SpillableStreamWriter};
+use tokio::task::JoinHandle;
 
 /// IDs are scoped to one physical plan. This node contains no execution state.
 #[derive(Debug)]
@@ -30,13 +33,7 @@ pub struct SharedPlanExec {
 
 impl SharedPlanExec {
     pub fn new(id: usize, input: Arc<dyn ExecutionPlan>) -> Self {
-        let properties = Arc::new(
-            input
-                .properties()
-                .as_ref()
-                .clone()
-                .with_emission_type(EmissionType::Final),
-        );
+        let properties = input.properties().clone();
         Self {
             id,
             input,
@@ -88,15 +85,102 @@ impl ExecutionPlan for SharedPlanExec {
     }
 }
 
-type SharedResult = Shared<
-    BoxFuture<'static, std::result::Result<Arc<Vec<Arc<ReplayOutput>>>, Arc<DataFusionError>>>,
->;
+struct ProducerState {
+    writers: Vec<SpillableStreamWriter>,
+    tasks: Vec<JoinHandle<()>>,
+    started: bool,
+}
+
+struct SharedProducer {
+    input: Arc<dyn ExecutionPlan>,
+    context: Arc<TaskContext>,
+    outputs: Vec<SpillableStream>,
+    state: Mutex<ProducerState>,
+    metrics: ExecutionPlanMetricsSet,
+}
+
+impl SharedProducer {
+    fn new(input: Arc<dyn ExecutionPlan>, context: Arc<TaskContext>) -> Self {
+        let metrics = ExecutionPlanMetricsSet::new();
+        let buffer = context
+            .extension::<RepartitionBufferConfig>()
+            .map(|config| config.buffer_size())
+            .unwrap_or(DEFAULT_REPARTITION_BUFFER_SIZE);
+        let (outputs, writers) = (0..input.output_partitioning().partition_count())
+            .map(|partition| {
+                SpillableStream::new(&context, input.schema(), &metrics, partition, buffer)
+            })
+            .unzip();
+        Self {
+            input,
+            context,
+            outputs,
+            state: Mutex::new(ProducerState {
+                writers,
+                tasks: vec![],
+                started: false,
+            }),
+            metrics,
+        }
+    }
+
+    fn start(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.started {
+            return;
+        }
+        state.started = true;
+        // Drain partitions concurrently: repartition and join inputs may depend
+        // on each other. Readers still receive each partition incrementally.
+        state.tasks = std::mem::take(&mut state.writers)
+            .into_iter()
+            .enumerate()
+            .map(|(partition, mut writer)| {
+                let input = self.input.clone();
+                let context = self.context.clone();
+                let metrics = self.metrics.clone();
+                tokio::spawn(async move {
+                    MetricBuilder::new(&metrics)
+                        .counter("producer_executions", partition)
+                        .add(1);
+                    let result: Result<()> = async {
+                        let mut stream = input.execute(partition, context)?;
+                        while let Some(batch) = stream.try_next().await? {
+                            if !writer.write(batch).await? {
+                                break;
+                            }
+                        }
+                        Ok(())
+                    }
+                    .await;
+                    match result {
+                        Ok(()) => writer.finish(),
+                        Err(error) => writer.fail(error),
+                    }
+                })
+            })
+            .collect();
+    }
+}
+
+impl Drop for SharedProducer {
+    fn drop(&mut self) {
+        for task in &self
+            .state
+            .get_mut()
+            .unwrap_or_else(|error| error.into_inner())
+            .tasks
+        {
+            task.abort();
+        }
+    }
+}
 
 struct SharedReadExec {
     id: usize,
     properties: Arc<PlanProperties>,
-    output: SharedResult,
-    metrics: ExecutionPlanMetricsSet,
+    producer: Arc<SharedProducer>,
+    readers: Mutex<Vec<Option<SendableRecordBatchStream>>>,
 }
 
 impl Debug for SharedReadExec {
@@ -137,18 +221,27 @@ impl ExecutionPlan for SharedReadExec {
         Ok(self)
     }
     fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.metrics.clone_inner())
+        Some(self.producer.metrics.clone_inner())
     }
     fn execute(&self, partition: usize, _: Arc<TaskContext>) -> Result<SendableRecordBatchStream> {
-        let output = self.output.clone();
+        let reader = self
+            .readers
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get_mut(partition)
+            .and_then(Option::take)
+            .ok_or_else(|| {
+                DataFusionError::Internal(format!(
+                    "shared reader partition {partition} is unavailable"
+                ))
+            })?;
+        let producer = self.producer.clone();
         let schema = self.schema();
         let output_schema = schema.clone();
         let stream = futures::stream::once(async move {
-            let outputs = output.await.map_err(DataFusionError::Shared)?;
-            let Some(output) = outputs.get(partition) else {
-                return internal_err!("shared output partition {partition} does not exist");
-            };
-            Ok(output.stream()?.map(move |batch| {
+            producer.start();
+            Ok::<_, DataFusionError>(reader.map(move |batch| {
+                let _keep_alive = &producer;
                 let batch = batch?;
                 Ok(RecordBatch::try_new_with_options(
                     schema.clone(),
@@ -174,59 +267,28 @@ pub fn bind_shared_plans(
     fn bind(
         plan: Arc<dyn ExecutionPlan>,
         context: &Arc<TaskContext>,
-        registry: &mut HashMap<usize, (SharedResult, ExecutionPlanMetricsSet)>,
+        registry: &mut HashMap<usize, Arc<SharedProducer>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if let Some(shared) = plan.downcast_ref::<SharedPlanExec>() {
             let id = shared.id();
-            let (output, metrics) = if let Some(entry) = registry.get(&id) {
-                entry.clone()
+            let producer = if let Some(producer) = registry.get(&id) {
+                producer.clone()
             } else {
                 let input = bind(shared.input().clone(), context, registry)?;
-                let context = context.clone();
-                let metrics = ExecutionPlanMetricsSet::new();
-                let producer_metrics = metrics.clone();
-                // A shared future is polled by any live reader. Dropping one
-                // reader does not cancel production; dropping all owners does.
-                let output = async move {
-                    let result: Result<_> = async {
-                        let partitions = input.output_partitioning().partition_count();
-                        let outputs = try_join_all((0..partitions).map(|partition| {
-                            let input = input.clone();
-                            let context = context.clone();
-                            let metrics = producer_metrics.clone();
-                            async move {
-                                MetricBuilder::new(&metrics)
-                                    .counter("producer_executions", partition)
-                                    .add(1);
-                                let mut buffer = ReplayBuffer::new(
-                                    &context,
-                                    input.schema(),
-                                    &metrics,
-                                    partition,
-                                );
-                                let mut stream = input.execute(partition, context)?;
-                                while let Some(batch) = stream.try_next().await? {
-                                    buffer.append(batch)?;
-                                }
-                                Ok::<_, DataFusionError>(Arc::new(buffer.finish()?))
-                            }
-                        }))
-                        .await?;
-                        Ok(Arc::new(outputs))
-                    }
-                    .await;
-                    result.map_err(Arc::new)
-                }
-                .boxed()
-                .shared();
-                registry.insert(id, (output.clone(), metrics.clone()));
-                (output, metrics)
+                let producer = Arc::new(SharedProducer::new(input, context.clone()));
+                registry.insert(id, producer.clone());
+                producer
             };
+            let readers = producer
+                .outputs
+                .iter()
+                .map(|output| output.subscribe().map(Some))
+                .collect::<Result<Vec<_>>>()?;
             return Ok(Arc::new(SharedReadExec {
                 id,
                 properties: plan.properties().clone(),
-                output,
-                metrics,
+                producer,
+                readers: Mutex::new(readers),
             }));
         }
         let children = plan

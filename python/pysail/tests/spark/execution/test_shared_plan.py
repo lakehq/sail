@@ -22,6 +22,7 @@ def remote(request, tmp_path_factory):
     envs = {
         "SAIL_MODE": "local" if request.param == "local" else "local-cluster",
         "SAIL_CLUSTER__TASK_STREAM_BUFFER": "1",
+        "SAIL_OPTIMIZER__ENABLE_PLAN_REUSE": "true",
         "SAIL_RUNTIME__MEMORY_POOL__TYPE": "greedy",
         "SAIL_RUNTIME__MEMORY_POOL__GREEDY__MAX_SIZE": str(256 * 1024 * 1024),
     }
@@ -89,9 +90,9 @@ def test_early_reader_does_not_truncate_shared_output(spark, snapshot):
 
 @pytest.mark.yamlsnapshot(group="plan")
 def test_shared_output_spills_and_replays_to_late_reader(spark, snapshot):
-    # Each shared hash partition exceeds the 8 MiB replay memory budget. Each
+    # Each shared hash partition exceeds the 8 MiB shared stream memory budget. Each
     # consumer also uses the payload, preventing projection pushdown from
-    # removing the wide column before materialization.
+    # removing the wide column before the shared stream.
     query = """
         WITH t AS (
             SELECT id, repeat(CAST(id AS STRING), 2048) AS payload
@@ -224,3 +225,44 @@ def test_volatile_projection_stays_outside_shared_producer(spark, snapshot):
     assert sorted(row.id for row in rows) == list(range(1000))
     plan = df._explain_string()  # noqa: SLF001
     assert normalize_plan_text(plan) == snapshot
+
+
+def test_tail_with_shared_input(spark):
+    source = spark.range(10, numPartitions=2)
+    repeated = source.unionAll(source).orderBy("id")
+    assert repeated.tail(3) == [Row(id=8), Row(id=9), Row(id=9)]
+    assert repeated.tail(3) == [Row(id=8), Row(id=9), Row(id=9)]
+
+
+def test_crosstab_with_shared_input(spark):
+    source = spark.range(6, numPartitions=2).selectExpr("id % 2 AS a", "id % 3 AS b")
+    repeated = source.unionAll(source)
+    expected = [Row(a_b=str(a), **{"0": 2, "1": 2, "2": 2}) for a in range(2)]
+    assert sorted(repeated.crosstab("a", "b").collect()) == expected
+    assert sorted(repeated.crosstab("a", "b").collect()) == expected
+
+
+def test_shared_input_on_both_sides_of_blocking_exchange(spark):
+    # Sharing this source connects a later consumer to an earlier producer
+    # across the storage/Celeborn exchange used by the aggregate.
+    rows = spark.sql("""
+        WITH t AS (SELECT id FROM range(0, 10000, 1, 2))
+        SELECT SUM(a.id) AS n FROM t a
+        CROSS JOIN (SELECT MAX(id) AS m FROM t) b
+        WHERE a.id <= b.m
+    """).collect()
+    assert rows == [Row(n=49995000)]
+
+
+def test_time_travel_scalar_with_shared_input(spark, tmp_path):
+    path = str(tmp_path / "time_travel")
+    spark.range(3).write.format("delta").save(path)
+    rows = spark.sql(f"""
+        SELECT id FROM delta.`{path}` TIMESTAMP AS OF (
+            SELECT MAX(ts) FROM (
+                SELECT current_timestamp() AS ts FROM range(2)
+                UNION ALL SELECT current_timestamp() AS ts FROM range(2)
+            )
+        ) ORDER BY id
+    """).collect()  # noqa: S608
+    assert rows == [Row(id=i) for i in range(3)]

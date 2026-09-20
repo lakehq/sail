@@ -419,15 +419,13 @@ data:
                   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                     CoalescePartitionsExec: fetch=1
                       LocalLimitExec: fetch=1
-                        SharedPlanExec: id=0
-                          RangeExec
+                        RangeExec
         ProjectionExec: expr=[1 as #5, sum(t.#2)@0 as #6]
           AggregateExec: mode=Final, gby=[], aggr=[sum(t.#2)]
             CoalescePartitionsExec
               AggregateExec: mode=Partial, gby=[], aggr=[sum(t.#2)]
                 ProjectionExec: expr=[id@0 * 7 as #2]
-                  SharedPlanExec: id=0
-                    RangeExec
+                  RangeExec
 ---
 name: "test_early_reader_does_not_truncate_shared_output[local]"
 data:
@@ -443,15 +441,13 @@ data:
                   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                     CoalescePartitionsExec: fetch=1
                       LocalLimitExec: fetch=1
-                        SharedPlanExec: id=0
-                          RangeExec
+                        RangeExec
         ProjectionExec: expr=[1 as #5, sum(t.#2)@0 as #6]
           AggregateExec: mode=Final, gby=[], aggr=[sum(t.#2)]
             CoalescePartitionsExec
               AggregateExec: mode=Partial, gby=[], aggr=[sum(t.#2)]
                 ProjectionExec: expr=[id@0 * 7 as #2]
-                  SharedPlanExec: id=0
-                    RangeExec
+                  RangeExec
 ---
 name: "test_early_reader_does_not_truncate_shared_output[storage]"
 data:
@@ -467,15 +463,13 @@ data:
                   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                     CoalescePartitionsExec: fetch=1
                       LocalLimitExec: fetch=1
-                        SharedPlanExec: id=0
-                          RangeExec
+                        RangeExec
         ProjectionExec: expr=[1 as #5, sum(t.#2)@0 as #6]
           AggregateExec: mode=Final, gby=[], aggr=[sum(t.#2)]
             CoalescePartitionsExec
               AggregateExec: mode=Partial, gby=[], aggr=[sum(t.#2)]
                 ProjectionExec: expr=[id@0 * 7 as #2]
-                  SharedPlanExec: id=0
-                    RangeExec
+                  RangeExec
 ---
 name: "test_pivot_value_inference_with_shared_input[flight]"
 data:

@@ -88,12 +88,9 @@ impl PlanResolver<'_> {
             vec![],
             vec![count_expr],
         )?);
-        let count_batches = self
-            .ctx
-            .execute_logical_plan(count_plan)
-            .await?
-            .collect()
-            .await?;
+        let count_batches =
+            sail_common_datafusion::session::job::collect_logical_plan(self.ctx, count_plan)
+                .await?;
         let count = count_batches[0]
             .column(0)
             .as_primitive::<Int64Type>()

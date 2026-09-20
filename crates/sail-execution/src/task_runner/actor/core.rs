@@ -52,27 +52,15 @@ impl Actor for TaskRunnerActor {
                 key,
                 replicas,
                 schema,
+                context,
                 result,
-            } => self.handle_create_local_stream(key, replicas, schema, result),
+            } => self.handle_create_local_stream(key, replicas, schema, context, result),
             TaskRunnerMessage::CreateStorageStream {
                 key,
                 schema,
                 context,
                 result,
             } => self.handle_create_storage_stream(key, schema, context, result),
-            TaskRunnerMessage::CreateReplayStream {
-                key,
-                schema,
-                context,
-                result,
-            } => {
-                let output = self
-                    .extensions
-                    .local_streams
-                    .create_replay_stream(ctx, key, schema, &context);
-                let _ = result.send(output);
-                ActorAction::Continue
-            }
             TaskRunnerMessage::CreateCelebornStream {
                 key,
                 mappers,

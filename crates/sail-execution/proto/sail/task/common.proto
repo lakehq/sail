@@ -109,7 +109,6 @@ message TaskOutputLocator {
   oneof Kind {
     TaskOutputPipelinedLocator pipelined = 1;
     TaskOutputBlockingLocator blocking = 2;
-    TaskOutputReplayLocator replay = 3;
   }
 }
 
@@ -118,7 +117,4 @@ message TaskOutputPipelinedLocator {
 }
 
 message TaskOutputBlockingLocator {
-}
-
-message TaskOutputReplayLocator {
 }

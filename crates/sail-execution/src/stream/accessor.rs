@@ -131,6 +131,7 @@ impl TaskStreamAccessor {
                 key,
                 replicas,
                 schema,
+                context: self.context.clone(),
                 result,
             },
             rx,
@@ -146,24 +147,6 @@ impl TaskStreamAccessor {
         let (result, rx) = oneshot::channel();
         self.receive(
             TaskRunnerMessage::CreateStorageStream {
-                key,
-                schema,
-                context: self.context.clone(),
-                result,
-            },
-            rx,
-        )
-        .await
-    }
-
-    async fn create_replay_stream(
-        &self,
-        key: TaskStreamKey,
-        schema: SchemaRef,
-    ) -> Result<Box<dyn TaskStreamChannelSink>> {
-        let (result, rx) = oneshot::channel();
-        self.receive(
-            TaskRunnerMessage::CreateReplayStream {
                 key,
                 schema,
                 context: self.context.clone(),
@@ -403,15 +386,6 @@ impl TaskStreamWriter for MultiChannelTaskStreamWriter {
         }
         let channels = self.output.channels();
         let sinks = match &self.output.locator {
-            TaskOutputLocator::Replay => {
-                try_join_all((0..channels).map(|channel| {
-                    self.streams.create_replay_stream(
-                        self.key.task_stream_key(channel),
-                        self.schema.clone(),
-                    )
-                }))
-                .await?
-            }
             TaskOutputLocator::Pipelined { replicas } => {
                 try_join_all((0..channels).map(|channel| {
                     self.streams.create_local_stream(
@@ -527,6 +501,17 @@ impl TaskStreamSink for MultiChannelTaskStreamSink {
         for sink in self.sinks.into_iter().flatten() {
             sink.abort().await?;
         }
+        Ok(())
+    }
+
+    async fn fail(self: Box<Self>, error: Arc<DataFusionError>) -> Result<()> {
+        try_join_all(
+            self.sinks
+                .into_iter()
+                .flatten()
+                .map(|sink| sink.fail(error.clone())),
+        )
+        .await?;
         Ok(())
     }
 }

@@ -45,6 +45,7 @@ def remote(
     )
     envs = {
         "SAIL_MODE": "local-cluster",
+        "SAIL_OPTIMIZER__ENABLE_PLAN_REUSE": "true",
         "SAIL_CLUSTER__SHUFFLE_BACKEND__TYPE": "celeborn",
         "SAIL_CLUSTER__SHUFFLE_BACKEND__CELEBORN__MASTER_ENDPOINTS": (
             f'["{celeborn_master.host}:{celeborn_master.port}"]'

@@ -296,8 +296,9 @@ async fn shuffle_write(
             sink.abort().await
         }
         Err(error) => {
-            let _ = sink.abort().await;
-            Err(error)
+            let error = Arc::new(error);
+            let _ = sink.fail(error.clone()).await;
+            Err(datafusion::common::DataFusionError::Shared(error))
         }
     }
 }

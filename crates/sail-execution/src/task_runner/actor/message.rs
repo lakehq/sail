@@ -38,15 +38,10 @@ pub enum TaskRunnerMessage {
         key: TaskStreamKey,
         replicas: usize,
         schema: SchemaRef,
-        result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
-    },
-    CreateStorageStream {
-        key: TaskStreamKey,
-        schema: SchemaRef,
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
     },
-    CreateReplayStream {
+    CreateStorageStream {
         key: TaskStreamKey,
         schema: SchemaRef,
         context: Arc<TaskContext>,
@@ -112,7 +107,6 @@ impl SpanAssociation for TaskRunnerMessage {
             Self::ProbePendingLocalStream { .. } => "ProbePendingLocalStream",
             Self::CreateLocalStream { .. } => "CreateLocalStream",
             Self::CreateStorageStream { .. } => "CreateStorageStream",
-            Self::CreateReplayStream { .. } => "CreateReplayStream",
             Self::CreateCelebornStream { .. } => "CreateCelebornStream",
             Self::FetchDriverStream { .. } => "FetchDriverStream",
             Self::FetchWorkerStream { .. } => "FetchWorkerStream",
@@ -183,8 +177,7 @@ impl SpanAssociation for TaskRunnerMessage {
             }
             Self::ProbePendingLocalStream { key }
             | Self::CreateLocalStream { key, .. }
-            | Self::CreateStorageStream { key, .. }
-            | Self::CreateReplayStream { key, .. } => {
+            | Self::CreateStorageStream { key, .. } => {
                 let TaskStreamKey {
                     job_id,
                     stage,

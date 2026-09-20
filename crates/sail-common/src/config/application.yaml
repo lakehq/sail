@@ -891,10 +891,10 @@
 
 - key: optimizer.enable_plan_reuse
   type: boolean
-  default: "true"
+  default: "false"
   description: |
-    Whether to execute equivalent physical subplans once per query and replay their output
-    for multiple consumers. Shared results use memory and spill to temporary files when needed.
+    Whether to execute equivalent physical subplans once per query and stream their output
+    to multiple consumers. Unread shared output spills to temporary files when needed.
     This does not force materialization of CTEs with different optimized plans.
   experimental: true
 

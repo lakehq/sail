@@ -180,9 +180,6 @@ impl fmt::Display for InputMode {
 pub enum OutputMode {
     Pipelined,
     Blocking,
-    /// Completed, spillable output retained on its producer worker and served
-    /// through Flight. Unlike pipelined replicas it has unlimited independent readers.
-    Replay,
 }
 
 impl fmt::Display for OutputMode {
@@ -190,7 +187,6 @@ impl fmt::Display for OutputMode {
         match self {
             OutputMode::Pipelined => write!(f, "Pipelined"),
             OutputMode::Blocking => write!(f, "Blocking"),
-            OutputMode::Replay => write!(f, "Replay"),
         }
     }
 }

@@ -274,25 +274,18 @@ fn plan_job_graph_stages(
             let input =
                 if let Some(input) = producer.plan.downcast_ref::<StageInputExec<StageInput>>() {
                     let input = input.input().clone();
-                    // Existing storage/Celeborn exchanges are already replayable.
-                    if matches!(graph.stages[input.stage].mode, OutputMode::Pipelined) {
-                        graph.stages[input.stage].mode = OutputMode::Replay;
-                    }
+                    // Reuse existing exchanges; pipelined streams reserve one
+                    // spillable cursor for each downstream consumer.
                     input
                 } else {
-                    // Preserve the producer's partition numbers and ordering. A
-                    // Celeborn reducer cannot currently address individual mapper
-                    // partitions, so non-exchange reuse uses Flight replay there.
-                    let mode = match graph.options.shuffle_backend {
-                        ShuffleBackendKind::Storage { .. } => OutputMode::Blocking,
-                        _ => OutputMode::Replay,
-                    };
+                    // Preserve partition numbers and ordering, including for
+                    // Celeborn where individual mapper partitions are unavailable.
                     let stage = push_stage(
                         producer.plan,
                         graph,
                         OutputDistribution::RoundRobinBatch { channels: 1 },
                         TaskPlacement::Worker,
-                        mode,
+                        OutputMode::Pipelined,
                     )?;
                     StageInput {
                         stage,
@@ -1014,10 +1007,7 @@ mod tests {
                 let inputs = &graph.stages().last().unwrap().inputs;
                 assert_eq!(inputs.len(), 2);
                 assert_eq!(inputs[0].stage, inputs[1].stage);
-                assert!(!matches!(
-                    graph.stages()[inputs[0].stage].mode,
-                    OutputMode::Pipelined
-                ));
+                assert_eq!(graph.replicas(inputs[0].stage), 2);
             }
         }
     }

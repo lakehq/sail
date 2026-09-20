@@ -42,12 +42,33 @@ impl JobTopology {
             .map(|_| StageTopology { consumers: vec![] })
             .collect::<Vec<_>>();
 
+        // A shared producer can feed both sides of a blocking dependency.
+        // Keep those consumers in later regions even when they also read a
+        // pipelined input. The stream retains their reserved cursors until then.
+        let mut levels = vec![0; graph.stages().len()];
+        for (s, stage) in graph.stages().iter().enumerate() {
+            levels[s] = stage
+                .inputs
+                .iter()
+                .map(|input| {
+                    levels[input.stage]
+                        + usize::from(matches!(
+                            graph.stages()[input.stage].mode,
+                            OutputMode::Blocking
+                        ))
+                })
+                .max()
+                .unwrap_or(0);
+        }
+
         let mut pipelined_adjacency = vec![vec![]; graph.stages().len()];
 
         for (s, stage) in graph.stages().iter().enumerate() {
             for input in &stage.inputs {
                 stages[input.stage].consumers.push(s);
-                if matches!(&graph.stages()[input.stage].mode, OutputMode::Pipelined) {
+                if matches!(&graph.stages()[input.stage].mode, OutputMode::Pipelined)
+                    && levels[s] == levels[input.stage]
+                {
                     pipelined_adjacency[s].push(input.stage);
                     pipelined_adjacency[input.stage].push(s);
                 }
@@ -96,7 +117,19 @@ impl JobTopology {
             let mut all_forward = true;
             for &u in &component {
                 for input in &graph.stages()[u].inputs {
-                    if component.contains(&input.stage) && !matches!(input.mode, InputMode::Forward)
+                    // Union and other multi-input nodes can map child-local
+                    // partitions to different consumer partition numbers. Such
+                    // edges cannot be sliced by the stage partition index.
+                    if component.contains(&input.stage)
+                        && (!matches!(input.mode, InputMode::Forward)
+                            || graph.stages()[input.stage]
+                                .plan
+                                .output_partitioning()
+                                .partition_count()
+                                != graph.stages()[u]
+                                    .plan
+                                    .output_partitioning()
+                                    .partition_count())
                     {
                         all_forward = false;
                         break;

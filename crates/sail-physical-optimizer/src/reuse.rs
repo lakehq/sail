@@ -466,7 +466,10 @@ pub fn reuse_subplans(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionP
             .children()
             .into_iter()
             .map(|child| {
-                let child_scope = if plan.is::<BarrierExec>() {
+                // A fetch-limited consumer may stop before another reader even
+                // starts. Keep its descendants in a separate reuse scope: a
+                // fast producer must not force spilling just to return LIMIT 1.
+                let child_scope = if plan.is::<BarrierExec>() || plan.fetch().is_some() {
                     *next_scope += 1;
                     *next_scope
                 } else {
