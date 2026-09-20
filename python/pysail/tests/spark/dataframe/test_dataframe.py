@@ -6,6 +6,7 @@ from pandas.testing import assert_frame_equal
 from pyspark.sql import Row
 from pyspark.sql.functions import col, count, expr, first, lit, row_number, struct
 from pyspark.sql.functions import max as spark_max
+from pyspark.sql.functions import transform as spark_transform
 from pyspark.sql.types import IntegerType, LongType, MapType, StringType, StructField, StructType
 from pyspark.sql.window import Window
 
@@ -1526,6 +1527,154 @@ def test_drop_fields_matches_a_nested_path_with_the_resolver(spark):
         # matches is a missing field rather than a struct left alone.
         with pytest.raises(Exception, match=re.escape("[FIELD_NOT_FOUND]")):
             df.select(col("s").dropFields("A.B")).collect()
+    finally:
+        spark.conf.unset("spark.sql.caseSensitive")
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_a_rebuilt_level_takes_the_nullability_of_its_parent(spark):
+    # A level of the path is rebuilt as a `WithField` whose value reads that level, so its
+    # nullability is the one the READING has — `parent.nullable || field.nullable` — and not the
+    # one the field declares. Sail gives it the declared one, so a nullable parent holding a
+    # non-nullable child is reported non-nullable.
+    schema = StructType(
+        [
+            StructField(
+                "s",
+                StructType(
+                    [
+                        StructField(
+                            "a",
+                            StructType([StructField("b", IntegerType(), False)]),
+                            False,
+                        )
+                    ]
+                ),
+                True,
+            )
+        ]
+    )
+    df = spark.createDataFrame([(((1,),),)], schema)
+
+    rebuilt = df.select(col("s").withField("a.c", lit(1)))
+    assert rebuilt.schema[0].dataType["a"].nullable is True
+
+
+def test_a_level_that_is_not_a_struct_reports_the_spark_class(spark):
+    # A path is rewritten into one `update_fields` per level, and every level but the last is
+    # also READ, with an `ExtractValue` built while the plan is. The two steps refuse a level that
+    # is not a struct with different classes, so which one answers depends on where the level
+    # sits: the parent of the last name is only ever the input of an `update_fields`, while a
+    # level before it is read first, and the read is refused first.
+    df = spark.sql("SELECT named_struct('b', 1, 'a', named_struct('x', 1)) AS s")
+
+    # The parent of the last name: `update_fields` refuses its input.
+    for column in (col("s").withField("b.x", lit(1)), col("s").dropFields("b.x")):
+        with pytest.raises(
+            Exception,
+            match=re.escape('The first parameter requires the "STRUCT" type, however "s.b" has'),
+        ):
+            df.select(column).collect()
+
+    # It is the parent of the last name wherever the path ends, not the first level.
+    with pytest.raises(
+        Exception,
+        match=re.escape('The first parameter requires the "STRUCT" type, however "s.a.x" has'),
+    ):
+        df.select(col("s").withField("a.x.y", lit(1))).collect()
+
+    # A level before it is read, and the read is refused with the class the same read raises on
+    # its own, not with the one the `update_fields` above it would have raised.
+    for column in (col("s").withField("b.x.y", lit(1)), col("s").dropFields("b.x.y")):
+        with pytest.raises(
+            Exception,
+            match=re.escape(
+                '[INVALID_EXTRACT_BASE_FIELD_TYPE] Can\'t extract a value from "s.b". '
+                'Need a complex type [STRUCT, ARRAY, MAP] but got "INT".'
+            ),
+        ):
+            df.select(column).collect()
+
+    # A NULL base is read as NULL rather than refused, so the refusal is the one `update_fields`
+    # raises even when the path has more than one level.
+    null = spark.sql("SELECT NULL AS s")
+    for column in (col("s").withField("a", lit(1)), col("s").withField("a.b", lit(1))):
+        with pytest.raises(Exception, match=re.escape('has the type "VOID"')):
+            null.select(column).collect()
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_a_struct_with_two_fields_of_one_name_can_be_read(spark):
+    # Spark builds a struct whose fields repeat a name and reads it back. Sail builds the same
+    # schema and cannot return the rows: the client refuses to convert a struct with duplicate
+    # field names, so what the server sends has to be what a struct with distinct names sends.
+    #
+    # This is the output path rather than name resolution, and it is reached without any of the
+    # operations this file exercises. It is pinned here because folding the case of a field name
+    # opens a third way into it: `withField("a")` over `struct<a, A>` now correctly produces
+    # `struct<a, a>`, where it used to leave `A` alone and answer the wrong rows.
+    written = spark.sql("SELECT named_struct('a', 1, 'a', 2) AS s")
+    assert written.schema[0].dataType.simpleString() == "struct<a:int,a:int>"
+    assert [tuple(row[0]) for row in written.collect()] == [(1, 2)]
+
+    # The same shape through the DataFrame API, which is the second way in.
+    built = spark.sql("SELECT 1 AS x, 2 AS y").select(struct(col("x").alias("a"), col("y").alias("a")).alias("s"))
+    assert [tuple(row[0]) for row in built.collect()] == [(1, 2)]
+
+
+def test_a_lambda_parameter_is_named_the_way_spark_names_it(spark):
+    # A lambda parameter has no name a user wrote, so Spark prints it as `namedlambdavariable()`.
+    # The name Sail gives one is generated per call, so echoing it would put a name in the
+    # message that changes between two identical runs.
+    df = spark.sql("SELECT array(named_struct('a', 1)) AS arr")
+
+    # Asserted twice: the name Sail generates counts up per call, so a name that leaked into the
+    # message would differ between these two otherwise identical runs.
+    for _ in range(2):
+        with pytest.raises(Exception, match=re.escape('"namedlambdavariable().a" has the type')):
+            df.select(spark_transform(col("arr"), lambda x: x.withField("a.b", lit(9)))).collect()
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_a_level_that_is_complex_but_not_a_struct_names_the_level_spark_names(spark):
+    # `ExtractValue` has one arm per complex type, and none of them refuses the read: an array of
+    # structs reads the field inside the elements, any other array is indexed, and a map is looked
+    # up. The path therefore walks one level further than Sail lets it, and the level the error
+    # names is the deeper one.
+    arr = spark.sql("SELECT named_struct('a', array(named_struct('x', 1))) AS s")
+    mp = spark.sql("SELECT named_struct('m', map('k', named_struct('x', 1))) AS s")
+
+    with pytest.raises(Exception, match=re.escape('however "s.a.x" has the type "ARRAY<INT')):
+        arr.select(col("s").withField("a.x.y", lit(1))).collect()
+
+    with pytest.raises(Exception, match=re.escape('Cannot resolve "s.a.x[y]"')):
+        arr.select(col("s").withField("a.x.y.z", lit(1))).collect()
+
+    with pytest.raises(Exception, match=re.escape('however "s.m[k].x" has the type "INT"')):
+        mp.select(col("s").withField("m.k.x.y", lit(1))).collect()
+
+
+def test_a_nested_path_reports_an_ambiguous_level(spark):
+    # The rule has two halves. The LAST name of the path is only ever written or dropped, so every
+    # field it matches is written or dropped and a duplicate name is the correct output. Every
+    # level BEFORE it is looked up with `ExtractValue` first, and a name that matches twice there
+    # is ambiguous rather than a level to rebuild twice.
+    dup = spark.sql("SELECT named_struct('a', named_struct('x', 1, 'y', 2), 'A', named_struct('x', 3, 'y', 4)) AS s")
+
+    for column in (
+        col("s").dropFields("a.x"),
+        col("s").withField("a.y", lit(9)),
+    ):
+        with pytest.raises(Exception, match=re.escape("[AMBIGUOUS_REFERENCE_TO_FIELDS]")):
+            dup.select(column).collect()
+
+    try:
+        spark.conf.set("spark.sql.caseSensitive", "true")
+
+        # Nothing is ambiguous once the case is not folded, so the level is rebuilt as usual.
+        dropped = dup.select(col("s").dropFields("a.x"))
+        assert dropped.schema[0].dataType.simpleString() == "struct<a:struct<y:int>,A:struct<x:int,y:int>>"
+        assert [tuple(row[0]) for row in dropped.collect()] == [((2,), (3, 4))]
     finally:
         spark.conf.unset("spark.sql.caseSensitive")
 

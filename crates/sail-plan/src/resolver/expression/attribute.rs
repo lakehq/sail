@@ -7,7 +7,6 @@ use datafusion_expr::{ScalarUDF, UNNAMED_TABLE, col, expr, lit};
 use datafusion_functions::core::get_field;
 use sail_common::spec;
 use sail_function::scalar::array_struct_field::ArrayStructField;
-use sail_sql_analyzer::parser::parse_attribute_name;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -81,23 +80,13 @@ fn quote_identifier_parts<'a>(parts: impl Iterator<Item = &'a str>) -> String {
         .join(".")
 }
 
-/// Renders a name that reaches a message as a single string the way Spark's
-/// `toSQLId(parts: String)` does, which parses the name before quoting each part
-/// (`org.apache.spark.sql.errors.DataTypeErrorsBase#toSQLId`). A part of the name that contains a dot is therefore reported
-/// as several quoted parts, and a name that is already quoted keeps its back quotes single. A
-/// name the parser rejects is quoted whole, since its syntax has an error condition of its own.
-pub(in crate::resolver) fn quote_identifier_name(name: &str) -> String {
-    match parse_attribute_name(name) {
-        Some(object) => quote_identifier(&object),
-        None => quote_identifier_part(name),
-    }
-}
-
-/// Quotes one part of an identifier as Spark's `QuotingUtils.quoteIdentifier` does, doubling the
-/// back quotes it contains.
-pub(crate) fn quote_identifier_part(part: &str) -> String {
-    format!("`{}`", part.replace('`', "``"))
-}
+/// Quotes one part of an identifier as Spark's `QuotingUtils.quoteIdentifier` does.
+pub(crate) use sail_sql_analyzer::parser::quote_identifier_part;
+/// Renders a name that reaches a message as a single string the way Spark's `toSQLId` does. The
+/// same classes are built in `sail-function` for the operations the resolver builds, so the
+/// renderer is shared rather than written twice: two spellings of one error class is what this
+/// replaces.
+pub(in crate::resolver) use sail_sql_analyzer::parser::to_sql_id as quote_identifier_name;
 
 /// Quotes one part unless it is a plain identifier, as `QuotingUtils.quoteIfNeeded` does. This is
 /// the rendering `UnresolvedAttribute.sql` uses, which is the name the suggestion is ordered by.
@@ -611,7 +600,7 @@ impl PlanResolver<'_> {
     }
 
     /// The error for a name that walks into something that is not a complex type.
-    fn invalid_extract_base_error(
+    pub(in crate::resolver::expression) fn invalid_extract_base_error(
         &self,
         base: &str,
         data_type: &DataType,

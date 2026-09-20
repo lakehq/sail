@@ -9,7 +9,7 @@ use datafusion_expr::{
 };
 use sail_common::utils::string::equals_ignore_case;
 
-use crate::error::field_not_found_plan_err;
+use crate::error::{ambiguous_field_plan_err, field_not_found_plan_err};
 
 /// Matches a field name against the name a `withField` asked for, the way the analyzer resolver
 /// does: it folds the case unless the analysis is case sensitive.
@@ -58,7 +58,21 @@ impl UpdateStructField {
                 }
 
                 let current_field = &field_names[0];
-                let mut new_fields = Vec::new();
+
+                // Only the last name is written, so only it may match more than one field. Every
+                // level before it is looked up first, and a name that matches twice there is
+                // ambiguous rather than a level to rebuild twice.
+                if field_names.len() > 1 {
+                    let count = fields
+                        .iter()
+                        .filter(|x| matches(x.name(), current_field, case_sensitive))
+                        .count();
+                    if count > 1 {
+                        return Err(ambiguous_field_plan_err(current_field, count));
+                    }
+                }
+
+                let mut new_fields = Vec::with_capacity(fields.len() + 1);
                 let mut field_found = false;
 
                 for field in fields.iter() {

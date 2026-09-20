@@ -113,6 +113,32 @@ pub fn parse_attribute_name(name: &str) -> Option<spec::ObjectName> {
         .map(spec::ObjectName::from)
 }
 
+/// Renders a name the way Spark's `toSQLId` does: it parses the name with the attribute grammar
+/// above and quotes each part, doubling the back quotes a part contains
+/// (`org.apache.spark.sql.errors.DataTypeErrorsBase#toSQLId` over
+/// `org.apache.spark.sql.catalyst.util.QuotingUtils#quoteIdentifier`). A part that contains a dot
+/// is therefore written as several quoted parts, and a name the parser rejects is quoted whole,
+/// since its syntax has an error condition of its own.
+///
+/// This lives here, beside the parser it uses, because the same error classes are built both in
+/// the query resolver and in the functions the resolver builds, and the two have to read alike.
+pub fn to_sql_id(name: &str) -> String {
+    match parse_attribute_name(name) {
+        Some(object) => object
+            .parts()
+            .iter()
+            .map(|x| quote_identifier_part(x.as_ref()))
+            .collect::<Vec<_>>()
+            .join("."),
+        None => quote_identifier_part(name),
+    }
+}
+
+/// Quotes one part of an identifier as Spark's `QuotingUtils.quoteIdentifier` does.
+pub fn quote_identifier_part(part: &str) -> String {
+    format!("`{}`", part.replace('`', "``"))
+}
+
 pub fn parse_qualified_wildcard(s: &str) -> SqlResult<QualifiedWildcard> {
     parse!(s, create_qualified_wildcard_parser)
 }

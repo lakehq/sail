@@ -7,7 +7,7 @@ use datafusion_common::{Result, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use sail_common::utils::string::equals_ignore_case;
 
-use crate::error::field_not_found_plan_err;
+use crate::error::{ambiguous_field_plan_err, field_not_found_plan_err};
 
 /// Matches a field name against the name a `dropFields` asked for, the way the analyzer resolver
 /// does: it folds the case unless the analysis is case sensitive.
@@ -54,6 +54,19 @@ impl DropStructField {
                     return plan_err!("Field name cannot be empty");
                 };
 
+                // Only the last name is written or dropped, so only it may match more than one
+                // field. Every level before it is looked up first, and a name that matches twice
+                // there is ambiguous rather than a level to rebuild twice.
+                if field_names.len() > 1 {
+                    let count = fields
+                        .iter()
+                        .filter(|x| matches(x.name(), current_field, case_sensitive))
+                        .count();
+                    if count > 1 {
+                        return Err(ambiguous_field_plan_err(current_field, count));
+                    }
+                }
+
                 let mut new_fields = Vec::with_capacity(fields.len());
                 let mut field_found = false;
 
@@ -70,6 +83,14 @@ impl DropStructField {
                         )?;
                         // The path is rebuilt as a `WithField` per level, so the level takes the
                         // spelling that was asked for rather than the one the struct declares.
+                        // TODO: Spark gives the rebuilt level the nullability of the
+                        // EXPRESSION that reads it, `parent.nullable || field.nullable`
+                        // (`UpdateFields.nullable` is `structExpr.nullable`, and `structExpr` is
+                        // a `GetStructField` whose nullability is that disjunction), so a
+                        // nullable parent holding a non-nullable child reports `true` there and
+                        // `false` here. Threading it needs `return_field_from_args`, which
+                        // `DropStructField` does not have, and tightening nullability in Sail has
+                        // its own sweep. See `test_a_rebuilt_level_takes_the_nullability_of_its_parent`.
                         new_fields.push(Arc::new(Field::new(
                             current_field,
                             new_data_type,
@@ -95,6 +116,9 @@ impl DropStructField {
                     Ok(DataType::Struct(new_fields.into()))
                 }
             }
+            // The resolver checks every level of the path against the input of `update_fields`
+            // before this runs, so a level that is not a struct is already reported there with
+            // the class and the wording Spark uses. This stays as the invariant it is.
             _ => plan_err!("Expected Struct, found {data_type}"),
         }
     }
