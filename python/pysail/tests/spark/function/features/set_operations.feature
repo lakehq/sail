@@ -243,6 +243,42 @@ Feature: Set operations (INTERSECT, EXCEPT)
         """
       Then query error SET_OPERATION_ON_MAP_TYPE
 
+  Rule: The type in the message is written the way Spark writes a type in SQL
+
+    # Spark renders it with `toSQLType`, which is `DataType.sql`, and not with the upper cased
+    # `simpleString` a plan schema is rendered with: a comma is followed by a space, and a struct
+    # field keeps the case it was declared with and is quoted when it needs to be.
+    Scenario Outline: the type of <case>
+      When query
+        """
+        SELECT <value> AS m UNION SELECT <other>
+        """
+      Then query error is "<rendered>"\.
+
+      Examples:
+        | case             | value                 | other                 | rendered                      |
+        | a map            | map('a', 1)           | map('b', 2)           | MAP<STRING, INT>              |
+        | a map of maps    | map('a', map('b', 1)) | map('c', map('d', 2)) | MAP<STRING, MAP<STRING, INT>> |
+        | an array of maps | array(map('a', 1))    | array(map('b', 2))    | ARRAY<MAP<STRING, INT>>       |
+
+    @sail-bug
+    # The rendering is right; what differs is the schema behind it. Spark builds the fields of a
+    # struct literal as non-nullable and Sail builds them nullable, so the ` NOT NULL` the type
+    # carries never appears. The cause is pinned on its own in
+    # `test_a_struct_literal_builds_non_nullable_fields`, and both go green together.
+    Scenario Outline: the type of <case> says which of its fields cannot be null
+      When query
+        """
+        SELECT <value> AS m UNION SELECT <other>
+        """
+      Then query error is "<rendered>"\.
+
+      Examples:
+        | case                   | value                                  | other                                  | rendered                                              |
+        | a struct of one field  | named_struct('MiCampo', map('a', 1))   | named_struct('MiCampo', map('b', 2))   | STRUCT<MiCampo: MAP<STRING, INT> NOT NULL>            |
+        | a struct of two fields | named_struct('x', map('a', 1), 'y', 2) | named_struct('x', map('b', 2), 'y', 3) | STRUCT<x: MAP<STRING, INT> NOT NULL, y: INT NOT NULL> |
+        | a field needing quotes | named_struct('mi campo', map('a', 1))  | named_struct('mi campo', map('b', 2))  | STRUCT<`mi campo`: MAP<STRING, INT> NOT NULL>         |
+
     Scenario Outline: <case> of a map column is rejected
       # Every operation that has to compare whole rows reaches the same check, including the ALL
       # forms, which keep the duplicates but still compare.

@@ -66,6 +66,16 @@ def test_input_schema_is_honored(spark):
     assert _nullable(df, "nl") is True
 
 
+@sail_bug
+def test_a_struct_literal_builds_non_nullable_fields(spark):
+    # `CreateNamedStruct` takes the nullability of each value, so a struct built from literals has
+    # fields that cannot be null. Sail builds them nullable, which reaches anything that renders
+    # the type: a field that cannot be null is written `NOT NULL` inside `STRUCT<...>`.
+    fields = spark.sql("SELECT named_struct('a', 1, 'b', map('k', 2)) AS s").schema["s"].dataType.fields
+
+    assert [(field.name, field.nullable) for field in fields] == [("a", False), ("b", False)]
+
+
 # --- functions that correctly propagate nullability (pass on Sail and JVM) ---
 
 

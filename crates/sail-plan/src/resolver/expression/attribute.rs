@@ -101,7 +101,7 @@ pub(crate) fn quote_identifier_part(part: &str) -> String {
 
 /// Quotes one part unless it is a plain identifier, as `QuotingUtils.quoteIfNeeded` does. This is
 /// the rendering `UnresolvedAttribute.sql` uses, which is the name the suggestion is ordered by.
-fn quote_if_needed(part: &str) -> String {
+pub(in crate::resolver) fn quote_if_needed(part: &str) -> String {
     let mut characters = part.chars();
     let plain = matches!(characters.next(), Some(x) if x.is_ascii_alphabetic() || x == '_')
         && characters.all(|x| x.is_ascii_alphanumeric() || x == '_');

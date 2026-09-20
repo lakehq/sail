@@ -12,23 +12,67 @@ use sail_sql_analyzer::parser::parse_attribute_name;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::attribute::{
-    qualifier_parts, quote_identifier_name, quote_identifier_part, unresolved_column_fields_error,
-    utf16_key,
+    qualifier_parts, quote_identifier_name, quote_identifier_part, quote_if_needed,
+    unresolved_column_fields_error, utf16_key,
 };
 use crate::resolver::state::{FieldInfo, PlanResolverState};
 
 impl PlanResolver<'_> {
     /// The name of a data type as Spark writes it inside an error message.
     ///
-    /// TODO: Spark renders it with `toSQLType`, which is `DataType.sql` and not the upper cased
-    /// `simpleString`: it writes `MAP<STRING, INT>` with a space after the comma, keeps the case
-    /// of a struct field name and keeps `NOT NULL`.
+    /// This is `DataType.sql`, the one `toSQLType` quotes, and not the upper cased `simpleString`
+    /// a plan schema is rendered with: a comma is followed by a space, a struct field keeps the
+    /// case it was declared with and is quoted when it needs to be, and a field that cannot be
+    /// null says so.
     pub(super) fn spark_type_name(&self, data_type: &DataType) -> PlanResult<String> {
-        let service = self.ctx.extension::<PlanService>()?;
-        let name = service
-            .plan_formatter()
-            .data_type_to_simple_string(data_type)?;
-        Ok(name.to_uppercase())
+        match data_type {
+            DataType::List(field)
+            | DataType::LargeList(field)
+            | DataType::ListView(field)
+            | DataType::LargeListView(field) => Ok(format!(
+                "ARRAY<{}>",
+                self.spark_type_name(field.data_type())?
+            )),
+            DataType::Struct(fields) => {
+                let fields = fields
+                    .iter()
+                    .map(|field| {
+                        Ok(format!(
+                            "{}: {}{}",
+                            quote_if_needed(field.name()),
+                            self.spark_type_name(field.data_type())?,
+                            if field.is_nullable() { "" } else { " NOT NULL" }
+                        ))
+                    })
+                    .collect::<PlanResult<Vec<_>>>()?;
+                Ok(format!("STRUCT<{}>", fields.join(", ")))
+            }
+            DataType::Map(field, _) => {
+                let DataType::Struct(fields) = field.data_type() else {
+                    return Err(PlanError::invalid(
+                        "expected a struct field for a map data type",
+                    ));
+                };
+                let [key, value] = fields.as_ref() else {
+                    return Err(PlanError::invalid(
+                        "expected two fields in the struct of a map data type",
+                    ));
+                };
+                Ok(format!(
+                    "MAP<{}, {}>",
+                    self.spark_type_name(key.data_type())?,
+                    self.spark_type_name(value.data_type())?
+                ))
+            }
+            // Every other type is written the way its `simpleString` is, in upper case.
+            _ => {
+                let service = self.ctx.extension::<PlanService>()?;
+                let name = service
+                    .plan_formatter()
+                    .data_type_to_simple_string(data_type)?;
+                Ok(name.to_uppercase())
+            }
+        }
     }
 
     /// Matches an identifier against another one the way the Spark analyzer resolver does.
