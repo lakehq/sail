@@ -30,6 +30,7 @@ use sail_function::scalar::string::spark_regexp_extract_all::{
 };
 use sail_function::scalar::string::spark_sentences::SparkSentences;
 use sail_function::scalar::string::spark_split::SparkSplit;
+use sail_function::scalar::string::spark_string_prefix::SparkStringPrefix;
 use sail_function::scalar::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
 use sail_function::scalar::string::spark_to_char::SparkToChar;
 use sail_function::scalar::string::spark_to_number::SparkToNumber;
@@ -93,6 +94,19 @@ fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .two()
         .map_err(|_| PlanError::invalid("substr requires 2 or 3 arguments"))?;
     let string = cast_to_logical_string_or_try(string, function_context.schema, false)?;
+    // A literal prefix needs neither per-row position/length arrays nor an
+    // intermediate string-view result followed by conversion to Utf8.
+    let literal_int = |expr: &expr::Expr| match expr {
+        expr::Expr::Literal(ScalarValue::Int32(Some(n)), _) => Some(i64::from(*n)),
+        expr::Expr::Literal(ScalarValue::Int64(Some(n)), _) => Some(*n),
+        _ => None,
+    };
+    if matches!(literal_int(&position), Some(0 | 1))
+        && let Some(length) = length_opt.as_ref().and_then(literal_int)
+        && (0..=i64::from(i32::MAX)).contains(&length)
+    {
+        return Ok(ScalarUDF::from(SparkStringPrefix::new()).call(vec![string, lit(length)]));
+    }
     // Spark uses 1-based indexing, but treats pos=0 the same as pos=1 (start of string).
     // For negative positions, Spark counts from the end of the string.
     // DataFusion follows the SQL standard where pos=0 reduces the effective length by 1,
