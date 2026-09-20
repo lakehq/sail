@@ -3,7 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::{
     ArrayRef, AsArray, DurationMicrosecondArray, DurationMillisecondArray, DurationNanosecondArray,
     DurationSecondArray, Int8Array, Int16Array, Int32Array, Int64Array, IntervalDayTimeArray,
-    IntervalMonthDayNanoArray, IntervalYearMonthArray, new_null_array,
+    IntervalMonthDayNanoArray, IntervalYearMonthArray,
 };
 use datafusion::arrow::datatypes::{
     DataType, DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
@@ -112,7 +112,6 @@ impl ScalarUDFImpl for SparkAbs {
         ) {
             return datafusion::functions::math::abs::AbsFunc::new().invoke_with_args(args);
         }
-        let return_dtype = args.return_field.data_type().clone();
         let ScalarFunctionArgs { args, .. } = args;
         let [arg] = args.as_slice() else {
             return Err(invalid_arg_count_exec_err("abs", (1, 1), args.len()));
@@ -121,10 +120,7 @@ impl ScalarUDFImpl for SparkAbs {
         if let ColumnarValue::Array(array) = arg
             && array.null_count() == array.len()
         {
-            return Ok(ColumnarValue::Array(new_null_array(
-                &return_dtype,
-                array.len(),
-            )));
+            return Ok(ColumnarValue::Array(Arc::clone(array)));
         }
         match arg {
             // Signed integer abs: ANSI=true errors on MIN; ANSI=false wraps

@@ -1,7 +1,6 @@
 use std::fmt;
 use std::sync::Arc;
 
-use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result};
 use datafusion::execution::TaskContext;
@@ -14,40 +13,40 @@ use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
 use crate::stream::merge::merged_stream;
 use crate::stream::reader::{TaskStreamReader, TaskStreamSource};
 use crate::stream::writer::{
-    TaskStreamChannelSink, TaskStreamSink, TaskStreamWriteState, TaskStreamWriter,
+    MultiChannelTaskStreamSink, TaskStreamChannelSink, TaskStreamSink, TaskStreamWriter,
 };
 use crate::task::definition::{TaskInput, TaskInputLocator, TaskOutput, TaskOutputLocator};
-use crate::task_runner::{TaskRunnerActor, TaskRunnerExtensions, TaskRunnerMessage};
+use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage};
 
-pub struct TaskStreamFactory<'a> {
+pub struct TaskStreamFactory {
     handle: ActorHandle<TaskRunnerActor>,
     context: Arc<TaskContext>,
-    extensions: &'a TaskRunnerExtensions,
+    celeborn: bool,
     mappers: usize,
 }
 
-impl Clone for TaskStreamFactory<'_> {
+impl Clone for TaskStreamFactory {
     fn clone(&self) -> Self {
         Self {
             handle: self.handle.clone(),
             context: self.context.clone(),
-            extensions: self.extensions,
+            celeborn: self.celeborn,
             mappers: self.mappers,
         }
     }
 }
 
-impl<'a> TaskStreamFactory<'a> {
+impl TaskStreamFactory {
     pub fn new(
         handle: ActorHandle<TaskRunnerActor>,
         context: Arc<TaskContext>,
-        extensions: &'a TaskRunnerExtensions,
+        celeborn: bool,
         mappers: usize,
     ) -> Self {
         Self {
             handle,
             context,
-            extensions,
+            celeborn,
             mappers,
         }
     }
@@ -73,9 +72,7 @@ impl<'a> TaskStreamFactory<'a> {
         output: TaskOutput,
         schema: SchemaRef,
     ) -> Arc<dyn TaskStreamWriter> {
-        if self.extensions.celeborn_streams.is_some()
-            && matches!(output.locator, TaskOutputLocator::Blocking)
-        {
+        if self.celeborn && matches!(output.locator, TaskOutputLocator::Blocking) {
             Arc::new(CelebornTaskStreamWriter::new(
                 self.handle.clone(),
                 self.context.clone(),
@@ -286,7 +283,7 @@ impl fmt::Debug for MultiChannelTaskStreamReader {
 #[tonic::async_trait]
 impl TaskStreamReader for MultiChannelTaskStreamReader {
     async fn open(&self, partition: usize) -> Result<TaskStreamSource> {
-        let streams = match &self.input.locator {
+        let streams = match self.input.locator.as_ref() {
             TaskInputLocator::Driver { keys } => {
                 let keys = keys.get(partition).ok_or_else(|| {
                     DataFusionError::Execution(format!("input partition {partition} not found"))
@@ -461,43 +458,5 @@ impl TaskStreamWriter for CelebornTaskStreamWriter {
                 self.schema.clone(),
             )
             .await
-    }
-}
-
-pub(crate) struct MultiChannelTaskStreamSink {
-    pub(crate) sinks: Vec<Option<Box<dyn TaskStreamChannelSink>>>,
-}
-
-#[tonic::async_trait]
-impl TaskStreamSink for MultiChannelTaskStreamSink {
-    async fn write(&mut self, channel: usize, batch: RecordBatch) -> Result<TaskStreamWriteState> {
-        let state = match self.sinks.get_mut(channel).ok_or_else(|| {
-            DataFusionError::Execution(format!("shuffle output channel {channel} not found"))
-        })? {
-            Some(sink) => sink.write(batch).await?,
-            None => TaskStreamWriteState::Closed,
-        };
-        if state == TaskStreamWriteState::Closed {
-            self.sinks[channel] = None;
-        }
-        Ok(if self.sinks.iter().any(Option::is_some) {
-            TaskStreamWriteState::Active
-        } else {
-            TaskStreamWriteState::Closed
-        })
-    }
-
-    async fn commit(self: Box<Self>) -> Result<()> {
-        for sink in self.sinks.into_iter().flatten() {
-            sink.commit().await?;
-        }
-        Ok(())
-    }
-
-    async fn abort(self: Box<Self>) -> Result<()> {
-        for sink in self.sinks.into_iter().flatten() {
-            sink.abort().await?;
-        }
-        Ok(())
     }
 }

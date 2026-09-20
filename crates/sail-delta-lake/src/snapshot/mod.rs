@@ -1230,6 +1230,56 @@ mod tests {
 
     #[test]
     #[expect(clippy::unwrap_used)]
+    fn snapshot_statistics_exclude_all_null_bounds_using_the_correct_row_count() {
+        for (tight, null_count, deleted, expected_min, expected_max) in [
+            (true, 4, None, 5, 6),
+            (true, 2, Some(2), 5, 6),
+            (false, 4, Some(2), 5, 6),
+            (false, 2, Some(2), -999, 999),
+        ] {
+            let stats = serde_json::json!({
+                "numRecords": 4,
+                "tightBounds": tight,
+                "minValues": {"id": -999},
+                "maxValues": {"id": 999},
+                "nullCount": {"id": null_count},
+            })
+            .to_string();
+            let snapshot = test_snapshot_with_adds(
+                Protocol::new(3, 7, Some(vec![TableFeature::DeletionVectors]), None),
+                test_metadata_with_schema(
+                    StructType::try_new([StructField::nullable("id", DataType::LONG)]).unwrap(),
+                )
+                .unwrap(),
+                Vec::new(),
+                vec![
+                    stats_add("nullable.parquet", Some(&stats), deleted),
+                    stats_add(
+                        "nonnull.parquet",
+                        Some(
+                            r#"{"numRecords":2,"minValues":{"id":5},"maxValues":{"id":6},"nullCount":{"id":0}}"#,
+                        ),
+                        None,
+                    ),
+                ],
+            );
+            let statistics = snapshot.pruning_stats().unwrap().statistics().unwrap();
+            let id = &statistics.column_statistics[0];
+            let bound = |value| {
+                let value = ScalarValue::Int64(Some(value));
+                if tight {
+                    Precision::Exact(value)
+                } else {
+                    Precision::Inexact(value)
+                }
+            };
+            assert_eq!(id.min_value, bound(expected_min));
+            assert_eq!(id.max_value, bound(expected_max));
+        }
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
     fn snapshot_statistics_ignore_fully_deleted_files() {
         let snapshot = test_snapshot_with_adds(
             Protocol::new(3, 7, Some(vec![TableFeature::DeletionVectors]), None),

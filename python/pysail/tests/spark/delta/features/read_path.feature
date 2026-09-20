@@ -93,6 +93,33 @@ Feature: Delta Lake read path (driver vs metadata-as-data)
         """
       Then query plan matches snapshot
 
+    Scenario: SQL row existence preserves metadata replay and filters
+      When query
+        """
+        SELECT 1 AS present FROM delta_read_metadata_path LIMIT 1
+        """
+      Then query result collected
+        | present |
+        | 1       |
+      When query
+        """
+        SELECT 1 AS present FROM delta_read_metadata_path WHERE id > 2 LIMIT 1
+        """
+      Then query result collected
+        | present |
+      When query
+        """
+        SELECT 1 AS present
+        WHERE EXISTS(SELECT * FROM delta_read_metadata_path WHERE id > 2)
+        """
+      Then query result collected
+        | present |
+      When query
+        """
+        EXPLAIN SELECT 1 AS present FROM delta_read_metadata_path LIMIT 1
+        """
+      Then query plan matches snapshot
+
     Scenario: Metadata pruning does not assume arbitrary casts preserve bounds
       Given statement
         """
@@ -145,6 +172,26 @@ Feature: Delta Lake read path (driver vs metadata-as-data)
       When query
         """
         EXPLAIN SELECT * FROM delta_read_driver_partitioned_path WHERE year = 2024
+        """
+      Then query plan matches snapshot
+
+    Scenario: SQL row existence preserves partition predicates
+      When query
+        """
+        SELECT 1 AS present FROM delta_read_driver_partitioned_path WHERE year = 2024 LIMIT 1
+        """
+      Then query result collected
+        | present |
+        | 1       |
+      When query
+        """
+        SELECT 1 AS present FROM delta_read_driver_partitioned_path WHERE year = 2025 LIMIT 1
+        """
+      Then query result collected
+        | present |
+      When query
+        """
+        EXPLAIN SELECT 1 AS present FROM delta_read_driver_partitioned_path WHERE year = 2024 LIMIT 1
         """
       Then query plan matches snapshot
 
@@ -500,5 +547,248 @@ Feature: Delta Lake read path (driver vs metadata-as-data)
       When query
         """
         EXPLAIN SELECT COUNT(1) AS cnt FROM csv_count_scan
+        """
+      Then query plan matches snapshot
+
+  Rule: SQL row existence uses Delta row counts without column statistics
+    Background:
+      Given variable location for temporary directory delta_row_existence
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_row_existence
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_row_existence (id INT, value INT)
+        USING DELTA LOCATION {{ location.sql }}
+        TBLPROPERTIES ('delta.dataSkippingNumIndexedCols' = '0')
+        """
+
+    Scenario: SQL row existence returns no row for an empty Delta snapshot
+      When query
+        """
+        SELECT 1 AS present FROM delta_row_existence LIMIT 1
+        """
+      Then query result collected
+        | present |
+      Then query schema
+        """
+        root
+         |-- present: integer (nullable = false)
+        """
+      When query
+        """
+        EXPLAIN SELECT 1 AS present FROM delta_row_existence LIMIT 1
+        """
+      Then query plan matches snapshot
+
+    Scenario: SQL row existence uses metadata for a nonempty Delta snapshot
+      Given statement
+        """
+        INSERT INTO delta_row_existence VALUES (1, 10), (2, NULL), (NULL, NULL)
+        """
+      When query
+        """
+        SELECT 1 AS present FROM delta_row_existence LIMIT 1
+        """
+      Then query result collected
+        | present |
+        | 1       |
+      Then query schema
+        """
+        root
+         |-- present: integer (nullable = false)
+        """
+      When query
+        """
+        EXPLAIN SELECT 1 AS present FROM delta_row_existence LIMIT 1
+        """
+      Then query plan matches snapshot
+
+    Scenario: SQL row existence distinguishes an empty snapshot from an all-null row
+      When query
+        """
+        SELECT 1 AS present WHERE EXISTS(SELECT * FROM delta_row_existence)
+        """
+      Then query result collected
+        | present |
+      When query
+        """
+        SELECT 1 AS absent WHERE NOT EXISTS(SELECT * FROM delta_row_existence)
+        """
+      Then query result collected
+        | absent |
+        | 1      |
+      Given statement
+        """
+        INSERT INTO delta_row_existence VALUES (NULL, NULL)
+        """
+      When query
+        """
+        SELECT 1 AS present WHERE EXISTS(SELECT * FROM delta_row_existence)
+        """
+      Then query result collected
+        | present |
+        | 1       |
+      When query
+        """
+        SELECT 1 AS absent WHERE NOT EXISTS(SELECT * FROM delta_row_existence)
+        """
+      Then query result collected
+        | absent |
+      When query
+        """
+        SELECT 1 AS present FROM delta_row_existence LIMIT 1
+        """
+      Then query result collected
+        | present |
+        | 1       |
+
+    Scenario Outline: SQL row existence preserves LIMIT and OFFSET cardinality
+      Given statement
+        """
+        INSERT INTO delta_row_existence VALUES (1, 10), (2, NULL), (3, 30)
+        """
+      When query
+        """
+        SELECT COUNT(*) AS row_count
+        FROM (SELECT 1 FROM delta_row_existence LIMIT <limit> OFFSET <offset>)
+        """
+      Then query result collected
+        | row_count |
+        | <count>   |
+
+      Examples:
+        | limit | offset | count |
+        | 0     | 0      | 0     |
+        | 2     | 0      | 2     |
+        | 5     | 0      | 3     |
+        | 1     | 1      | 1     |
+        | 1     | 3      | 0     |
+        | 2     | 2      | 1     |
+
+    Scenario: SQL row existence preserves data predicates and ordered column reads
+      Given statement
+        """
+        INSERT INTO delta_row_existence VALUES (3, 30), (1, 10), (2, NULL)
+        """
+      When query
+        """
+        SELECT 1 AS present FROM delta_row_existence WHERE id > 3 LIMIT 1
+        """
+      Then query result collected
+        | present |
+      When query
+        """
+        SELECT 1 AS present FROM delta_row_existence WHERE id = 2 LIMIT 1
+        """
+      Then query result collected
+        | present |
+        | 1       |
+      When query
+        """
+        SELECT id FROM delta_row_existence ORDER BY id DESC LIMIT 1
+        """
+      Then query result collected
+        | id |
+        | 3  |
+      When query
+        """
+        EXPLAIN SELECT 1 AS present FROM delta_row_existence WHERE id = 2 LIMIT 1
+        """
+      Then query plan matches snapshot
+
+    Scenario: SQL row existence preserves correlated subquery predicates
+      Given statement
+        """
+        INSERT INTO delta_row_existence VALUES (1, 10), (2, NULL), (3, 30)
+        """
+      When query
+        """
+        SELECT candidate.id
+        FROM VALUES (2), (4) AS candidate(id)
+        WHERE EXISTS(
+          SELECT 1 FROM delta_row_existence
+          WHERE delta_row_existence.id = candidate.id
+        )
+        ORDER BY candidate.id
+        """
+      Then query result collected ordered
+        | id |
+        | 2  |
+      When query
+        """
+        SELECT candidate.id
+        FROM VALUES (2), (4) AS candidate(id)
+        WHERE NOT EXISTS(
+          SELECT 1 FROM delta_row_existence
+          WHERE delta_row_existence.id = candidate.id
+        )
+        ORDER BY candidate.id
+        """
+      Then query result collected ordered
+        | id |
+        | 4  |
+
+      When query
+        """
+        SELECT candidate.id,
+          EXISTS(
+            SELECT 1 FROM delta_row_existence
+            WHERE delta_row_existence.id = candidate.id
+          ) AS present,
+          NOT EXISTS(
+            SELECT 1 FROM delta_row_existence
+            WHERE delta_row_existence.id = candidate.id
+          ) AS absent
+        FROM VALUES (2), (4) AS candidate(id)
+        ORDER BY candidate.id
+        """
+      Then query result collected ordered
+        | id | present | absent |
+        | 2  | true    | false  |
+        | 4  | false   | true   |
+
+    Scenario: SQL projected EXISTS returns row existence as a boolean
+      When query
+        """
+        SELECT
+          EXISTS(SELECT * FROM delta_row_existence) AS present,
+          NOT EXISTS(SELECT * FROM delta_row_existence) AS absent
+        """
+      Then query result collected
+        | present | absent |
+        | false   | true   |
+      Given statement
+        """
+        INSERT INTO delta_row_existence VALUES (1, 10)
+        """
+      When query
+        """
+        SELECT
+          EXISTS(SELECT * FROM delta_row_existence) AS present,
+          NOT EXISTS(SELECT * FROM delta_row_existence) AS absent
+        """
+      Then query result collected
+        | present | absent |
+        | true    | false  |
+      Then query schema
+        """
+        root
+         |-- present: boolean (nullable = false)
+         |-- absent: boolean (nullable = false)
+        """
+      When query
+        """
+        SELECT
+          EXISTS(SELECT * FROM delta_row_existence WHERE id > 1) AS present,
+          NOT EXISTS(SELECT * FROM delta_row_existence WHERE id > 1) AS absent
+        """
+      Then query result collected
+        | present | absent |
+        | false   | true   |
+      When query
+        """
+        EXPLAIN SELECT EXISTS(SELECT * FROM delta_row_existence) AS present
         """
       Then query plan matches snapshot
