@@ -7,19 +7,36 @@ use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err, plan
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
+use sail_common::utils::string::equals_ignore_case;
+
+/// Matches a field name against the name a `withField` asked for, the way the analyzer resolver
+/// does: it folds the case unless the analysis is case sensitive.
+fn matches(name: &str, target: &str, case_sensitive: bool) -> bool {
+    if case_sensitive {
+        name == target
+    } else {
+        equals_ignore_case(name, target)
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct UpdateStructField {
     signature: Signature,
     field_names: Vec<String>,
+    case_sensitive: bool,
 }
 
 impl UpdateStructField {
-    pub fn new(field_names: Vec<String>) -> Self {
+    pub fn new(field_names: Vec<String>, case_sensitive: bool) -> Self {
         Self {
             signature: Signature::any(2, Volatility::Immutable),
             field_names,
+            case_sensitive,
         }
+    }
+
+    pub fn case_sensitive(&self) -> bool {
+        self.case_sensitive
     }
 
     pub fn field_names(&self) -> &[String] {
@@ -30,6 +47,7 @@ impl UpdateStructField {
         data_type: &DataType,
         field_names: &[String],
         new_field: &Field,
+        case_sensitive: bool,
     ) -> Result<DataType> {
         match data_type {
             DataType::Struct(fields) => {
@@ -42,18 +60,23 @@ impl UpdateStructField {
                 let mut field_found = false;
 
                 for field in fields.iter() {
-                    if field.name() == current_field {
+                    // The field to replace is matched the way the analyzer resolver matches a
+                    // name, so a name written in another case reaches it unless the analysis is
+                    // case sensitive.
+                    if matches(field.name(), current_field, case_sensitive) {
                         field_found = true;
                         if field_names.len() == 1 {
-                            // The field is replaced rather than edited, so it takes the metadata
-                            // of the value, which `withField` gives none, and keeps only its name.
+                            // The field is replaced rather than edited, so it takes the type,
+                            // the nullability and the name of the value, and no metadata, which
+                            // is what `StructField(name, dataType, nullable)` gives it.
                             new_fields
-                                .push(Arc::new(new_field.clone().with_name(field.name().clone())));
+                                .push(Arc::new(new_field.clone().with_name(current_field.clone())));
                         } else {
                             let new_data_type = Self::update_nested_field(
                                 field.data_type(),
                                 &field_names[1..],
                                 new_field,
+                                case_sensitive,
                             )?;
                             new_fields.push(Arc::new(
                                 field.as_ref().clone().with_data_type(new_data_type),
@@ -166,7 +189,12 @@ impl ScalarUDFImpl for UpdateStructField {
             new_field_type.clone(),
             true,
         );
-        Self::update_nested_field(data_type, &self.field_names, &new_field)
+        Self::update_nested_field(
+            data_type,
+            &self.field_names,
+            &new_field,
+            self.case_sensitive,
+        )
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
@@ -185,8 +213,12 @@ impl ScalarUDFImpl for UpdateStructField {
             value_field.data_type().clone(),
             value_field.is_nullable(),
         );
-        let data_type =
-            Self::update_nested_field(struct_field.data_type(), &self.field_names, &new_field)?;
+        let data_type = Self::update_nested_field(
+            struct_field.data_type(),
+            &self.field_names,
+            &new_field,
+            self.case_sensitive,
+        )?;
         Ok(Arc::new(Field::new(
             self.name(),
             data_type,

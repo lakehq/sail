@@ -428,7 +428,11 @@ impl PlanResolver<'_> {
                 .await?;
             (
                 format!("WithField({})", value_name.one()?),
-                ScalarUDF::from(UpdateStructField::new(field_name)).call(vec![expr, value_expr]),
+                ScalarUDF::from(UpdateStructField::new(
+                    field_name,
+                    self.config.case_sensitive,
+                ))
+                .call(vec![expr, value_expr]),
             )
         } else {
             (

@@ -28,6 +28,7 @@ impl PlanResolver<'_> {
         match data_type {
             DataType::List(field)
             | DataType::LargeList(field)
+            | DataType::FixedSizeList(field, _)
             | DataType::ListView(field)
             | DataType::LargeListView(field) => Ok(format!(
                 "ARRAY<{}>",

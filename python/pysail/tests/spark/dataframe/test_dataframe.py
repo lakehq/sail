@@ -1421,15 +1421,26 @@ def test_an_intersection_is_nullable_only_where_both_sides_are(spark):
     assert result.schema["a"].nullable is False
 
 
-@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_with_field_matches_the_existing_field_with_the_resolver(spark):
-    # `WithField` matches the field it replaces with the resolver and names it the way it was
-    # asked for, so asking in another case replaces the field rather than adding a second one.
+    # `WithField` matches the field it replaces with the resolver and names the result the way it
+    # was asked for, so asking in another case replaces the field and renames it. Making the
+    # analysis case sensitive stops the two from meeting, and then the field is appended instead,
+    # which is what tells "it matched" apart from "it renamed whatever it found".
     df = spark.sql("SELECT named_struct('a', 1) AS s")
 
-    replaced = df.withColumn("s", col("s").withField("A", lit(9)))
+    assert df.withColumn("s", col("s").withField("a", lit(9))).schema["s"].dataType.simpleString() == "struct<a:int>"
+    assert df.withColumn("s", col("s").withField("A", lit(9))).schema["s"].dataType.simpleString() == "struct<A:int>"
+    assert (
+        df.withColumn("s", col("s").withField("z", lit(9))).schema["s"].dataType.simpleString() == "struct<a:int,z:int>"
+    )
 
-    assert replaced.schema["s"].dataType.simpleString() == "struct<A:int>"
+    try:
+        spark.conf.set("spark.sql.caseSensitive", "true")
+        replaced = df.withColumn("s", col("s").withField("A", lit(9)))
+
+        assert replaced.schema["s"].dataType.simpleString() == "struct<a:int,A:int>"
+    finally:
+        spark.conf.unset("spark.sql.caseSensitive")
 
 
 def test_a_using_join_key_is_reachable_through_the_qualifier_of_each_side(spark):
