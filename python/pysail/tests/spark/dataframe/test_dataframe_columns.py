@@ -35,8 +35,6 @@ from pyspark.sql.window import Window
 
 from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
-_SAIL_BUG = pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
-
 ANALYZER = {"spark.sql.analyzer.singlePassResolver.enabled": "false"}
 
 # The three rows of the reported repro fold to two distinct products.
@@ -277,7 +275,7 @@ def test_replacement_survives_a_later_analysis(spark, case_sensitive, columns):
         _unconfigure(spark)
 
 
-@_SAIL_BUG
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_an_added_column_carries_no_qualifier(spark):
     # The star expansion returns the input's own attributes for the columns it passes through, so
     # those keep their qualifier, while a column the projection adds is an alias with none.
@@ -288,7 +286,7 @@ def test_an_added_column_carries_no_qualifier(spark):
         _ = df.withColumn("c", lit(1)).select("x.c").collect()
 
 
-@_SAIL_BUG
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_a_rename_keeps_the_qualifier_of_the_columns_it_did_not_touch(spark):
     # Renaming one column does not take the qualifier away from the others.
     df = spark.sql("SELECT 1 AS a, 2 AS b").alias("x")
@@ -303,13 +301,37 @@ def test_a_rename_keeps_the_qualifier_of_the_columns_it_did_not_touch(spark):
         # none of them, would still have to pass these.
         ("1", "int", False, None),
         ("a", "int", False, None),
-        pytest.param("CAST(1 AS DECIMAL(10,2))", "decimal(10,2)", True, None, marks=_SAIL_BUG),
-        pytest.param("map('k', 1)", "map<string,int>", False, None, marks=_SAIL_BUG),
-        pytest.param("CASE WHEN a > 1 THEN 'big' ELSE 'small' END", "string", False, None, marks=_SAIL_BUG),
+        pytest.param(
+            "CAST(1 AS DECIMAL(10,2))",
+            "decimal(10,2)",
+            True,
+            None,
+            marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
+        ),
+        pytest.param(
+            "map('k', 1)",
+            "map<string,int>",
+            False,
+            None,
+            marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
+        ),
+        pytest.param(
+            "CASE WHEN a > 1 THEN 'big' ELSE 'small' END",
+            "string",
+            False,
+            None,
+            marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
+        ),
         # The containers, whose inner flag `simpleString()` hides as well: the array agrees on both
         # flags, the struct disagrees on both.
         ("array(1, 2)", "array<int>", False, False),
-        pytest.param("named_struct('n', 1)", "struct<n:int>", False, False, marks=_SAIL_BUG),
+        pytest.param(
+            "named_struct('n', 1)",
+            "struct<n:int>",
+            False,
+            False,
+            marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
+        ),
     ],
 )
 def test_an_added_column_reports_the_nullability_of_its_expression(spark, expression, data_type, nullable, inner):
@@ -666,7 +688,10 @@ COMPOSITION_RESULTS = [
 
 # (case, caseSensitive, error condition)
 COMPOSITION_ERRORS = [
-    pytest.param(*("replaced_then_union", "true", "NUM_COLUMNS_MISMATCH"), marks=[_SAIL_BUG]),
+    pytest.param(
+        *("replaced_then_union", "true", "NUM_COLUMNS_MISMATCH"),
+        marks=[pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)],
+    ),
     _error_param("replaced_then_union_by_name", "true", "UNRESOLVED_COLUMN_AMONG_FIELD_NAMES"),
     # The client decides whether the name carries a plan id, and that is what selects between the
     # two conditions Spark raises, so an older client reaches this through
@@ -733,7 +758,7 @@ def test_a_sort_by_a_replaced_column_reads_the_original(spark):
     assert [tuple(row) for row in replaced.orderBy(col("a").asc()).collect()] == [(-3,), (-2,), (-1,)]
 
 
-@_SAIL_BUG
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_a_filter_by_a_replaced_column_reads_the_original(spark):
     # `Filter` is a `UnaryNode` like `Sort`, so the same reference resolves there too. Keeping the
     # row where the original `a` is 2 keeps the row whose replacement is -2, which is the answer
@@ -749,7 +774,7 @@ def test_a_filter_by_a_replaced_column_reads_the_original(spark):
     assert [tuple(row) for row in same_case.filter(df["a"] == _SELECTED).collect()] == [(-_SELECTED,)]
 
 
-@_SAIL_BUG
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_a_filter_by_a_renamed_column_reads_it_under_its_old_name(spark):
     # The same rule for a rename, where the values survive and only the name is gone.
     df = spark.sql("SELECT * FROM VALUES (1), (2), (3) AS t(a)")
@@ -1428,9 +1453,18 @@ METADATA_RESULTS = [
 
 # (case, error condition)
 METADATA_ERRORS = [
-    pytest.param(*("expr/aggregate function", "MISSING_GROUP_BY"), marks=_SAIL_BUG),
-    pytest.param(*("expr-replace/aggregate function", "MISSING_GROUP_BY"), marks=_SAIL_BUG),
-    pytest.param(*("expr-meta/aggregate function", "MISSING_GROUP_BY"), marks=_SAIL_BUG),
+    pytest.param(
+        *("expr/aggregate function", "MISSING_GROUP_BY"),
+        marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
+    ),
+    pytest.param(
+        *("expr-replace/aggregate function", "MISSING_GROUP_BY"),
+        marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
+    ),
+    pytest.param(
+        *("expr-meta/aggregate function", "MISSING_GROUP_BY"),
+        marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
+    ),
 ]
 
 

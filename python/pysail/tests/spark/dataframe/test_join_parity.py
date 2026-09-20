@@ -15,8 +15,6 @@ import pytest
 
 from pysail.testing.spark.utils.common import is_jvm_spark
 
-_SAIL_BUG = pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
-
 _ANALYZER = {"spark.sql.analyzer.singlePassResolver.enabled": "false"}
 
 QUERIES = {
@@ -334,7 +332,7 @@ RESULTS = [
             "struct<k:int,lv:string,k:int,rv:string>",
             ["{'k#1': 1, 'lv': 'x', 'k#2': 1, 'rv': 'p'}"],
         ),
-        marks=_SAIL_BUG,
+        marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
     ),
     pytest.param(
         *(
@@ -344,7 +342,7 @@ RESULTS = [
             "struct<k:int,lv:string,k:int,rv:string>",
             ["{'k#1': 1, 'lv': 'x', 'k#2': 1, 'rv': 'p'}"],
         ),
-        marks=_SAIL_BUG,
+        marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
     ),
     pytest.param(
         *(
@@ -354,7 +352,7 @@ RESULTS = [
             "struct<k:int,lv:string,rv:string>",
             ["{'k': 1, 'lv': 'x', 'rv': 'p'}"],
         ),
-        marks=_SAIL_BUG,
+        marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
     ),
     pytest.param(
         *(
@@ -364,7 +362,7 @@ RESULTS = [
             "struct<k:int,lv:string,rv:string>",
             ["{'k': 1, 'lv': 'x', 'rv': 'p'}"],
         ),
-        marks=_SAIL_BUG,
+        marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
     ),
     (
         "key/two keys",
@@ -553,8 +551,14 @@ ERRORS = [
     ("natural/LEFT SEMI", "true", r"Unsupported natural join type LeftSemi"),
     ("natural/LEFT ANTI", "false", r"Unsupported natural join type LeftAnti"),
     ("natural/LEFT ANTI", "true", r"Unsupported natural join type LeftAnti"),
-    pytest.param(*("natural/CROSS", "false", "INCOMPATIBLE_JOIN_TYPES"), marks=_SAIL_BUG),
-    pytest.param(*("natural/CROSS", "true", "INCOMPATIBLE_JOIN_TYPES"), marks=_SAIL_BUG),
+    pytest.param(
+        *("natural/CROSS", "false", "INCOMPATIBLE_JOIN_TYPES"),
+        marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
+    ),
+    pytest.param(
+        *("natural/CROSS", "true", "INCOMPATIBLE_JOIN_TYPES"),
+        marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
+    ),
     ("key/key differing in case", "true", "UNRESOLVED_USING_COLUMN_FOR_JOIN"),
     # `NATURAL` does not fail when it finds no common name: it degrades to a cross join, which is
     # the divergence this file was written for, so the two settings differ in the column list.
@@ -562,10 +566,22 @@ ERRORS = [
     ("key/key missing on the right", "true", "UNRESOLVED_USING_COLUMN_FOR_JOIN"),
     ("key/key missing on both", "false", "UNRESOLVED_USING_COLUMN_FOR_JOIN"),
     ("key/key missing on both", "true", "UNRESOLVED_USING_COLUMN_FOR_JOIN"),
-    pytest.param(*("key/incompatible key types", "false", "CAST_INVALID_INPUT"), marks=_SAIL_BUG),
-    pytest.param(*("key/incompatible key types", "true", "CAST_INVALID_INPUT"), marks=_SAIL_BUG),
-    pytest.param(*("key/map key", "false", "DATATYPE_MISMATCH.INVALID_ORDERING_TYPE"), marks=_SAIL_BUG),
-    pytest.param(*("key/map key", "true", "DATATYPE_MISMATCH.INVALID_ORDERING_TYPE"), marks=_SAIL_BUG),
+    pytest.param(
+        *("key/incompatible key types", "false", "CAST_INVALID_INPUT"),
+        marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
+    ),
+    pytest.param(
+        *("key/incompatible key types", "true", "CAST_INVALID_INPUT"),
+        marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
+    ),
+    pytest.param(
+        *("key/map key", "false", "DATATYPE_MISMATCH.INVALID_ORDERING_TYPE"),
+        marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
+    ),
+    pytest.param(
+        *("key/map key", "true", "DATATYPE_MISMATCH.INVALID_ORDERING_TYPE"),
+        marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
+    ),
 ]
 
 
