@@ -233,22 +233,53 @@ pub(in crate::resolver) fn unresolved_column_error(
     // list, so a column of its input that the list does not carry through is not a name there and
     // must not reach the suggestion. A grouping expression is only one when it is selected too.
     // Outside a `HAVING` the schema is the input itself and every column is a name.
+    //
+    // A wildcard in that list is not a name of its own: it has not been expanded yet, so it is
+    // still called `*`, and what it contributes to the output are the columns of what it targets.
+    // It must neither become a candidate nor take the real ones away.
+    let is_wildcard = |x: &NamedExpr| x.name.as_slice() == ["*"];
+    let wildcards = state
+        .get_projections_for_having()
+        .iter()
+        .filter(|x| is_wildcard(x))
+        .map(|x| match &x.expr {
+            #[expect(deprecated)]
+            expr::Expr::Wildcard { qualifier, .. } => qualifier.clone(),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
     let projections = state
         .get_projections_for_having()
         .iter()
+        .filter(|x| !is_wildcard(x))
         .flat_map(|x| x.name.iter())
         .collect::<Vec<_>>();
-    let candidates = if projections.is_empty() {
+    let candidates = if projections.is_empty() && wildcards.is_empty() {
         candidates
     } else {
+        let expanded = |qualifier: &[String]| {
+            wildcards.iter().any(|x| match x {
+                // The expansion compares the qualifier literally, and the one the wildcard
+                // carries was already replaced with the matching one in the schema.
+                Some(x) => qualifier.ends_with(qualifier_parts(Some(x)).as_slice()),
+                None => true,
+            })
+        };
         candidates
             .into_iter()
-            .filter(|parts| parts.last().is_some_and(|x| projections.contains(&x)))
+            .filter(|parts| {
+                let (name, qualifier) = match parts.split_last() {
+                    Some((name, qualifier)) => (name, qualifier),
+                    None => return false,
+                };
+                projections.contains(&name) || expanded(qualifier)
+            })
             .collect::<Vec<_>>()
     };
     let candidates = state
         .get_projections_for_having()
         .iter()
+        .filter(|x| !is_wildcard(x))
         .filter_map(|x| match x.name.as_slice() {
             [name] if !grouping.contains(&name) => Some(vec![name.clone()]),
             _ => None,
@@ -438,7 +469,7 @@ impl PlanResolver<'_> {
         }
     }
 
-    fn resolve_field_or_nested_field(
+    pub(in crate::resolver) fn resolve_field_or_nested_field(
         &self,
         name: &spec::ObjectName,
         plan_id: Option<i64>,

@@ -311,6 +311,34 @@ Feature: identifier resolution beyond ASCII
         """
       Then query error Did you mean one of the following\? \[`n`, `a`\]\.
 
+    Scenario: a wildcard offers the columns it expands rather than itself
+      # A `*` is not a name of the output: it carries the columns of the input through, and those
+      # are the names the filter offers. Offering `*` would name something nobody can write.
+      When query
+        """
+        SELECT * FROM (SELECT 1 AS a, 2 AS b) GROUP BY a, b HAVING zz > 0
+        """
+      Then query error Did you mean one of the following\? \[`a`, `b`\]\.
+
+    Scenario: a wildcard beside an aggregate alias keeps the alias first
+      # With both in the list the alias still comes before the columns, which tells the expansion
+      # apart from a rule that merely stopped filtering.
+      When query
+        """
+        SELECT *, count(*) AS c FROM (SELECT 1 AS a, 2 AS b) GROUP BY a, b HAVING zz > 0
+        """
+      Then query error Did you mean one of the following\? \[`c`, `a`, `b`\]\.
+
+    Scenario: a qualified wildcard offers only the columns of what it targets
+      # The target chooses which columns are carried through, so the other side of the join is
+      # not offered. Without a join the same query cannot tell that apart from expanding all.
+      When query
+        """
+        SELECT t.* FROM (SELECT 1 AS a, 2 AS b) AS t JOIN (SELECT 1 AS c, 2 AS d) AS u ON t.a = u.c
+        GROUP BY t.a, t.b, u.c, u.d HAVING zz > 0
+        """
+      Then query error Did you mean one of the following\? \[`a`, `b`\]\.
+
     Scenario: the suggestion of a sort offers the names of the projection
       # TODO: the names are the right ones, but their ORDER is not pinned here: both sit at the
       # same distance from the name that was asked for, and Spark breaks that tie with `c` first
@@ -597,6 +625,49 @@ Feature: identifier resolution beyond ASCII
         SELECT s.x.missing FROM (SELECT named_struct('x', named_struct('y', 1)) AS s)
         """
       Then query error \[FIELD_NOT_FOUND\] No such struct field `missing` in `y`\.
+
+    Scenario: a wildcard on a field that matches nothing is a missing field too
+      # The target of a wildcard is resolved as an attribute reference before it is required to
+      # be a struct, so what is reported is the field the walk did not find.
+      When query
+        """
+        SELECT s.zz.* FROM (SELECT named_struct('x', 1) AS s)
+        """
+      Then query error \[FIELD_NOT_FOUND\] No such struct field `zz` in `x`\.
+
+  Rule: A wildcard target that resolves but is not a struct is reported by its type
+
+    Scenario: the target is not a complex type
+      # It resolved, so the failure is the type it reached and not a name that did not resolve.
+      When query
+        """
+        SELECT a.* FROM (SELECT 1 AS a)
+        """
+      Then query error Can only star expand struct data types\. Attribute: `List\(a\)`\.
+
+    Scenario: the target is a nested field that is not a struct
+      # The attribute that is named is the whole path, part by part, as Spark renders the list.
+      When query
+        """
+        SELECT s.inner.* FROM (SELECT named_struct('inner', 1) AS s)
+        """
+      Then query error Can only star expand struct data types\. Attribute: `List\(s, inner\)`\.
+
+    Scenario: the target is a map, which is complex but not a struct
+      When query
+        """
+        SELECT m.* FROM (SELECT map('k', 1) AS m)
+        """
+      Then query error Can only star expand struct data types\. Attribute: `List\(m\)`\.
+
+    Scenario: an ambiguous target is refused before its type is looked at
+      # Resolving the target comes first, so a name that matches twice is refused even when only
+      # one of the two could have been expanded.
+      When query
+        """
+        SELECT s.* FROM (SELECT named_struct('x', 1) AS s, 2 AS s)
+        """
+      Then query error \[AMBIGUOUS_REFERENCE\] Reference `s` is ambiguous, could be: \[`s`, `s`\]\.
 
     Scenario: a field of a struct inside an array is reported the same way
       When query

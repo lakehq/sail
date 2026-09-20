@@ -148,6 +148,22 @@ impl PlanResolver<'_> {
                     .collect(),
             })
             .collect::<PlanResult<Vec<_>>>()?;
+        // No qualifier matched, so Spark resolves the target as an attribute reference and only
+        // then requires what it reached to be a struct. A name that is ambiguous, or that walks
+        // into a field the struct does not have, is therefore reported from the resolution, and
+        // only a target that resolves to nothing is a star that cannot be expanded
+        // (`UnresolvedStarBase.expandStar`).
+        let attribute = self.resolve_field_or_nested_field(name, None, schema, state)?;
+        if attribute.is_some() && candidates.len() != 1 {
+            return Err(PlanError::AnalysisError(format!(
+                "Can only star expand struct data types. Attribute: `List({})`.",
+                name.parts()
+                    .iter()
+                    .map(|x| x.as_ref())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
         candidates.one().map_err(|_| {
             let target = quote_identifier_name(
                 &name
