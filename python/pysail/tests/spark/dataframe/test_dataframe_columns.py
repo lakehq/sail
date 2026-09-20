@@ -282,7 +282,7 @@ def test_an_added_column_carries_no_qualifier(spark):
     df = spark.sql("SELECT 1 AS a, 2 AS b").alias("x")
 
     assert df.withColumn("c", lit(1)).select("x.a").columns == ["a"]
-    with pytest.raises(Exception, match="UNRESOLVED_COLUMN"):
+    with pytest.raises(Exception, match=r"UNRESOLVED_COLUMN\.WITH_SUGGESTION"):
         _ = df.withColumn("c", lit(1)).select("x.c").collect()
 
 

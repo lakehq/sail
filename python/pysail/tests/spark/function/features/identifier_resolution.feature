@@ -145,7 +145,7 @@ Feature: identifier resolution beyond ASCII
         """
         SELECT s.X FROM (SELECT named_struct('x', 1) AS s)
         """
-      Then query error FIELD_NOT_FOUND
+      Then query error \[FIELD_NOT_FOUND\] No such struct field `X` in `x`\.
 
     Scenario: a relation is expanded through a qualifier written in a different case
       # The target of the wildcard is matched by the resolver, so the case it was written in does
@@ -185,7 +185,7 @@ Feature: identifier resolution beyond ASCII
         """
         SELECT s.x FROM (SELECT named_struct('x', 1, 'X', 2) AS s)
         """
-      Then query error AMBIGUOUS_REFERENCE_TO_FIELDS
+      Then query error \[AMBIGUOUS_REFERENCE_TO_FIELDS\] Ambiguous reference to the field `x`\. It appears 2 times in the schema\.
 
     # The name reaches the message as one string, so it is parsed again before it is quoted.
     Scenario: an ambiguous field whose name contains a dot is reported as several quoted parts

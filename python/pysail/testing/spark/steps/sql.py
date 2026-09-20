@@ -260,7 +260,10 @@ def dataframe_for(case, spark):
             F.to_timestamp_ntz(F.lit("2024-01-02"), F.lit(None)).alias("result")
         ),
     }
-    cases.update(_join_cases(spark))
+    # The join cases build three frames as soon as they are asked for, so they are only
+    # consulted when the case is not one of the lazy ones above.
+    if case not in cases:
+        cases.update(_join_cases(spark))
     try:
         return cases[case]()
     except KeyError:

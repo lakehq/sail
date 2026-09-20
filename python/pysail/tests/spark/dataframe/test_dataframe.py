@@ -289,7 +289,7 @@ def test_with_columns_does_not_resolve_a_discarded_alias(spark):
     df = spark.range(1)
 
     assert df.withColumns({"id": lit(1), dotless_id: col("missing")}).collect() == [Row(id=1)]
-    with pytest.raises(Exception, match="UNRESOLVED_COLUMN"):
+    with pytest.raises(Exception, match=re.escape("[UNRESOLVED_COLUMN.WITH_SUGGESTION]")):
         df.withColumns({dotless_id: col("missing"), "id": lit(1)}).collect()
 
 
@@ -664,7 +664,7 @@ def test_replace_subset_matches_name_exactly(spark):
     assert df.replace("x", "y", subset=["S"]).collect() == [Row(s="x")]
     assert spark.createDataFrame([("x",)], ["Ä"]).replace("x", "y", subset=["ä"]).collect() == [Row(Ä="x")]
 
-    with pytest.raises(Exception, match="UNRESOLVED_COLUMN"):
+    with pytest.raises(Exception, match=re.escape("[UNRESOLVED_COLUMN.WITH_SUGGESTION]")):
         df.replace("x", "y", subset=["nope"]).collect()
 
 
@@ -838,7 +838,7 @@ def test_to_schema_does_not_qualify_a_column_it_rebuilds(spark, expression, targ
     df = spark.sql(f"SELECT {expression} AS a").alias("t")
     reconciled = df.to(df.schema if target is None else target)
 
-    with pytest.raises(Exception, match="UNRESOLVED_COLUMN"):
+    with pytest.raises(Exception, match=re.escape("[UNRESOLVED_COLUMN.WITH_SUGGESTION]")):
         reconciled.select("t.a").collect()
 
 
@@ -1169,9 +1169,9 @@ def test_replace_rejects_a_nested_name(spark):
 def test_fillna_rejects_a_subset_name_that_matches_nothing(spark):
     # A subset name that resolves to no column is an error rather than being ignored.
     df = spark.sql("SELECT CAST(NULL AS INT) AS a")
-    with pytest.raises(Exception, match="UNRESOLVED_COLUMN"):
+    with pytest.raises(Exception, match=re.escape("[UNRESOLVED_COLUMN.WITH_SUGGESTION]")):
         df.fillna(0, subset=["nope"]).collect()
-    with pytest.raises(Exception, match="UNRESOLVED_COLUMN"):
+    with pytest.raises(Exception, match=re.escape("[UNRESOLVED_COLUMN.WITH_SUGGESTION]")):
         df.dropna(subset=["nope"]).collect()
 
 
@@ -1230,7 +1230,7 @@ def test_fillna_rejects_an_ambiguous_subset_name(spark):
 
 
 def test_fillna_rejects_a_map_key_that_matches_nothing(spark):
-    with pytest.raises(Exception, match="UNRESOLVED_COLUMN"):
+    with pytest.raises(Exception, match=re.escape("[UNRESOLVED_COLUMN.WITH_SUGGESTION]")):
         spark.sql("SELECT CAST(NULL AS INT) AS a").fillna({"nope": 0}).collect()
 
 
@@ -1249,6 +1249,8 @@ def test_dropna_filters_on_a_nested_subset_name(spark):
 
 @pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_union_by_name_rejects_an_extra_column_on_the_right(spark):
+    # Without `allowMissingColumns` the two sides have to name the same columns. Sail unions
+    # them on the names they share and lets the extra one through instead of refusing.
     left = spark.sql("SELECT 1 AS a")
     right = spark.sql("SELECT 2 AS a, 3 AS b")
     with pytest.raises(Exception, match="NUM_COLUMNS_MISMATCH"):
@@ -1310,6 +1312,8 @@ def test_union_by_name_merges_reordered_nested_struct_fields(spark):
 
 @pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_union_by_name_fills_a_missing_nested_struct_field(spark):
+    # `allowMissingColumns` reaches into a struct as well, filling the field the other side
+    # does not have. Sail compares the two structs whole, so the union fails to plan.
     left = spark.sql("SELECT named_struct('x', 1, 'y', 2) AS s")
     right = spark.sql("SELECT named_struct('x', 3) AS s")
     assert [r.s.asDict() for r in left.unionByName(right, allowMissingColumns=True).collect()] == [
@@ -1320,6 +1324,8 @@ def test_union_by_name_fills_a_missing_nested_struct_field(spark):
 
 @pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_union_by_name_matches_nested_struct_fields_case_insensitively(spark):
+    # The fields of a struct are matched by the resolver, like any other name. Sail compares
+    # them literally, so the two structs are different types and the cast is refused.
     left = spark.sql("SELECT named_struct('x', 1) AS s")
     right = spark.sql("SELECT named_struct('X', 3) AS s")
     assert [r.s.asDict() for r in left.unionByName(right).collect()] == [{"x": 1}, {"x": 3}]
@@ -1327,6 +1333,8 @@ def test_union_by_name_matches_nested_struct_fields_case_insensitively(spark):
 
 @pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_drop_duplicates_rejects_an_empty_subset(spark):
+    # The Connect planner validates the subset before the plan is built, so an empty one is
+    # its own condition rather than the message of whoever finds it later.
     with pytest.raises(Exception, match="DEDUPLICATE_REQUIRES"):
         spark.sql("SELECT 1 AS a").dropDuplicates([]).collect()
 
