@@ -44,8 +44,10 @@ pub(super) fn worthwhile(
     };
     let rows = target_rows as f64;
     let saved = rows * (1.0 - retained) * downstream_work;
+    // Charge both key deduplication and the semijoin hash-table build, using
+    // the pre-deduplication row estimate for both.
     let added = restriction.scan_rows as f64 * options.probe_side_weight
-        + restriction.rows as f64 * options.build_side_weight
+        + 2.0 * restriction.rows as f64 * options.build_side_weight
         + rows * options.probe_side_weight
         + rows * retained * options.output_weight;
     Ok(saved > BENEFIT_MARGIN * added)
@@ -98,8 +100,9 @@ fn retained_fraction(
             width
         }
     };
-    // Source rows are an upper bound on eligible distinct keys, including
-    // duplicate dimension keys. Range intersection can tighten that bound.
+    // Estimated source rows approximate the eligible distinct-key count; they are
+    // not an upper bound when filter selectivity is underestimated. Range
+    // intersection can tighten the estimate.
     let eligible = overlap.map_or(source_rows as f64, |n| n.min(source_rows as f64));
     Some(null_fraction + (1.0 - null_fraction) * (eligible / domain).min(1.0))
 }

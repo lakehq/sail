@@ -63,8 +63,57 @@ Feature: Join reorder propagates selective dimension keys before fact joins
       """
     Then query plan matches snapshot
 
+  Scenario: Early reductions survive Parquet filter pushdown on the dimension scan
+    Given statement template
+      """
+      CREATE OR REPLACE TEMP VIEW early_filter_dimension
+      USING parquet OPTIONS (path {{ dimension.sql }}, pushdown_filters 'true')
+      """
+    When query
+      """
+      EXPLAIN
+      SELECT d.k, g.total
+      FROM early_filter_dimension d
+      JOIN (
+        SELECT a.k, SUM(a.amount) AS total
+        FROM early_filter_facts a JOIN early_filter_facts b
+          ON a.k = b.k AND a.ticket = b.ticket
+        GROUP BY a.k HAVING SUM(a.amount) > 5
+      ) g ON d.k = g.k
+      WHERE d.color = 'red'
+      """
+    Then query plan matches snapshot
+    When query
+      """
+      SELECT d.k, g.total
+      FROM early_filter_dimension d
+      JOIN (
+        SELECT a.k, SUM(a.amount) AS total
+        FROM early_filter_facts a JOIN early_filter_facts b
+          ON a.k = b.k AND a.ticket = b.ticket
+        GROUP BY a.k HAVING SUM(a.amount) > 5
+      ) g ON d.k = g.k
+      WHERE d.color = 'red'
+      """
+    Then query result collected
+      | k | total |
+      | 1 | 10    |
+      | 1 | 10    |
+
   Scenario Outline: A selective filter does not make an expensive dimension scan cheap to duplicate
     Given variable large_dimension for temporary directory early_filter_large_dimension
+    Given statement template
+      """
+      INSERT OVERWRITE DIRECTORY {{ facts.sql }} USING parquet
+      SELECT CASE WHEN id % 10 = 9 THEN NULL ELSE id % 10 END AS k,
+             id AS ticket, CAST(1 AS BIGINT) AS amount
+      FROM range(20000)
+      """
+    Given statement template
+      """
+      CREATE OR REPLACE TEMP VIEW early_filter_facts AS
+      SELECT * FROM parquet.`{{ facts.string }}`
+      """
     Given statement template
       """
       INSERT OVERWRITE DIRECTORY {{ large_dimension.sql }} USING parquet
@@ -103,7 +152,7 @@ Feature: Join reorder propagates selective dimension keys before fact joins
       """
     Then query result collected
       | k | total |
-      | 1 | 10    |
+      | 1 | 2000  |
 
     Examples:
       | rows   |
@@ -187,7 +236,7 @@ Feature: Join reorder propagates selective dimension keys before fact joins
       | total | n  |
       | 10    | 10 |
 
-  Scenario: Cleanup preserves user semijoins whose aliases resemble generated keys
+  Scenario: User semijoins on a selective dimension keep their results
     When query
       """
       SELECT SUM(a.amount) AS total, COUNT(*) AS n
@@ -227,15 +276,15 @@ Feature: Join reorder propagates selective dimension keys before fact joins
       FROM early_filter_dimension d
       JOIN (
         SELECT b.k FROM early_filter_facts a
-        LEFT JOIN early_filter_facts b ON a.ticket = b.ticket AND b.ticket < 5
+        LEFT JOIN early_filter_facts b ON a.ticket = b.ticket AND a.k < 5
       ) f ON d.k <=> f.k
       WHERE d.color = 'red'
       GROUP BY d.k ORDER BY d.k
       """
     Then query result ordered
       | k    | n  |
-      | NULL | 95 |
-      | 1    | 2  |
+      | NULL | 50 |
+      | 1    | 20 |
 
   Scenario: Early filters do not cross top-k boundaries
     When query
@@ -243,7 +292,7 @@ Feature: Join reorder propagates selective dimension keys before fact joins
       SELECT d.k, COUNT(*) AS n
       FROM early_filter_dimension d
       JOIN (
-        SELECT a.k FROM early_filter_facts a
+        SELECT b.k FROM early_filter_facts a
         JOIN (SELECT * FROM early_filter_facts ORDER BY ticket LIMIT 3) b
           ON a.ticket = b.ticket
       ) f ON d.k <=> f.k
@@ -285,22 +334,98 @@ Feature: Join reorder propagates selective dimension keys before fact joins
       | 1    | 20    |
 
   Scenario: Composite restrictions keep key tuples together
+    Given statement template
+      """
+      INSERT OVERWRITE DIRECTORY {{ facts.sql }} USING parquet
+      SELECT CASE WHEN id % 10 = 9 THEN NULL ELSE id % 10 END AS k, id AS ticket,
+             CAST(CASE WHEN id < 50 THEN 10 ELSE 20 END AS BIGINT) AS shade
+      FROM range(100)
+      """
+    Given statement template
+      """
+      INSERT OVERWRITE DIRECTORY {{ dimension.sql }} USING parquet
+      SELECT * FROM VALUES
+        (CAST(1 AS BIGINT), CAST(10 AS BIGINT), 'x'), (CAST(1 AS BIGINT), CAST(10 AS BIGINT), 'x'),
+        (CAST(NULL AS BIGINT), CAST(10 AS BIGINT), 'x'), (CAST(2 AS BIGINT), CAST(20 AS BIGINT), 'x'),
+        (CAST(3 AS BIGINT), CAST(10 AS BIGINT), 'y') AS d(k, shade, tag)
+      """
+    Given statement template
+      """
+      CREATE OR REPLACE TEMP VIEW early_filter_facts AS
+      SELECT * FROM parquet.`{{ facts.string }}`
+      """
+    Given statement template
+      """
+      CREATE OR REPLACE TEMP VIEW early_filter_dimension AS
+      SELECT * FROM parquet.`{{ dimension.string }}`
+      """
+    When query
+      """
+      EXPLAIN
+      SELECT d.k, COUNT(*) AS n
+      FROM early_filter_dimension d
+      JOIN (
+        SELECT b.k, b.shade
+        FROM early_filter_facts a
+        JOIN early_filter_facts b ON a.ticket = b.ticket
+        GROUP BY b.k, b.shade, b.ticket
+      ) f ON d.k <=> f.k AND d.shade <=> f.shade
+      WHERE d.tag = 'x'
+      GROUP BY d.k ORDER BY d.k
+      """
+    Then query plan matches snapshot
     When query
       """
       SELECT d.k, COUNT(*) AS n
       FROM early_filter_dimension d
       JOIN (
-        SELECT a.k, b.color
+        SELECT b.k, b.shade
         FROM early_filter_facts a
-        JOIN (
-          SELECT k, CASE WHEN ticket < 50 THEN 'red' ELSE 'blue' END AS color, ticket
-          FROM early_filter_facts
-        ) b ON a.k <=> b.k AND a.ticket = b.ticket
-      ) f ON d.k <=> f.k AND d.color = f.color
-      WHERE d.color = 'red'
+        JOIN early_filter_facts b ON a.ticket = b.ticket
+        GROUP BY b.k, b.shade, b.ticket
+      ) f ON d.k <=> f.k AND d.shade <=> f.shade
+      WHERE d.tag = 'x'
       GROUP BY d.k ORDER BY d.k
       """
     Then query result ordered
       | k    | n  |
       | NULL | 5  |
       | 1    | 10 |
+      | 2    | 5  |
+    When query
+      """
+      SELECT d.k, COUNT(*) AS n
+      FROM early_filter_dimension d
+      JOIN (
+        SELECT a.k, b.shade
+        FROM early_filter_facts a
+        JOIN early_filter_facts b ON a.ticket = b.ticket
+        GROUP BY a.k, b.shade, b.ticket
+      ) f ON d.k <=> f.k AND d.shade <=> f.shade
+      WHERE d.tag = 'x'
+      GROUP BY d.k ORDER BY d.k
+      """
+    Then query result ordered
+      | k    | n  |
+      | NULL | 5  |
+      | 1    | 10 |
+      | 2    | 5  |
+
+  Scenario: Early filters preserve volatile grouping expressions outside the join keys
+    When query
+      """
+      SELECT d.k, g.n
+      FROM early_filter_dimension d
+      JOIN (
+        SELECT k, COUNT(*) AS n
+        FROM early_filter_facts
+        GROUP BY k, CAST(rand(42) * 2 AS INT)
+      ) g ON d.k = g.k
+      WHERE d.color = 'red'
+      """
+    Then query result collected
+      | k | n |
+      | 1 | 3 |
+      | 1 | 3 |
+      | 1 | 7 |
+      | 1 | 7 |

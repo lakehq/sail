@@ -17,7 +17,7 @@ use datafusion::error::Result;
 use datafusion::logical_expr::{JoinType, Operator};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::expressions::{BinaryExpr, Column, InListExpr};
-use datafusion::physical_plan::aggregates::AggregateExec;
+use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use datafusion::physical_plan::execution_plan::reset_plan_states;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
@@ -144,6 +144,16 @@ fn visit(
             })
             .collect();
         let keys = Arc::new(ProjectionExec::try_new(expr, Arc::clone(source))?);
+        let key_stats = StatisticsContext::new().compute(keys.as_ref(), &StatisticsArgs::new())?;
+        // Match JoinSelection's byte-first collection threshold: the benefit
+        // estimate does not account for hash-repartitioning the target scan.
+        let can_collect = match key_stats.total_byte_size.get_value() {
+            Some(&bytes) => bytes < config.optimizer.hash_join_single_partition_threshold,
+            None => rows < max_rows,
+        };
+        if !can_collect {
+            continue;
+        }
         let (source, source_keys) = source_lineage(Arc::clone(source), source_keys);
         let restriction = Restriction {
             keys,
@@ -280,6 +290,11 @@ fn push(
             return replace_children_if_necessary(plan, vec![child]);
         }
     } else if let Some(aggregate) = plan.downcast_ref::<AggregateExec>() {
+        for (expr, _) in aggregate.group_expr().expr() {
+            if volatile(expr)? {
+                return Ok(plan);
+            }
+        }
         // Grouping sets can synthesize NULL keys and global aggregation can emit
         // a row on empty input. Neither allows this transformation.
         if !aggregate.group_expr().has_grouping_set() {
@@ -362,10 +377,28 @@ fn insert(
         source_keys: restriction.source_keys.clone(),
     });
     context.remaining -= 1;
-    Ok(Arc::new(HashJoinExec::try_new(
-        // Each independent consumer needs the complete key set, not a shared
-        // work-stealing scan queue. Key-set materialization is a separate concern.
+    // Hash semijoins enumerate duplicate build matches before discarding them.
+    // Deduplicate only the copied keys; the original join retains multiplicity.
+    let distinct_keys = Arc::new(AggregateExec::try_new(
+        AggregateMode::Single,
+        PhysicalGroupBy::new_single(
+            (0..keys.len())
+                .map(|i| {
+                    (
+                        column(&restriction.keys, i),
+                        format!("__early_join_key_{i}"),
+                    )
+                })
+                .collect(),
+        ),
+        vec![],
+        vec![],
+        // Each independent consumer needs its own scan queue.
         reset_plan_states(Arc::clone(&restriction.keys))?,
+        restriction.keys.schema(),
+    )?);
+    Ok(Arc::new(HashJoinExec::try_new(
+        distinct_keys,
         plan,
         on,
         None,

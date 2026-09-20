@@ -46,15 +46,11 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(OutputRequirements::new_add_mode()));
     rules.push(Arc::new(AggregateStatistics::new()));
     if options.enable_join_reorder {
-        // Establish scan filters before estimating early join reductions.
-        rules.push(Arc::new(FilterPushdown::new()));
         rules.push(Arc::new(JoinReorder::new(options.join_reorder)));
     }
     rules.push(Arc::new(JoinSelection::new()));
     rules.push(Arc::new(LimitedDistinctAggregation::new()));
-    if !options.enable_join_reorder {
-        rules.push(Arc::new(FilterPushdown::new()));
-    }
+    rules.push(Arc::new(FilterPushdown::new()));
     // WindowTopN checks DataFusion's `enable_window_topn`, which defaults to false because
     // PartitionedTopKExec can regress memory and runtime for high-cardinality partition keys.
     // Revisit the opt-in default when that trade-off is addressed.
@@ -89,20 +85,28 @@ mod tests {
 
     #[test]
     fn test_optimizer_rules() -> datafusion::common::Result<()> {
-        let optimizers = get_physical_optimizers(Default::default());
         let datafusion_optimizers = PhysicalOptimizer::default().rules;
 
         let datafusion_optimizer_names: Vec<&str> =
             datafusion_optimizers.iter().map(|opt| opt.name()).collect();
-        let actual_datafusion_optimizer_names: Vec<&str> = optimizers
-            .iter()
-            .map(|opt| opt.name())
-            .filter(|name| datafusion_optimizer_names.contains(name))
-            .collect();
-        assert_eq!(
-            datafusion_optimizer_names, actual_datafusion_optimizer_names,
-            "the custom physical optimizer rules should include all the default DataFusion optimizer rules in the same order"
-        );
+        // `JoinReorder` and `JoinSelection` estimate cardinality from the `FilterExec` above
+        // a scan, which `FilterPushdown` removes when the source applies the predicate exactly
+        // (e.g. Parquet with `pushdown_filters`). Enabling join reorder must not move it earlier.
+        for enable_join_reorder in [false, true] {
+            let optimizers = get_physical_optimizers(PhysicalOptimizerOptions {
+                enable_join_reorder,
+                ..Default::default()
+            });
+            let actual_datafusion_optimizer_names: Vec<&str> = optimizers
+                .iter()
+                .map(|opt| opt.name())
+                .filter(|name| datafusion_optimizer_names.contains(name))
+                .collect();
+            assert_eq!(
+                datafusion_optimizer_names, actual_datafusion_optimizer_names,
+                "the custom physical optimizer rules should include all the default DataFusion optimizer rules in the same order (enable_join_reorder = {enable_join_reorder})"
+            );
+        }
 
         Ok(())
     }
