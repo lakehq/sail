@@ -981,13 +981,51 @@ def test_to_schema_reorders_nested_struct_fields(spark):
     assert src.to(target).collect() == [Row(s=Row(Y="a", X=1))]
 
 
-@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_to_schema_rejects_nullable_column_for_non_nullable_field(spark):
     # A nullable input column cannot be narrowed to a non-nullable target field.
     src = spark.sql("SELECT CAST(NULL AS INT) AS a")
     target = StructType([StructField("a", IntegerType(), False)])
 
-    with pytest.raises(Exception, match="NULLABLE_COLUMN_OR_FIELD"):
+    with pytest.raises(
+        Exception,
+        match=re.escape(
+            "[NULLABLE_COLUMN_OR_FIELD] Column or field `a` is nullable while it's required to be non-nullable."
+        ),
+    ):
+        src.to(target).collect()
+
+
+def test_to_schema_checks_nullability_before_it_fills_a_missing_field(spark):
+    # `reconcileColumnType` refuses the narrowing of a column it matched whatever the fields
+    # around it are, so a target that also adds a column to fill does not get to return rows with
+    # a schema that claims the column cannot be null. A source that is already non-nullable is
+    # the other side of the rule, and it must still go through.
+    target = StructType([StructField("a", IntegerType(), False), StructField("z", StringType(), True)])
+    nullable = spark.createDataFrame([(1,)], "a int")
+    non_nullable = spark.sql("SELECT 1 AS a")
+
+    assert nullable.schema["a"].nullable is True
+    with pytest.raises(Exception, match=re.escape("[NULLABLE_COLUMN_OR_FIELD]")):
+        nullable.to(target).collect()
+
+    assert non_nullable.schema["a"].nullable is False
+    assert [tuple(row) for row in non_nullable.to(target).collect()] == [(1, None)]
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
+def test_to_schema_rejects_a_nested_field_narrowed_to_non_nullable(spark):
+    # The reconciliation walks into a struct and applies the same rule there, naming the whole
+    # path it walked. Sail rebuilds a nested target with a cast instead of field by field, so the
+    # check never reaches the field.
+    src = spark.sql("SELECT named_struct('b', CAST(NULL AS INT)) AS a")
+    target = StructType([StructField("a", StructType([StructField("b", IntegerType(), False)]), True)])
+
+    with pytest.raises(
+        Exception,
+        match=re.escape(
+            "[NULLABLE_COLUMN_OR_FIELD] Column or field `a`.`b` is nullable while it's required to be non-nullable."
+        ),
+    ):
         src.to(target).collect()
 
 
