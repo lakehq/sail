@@ -359,12 +359,14 @@ fn should_show(previous_plan: &StringifiedPlan, this_plan: &StringifiedPlan) -> 
 
 async fn maybe_collect_metrics(
     options: &ExplainOptions,
-    physical: &Option<Arc<dyn ExecutionPlan>>,
+    physical: &mut Option<Arc<dyn ExecutionPlan>>,
     ctx: &SessionContext,
 ) -> Result<()> {
     if options.analyze {
         // Run the plan to populate metrics. Ignore the output batches.
         if let Some(plan) = physical {
+            *plan =
+                sail_physical_plan::shared::bind_shared_plans(Arc::clone(plan), ctx.task_ctx())?;
             let _ = collect(Arc::clone(plan), ctx.task_ctx()).await?;
         }
     }
@@ -410,10 +412,10 @@ pub async fn explain_string_from_logical_plan(
 
 async fn explain_from_collected(
     ctx: &SessionContext,
-    collected: CollectedPlan,
+    mut collected: CollectedPlan,
     options: ExplainOptions,
 ) -> PlanResult<ExplainString> {
-    maybe_collect_metrics(&options, &collected.physical_plan, ctx)
+    maybe_collect_metrics(&options, &mut collected.physical_plan, ctx)
         .await
         .map_err(PlanError::from)?;
 

@@ -621,6 +621,9 @@ data:
     physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
+    physical_plan after reuse_subplans:
+    SAME TEXT AS ABOVE
+
     physical_plan:
     DeltaCommitExec(table_path=file://<tmp>/delta_update/)
       CoalescePartitionsExec

@@ -27,6 +27,7 @@ use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::coalesce::CoalesceExec;
 use sail_physical_plan::remote_checkpoint::RemoteCheckpointCommitExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
+use sail_physical_plan::shared::SharedPlanExec;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::job_graph::{
@@ -47,6 +48,7 @@ impl JobGraph {
             stages: vec![],
             schema: plan.schema(),
             options,
+            shared_inputs: Default::default(),
         };
         let last = build_job_graph(plan, PartitionUsage::Once, &mut graph)?.plan;
         let (last, inputs) = rewrite_inputs(last)?;
@@ -258,6 +260,52 @@ fn plan_job_graph_stages(
     driver_stage_handling: DriverStageHandling,
     scalar_context: Option<ScalarSubqueryContext<'_>>,
 ) -> ExecutionResult<PlannedSubtree> {
+    if let Some(shared) = plan.downcast_ref::<SharedPlanExec>() {
+        let input = if let Some(input) = graph.shared_inputs.get(&shared.id()) {
+            input.clone()
+        } else {
+            let producer = plan_job_graph_stages(
+                shared.input().clone(),
+                PartitionUsage::Once,
+                graph,
+                DriverStageHandling::CreateStage,
+                scalar_context,
+            )?;
+            let input =
+                if let Some(input) = producer.plan.downcast_ref::<StageInputExec<StageInput>>() {
+                    let input = input.input().clone();
+                    // Existing storage/Celeborn exchanges are already replayable.
+                    if matches!(graph.stages[input.stage].mode, OutputMode::Pipelined) {
+                        graph.stages[input.stage].mode = OutputMode::Replay;
+                    }
+                    input
+                } else {
+                    // Preserve the producer's partition numbers and ordering. A
+                    // Celeborn reducer cannot currently address individual mapper
+                    // partitions, so non-exchange reuse uses Flight replay there.
+                    let mode = match graph.options.shuffle_backend {
+                        ShuffleBackendKind::Storage { .. } => OutputMode::Blocking,
+                        _ => OutputMode::Replay,
+                    };
+                    let stage = push_stage(
+                        producer.plan,
+                        graph,
+                        OutputDistribution::RoundRobinBatch { channels: 1 },
+                        TaskPlacement::Worker,
+                        mode,
+                    )?;
+                    StageInput {
+                        stage,
+                        mode: InputMode::Forward,
+                    }
+                };
+            graph.shared_inputs.insert(shared.id(), input.clone());
+            input
+        };
+        return Ok(PlannedSubtree::without_pending_scalar_subquery_expr(
+            Arc::new(StageInputExec::new(input, plan.properties().clone())),
+        ));
+    }
     if let Some(scalar) = plan.downcast_ref::<ScalarSubqueryExec>() {
         return build_scalar_subquery_job_graph(scalar, usage, graph, driver_stage_handling);
     }
@@ -929,6 +977,7 @@ mod tests {
     use sail_physical_plan::coalesce::CoalesceExec;
     use sail_physical_plan::remote_checkpoint::RemoteCheckpointCommitExec;
     use sail_physical_plan::repartition::ExplicitRepartitionExec;
+    use sail_physical_plan::shared::SharedPlanExec;
 
     use super::{JobGraph, JobGraphOptions, create_scalar_subquery_input};
     use crate::job_graph::{InputMode, OutputDistribution, OutputMode, StageInput, TaskPlacement};
@@ -941,6 +990,38 @@ mod tests {
 
     fn empty_plan() -> Arc<dyn ExecutionPlan> {
         Arc::new(EmptyExec::new(schema()))
+    }
+
+    #[test]
+    fn test_shared_producer_has_one_stage_and_multiple_inputs() {
+        for options in [
+            flight_shuffle_options(),
+            blocking_shuffle_options(),
+            celeborn_shuffle_options(),
+        ] {
+            for exchange in [false, true] {
+                let producer = if exchange {
+                    Arc::new(
+                        RepartitionExec::try_new(empty_plan(), Partitioning::RoundRobinBatch(4))
+                            .unwrap(),
+                    ) as Arc<dyn ExecutionPlan>
+                } else {
+                    empty_plan()
+                };
+                let shared = Arc::new(SharedPlanExec::new(0, producer)) as Arc<dyn ExecutionPlan>;
+                let single = JobGraph::try_new(shared.clone(), options.clone()).unwrap();
+                let plan = UnionExec::try_new(vec![shared.clone(), shared]).unwrap();
+                let graph = JobGraph::try_new(plan, options.clone()).unwrap();
+                assert_eq!(graph.stages().len(), single.stages().len());
+                let inputs = &graph.stages().last().unwrap().inputs;
+                assert_eq!(inputs.len(), 2);
+                assert_eq!(inputs[0].stage, inputs[1].stage);
+                assert!(!matches!(
+                    graph.stages()[inputs[0].stage].mode,
+                    OutputMode::Pipelined
+                ));
+            }
+        }
     }
 
     fn flight_shuffle_options() -> JobGraphOptions {
@@ -1109,6 +1190,7 @@ mod tests {
                 stages: vec![],
                 schema: schema(),
                 options,
+                shared_inputs: Default::default(),
             };
             let input = create_scalar_subquery_input(&empty_plan(), &mut graph).unwrap();
 

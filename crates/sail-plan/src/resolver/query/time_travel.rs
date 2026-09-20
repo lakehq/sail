@@ -230,7 +230,15 @@ impl PlanResolver<'_> {
     async fn execute_time_travel_scalar(&self, expr: Expr) -> PlanResult<ScalarValue> {
         let expr = Self::cap_time_travel_scalar_subqueries(expr)?;
         let plan = Self::build_time_travel_scalar_plan(expr)?;
-        let batches = self.ctx.execute_logical_plan(plan).await?.collect().await?;
+        let physical = self
+            .ctx
+            .execute_logical_plan(plan)
+            .await?
+            .create_physical_plan()
+            .await?;
+        let physical =
+            sail_physical_plan::shared::bind_shared_plans(physical, self.ctx.task_ctx())?;
+        let batches = datafusion::physical_plan::collect(physical, self.ctx.task_ctx()).await?;
         let mut total_rows = 0usize;
         let mut value = None;
         for batch in batches {
