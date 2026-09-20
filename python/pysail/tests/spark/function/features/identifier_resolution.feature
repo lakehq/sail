@@ -147,6 +147,18 @@ Feature: identifier resolution beyond ASCII
         """
       Then query error FIELD_NOT_FOUND
 
+    Scenario: a relation is expanded through a qualifier written in a different case
+      # The target of the wildcard is matched by the resolver, so the case it was written in does
+      # not have to be the one the relation was declared with. Getting this wrong expands nothing
+      # and returns an empty row rather than failing, which is why the columns are asserted.
+      When query
+        """
+        SELECT T.* FROM (SELECT 1 AS x, 2 AS y) AS t
+        """
+      Then query result
+        | x | y |
+        | 1 | 2 |
+
     Scenario: a struct is expanded through a qualifier written in a different case
       # The wildcard target is matched by the resolver, but the expansion compares the qualifier
       # literally, so the qualifier that the user wrote has to be replaced with the one in the

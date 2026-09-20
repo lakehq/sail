@@ -1424,6 +1424,19 @@ def test_with_field_matches_the_existing_field_with_the_resolver(spark):
     assert replaced.schema["s"].dataType.simpleString() == "struct<A:int>"
 
 
+def test_a_using_join_key_is_reachable_through_the_qualifier_of_each_side(spark):
+    # The key of a `USING` join is one column in the output, but each side keeps its own hidden
+    # copy, so the qualifier of either side still reaches it. Both sides are asserted because
+    # keeping only the left one would pass a test that checks just `L`.
+    left = spark.sql("SELECT 1 AS k, 10 AS a").alias("L")
+    right = spark.sql("SELECT 1 AS k, 20 AS b").alias("R")
+
+    joined = left.join(right, "k")
+
+    assert [tuple(row) for row in joined.select("L.k").collect()] == [(1,)]
+    assert [tuple(row) for row in joined.select("R.k").collect()] == [(1,)]
+
+
 def test_a_join_key_does_not_shift_the_columns_of_a_later_operation(spark):
     # A `USING` join keeps the key of each side as a hidden field, interleaved with the visible
     # ones. An operation that pairs the names of the schema with its columns by POSITION would
