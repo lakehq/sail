@@ -280,6 +280,7 @@ use sail_physical_plan::data_source::RemoteDataSourceExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
+use sail_physical_plan::optional_filter::OptionalFilterExpr;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::remote_checkpoint::{
     CheckpointDataSource, RemoteCheckpointCommitExec, RemoteCheckpointWriteExec,
@@ -313,7 +314,7 @@ use crate::plan::r#gen::extended_window_udf::UdwfKind;
 use crate::plan::r#gen::{
     CastColumnExprNode, ExtendedAggregateUdf, ExtendedPhysicalExprNode, ExtendedPhysicalPlanNode,
     ExtendedScalarUdf, ExtendedStreamUdf, ExtendedWindowUdf, IcebergPartitionTransformExprNode,
-    LambdaExprNode, LambdaVariableExprNode,
+    LambdaExprNode, LambdaVariableExprNode, OptionalFilterExprNode,
 };
 use crate::plan::{StageInputExec, r#gen};
 use crate::proto::decode::{
@@ -4037,6 +4038,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             .expr_kind
             .ok_or_else(|| plan_datafusion_err!("missing physical expr node"))?;
         match expr_kind {
+            ExprKind::OptionalFilter(_) => {
+                let [predicate] = inputs else {
+                    return plan_err!(
+                        "OptionalFilterExpr expects exactly one input, got {}",
+                        inputs.len()
+                    );
+                };
+                Ok(Arc::new(OptionalFilterExpr::new(Arc::clone(predicate))))
+            }
             ExprKind::SchemaEvolutionCast(node) => {
                 let (input, input_field, target_field, matching, timezone_mode) = self
                     .try_decode_cast_column_expr(&node, inputs, "SchemaEvolutionCastColumnExpr")?;
@@ -4119,7 +4129,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         _ctx: &PhysicalExprEncodeCtx<'_>,
     ) -> Result<()> {
         // Lambdas are handled in converter.rs, but we leave it here for defensive programming.
-        let expr_kind = if let Some(cast) = node.downcast_ref::<SchemaEvolutionCastColumnExpr>() {
+        let expr_kind = if node.is::<OptionalFilterExpr>() {
+            ExprKind::OptionalFilter(OptionalFilterExprNode {})
+        } else if let Some(cast) = node.downcast_ref::<SchemaEvolutionCastColumnExpr>() {
             let node = self.try_encode_cast_column_expr(
                 cast.input_field().as_ref(),
                 cast.target_field().as_ref(),
@@ -6033,6 +6045,155 @@ mod tests {
         assert_eq!(
             format!("{:?}", scan_filter.current()?),
             format!("{:?}", lit(false))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_remote_plan_round_trip_preserves_optional_remapped_filter_state() -> Result<()> {
+        use datafusion::arrow::array::{BooleanArray, Int64Array};
+        use datafusion::logical_expr::Operator;
+        use datafusion::physical_expr::expressions::{BinaryExpr, DynamicFilterPhysicalExpr, lit};
+        use datafusion::physical_plan::filter::FilterExec;
+        use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("padding", DataType::Int64, false),
+            Field::new("stored_value", DataType::Int64, false),
+        ]));
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::new(Column::new("value", 0)) as Arc<dyn PhysicalExpr>],
+            lit(true),
+        )) as Arc<dyn PhysicalExpr>;
+        let scan_filter = Arc::clone(&dynamic_filter)
+            .with_new_children(vec![Arc::new(Column::new("stored_value", 1))])?;
+        let optional_filter = Arc::new(OptionalFilterExpr::new(Arc::clone(&scan_filter)));
+        let parquet_source =
+            Arc::new(ParquetSource::new(Arc::clone(&schema)).with_predicate(scan_filter));
+        let file_scan = FileScanConfigBuilder::new(
+            datafusion::execution::object_store::ObjectStoreUrl::local_filesystem(),
+            parquet_source,
+        )
+        .build();
+        let scan = DataSourceExec::from_data_source(file_scan) as Arc<dyn ExecutionPlan>;
+        let exact_filter = Arc::new(FilterExec::try_new(optional_filter, scan)?);
+        let projection = Arc::new(ProjectionExec::try_new(
+            vec![ProjectionExpr {
+                expr: Arc::new(Column::new("stored_value", 1)),
+                alias: "value".to_string(),
+            }],
+            exact_filter,
+        )?);
+        let plan =
+            Arc::new(FilterExec::try_new(dynamic_filter, projection)?) as Arc<dyn ExecutionPlan>;
+
+        let codec = RemoteExecutionCodec;
+        let bytes = crate::proto::encode_remote_physical_plan(&codec, plan)?;
+        let decoded =
+            crate::proto::decode_remote_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let filter = decoded
+            .downcast_ref::<FilterExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not a filter"))?;
+        let projection = filter
+            .input()
+            .downcast_ref::<ProjectionExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded filter input is not a projection"))?;
+        let exact_filter = projection
+            .input()
+            .downcast_ref::<FilterExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded projection input is not a filter"))?;
+        let optional_filter = exact_filter
+            .predicate()
+            .downcast_ref::<OptionalFilterExpr>()
+            .ok_or_else(|| plan_datafusion_err!("decoded predicate is not an optional filter"))?;
+        let scan = exact_filter
+            .input()
+            .downcast_ref::<DataSourceExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded filter input is not a data source"))?;
+        let (_, parquet_source) = scan
+            .downcast_to_file_source::<ParquetSource>()
+            .ok_or_else(|| plan_datafusion_err!("decoded data source is not Parquet"))?;
+        let scan_filter = parquet_source
+            .filter()
+            .ok_or_else(|| plan_datafusion_err!("decoded Parquet source has no predicate"))?;
+        let outer_filter = filter
+            .predicate()
+            .downcast_ref::<DynamicFilterPhysicalExpr>()
+            .ok_or_else(|| plan_datafusion_err!("outer predicate is not a dynamic filter"))?;
+        let scan_filter = scan_filter
+            .downcast_ref::<DynamicFilterPhysicalExpr>()
+            .ok_or_else(|| plan_datafusion_err!("scan predicate is not a dynamic filter"))?;
+        assert_eq!(outer_filter.expression_id(), scan_filter.expression_id());
+        assert_eq!(
+            outer_filter.expression_id(),
+            optional_filter.predicate().expression_id(),
+        );
+
+        outer_filter.update(Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("value", 0)),
+            Operator::Gt,
+            lit(10_i64),
+        )))?;
+        outer_filter.mark_complete();
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![100, 0])),
+                Arc::new(Int64Array::from(vec![4, 20])),
+            ],
+        )?;
+        // The columns yield opposite predicates: this checks the decoded
+        // consumer uses stored_value@1 after an update expressed as value@0.
+        let values = optional_filter
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())?;
+        assert_eq!(
+            values.as_any().downcast_ref::<BooleanArray>(),
+            Some(&BooleanArray::from(vec![false, true])),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_optional_filter_round_trip_resets_sampling_state() -> Result<()> {
+        use datafusion::arrow::array::{BooleanArray, Int64Array};
+        use datafusion::logical_expr::Operator;
+        use datafusion::physical_expr::expressions::{BinaryExpr, DynamicFilterPhysicalExpr, lit};
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            false,
+        )]));
+        let column: Arc<dyn PhysicalExpr> = Arc::new(Column::new("value", 0));
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::clone(&column)],
+            Arc::new(BinaryExpr::new(column, Operator::Gt, lit(10_i64))),
+        ));
+        dynamic_filter.mark_complete();
+        let optional_filter: Arc<dyn PhysicalExpr> =
+            Arc::new(OptionalFilterExpr::new(dynamic_filter));
+        let sample = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int64Array::from(vec![20, 40]))],
+        )?;
+        optional_filter.evaluate(&sample)?;
+
+        let decoded = round_trip_expr(&optional_filter, schema.as_ref())?;
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(Int64Array::from(vec![4, 20]))])?;
+        // The original consumer bypasses after its nonselective sample. The
+        // decoded consumer must sample independently and reject value 4.
+        let original = optional_filter
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())?;
+        let decoded = decoded.evaluate(&batch)?.into_array(batch.num_rows())?;
+        assert_eq!(
+            original.as_any().downcast_ref::<BooleanArray>(),
+            Some(&BooleanArray::from(vec![true, true])),
+        );
+        assert_eq!(
+            decoded.as_any().downcast_ref::<BooleanArray>(),
+            Some(&BooleanArray::from(vec![false, true])),
         );
         Ok(())
     }

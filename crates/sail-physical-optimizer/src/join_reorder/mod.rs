@@ -23,10 +23,13 @@ mod builder;
 mod cardinality_estimator;
 mod cost_model;
 mod dp_plan;
+mod early_join_filter;
 mod enumerator;
 mod graph;
 mod join_set;
 mod reconstructor;
+
+pub(crate) use early_join_filter::PropagateJoinFilters;
 
 #[derive(Debug, Clone)]
 pub struct JoinReorderOptions {

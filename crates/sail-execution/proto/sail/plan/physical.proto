@@ -99,8 +99,12 @@ message ExtendedPhysicalExprNode {
     LambdaExprNode lambda = 3;
     LambdaVariableExprNode lambda_variable = 4;
     IcebergPartitionTransformExprNode iceberg_partition_transform = 5;
+    OptionalFilterExprNode optional_filter = 6;
   }
 }
+
+// Sampling decisions are local execution state and are not serialized.
+message OptionalFilterExprNode {}
 
 message IcebergPartitionTransformExprNode {
   string transform = 1;
