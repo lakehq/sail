@@ -78,9 +78,13 @@ impl UpdateStructField {
                                 new_field,
                                 case_sensitive,
                             )?;
-                            new_fields.push(Arc::new(
-                                field.as_ref().clone().with_data_type(new_data_type),
-                            ));
+                            // An intermediate level is rebuilt as `WithField(name, ...)` too, so
+                            // it takes the name that was asked for, like the last one.
+                            new_fields.push(Arc::new(Field::new(
+                                current_field,
+                                new_data_type,
+                                field.is_nullable(),
+                            )));
                         }
                     } else {
                         new_fields.push(Arc::clone(field));
@@ -117,6 +121,7 @@ impl UpdateStructField {
         field_names: &[String],
         new_field_array: &ArrayRef,
         new_data_type: &DataType,
+        case_sensitive: bool,
     ) -> Result<ArrayRef> {
         if field_names.is_empty() {
             return exec_err!("Field name cannot be empty");
@@ -130,30 +135,40 @@ impl UpdateStructField {
             DataType::Struct(fields) => fields.clone(),
             _ => return exec_err!("Expected Struct return type, found {new_data_type}"),
         };
-        let mut new_arrays = Vec::new();
+        let mut new_arrays = Vec::with_capacity(new_fields.len());
 
-        for field in new_fields.iter() {
-            if field.name() == current_field_name {
+        // The columns are walked by POSITION, not by name: the return type keeps the order of the
+        // input and appends at most one field at the end, and a name the resolver matched may
+        // have been rewritten to the spelling that was asked for, so looking it up by name in the
+        // input would miss it.
+        for (index, field) in struct_array.fields().iter().enumerate() {
+            let column = struct_array.column(index);
+            if matches(field.name(), current_field_name, case_sensitive) {
                 if field_names.len() == 1 {
                     new_arrays.push(Arc::clone(new_field_array));
                 } else {
-                    let existing_column =
-                        struct_array.column_by_name(field.name()).ok_or_else(|| {
-                            exec_datafusion_err!("Field `{}` not found", field.name())
-                        })?;
+                    let updated = new_fields.get(index).ok_or_else(|| {
+                        exec_datafusion_err!("Field `{}` not found", field.name())
+                    })?;
                     let new_array = Self::update_nested_field_from_array(
-                        existing_column,
+                        column,
                         &field_names[1..],
                         new_field_array,
-                        field.data_type(),
+                        updated.data_type(),
+                        case_sensitive,
                     )?;
                     new_arrays.push(new_array);
                 }
-            } else if let Some(column) = struct_array.column_by_name(field.name()) {
-                new_arrays.push(Arc::clone(column));
             } else {
-                return exec_err!("Unexpected field `{}` in updated struct", field.name());
+                new_arrays.push(Arc::clone(column));
             }
+        }
+        if new_arrays.len() < new_fields.len() {
+            // Nothing matched, so the field was appended at the end of the return type.
+            if field_names.len() != 1 {
+                return exec_err!("Field `{current_field_name}` not found");
+            }
+            new_arrays.push(Arc::clone(new_field_array));
         }
 
         Ok(Arc::new(StructArray::try_new(
@@ -245,6 +260,7 @@ impl ScalarUDFImpl for UpdateStructField {
             &self.field_names,
             new_field_array,
             return_field.data_type(),
+            self.case_sensitive,
         )?;
         Ok(ColumnarValue::Array(new_array))
     }

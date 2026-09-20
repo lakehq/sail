@@ -372,18 +372,17 @@ impl PlanResolver<'_> {
                         "invalid extraction value for struct: {extraction}"
                     )));
                 };
-                let Ok(name) = fields
-                    .iter()
-                    .filter(|x| x.name().eq_ignore_ascii_case(&name))
-                    .map(|x| x.name().to_string())
-                    .collect::<Vec<_>>()
-                    .one()
-                else {
-                    return Err(PlanError::AnalysisError(format!(
-                        "missing or ambiguous field: {name}"
-                    )));
+                // The field is matched the way every other name is, so it folds the case
+                // unless the analysis is case sensitive, and a name that matches more than one
+                // field is ambiguous rather than missing.
+                let Some(field) = self.resolve_struct_field(&fields, &name)? else {
+                    let names = fields
+                        .iter()
+                        .map(|x| x.name().to_string())
+                        .collect::<Vec<_>>();
+                    return Err(Self::field_not_found_error(&name, &names));
                 };
-                expr.field(name)
+                expr.field(field.name().clone())
             }
             _ => {
                 return Err(PlanError::AnalysisError(format!(

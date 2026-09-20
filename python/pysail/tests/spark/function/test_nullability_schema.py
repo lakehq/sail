@@ -71,6 +71,9 @@ def test_a_struct_literal_builds_non_nullable_fields(spark):
     # `CreateNamedStruct` takes the nullability of each value, so a struct built from literals has
     # fields that cannot be null. Sail builds them nullable, which reaches anything that renders
     # the type: a field that cannot be null is written `NOT NULL` inside `STRUCT<...>`.
+    #
+    # Neither `collect()` nor `simpleString()` shows it, since neither renders nullability. The
+    # lenses that do are the schema read here and the Arrow one (`toArrow`, `_to_table`).
     fields = spark.sql("SELECT named_struct('a', 1, 'b', map('k', 2)) AS s").schema["s"].dataType.fields
 
     assert [(field.name, field.nullable) for field in fields] == [("a", False), ("b", False)]

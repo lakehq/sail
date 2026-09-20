@@ -92,19 +92,13 @@ impl PlanResolver<'_> {
                 )));
             }
             let (input_qualifier, input_field) = input.schema().qualified_field(input_idx);
-            // The reconciliation refuses to narrow a column that can be null to a field that
-            // cannot, and it does so before it looks at the type.
-            //
-            // TODO: Spark applies the same rule to the fields of a struct it walks into, naming
-            // the whole path, while a nested target is rebuilt here with a single cast. See
-            // `test_to_schema_rejects_a_nested_field_narrowed_to_non_nullable`.
-            if input_field.is_nullable() && !target_field.is_nullable() {
-                return Err(PlanError::AnalysisError(format!(
-                    "[NULLABLE_COLUMN_OR_FIELD] Column or field {} is nullable while it's \
-                     required to be non-nullable.",
-                    quote_identifier_name(target_name)
-                )));
-            }
+            // TODO: the reconciliation refuses to narrow a column that can be null to a field
+            // that cannot, before it looks at the type, and applies the same rule to the fields
+            // of a struct it walks into, naming the whole path. The check cannot be turned on
+            // while nullability is computed more loosely here than in Spark: `upper('x')`, a
+            // `named_struct`, a `map` and a `CASE` are all reported nullable here and
+            // non-nullable there, so the rule would refuse what Spark answers. See
+            // `test_to_schema_accepts_a_column_spark_considers_non_nullable`.
             let column = Expr::Column(Column::from((input_qualifier, input_field)));
             let expr = if input_field.data_type() == target_field.data_type() {
                 column

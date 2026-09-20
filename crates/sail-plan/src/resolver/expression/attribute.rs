@@ -591,7 +591,7 @@ impl PlanResolver<'_> {
         )))
     }
 
-    fn field_not_found_error(name: &str, fields: &[String]) -> PlanError {
+    pub(in crate::resolver) fn field_not_found_error(name: &str, fields: &[String]) -> PlanError {
         let fields = fields
             .iter()
             .map(|x| quote_identifier_part(x))

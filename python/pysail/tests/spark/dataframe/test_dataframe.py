@@ -6,7 +6,7 @@ from pandas.testing import assert_frame_equal
 from pyspark.sql import Row
 from pyspark.sql.functions import col, count, expr, first, lit, row_number, struct
 from pyspark.sql.functions import max as spark_max
-from pyspark.sql.types import IntegerType, LongType, StringType, StructField, StructType
+from pyspark.sql.types import IntegerType, LongType, MapType, StringType, StructField, StructType
 from pyspark.sql.window import Window
 
 from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
@@ -981,6 +981,24 @@ def test_to_schema_reorders_nested_struct_fields(spark):
     assert src.to(target).collect() == [Row(s=Row(Y="a", X=1))]
 
 
+def test_to_schema_accepts_a_column_spark_considers_non_nullable(spark):
+    # Spark reports these four as non-nullable and Sail reports them nullable, so a check that
+    # narrows on Sail's own flag would refuse a target Spark answers. Each one is a different
+    # branch of that gap: a plain function, a struct literal, a map literal and a `CASE`.
+    cases = [
+        ("upper('x')", StringType()),
+        ("named_struct('a', 1)", StructType([StructField("a", IntegerType(), True)])),
+        ("map('k', 1)", MapType(StringType(), IntegerType(), True)),
+        ("CASE WHEN 1 > 0 THEN 'x' ELSE 'y' END", StringType()),
+    ]
+    for expression, data_type in cases:
+        source = spark.sql(f"SELECT {expression} AS a")
+        target = StructType([StructField("a", data_type, False)])
+
+        assert len(source.to(target).collect()) == 1
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_to_schema_rejects_nullable_column_for_non_nullable_field(spark):
     # A nullable input column cannot be narrowed to a non-nullable target field.
     src = spark.sql("SELECT CAST(NULL AS INT) AS a")
@@ -995,6 +1013,7 @@ def test_to_schema_rejects_nullable_column_for_non_nullable_field(spark):
         src.to(target).collect()
 
 
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_to_schema_checks_nullability_before_it_fills_a_missing_field(spark):
     # `reconcileColumnType` refuses the narrowing of a column it matched whatever the fields
     # around it are, so a target that also adds a column to fill does not get to return rows with
@@ -1419,6 +1438,63 @@ def test_an_intersection_is_nullable_only_where_both_sides_are(spark):
     result._cached_schema = None  # noqa: SLF001
 
     assert result.schema["a"].nullable is False
+
+
+def test_get_field_matches_the_field_with_the_resolver(spark):
+    # Reading a field by name through `getField` resolves it the way every other name is
+    # resolved, so it folds the case unless the analysis is case sensitive, and a name that
+    # matches nothing is a missing field rather than a message of its own.
+    df = spark.sql("SELECT named_struct('x', 1) AS s")
+
+    assert [tuple(row) for row in df.select(col("s").getField("X")).collect()] == [(1,)]
+    with pytest.raises(Exception, match=re.escape("[FIELD_NOT_FOUND]")):
+        df.select(col("s").getField("zz")).collect()
+
+    try:
+        spark.conf.set("spark.sql.caseSensitive", "true")
+
+        assert [tuple(row) for row in df.select(col("s").getField("x")).collect()] == [(1,)]
+        with pytest.raises(Exception, match=re.escape("[FIELD_NOT_FOUND]")):
+            df.select(col("s").getField("X")).collect()
+    finally:
+        spark.conf.unset("spark.sql.caseSensitive")
+
+
+def test_get_field_reports_a_field_that_two_names_match(spark):
+    # The resolver decides how many fields a name matches, so the same struct is ambiguous when
+    # the case is folded and unambiguous when it is not.
+    df = spark.sql("SELECT named_struct('x', 1, 'X', 2) AS s")
+
+    with pytest.raises(Exception, match=re.escape("[AMBIGUOUS_REFERENCE_TO_FIELDS]")):
+        df.select(col("s").getField("x")).collect()
+
+    try:
+        spark.conf.set("spark.sql.caseSensitive", "true")
+
+        assert [tuple(row) for row in df.select(col("s").getField("x")).collect()] == [(1,)]
+        assert [tuple(row) for row in df.select(col("s").getField("X")).collect()] == [(2,)]
+    finally:
+        spark.conf.unset("spark.sql.caseSensitive")
+
+
+def test_with_field_renames_every_level_of_a_nested_path(spark):
+    # A nested path is rebuilt as a `WithField` at each level, so every level the resolver matched
+    # takes the spelling that was asked for, not only the last one. The rows are asserted as well
+    # as the schema: renaming the type without moving the column underneath is the failure this
+    # pins, and it shows up only when the rows are read.
+    df = spark.sql("SELECT named_struct('a', named_struct('b', 1)) AS s")
+
+    outer = df.withColumn("s", col("s").withField("A.b", lit(9)))
+    assert outer.schema["s"].dataType.simpleString() == "struct<A:struct<b:int>>"
+    assert [row.s.A.b for row in outer.collect()] == [9]
+
+    both = df.withColumn("s", col("s").withField("A.B", lit(9)))
+    assert both.schema["s"].dataType.simpleString() == "struct<A:struct<B:int>>"
+    assert [row.s.A.B for row in both.collect()] == [9]
+
+    exact = df.withColumn("s", col("s").withField("a.b", lit(9)))
+    assert exact.schema["s"].dataType.simpleString() == "struct<a:struct<b:int>>"
+    assert [row.s.a.b for row in exact.collect()] == [9]
 
 
 def test_with_field_matches_the_existing_field_with_the_resolver(spark):
