@@ -19,7 +19,7 @@ use crate::driver::worker_pool::state::WorkerState;
 use crate::driver::worker_pool::{WorkerDescriptor, WorkerPool, WorkerPoolOptions};
 use crate::driver::{DriverActor, DriverMessage, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, WorkerId};
+use crate::id::{JobId, TaskAttempt, TaskKey, TaskKeyDisplay, TaskStreamKey, WorkerId};
 use crate::rpc::ClientOptions;
 use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
@@ -325,7 +325,9 @@ impl WorkerPool {
         &mut self,
         ctx: &mut ActorContext<DriverActor>,
         worker_id: WorkerId,
-        keys: Vec<TaskKey>,
+        job_id: JobId,
+        stage: usize,
+        tasks: Vec<TaskAttempt>,
         definition: Arc<TaskDefinition>,
     ) {
         let running_workers = self.list_running_workers();
@@ -344,9 +346,9 @@ impl WorkerPool {
         let (client, peers) = match prepare() {
             Ok(value) => value,
             Err(error) => {
-                for key in keys {
+                for task in tasks {
                     ctx.send(DriverMessage::UpdateTask {
-                        key,
+                        key: task.task_key(job_id, stage),
                         status: TaskStatus::Failed,
                         message: Some(format!("failed to dispatch task batch: {error}")),
                         cause: Some(CommonErrorCause::new::<PyErrExtractor>(&error)),
@@ -358,11 +360,14 @@ impl WorkerPool {
         };
         let handle = ctx.handle().clone();
         ctx.spawn(async move {
-            if let Err(error) = client.run_task_batch(keys.clone(), definition, peers).await {
-                for key in keys {
+            if let Err(error) = client
+                .run_task_batch(job_id, stage, tasks.clone(), definition, peers)
+                .await
+            {
+                for task in tasks {
                     let _ = handle
                         .send(DriverMessage::UpdateTask {
-                            key,
+                            key: task.task_key(job_id, stage),
                             status: TaskStatus::Failed,
                             message: Some(format!("failed to run task batch: {error}")),
                             cause: Some(CommonErrorCause::new::<PyErrExtractor>(&error)),

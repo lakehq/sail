@@ -7,7 +7,7 @@ use sail_common::actor::ActorHandle;
 use tonic::{Request, Response, Status};
 
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::TaskKey;
+use crate::id::{TaskAttempt, TaskKey};
 use crate::task::definition::TaskDefinition;
 use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage};
 use crate::worker::r#gen::worker_service_server::WorkerService;
@@ -58,13 +58,12 @@ impl WorkerService for WorkerServer {
             .collect::<ExecutionResult<Vec<_>>>()?;
         let definition = crate::task::r#gen::TaskDefinition::decode(definition.as_slice())
             .map_err(|e| Status::invalid_argument(format!("invalid task definition: {e}")))?;
-        let keys = tasks
+        let stage =
+            usize::try_from(stage).map_err(|_| Status::invalid_argument("stage overflow"))?;
+        let tasks = tasks
             .into_iter()
             .map(|task| {
-                Ok(TaskKey {
-                    job_id: job_id.into(),
-                    stage: usize::try_from(stage)
-                        .map_err(|_| Status::invalid_argument("stage overflow"))?,
+                Ok(TaskAttempt {
                     partition: usize::try_from(task.partition)
                         .map_err(|_| Status::invalid_argument("partition overflow"))?,
                     attempt: usize::try_from(task.attempt)
@@ -75,7 +74,9 @@ impl WorkerService for WorkerServer {
         let (result, rx) = tokio::sync::oneshot::channel();
         self.task_runner
             .send(TaskRunnerMessage::RunTaskBatch {
-                keys,
+                job_id: job_id.into(),
+                stage,
+                tasks,
                 definition: Arc::new(TaskDefinition::try_from(definition)?),
                 context: self.context.clone(),
                 peers,

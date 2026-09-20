@@ -19,7 +19,9 @@ use crate::driver::output::{JobOutputItem, JobOutputOutcome};
 use crate::driver::worker_scaler::{WorkerLaunchRequest, WorkerRetryRequest};
 use crate::driver::{DriverMessage, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, TaskStreamKeyDisplay, WorkerId};
+use crate::id::{
+    JobId, TaskAttempt, TaskKey, TaskKeyDisplay, TaskStreamKey, TaskStreamKeyDisplay, WorkerId,
+};
 use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
 use crate::task::scheduling::{TaskAssignment, TaskAssignmentGetter, TaskStreamAssignment};
@@ -668,9 +670,16 @@ impl DriverActor {
                 self.job_scheduler
                     .update_task(key, TaskState::Scheduled, None, None);
             }
+            let tasks = keys
+                .into_iter()
+                .map(|key| TaskAttempt {
+                    partition: key.partition,
+                    attempt: key.attempt,
+                })
+                .collect::<Vec<_>>();
             if let Some(worker_id) = worker {
                 self.worker_pool
-                    .run_task_batch(ctx, worker_id, keys, definition);
+                    .run_task_batch(ctx, worker_id, job_id, stage, tasks, definition);
             } else {
                 let task_runner = self.task_runner.clone();
                 let driver = ctx.handle().clone();
@@ -682,7 +691,9 @@ impl DriverActor {
                         let (result, rx) = oneshot::channel();
                         task_runner
                             .send(TaskRunnerMessage::RunTaskBatch {
-                                keys: keys.clone(),
+                                job_id,
+                                stage,
+                                tasks: tasks.clone(),
                                 definition,
                                 context,
                                 peers: vec![],
@@ -698,10 +709,10 @@ impl DriverActor {
                     }
                     .await;
                     if let Err(error) = output {
-                        for key in keys {
+                        for task in tasks {
                             let _ = driver
                                 .send(DriverMessage::UpdateTask {
-                                    key,
+                                    key: task.task_key(job_id, stage),
                                     status: TaskStatus::Failed,
                                     message: Some(error.to_string()),
                                     cause: Some(CommonErrorCause::new::<PyErrExtractor>(&error)),

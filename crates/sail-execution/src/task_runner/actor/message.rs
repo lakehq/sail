@@ -9,7 +9,7 @@ use tokio::sync::oneshot;
 
 use crate::driver::TaskStatus;
 use crate::error::ExecutionResult;
-use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
+use crate::id::{JobId, TaskAttempt, TaskKey, TaskStreamKey, WorkerId};
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{TaskStreamChannelSink, TaskStreamSink};
 use crate::task::definition::TaskDefinition;
@@ -17,7 +17,9 @@ use crate::worker::WorkerLocation;
 
 pub enum TaskRunnerMessage {
     RunTaskBatch {
-        keys: Vec<TaskKey>,
+        job_id: JobId,
+        stage: usize,
+        tasks: Vec<TaskAttempt>,
         definition: Arc<TaskDefinition>,
         context: Arc<TaskContext>,
         peers: Vec<WorkerLocation>,
@@ -128,11 +130,9 @@ impl SpanAssociation for TaskRunnerMessage {
     fn properties(&self) -> impl IntoIterator<Item = (Cow<'static, str>, Cow<'static, str>)> {
         let mut properties: Vec<(&'static str, String)> = vec![];
         match self {
-            Self::RunTaskBatch { keys, .. } => {
-                if let Some(key) = keys.first() {
-                    properties.push((SpanAttribute::EXECUTION_JOB_ID, key.job_id.to_string()));
-                    properties.push((SpanAttribute::EXECUTION_STAGE, key.stage.to_string()));
-                }
+            Self::RunTaskBatch { job_id, stage, .. } => {
+                properties.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
+                properties.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));
             }
             Self::CloseJob { job_id } => {
                 properties.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));

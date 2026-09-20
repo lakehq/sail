@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use prost::Message;
 
-use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{JobId, TaskKey};
+use crate::error::ExecutionResult;
+use crate::id::{JobId, TaskAttempt, TaskKey};
 use crate::rpc::{ClientHandle, ClientOptions, ClientService};
 use crate::stream::service::{TaskStreamFlightClient, TaskStreamOwner};
 use crate::task::definition::TaskDefinition;
@@ -43,31 +43,30 @@ impl WorkerClient {
 }
 
 impl WorkerClient {
-    /// Sends a task to a remote worker for execution via gRPC.
+    /// Sends a batch of task attempts from one stage to a remote worker via gRPC.
     pub async fn run_task_batch(
         &self,
-        keys: Vec<TaskKey>,
+        job_id: JobId,
+        stage: usize,
+        tasks: Vec<TaskAttempt>,
         definition: Arc<TaskDefinition>,
         peers: Vec<WorkerLocation>,
     ) -> ExecutionResult<()> {
-        let key = keys
-            .first()
-            .ok_or_else(|| ExecutionError::InvalidArgument("empty task batch".into()))?;
         let definition =
             crate::task::r#gen::TaskDefinition::from(definition.as_ref().clone()).encode_to_vec();
         log::debug!(
             "task batch tasks={} encoded definition bytes={}",
-            keys.len(),
+            tasks.len(),
             definition.len()
         );
         let request = RunTaskBatchRequest {
-            job_id: key.job_id.into(),
-            stage: key.stage as u64,
-            tasks: keys
-                .iter()
-                .map(|key| crate::worker::r#gen::TaskAttempt {
-                    partition: key.partition as u64,
-                    attempt: key.attempt as u64,
+            job_id: job_id.into(),
+            stage: stage as u64,
+            tasks: tasks
+                .into_iter()
+                .map(|task| crate::worker::r#gen::TaskAttempt {
+                    partition: task.partition as u64,
+                    attempt: task.attempt as u64,
                 })
                 .collect(),
             definition,

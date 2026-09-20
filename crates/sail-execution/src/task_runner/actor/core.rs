@@ -32,13 +32,16 @@ impl Actor for TaskRunnerActor {
     ) -> ActorAction {
         match message {
             TaskRunnerMessage::RunTaskBatch {
-                keys,
+                job_id,
+                stage,
+                tasks,
                 definition,
                 context,
                 peers,
                 result,
             } => {
-                let output = self.handle_run_task_batch(ctx, keys, definition, context, peers);
+                let output = self
+                    .handle_run_task_batch(ctx, job_id, stage, tasks, definition, context, peers);
                 let _ = result.send(output);
                 ActorAction::Continue
             }

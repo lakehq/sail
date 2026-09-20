@@ -12,7 +12,7 @@ use tokio::sync::oneshot;
 
 use crate::driver::{DriverMessage, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
+use crate::id::{JobId, TaskAttempt, TaskKey, TaskStreamKey, WorkerId};
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{TaskStreamChannelSink, TaskStreamSink};
 use crate::task::definition::TaskDefinition;
@@ -25,20 +25,14 @@ impl TaskRunnerActor {
     pub(super) fn handle_run_task_batch(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        keys: Vec<TaskKey>,
+        job_id: JobId,
+        stage: usize,
+        tasks: Vec<TaskAttempt>,
         definition: Arc<TaskDefinition>,
         context: Arc<TaskContext>,
         peers: Vec<WorkerLocation>,
     ) -> ExecutionResult<()> {
-        if !self.tasks.check_batch(&keys)? {
-            return Ok(());
-        }
-        // Validate shared descriptions before admitting any task. Only descriptions are shared;
-        // every task gets a fresh converter, executable plan, and shuffle reader/writer.
-        let proto = Arc::new(PhysicalPlanNode::decode(definition.plan.as_ref()).map_err(
-            |error| ExecutionError::InvalidArgument(format!("invalid physical plan: {error}")),
-        )?);
-        let schema = Arc::new(crate::proto::try_decode_schema(&definition.schema)?);
+        // Peer tracking is independent of task admission, including canceled or replayed batches.
         if !peers.is_empty()
             && let TaskRunnerPlacement::Worker {
                 worker_id,
@@ -60,8 +54,18 @@ impl TaskRunnerActor {
                 }
             });
         }
-        self.tasks.record_batch(&keys);
-        for key in keys {
+        if !self.tasks.check_batch(job_id, stage, &tasks)? {
+            return Ok(());
+        }
+        // Validate shared descriptions before admitting any task. Only descriptions are shared;
+        // every task gets a fresh converter, executable plan, and shuffle reader/writer.
+        let proto = Arc::new(PhysicalPlanNode::decode(definition.plan.as_ref()).map_err(
+            |error| ExecutionError::InvalidArgument(format!("invalid physical plan: {error}")),
+        )?);
+        let schema = Arc::new(crate::proto::try_decode_schema(&definition.schema)?);
+        self.tasks.record_batch(job_id, stage, &tasks);
+        for task in tasks {
+            let key = task.task_key(job_id, stage);
             let stream = TaskPreparation {
                 session_id: self.session_id.clone(),
                 handle: ctx.handle().clone(),
