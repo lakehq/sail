@@ -9,6 +9,8 @@ use datafusion_expr::{
 };
 use sail_common::utils::string::equals_ignore_case;
 
+use crate::error::field_not_found_plan_err;
+
 /// Matches a field name against the name a `withField` asked for, the way the analyzer resolver
 /// does: it folds the case unless the analysis is case sensitive.
 fn matches(name: &str, target: &str, case_sensitive: bool) -> bool {
@@ -92,22 +94,12 @@ impl UpdateStructField {
                 }
 
                 if !field_found {
-                    if field_names.len() == 1 {
-                        new_fields.push(Arc::new(new_field.clone()));
-                    } else {
-                        let mut intermediate_type = new_field.data_type().clone();
-                        for field_name in field_names.iter().rev().skip(1) {
-                            intermediate_type = DataType::Struct(
-                                vec![Arc::new(Field::new(field_name, intermediate_type, true))]
-                                    .into(),
-                            );
-                        }
-                        new_fields.push(Arc::new(Field::new(
-                            current_field,
-                            intermediate_type,
-                            true,
-                        )));
+                    // Only the last name is created. Every level before it is looked up first, so
+                    // a level that is not there is a missing field rather than one to invent.
+                    if field_names.len() > 1 {
+                        return Err(field_not_found_plan_err(current_field, fields));
                     }
+                    new_fields.push(Arc::new(new_field.clone()));
                 }
 
                 Ok(DataType::Struct(new_fields.into()))

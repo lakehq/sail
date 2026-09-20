@@ -112,6 +112,14 @@ impl PlanResolver<'_> {
     /// variable names by lowercasing them instead of using the resolver, so this is the same rule
     /// that detects duplicate names.
     pub(super) fn match_lambda_parameter(&self, a: &str, b: &str) -> bool {
+        if self.config.case_sensitive {
+            return a == b;
+        }
+        // Lowercasing allocates, and beyond ASCII it uses the full mappings that can expand, so
+        // the slow path has to stay for a name that is not ASCII.
+        if a.is_ascii() && b.is_ascii() {
+            return a.eq_ignore_ascii_case(b);
+        }
         self.fold_identifier(a) == self.fold_identifier(b)
     }
 

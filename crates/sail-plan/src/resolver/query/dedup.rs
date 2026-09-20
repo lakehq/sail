@@ -91,10 +91,9 @@ impl PlanResolver<'_> {
         if !contains_map_type(field.data_type()) {
             return Ok(());
         }
-        let name = state
-            .get_field_info(field.name())
-            .map(|x| x.name().to_string())
-            .unwrap_or_else(|_| field.name().clone());
+        // Falling back to the field id here would write the internal name (`#6`) into a message
+        // the user reads, so a missing entry is the invariant break it is.
+        let name = state.get_field_info(field.name())?.name().to_string();
         let data_type = self.spark_type_name(field.data_type())?;
         Err(PlanError::AnalysisError(format!(
             "[UNSUPPORTED_FEATURE.SET_OPERATION_ON_MAP_TYPE] The feature is not supported: \

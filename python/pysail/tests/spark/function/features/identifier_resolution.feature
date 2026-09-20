@@ -724,6 +724,31 @@ Feature: identifier resolution beyond ASCII
         """
       Then query error Can't extract a value from "a\.b"\.
 
+    # An array IS one of the complex types, so it is not the base that is refused: the name is
+    # read as an index into the array, and an index has to be integral.
+    Scenario: a name that reads an array is an index of the wrong type
+      When query
+        """
+        SELECT a.x FROM (SELECT array(1, 2) AS a)
+        """
+      Then query error \[DATATYPE_MISMATCH\.UNEXPECTED_INPUT_TYPE\] Cannot resolve "a\[x\]" due to data type mismatch: The second parameter requires the "INTEGRAL" type, however "x" has the type "STRING"\.
+
+    Scenario: a field read through an array is itself an array
+      # `a.x` gives an array of the field, so the next part indexes that array rather than the
+      # element type the field was declared with.
+      When query
+        """
+        SELECT a.x.y FROM (SELECT array(named_struct('x', 1)) AS a)
+        """
+      Then query error Cannot resolve "a\.x\[y\]" due to data type mismatch: The second parameter requires the "INTEGRAL" type, however "y" has the type "STRING"\.
+
+    Scenario: an array reached through a struct field is indexed the same way
+      When query
+        """
+        SELECT s.a.x FROM (SELECT named_struct('a', array(1)) AS s)
+        """
+      Then query error Cannot resolve "s\.a\[x\]" due to data type mismatch: The second parameter requires the "INTEGRAL" type, however "x" has the type "STRING"\.
+
   Rule: The columns listed by a failed wildcard are ordered the way the analyzer orders them
 
     Scenario: the input columns of a star expansion are sorted by name

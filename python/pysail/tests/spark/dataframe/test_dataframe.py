@@ -1477,6 +1477,59 @@ def test_get_field_reports_a_field_that_two_names_match(spark):
         spark.conf.unset("spark.sql.caseSensitive")
 
 
+def test_drop_fields_matches_the_field_with_the_resolver(spark):
+    # `DropField` keeps the fields the resolver does not match, so it folds the case unless the
+    # analysis is case sensitive, it drops every field a folded name matches, and dropping all of
+    # them is refused rather than producing a struct with no field at all.
+    df = spark.sql("SELECT named_struct('a', 1, 'b', 2) AS s")
+
+    folded = df.select(col("s").dropFields("A"))
+    assert folded.schema[0].dataType.simpleString() == "struct<b:int>"
+    assert [tuple(row[0]) for row in folded.collect()] == [(2,)]
+
+    with pytest.raises(Exception, match=re.escape("[DATATYPE_MISMATCH.CANNOT_DROP_ALL_FIELDS]")):
+        df.select(col("s").dropFields("A", "B")).collect()
+
+    dup = spark.sql("SELECT named_struct('a', 1, 'A', 2, 'b', 3) AS s")
+    both = dup.select(col("s").dropFields("a"))
+    assert both.schema[0].dataType.simpleString() == "struct<b:int>"
+    assert [tuple(row[0]) for row in both.collect()] == [(3,)]
+
+    try:
+        spark.conf.set("spark.sql.caseSensitive", "true")
+
+        exact = df.select(col("s").dropFields("A"))
+        assert exact.schema[0].dataType.simpleString() == "struct<a:int,b:int>"
+        assert [tuple(row[0]) for row in exact.collect()] == [(1, 2)]
+
+        one = dup.select(col("s").dropFields("a"))
+        assert one.schema[0].dataType.simpleString() == "struct<A:int,b:int>"
+        assert [tuple(row[0]) for row in one.collect()] == [(2, 3)]
+    finally:
+        spark.conf.unset("spark.sql.caseSensitive")
+
+
+def test_drop_fields_matches_a_nested_path_with_the_resolver(spark):
+    # A nested path is walked one level at a time, and every level is matched with the resolver.
+    df = spark.sql("SELECT named_struct('a', named_struct('b', 1, 'c', 2)) AS s")
+
+    # The path is rebuilt as a `WithField` per level, so the level the resolver matched takes the
+    # spelling that was asked for, exactly as it does for `withField`.
+    folded = df.select(col("s").dropFields("A.B"))
+    assert folded.schema[0].dataType.simpleString() == "struct<A:struct<c:int>>"
+    assert [row[0].A.c for row in folded.collect()] == [2]
+
+    try:
+        spark.conf.set("spark.sql.caseSensitive", "true")
+
+        # The level is looked up before it is rebuilt, so a spelling the resolver no longer
+        # matches is a missing field rather than a struct left alone.
+        with pytest.raises(Exception, match=re.escape("[FIELD_NOT_FOUND]")):
+            df.select(col("s").dropFields("A.B")).collect()
+    finally:
+        spark.conf.unset("spark.sql.caseSensitive")
+
+
 def test_with_field_renames_every_level_of_a_nested_path(spark):
     # A nested path is rebuilt as a `WithField` at each level, so every level the resolver matched
     # takes the spelling that was asked for, not only the last one. The rows are asserted as well

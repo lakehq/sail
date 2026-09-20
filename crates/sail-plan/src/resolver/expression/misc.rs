@@ -188,7 +188,7 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        use regex::Regex;
+        use regex::RegexBuilder;
         use sail_function::scalar::multi_expr::MultiExpr;
 
         // Remove backticks from the pattern if present
@@ -205,9 +205,15 @@ impl PlanResolver<'_> {
             })?
             .to_string();
         let anchored_pattern = format!("^(?:{normalized_pattern})$");
-        let pattern = Regex::new(&anchored_pattern).map_err(|e| {
-            PlanError::invalid(format!("invalid regex pattern '{}': {}", pattern_str, e))
-        })?;
+        // Every name the byte pattern above cannot judge falls back to this one, so it folds too.
+        // Beyond ASCII it folds more than Java does, which is the direction the TODO below names;
+        // not folding at all would be the opposite divergence, and a silent one.
+        let pattern = RegexBuilder::new(&anchored_pattern)
+            .case_insensitive(!self.config.case_sensitive)
+            .build()
+            .map_err(|e| {
+                PlanError::invalid(format!("invalid regex pattern '{}': {}", pattern_str, e))
+            })?;
 
         // Spark compiles the pattern case-insensitively unless the analysis is case sensitive, and
         // Java's `(?i)` folds ASCII alone
@@ -436,7 +442,8 @@ impl PlanResolver<'_> {
         } else {
             (
                 "dropfield()".to_string(),
-                ScalarUDF::from(DropStructField::new(field_name)).call(vec![expr]),
+                ScalarUDF::from(DropStructField::new(field_name, self.config.case_sensitive))
+                    .call(vec![expr]),
             )
         };
         // Spark collapses chained `withField`/`dropFields` into a single

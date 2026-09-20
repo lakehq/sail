@@ -201,18 +201,20 @@ impl PlanResolver<'_> {
         for name in &columns {
             self.validate_na_column(schema, name.as_ref(), false, state)?;
         }
+        // The entries are parsed once rather than once per column: the name a subset entry
+        // matches by does not depend on the column it is compared against.
+        let subset = columns
+            .iter()
+            .filter_map(|x| Self::na_column_name(x.as_ref()))
+            .collect::<Vec<_>>();
         let not_null_exprs = schema
             .columns()
             .into_iter()
             .filter_map(|column| {
                 (columns.is_empty() || {
-                    let columns = columns
-                        .iter()
-                        .filter_map(|x| Self::na_column_name(x.as_ref()))
-                        .collect::<Vec<_>>();
                     state
                         .get_field_info(column.name())
-                        .is_ok_and(|info| columns.iter().any(|c| self.match_field(info, c, None)))
+                        .is_ok_and(|info| subset.iter().any(|c| self.match_field(info, c, None)))
                 })
                 .then(|| {
                     col(column.clone()).get_type(schema).ok().map(|col_type| {

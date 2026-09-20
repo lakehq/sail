@@ -3005,8 +3005,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 )?;
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::DropStructField(r#gen::DropStructFieldUdf { field_names }) => {
-                let udf = DropStructField::new(field_names);
+            UdfKind::DropStructField(r#gen::DropStructFieldUdf {
+                field_names,
+                case_sensitive,
+            }) => {
+                let udf = DropStructField::new(field_names, case_sensitive);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
             UdfKind::Explode(r#gen::ExplodeUdf { name }) => {
@@ -3572,7 +3575,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             })
         } else if let Some(func) = node.inner().downcast_ref::<DropStructField>() {
             let field_names = func.field_names().to_vec();
-            UdfKind::DropStructField(r#gen::DropStructFieldUdf { field_names })
+            UdfKind::DropStructField(r#gen::DropStructFieldUdf {
+                field_names,
+                case_sensitive: func.case_sensitive(),
+            })
         } else if let Some(_func) = node.inner().downcast_ref::<Explode>() {
             let name = node.name().to_string();
             UdfKind::Explode(r#gen::ExplodeUdf { name })

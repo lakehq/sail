@@ -283,6 +283,7 @@ message PySparkCoGroupMapUdf {
 
 message DropStructFieldUdf {
   repeated string field_names = 1;
+  bool case_sensitive = 2;
 }
 
 message ExplodeUdf {

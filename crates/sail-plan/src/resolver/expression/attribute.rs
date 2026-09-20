@@ -191,7 +191,9 @@ fn order_candidates_by_similarity(
             quote_identifier_parts(parts[start..].iter().map(|x| x.as_str()))
         })
         .collect::<Vec<_>>();
-    candidates.sort_by_key(|x| edit_distance(x, base));
+    // The distance is a dynamic program over every candidate, and the candidates are every
+    // column in scope, so it is computed once per name rather than once per comparison.
+    candidates.sort_by_cached_key(|x| edit_distance(x, base));
     candidates
 }
 
@@ -552,7 +554,10 @@ impl PlanResolver<'_> {
                 | DataType::LargeList(field)
                 | DataType::FixedSizeList(field, _) => match field.data_type() {
                     DataType::Struct(fields) => fields.clone(),
-                    _ => return self.invalid_extract_base_error(&base, &data_type).map(Some),
+                    // An array of anything else is read by index, so the name is not a field that
+                    // is missing but an index whose type is wrong: Spark builds a `GetArrayItem`
+                    // here rather than refusing the base (`ExtractValue.extractValue`).
+                    _ => return Ok(Some(Self::array_index_type_error(&base, part.as_ref()))),
                 },
                 // A map is a complex type that Spark walks into by key. Sail does not reach it
                 // through a dotted name, and that gap is reported the way it always was.
@@ -564,7 +569,23 @@ impl PlanResolver<'_> {
                     // The base of the next step is the whole path walked so far, as Spark
                     // prints it, and not just the name of the field that was reached.
                     base = format!("{base}.{}", part.as_ref());
-                    data_type = field.data_type().clone();
+                    // A field read through an array is an array of that field, so the next step
+                    // sees the type the expression has and not the one the field was declared
+                    // with.
+                    data_type = match &data_type {
+                        DataType::List(_) => DataType::List(Arc::new(Field::new_list_field(
+                            field.data_type().clone(),
+                            true,
+                        ))),
+                        DataType::LargeList(_) => DataType::LargeList(Arc::new(
+                            Field::new_list_field(field.data_type().clone(), true),
+                        )),
+                        DataType::FixedSizeList(_, size) => DataType::FixedSizeList(
+                            Arc::new(Field::new_list_field(field.data_type().clone(), true)),
+                            *size,
+                        ),
+                        _ => field.data_type().clone(),
+                    };
                 }
                 _ => {
                     let names = fields
@@ -576,6 +597,17 @@ impl PlanResolver<'_> {
             }
         }
         Ok(None)
+    }
+
+    /// The error for a name that reads an array, which Spark takes as an index into it: the
+    /// extraction becomes a `GetArrayItem` whose second parameter has to be integral, while the
+    /// name is a string.
+    fn array_index_type_error(base: &str, name: &str) -> PlanError {
+        PlanError::AnalysisError(format!(
+            "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"{base}[{name}]\" due to \
+             data type mismatch: The second parameter requires the \"INTEGRAL\" type, however \
+             \"{name}\" has the type \"STRING\"."
+        ))
     }
 
     /// The error for a name that walks into something that is not a complex type.
@@ -592,14 +624,16 @@ impl PlanResolver<'_> {
     }
 
     pub(in crate::resolver) fn field_not_found_error(name: &str, fields: &[String]) -> PlanError {
+        // Spark renders both through `toSQLId`, which parses the name first, so a field whose
+        // own name contains a dot is written as several quoted parts.
         let fields = fields
             .iter()
-            .map(|x| quote_identifier_part(x))
+            .map(|x| quote_identifier_name(x))
             .collect::<Vec<_>>()
             .join(", ");
         PlanError::AnalysisError(format!(
             "[FIELD_NOT_FOUND] No such struct field {} in {}.",
-            quote_identifier_part(name),
+            quote_identifier_name(name),
             fields
         ))
     }

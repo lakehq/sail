@@ -105,6 +105,11 @@ thread_local! {
 /// case mappings of a character are not always symmetric, and that the mappings are the simple
 /// ones, which may differ from the full mappings that expand to several characters.
 pub fn equals_ignore_case(left: &str, right: &str) -> bool {
+    // Identifiers are overwhelmingly ASCII, where this rule and the ASCII one agree, and every
+    // name resolution funnels through here once per schema field.
+    if left.is_ascii() && right.is_ascii() {
+        return left.eq_ignore_ascii_case(right);
+    }
     let mut left_chars = left.chars();
     let mut right_chars = right.chars();
     loop {
