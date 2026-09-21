@@ -27,7 +27,6 @@ Feature: regexp_count output schema
          |-- result: integer (nullable = false)
         """
 
-    @sail-bug
     Scenario: a nullable column input to regexp_count stays nullable
       When query
         """
@@ -38,3 +37,14 @@ Feature: regexp_count output schema
         root
          |-- result: integer (nullable = true)
         """
+
+  Rule: Return type
+
+    Scenario: the count is returned as INT, matching Spark
+      When query
+        """
+        SELECT regexp_count('abcabc', 'a') AS result
+        """
+      Then query result
+        | result |
+        | 2      |

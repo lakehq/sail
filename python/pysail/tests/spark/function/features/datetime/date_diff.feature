@@ -27,7 +27,6 @@ Feature: date_diff output schema
          |-- result: integer (nullable = true)
         """
 
-    @sail-bug
     Scenario: a nullable column input to date_diff stays nullable
       When query
         """

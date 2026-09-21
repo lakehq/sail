@@ -27,7 +27,6 @@ Feature: regexp_instr output schema
          |-- result: integer (nullable = false)
         """
 
-    @sail-bug
     Scenario: a nullable column input to regexp_instr stays nullable
       When query
         """
@@ -38,3 +37,14 @@ Feature: regexp_instr output schema
         root
          |-- result: integer (nullable = true)
         """
+
+  Rule: Return type
+
+    Scenario: the position is returned as INT, matching Spark
+      When query
+        """
+        SELECT regexp_instr('abcabc', 'b') AS result
+        """
+      Then query result
+        | result |
+        | 2      |
