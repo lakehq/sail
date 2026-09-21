@@ -8,6 +8,7 @@ use crate::shuffle::ShuffleBackendKind;
 #[derive(Debug, Clone)]
 pub struct WorkerLaunchOptions {
     pub enable_tls: bool,
+    pub batch_size: usize,
     pub session_id: String,
     pub driver_id: DriverId,
     pub driver_external_host: String,

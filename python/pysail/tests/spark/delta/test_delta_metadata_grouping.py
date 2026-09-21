@@ -235,6 +235,8 @@ def test_metadata_grouping_uses_deletion_vector_cardinality(spark, tmp_path, met
     ]
     limited = spark.read.format("delta").load(str(path)).limit(3).collect()
     assert sorted(row.id for row in limited) == [3, 5, 6]
+    frame = spark.read.format("delta").option("metadataAsDataRead", metadata_as_data).load(str(path))
+    assert frame.groupBy("id").count().orderBy("id").collect() == [Row(3, 1), Row(5, 1), Row(6, 1)]
     for data_file in path.rglob("*.parquet"):
         data_file.unlink()
     for vector_file in path.rglob("deletion_vector_*.bin"):
