@@ -43,8 +43,9 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DataFusionError, Result, internal_err};
-use datafusion_physical_expr::{Distribution, EquivalenceProperties};
+use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::stream::{StreamExt, once};
 use sail_common_datafusion::array::record_batch::cast_array_recursively;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
@@ -61,7 +62,8 @@ use crate::physical_plan::{
 };
 use crate::schema::adapt_array_to_physical_field;
 use crate::spec::{
-    Action, ColumnMappingMode, DeltaOperation, Metadata, Protocol, TableFeature, TableProperties,
+    Action, ColumnMappingMode, DataSkippingNumIndexedCols, DeltaOperation, Metadata, Protocol,
+    TableFeature, TableProperties, physical_data_skipping_columns,
 };
 use crate::transaction::OperationMetrics;
 use crate::writer::variant_shredding::{VariantShreddingConfig, variant_top_level_columns};
@@ -85,6 +87,7 @@ struct MergeRowMetrics {
     not_matched_by_source_deleted: u64,
     saw_detailed_merge_op: bool,
     uses_source_metric: bool,
+    uses_operation: bool,
 }
 
 enum SourceMetricColumn<'a> {
@@ -229,6 +232,7 @@ impl MergeRowMetrics {
         let Some((index, _)) = batch.schema().column_with_name(OPERATION_COLUMN) else {
             return Ok(());
         };
+        self.uses_operation = true;
         let column = batch.column(index);
         match column.data_type() {
             DataType::Int32 => {
@@ -548,28 +552,15 @@ impl ExecutionPlan for DeltaWriterExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        if self.partition_columns.is_empty() {
-            // Upstream repartitioning controls file counts and small-file behavior.
-            return vec![Distribution::UnspecifiedDistribution];
-        }
+        vec![Distribution::UnspecifiedDistribution]
+    }
 
-        // For partitioned tables, require grouping by the partition key so that each task can
-        // write its partitions correctly without opening many writers concurrently.
-        //
-        // TODO(optimizer): Reduce the cost of meeting this distribution requirement.
-        let mut exprs: Vec<Arc<dyn datafusion_physical_expr::PhysicalExpr>> =
-            Vec::with_capacity(self.partition_columns.len());
-        for name in &self.partition_columns {
-            let idx = match self.input.schema().index_of(name) {
-                Ok(i) => i,
-                Err(_) => return vec![Distribution::UnspecifiedDistribution],
-            };
-            exprs.push(Arc::new(
-                datafusion_physical_expr::expressions::Column::new(name, idx),
-            ));
-        }
-
-        vec![Distribution::HashPartitioned(exprs)]
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        // Writer parallelism follows the input plan. Letting `EnforceDistribution` add a
+        // round-robin repartition just for the writer would make the file layout and the
+        // `operationMetrics` file/byte counters depend on batch arrival order. Operators that do
+        // benefit from partitioning still get it, so upstream parallelism is unaffected.
+        vec![false]
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
@@ -604,6 +595,22 @@ impl ExecutionPlan for DeltaWriterExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    #[expect(deprecated)]
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: datafusion::physical_plan::ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.with_new_children(children)
     }
 
     fn with_new_children(
@@ -721,6 +728,37 @@ impl DeltaWriterExec {
                 Self::variant_shredding_config(&write_context, !stats_excluded_columns.is_empty())?;
             let physical_partition_columns = write_context.physical_partition_columns.clone();
             let logical_kernel_for_mapping = write_context.logical_kernel_for_mapping.clone();
+            let (_, effective_metadata) = Self::effective_protocol_and_metadata(&write_context);
+            let table_properties = effective_metadata
+                .map(|metadata| TableProperties::from(metadata.configuration().iter()))
+                .unwrap_or_default();
+            let logical_stats_schema = logical_kernel_for_mapping
+                .as_ref()
+                .unwrap_or(&write_context.final_schema);
+            let stats_columns =
+                table_properties
+                    .data_skipping_stats_columns
+                    .as_ref()
+                    .map(|columns| {
+                        physical_data_skipping_columns(logical_stats_schema, columns, kernel_mode)
+                    });
+            let num_indexed_cols = if stats_columns.is_some() {
+                0
+            } else {
+                match table_properties
+                    .data_skipping_num_indexed_cols
+                    .unwrap_or(DataSkippingNumIndexedCols::NumColumns(32))
+                {
+                    DataSkippingNumIndexedCols::AllColumns => -1,
+                    DataSkippingNumIndexedCols::NumColumns(count) => {
+                        i32::try_from(count).map_err(|_| {
+                            DataFusionError::Plan(format!(
+                                "delta.dataSkippingNumIndexedCols exceeds i32: {count}"
+                            ))
+                        })?
+                    }
+                }
+            };
 
             let writer_config = WriterConfig::new(
                 writer_schema.clone(),
@@ -729,8 +767,8 @@ impl DeltaWriterExec {
                 None,
                 *target_file_size,
                 write_batch_size.get(),
-                32,
-                None,
+                num_indexed_cols,
+                stats_columns,
                 stats_excluded_columns,
                 variant_shredding,
             );
@@ -847,6 +885,16 @@ impl DeltaWriterExec {
                 {
                     operation_metrics.num_source_rows = Some(source_rows);
                 }
+            } else if matches!(operation.as_ref(), Some(DeltaOperation::Update { .. }))
+                && merge_row_metrics.uses_operation
+            {
+                operation_metrics.num_updated_rows = Some(merge_row_metrics.updated);
+                operation_metrics.num_copied_rows = Some(merge_row_metrics.copied);
+            } else if matches!(operation.as_ref(), Some(DeltaOperation::Delete { .. }))
+                && merge_row_metrics.uses_operation
+            {
+                operation_metrics.num_deleted_rows = Some(merge_row_metrics.deleted);
+                operation_metrics.num_copied_rows = Some(merge_row_metrics.copied);
             }
 
             output_rows.add(usize::try_from(total_rows).unwrap_or(usize::MAX));

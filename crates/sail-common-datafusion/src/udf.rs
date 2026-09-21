@@ -6,7 +6,7 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion_common::Result;
 use sail_common::impl_dyn_object_traits;
-use sail_common::object::DynObject;
+use sail_common::utils::object::DynObject;
 
 /// Trait for implementing UDF to map input stream to output stream.
 pub trait StreamUDF: DynObject + Debug + Send + Sync {

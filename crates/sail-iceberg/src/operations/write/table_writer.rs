@@ -26,9 +26,7 @@ use url::Url;
 use crate::operations::write::arrow_parquet::ArrowParquetWriter;
 use crate::operations::write::base_writer::DataFileWriter;
 use crate::operations::write::config::WriterConfig;
-use crate::operations::write::file_writer::location_generator::{
-    DefaultLocationGenerator, LocationGenerator,
-};
+use crate::operations::write::file_writer::location_generator::DefaultLocationGenerator;
 use crate::operations::write::partition::split_record_batch_by_partition;
 use crate::operations::write::variant_shredding::{
     VariantShreddingPlan, apply_variant_shredding_plan, build_variant_shredding_plan,
@@ -51,15 +49,20 @@ enum PartitionWriterState {
     },
 }
 
+struct PartitionWriter {
+    partition_dir: String,
+    state: PartitionWriterState,
+}
+
 pub struct IcebergTableWriter {
     pub store: Arc<dyn object_store::ObjectStore>,
     pub config: WriterConfig,
     pub generator: DefaultLocationGenerator,
     pub data_url: Url,
-    // partition_dir -> writer
-    writers: HashMap<String, PartitionWriterState>,
-    // partition_dir -> partition values aligned with spec
-    partition_values_map: HashMap<String, Vec<Option<Literal>>>,
+    // Typed partition tuple -> writer.
+    // TODO: Roll each partition writer using the `target-file-size-bytes` write option or
+    // `write.target-file-size-bytes` table property.
+    writers: HashMap<Vec<Option<Literal>>, PartitionWriter>,
     written: Vec<DataFile>,
     pub partition_spec_id: i32,
 }
@@ -78,46 +81,18 @@ impl IcebergTableWriter {
             config,
             data_url,
             writers: HashMap::new(),
-            partition_values_map: HashMap::new(),
             written: Vec::new(),
             partition_spec_id,
         }
     }
 
     pub async fn write(&mut self, batch: &RecordBatch) -> Result<(), String> {
-        if batch.num_rows() == 0 {
-            return Ok(());
-        }
-
         let spec = &self.config.partition_spec;
         let iceberg_schema = &self.config.iceberg_schema;
-
-        if spec.fields.is_empty() {
-            // Unpartitioned: write as-is once
-            let partition_dir = String::new();
-            self.partition_values_map
-                .entry(partition_dir.clone())
-                .or_default();
-            let padded = Self::align_batch_with_table_schema(
-                batch,
-                &self.config.table_schema,
-                self.config.iceberg_schema.as_ref(),
-            )
-            .map_err(|e| e.to_string())?;
-            let normalized =
-                unshred_shredded_variants_for_write(&padded, &self.config.table_schema)?;
-            let aligned = cast_record_batch_relaxed_tz(&normalized, &self.config.table_schema)
-                .map_err(|e| e.to_string())?;
-            self.write_aligned_batch(partition_dir, aligned).await?;
-            return Ok(());
-        }
-
         let parts = split_record_batch_by_partition(batch, spec, iceberg_schema)?;
-        for p in parts.into_iter() {
+        for p in parts {
             let partition_dir = p.partition_dir;
-            self.partition_values_map
-                .entry(partition_dir.clone())
-                .or_insert(p.partition_values);
+            let partition_values = p.partition_values;
             let padded = Self::align_batch_with_table_schema(
                 &p.record_batch,
                 &self.config.table_schema,
@@ -128,7 +103,8 @@ impl IcebergTableWriter {
                 unshred_shredded_variants_for_write(&padded, &self.config.table_schema)?;
             let aligned = cast_record_batch_relaxed_tz(&normalized, &self.config.table_schema)
                 .map_err(|e| e.to_string())?;
-            self.write_aligned_batch(partition_dir, aligned).await?;
+            self.write_aligned_batch(partition_values, partition_dir, aligned)
+                .await?;
         }
 
         Ok(())
@@ -136,16 +112,22 @@ impl IcebergTableWriter {
 
     async fn write_aligned_batch(
         &mut self,
+        partition_values: Vec<Option<Literal>>,
         partition_dir: String,
         batch: RecordBatch,
     ) -> Result<(), String> {
-        let state = self
-            .writers
-            .remove(&partition_dir)
-            .map(Ok)
-            .unwrap_or_else(|| self.new_partition_writer_state())?;
+        let (partition_dir, state) = match self.writers.remove(&partition_values) {
+            Some(writer) => (writer.partition_dir, writer.state),
+            None => (partition_dir, self.new_partition_writer_state()?),
+        };
         let state = self.write_partition_state(state, batch).await?;
-        self.writers.insert(partition_dir, state);
+        self.writers.insert(
+            partition_values,
+            PartitionWriter {
+                partition_dir,
+                state,
+            },
+        );
         Ok(())
     }
 
@@ -265,50 +247,43 @@ impl IcebergTableWriter {
         }
     }
 
-    pub async fn flush_partition(
+    async fn flush_partition(
         &mut self,
+        state: PartitionWriterState,
         partition_dir: &str,
         partition_values: Vec<Option<Literal>>,
     ) -> Result<(), String> {
-        if let Some(state) = self.writers.remove(partition_dir) {
-            let writer = self.finish_partition_state(state).await?;
-            let (bytes, meta) = writer.close().await?;
-            let (rel, full) = self.generator.with_partition_dir(Some(partition_dir));
-            log::trace!("iceberg.table_writer.flush_partition.writing: {}", full);
-            self.store
-                .put(&full, object_store::PutPayload::from(bytes))
-                .await
-                .map_err(|e| e.to_string())?;
-            log::trace!(
-                "iceberg.table_writer.flush_partition.written: rel={} full={}",
-                rel,
-                full
-            );
-            // Prevent a leading partition segment containing ':' from being parsed as a URI scheme.
-            let file_path = match self.data_url.join(&format!("./{rel}")) {
-                Ok(u) => u.to_string(),
-                Err(_) => {
-                    format!("{}{}", self.data_url.as_str(), rel)
-                }
-            };
-            let df = DataFileWriter::new(self.partition_spec_id, file_path, partition_values)
-                .finish(meta)?
-                .data_file;
-            self.written.push(df);
-        }
+        let writer = self.finish_partition_state(state).await?;
+        let (bytes, meta) = writer.close().await?;
+        let (rel, full) = self.generator.next_data_path(Some(partition_dir))?;
+        log::trace!("iceberg.table_writer.flush_partition.writing: {}", full);
+        self.store
+            .put(&full, object_store::PutPayload::from(bytes))
+            .await
+            .map_err(|e| e.to_string())?;
+        log::trace!(
+            "iceberg.table_writer.flush_partition.written: rel={} full={}",
+            rel,
+            full
+        );
+        // Prevent a leading partition segment containing ':' from being parsed as a URI scheme.
+        let file_path = match self.data_url.join(&format!("./{rel}")) {
+            Ok(u) => u.to_string(),
+            Err(_) => {
+                format!("{}{}", self.data_url.as_str(), rel)
+            }
+        };
+        let df = DataFileWriter::new(self.partition_spec_id, file_path, partition_values)
+            .finish_with_schema(meta, self.config.iceberg_schema.as_ref())?
+            .data_file;
+        self.written.push(df);
         Ok(())
     }
 
     pub async fn close(mut self) -> Result<Vec<DataFile>, String> {
-        let keys: Vec<String> = self.writers.keys().cloned().collect();
-        for k in keys {
-            let vals = self
-                .partition_values_map
-                .remove(&k)
-                .unwrap_or_default()
-                .into_iter()
-                .collect();
-            self.flush_partition(&k, vals).await?;
+        for (partition_values, writer) in std::mem::take(&mut self.writers) {
+            self.flush_partition(writer.state, &writer.partition_dir, partition_values)
+                .await?;
         }
         Ok(self.written)
     }

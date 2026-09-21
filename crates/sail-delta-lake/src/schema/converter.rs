@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -15,11 +16,27 @@ use sail_common_datafusion::array::record_batch::cast_array_recursively;
 use sail_common_datafusion::schema_evolution::{
     StructFieldMatching, cast_array_with_schema_evolution_relaxed_tz,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::spec::{
     ColumnMappingMode, ColumnMetadataKey, DataType, DeltaError as DeltaTableError, DeltaResult,
     MetadataValue, StructField, StructType,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PhysicalPartitionColumn {
+    pub logical_name: String,
+    pub physical_name: String,
+}
+
+impl PhysicalPartitionColumn {
+    pub fn new(logical_name: impl Into<String>, physical_name: impl Into<String>) -> Self {
+        Self {
+            logical_name: logical_name.into(),
+            physical_name: physical_name.into(),
+        }
+    }
+}
 
 pub fn arrow_schema_from_struct_type(
     schema: &StructType,
@@ -169,6 +186,35 @@ pub fn arrow_field_physical_name(field: &Field, mode: ColumnMappingMode) -> &str
             .map(|s| s.as_str())
             .unwrap_or_else(|| field.name().as_str()),
     }
+}
+
+/// Resolve every logical struct field path to its physical Delta column path.
+pub fn logical_to_physical_arrow_paths(
+    schema: &ArrowSchema,
+    mode: ColumnMappingMode,
+) -> HashMap<Vec<String>, Vec<String>> {
+    fn add_fields(
+        fields: &Fields,
+        mode: ColumnMappingMode,
+        logical_prefix: &[String],
+        physical_prefix: &[String],
+        paths: &mut HashMap<Vec<String>, Vec<String>>,
+    ) {
+        for field in fields {
+            let mut logical_path = logical_prefix.to_vec();
+            logical_path.push(field.name().clone());
+            let mut physical_path = physical_prefix.to_vec();
+            physical_path.push(arrow_field_physical_name(field, mode).to_string());
+            paths.insert(logical_path.clone(), physical_path.clone());
+            if let ArrowDataType::Struct(children) = field.data_type() {
+                add_fields(children, mode, &logical_path, &physical_path, paths);
+            }
+        }
+    }
+
+    let mut paths = HashMap::new();
+    add_fields(schema.fields(), mode, &[], &[], &mut paths);
+    paths
 }
 
 pub fn restore_logical_record_batch(

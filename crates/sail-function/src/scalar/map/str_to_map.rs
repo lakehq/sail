@@ -22,16 +22,11 @@ use crate::scalar::string::spark_split::{SparkSplit, parse_regex, split_to_array
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct StrToMap {
     signature: Signature,
-}
-
-impl Default for StrToMap {
-    fn default() -> Self {
-        Self::new()
-    }
+    last_value_wins: bool,
 }
 
 impl StrToMap {
-    pub fn new() -> Self {
+    pub fn new(last_value_wins: bool) -> Self {
         Self {
             signature: Signature::one_of(
                 vec![
@@ -41,7 +36,12 @@ impl StrToMap {
                 ],
                 Volatility::Immutable,
             ),
+            last_value_wins,
         }
+    }
+
+    pub fn last_value_wins(&self) -> bool {
+        self.last_value_wins
     }
 }
 
@@ -87,14 +87,15 @@ impl ScalarUDFImpl for StrToMap {
             config_options: args.config_options,
         })?;
 
-        make_scalar_function(str_to_map_inner, vec![Hint::Pad, Hint::AcceptsSingular])(&[
-            split_result,
-            key_value_delims,
-        ])
+        let last_value_wins = self.last_value_wins;
+        make_scalar_function(
+            move |args| str_to_map_inner(args, last_value_wins),
+            vec![Hint::Pad, Hint::AcceptsSingular],
+        )(&[split_result, key_value_delims])
     }
 }
 
-fn str_to_map_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn str_to_map_inner(args: &[ArrayRef], last_value_wins: bool) -> Result<ArrayRef> {
     let [pair_strs, key_value_delims] = take_function_args("str_to_map", args)?;
     let pair_lists = pair_strs.as_list::<i32>();
     match (
@@ -148,6 +149,7 @@ fn str_to_map_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                 values.offsets(),
                 keys.nulls(),
                 values.nulls(),
+                last_value_wins,
             )
         }
         _ => internal_err!("str_to_map: failed to downcast arguments to StringArrays"),

@@ -1,0 +1,1 @@
+"""Catalog provider integration tests."""

@@ -2,6 +2,53 @@
 
 import pytest
 
+SPARK_4_2_VERSION_UPDATE_BUILT_INS = {
+    "current_path",
+    "is_valid_variant",
+    "kll_merge_agg_bigint",
+    "kll_merge_agg_double",
+    "kll_merge_agg_float",
+    "measure",
+    "time_bucket",
+    "time_from_micros",
+    "time_from_millis",
+    "time_from_seconds",
+    "time_to_micros",
+    "time_to_millis",
+    "time_to_seconds",
+    "tuple_difference_double",
+    "tuple_difference_integer",
+    "tuple_difference_theta_double",
+    "tuple_difference_theta_integer",
+    "tuple_intersection_agg_double",
+    "tuple_intersection_agg_integer",
+    "tuple_intersection_double",
+    "tuple_intersection_integer",
+    "tuple_intersection_theta_double",
+    "tuple_intersection_theta_integer",
+    "tuple_sketch_agg_double",
+    "tuple_sketch_agg_integer",
+    "tuple_sketch_estimate_double",
+    "tuple_sketch_estimate_integer",
+    "tuple_sketch_summary_double",
+    "tuple_sketch_summary_integer",
+    "tuple_sketch_theta_double",
+    "tuple_sketch_theta_integer",
+    "tuple_union_agg_double",
+    "tuple_union_agg_integer",
+    "tuple_union_double",
+    "tuple_union_integer",
+    "tuple_union_theta_double",
+    "tuple_union_theta_integer",
+    "vector_avg",
+    "vector_cosine_similarity",
+    "vector_inner_product",
+    "vector_l2_distance",
+    "vector_norm",
+    "vector_normalize",
+    "vector_sum",
+}
+
 
 def _show_function_names(spark, sql):
     return {row.function for row in spark.sql(sql).collect()}
@@ -39,12 +86,21 @@ def test_list_functions_includes_built_ins(spark):
     }.issubset(names)
 
 
+def test_list_functions_includes_spark_4_2_version_update_built_ins(spark):
+    names = {f.name for f in spark.catalog.listFunctions()}
+    assert SPARK_4_2_VERSION_UPDATE_BUILT_INS.issubset(names)
+
+
 def test_list_functions_has_metadata_for_built_ins(spark):
     functions = {f.name: f for f in spark.catalog.listFunctions()}
     expected = {
         "+": "org.apache.spark.sql.catalyst.expressions.Add",
         "concat": "org.apache.spark.sql.catalyst.expressions.Concat",
+        "current_path": "org.apache.spark.sql.catalyst.expressions.CurrentPath",
+        "time_bucket": "org.apache.spark.sql.catalyst.expressions.TimeBucketExpressionBuilder",
         "to_date": "org.apache.spark.sql.catalyst.expressions.ParseToDate",
+        "tuple_difference_double": "org.apache.spark.sql.catalyst.expressions.TupleDifferenceDouble",
+        "vector_norm": "org.apache.spark.sql.catalyst.expressions.VectorNorm",
     }
     for name, class_name in expected.items():
         assert functions[name].isTemporary is True

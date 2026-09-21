@@ -13,7 +13,6 @@ sail-execution = { path = "../sail-execution" }
 sail-catalog = { path = "../sail-catalog" }
 sail-catalog-memory = { path = "../sail-catalog-memory" }
 sail-plan = { path = "../sail-plan" }
-sail-server = { path = "../sail-server" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 sail-sql-parser = { path = "../sail-sql-parser" }
 sail-session = { path = "../sail-session" }

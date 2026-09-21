@@ -1,11 +1,14 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, ArrayRef, AsArray, BooleanBuilder, MapArray, StructArray};
+use datafusion::arrow::array::{
+    Array, ArrayRef, AsArray, BooleanBuilder, Int32Array, MapArray, StructArray,
+};
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
-use datafusion::arrow::compute::filter;
+use datafusion::arrow::compute::{filter, take};
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
-use datafusion_common::{HashSet, Result, ScalarValue, exec_err, internal_err};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use sail_common::spec::{SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 
 /// Helper function to get element [`DataType`]
@@ -91,13 +94,8 @@ pub fn map_type_from_key_value_types(key_type: &DataType, value_type: &DataType)
 ///    So the inputs can be [`ListArray`](`arrow::array::ListArray`)/[`LargeListArray`](`arrow::array::LargeListArray`)/[`FixedSizeListArray`](`arrow::array::FixedSizeListArray`)<br>
 ///    To preserve the row info, [`offsets`](arrow::array::ListArray::offsets) and [`nulls`](arrow::array::ListArray::nulls) for both keys and values need to be provided<br>
 ///    [`FixedSizeListArray`](`arrow::array::FixedSizeListArray`) has no `offsets`, so they can be generated as a cumulative sum of it's `Size`
-/// 2. Spark provides [spark.sql.mapKeyDedupPolicy](https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961)
-///    to handle duplicate keys<br>
-///    For now, configurable functions are not supported by Datafusion<br>
-///    So more permissive `LAST_WIN` option is used in this implementation (instead of `EXCEPTION`)<br>
-///    `EXCEPTION` behaviour can still be achieved externally in cost of performance:<br>
-///    `when(array_length(array_distinct(keys)) == array_length(keys), constructed_map)`<br>
-///    `.otherwise(raise_error("duplicate keys occurred during map construction"))`
+/// 2. Duplicate-key handling follows Spark's `spark.sql.mapKeyDedupPolicy`:
+///    `false` raises an error and `true` keeps the last value at the first key position.
 pub fn map_from_keys_values_offsets_nulls(
     flat_keys: &ArrayRef,
     flat_values: &ArrayRef,
@@ -105,6 +103,7 @@ pub fn map_from_keys_values_offsets_nulls(
     values_offsets: &[i32],
     keys_nulls: Option<&NullBuffer>,
     values_nulls: Option<&NullBuffer>,
+    last_value_wins: bool,
 ) -> Result<ArrayRef> {
     let (keys, values, offsets) = map_deduplicate_keys(
         flat_keys,
@@ -113,6 +112,7 @@ pub fn map_from_keys_values_offsets_nulls(
         values_offsets,
         keys_nulls,
         values_nulls,
+        last_value_wins,
     )?;
     let nulls = NullBuffer::union(keys_nulls, values_nulls);
 
@@ -139,6 +139,7 @@ pub fn map_from_keys_values_offsets_nulls(
     )?))
 }
 
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)]
 fn map_deduplicate_keys(
     flat_keys: &ArrayRef,
     flat_values: &ArrayRef,
@@ -146,6 +147,7 @@ fn map_deduplicate_keys(
     values_offsets: &[i32],
     keys_nulls: Option<&NullBuffer>,
     values_nulls: Option<&NullBuffer>,
+    last_value_wins: bool,
 ) -> Result<(ArrayRef, ArrayRef, OffsetBuffer<i32>)> {
     let offsets_len = keys_offsets.len();
     let mut new_offsets = Vec::with_capacity(offsets_len);
@@ -163,7 +165,8 @@ fn map_deduplicate_keys(
     new_offsets.push(new_last_offset);
 
     let mut keys_mask_builder = BooleanBuilder::new();
-    let mut values_mask_builder = BooleanBuilder::new();
+    let mut value_indices = Vec::new();
+    let mut key_to_output_index: HashMap<ScalarValue, usize> = HashMap::new();
     for (row_idx, (next_keys_offset, next_values_offset)) in keys_offsets
         .iter()
         .zip(values_offsets.iter())
@@ -173,9 +176,6 @@ fn map_deduplicate_keys(
         let num_keys_entries = *next_keys_offset as usize - cur_keys_offset;
         let num_values_entries = *next_values_offset as usize - cur_values_offset;
 
-        let mut keys_mask_one = [false].repeat(num_keys_entries);
-        let mut values_mask_one = [false].repeat(num_values_entries);
-
         let key_is_valid = keys_nulls.is_none_or(|buf| buf.is_valid(row_idx));
         let value_is_valid = values_nulls.is_none_or(|buf| buf.is_valid(row_idx));
 
@@ -184,41 +184,38 @@ fn map_deduplicate_keys(
                 return exec_err!(
                     "map_deduplicate_keys: keys and values lists in the same row must have equal lengths"
                 );
-            } else if num_keys_entries != 0 {
-                let mut seen_keys = HashSet::new();
+            }
+            key_to_output_index.clear();
+            for entry_index in 0..num_keys_entries {
+                let key = ScalarValue::try_from_array(flat_keys, cur_keys_offset + entry_index)?
+                    .compacted();
+                let value_index = (cur_values_offset + entry_index) as i32;
 
-                for cur_entry_idx in (0..num_keys_entries).rev() {
-                    let key =
-                        ScalarValue::try_from_array(&flat_keys, cur_keys_offset + cur_entry_idx)?
-                            .compacted();
-                    if seen_keys.contains(&key) {
-                        // TODO: implement configuration and logic for spark.sql.mapKeyDedupPolicy=EXCEPTION (this is default spark-config)
-                        // exec_err!("invalid argument: duplicate keys in map")
-                        // https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961
-                    } else {
-                        // This code implements deduplication logic for spark.sql.mapKeyDedupPolicy=LAST_WIN (this is NOT default spark-config)
-                        keys_mask_one[cur_entry_idx] = true;
-                        values_mask_one[cur_entry_idx] = true;
-                        seen_keys.insert(key);
-                        new_last_offset += 1;
+                if let Some(&output_index) = key_to_output_index.get(&key) {
+                    if last_value_wins {
+                        value_indices[output_index] = value_index;
+                        keys_mask_builder.append_value(false);
+                        continue;
                     }
+                    return exec_err!(
+                        "[DUPLICATED_MAP_KEY] Duplicate map key {key} was found. To allow duplicate keys, set `spark.sql.mapKeyDedupPolicy` to `LAST_WIN`."
+                    );
                 }
+                keys_mask_builder.append_value(true);
+                key_to_output_index.insert(key, value_indices.len());
+                value_indices.push(value_index);
+                new_last_offset += 1;
             }
         } else {
-            // the result entry is NULL
-            // both current row offsets are skipped
-            // keys or values in the current row are marked false in the masks
+            keys_mask_builder.append_n(num_keys_entries, false);
         }
-        keys_mask_builder.append_array(&keys_mask_one.into());
-        values_mask_builder.append_array(&values_mask_one.into());
         new_offsets.push(new_last_offset);
         cur_keys_offset += num_keys_entries;
         cur_values_offset += num_values_entries;
     }
     let keys_mask = keys_mask_builder.finish();
-    let values_mask = values_mask_builder.finish();
-    let needed_keys = filter(&flat_keys, &keys_mask)?;
-    let needed_values = filter(&flat_values, &values_mask)?;
+    let needed_keys = filter(flat_keys, &keys_mask)?;
+    let needed_values = take(flat_values, &Int32Array::from(value_indices), None)?;
     let offsets = OffsetBuffer::new(new_offsets.into());
     Ok((needed_keys, needed_values, offsets))
 }

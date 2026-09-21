@@ -217,6 +217,9 @@ impl PlanResolver<'_> {
                                     ignore_nulls,
                                     filter,
                                     order_by,
+                                    preserve_count_argument_columns: state
+                                        .config()
+                                        .preserve_count_argument_columns,
                                     function_context: FunctionContextInput {
                                         argument_display_names: &argument_display_names,
                                         plan_config: &self.config,
@@ -453,6 +456,8 @@ impl PlanResolver<'_> {
         mut arguments: Vec<spec::Expr>,
     ) -> Vec<spec::Expr> {
         const DATE_PART_FUNCTIONS: &[&str] = &[
+            "date_add",
+            "dateadd",
             "datediff",
             "date_diff",
             "timestampadd",

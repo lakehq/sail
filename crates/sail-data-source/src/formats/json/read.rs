@@ -111,7 +111,7 @@ impl ReadFormat for JsonReadFormat {
             .with_output_ordering(input.output_ordering)
             .with_file_compression_type(FileCompressionType::from(options.compression))
             .with_preserve_order(input.preserve_order)
-            .with_partitioned_by_file_group(input.partitioned_by_file_group)
+            .with_output_partitioning(input.output_partitioning)
             .build();
 
         Ok(config)

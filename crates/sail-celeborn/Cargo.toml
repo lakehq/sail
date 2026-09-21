@@ -1,0 +1,28 @@
+[package]
+name = "sail-celeborn"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+sail-common = { path = "../sail-common" }
+
+log = { workspace = true }
+futures = { workspace = true }
+bytes = { workspace = true }
+crc32fast = { workspace = true }
+lz4_flex = { workspace = true }
+num_enum = { workspace = true }
+prost = { workspace = true }
+readonly = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true }
+twox-hash = { workspace = true }
+uuid = { workspace = true }
+zstd = { workspace = true }
+
+[build-dependencies]
+tonic-prost-build = { workspace = true }

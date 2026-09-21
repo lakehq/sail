@@ -81,6 +81,65 @@ Feature: Iceberg Basic IO
         | 1  | first  |
         | 2  | second |
 
+    Scenario: Create or replace preserves historical lineage and clears main
+      Given statement template
+        """
+        CREATE TABLE test_table (id INT, value STRING)
+        USING iceberg
+        LOCATION {{ location.uri }}
+        """
+      Given statement
+        """
+        INSERT INTO test_table VALUES (1, 'before-replace')
+        """
+      Given iceberg tag before_replace in location points to snapshot index 0
+      Given statement template
+        """
+        CREATE OR REPLACE TABLE test_table (id INT, value STRING)
+        USING iceberg
+        LOCATION {{ location.uri }}
+        """
+      Then iceberg metadata matches snapshot
+      Then iceberg metadata contains
+        | path                | value |
+        | current-snapshot-id | -1    |
+      Then iceberg snapshot count is 1
+      When query
+        """
+        SELECT * FROM test_table
+        """
+      Then query result
+        | id | value |
+      When query
+        """
+        SELECT * FROM test_table VERSION AS OF 'before_replace'
+        """
+      Then query result
+        | id | value          |
+        | 1  | before-replace |
+      Given statement
+        """
+        INSERT INTO test_table VALUES (2, 'after-replace')
+        """
+      Then iceberg snapshot count is 2
+      Then iceberg metadata contains
+        | path                 | value |
+        | last-sequence-number | 2     |
+      When query
+        """
+        SELECT * FROM test_table VERSION AS OF 'main'
+        """
+      Then query result
+        | id | value         |
+        | 2  | after-replace |
+      When query
+        """
+        SELECT * FROM test_table VERSION AS OF 'before_replace'
+        """
+      Then query result
+        | id | value          |
+        | 1  | before-replace |
+
     Scenario: Append after latest metadata uses UUID-prefixed naming
       Given statement template
         """

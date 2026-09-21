@@ -4,13 +4,15 @@ use std::fmt;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr::{PhysicalExpr, RangePartitioning};
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
+use crate::shuffle::ShuffleBackendKind;
+
 #[derive(Debug, Clone)]
 pub struct JobGraphOptions {
-    pub use_blocking_shuffle: bool,
+    pub shuffle_backend: ShuffleBackendKind,
 }
 
 /// A job graph represents a distributed execution plan for a job.
@@ -38,6 +40,10 @@ impl JobGraph {
         &self.schema
     }
 
+    pub(crate) fn shuffle_backend(&self) -> &ShuffleBackendKind {
+        &self.options.shuffle_backend
+    }
+
     /// Get the required number of output replicas for the given stage.
     pub fn replicas(&self, stage: usize) -> usize {
         let replicas = self
@@ -48,7 +54,7 @@ impl JobGraph {
                     .iter()
                     .filter(|input| input.stage == stage)
                     .map(|input| match input.mode {
-                        InputMode::Forward | InputMode::Shuffle | InputMode::Rescale => 1,
+                        InputMode::Forward | InputMode::Shuffle | InputMode::Rescale { .. } => 1,
                         InputMode::Merge | InputMode::Broadcast => {
                             x.plan.output_partitioning().partition_count()
                         }
@@ -150,10 +156,10 @@ pub enum InputMode {
     /// For each partition in the current stage, execute a single partition to fetch the input
     /// which reads all channels from all partitions in the input stage.
     Broadcast,
-    /// For each partition in the current stage, execute a contiguous subset of input partitions
-    /// (determined by evenly dividing input partitions among output partitions) and read all
-    /// channels from each.
-    Rescale,
+    /// For each partition of this stage input, execute a contiguous subset of producer
+    /// partitions and read all channels from each. The target partition count belongs to
+    /// this input, which may differ from the containing stage (e.g. under a union).
+    Rescale { partitions: usize },
 }
 
 impl fmt::Display for InputMode {
@@ -163,7 +169,7 @@ impl fmt::Display for InputMode {
             InputMode::Merge => write!(f, "Merge"),
             InputMode::Shuffle => write!(f, "Shuffle"),
             InputMode::Broadcast => write!(f, "Broadcast"),
-            InputMode::Rescale => write!(f, "Rescale"),
+            InputMode::Rescale { partitions } => write!(f, "Rescale(partitions={partitions})"),
         }
     }
 }
@@ -189,11 +195,14 @@ pub enum OutputDistribution {
         keys: Vec<Arc<dyn PhysicalExpr>>,
         channels: usize,
     },
-    RoundRobin {
+    Range {
+        partitioning: RangePartitioning,
+    },
+    RoundRobinBatch {
         channels: usize,
     },
     /// Row-level round-robin distribution for explicit user repartition calls.
-    /// Unlike `RoundRobin` (batch-based), this distributes individual rows across
+    /// Unlike `RoundRobinBatch`, this distributes individual rows across
     /// output partitions to ensure even data distribution.
     RoundRobinRow {
         channels: usize,
@@ -204,7 +213,8 @@ impl OutputDistribution {
     pub fn channels(&self) -> usize {
         match self {
             OutputDistribution::Hash { channels, .. } => *channels,
-            OutputDistribution::RoundRobin { channels } => *channels,
+            OutputDistribution::Range { partitioning } => partitioning.partition_count(),
+            OutputDistribution::RoundRobinBatch { channels } => *channels,
             OutputDistribution::RoundRobinRow { channels } => *channels,
         }
     }
@@ -217,8 +227,9 @@ impl fmt::Display for OutputDistribution {
                 let keys = keys.iter().map(|k| k.to_string()).collect::<Vec<_>>();
                 write!(f, "Hash(keys=[{}], channels={})", keys.join(", "), channels)
             }
-            OutputDistribution::RoundRobin { channels } => {
-                write!(f, "RoundRobin(channels={})", channels)
+            OutputDistribution::Range { partitioning } => write!(f, "{partitioning}"),
+            OutputDistribution::RoundRobinBatch { channels } => {
+                write!(f, "RoundRobinBatch(channels={})", channels)
             }
             OutputDistribution::RoundRobinRow { channels } => {
                 write!(f, "RoundRobinRow(channels={})", channels)

@@ -10,7 +10,7 @@ use datafusion::catalog::Session;
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::{LogicalPlan, TableSource};
 use datafusion_common::{Result, plan_err};
-use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
+use sail_common_datafusion::datasource::{DataSource, SinkInfo, SourceInfo};
 use sail_common_datafusion::streaming::source::StreamSourceTableProvider;
 
 pub use crate::formats::rate::reader::RateSourceExec;
@@ -21,10 +21,10 @@ use crate::options::r#gen::RateReadOptions;
 /// Generate record batches at a fixed rate for testing purposes.
 /// The record batches contain two columns, a timestamp and an integer value.
 #[derive(Debug)]
-pub struct RateTableFormat;
+pub struct RateDataSource;
 
 #[async_trait]
-impl TableFormat for RateTableFormat {
+impl DataSource for RateDataSource {
     fn name(&self) -> &str {
         "rate"
     }
@@ -46,13 +46,13 @@ impl TableFormat for RateTableFormat {
             read_case_sensitive: _,
         } = info;
         if !constraints.deref().is_empty() {
-            return plan_err!("the rate table format does not support constraints");
+            return plan_err!("the rate data source does not support constraints");
         }
         if !partition_by.is_empty() {
-            return plan_err!("the rate table format does not support partitioning");
+            return plan_err!("the rate data source does not support partitioning");
         }
         if bucket_by.is_some() || !sort_order.is_empty() {
-            return plan_err!("the rate table format does not support bucketing");
+            return plan_err!("the rate data source does not support bucketing");
         }
 
         let schema = match schema {
@@ -84,6 +84,6 @@ impl TableFormat for RateTableFormat {
     }
 
     async fn create_writer(&self, _ctx: &dyn Session, _info: SinkInfo) -> Result<LogicalPlan> {
-        plan_err!("the rate table format does not support writing")
+        plan_err!("the rate data source does not support writing")
     }
 }

@@ -574,6 +574,7 @@ def test_delta_io_ignore_mode(spark, delta_test_data, tmp_path):
     initial_result = spark.read.format("delta").load(delta_table_path).sort("id")
     initial_data = initial_result.collect()
     assert len(initial_data) == 3  # noqa: PLR2004
+    commit_files_before = sorted((delta_path / "_delta_log").glob("*.json"))
 
     # Try to write new data with ignore mode - should be ignored since table exists
     new_data = [
@@ -581,13 +582,15 @@ def test_delta_io_ignore_mode(spark, delta_test_data, tmp_path):
         Row(id=21, event="Y", score=0.88),
     ]
     df2 = spark.createDataFrame(new_data)
-    df2.write.format("delta").mode("ignore").save(str(delta_path))
+    df2.write.format("delta").mode("ignore").partitionBy("missing").save(str(delta_path))
 
     # Read data again - should be unchanged
     result_df = spark.read.format("delta").load(delta_table_path).sort("id")
     result_data = result_df.collect()
+    commit_files_after = sorted((delta_path / "_delta_log").glob("*.json"))
 
     # Data should remain the same as initial data
+    assert commit_files_after == commit_files_before
     assert len(result_data) == 3  # noqa: PLR2004
     assert result_data[0].id == 10  # noqa: PLR2004
     assert result_data[1].id == 11  # noqa: PLR2004

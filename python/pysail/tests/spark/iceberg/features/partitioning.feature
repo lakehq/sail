@@ -101,6 +101,64 @@ Feature: Iceberg Partitioning
           📄 snap-*.avro
         """
 
+  Rule: Binary identity partitioning preserves Iceberg values
+    Background:
+      Given variable location for temporary directory iceberg_part_binary_identity
+      Given final statement
+        """
+        DROP TABLE IF EXISTS part_binary_identity
+        """
+
+    Scenario: SQL insert keeps binary values typed and uses JVM-compatible partition paths
+      Given statement template
+        """
+        CREATE TABLE part_binary_identity (id INT, payload BINARY)
+        USING iceberg
+        PARTITIONED BY (payload)
+        LOCATION {{ location.uri }}
+        """
+      Given statement
+        """
+        INSERT INTO part_binary_identity VALUES
+          (1, X'FBFF'),
+          (2, X'010203'),
+          (3, CAST(NULL AS BINARY))
+        """
+      When query
+        """
+        SELECT id, hex(payload) AS payload
+        FROM part_binary_identity
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | payload |
+        | 1  | FBFF    |
+        | 2  | 010203  |
+        | 3  | NULL    |
+      When query
+        """
+        SELECT id
+        FROM part_binary_identity
+        WHERE payload = X'FBFF'
+        """
+      Then query result ordered
+        | id |
+        | 1  |
+      Then file tree in location matches
+        """
+        📂 data
+          📂 payload=%2B%2F8%3D
+            📄 *.parquet
+          📂 payload=AQID
+            📄 *.parquet
+          📂 payload=null
+            📄 *.parquet
+        📂 metadata
+          📄 *.metadata.json
+          📄 *.metadata.json
+          📄 snap-*.avro
+        """
+
   Rule: Bucket transform partitioning
     Background:
       Given variable location for temporary directory iceberg_part_bucket

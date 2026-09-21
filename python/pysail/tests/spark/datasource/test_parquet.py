@@ -1,6 +1,9 @@
 from collections.abc import Mapping
+from datetime import UTC, datetime
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql import Row
@@ -129,6 +132,65 @@ def test_parquet_read_options(spark, sample_df, tmp_path):
     read_df = spark.read.option("binaryAsString", "false").option("pruning", "true").parquet(path)
     assert sample_df.count() == read_df.count()
     assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
+
+
+@pytest.mark.parametrize(
+    ("physical_schema", "requested_schema", "value"),
+    [
+        ("value DOUBLE", "value INT", 1.5),
+        ("value INT", "value BOOLEAN", 1),
+        ("value STRUCT<nested: DOUBLE>", "value STRUCT<nested: INT>", Row(nested=1.5)),
+        ("value ARRAY<DOUBLE>", "value ARRAY<INT>", [1.5]),
+        ("value MAP<STRING, DOUBLE>", "value MAP<STRING, INT>", {"key": 1.5}),
+    ],
+)
+def test_parquet_explicit_schema_rejects_incompatible_types(spark, tmp_path, physical_schema, requested_schema, value):
+    path = str(tmp_path / "incompatible_explicit_schema")
+    spark.createDataFrame([(value,)], physical_schema).write.parquet(path)
+
+    with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
+        spark.read.schema(requested_schema).parquet(path).collect()
+
+
+def test_parquet_explicit_schema_allows_supported_widening(spark, tmp_path):
+    path = str(tmp_path / "supported_explicit_schema_widening")
+    spark.createDataFrame([(1, 1.5), (None, None)], "id INT, value FLOAT").write.parquet(path)
+
+    rows = spark.read.schema("id BIGINT, value DOUBLE").parquet(path).orderBy("id").collect()
+
+    assert rows == [Row(id=None, value=None), Row(id=1, value=1.5)]
+
+
+def test_parquet_explicit_schema_allows_missing_fields(spark, tmp_path):
+    path = str(tmp_path / "missing_explicit_schema_field")
+    spark.createDataFrame([(1,)], "id INT").write.parquet(path)
+
+    rows = spark.read.schema("id INT, missing STRING").parquet(path).collect()
+
+    assert rows == [Row(id=1, missing=None)]
+
+
+@pytest.mark.parametrize("requested_type", ["TIMESTAMP", "TIMESTAMP_NTZ"])
+def test_parquet_explicit_schema_determines_int96_timestamp_family(spark, tmp_path, requested_type):
+    path = tmp_path / "int96_explicit_timestamp_schema.parquet"
+    table = pa.table(
+        {
+            "value": pa.array(
+                [datetime(2024, 1, 2, 3, 4, 5, tzinfo=UTC)],
+                type=pa.timestamp("us"),
+            )
+        }
+    )
+    pq.write_table(table, path, use_deprecated_int96_timestamps=True)
+
+    rows = (
+        spark.read.schema(f"value {requested_type}")
+        .parquet(str(path))
+        .selectExpr("CAST(value AS STRING) AS value")
+        .collect()
+    )
+
+    assert rows == [Row(value="2024-01-02 03:04:05")]
 
 
 def test_parquet_write_with_bloom_filter(spark, tmpdir):

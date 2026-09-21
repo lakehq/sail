@@ -504,30 +504,35 @@ Feature: datetime format strings
     Background:
       Given config spark.sql.session.timeZone = UTC
 
+    # Spark reports arity through WRONG_NUM_ARGS; Sail emits its own wording. Systemic across
+    # the whole function surface, so it is recorded rather than worked around here.
+    @sail-bug
     Scenario: `date_format` rejects extra locale argument
       When query
         """
         SELECT date_format(TIMESTAMP '2026-06-15 14:30:45.123456', 'EEEE, dd MMMM yyyy a QQQQ GGGG', 'extra')
         """
-      Then query error (?i).*date_format.*requires 2 arguments.*
+      Then query error \[WRONG_NUM_ARGS.*The `date_format` requires 2 parameters but the actual number is 3
 
+    @sail-bug
     Scenario: `from_unixtime` rejects extra locale argument
       When query
         """
         SELECT from_unixtime(1781533845, 'EEEE, dd MMMM yyyy a QQQQ GGGG', 'extra')
         """
-      Then query error (?i).*from_unixtime.*requires 1 or 2 arguments.*
+      Then query error \[WRONG_NUM_ARGS.*The `from_unixtime` requires \[1, 2\] parameters but the actual number is 3
 
+    @sail-bug
     Scenario Outline: Extra argument: <case>
       When query
         """
         SELECT <fn>('2026-06-15', 'yyyy-MM-dd', 'extra')
         """
-      Then query error <error>
+      Then query error \[WRONG_NUM_ARGS.*The `<fn>` requires \[1, 2\] parameters but the actual number is 3
 
       Examples:
-        | case                                      | fn               | error                                               |
-        | `to_timestamp` rejects extra argument     | to_timestamp     | (?i).*to_timestamp.*requires 1 or 2 arguments.*     |
-        | `to_timestamp_ltz` rejects extra argument | to_timestamp_ltz | (?i).*to_timestamp.*requires 1 or 2 arguments.*     |
-        | `to_timestamp_ntz` rejects extra argument | to_timestamp_ntz | (?i).*to_timestamp.*requires 1 or 2 arguments.*     |
-        | `try_to_timestamp` rejects extra argument | try_to_timestamp | (?i).*try_to_timestamp.*requires 1 or 2 arguments.* |
+        | case                                      | fn               |
+        | `to_timestamp` rejects extra argument     | to_timestamp     |
+        | `to_timestamp_ltz` rejects extra argument | to_timestamp_ltz |
+        | `to_timestamp_ntz` rejects extra argument | to_timestamp_ntz |
+        | `try_to_timestamp` rejects extra argument | try_to_timestamp |

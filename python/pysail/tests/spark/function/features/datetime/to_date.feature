@@ -26,6 +26,187 @@ Feature: to_date with an argument coming from a column
         | 2016-12-31 |
         | 2016-12-31 |
 
+  Rule: Formatted numeric date keys are implicitly cast to string
+
+    Scenario Outline: To date parses a formatted <case> literal
+      When query
+        """
+        SELECT to_date(<value>, 'yyyyMMdd') AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case         | value                            | result     |
+        | integer      | 20260220                         | 2026-02-20 |
+        | bigint       | CAST(20251201 AS BIGINT)          | 2025-12-01 |
+        | decimal      | CAST(20260220 AS DECIMAL(8, 0))   | 2026-02-20 |
+        | typed null   | CAST(NULL AS BIGINT)             | NULL       |
+        | untyped null | NULL                             | NULL       |
+
+    Scenario Outline: To date parses numeric columns with literal and dynamic formats with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT
+          id,
+          to_date(value, 'yyyyMMdd') AS literal_format,
+          to_date(value, format) AS dynamic_format
+        FROM VALUES
+          (1, 20260220, 'yyyyMMdd'),
+          (2, 20261201, 'yyyyddMM'),
+          (3, CAST(NULL AS INT), 'yyyyMMdd'),
+          (4, 20251201, CAST(NULL AS STRING))
+          AS t(id, value, format)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | literal_format | dynamic_format |
+        | 1  | 2026-02-20     | 2026-02-20     |
+        | 2  | 2026-12-01     | 2026-01-12     |
+        | 3  | NULL           | NULL           |
+        | 4  | 2025-12-01     | NULL           |
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    Scenario: To date parses a numeric literal using a format column
+      When query
+        """
+        SELECT id, to_date(20261201, format) AS result
+        FROM VALUES
+          (1, 'yyyyMMdd'),
+          (2, 'yyyyddMM'),
+          (3, CAST(NULL AS STRING))
+          AS t(id, format)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | result     |
+        | 1  | 2026-12-01 |
+        | 2  | 2026-01-12 |
+        | 3  | NULL       |
+
+    Scenario: To date returns NULL for invalid numeric date keys with ANSI disabled
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT
+          to_date(20260229, 'yyyyMMdd') AS literal_value,
+          to_date(value, 'yyyyMMdd') AS column_value
+        FROM VALUES (20260229), (20260015) AS t(value)
+        """
+      Then query result
+        | literal_value | column_value |
+        | NULL          | NULL         |
+        | NULL          | NULL         |
+
+    Scenario Outline: To date rejects an invalid numeric <case> with ANSI enabled
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT to_date(<value>, 'yyyyMMdd') AS result
+        FROM VALUES (20260229), (20260015) AS t(value)
+        """
+      Then query error (?i)(CANNOT_PARSE_TIMESTAMP|invalid parsed (date|month)|out of range|DateValue)
+
+      Examples:
+        | case    | value    |
+        | literal | 20260229 |
+        | column  | value    |
+
+  Rule: Invalid string input follows ANSI mode
+
+    Scenario Outline: To date returns NULL for <case> with ANSI disabled
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT to_date(<args>) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+      Examples:
+        | case                       | args                    |
+        | default invalid leap day   | '2026-02-29'            |
+        | default invalid month      | '2026-00-15'            |
+        | formatted invalid leap day | '20260229', 'yyyyMMdd' |
+        | formatted invalid month    | '20260015', 'yyyyMMdd' |
+
+    Scenario: To date returns NULL for invalid string columns with ANSI disabled
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT
+          id,
+          to_date(value) AS default_result,
+          to_date(compact_value, 'yyyyMMdd') AS formatted_result
+        FROM VALUES
+          (1, '2026-01-01', '20260101'),
+          (2, '2026-02-29', '20260229'),
+          (3, '2026-00-15', '20260015'),
+          (4, CAST(NULL AS STRING), CAST(NULL AS STRING))
+          AS t(id, value, compact_value)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | default_result | formatted_result |
+        | 1  | 2026-01-01     | 2026-01-01       |
+        | 2  | NULL           | NULL             |
+        | 3  | NULL           | NULL             |
+        | 4  | NULL           | NULL             |
+
+    Scenario Outline: To date rejects <case> literal with ANSI enabled
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT to_date(<args>) AS result
+        """
+      Then query error (?i)(CANNOT_PARSE_TIMESTAMP|CAST_INVALID_INPUT|invalid parsed (date|month)|out of range|DateValue)
+
+      Examples:
+        | case                       | args                    |
+        | default invalid leap day   | '2026-02-29'            |
+        | default invalid month      | '2026-00-15'            |
+        | formatted invalid leap day | '20260229', 'yyyyMMdd' |
+        | formatted invalid month    | '20260015', 'yyyyMMdd' |
+
+    Scenario Outline: To date rejects <case> column with ANSI enabled
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT <call> AS result FROM VALUES ('<value>') AS t(value)
+        """
+      Then query error (?i)(CANNOT_PARSE_TIMESTAMP|CAST_INVALID_INPUT|invalid parsed (date|month)|out of range|DateValue)
+
+      Examples:
+        | case                       | call                       | value      |
+        | default invalid leap day   | to_date(value)             | 2026-02-29 |
+        | default invalid month      | to_date(value)             | 2026-00-15 |
+        | formatted invalid leap day | to_date(value, 'yyyyMMdd') | 20260229   |
+        | formatted invalid month    | to_date(value, 'yyyyMMdd') | 20260015   |
+
+    Scenario Outline: To date <case> is nullable with ANSI disabled
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT to_date(<args>) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: date (nullable = true)
+        """
+
+      Examples:
+        | case            | args                    |
+        | default format  | '2026-01-01'            |
+        | explicit format | '20260101', 'yyyyMMdd' |
+
   Rule: Explicit NULL format semantics
 
     Scenario: To date NULL format semantics distinguishes omitted and explicit format

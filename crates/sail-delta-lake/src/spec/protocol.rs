@@ -162,7 +162,7 @@ impl TableFeature {
 
 #[cfg(test)]
 mod tests {
-    use super::TableFeature;
+    use super::{Protocol, TableFeature};
 
     #[test]
     #[expect(clippy::unwrap_used)]
@@ -192,6 +192,140 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn protocol_merge_preserves_versions_features_and_list_presence() -> serde_json::Result<()> {
+        let legacy_protocol = Protocol::new(1, 2, None, None);
+        assert_eq!(
+            legacy_protocol.merge_upgrade_requirements(&legacy_protocol),
+            legacy_protocol
+        );
+
+        let empty_table_features = Protocol::new(3, 7, Some(vec![]), Some(vec![]));
+        assert_eq!(
+            empty_table_features.merge_upgrade_requirements(&empty_table_features),
+            empty_table_features
+        );
+        assert_eq!(empty_table_features.reader_features(), Some([].as_slice()));
+        assert_eq!(empty_table_features.writer_features(), Some([].as_slice()));
+        let json = serde_json::to_value(&empty_table_features)?;
+        assert_eq!(json["readerFeatures"], serde_json::json!([]));
+        assert_eq!(json["writerFeatures"], serde_json::json!([]));
+
+        let writer_table_features = Protocol::new(1, 7, None, Some(vec![]));
+        let merged = legacy_protocol.merge_upgrade_requirements(&writer_table_features);
+        assert!(merged.reader_features().is_none());
+        assert_eq!(
+            merged.writer_features(),
+            Some([TableFeature::AppendOnly, TableFeature::Invariants].as_slice())
+        );
+
+        let merged = Protocol::new(1, 7, None, Some(vec![]))
+            .merge_upgrade_requirements(&Protocol::new(1, 4, None, None));
+        assert_eq!(merged.min_reader_version(), 1);
+        assert_eq!(merged.min_writer_version(), 7);
+        assert!(merged.reader_features().is_none());
+        assert_eq!(
+            merged.writer_features(),
+            Some(
+                [
+                    TableFeature::AppendOnly,
+                    TableFeature::Invariants,
+                    TableFeature::CheckConstraints,
+                    TableFeature::ChangeDataFeed,
+                    TableFeature::GeneratedColumns,
+                ]
+                .as_slice()
+            )
+        );
+
+        let merged = Protocol::new(2, 7, None, Some(vec![TableFeature::ColumnMapping]))
+            .merge_upgrade_requirements(&Protocol::new(3, 7, Some(vec![]), Some(vec![])));
+        assert_eq!(merged.min_reader_version(), 3);
+        assert_eq!(merged.min_writer_version(), 7);
+        assert_eq!(
+            merged.reader_features(),
+            Some([TableFeature::ColumnMapping].as_slice())
+        );
+        assert_eq!(
+            merged.writer_features(),
+            Some([TableFeature::ColumnMapping].as_slice())
+        );
+
+        let merged = Protocol::new(1, 4, None, None).merge_upgrade_requirements(&Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::V2Checkpoint]),
+            Some(vec![TableFeature::V2Checkpoint]),
+        ));
+        assert_eq!(merged.min_reader_version(), 3);
+        assert_eq!(merged.min_writer_version(), 7);
+        assert!(merged.has_reader_feature(&TableFeature::V2Checkpoint));
+        for feature in [
+            TableFeature::AppendOnly,
+            TableFeature::Invariants,
+            TableFeature::CheckConstraints,
+            TableFeature::ChangeDataFeed,
+            TableFeature::GeneratedColumns,
+            TableFeature::V2Checkpoint,
+        ] {
+            assert!(
+                merged.has_writer_feature(&feature),
+                "table-feature upgrade dropped {}",
+                feature.as_str()
+            );
+        }
+
+        let catalog_requirements = Protocol::new(
+            3,
+            7,
+            Some(vec![
+                TableFeature::CatalogManaged,
+                TableFeature::VacuumProtocolCheck,
+            ]),
+            Some(vec![
+                TableFeature::CatalogManaged,
+                TableFeature::InCommitTimestamp,
+                TableFeature::VacuumProtocolCheck,
+            ]),
+        );
+        let merged =
+            Protocol::new(2, 6, None, None).merge_upgrade_requirements(&catalog_requirements);
+        assert!(merged.has_reader_feature(&TableFeature::ColumnMapping));
+        for feature in [
+            TableFeature::AppendOnly,
+            TableFeature::Invariants,
+            TableFeature::CheckConstraints,
+            TableFeature::ChangeDataFeed,
+            TableFeature::GeneratedColumns,
+            TableFeature::ColumnMapping,
+            TableFeature::IdentityColumns,
+        ] {
+            assert!(
+                merged.has_writer_feature(&feature),
+                "catalog upgrade dropped legacy feature {}",
+                feature.as_str()
+            );
+        }
+
+        let merged = Protocol::new(1, 7, None, Some(vec![TableFeature::InCommitTimestamp]))
+            .merge_upgrade_requirements(&catalog_requirements);
+        for feature in [
+            TableFeature::AppendOnly,
+            TableFeature::Invariants,
+            TableFeature::CheckConstraints,
+            TableFeature::ChangeDataFeed,
+            TableFeature::GeneratedColumns,
+            TableFeature::IdentityColumns,
+        ] {
+            assert!(
+                !merged.has_writer_feature(&feature),
+                "catalog upgrade invented legacy feature {}",
+                feature.as_str()
+            );
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -216,8 +350,8 @@ impl Protocol {
         Self {
             min_reader_version,
             min_writer_version,
-            reader_features: reader_features.filter(|features| !features.is_empty()),
-            writer_features: writer_features.filter(|features| !features.is_empty()),
+            reader_features,
+            writer_features,
         }
     }
 
@@ -255,5 +389,89 @@ impl Protocol {
 
     pub fn is_in_commit_timestamps_enabled(&self, table_properties: &TableProperties) -> bool {
         self.supports_in_commit_timestamps() && table_properties.enable_in_commit_timestamps()
+    }
+
+    pub(crate) fn table_features_for_upgrade(&self) -> (Vec<TableFeature>, Vec<TableFeature>) {
+        let mut reader_features = self.reader_features().unwrap_or(&[]).to_vec();
+        let mut writer_features = self.writer_features().unwrap_or(&[]).to_vec();
+        if self.min_writer_version() >= 7 {
+            if self.min_reader_version() == 2
+                && writer_features.contains(&TableFeature::ColumnMapping)
+                && !reader_features.contains(&TableFeature::ColumnMapping)
+            {
+                reader_features.push(TableFeature::ColumnMapping);
+            }
+            return (reader_features, writer_features);
+        }
+
+        let mut push_writer_feature = |feature| {
+            if !writer_features.contains(&feature) {
+                writer_features.push(feature);
+            }
+        };
+        if self.min_writer_version() >= 2 {
+            push_writer_feature(TableFeature::AppendOnly);
+            push_writer_feature(TableFeature::Invariants);
+        }
+        if self.min_writer_version() >= 3 {
+            push_writer_feature(TableFeature::CheckConstraints);
+        }
+        if self.min_writer_version() >= 4 {
+            push_writer_feature(TableFeature::ChangeDataFeed);
+            push_writer_feature(TableFeature::GeneratedColumns);
+        }
+        if self.min_reader_version() >= 2 && self.min_writer_version() >= 5 {
+            if !reader_features.contains(&TableFeature::ColumnMapping) {
+                reader_features.push(TableFeature::ColumnMapping);
+            }
+            push_writer_feature(TableFeature::ColumnMapping);
+        }
+        if self.min_writer_version() >= 6 {
+            push_writer_feature(TableFeature::IdentityColumns);
+        }
+        (reader_features, writer_features)
+    }
+
+    /// Merge protocol requirements without dropping versions or features already active on the
+    /// table. Legacy version-implied features are materialized when the result enters the table
+    /// features protocol.
+    pub(crate) fn merge_upgrade_requirements(&self, requirements: &Protocol) -> Protocol {
+        let min_reader_version = self
+            .min_reader_version()
+            .max(requirements.min_reader_version());
+        let min_writer_version = self
+            .min_writer_version()
+            .max(requirements.min_writer_version());
+        let (mut reader_features, mut writer_features) = self.table_features_for_upgrade();
+        let (required_reader_features, required_writer_features) =
+            requirements.table_features_for_upgrade();
+
+        let append_requirements = |features: &mut Vec<TableFeature>, required: &[TableFeature]| {
+            for feature in required {
+                if !features.contains(feature) {
+                    features.push(feature.clone());
+                }
+            }
+        };
+
+        let reader_features = if min_reader_version >= 3 {
+            append_requirements(&mut reader_features, &required_reader_features);
+            Some(reader_features)
+        } else {
+            self.reader_features().map(<[_]>::to_vec)
+        };
+        let writer_features = if min_writer_version >= 7 {
+            append_requirements(&mut writer_features, &required_writer_features);
+            Some(writer_features)
+        } else {
+            self.writer_features().map(<[_]>::to_vec)
+        };
+
+        Protocol::new(
+            min_reader_version,
+            min_writer_version,
+            reader_features,
+            writer_features,
+        )
     }
 }

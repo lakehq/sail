@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use sail_plan::config::{DefaultTimestampType, PlanConfig};
+use sail_plan::config::{
+    DefaultTimestampType, MapKeyDedupPolicy, PlanConfig, StoreAssignmentPolicy,
+};
 use sail_python_udf::config::PySparkUdfConfig;
 
 use crate::error::{SparkError, SparkResult};
@@ -228,7 +230,7 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
 
         if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_EXECUTION_ARROW_USE_LARGE_VAR_TYPES)
-            .map(|x| x.to_lowercase().parse::<bool>())
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
             .transpose()?
         {
             output.arrow_use_large_var_types = value;
@@ -260,15 +262,40 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
 
         if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_ANSI_ENABLED)
-            .map(|x| x.to_lowercase().parse::<bool>())
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
             .transpose()?
         {
             output.ansi_mode = value;
         }
 
+        if let Some(value) = config.get_option(SparkConfigKey::SPARK_SQL_STORE_ASSIGNMENT_POLICY) {
+            output.store_assignment_policy = match value.trim().to_ascii_uppercase().as_str() {
+                "ANSI" => StoreAssignmentPolicy::Ansi,
+                "STRICT" => StoreAssignmentPolicy::Strict,
+                "LEGACY" => StoreAssignmentPolicy::Legacy,
+                _ => {
+                    return Err(SparkError::invalid(format!(
+                        "invalid store assignment policy: {value}"
+                    )));
+                }
+            };
+        }
+
+        if let Some(value) = config.get_option(SparkConfigKey::SPARK_SQL_MAP_KEY_DEDUP_POLICY) {
+            output.map_key_dedup_policy = match value.trim().to_ascii_uppercase().as_str() {
+                "EXCEPTION" => MapKeyDedupPolicy::Exception,
+                "LAST_WIN" => MapKeyDedupPolicy::LastWin,
+                _ => {
+                    return Err(SparkError::invalid(format!(
+                        "invalid map key dedup policy: {value}"
+                    )));
+                }
+            };
+        }
+
         if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_CROSS_JOIN_ENABLED)
-            .map(|x| x.to_lowercase().parse::<bool>())
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
             .transpose()?
         {
             output.cross_join_enabled = value;
@@ -276,7 +303,7 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
 
         if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_CASE_SENSITIVE)
-            .map(|x| x.to_lowercase().parse::<bool>())
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
             .transpose()?
         {
             output.case_sensitive = value;
@@ -292,10 +319,26 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
 
         if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_TVF_ALLOW_MULTIPLE_TABLE_ARGUMENTS_ENABLED)
-            .map(|x| x.to_lowercase().parse::<bool>())
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
             .transpose()?
         {
             output.tvf_allow_multiple_table_arguments = value;
+        }
+
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_LEGACY_ALLOW_PARAMETERLESS_COUNT)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.legacy_allow_parameterless_count = value;
+        }
+
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_LEGACY_SIZE_OF_NULL)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.legacy_size_of_null = value;
         }
 
         output.pyspark_udf_config = Arc::new(PySparkUdfConfig::try_from(config)?);
@@ -319,7 +362,7 @@ impl TryFrom<&SparkRuntimeConfig> for PySparkUdfConfig {
 
         if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_LEGACY_EXECUTION_PANDAS_GROUPED_MAP_ASSIGN_COLUMNS_BY_NAME)
-            .map(|x| x.to_lowercase().parse::<bool>())
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
             .transpose()?
         {
             output.pandas_grouped_map_assign_columns_by_name = value;
@@ -327,7 +370,7 @@ impl TryFrom<&SparkRuntimeConfig> for PySparkUdfConfig {
 
         if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_EXECUTION_PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY)
-            .map(|x| x.to_lowercase().parse::<bool>())
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
             .transpose()?
         {
             output.pandas_convert_to_arrow_array_safely = value;
@@ -335,7 +378,7 @@ impl TryFrom<&SparkRuntimeConfig> for PySparkUdfConfig {
 
         if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_EXECUTION_ARROW_MAX_RECORDS_PER_BATCH)
-            .map(|x| x.parse::<i128>())
+            .map(|x| x.trim().parse::<i128>())
             .transpose()?
         {
             output.arrow_max_records_per_batch = if value <= 0 || value > usize::MAX as i128 {
@@ -347,7 +390,7 @@ impl TryFrom<&SparkRuntimeConfig> for PySparkUdfConfig {
 
         if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_EXECUTION_ARROW_USE_LARGE_VAR_TYPES)
-            .map(|x| x.to_lowercase().parse::<bool>())
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
             .transpose()?
         {
             output.arrow_use_large_var_types = value;
@@ -357,7 +400,7 @@ impl TryFrom<&SparkRuntimeConfig> for PySparkUdfConfig {
             .get_option(
                 SparkConfigKey::SPARK_SQL_LEGACY_EXECUTION_PYTHON_UDF_PANDAS_CONVERSION_ENABLED,
             )
-            .map(|x| x.to_lowercase().parse::<bool>())
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
             .transpose()?
         {
             output.python_udf_pandas_conversion_enabled = value;
@@ -367,7 +410,7 @@ impl TryFrom<&SparkRuntimeConfig> for PySparkUdfConfig {
             .get_option(
                 SparkConfigKey::SPARK_SQL_LEGACY_EXECUTION_PYTHON_UDTF_PANDAS_CONVERSION_ENABLED,
             )
-            .map(|x| x.to_lowercase().parse::<bool>())
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
             .transpose()?
         {
             output.python_udtf_pandas_conversion_enabled = value;
@@ -375,7 +418,7 @@ impl TryFrom<&SparkRuntimeConfig> for PySparkUdfConfig {
 
         if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_EXECUTION_PYTHON_UDF_PANDAS_INT_TO_DECIMAL_COERCION_ENABLED)
-            .map(|x| x.to_lowercase().parse::<bool>())
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
             .transpose()?
         {
             output.python_udf_pandas_int_to_decimal_coercion_enabled = value;
@@ -385,7 +428,7 @@ impl TryFrom<&SparkRuntimeConfig> for PySparkUdfConfig {
             .get_option(
                 SparkConfigKey::SPARK_SQL_EXECUTION_PYTHON_UDF_PANDAS_PREFER_INT_EXTENSION_DTYPE,
             )
-            .map(|x| x.to_lowercase().parse::<bool>())
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
             .transpose()?
         {
             output.python_udf_pandas_prefer_int_extension_dtype = value;
@@ -393,7 +436,7 @@ impl TryFrom<&SparkRuntimeConfig> for PySparkUdfConfig {
 
         if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_EXECUTION_PYSPARK_BINARY_AS_BYTES)
-            .map(|x| x.to_lowercase().parse::<bool>())
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
             .transpose()?
         {
             output.binary_as_bytes = value;

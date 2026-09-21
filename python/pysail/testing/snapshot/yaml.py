@@ -162,8 +162,9 @@ class YamlDataSerializer:
                 f.write(f"{cls._doc_divider}\n")
                 f.write(f"name: {_quote_yaml_string(snapshot.name)}\n")
                 f.write("data:\n")
-                f.writelines(f"{cls._indent}{line}\n" for line in snapshot.data.splitlines())
-                if not snapshot.data.splitlines():
+                data_lines = snapshot.data.splitlines()
+                f.writelines(f"{cls._indent}{line}\n" if line else "\n" for line in data_lines)
+                if not data_lines:
                     f.write(f"{cls._indent}null\n")
 
     @classmethod
@@ -223,8 +224,8 @@ class YamlDataSerializer:
             if not line.strip():
                 if current_name is None and not collecting_data:
                     continue
-                if collecting_data and line.startswith(cls._indent):
-                    # Indented blank line is a blank line within the data block.
+                if collecting_data and (not line or line.startswith(cls._indent)):
+                    # Blank lines belong to the data block even when they carry no indentation.
                     data_lines.append(line[len(cls._indent) :])
                     continue
                 continue

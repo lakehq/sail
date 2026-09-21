@@ -1,6 +1,9 @@
+import json
+
 import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
+from pyspark.sql.functions import lit
 from pyspark.sql.types import Row
 
 
@@ -58,6 +61,24 @@ def test_delta_partitioning_by_single_column(spark, tmp_path):
     assert filtered_df_gt.count() == 2, "GREATER THAN filter should return 2 records for year>2025"  # noqa: PLR2004
 
 
+def test_delta_constant_partition_uses_multiple_writers(spark, tmp_path):
+    """Writers are not funneled through a single task per table partition.
+
+    Every row lands in the same table partition, so a plan that shards by partition key would
+    write a single file. Writer count follows the input plan instead, which has four partitions.
+    """
+    delta_path = tmp_path / "constant_partitioned_delta_table"
+    row_count = 32_768
+    input_partitions = 4
+    df = spark.range(0, row_count, 1, input_partitions).withColumn("day", lit("2026-09-06"))
+
+    df.write.format("delta").mode("overwrite").partitionBy("day").save(str(delta_path))
+
+    data_files = list((delta_path / "day=2026-09-06").glob("*.parquet"))
+    assert len(data_files) == input_partitions, "each input partition should write its own file"
+    assert spark.read.format("delta").load(str(delta_path)).count() == row_count
+
+
 def test_delta_partitioning_creates_correct_directory_structure(spark, delta_test_data, tmp_path):
     delta_path = tmp_path / "partitioned_delta_table"
     delta_table_path = f"{delta_path}"
@@ -77,6 +98,44 @@ def test_delta_partitioning_creates_correct_directory_structure(spark, delta_tes
     expected_data = expected_data.sort_values("id").reset_index(drop=True)
 
     assert_frame_equal(result_pandas, expected_data, check_dtype=False)
+
+
+@pytest.mark.parametrize(
+    ("column_mapping_mode", "schema_partition_name", "requested_partition_name"),
+    [
+        pytest.param("none", "EventDate", "eventdate", id="ascii-none"),
+        pytest.param("name", "EventDate", "eventdate", id="ascii-name"),
+        pytest.param("none", "ÄDate", "ädate", id="unicode-none"),
+        pytest.param("none", "ΣDate", "ςdate", id="unicode-final-sigma-none"),
+    ],
+)
+def test_delta_partition_name_resolution_canonicalizes_case(
+    spark,
+    tmp_path,
+    column_mapping_mode,
+    schema_partition_name,
+    requested_partition_name,
+):
+    delta_path = tmp_path / "case_insensitive_partition_name"
+    source = spark.createDataFrame([(1, "2026-08-06")], ["id", schema_partition_name])
+
+    (
+        source.write.format("delta")
+        .mode("overwrite")
+        .option("delta.columnMapping.mode", column_mapping_mode)
+        .partitionBy(requested_partition_name)
+        .save(str(delta_path))
+    )
+
+    rows = spark.read.format("delta").load(str(delta_path)).collect()
+    assert [row.asDict() for row in rows] == [{"id": 1, schema_partition_name: "2026-08-06"}]
+
+    first_commit = delta_path / "_delta_log" / "00000000000000000000.json"
+    actions = [json.loads(line) for line in first_commit.read_text(encoding="utf-8").splitlines()]
+    first_metadata = next(action["metaData"] for action in actions if "metaData" in action)
+    assert first_metadata["partitionColumns"] == [schema_partition_name]
+    if column_mapping_mode == "name":
+        assert first_metadata["configuration"]["delta.columnMapping.mode"] == "name"
 
 
 def test_delta_partitioning_by_multiple_columns(spark, tmp_path):

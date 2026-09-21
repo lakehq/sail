@@ -6,12 +6,13 @@ use datafusion::arrow::array::{Array, StringArray, UInt64Array};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::catalog::memory::DataSourceExec;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
 use datafusion::execution::context::TaskContext;
 use datafusion::execution::object_store::ObjectStoreUrl;
-use datafusion::physical_expr::{Distribution, EquivalenceProperties};
+use datafusion::physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -22,7 +23,9 @@ use datafusion::physical_plan::{
 use datafusion_common::{DataFusionError, Result, internal_err};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use object_store::ObjectMeta;
-use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
+use sail_common_datafusion::schema_evolution::{
+    SchemaEvolutionPhysicalExprAdapterFactoryWithMatching, StructFieldMatching,
+};
 use url::Url;
 
 use crate::io::StoreContext;
@@ -141,6 +144,7 @@ impl ScanByDataFilesState {
                 ordering: None,
                 extensions: Default::default(),
                 metadata_size_hint: None,
+                arrow_schema: None,
                 table_reference: None,
             });
         }
@@ -168,8 +172,11 @@ impl ScanByDataFilesState {
 
         let file_scan_config = FileScanConfigBuilder::new(object_store_url, parquet_source)
             .with_file_groups(file_groups)
-            .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})
-                as Arc<dyn PhysicalExprAdapterFactory>))
+            .with_expr_adapter(Some(Arc::new(
+                SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(
+                    StructFieldMatching::FieldId,
+                ),
+            ) as Arc<dyn PhysicalExprAdapterFactory>))
             .build();
 
         let scan_exec = DataSourceExec::from_data_source(file_scan_config);
@@ -269,6 +276,22 @@ impl ExecutionPlan for IcebergScanByDataFilesExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    #[expect(deprecated)]
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: datafusion::physical_plan::ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.with_new_children(children)
     }
 
     fn with_new_children(

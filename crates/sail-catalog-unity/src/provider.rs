@@ -23,11 +23,11 @@ use sail_catalog::lakehouse::{
 };
 use sail_catalog::provider::{
     AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
-    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
-    TableFormatCreateMetadataMode,
+    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
+    LakeSourceCreateMetadataMode, Namespace,
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
-use sail_common::http::SAIL_USER_AGENT;
+use sail_common::utils::http::SAIL_USER_AGENT;
 use sail_common_datafusion::catalog::delta::{
     DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY, unity_table_id_value,
 };
@@ -839,8 +839,8 @@ impl CatalogProvider for UnityCatalogProvider {
             &self.lakehouse_capabilities(),
         );
         if request.options.format.eq_ignore_ascii_case("delta") && !request.options.is_external {
-            plan.materialization = LakehouseCreateMaterialization::AfterCatalogTableFormat {
-                mode: TableFormatCreateMetadataMode::CatalogCoordinated,
+            plan.materialization = LakehouseCreateMaterialization::AfterCatalogLakeSource {
+                mode: LakeSourceCreateMetadataMode::CatalogCoordinated,
             };
             if request.options.is_write_precondition {
                 let client = self

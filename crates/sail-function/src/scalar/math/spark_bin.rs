@@ -206,7 +206,7 @@ fn bin_into(value: i64, dst: &mut String) {
     let v = value as u64;
     if value >= 0 {
         // Trim leading zeros — at least 1 bit (for value == 0).
-        let n_bits = (u64::BITS - v.leading_zeros()).max(1) as usize;
+        let n_bits = v.bit_width().max(1) as usize;
         for i in (0..n_bits).rev() {
             dst.push(if (v >> i) & 1 == 1 { '1' } else { '0' });
         }

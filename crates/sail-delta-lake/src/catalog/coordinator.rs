@@ -115,8 +115,8 @@ fn map_commit_outcome(outcome: CatalogResult<LakehouseCommitOutcome>) -> Result<
         Ok(LakehouseCommitOutcome::StateUnknown { message }) => Err(DataFusionError::External(
             Box::new(CatalogError::CommitStateUnknown(message)),
         )),
-        Ok(LakehouseCommitOutcome::Rejected { message }) => Err(DataFusionError::Execution(
-            format!("Delta catalog commit rejected: {message}"),
+        Ok(LakehouseCommitOutcome::Rejected { message }) => Err(DataFusionError::External(
+            Box::new(CatalogError::CommitRejected(message)),
         )),
         Err(CatalogError::Conflict(message)) => Err(DataFusionError::Execution(format!(
             "Delta catalog commit conflict: {message}"
@@ -442,5 +442,31 @@ fn metadata_value_json(value: &MetadataValue) -> Result<serde_json::Value> {
         MetadataValue::String(value) => Ok(serde_json::Value::String(value.clone())),
         MetadataValue::Boolean(value) => Ok(serde_json::Value::Bool(*value)),
         MetadataValue::Other(value) => Ok(value.clone()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn definite_commit_rejection_preserves_its_typed_outcome() -> Result<()> {
+        match map_commit_outcome(Ok(LakehouseCommitOutcome::Rejected {
+            message: "policy denied".to_string(),
+        })) {
+            Err(DataFusionError::External(error)) => {
+                let error = error.downcast_ref::<CatalogError>().ok_or_else(|| {
+                    DataFusionError::Internal("expected typed catalog error".to_string())
+                })?;
+                assert!(
+                    matches!(error, CatalogError::CommitRejected(message) if message == "policy denied")
+                );
+                Ok(())
+            }
+            Err(error) => Err(error),
+            Ok(()) => Err(DataFusionError::Internal(
+                "definite commit rejection unexpectedly succeeded".to_string(),
+            )),
+        }
     }
 }

@@ -5,6 +5,7 @@ use datafusion::common::{Result, internal_datafusion_err};
 use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::SessionConfig;
+use sail_common::actor::ActorSystem;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
@@ -78,12 +79,14 @@ fn create_spark_session_factory(
 pub async fn create_spark_session_manager(
     config: Arc<AppConfig>,
     runtime: RuntimeHandle,
+    system: &mut ActorSystem,
 ) -> SparkResult<SessionManager> {
     Ok(create_session_manager(
         config.clone(),
         runtime,
         create_spark_session_factory,
         Duration::from_secs(config.spark.session_timeout_secs),
+        system,
     )
     .await?)
 }

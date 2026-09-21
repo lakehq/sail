@@ -28,3 +28,11 @@ iana-time-zone = { workspace = true }
 tokio = { workspace = true }
 secrecy = { workspace = true }
 toml = { workspace = true }
+fastrace = { workspace = true }
+log = { workspace = true }
+tonic = { workspace = true }
+tonic-reflection = { workspace = true }
+tonic-health = { workspace = true }
+tower = { workspace = true }
+axum = { workspace = true }
+pin-project-lite = { workspace = true }

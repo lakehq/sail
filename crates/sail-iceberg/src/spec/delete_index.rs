@@ -118,12 +118,21 @@ fn encode_primitive(p: &PrimitiveLiteral, out: &mut Vec<u8>) {
         }
         PrimitiveLiteral::Float(OrderedFloat(f)) => {
             out.push(0x04);
-            // Normalize +0.0/-0.0 via bit-pattern per Iceberg Scan Planning note 3.
-            out.extend_from_slice(&f.to_bits().to_le_bytes());
+            let bits = if f.is_nan() {
+                f32::NAN.to_bits()
+            } else {
+                f.to_bits()
+            };
+            out.extend_from_slice(&bits.to_le_bytes());
         }
         PrimitiveLiteral::Double(OrderedFloat(f)) => {
             out.push(0x05);
-            out.extend_from_slice(&f.to_bits().to_le_bytes());
+            let bits = if f.is_nan() {
+                f64::NAN.to_bits()
+            } else {
+                f.to_bits()
+            };
+            out.extend_from_slice(&bits.to_le_bytes());
         }
         PrimitiveLiteral::Int128(i) => {
             out.push(0x06);
@@ -487,7 +496,7 @@ mod tests {
     }
 
     #[test]
-    fn float_partition_key_uses_bit_pattern() {
+    fn floating_point_partition_key_matches_iceberg_equality() {
         let pos_zero = vec![Some(Literal::Primitive(PrimitiveLiteral::Float(
             OrderedFloat(0.0f32),
         )))];
@@ -505,6 +514,28 @@ mod tests {
         )))];
         let k_dup = PartitionKey::new(0, &pos_zero_dup);
         assert_eq!(k_pos, k_dup);
+
+        let float_nan = vec![Some(Literal::Primitive(PrimitiveLiteral::Float(
+            OrderedFloat(f32::from_bits(0x7fc0_0001)),
+        )))];
+        let other_float_nan = vec![Some(Literal::Primitive(PrimitiveLiteral::Float(
+            OrderedFloat(f32::from_bits(0xffc0_0042)),
+        )))];
+        assert_eq!(
+            PartitionKey::new(0, &float_nan),
+            PartitionKey::new(0, &other_float_nan)
+        );
+
+        let double_nan = vec![Some(Literal::Primitive(PrimitiveLiteral::Double(
+            OrderedFloat(f64::from_bits(0x7ff8_0000_0000_0001)),
+        )))];
+        let other_double_nan = vec![Some(Literal::Primitive(PrimitiveLiteral::Double(
+            OrderedFloat(f64::from_bits(0xfff8_0000_0000_0042)),
+        )))];
+        assert_eq!(
+            PartitionKey::new(0, &double_nan),
+            PartitionKey::new(0, &other_double_nan)
+        );
     }
 
     #[test]

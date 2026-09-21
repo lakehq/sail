@@ -117,7 +117,101 @@ impl ProtocolChecker {
         }
     }
 
-    pub(crate) fn unsupported_reader_features(
+    fn validate_feature_lists(&self, protocol: &Protocol) -> Result<(), TransactionError> {
+        if protocol.min_reader_version() < 1 {
+            return Err(TransactionError::InvalidProtocol(format!(
+                "minReaderVersion must be at least 1, found {}",
+                protocol.min_reader_version()
+            )));
+        }
+        if protocol.min_writer_version() < 1 {
+            return Err(TransactionError::InvalidProtocol(format!(
+                "minWriterVersion must be at least 1, found {}",
+                protocol.min_writer_version()
+            )));
+        }
+        match protocol.min_reader_version() {
+            0..=2 if protocol.reader_features().is_some() => {
+                return Err(TransactionError::InvalidProtocol(format!(
+                    "readerFeatures must be absent when minReaderVersion is {}",
+                    protocol.min_reader_version()
+                )));
+            }
+            3 if protocol.reader_features().is_none() => {
+                return Err(TransactionError::InvalidProtocol(
+                    "readerFeatures must be present when minReaderVersion is 3".to_string(),
+                ));
+            }
+            3 if protocol.min_writer_version() != 7 => {
+                return Err(TransactionError::InvalidProtocol(format!(
+                    "minReaderVersion 3 requires minWriterVersion 7, found {}",
+                    protocol.min_writer_version()
+                )));
+            }
+            _ => {}
+        }
+        match protocol.min_writer_version() {
+            0..=6 if protocol.writer_features().is_some() => {
+                return Err(TransactionError::InvalidProtocol(format!(
+                    "writerFeatures must be absent when minWriterVersion is {}",
+                    protocol.min_writer_version()
+                )));
+            }
+            7 if protocol.writer_features().is_none() => {
+                return Err(TransactionError::InvalidProtocol(
+                    "writerFeatures must be present when minWriterVersion is 7".to_string(),
+                ));
+            }
+            _ => {}
+        }
+
+        let reader_features = protocol.reader_features().unwrap_or(&[]);
+        let writer_features = protocol.writer_features().unwrap_or(&[]);
+
+        for feature in reader_features {
+            if !feature.is_reader_feature() && !matches!(feature, TableFeature::Unknown) {
+                return Err(TransactionError::InvalidProtocol(format!(
+                    "writer-only feature {} must not be listed in readerFeatures",
+                    feature.as_str()
+                )));
+            }
+            if !writer_features.contains(feature) {
+                return Err(TransactionError::InvalidProtocol(format!(
+                    "reader-writer feature {} must be listed in both readerFeatures and writerFeatures",
+                    feature.as_str()
+                )));
+            }
+        }
+
+        for feature in writer_features {
+            let legacy_column_mapping =
+                protocol.min_reader_version() == 2 && feature == &TableFeature::ColumnMapping;
+            if feature.is_reader_feature()
+                && !legacy_column_mapping
+                && !reader_features.contains(feature)
+            {
+                return Err(TransactionError::InvalidProtocol(format!(
+                    "reader-writer feature {} must be listed in both readerFeatures and writerFeatures",
+                    feature.as_str()
+                )));
+            }
+        }
+
+        if (reader_features.contains(&TableFeature::VariantShredding)
+            || writer_features.contains(&TableFeature::VariantShredding))
+            && !(reader_features.contains(&TableFeature::VariantType)
+                && writer_features.contains(&TableFeature::VariantType))
+        {
+            return Err(TransactionError::InvalidProtocol(
+                "variantShredding requires variantType in both readerFeatures and writerFeatures"
+                    .to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn unsupported_reader_features_for_valid_protocol(
         &self,
         protocol: &Protocol,
     ) -> Result<Vec<TableFeature>, TransactionError> {
@@ -130,7 +224,15 @@ impl ProtocolChecker {
             .collect::<Vec<_>>())
     }
 
-    pub(crate) fn unsupported_writer_features(
+    pub(crate) fn unsupported_reader_features(
+        &self,
+        protocol: &Protocol,
+    ) -> Result<Vec<TableFeature>, TransactionError> {
+        self.validate_feature_lists(protocol)?;
+        self.unsupported_reader_features_for_valid_protocol(protocol)
+    }
+
+    fn unsupported_writer_features_for_valid_protocol(
         &self,
         protocol: &Protocol,
     ) -> Result<Vec<TableFeature>, TransactionError> {
@@ -143,8 +245,17 @@ impl ProtocolChecker {
             .collect::<Vec<_>>())
     }
 
+    pub(crate) fn unsupported_writer_features(
+        &self,
+        protocol: &Protocol,
+    ) -> Result<Vec<TableFeature>, TransactionError> {
+        self.validate_feature_lists(protocol)?;
+        self.unsupported_writer_features_for_valid_protocol(protocol)
+    }
+
     pub fn can_read_from_protocol(&self, protocol: &Protocol) -> Result<(), TransactionError> {
-        let diff = self.unsupported_reader_features(protocol)?;
+        self.validate_feature_lists(protocol)?;
+        let diff = self.unsupported_reader_features_for_valid_protocol(protocol)?;
         if !diff.is_empty() {
             return Err(TransactionError::UnsupportedTableFeatures(diff));
         }
@@ -156,21 +267,7 @@ impl ProtocolChecker {
         protocol: &Protocol,
         schema: &Schema,
     ) -> Result<(), TransactionError> {
-        let contains_timestampntz = contains_timestampntz(schema.fields());
-        let required_features: Option<&[TableFeature]> = match protocol.min_writer_version() {
-            0..=6 => None,
-            _ => protocol.writer_features(),
-        };
-
-        if let Some(table_features) = required_features {
-            if !table_features.contains(&TableFeature::TimestampWithoutTimezone)
-                && contains_timestampntz
-            {
-                return Err(TransactionError::TableFeaturesRequired(
-                    TableFeature::TimestampWithoutTimezone,
-                ));
-            }
-        } else if contains_timestampntz {
+        if contains_timestampntz(schema.fields()) && !self.supports_timestamp_ntz_schema(protocol) {
             return Err(TransactionError::TableFeaturesRequired(
                 TableFeature::TimestampWithoutTimezone,
             ));
@@ -183,26 +280,29 @@ impl ProtocolChecker {
         protocol: &Protocol,
         schema: &Schema,
     ) -> Result<(), TransactionError> {
-        let contains_variant = contains_variant(schema.fields());
-        if contains_variant
-            && !(protocol.min_reader_version() >= 3
-                && protocol.min_writer_version() >= 7
-                && protocol
-                    .reader_features()
-                    .unwrap_or(&[])
-                    .iter()
-                    .any(TableFeature::is_variant_type_feature)
-                && protocol
-                    .writer_features()
-                    .unwrap_or(&[])
-                    .iter()
-                    .any(TableFeature::is_variant_type_feature))
-        {
+        if contains_variant(schema.fields()) && !self.supports_variant_schema(protocol) {
             return Err(TransactionError::TableFeaturesRequired(
                 TableFeature::VariantType,
             ));
         }
         Ok(())
+    }
+
+    pub fn supports_timestamp_ntz_schema(&self, protocol: &Protocol) -> bool {
+        protocol.min_reader_version() >= 3
+            && protocol.min_writer_version() >= 7
+            && protocol.has_reader_feature(&TableFeature::TimestampWithoutTimezone)
+            && protocol.has_writer_feature(&TableFeature::TimestampWithoutTimezone)
+    }
+
+    pub fn supports_variant_schema(&self, protocol: &Protocol) -> bool {
+        protocol.min_reader_version() >= 3
+            && protocol.min_writer_version() >= 7
+            && [TableFeature::VariantType, TableFeature::VariantTypePreview]
+                .iter()
+                .any(|feature| {
+                    protocol.has_reader_feature(feature) && protocol.has_writer_feature(feature)
+                })
     }
 
     pub fn check_can_write_variant_shredding_to_protocol(
@@ -232,8 +332,9 @@ impl ProtocolChecker {
     }
 
     pub fn can_write_to_protocol(&self, protocol: &Protocol) -> Result<(), TransactionError> {
+        self.validate_feature_lists(protocol)?;
         // NOTE: writers must always support all required reader features
-        let mut reader_diff = self.unsupported_reader_features(protocol)?;
+        let mut reader_diff = self.unsupported_reader_features_for_valid_protocol(protocol)?;
         // catalogManaged is unsafe for data reads until catalog-ratified commits are replayed,
         // but writes can proceed through the catalog-managed commit path when the protocol also
         // declares the matching writer feature.
@@ -245,7 +346,7 @@ impl ProtocolChecker {
         if !reader_diff.is_empty() {
             return Err(TransactionError::UnsupportedTableFeatures(reader_diff));
         }
-        let diff = self.unsupported_writer_features(protocol)?;
+        let diff = self.unsupported_writer_features_for_valid_protocol(protocol)?;
         if !diff.is_empty() {
             return Err(TransactionError::UnsupportedTableFeatures(diff));
         }
@@ -309,6 +410,7 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     reader_features.insert(TableFeature::VariantShredding);
     reader_features.insert(TableFeature::VariantShreddingPreview);
     reader_features.insert(TableFeature::CatalogManaged);
+    reader_features.insert(TableFeature::VacuumProtocolCheck);
     let mut writer_features = HashSet::new();
     // Keep this list aligned with end-to-end behavior, not just protocol parsing.
     // These features are only checked against the explicit `writerFeatures` list on
@@ -335,6 +437,7 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     writer_features.insert(TableFeature::VariantTypePreview);
     writer_features.insert(TableFeature::VariantShredding);
     writer_features.insert(TableFeature::VariantShreddingPreview);
+    writer_features.insert(TableFeature::VacuumProtocolCheck);
 
     ProtocolChecker::new(reader_features, writer_features)
 });
@@ -393,8 +496,8 @@ mod tests {
     }
 
     #[test]
-    fn global_checker_accepts_variant_shredding_without_variant_type() {
-        let protocol = Protocol::new(
+    fn global_checker_distinguishes_stable_and_preview_variant_dependencies() {
+        let preview_protocol = Protocol::new(
             3,
             7,
             Some(vec![TableFeature::VariantShreddingPreview]),
@@ -405,24 +508,66 @@ mod tests {
             ]),
         );
 
-        INSTANCE.can_read_from_protocol(&protocol).unwrap();
-        INSTANCE.can_write_to_protocol(&protocol).unwrap();
+        INSTANCE.can_read_from_protocol(&preview_protocol).unwrap();
+        INSTANCE.can_write_to_protocol(&preview_protocol).unwrap();
         INSTANCE
-            .check_can_write_variant_shredding_to_protocol(&protocol, true)
+            .check_can_write_variant_shredding_to_protocol(&preview_protocol, true)
             .unwrap();
+
+        for extra_feature in [None, Some(TableFeature::VariantTypePreview)] {
+            let mut reader_features = vec![TableFeature::VariantShredding];
+            let mut writer_features = vec![TableFeature::VariantShredding];
+            if let Some(feature) = extra_feature {
+                reader_features.push(feature.clone());
+                writer_features.push(feature);
+            }
+            let stable_protocol = Protocol::new(3, 7, Some(reader_features), Some(writer_features));
+
+            for error in [
+                INSTANCE
+                    .can_read_from_protocol(&stable_protocol)
+                    .unwrap_err(),
+                INSTANCE
+                    .can_write_to_protocol(&stable_protocol)
+                    .unwrap_err(),
+            ] {
+                assert!(matches!(
+                    error,
+                    TransactionError::InvalidProtocol(message)
+                        if message.contains("variantShredding requires variantType")
+                ));
+            }
+        }
     }
 
     #[test]
-    fn global_checker_accepts_catalog_managed_feature() {
-        let protocol = Protocol::new(
-            3,
-            7,
-            Some(vec![TableFeature::CatalogManaged]),
-            Some(vec![TableFeature::CatalogManaged]),
-        );
+    fn global_checker_accepts_valid_table_feature_protocols() {
+        let protocols = [
+            (
+                "catalog-managed feature",
+                Protocol::new(
+                    3,
+                    7,
+                    Some(vec![TableFeature::CatalogManaged]),
+                    Some(vec![TableFeature::CatalogManaged]),
+                ),
+            ),
+            (
+                "present empty feature lists",
+                Protocol::new(3, 7, Some(vec![]), Some(vec![])),
+            ),
+        ];
 
-        INSTANCE.can_read_from_protocol(&protocol).unwrap();
-        INSTANCE.can_write_to_protocol(&protocol).unwrap();
+        for (label, protocol) in protocols {
+            assert!(
+                INSTANCE.can_read_from_protocol(&protocol).is_ok(),
+                "reader rejected {label}"
+            );
+            assert!(
+                INSTANCE.can_write_to_protocol(&protocol).is_ok(),
+                "writer rejected {label}"
+            );
+        }
     }
 
     #[test]
@@ -531,15 +676,15 @@ mod tests {
         let protocol = Protocol::new(
             3,
             7,
-            Some(vec![TableFeature::RowTracking]),
-            Some(vec![TableFeature::AppendOnly]),
+            Some(vec![TableFeature::Unknown]),
+            Some(vec![TableFeature::AppendOnly, TableFeature::Unknown]),
         );
 
         let err = INSTANCE.can_read_from_protocol(&protocol).unwrap_err();
         assert!(matches!(
             err,
             TransactionError::UnsupportedTableFeatures(features)
-                if features.contains(&TableFeature::RowTracking)
+                if features.contains(&TableFeature::Unknown)
         ));
     }
 
@@ -550,8 +695,104 @@ mod tests {
     }
 
     #[test]
-    fn global_checker_rejects_unknown_reader_version() {
-        let protocol = Protocol::new(99, 7, None, Some(vec![]));
-        assert!(INSTANCE.can_read_from_protocol(&protocol).is_err());
+    fn global_checker_rejects_invalid_protocols() {
+        let vacuum_writer_only: Protocol = serde_json::from_value(serde_json::json!({
+            "minReaderVersion": 3,
+            "minWriterVersion": 7,
+            "readerFeatures": [],
+            "writerFeatures": ["vacuumProtocolCheck"]
+        }))
+        .unwrap();
+        let cases = [
+            (
+                "reader-writer feature listed only for readers",
+                Protocol::new(
+                    3,
+                    7,
+                    Some(vec![TableFeature::VacuumProtocolCheck]),
+                    Some(vec![TableFeature::AppendOnly]),
+                ),
+                "reader-writer feature vacuumProtocolCheck must be listed in both readerFeatures and writerFeatures",
+            ),
+            (
+                "reader-writer feature listed only for writers",
+                vacuum_writer_only,
+                "reader-writer feature vacuumProtocolCheck must be listed in both readerFeatures and writerFeatures",
+            ),
+            (
+                "reader features present at a legacy version",
+                Protocol::new(
+                    1,
+                    7,
+                    Some(vec![TableFeature::VacuumProtocolCheck]),
+                    Some(vec![TableFeature::VacuumProtocolCheck]),
+                ),
+                "readerFeatures must be absent",
+            ),
+            (
+                "table-feature reader version paired with legacy writer version",
+                Protocol::new(3, 6, Some(vec![TableFeature::VacuumProtocolCheck]), None),
+                "minReaderVersion 3 requires minWriterVersion 7",
+            ),
+            (
+                "reader features missing at the table-feature version",
+                Protocol::new(3, 7, None, Some(vec![TableFeature::VacuumProtocolCheck])),
+                "readerFeatures must be present",
+            ),
+            (
+                "writer features missing at the table-feature version",
+                Protocol::new(3, 7, Some(vec![TableFeature::VacuumProtocolCheck]), None),
+                "writerFeatures must be present",
+            ),
+            (
+                "zero reader version",
+                Protocol::new(0, 1, None, None),
+                "minReaderVersion must be at least 1",
+            ),
+            (
+                "zero writer version",
+                Protocol::new(1, 0, None, None),
+                "minWriterVersion must be at least 1",
+            ),
+            (
+                "negative reader version",
+                Protocol::new(-1, 1, None, None),
+                "minReaderVersion must be at least 1",
+            ),
+            (
+                "negative writer version",
+                Protocol::new(1, -1, None, None),
+                "minWriterVersion must be at least 1",
+            ),
+            (
+                "writer-only feature listed for readers",
+                Protocol::new(
+                    3,
+                    7,
+                    Some(vec![TableFeature::AppendOnly]),
+                    Some(vec![TableFeature::AppendOnly]),
+                ),
+                "writer-only feature appendOnly",
+            ),
+        ];
+
+        for (label, protocol, expected_message) in cases {
+            for error in [
+                INSTANCE.can_read_from_protocol(&protocol).unwrap_err(),
+                INSTANCE.can_write_to_protocol(&protocol).unwrap_err(),
+            ] {
+                assert!(
+                    matches!(
+                        &error,
+                        TransactionError::InvalidProtocol(message)
+                            if message.contains(expected_message)
+                    ),
+                    "unexpected {label} error: {error}"
+                );
+            }
+        }
+
+        let unknown_reader = Protocol::new(99, 7, None, Some(vec![]));
+        assert!(INSTANCE.can_read_from_protocol(&unknown_reader).is_err());
     }
 }

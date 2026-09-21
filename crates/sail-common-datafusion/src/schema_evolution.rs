@@ -10,8 +10,8 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::{DataFusionError, Result, ScalarValue, exec_err};
 use datafusion::functions::core::getfield::GetFieldFunc;
-use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
-use datafusion::physical_expr::expressions::{self, Column, Literal};
+use datafusion::parquet::arrow::{PARQUET_FIELD_ID_META_KEY, RowNumber};
+use datafusion::physical_expr::expressions::{self, CastExpr, Column, Literal};
 use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use datafusion::physical_expr_adapter::{PhysicalExprAdapter, PhysicalExprAdapterFactory};
 use datafusion::physical_plan::ColumnarValue;
@@ -98,7 +98,7 @@ fn create_schema_evolution_adapter(
     timezone_mode: SchemaEvolutionTimezoneMode,
 ) -> Result<Arc<dyn PhysicalExprAdapter>> {
     let (column_mapping, default_values) =
-        create_column_mapping(&logical_file_schema, &physical_file_schema);
+        create_column_mapping(&logical_file_schema, &physical_file_schema, matching);
 
     Ok(Arc::new(SchemaEvolutionPhysicalExprAdapter {
         logical_file_schema,
@@ -113,17 +113,32 @@ fn create_schema_evolution_adapter(
 fn create_column_mapping(
     logical_schema: &Schema,
     physical_schema: &Schema,
+    matching: StructFieldMatching,
 ) -> (Vec<Option<usize>>, Vec<Option<ScalarValue>>) {
     let mut column_mapping = Vec::with_capacity(logical_schema.fields().len());
     let mut default_values = Vec::with_capacity(logical_schema.fields().len());
 
     for logical_field in logical_schema.fields() {
-        match physical_schema.index_of(logical_field.name()) {
-            Ok(physical_index) => {
+        // Reader-generated positions have no Delta physical name or field ID.
+        // Match their typed virtual fields before applying persisted-column rules.
+        let physical_field = if logical_field.try_extension_type::<RowNumber>().is_ok() {
+            physical_schema
+                .fields()
+                .iter()
+                .enumerate()
+                .find(|(_, field)| {
+                    field.name() == logical_field.name()
+                        && field.try_extension_type::<RowNumber>().is_ok()
+                })
+        } else {
+            find_matching_struct_field(physical_schema.fields(), logical_field, matching)
+        };
+        match physical_field {
+            Some((physical_index, _)) => {
                 column_mapping.push(Some(physical_index));
                 default_values.push(None);
             }
-            Err(_) => {
+            None => {
                 column_mapping.push(None);
                 let default_value = if logical_field.is_nullable() {
                     Some(
@@ -225,18 +240,20 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
             None => return Ok(None),
         };
 
-        let physical_field = match self.physical_file_schema.field_with_name(column.name()) {
-            Ok(field) => field,
+        let logical_field_index = match self.logical_file_schema.index_of(column.name()) {
+            Ok(index) => index,
             Err(_) => return Ok(None),
         };
+        let physical_field_index = match self.column_mapping.get(logical_field_index) {
+            Some(Some(index)) => *index,
+            _ => return Ok(None),
+        };
+        let physical_field = self.physical_file_schema.field(physical_field_index);
         let physical_struct_fields = match physical_field.data_type() {
             DataType::Struct(fields) => fields,
             _ => return Ok(None),
         };
-        let logical_field = match self.logical_file_schema.field_with_name(column.name()) {
-            Ok(field) => field,
-            Err(_) => return Ok(None),
-        };
+        let logical_field = self.logical_file_schema.field(logical_field_index);
         let logical_struct_fields = match logical_field.data_type() {
             DataType::Struct(fields) => fields,
             _ => return Ok(None),
@@ -324,20 +341,21 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
         physical_field: &Field,
         physical_index: usize,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-        let needs_index_update = column.index() != physical_index;
+        let needs_column_update =
+            column.index() != physical_index || column.name() != physical_field.name();
         let needs_type_cast = logical_field.data_type() != physical_field.data_type();
 
-        match (needs_index_update, needs_type_cast) {
+        match (needs_column_update, needs_type_cast) {
             (false, false) => Ok(Transformed::no(expr)),
             (true, false) => {
                 let new_column =
-                    Column::new_with_schema(logical_field.name(), self.physical_file_schema)?;
+                    Column::new_with_schema(physical_field.name(), self.physical_file_schema)?;
                 Ok(Transformed::yes(Arc::new(new_column)))
             }
             (false, true) => self.apply_type_cast(expr, logical_field, physical_field),
             (true, true) => {
                 let new_column =
-                    Column::new_with_schema(logical_field.name(), self.physical_file_schema)?;
+                    Column::new_with_schema(physical_field.name(), self.physical_file_schema)?;
                 self.apply_type_cast(Arc::new(new_column), logical_field, physical_field)
             }
         }
@@ -356,6 +374,18 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
                 physical_field.data_type(),
                 logical_field.data_type()
             );
+        }
+
+        // TODO: Expose a pruning target for PhysicalName and FieldId casts so Delta and Iceberg
+        // can prune nested Parquet leaves without weakening their field-identity semantics.
+        if self.matching == StructFieldMatching::Name
+            && is_pure_name_structural_narrowing(physical_field, logical_field)
+        {
+            return Ok(Transformed::yes(Arc::new(CastExpr::new_with_target_field(
+                column_expr,
+                Arc::new(logical_field.clone()),
+                None,
+            ))));
         }
 
         let input_field = Arc::new(physical_field.clone());
@@ -381,6 +411,40 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
             }
         };
         Ok(Transformed::yes(Arc::new(cast)))
+    }
+}
+
+/// Returns whether DataFusion's name-based nested cast is equivalent to Sail's cast.
+/// Keeping the native cast for these shapes lets Parquet derive a leaf-level projection.
+fn is_pure_name_structural_narrowing(source: &Field, target: &Field) -> bool {
+    if is_variant_arrow_field(source)
+        || is_variant_arrow_field(target)
+        || is_variant_storage_type(source.data_type())
+        || is_variant_storage_type(target.data_type())
+    {
+        return false;
+    }
+
+    match (source.data_type(), target.data_type()) {
+        (DataType::Struct(source_fields), DataType::Struct(target_fields)) => {
+            target_fields.iter().all(|target_field| {
+                source_fields
+                    .iter()
+                    .find(|source_field| source_field.name() == target_field.name())
+                    .is_some_and(|source_field| {
+                        is_pure_name_structural_narrowing(source_field, target_field)
+                    })
+            })
+        }
+        (DataType::List(source_item), DataType::List(target_item))
+        | (DataType::LargeList(source_item), DataType::LargeList(target_item)) => {
+            is_pure_name_structural_narrowing(source_item, target_item)
+        }
+        _ => {
+            source.data_type() == target.data_type()
+                && !source.data_type().is_nested()
+                && !target.data_type().is_nested()
+        }
     }
 }
 
@@ -1052,6 +1116,45 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn virtual_row_numbers_survive_column_mapping() -> Result<()> {
+        let row_number =
+            Arc::new(Field::new("position", DataType::Int64, false).with_extension_type(RowNumber));
+        let logical = Arc::new(Schema::new(vec![Arc::clone(&row_number)]));
+        let physical = Arc::new(Schema::new(vec![
+            Arc::new(Field::new("data", DataType::Int64, true)),
+            row_number,
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&physical),
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2])),
+                Arc::new(Int64Array::from(vec![10, 100])),
+            ],
+        )?;
+        for matching in [
+            StructFieldMatching::PhysicalName,
+            StructFieldMatching::FieldId,
+        ] {
+            let adapter = create_schema_evolution_adapter(
+                Arc::clone(&logical),
+                Arc::clone(&physical),
+                matching,
+                SchemaEvolutionTimezoneMode::Strict,
+            )?;
+            let expr = adapter.rewrite(Arc::new(Column::new("position", 0)))?;
+            assert!(
+                expr.downcast_ref::<Column>()
+                    .is_some_and(|column| column.index() == 1)
+            );
+            assert_eq!(
+                expr.evaluate(&batch)?.into_array(2)?.as_ref(),
+                batch.column(1).as_ref()
+            );
+        }
+        Ok(())
+    }
+
     fn variant_field(name: &str) -> Field {
         Field::new(
             name,
@@ -1072,6 +1175,49 @@ mod tests {
             Field::new(name, DataType::Int64, true)
                 .with_metadata(HashMap::from([(metadata_key.to_string(), id.to_string())])),
         )
+    }
+
+    #[test]
+    fn maps_top_level_columns_by_field_id() -> Result<()> {
+        let logical_schema = Arc::new(Schema::new(vec![
+            field_with_id("renamed_b", PARQUET_FIELD_ID_META_KEY, 2),
+            field_with_id("renamed_a", PARQUET_FIELD_ID_META_KEY, 1),
+        ]));
+        let physical_schema = Arc::new(Schema::new(vec![
+            field_with_id("old_a", PARQUET_FIELD_ID_META_KEY, 1),
+            field_with_id("old_b", PARQUET_FIELD_ID_META_KEY, 2),
+        ]));
+        let adapter = create_schema_evolution_adapter(
+            logical_schema,
+            Arc::clone(&physical_schema),
+            StructFieldMatching::FieldId,
+            SchemaEvolutionTimezoneMode::Strict,
+        )?;
+
+        let rewritten = adapter.rewrite(Arc::new(Column::new("renamed_b", 0)))?;
+        let column = rewritten
+            .downcast_ref::<Column>()
+            .expect("rewritten column");
+        assert_eq!(column.name(), "old_b");
+        assert_eq!(column.index(), 1);
+
+        let renamed_in_place = Arc::new(Schema::new(vec![
+            field_with_id("renamed_a", PARQUET_FIELD_ID_META_KEY, 1),
+            field_with_id("renamed_b", PARQUET_FIELD_ID_META_KEY, 2),
+        ]));
+        let adapter = create_schema_evolution_adapter(
+            renamed_in_place,
+            physical_schema,
+            StructFieldMatching::FieldId,
+            SchemaEvolutionTimezoneMode::Strict,
+        )?;
+        let rewritten = adapter.rewrite(Arc::new(Column::new("renamed_a", 0)))?;
+        let column = rewritten
+            .downcast_ref::<Column>()
+            .expect("rewritten column");
+        assert_eq!(column.name(), "old_a");
+        assert_eq!(column.index(), 0);
+        Ok(())
     }
 
     #[test]

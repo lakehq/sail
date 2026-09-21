@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::logical_expr::StringifiedPlan;
-use sail_common::datetime::get_system_timezone;
+use sail_common::utils::datetime::get_system_timezone;
 use sail_common_datafusion::extension::SessionExtension;
 use sail_plan::config::PlanConfig;
 

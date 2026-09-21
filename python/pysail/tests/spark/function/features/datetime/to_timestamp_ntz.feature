@@ -26,6 +26,10 @@ Feature: to_timestamp_ntz
 
   Rule: Output schema (migrated from test_to_timestamp_ntz.txt printSchema doctests)
 
+    # The inline-table TIMESTAMP column is non-nullable and the conversion cannot fail, so
+    # Spark keeps the result non-nullable. Sail widens it.
+    @sail-bug
+    @function(nullability)
     Scenario: to_timestamp_ntz doctest #3 (schema)
       Given config spark.sql.session.timeZone = Europe/Amsterdam
       When query
@@ -35,5 +39,5 @@ Feature: to_timestamp_ntz
       Then query schema
         """
         root
-         |-- r: timestamp_ntz (nullable = true)
+         |-- r: timestamp_ntz (nullable = false)
         """

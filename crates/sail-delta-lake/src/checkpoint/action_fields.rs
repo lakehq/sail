@@ -10,7 +10,6 @@ use datafusion::arrow::datatypes::{
 use datafusion::arrow::json::LineDelimitedWriter;
 use datafusion::arrow::record_batch::RecordBatch;
 
-use crate::schema::make_physical_arrow_schema;
 use crate::snapshot::materialize::parse_partition_values_array;
 use crate::spec::fields::{FIELD_NAME_PARTITION_VALUES_PARSED, FIELD_NAME_STATS_PARSED};
 use crate::spec::{
@@ -49,12 +48,8 @@ impl AddAugmentationConfig {
                     .cloned()
                     .collect();
                 let non_partition_schema = StructType::try_new(non_partition_fields)?;
-                let non_partition_arrow = ArrowSchema::try_from(&non_partition_schema)?;
-                let physical_non_partition_arrow =
-                    make_physical_arrow_schema(&non_partition_arrow, column_mapping_mode);
-                let physical_non_partition_schema =
-                    StructType::try_from(&physical_non_partition_arrow)?;
-                let stats_struct = stats_schema(&physical_non_partition_schema, &properties)?;
+                let stats_struct = stats_schema(&non_partition_schema, &properties)?
+                    .make_physical(column_mapping_mode);
                 let stats_arrow = Arc::new(ArrowSchema::try_from(&stats_struct)?);
 
                 let partition_schema = if partition_cols.is_empty() {

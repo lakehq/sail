@@ -186,6 +186,7 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
         ("bitmap_count", F::unary(bitmap_fn::bitmap_count)),
         ("current_catalog", F::custom(current_catalog)),
         ("current_database", F::custom(current_database)),
+        ("current_path", F::unknown("current_path")),
         ("current_schema", F::custom(current_database)),
         ("current_user", F::custom(current_user)),
         ("from_avro", F::unknown("from_avro")),
@@ -207,6 +208,72 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
         ),
         ("theta_union", F::custom(theta_union)),
         (
+            "tuple_difference_double",
+            F::unknown("tuple_difference_double"),
+        ),
+        (
+            "tuple_difference_integer",
+            F::unknown("tuple_difference_integer"),
+        ),
+        (
+            "tuple_difference_theta_double",
+            F::unknown("tuple_difference_theta_double"),
+        ),
+        (
+            "tuple_difference_theta_integer",
+            F::unknown("tuple_difference_theta_integer"),
+        ),
+        (
+            "tuple_intersection_double",
+            F::unknown("tuple_intersection_double"),
+        ),
+        (
+            "tuple_intersection_integer",
+            F::unknown("tuple_intersection_integer"),
+        ),
+        (
+            "tuple_intersection_theta_double",
+            F::unknown("tuple_intersection_theta_double"),
+        ),
+        (
+            "tuple_intersection_theta_integer",
+            F::unknown("tuple_intersection_theta_integer"),
+        ),
+        (
+            "tuple_sketch_estimate_double",
+            F::unknown("tuple_sketch_estimate_double"),
+        ),
+        (
+            "tuple_sketch_estimate_integer",
+            F::unknown("tuple_sketch_estimate_integer"),
+        ),
+        (
+            "tuple_sketch_summary_double",
+            F::unknown("tuple_sketch_summary_double"),
+        ),
+        (
+            "tuple_sketch_summary_integer",
+            F::unknown("tuple_sketch_summary_integer"),
+        ),
+        (
+            "tuple_sketch_theta_double",
+            F::unknown("tuple_sketch_theta_double"),
+        ),
+        (
+            "tuple_sketch_theta_integer",
+            F::unknown("tuple_sketch_theta_integer"),
+        ),
+        ("tuple_union_double", F::unknown("tuple_union_double")),
+        ("tuple_union_integer", F::unknown("tuple_union_integer")),
+        (
+            "tuple_union_theta_double",
+            F::unknown("tuple_union_theta_double"),
+        ),
+        (
+            "tuple_union_theta_integer",
+            F::unknown("tuple_union_theta_integer"),
+        ),
+        (
             "input_file_block_length",
             F::unknown("input_file_block_length"),
         ),
@@ -214,6 +281,8 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
             "input_file_block_start",
             F::unknown("input_file_block_start"),
         ),
+        // TODO: Map this to DataFusion's file-name UDF after preserving Spark's empty-string
+        // behavior for non-file inputs and covering driver-to-worker file scans.
         ("input_file_name", F::unknown("input_file_name")),
         ("java_method", F::unknown("java_method")),
         (

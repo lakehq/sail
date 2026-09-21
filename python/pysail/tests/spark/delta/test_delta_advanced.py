@@ -2,7 +2,9 @@ import json
 import os
 import time
 from datetime import datetime, timezone
+from urllib.parse import unquote
 
+import pyarrow.parquet as pq
 from pyspark.sql.types import Row
 
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
@@ -18,6 +20,12 @@ def _write_delta_log_actions(log_dir, version: int, actions: list[dict]) -> None
     log_path = log_dir / f"{version:020}.json"
     with log_path.open("w", encoding="utf-8") as f:
         f.write("\n".join(json.dumps(obj, separators=(",", ":")) for obj in actions))
+
+
+def _deletion_vector_unique_id(action: dict) -> str:
+    descriptor = action["deletionVector"]
+    offset = f"@{descriptor['offset']}" if "offset" in descriptor else ""
+    return f"{descriptor['storageType']}{descriptor['pathOrInlineDv']}{offset}"
 
 
 def _rewrite_in_commit_timestamp(log_dir, version: int, timestamp_ms: int) -> None:
@@ -68,6 +76,81 @@ def test_delta_feature_time_travel_by_version(spark, tmp_path):
     v1_df = spark.read.format("delta").option("versionAsOf", "1").load(delta_table_path).sort("id")
     expected_v1 = [Row(id=1, value="v0"), Row(id=2, value="v1")]
     assert v1_df.collect() == expected_v1
+
+
+def test_log_replay_key_includes_deletion_vector_identity(spark, tmp_path):
+    table_path = tmp_path / "delta_replay_dv_identity"
+    table_location = escape_sql_string_literal(str(table_path))
+    table_name = "delta_replay_dv_identity"
+    spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (id INT)
+            USING DELTA
+            LOCATION '{table_location}'
+            TBLPROPERTIES (
+              'delta.enableDeletionVectors' = 'true',
+              'delta.checkpointInterval' = '100'
+            )
+            """
+        )
+        spark.sql(f"INSERT INTO {table_name} VALUES (1), (2), (3), (4), (5)")  # noqa: S608
+        spark.sql(f"DELETE FROM {table_name} WHERE id = 2")  # noqa: S608
+        spark.sql(f"DELETE FROM {table_name} WHERE id = 5")  # noqa: S608
+        spark.sql(f"DROP TABLE {table_name}")
+
+        log_dir = table_path / "_delta_log"
+        assert sorted(path.name for path in log_dir.glob("*.json")) == [f"{version:020}.json" for version in range(4)]
+        version_1 = _read_delta_log_actions(log_dir, 1)
+        version_2 = _read_delta_log_actions(log_dir, 2)
+        version_3 = _read_delta_log_actions(log_dir, 3)
+        initial_add = next(action["add"] for action in version_1 if "add" in action)
+        add_a = next(action["add"] for action in version_2 if action.get("add", {}).get("deletionVector"))
+        remove_a = next(action["remove"] for action in version_3 if action.get("remove", {}).get("deletionVector"))
+        add_b = next(action["add"] for action in version_3 if action.get("add", {}).get("deletionVector"))
+
+        assert add_a["path"] == remove_a["path"] == add_b["path"]
+        assert add_a["deletionVector"] == remove_a["deletionVector"]
+        assert [
+            add_a["deletionVector"]["cardinality"],
+            add_b["deletionVector"]["cardinality"],
+        ] == [1, 2]
+        assert _deletion_vector_unique_id(add_a) == _deletion_vector_unique_id(remove_a)
+        assert _deletion_vector_unique_id(add_a) != _deletion_vector_unique_id(add_b)
+        parquet_data = pq.ParquetFile(table_path / unquote(initial_add["path"])).read().to_pydict()
+        assert sorted(parquet_data["id"]) == [1, 2, 3, 4, 5]
+        assert not list(log_dir.glob("*.checkpoint*.parquet"))
+
+        _write_delta_log_actions(log_dir, 4, [{"remove": remove_a}])
+        expected_v4 = json.dumps({"remove": remove_a}, separators=(",", ":"))
+        assert (log_dir / "00000000000000000004.json").read_text(encoding="utf-8") == expected_v4
+
+        eager_ids = [
+            row.id for row in spark.read.format("delta").load(str(table_path)).select("id").orderBy("id").collect()
+        ]
+        assert eager_ids == [1, 3, 4]
+
+        replay_ids = {}
+        for strategy in ("sort", "hash"):
+            rows = (
+                spark.read.format("delta")
+                .option("metadataAsDataRead", "true")
+                .option("deltaLogReplayStrategy", strategy)
+                .load(str(table_path))
+                .select("id")
+                .orderBy("id")
+                .collect()
+            )
+            replay_ids[strategy] = [row.id for row in rows]
+
+        assert replay_ids == {
+            "sort": [1, 3, 4],
+            "hash": [1, 3, 4],
+        }
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
 
 def test_delta_feature_time_travel_by_timestamp(spark, tmp_path):

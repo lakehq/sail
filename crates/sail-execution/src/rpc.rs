@@ -2,13 +2,13 @@ use std::future::Future;
 use std::sync::Arc;
 
 use arrow_flight::flight_service_client::FlightServiceClient;
-use sail_telemetry::layers::{TracingClientLayer, TracingClientService};
+use sail_common::telemetry::{TracingClientLayer, TracingClientService};
 use tokio::sync::{OnceCell, oneshot};
 use tokio::task::JoinHandle;
 use tonic::transport::Channel;
 use tower::ServiceBuilder;
 
-use crate::driver::DriverServiceClient;
+use crate::driver::{CelebornLifecycleManagerServiceClient, DriverServiceClient};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::worker::WorkerServiceClient;
 
@@ -118,6 +118,7 @@ macro_rules! impl_client_builder {
 pub type ClientService = TracingClientService<Channel>;
 
 impl_client_builder!(DriverServiceClient<ClientService>);
+impl_client_builder!(CelebornLifecycleManagerServiceClient<ClientService>);
 impl_client_builder!(WorkerServiceClient<ClientService>);
 impl_client_builder!(FlightServiceClient<ClientService>);
 

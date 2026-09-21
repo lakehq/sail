@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::sync::Arc;
 
+use bytes::Bytes;
 use datafusion::common::{DataFusionError, Result, plan_err};
 use flate2::Compression;
 use flate2::read::GzDecoder;
@@ -25,6 +26,7 @@ use url::Url;
 const METADATA_COMPRESSION_PROPERTY: &str = "write.metadata.compression-codec";
 const METADATA_COMPRESSION_NONE: &str = "none";
 const METADATA_COMPRESSION_GZIP: &str = "gzip";
+const VERSION_HINT_PATH: &str = "metadata/version-hint.text";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MetadataFileCodec {
@@ -138,6 +140,26 @@ pub(crate) fn metadata_file_extension_from_properties(
     Ok(MetadataFileCodec::from_property_value(codec)?.file_extension())
 }
 
+/// Writes the non-authoritative Iceberg metadata version hint.
+///
+/// This is best-effort: failures are logged because the hint is only an optional
+/// lookup optimization.
+pub(crate) async fn write_version_hint(
+    object_store: &Arc<dyn object_store::ObjectStore>,
+    version_hint: &str,
+) {
+    let hint_path = ObjectPath::from(VERSION_HINT_PATH);
+    if let Err(error) = object_store
+        .put(
+            &hint_path,
+            object_store::PutPayload::from(Bytes::copy_from_slice(version_hint.as_bytes())),
+        )
+        .await
+    {
+        log::warn!("Failed to update Iceberg version hint: {error}");
+    }
+}
+
 pub(crate) async fn load_metadata_file_bytes(
     object_store: &Arc<dyn object_store::ObjectStore>,
     metadata_location: &str,
@@ -162,27 +184,6 @@ pub async fn find_latest_metadata_file(
 
     log::trace!("Finding latest metadata file");
     let base_path = crate::utils::url_to_object_path(table_url)?;
-    let version_hint_path = base_path.clone().join("metadata").join("version-hint.text");
-    let mut hinted_version: Option<i32> = None;
-    let mut hinted_filename: Option<String> = None;
-    if let Ok(version_hint_data) = object_store.get(&version_hint_path).await
-        && let Ok(version_hint_bytes) = version_hint_data.bytes().await
-        && let Ok(version_hint) = String::from_utf8(version_hint_bytes.to_vec())
-    {
-        let content = version_hint.trim();
-        if let Ok(version) = content.parse::<i32>() {
-            log::trace!("Using numeric version hint: {}", version);
-            hinted_version = Some(version);
-        } else {
-            let fname = if parse_metadata_file_name(content).is_some() {
-                content.to_string()
-            } else {
-                format!("{}.metadata.json", content)
-            };
-            log::trace!("Using filename version hint: {}", fname);
-            hinted_filename = Some(fname);
-        }
-    }
 
     log::trace!("Listing metadata directory");
     let metadata_prefix = base_path.join("metadata");
@@ -211,27 +212,6 @@ pub async fn find_latest_metadata_file(
                     .then_with(|| left.2.cmp(&right.2))
                     .then_with(|| left.1.cmp(&right.1))
             });
-
-            if let Some(fname) = hinted_filename
-                && let Some((version, path, _)) =
-                    files.iter().rev().find(|(_, p, _)| p.ends_with(&fname))
-            {
-                log::trace!(
-                    "find_latest_metadata_file: selected by filename hint version {} path={}",
-                    version,
-                    path
-                );
-                return Ok(path.clone());
-            } else if let Some(hint) = hinted_version
-                && let Some((version, path, _)) = files.iter().rev().find(|(v, _, _)| *v == hint)
-            {
-                log::trace!(
-                    "find_latest_metadata_file: selected by numeric hint version {} path={}",
-                    version,
-                    path
-                );
-                return Ok(path.clone());
-            }
 
             if let Some((version, latest_file, _)) = files.last() {
                 log::trace!(

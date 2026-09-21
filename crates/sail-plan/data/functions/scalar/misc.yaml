@@ -193,6 +193,22 @@
       
   since: "1.6.0"
 
+- name: "current_path"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.CurrentPath"
+  signatures:
+    - "current_path()"
+  usage: "current_path() - Returns the current SQL path (qualified schema names)."
+  examples: |2-
+    
+        Examples:
+          > SELECT current_path();
+           system.builtin,system.session,spark_catalog.default
+      
+  since: "4.2.0"
+
 - name: "current_schema"
   scope: "sql_builtin"
   group: "misc_funcs"
@@ -658,6 +674,382 @@
       
   since: "4.0.0"
 
+- name: "tuple_difference_double"
+  scope: "sql_builtin"
+  group: "sketch_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.TupleDifferenceDouble"
+  signatures:
+    - "tuple_difference_double(tupleSketch1, tupleSketch2)"
+  usage: |2-
+    
+        tuple_difference_double(tupleSketch1, tupleSketch2) - Subtracts two binary representations of Datasketches
+        TupleSketch objects with double summary data type using a TupleSketch AnotB object.
+        Returns elements in the first sketch that are not in the second sketch. 
+  examples: |2-
+    
+        Examples:
+          > SELECT tuple_sketch_estimate_double(tuple_difference_double(tuple_sketch_agg_double(col1, val1), tuple_sketch_agg_double(col2, val2))) FROM VALUES (5, 5.0D, 4, 4.0D), (1, 1.0D, 4, 4.0D), (2, 2.0D, 5, 5.0D), (3, 3.0D, 1, 1.0D) tab(col1, val1, col2, val2);
+           2.0
+      
+  since: "4.2.0"
+
+- name: "tuple_difference_integer"
+  scope: "sql_builtin"
+  group: "sketch_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.TupleDifferenceInteger"
+  signatures:
+    - "tuple_difference_integer(tupleSketch1, tupleSketch2)"
+  usage: |2-
+    
+        tuple_difference_integer(tupleSketch1, tupleSketch2) - Subtracts two binary representations of Datasketches
+        TupleSketch objects with integer summary data type using a TupleSketch AnotB object.
+        Returns elements in the first sketch that are not in the second sketch. 
+  examples: |2-
+    
+        Examples:
+          > SELECT tuple_sketch_estimate_integer(tuple_difference_integer(tuple_sketch_agg_integer(col1, val1), tuple_sketch_agg_integer(col2, val2))) FROM VALUES (5, 5, 4, 4), (1, 1, 4, 4), (2, 2, 5, 5), (3, 3, 1, 1) tab(col1, val1, col2, val2);
+           2.0
+      
+  since: "4.2.0"
+
+- name: "tuple_difference_theta_double"
+  scope: "sql_builtin"
+  group: "sketch_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.TupleDifferenceThetaDouble"
+  signatures:
+    - "tuple_difference_theta_double(tupleSketch, thetaSketch)"
+  usage: |2-
+    
+        tuple_difference_theta_double(tupleSketch, thetaSketch) - Subtracts the binary representation of a
+        Datasketches ThetaSketch from a TupleSketch with double summary data type using a TupleSketch
+        AnotB object. Returns elements in the TupleSketch that are not in the ThetaSketch. 
+  examples: |2-
+    
+        Examples:
+          > SELECT tuple_sketch_estimate_double(tuple_difference_theta_double(tuple_sketch_agg_double(col1, val1), theta_sketch_agg(col2))) FROM VALUES (5, 5.0D, 4), (1, 1.0D, 4), (2, 2.0D, 5), (3, 3.0D, 1) tab(col1, val1, col2);
+           2.0
+      
+  since: "4.2.0"
+
+- name: "tuple_difference_theta_integer"
+  scope: "sql_builtin"
+  group: "sketch_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.TupleDifferenceThetaInteger"
+  signatures:
+    - "tuple_difference_theta_integer(tupleSketch, thetaSketch)"
+  usage: |2-
+    
+        tuple_difference_theta_integer(tupleSketch, thetaSketch) - Subtracts the binary representation of a
+        Datasketches ThetaSketch from a TupleSketch with integer summary data type using a TupleSketch
+        AnotB object. Returns elements in the TupleSketch that are not in the ThetaSketch. 
+  examples: |2-
+    
+        Examples:
+          > SELECT tuple_sketch_estimate_integer(tuple_difference_theta_integer(tuple_sketch_agg_integer(col1, val1), theta_sketch_agg(col2))) FROM VALUES (5, 5, 4), (1, 1, 4), (2, 2, 5), (3, 3, 1) tab(col1, val1, col2);
+           2.0
+      
+  since: "4.2.0"
+
+- name: "tuple_intersection_double"
+  scope: "sql_builtin"
+  group: "sketch_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.TupleIntersectionDouble"
+  signatures:
+    - "tuple_intersection_double(tupleSketch1, tupleSketch2, mode)"
+  usage: |2-
+    
+        tuple_intersection_double(tupleSketch1, tupleSketch2, mode) - Intersects two binary representations of Datasketches
+        TupleSketch objects with double summary data type using a TupleSketch Intersection object.
+        Users can set mode to 'sum', 'min', 'max', or 'alwaysone' (defaults to 'sum'). 
+  examples: |2-
+    
+        Examples:
+          > SELECT tuple_sketch_estimate_double(tuple_intersection_double(tuple_sketch_agg_double(col1, val1), tuple_sketch_agg_double(col2, val2))) FROM VALUES (1, 1.0D, 1, 4.0D), (2, 2.0D, 2, 5.0D), (3, 3.0D, 4, 6.0D) tab(col1, val1, col2, val2);
+           2.0
+      
+  since: "4.2.0"
+
+- name: "tuple_intersection_integer"
+  scope: "sql_builtin"
+  group: "sketch_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.TupleIntersectionInteger"
+  signatures:
+    - "tuple_intersection_integer(tupleSketch1, tupleSketch2, mode)"
+  usage: |2-
+    
+        tuple_intersection_integer(tupleSketch1, tupleSketch2, mode) - Intersects two binary representations of Datasketches
+        TupleSketch objects with integer summary data type using a TupleSketch Intersection object.
+        Users can set mode to 'sum', 'min', 'max', or 'alwaysone' (defaults to 'sum'). 
+  examples: |2-
+    
+        Examples:
+          > SELECT tuple_sketch_estimate_integer(tuple_intersection_integer(tuple_sketch_agg_integer(col1, val1), tuple_sketch_agg_integer(col2, val2))) FROM VALUES (1, 1, 1, 4), (2, 2, 2, 5), (3, 3, 4, 6) tab(col1, val1, col2, val2);
+           2.0
+      
+  since: "4.2.0"
+
+- name: "tuple_intersection_theta_double"
+  scope: "sql_builtin"
+  group: "sketch_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.TupleIntersectionThetaDouble"
+  signatures:
+    - "tuple_intersection_theta_double(tupleSketch, thetaSketch, mode)"
+  usage: |2-
+    
+        tuple_intersection_theta_double(tupleSketch, thetaSketch, mode) - Intersects the binary representation of a
+        Datasketches TupleSketch with double summary data type with the binary representation of a
+        Datasketches ThetaSketch using a TupleSketch Intersection object. The ThetaSketch entries are
+        assigned a default double summary value based on the mode: 0.0 for 'sum' mode, +Infinity for
+        'min' mode, -Infinity for 'max' mode, or 1.0 for 'alwaysone' mode. Users can set mode to 'sum',
+        'min', 'max', or 'alwaysone' (defaults to 'sum'). 
+  examples: |2-
+    
+        Examples:
+          > SELECT tuple_sketch_estimate_double(tuple_intersection_theta_double(tuple_sketch_agg_double(col1, val1), theta_sketch_agg(col2))) FROM VALUES (1, 1.0D, 1), (2, 2.0D, 2), (3, 3.0D, 4) tab(col1, val1, col2);
+           2.0
+      
+  since: "4.2.0"
+
+- name: "tuple_intersection_theta_integer"
+  scope: "sql_builtin"
+  group: "sketch_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.TupleIntersectionThetaInteger"
+  signatures:
+    - "tuple_intersection_theta_integer(tupleSketch, thetaSketch, mode)"
+  usage: |2-
+    
+        tuple_intersection_theta_integer(tupleSketch, thetaSketch, mode) - Intersects the binary representation of a
+        Datasketches TupleSketch with integer summary data type with the binary representation of a
+        Datasketches ThetaSketch using a TupleSketch Intersection object. The ThetaSketch entries are
+        assigned a default integer summary value based on the mode: 0 for 'sum' mode, Integer.MAX_VALUE
+        for 'min' mode, Integer.MIN_VALUE for 'max' mode, or 1 for 'alwaysone' mode. Users can set mode
+        to 'sum', 'min', 'max', or 'alwaysone' (defaults to 'sum'). 
+  examples: |2-
+    
+        Examples:
+          > SELECT tuple_sketch_estimate_integer(tuple_intersection_theta_integer(tuple_sketch_agg_integer(col1, val1), theta_sketch_agg(col2))) FROM VALUES (1, 1, 1), (2, 2, 2), (3, 3, 4) tab(col1, val1, col2);
+           2.0
+      
+  since: "4.2.0"
+
+- name: "tuple_sketch_estimate_double"
+  scope: "sql_builtin"
+  group: "sketch_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.TupleSketchEstimateDouble"
+  signatures:
+    - "tuple_sketch_estimate_double(child)"
+  usage: |2-
+    
+        tuple_sketch_estimate_double(child) - Returns the estimated number of unique values
+        given the binary representation of a Datasketches TupleSketch. The sketch's
+        summary type must be a double. 
+  examples: |2-
+    
+        Examples:
+          > SELECT tuple_sketch_estimate_double(tuple_sketch_agg_double(key, summary)) FROM VALUES (1, 1.0D), (1, 2.0D), (2, 3.0D) tab(key, summary);
+           2.0
+      
+  since: "4.2.0"
+
+- name: "tuple_sketch_estimate_integer"
+  scope: "sql_builtin"
+  group: "sketch_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.TupleSketchEstimateInteger"
+  signatures:
+    - "tuple_sketch_estimate_integer(child)"
+  usage: |2-
+    
+        tuple_sketch_estimate_integer(child) - Returns the estimated number of unique values
+        given the binary representation of a Datasketches TupleSketch. The sketch's
+        summary type must be an integer. 
+  examples: |2-
+    
+        Examples:
+          > SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary)) FROM VALUES (1, 1), (1, 2), (2, 3) tab(key, summary);
+           2.0
+      
+  since: "4.2.0"
+
+- name: "tuple_sketch_summary_double"
+  scope: "sql_builtin"
+  group: "sketch_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.TupleSketchSummaryDouble"
+  signatures:
+    - "tuple_sketch_summary_double(child, mode)"
+  usage: |2-
+    
+        tuple_sketch_summary_double(child, mode) - Aggregates the summary values from a double summary type
+        Datasketches TupleSketch. The mode can be 'sum', 'min', 'max', or 'alwaysone'
+        (defaults to 'sum'). 
+  examples: |2-
+    
+        Examples:
+          > SELECT tuple_sketch_summary_double(tuple_sketch_agg_double(key, summary)) FROM VALUES (1, 1.0D), (1, 2.0D), (2, 3.0D) tab(key, summary);
+           6.0
+      
+  since: "4.2.0"
+
+- name: "tuple_sketch_summary_integer"
+  scope: "sql_builtin"
+  group: "sketch_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.TupleSketchSummaryInteger"
+  signatures:
+    - "tuple_sketch_summary_integer(child, mode)"
+  usage: |2-
+    
+        tuple_sketch_summary_integer(child, mode) - Aggregates the summary values from a integer summary type
+        Datasketches TupleSketch. The mode can be 'sum', 'min', 'max', or 'alwaysone'
+        (defaults to 'sum'). 
+  examples: |2-
+    
+        Examples:
+          > SELECT tuple_sketch_summary_integer(tuple_sketch_agg_integer(key, summary)) FROM VALUES (1, 1), (1, 2), (2, 3) tab(key, summary);
+           6
+      
+  since: "4.2.0"
+
+- name: "tuple_sketch_theta_double"
+  scope: "sql_builtin"
+  group: "sketch_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.TupleSketchThetaDouble"
+  signatures:
+    - "tuple_sketch_theta_double(child)"
+  usage: |2-
+    
+        tuple_sketch_theta_double(child) - Returns the theta value (sampling rate) from a Datasketches TupleSketch.
+        The theta value represents the effective sampling rate of the sketch, between 0.0 and 1.0.
+        The sketch's summary type must be a double. 
+  examples: |2-
+    
+        Examples:
+          > SELECT tuple_sketch_theta_double(tuple_sketch_agg_double(key, summary)) FROM VALUES (1, 1.0D), (2, 2.0D), (3, 3.0D) tab(key, summary);
+           1.0
+      
+  since: "4.2.0"
+
+- name: "tuple_sketch_theta_integer"
+  scope: "sql_builtin"
+  group: "sketch_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.TupleSketchThetaInteger"
+  signatures:
+    - "tuple_sketch_theta_integer(child)"
+  usage: |2-
+    
+        tuple_sketch_theta_integer(child) - Returns the theta value (sampling rate) from a Datasketches TupleSketch.
+        The theta value represents the effective sampling rate of the sketch, between 0.0 and 1.0.
+        The sketch's summary type must be an integer. 
+  examples: |2-
+    
+        Examples:
+          > SELECT tuple_sketch_theta_integer(tuple_sketch_agg_integer(key, summary)) FROM VALUES (1, 1), (2, 2), (3, 3) tab(key, summary);
+           1.0
+      
+  since: "4.2.0"
+
+- name: "tuple_union_double"
+  scope: "sql_builtin"
+  group: "sketch_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.TupleUnionDoubleExpressionBuilder"
+  signatures:
+    - "tuple_union_double(tupleSketch1, tupleSketch2, lgNomEntries, mode)"
+  usage: |2-
+    
+        tuple_union_double(tupleSketch1, tupleSketch2, lgNomEntries, mode) - Merges two binary representations of Datasketches
+        TupleSketch objects with double summary data type using a TupleSketch Union object. Users can
+        set lgNomEntries to a value between 4 and 26 (defaults to 12) and mode to 'sum', 'min', 'max',
+        or 'alwaysone' (defaults to 'sum'). 
+  examples: |2-
+    
+        Examples:
+          > SELECT tuple_sketch_estimate_double(tuple_union_double(tuple_sketch_agg_double(col1, val1), tuple_sketch_agg_double(col2, val2))) FROM VALUES (1, 1.0D, 4, 4.0D), (2, 2.0D, 5, 5.0D), (3, 3.0D, 6, 6.0D) tab(col1, val1, col2, val2);
+           6.0
+      
+  since: "4.2.0"
+
+- name: "tuple_union_integer"
+  scope: "sql_builtin"
+  group: "sketch_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.TupleUnionIntegerExpressionBuilder"
+  signatures:
+    - "tuple_union_integer(tupleSketch1, tupleSketch2, lgNomEntries, mode)"
+  usage: |2-
+    
+        tuple_union_integer(tupleSketch1, tupleSketch2, lgNomEntries, mode) - Merges two binary representations of Datasketches
+        TupleSketch objects with integer summary data type using a TupleSketch Union object. Users can
+        set lgNomEntries to a value between 4 and 26 (defaults to 12) and mode to 'sum', 'min', 'max',
+        or 'alwaysone' (defaults to 'sum'). 
+  examples: |2-
+    
+        Examples:
+          > SELECT tuple_sketch_estimate_integer(tuple_union_integer(tuple_sketch_agg_integer(col1, val1), tuple_sketch_agg_integer(col2, val2))) FROM VALUES (1, 1, 4, 4), (2, 2, 5, 5), (3, 3, 6, 6) tab(col1, val1, col2, val2);
+           6.0
+      
+  since: "4.2.0"
+
+- name: "tuple_union_theta_double"
+  scope: "sql_builtin"
+  group: "sketch_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.TupleUnionThetaDoubleExpressionBuilder"
+  signatures:
+    - "tuple_union_theta_double(tupleSketch, thetaSketch, lgNomEntries, mode)"
+  usage: |2-
+    
+        tuple_union_theta_double(tupleSketch, thetaSketch, lgNomEntries, mode) - Merges the binary representation of a
+        Datasketches TupleSketch with double summary data type with the binary representation of a
+        Datasketches ThetaSketch using a TupleSketch Union object. The ThetaSketch entries are assigned
+        a default double summary value based on the mode: 0.0 for 'sum' mode, +Infinity for 'min' mode,
+        -Infinity for 'max' mode, or 1.0 for 'alwaysone' mode. Users can set lgNomEntries to a value
+        between 4 and 26 (defaults to 12) and mode to 'sum', 'min', 'max', or 'alwaysone' (defaults to
+        'sum'). 
+  examples: |2-
+    
+        Examples:
+          > SELECT tuple_sketch_estimate_double(tuple_union_theta_double(tuple_sketch_agg_double(col1, val1), theta_sketch_agg(col2))) FROM VALUES (1, 1.0D, 4), (2, 2.0D, 5), (3, 3.0D, 6) tab(col1, val1, col2);
+           6.0
+      
+  since: "4.2.0"
+
+- name: "tuple_union_theta_integer"
+  scope: "sql_builtin"
+  group: "sketch_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.TupleUnionThetaIntegerExpressionBuilder"
+  signatures:
+    - "tuple_union_theta_integer(tupleSketch, thetaSketch, lgNomEntries, mode)"
+  usage: |2-
+    
+        tuple_union_theta_integer(tupleSketch, thetaSketch, lgNomEntries, mode) - Merges the binary representation of a
+        Datasketches TupleSketch with integer summary data type with the binary representation of a
+        Datasketches ThetaSketch using a TupleSketch Union object. The ThetaSketch entries are assigned
+        a default integer summary value based on the mode: 0 for 'sum' mode, Integer.MAX_VALUE for 'min'
+        mode, Integer.MIN_VALUE for 'max' mode, or 1 for 'alwaysone' mode. Users can set lgNomEntries to
+        a value between 4 and 26 (defaults to 12) and mode to 'sum', 'min', 'max', or 'alwaysone'
+        (defaults to 'sum'). 
+  examples: |2-
+    
+        Examples:
+          > SELECT tuple_sketch_estimate_integer(tuple_union_theta_integer(tuple_sketch_agg_integer(col1, val1), theta_sketch_agg(col2))) FROM VALUES (1, 1, 4), (2, 2, 5), (3, 3, 6) tab(col1, val1, col2);
+           6.0
+      
+  since: "4.2.0"
+
 - name: "typeof"
   scope: "sql_builtin"
   group: "misc_funcs"
@@ -727,4 +1119,3 @@
            3.1.0 a6d6ea3efedbad14d99c24143834cd4e2e52fb40
       
   since: "3.0.0"
-

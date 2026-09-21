@@ -29,11 +29,11 @@ use super::context::PlannerContext;
 use super::metadata_predicate::{build_metadata_filter, predicate_requires_stats};
 use super::utils::{
     LogReplayOptions, align_schemas_for_union, build_log_replay_pipeline_with_options,
-    build_standard_write_layers,
+    build_standard_write_layers, prepare_delta_writer_input,
 };
 use crate::physical_plan::{
     DeltaCommitExec, DeltaDiscoveryExec, DeltaRemoveActionsExec, DeltaScanByAddsExec,
-    DeltaWriterExec, DeltaWriterExecOptions, create_projection, create_repartition, create_sort,
+    DeltaWriterExec, DeltaWriterExecOptions,
 };
 use crate::spec::{DeltaOperation, SaveMode};
 use crate::table::DeltaSnapshot;
@@ -79,10 +79,7 @@ async fn build_full_overwrite_plan(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let input_schema = input.schema();
 
-    let target_partitions = ctx.session().config().target_partitions().max(1);
-    let plan = create_projection(input, ctx.partition_columns().to_vec())?;
-    let plan = create_repartition(plan, ctx.partition_columns().to_vec(), target_partitions)?;
-    let plan = create_sort(plan, ctx.partition_columns().to_vec(), sort_order)?;
+    let plan = prepare_delta_writer_input(input, ctx.partition_columns(), sort_order)?;
 
     let writer_schema = plan.schema();
     let write_context =
@@ -120,7 +117,7 @@ async fn build_full_overwrite_plan(
         )
         .await?;
 
-        let all_adds: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::from_log_scan(
+        let all_adds: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::new(
             meta_scan,
             ctx.table_url().clone(),
             version,
@@ -186,15 +183,9 @@ async fn build_overwrite_if_plan(
     )
     .await?;
 
-    let target_partitions = ctx.session().config().target_partitions().max(1);
-    let new_plan = create_projection(Arc::clone(&input), ctx.partition_columns().to_vec())
-        .and_then(|plan| {
-            create_repartition(plan, ctx.partition_columns().to_vec(), target_partitions)
-        })
-        .and_then(|plan| create_sort(plan, ctx.partition_columns().to_vec(), sort_order))?;
-
-    let (aligned_new, aligned_old) = align_schemas_for_union(new_plan, old_data_plan)?;
+    let (aligned_new, aligned_old) = align_schemas_for_union(Arc::clone(&input), old_data_plan)?;
     let union_plan = UnionExec::try_new(vec![aligned_new, aligned_old])?;
+    let union_plan = prepare_delta_writer_input(union_plan, ctx.partition_columns(), sort_order)?;
 
     let input_schema = input.schema();
     let operation_override = Some(DeltaOperation::Write {
@@ -255,11 +246,9 @@ async fn build_overwrite_if_plan(
         condition_expr.clone(),
     )?;
 
-    let find_files_plan: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
+    let find_files_plan: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::new(
         meta_scan,
         ctx.table_url().clone(),
-        None,
-        None,
         version,
         partition_columns.clone(),
         partition_only,
@@ -309,11 +298,9 @@ async fn build_old_data_plan(
         condition_expr.clone(),
     )?;
 
-    let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
+    let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::new(
         meta_scan,
         ctx.table_url().clone(),
-        None,
-        None,
         version,
         ctx.partition_columns().to_vec(),
         partition_only,

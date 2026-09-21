@@ -10,7 +10,7 @@ use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
-use crate::scalar::datetime::utils::to_time64_array;
+use crate::scalar::datetime::utils::{invalid_time_unit_err, to_time64_array};
 
 /// Returns the divisor in microseconds for a given time_diff unit string.
 /// Returns `None` for unsupported units.
@@ -94,10 +94,7 @@ impl ScalarUDFImpl for SparkTimeDiff {
                     let divisor = match unit_divisor(unit) {
                         Some(d) => d,
                         None => {
-                            return exec_err!(
-                                "time_diff: unsupported unit '{}'. Supported: HOUR, MINUTE, SECOND, MILLISECOND, MICROSECOND",
-                                unit
-                            );
+                            return invalid_time_unit_err("time_diff", unit);
                         }
                     };
                     Some((end - start) / divisor)
@@ -133,10 +130,7 @@ impl ScalarUDFImpl for SparkTimeDiff {
                 let divisor = match unit_divisor(unit.as_str()) {
                     Some(d) => d,
                     None => {
-                        return exec_err!(
-                            "time_diff: unsupported unit '{}'. Supported: HOUR, MINUTE, SECOND, MILLISECOND, MICROSECOND",
-                            unit
-                        );
+                        return invalid_time_unit_err("time_diff", unit);
                     }
                 };
                 // Rust integer division truncates toward zero, matching Spark behavior.
@@ -202,10 +196,7 @@ where
                 // Rust integer division truncates toward zero, matching Spark behavior.
                 Some(divisor) => builder.append_value((end - start) / divisor),
                 None => {
-                    return exec_err!(
-                        "time_diff: unsupported unit '{}'. Supported: HOUR, MINUTE, SECOND, MILLISECOND, MICROSECOND",
-                        unit
-                    );
+                    return invalid_time_unit_err("time_diff", unit);
                 }
             },
         }

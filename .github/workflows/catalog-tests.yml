@@ -11,7 +11,7 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     env:
-      HATCH_ENV: "test.spark-4.2.0"
+      HATCH_ENV: "test.spark-4.1.3"
       # Coverage environment variables
       RUSTC_WORKSPACE_WRAPPER: ${{ github.workspace }}/.github/scripts/rustc-workspace-wrapper.sh
       LLVM_PROFILE_FILE: ${{ github.workspace }}/target/sail-catalog-it-%p-%m.profraw
@@ -45,6 +45,11 @@ jobs:
         run: |
           hatch run install-pysail
 
+      - name: Install Kerberos client
+        run: |
+          sudo apt-get update
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install --yes krb5-user
+
       - name: List Python packages
         continue-on-error: true
         run: |
@@ -52,7 +57,7 @@ jobs:
 
       - name: Run Catalog Integration Tests
         run: |
-          hatch run pytest -m integration --pyargs pysail.tests.spark -v
+          hatch run pytest -m integration --pyargs pysail.tests -v
 
       # Generate coverage report after catalog IT tests
       - name: Generate coverage report

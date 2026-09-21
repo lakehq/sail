@@ -4,17 +4,19 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast};
-use sail_common::datetime::time_unit_to_multiplier;
 use sail_common::spec;
+use sail_common::utils::datetime::time_unit_to_multiplier;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::is_variant_storage_field;
+use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
 };
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
@@ -22,6 +24,7 @@ use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
 use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
 
 use crate::error::{PlanError, PlanResult};
+use crate::function::is_spark_compatible_arrow_fixed_offset;
 use crate::resolver::PlanResolver;
 use crate::resolver::data_type::interval_field_metadata;
 use crate::resolver::expression::NamedExpr;
@@ -131,6 +134,28 @@ impl PlanResolver<'_> {
         );
         let from_is_day_time_interval = matches!(expr_type, DataType::Duration(_));
         let expr = match (expr_type, cast_to_type.clone(), is_try) {
+            (
+                DataType::Timestamp(_, None),
+                DataType::Timestamp(TimeUnit::Microsecond, Some(timezone)),
+                is_try,
+            ) => {
+                if is_spark_compatible_arrow_fixed_offset(timezone.as_ref()) {
+                    if is_try {
+                        try_cast(expr, cast_to_type.clone())
+                    } else {
+                        cast(expr, cast_to_type.clone())
+                    }
+                } else {
+                    let timestamp_ntz =
+                        cast(expr, DataType::Timestamp(TimeUnit::Microsecond, None));
+                    let instant = ScalarUDF::from(ConvertTz::new(false)).call(vec![
+                        lit(timezone.to_string()),
+                        lit("UTC"),
+                        timestamp_ntz,
+                    ]);
+                    cast(cast(instant, DataType::Int64), cast_to_type.clone())
+                }
+            }
             (_, DataType::Utf8, _) if expr_is_variant => cast(
                 ScalarUDF::new_from_impl(SparkVariantToJsonUdf::new()).call(vec![expr]),
                 DataType::Utf8,
@@ -150,6 +175,11 @@ impl PlanResolver<'_> {
                     lit("$"),
                     lit(data_type_string),
                 ])
+            }
+            (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View, DataType::Int32, false)
+                if !self.config.ansi_mode =>
+            {
+                ScalarUDF::new_from_impl(SparkCastStringToInt32::new()).call(vec![expr])
             }
             (from, DataType::Timestamp(time_unit, _) | DataType::Duration(time_unit), _)
                 if from.is_numeric() =>
@@ -189,7 +219,8 @@ impl PlanResolver<'_> {
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Date32,
                 is_try,
-            ) => ScalarUDF::new_from_impl(SparkDate::new(is_try)).call(vec![expr]),
+            ) => ScalarUDF::new_from_impl(SparkDate::new(is_try || !self.config.ansi_mode))
+                .call(vec![expr]),
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Timestamp(TimeUnit::Microsecond, tz),

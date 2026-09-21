@@ -119,7 +119,19 @@ impl TimestampParser {
     }
 
     fn string_to_microseconds(&self, value: &str, safe: bool) -> Result<Option<i64>> {
-        let (datetime, timezone) = match parse_timestamp(value).and_then(|x| x.into_naive()) {
+        let timestamp = match parse_timestamp(value) {
+            Ok(v) => v,
+            Err(_e) if safe => return Ok(None),
+            Err(e) => return Err(exec_datafusion_err!("{e}")),
+        };
+        if timestamp.time.second == 60 {
+            return if safe {
+                Ok(None)
+            } else {
+                exec_err!("invalid timestamp: leap seconds are not supported")
+            };
+        }
+        let (datetime, timezone) = match timestamp.into_naive() {
             Ok(v) => v,
             Err(_e) if safe => return Ok(None),
             Err(e) => return Err(exec_datafusion_err!("{e}")),
@@ -452,5 +464,28 @@ fn get_or_parse_format<'a>(
     match cache.entry(pattern.to_string()) {
         Entry::Occupied(entry) => Ok(entry.into_mut()),
         Entry::Vacant(entry) => Ok(entry.insert(DateTimeFormat::for_parsing(pattern)?)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unformatted_parser_rejects_leap_seconds_in_safe_and_strict_modes() -> Result<()> {
+        let parser = TimestampParser::Ltz {
+            default_timezone: "UTC".to_string(),
+        };
+
+        assert_eq!(
+            parser.string_to_microseconds("2026-06-15 23:59:60", true)?,
+            None
+        );
+        assert!(
+            parser
+                .string_to_microseconds("2026-06-15 23:59:60", false)
+                .is_err()
+        );
+        Ok(())
     }
 }

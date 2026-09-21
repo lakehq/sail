@@ -1,5 +1,24 @@
 Feature: str_to_map output schema
 
+  Rule: Duplicate key policy
+
+    Scenario: duplicate keys raise an error under the default EXCEPTION policy
+      When query
+        """
+        SELECT str_to_map('a:1,a:2', ',', ':') AS result
+        """
+      Then query error .*\[DUPLICATED_MAP_KEY\].*
+
+    Scenario: LAST_WIN keeps the final value
+      Given config spark.sql.mapKeyDedupPolicy = LAST_WIN
+      When query
+        """
+        SELECT str_to_map('a:1,a:2', ',', ':') AS result
+        """
+      Then query result
+        | result   |
+        | {a -> 2} |
+
   @function(nullability)
   Rule: Output schema
 

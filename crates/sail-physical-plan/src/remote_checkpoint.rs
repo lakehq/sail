@@ -7,6 +7,7 @@ use datafusion::arrow::array::{Array, ArrayRef, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::config::{ConfigOptions, TableParquetOptions};
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use datafusion::datasource::sink::DataSink;
@@ -88,6 +89,13 @@ impl DataSource for CheckpointDataSource {
 
     fn output_partitioning(&self) -> Partitioning {
         self.output_partitioning.clone()
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        self.source.apply_expressions(f)
     }
 
     fn eq_properties(&self) -> EquivalenceProperties {
@@ -307,6 +315,22 @@ impl ExecutionPlan for RemoteCheckpointCommitExec {
         vec![&self.input]
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    #[expect(deprecated)]
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: datafusion::physical_plan::ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.with_new_children(children)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -466,6 +490,22 @@ impl ExecutionPlan for RemoteCheckpointWriteExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    #[expect(deprecated)]
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: datafusion::physical_plan::ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.with_new_children(children)
     }
 
     fn with_new_children(
@@ -755,6 +795,10 @@ fn checkpoint_partitioning_with_count(
             Partitioning::Hash(expressions, partition_count)
         }
         Partitioning::Hash(_, _) => Partitioning::UnknownPartitioning(partition_count),
+        Partitioning::Range(range) if range.partition_count() == partition_count => {
+            Partitioning::Range(range)
+        }
+        Partitioning::Range(_) => Partitioning::UnknownPartitioning(partition_count),
         Partitioning::UnknownPartitioning(_) => Partitioning::UnknownPartitioning(partition_count),
     }
 }

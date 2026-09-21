@@ -1,9 +1,10 @@
 use std::future::Future;
 use std::sync::Arc;
 
+use sail_common::actor::ActorSystem;
 use sail_common::config::{AppConfig, GRPC_MAX_MESSAGE_LENGTH_DEFAULT};
 use sail_common::runtime::RuntimeHandle;
-use sail_server::ServerBuilder;
+use sail_common::server::ServerBuilder;
 pub use sail_session::session_manager::SessionManagerOptions;
 use tokio::net::TcpListener;
 use tonic::codec::CompressionEncoding;
@@ -22,7 +23,8 @@ pub async fn serve<F>(
 where
     F: Future<Output = ()>,
 {
-    let session_manager = create_spark_session_manager(config, runtime).await?;
+    let mut system = ActorSystem::new();
+    let session_manager = create_spark_session_manager(config, runtime, &mut system).await?;
     let result = {
         let server = SparkConnectServer::new(session_manager.clone());
         let service = SparkConnectServiceServer::new(server)
@@ -41,5 +43,6 @@ where
             .map_err(|e| std::io::Error::other(e.to_string()))
     };
     session_manager.shutdown().await?;
+    system.join().await;
     result.map_err(Into::into)
 }

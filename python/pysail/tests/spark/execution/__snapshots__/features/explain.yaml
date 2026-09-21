@@ -216,11 +216,11 @@ data:
   
   
     initial_physical_plan_with_schema:
-    ProjectionExec: expr=[#2@0 as #4, sum(t.#3)@1 as #5], schema=[#4:Int32;N, #5:Int64;N]
-      AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(t.#3)], schema=[#2:Int32;N, sum(t.#3):Int64;N]
-        AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)], schema=[#2:Int32;N, sum(t.#3)[sum]:Int64;N]
-          ProjectionExec: expr=[column1@0 as #2, column2@1 as #3], schema=[#2:Int32;N, #3:Int32;N]
-            DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32;N, column2:Int32;N]
+    ProjectionExec: expr=[#2@0 as #4, sum(t.#3)@1 as #5], schema=[#4:Int32, #5:Int64;N]
+      AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(t.#3)], schema=[#2:Int32, sum(t.#3):Int64;N]
+        AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)], schema=[#2:Int32, sum(t.#3)[sum]:Int64;N]
+          ProjectionExec: expr=[column1@0 as #2, column2@1 as #3], schema=[#2:Int32, #3:Int32]
+            DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32, column2:Int32]
   
   
     physical_plan after OutputRequirements:
@@ -244,7 +244,10 @@ data:
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
   
-    physical_plan after EnforceDistribution:
+    physical_plan after WindowTopN:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[#2@0 as #4, sum(t.#3)@1 as #5]
         AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(t.#3)]
@@ -257,13 +260,7 @@ data:
     physical_plan after CombinePartialFinalAggregate:
     SAME TEXT AS ABOVE
   
-    physical_plan after EnforceSorting:
-    SAME TEXT AS ABOVE
-  
     physical_plan after OptimizeAggregateOrder:
-    SAME TEXT AS ABOVE
-  
-    physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
   
     physical_plan after ProjectionPushdown:
@@ -352,7 +349,7 @@ data:
     inputs=[StageInput(stage=0, mode=Shuffle)]
     mode=Pipelined
     partitions=4
-    distribution=RoundRobin(channels=1)
+    distribution=RoundRobinBatch(channels=1)
     placement=Worker
     ProjectionExec: expr=[#4@0 as k, #5@1 as total]
       ProjectionExec: expr=[#2@0 as #4, sum(t.#3)@1 as #5]

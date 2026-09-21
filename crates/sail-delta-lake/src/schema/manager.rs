@@ -11,14 +11,18 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
+use icu_casemap::CaseMapper;
+use indexmap::IndexSet;
+use regex::Regex;
 use sail_common_datafusion::catalog::CatalogTableColumnIdentity;
 
 use super::mapping::{annotate_new_fields_for_column_mapping, compute_max_column_id};
 use crate::spec::{
-    ColumnMappingMode, ColumnMetadataKey, DeltaError as DeltaTableError, DeltaResult, Metadata,
-    MetadataValue, Protocol, StructField, StructType, TableFeature, TableProperties,
-    contains_timestampntz, contains_variant,
+    CheckpointPolicy, ColumnMappingMode, ColumnMetadataKey, DataType,
+    DeltaError as DeltaTableError, DeltaResult, Metadata, MetadataValue, Protocol, StructField,
+    StructType, TableFeature, TableProperties, contains_timestampntz, contains_variant,
 };
 
 /// Check if a Delta StructType schema contains any columns with generation expressions.
@@ -39,13 +43,17 @@ pub fn schema_has_column_defaults(schema: &StructType) -> bool {
 
 /// Check if a Delta metadata configuration contains table CHECK constraints.
 pub fn configuration_has_check_constraints(configuration: &HashMap<String, String>) -> bool {
+    configuration
+        .keys()
+        .any(|key| is_check_constraint_property(key))
+}
+
+pub(crate) fn is_check_constraint_property(key: &str) -> bool {
     const PREFIX: &str = "delta.constraints.";
-    configuration.keys().any(|key| {
-        key.len() > PREFIX.len()
-            && key
-                .get(..PREFIX.len())
-                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(PREFIX))
-    })
+    key.len() > PREFIX.len()
+        && key
+            .get(..PREFIX.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(PREFIX))
 }
 
 pub fn schema_has_identity_columns(schema: &StructType) -> bool {
@@ -194,6 +202,74 @@ pub fn evolve_schema(
     Ok(updated)
 }
 
+// OpenJDK 17 uses Unicode 13, so newer characters must keep identity mappings.
+#[expect(clippy::expect_used)]
+static JDK_17_ASSIGNED_CHARACTER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\p{Age:13.0}$").expect("JDK 17 Unicode age pattern should be valid")
+});
+
+fn spark_case_insensitive_name_eq(case_mapper: &CaseMapper, left: &str, right: &str) -> bool {
+    let mut left_chars = left.chars();
+    let mut right_chars = right.chars();
+
+    loop {
+        match (left_chars.next(), right_chars.next()) {
+            (None, None) => return true,
+            (Some(left), Some(right)) if java_char_eq_ignore_case(case_mapper, left, right) => {}
+            _ => return false,
+        }
+    }
+}
+
+fn java_char_eq_ignore_case(case_mapper: &CaseMapper, left: char, right: char) -> bool {
+    if left == right {
+        return true;
+    }
+    let mut left_buffer = [0; 4];
+    let mut right_buffer = [0; 4];
+    if !(JDK_17_ASSIGNED_CHARACTER.is_match(left.encode_utf8(&mut left_buffer))
+        && JDK_17_ASSIGNED_CHARACTER.is_match(right.encode_utf8(&mut right_buffer)))
+    {
+        return false;
+    }
+
+    let left_upper = case_mapper.simple_uppercase(left);
+    let right_upper = case_mapper.simple_uppercase(right);
+    left_upper == right_upper
+        || case_mapper.simple_lowercase(left_upper) == case_mapper.simple_lowercase(right_upper)
+}
+
+pub(crate) fn canonicalize_partition_columns(
+    schema: &StructType,
+    partition_columns: Vec<String>,
+) -> DeltaResult<Vec<String>> {
+    let case_mapper = CaseMapper::new();
+    let mut resolved_partition_columns = Vec::with_capacity(partition_columns.len());
+    for partition_column in partition_columns {
+        let mut matches = schema.fields().filter(|field| {
+            spark_case_insensitive_name_eq(&case_mapper, field.name(), &partition_column)
+        });
+        let field = matches.next().ok_or_else(|| {
+            DeltaTableError::schema(format!(
+                "partition column `{partition_column}` is not present in the table schema"
+            ))
+        })?;
+        if matches.next().is_some() {
+            return Err(DeltaTableError::schema(format!(
+                "partition column `{partition_column}` is ambiguous under case-insensitive resolution"
+            )));
+        }
+        if matches!(field.data_type(), DataType::Variant(_)) {
+            return Err(DeltaTableError::schema(format!(
+                "VARIANT column `{}` cannot be used as a partition column",
+                field.name()
+            )));
+        }
+        resolved_partition_columns.push(field.name().to_string());
+    }
+    Ok(resolved_partition_columns)
+}
+
 /// Build Metadata for table creation from an existing kernel StructType.
 pub fn metadata_for_create_with_struct_type(
     schema: StructType,
@@ -201,11 +277,12 @@ pub fn metadata_for_create_with_struct_type(
     created_time: i64,
     configuration: HashMap<String, String>,
 ) -> DeltaResult<Metadata> {
+    let resolved_partition_columns = canonicalize_partition_columns(&schema, partition_columns)?;
     Metadata::try_new(
         None,
         None,
         schema,
-        partition_columns,
+        resolved_partition_columns,
         created_time,
         configuration,
     )
@@ -232,30 +309,23 @@ pub fn protocol_for_metadata(metadata: &Metadata) -> DeltaResult<Protocol> {
     )
 }
 
-fn push_feature(features: &mut Vec<TableFeature>, feature: TableFeature) {
-    if !features.contains(&feature) {
-        features.push(feature);
-    }
-}
-
-fn enable_legacy_writer_features(writer_features: &mut Vec<TableFeature>) {
-    push_feature(writer_features, TableFeature::AppendOnly);
-    push_feature(writer_features, TableFeature::Invariants);
+fn enable_legacy_writer_features(writer_features: &mut IndexSet<TableFeature>) {
+    writer_features.insert(TableFeature::AppendOnly);
+    writer_features.insert(TableFeature::Invariants);
 }
 
 fn enable_variant_type_feature(
-    reader_features: &mut Vec<TableFeature>,
-    writer_features: &mut Vec<TableFeature>,
+    reader_features: &mut IndexSet<TableFeature>,
+    writer_features: &mut IndexSet<TableFeature>,
     feature: TableFeature,
 ) {
-    push_feature(reader_features, feature.clone());
-    push_feature(writer_features, feature);
-    enable_legacy_writer_features(writer_features);
+    reader_features.insert(feature.clone());
+    writer_features.insert(feature);
 }
 
 fn enable_variant_type_features_for_schema(
-    reader_features: &mut Vec<TableFeature>,
-    writer_features: &mut Vec<TableFeature>,
+    reader_features: &mut IndexSet<TableFeature>,
+    writer_features: &mut IndexSet<TableFeature>,
     explicit_features: &[TableFeature],
 ) {
     let feature = if explicit_features.contains(&TableFeature::VariantTypePreview)
@@ -269,8 +339,8 @@ fn enable_variant_type_features_for_schema(
 }
 
 fn has_variant_shredding_feature(
-    reader_features: &[TableFeature],
-    writer_features: &[TableFeature],
+    reader_features: &IndexSet<TableFeature>,
+    writer_features: &IndexSet<TableFeature>,
 ) -> bool {
     reader_features
         .iter()
@@ -284,13 +354,15 @@ fn has_variant_shredding_feature(
 }
 
 fn enable_variant_shredding_feature(
-    reader_features: &mut Vec<TableFeature>,
-    writer_features: &mut Vec<TableFeature>,
+    reader_features: &mut IndexSet<TableFeature>,
+    writer_features: &mut IndexSet<TableFeature>,
     feature: TableFeature,
 ) {
-    push_feature(reader_features, feature.clone());
-    push_feature(writer_features, feature);
-    enable_legacy_writer_features(writer_features);
+    if feature == TableFeature::VariantShredding {
+        enable_variant_type_feature(reader_features, writer_features, TableFeature::VariantType);
+    }
+    reader_features.insert(feature.clone());
+    writer_features.insert(feature);
 }
 
 fn explicit_table_features(
@@ -333,31 +405,31 @@ pub fn protocol_for_create(
     enable_variant: bool,
     configuration: &HashMap<String, String>,
 ) -> DeltaResult<Protocol> {
-    let mut reader_features = Vec::new();
-    let mut writer_features = Vec::new();
+    let mut reader_features = IndexSet::new();
+    let mut writer_features = IndexSet::new();
     let has_check_constraints = configuration_has_check_constraints(configuration);
     let table_properties = TableProperties::from(configuration.iter());
     let explicit_features = explicit_table_features(configuration)?;
 
     if enable_column_mapping {
-        reader_features.push(TableFeature::ColumnMapping);
-        writer_features.push(TableFeature::ColumnMapping);
+        reader_features.insert(TableFeature::ColumnMapping);
+        writer_features.insert(TableFeature::ColumnMapping);
     }
     if enable_timestamp_ntz {
-        reader_features.push(TableFeature::TimestampWithoutTimezone);
-        writer_features.push(TableFeature::TimestampWithoutTimezone);
+        reader_features.insert(TableFeature::TimestampWithoutTimezone);
+        writer_features.insert(TableFeature::TimestampWithoutTimezone);
     }
     if enable_in_commit_timestamps {
-        writer_features.push(TableFeature::InCommitTimestamp);
+        writer_features.insert(TableFeature::InCommitTimestamp);
     }
     if enable_generated_columns {
-        writer_features.push(TableFeature::GeneratedColumns);
+        writer_features.insert(TableFeature::GeneratedColumns);
     }
     if enable_column_defaults {
-        writer_features.push(TableFeature::AllowColumnDefaults);
+        writer_features.insert(TableFeature::AllowColumnDefaults);
     }
     if enable_identity_columns {
-        writer_features.push(TableFeature::IdentityColumns);
+        writer_features.insert(TableFeature::IdentityColumns);
     }
     if enable_variant {
         enable_variant_type_features_for_schema(
@@ -380,9 +452,9 @@ pub fn protocol_for_create(
             }
             feature => {
                 if feature.is_reader_feature() {
-                    push_feature(&mut reader_features, feature.clone());
+                    reader_features.insert(feature.clone());
                 }
-                push_feature(&mut writer_features, feature);
+                writer_features.insert(feature);
             }
         }
     }
@@ -406,12 +478,8 @@ pub fn protocol_for_create(
         .get("delta.enableDeletionVectors")
         .is_some_and(|v| v.eq_ignore_ascii_case("true"))
     {
-        if !reader_features.contains(&TableFeature::DeletionVectors) {
-            reader_features.push(TableFeature::DeletionVectors);
-        }
-        if !writer_features.contains(&TableFeature::DeletionVectors) {
-            writer_features.push(TableFeature::DeletionVectors);
-        }
+        reader_features.insert(TableFeature::DeletionVectors);
+        writer_features.insert(TableFeature::DeletionVectors);
     }
 
     // `delta.enableTypeWidening = "true"` enables the stable TypeWidening feature unless
@@ -419,33 +487,28 @@ pub fn protocol_for_create(
     if table_properties.enable_type_widening() {
         let preview_enabled = reader_features.contains(&TableFeature::TypeWideningPreview)
             || writer_features.contains(&TableFeature::TypeWideningPreview);
-        if !preview_enabled && !reader_features.contains(&TableFeature::TypeWidening) {
-            reader_features.push(TableFeature::TypeWidening);
-        }
-        if !preview_enabled && !writer_features.contains(&TableFeature::TypeWidening) {
-            writer_features.push(TableFeature::TypeWidening);
+        if !preview_enabled {
+            reader_features.insert(TableFeature::TypeWidening);
+            writer_features.insert(TableFeature::TypeWidening);
         }
     }
 
     // `delta.checkpointPolicy = "v2"` implicitly activates V2Checkpoint
-    if configuration
-        .get("delta.checkpointPolicy")
-        .map(|v| v.eq_ignore_ascii_case("v2"))
-        .unwrap_or(false)
-    {
-        if !reader_features.contains(&TableFeature::V2Checkpoint) {
-            reader_features.push(TableFeature::V2Checkpoint);
-        }
-        if !writer_features.contains(&TableFeature::V2Checkpoint) {
-            writer_features.push(TableFeature::V2Checkpoint);
-        }
+    if table_properties.checkpoint_policy() == CheckpointPolicy::V2 {
+        reader_features.insert(TableFeature::V2Checkpoint);
+        writer_features.insert(TableFeature::V2Checkpoint);
     }
 
-    if has_check_constraints
-        && !writer_features.is_empty()
-        && !writer_features.contains(&TableFeature::CheckConstraints)
+    // appendOnly is a legacy writer-v2 feature. It is listed explicitly only when another
+    // requirement already places the table on the writer-v7 table-features protocol.
+    if table_properties.append_only()
+        && (!reader_features.is_empty() || !writer_features.is_empty())
     {
-        writer_features.push(TableFeature::CheckConstraints);
+        writer_features.insert(TableFeature::AppendOnly);
+    }
+
+    if has_check_constraints && !writer_features.is_empty() {
+        writer_features.insert(TableFeature::CheckConstraints);
     }
 
     if reader_features.is_empty() && writer_features.is_empty() {
@@ -453,24 +516,102 @@ pub fn protocol_for_create(
         return Ok(Protocol::new(1, min_writer_version, None, None));
     }
 
+    enable_legacy_writer_features(&mut writer_features);
+
     let min_reader_version = if reader_features.is_empty() { 1 } else { 3 };
+    let reader_features = (min_reader_version == 3).then(|| reader_features.into_iter().collect());
 
     Ok(Protocol::new(
         min_reader_version,
         7,
-        Some(reader_features),
-        Some(writer_features),
+        reader_features,
+        Some(writer_features.into_iter().collect()),
     ))
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
-    use super::{protocol_for_create, protocol_for_metadata};
+    use icu_casemap::CaseMapper;
+
+    use super::{
+        metadata_for_create_with_struct_type, protocol_for_create, protocol_for_metadata,
+        spark_case_insensitive_name_eq,
+    };
     use crate::spec::{
         ColumnMetadataKey, DataType, DeltaResult, Metadata, StructField, StructType, TableFeature,
     };
+
+    #[test]
+    fn spark_case_insensitive_name_eq_matches_jdk_17_unicode_oracle() {
+        let case_mapper = CaseMapper::new();
+        for (left, right, expected) in [
+            ("Σ", "ς", true),
+            ("I", "ı", true),
+            ("İ", "i", true),
+            ("ß", "ẞ", true),
+            ("K", "K", true),
+            ("S", "ſ", true),
+            ("ß", "ss", false),
+            ("\u{10570}", "\u{10597}", false),
+        ] {
+            assert_eq!(
+                spark_case_insensitive_name_eq(&case_mapper, left, right),
+                expected,
+                "unexpected JDK 17 case-insensitive comparison for {left:?} and {right:?}"
+            );
+            assert_eq!(
+                spark_case_insensitive_name_eq(&case_mapper, right, left),
+                expected,
+                "unexpected JDK 17 case-insensitive comparison for {right:?} and {left:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn metadata_for_create_rejects_invalid_partition_columns() -> DeltaResult<()> {
+        let cases = [
+            (
+                "missing column",
+                StructType::try_new([StructField::nullable("id", DataType::INTEGER)])?,
+                "missing",
+                "partition column `missing` is not present in the table schema",
+            ),
+            (
+                "ASCII case-insensitive ambiguity",
+                StructType::try_new([
+                    StructField::nullable("Category", DataType::STRING),
+                    StructField::nullable("category", DataType::STRING),
+                ])?,
+                "CATEGORY",
+                "partition column `CATEGORY` is ambiguous under case-insensitive resolution",
+            ),
+            (
+                "Greek sigma case-insensitive ambiguity",
+                StructType::try_new([
+                    StructField::nullable("ΣDate", DataType::DATE),
+                    StructField::nullable("ςDate", DataType::DATE),
+                ])?,
+                "σdate",
+                "partition column `σdate` is ambiguous under case-insensitive resolution",
+            ),
+        ];
+
+        for (case, schema, partition_column, expected_message) in cases {
+            let result = metadata_for_create_with_struct_type(
+                schema,
+                vec![partition_column.to_string()],
+                0,
+                HashMap::new(),
+            );
+            assert!(
+                matches!(&result, Err(error) if error.to_string().contains(expected_message)),
+                "{case}: expected {expected_message:?}, got {result:?}"
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn protocol_for_create_treats_in_commit_timestamp_as_writer_only() -> DeltaResult<()> {
@@ -487,44 +628,92 @@ mod tests {
         assert_eq!(protocol.min_reader_version(), 1);
         assert_eq!(protocol.min_writer_version(), 7);
         assert_eq!(protocol.reader_features(), None);
-        assert_eq!(
-            protocol.writer_features(),
-            Some([TableFeature::InCommitTimestamp].as_slice())
-        );
+        assert!(protocol.has_writer_feature(&TableFeature::InCommitTimestamp));
+        assert!(protocol.has_writer_feature(&TableFeature::AppendOnly));
+        assert!(protocol.has_writer_feature(&TableFeature::Invariants));
         Ok(())
     }
 
     #[test]
-    fn protocol_for_create_extracts_v2_checkpoint_from_configuration() -> DeltaResult<()> {
-        // "enabled" (deprecated) still accepted for backward compatibility.
-        let mut config = HashMap::new();
-        config.insert(
-            "delta.feature.v2Checkpoint".to_string(),
-            "enabled".to_string(),
-        );
-        let protocol =
-            protocol_for_create(false, false, false, false, false, false, false, &config)?;
-        assert_eq!(protocol.min_reader_version(), 3);
-        assert_eq!(protocol.min_writer_version(), 7);
-        assert!(protocol.has_reader_feature(&TableFeature::V2Checkpoint));
-        assert!(protocol.has_writer_feature(&TableFeature::V2Checkpoint));
-        Ok(())
-    }
+    fn protocol_for_create_extracts_explicit_table_features() -> DeltaResult<()> {
+        let cases = [
+            (
+                "deprecated enabled status",
+                &[("delta.feature.v2Checkpoint", "enabled")] as &[(&str, &str)],
+                TableFeature::V2Checkpoint,
+                true,
+            ),
+            (
+                "supported reader-writer feature",
+                &[("delta.feature.v2Checkpoint", "supported")],
+                TableFeature::V2Checkpoint,
+                true,
+            ),
+            (
+                "supported writer-only feature",
+                &[
+                    ("delta.appendOnly", "true"),
+                    ("delta.feature.appendOnly", "supported"),
+                ],
+                TableFeature::AppendOnly,
+                false,
+            ),
+        ];
 
-    #[test]
-    fn protocol_for_create_extracts_v2_checkpoint_with_supported_value() -> DeltaResult<()> {
-        // "supported" is the current/preferred value.
-        let mut config = HashMap::new();
-        config.insert(
-            "delta.feature.v2Checkpoint".to_string(),
-            "supported".to_string(),
-        );
-        let protocol =
-            protocol_for_create(false, false, false, false, false, false, false, &config)?;
-        assert_eq!(protocol.min_reader_version(), 3);
-        assert_eq!(protocol.min_writer_version(), 7);
-        assert!(protocol.has_reader_feature(&TableFeature::V2Checkpoint));
-        assert!(protocol.has_writer_feature(&TableFeature::V2Checkpoint));
+        for (case, properties, feature, is_reader_feature) in cases {
+            let configuration = properties
+                .iter()
+                .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+                .collect::<HashMap<_, _>>();
+            let protocol = protocol_for_create(
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                &configuration,
+            )?;
+
+            assert_eq!(
+                protocol.min_reader_version(),
+                if is_reader_feature { 3 } else { 1 },
+                "{case}"
+            );
+            assert_eq!(protocol.min_writer_version(), 7, "{case}");
+            assert_eq!(
+                protocol.reader_features().is_some(),
+                is_reader_feature,
+                "{case}"
+            );
+
+            let reader_features = protocol.reader_features().unwrap_or(&[]);
+            let writer_features = protocol.writer_features().unwrap_or(&[]);
+            let reader_feature_set = reader_features.iter().cloned().collect::<HashSet<_>>();
+            let writer_feature_set = writer_features.iter().cloned().collect::<HashSet<_>>();
+            let expected_reader_features = if is_reader_feature {
+                HashSet::from([feature.clone()])
+            } else {
+                HashSet::new()
+            };
+            let mut expected_writer_features =
+                HashSet::from([TableFeature::AppendOnly, TableFeature::Invariants]);
+            expected_writer_features.insert(feature);
+
+            assert_eq!(
+                reader_features.len(),
+                expected_reader_features.len(),
+                "{case}"
+            );
+            assert_eq!(
+                writer_features.len(),
+                expected_writer_features.len(),
+                "{case}"
+            );
+            assert_eq!(reader_feature_set, expected_reader_features, "{case}");
+            assert_eq!(writer_feature_set, expected_writer_features, "{case}");
+        }
         Ok(())
     }
 
@@ -644,24 +833,81 @@ mod tests {
     }
 
     #[test]
-    fn protocol_for_create_stable_shredding_without_variant() -> DeltaResult<()> {
-        let mut config = HashMap::new();
-        config.insert(
-            "delta.feature.variantShredding".to_string(),
-            "supported".to_string(),
-        );
-        let protocol =
-            protocol_for_create(false, false, false, false, false, false, false, &config)?;
-        assert_eq!(protocol.min_reader_version(), 3);
-        assert_eq!(protocol.min_writer_version(), 7);
-        assert!(!protocol.has_reader_feature(&TableFeature::VariantType));
-        assert!(!protocol.has_writer_feature(&TableFeature::VariantType));
-        assert!(protocol.has_reader_feature(&TableFeature::VariantShredding));
-        assert!(protocol.has_writer_feature(&TableFeature::VariantShredding));
-        assert!(protocol.has_writer_feature(&TableFeature::AppendOnly));
-        assert!(protocol.has_writer_feature(&TableFeature::Invariants));
-        assert!(!protocol.has_reader_feature(&TableFeature::VariantShreddingPreview));
-        assert!(!protocol.has_writer_feature(&TableFeature::VariantShreddingPreview));
+    fn protocol_for_create_stable_shredding_enforces_variant_type_dependency() -> DeltaResult<()> {
+        let cases = [
+            ("stable shredding", &[] as &[(&str, &str)], false, false),
+            (
+                "stable shredding with preview VariantType",
+                &[("delta.feature.variantType-preview", "supported")],
+                true,
+                false,
+            ),
+            (
+                "stable and preview shredding",
+                &[("delta.feature.variantShredding-preview", "supported")],
+                false,
+                true,
+            ),
+        ];
+
+        for (
+            case,
+            additional_properties,
+            includes_preview_variant_type,
+            includes_preview_shredding,
+        ) in cases
+        {
+            let mut configuration = HashMap::from([(
+                "delta.feature.variantShredding".to_string(),
+                "supported".to_string(),
+            )]);
+            configuration.extend(
+                additional_properties
+                    .iter()
+                    .map(|(key, value)| ((*key).to_string(), (*value).to_string())),
+            );
+            let protocol = protocol_for_create(
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                &configuration,
+            )?;
+
+            assert_eq!(protocol.min_reader_version(), 3, "{case}");
+            assert_eq!(protocol.min_writer_version(), 7, "{case}");
+
+            let reader_features = protocol.reader_features().unwrap_or(&[]);
+            let writer_features = protocol.writer_features().unwrap_or(&[]);
+            let reader_feature_set = reader_features.iter().cloned().collect::<HashSet<_>>();
+            let writer_feature_set = writer_features.iter().cloned().collect::<HashSet<_>>();
+            let mut expected_reader_features =
+                HashSet::from([TableFeature::VariantType, TableFeature::VariantShredding]);
+            if includes_preview_variant_type {
+                expected_reader_features.insert(TableFeature::VariantTypePreview);
+            }
+            if includes_preview_shredding {
+                expected_reader_features.insert(TableFeature::VariantShreddingPreview);
+            }
+            let mut expected_writer_features = expected_reader_features.clone();
+            expected_writer_features.extend([TableFeature::AppendOnly, TableFeature::Invariants]);
+
+            assert_eq!(
+                reader_features.len(),
+                expected_reader_features.len(),
+                "{case}"
+            );
+            assert_eq!(
+                writer_features.len(),
+                expected_writer_features.len(),
+                "{case}"
+            );
+            assert_eq!(reader_feature_set, expected_reader_features, "{case}");
+            assert_eq!(writer_feature_set, expected_writer_features, "{case}");
+        }
         Ok(())
     }
 
@@ -765,6 +1011,42 @@ mod tests {
     }
 
     #[test]
+    fn protocol_for_metadata_keeps_append_only_property_states_on_legacy_protocol()
+    -> DeltaResult<()> {
+        for append_only_value in [None, Some("false"), Some("true")] {
+            let configuration = append_only_value
+                .map(|value| ("delta.appendOnly".to_string(), value.to_string()))
+                .into_iter()
+                .collect::<HashMap<_, _>>();
+            let schema = StructType::try_new([StructField::nullable("id", DataType::INTEGER)])?;
+            let metadata = Metadata::try_new(None, None, schema, vec![], 0, configuration)?;
+            let protocol = protocol_for_metadata(&metadata)?;
+
+            assert_eq!(
+                protocol.min_reader_version(),
+                1,
+                "append-only value {append_only_value:?}"
+            );
+            assert_eq!(
+                protocol.min_writer_version(),
+                2,
+                "append-only value {append_only_value:?}"
+            );
+            assert_eq!(
+                protocol.reader_features(),
+                None,
+                "append-only value {append_only_value:?}"
+            );
+            assert_eq!(
+                protocol.writer_features(),
+                None,
+                "append-only value {append_only_value:?}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn protocol_for_create_activates_v2_checkpoint_from_checkpoint_policy() -> DeltaResult<()> {
         let mut config = HashMap::new();
         config.insert("delta.checkpointPolicy".to_string(), "v2".to_string());
@@ -774,19 +1056,37 @@ mod tests {
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::V2Checkpoint));
         assert!(protocol.has_writer_feature(&TableFeature::V2Checkpoint));
+        assert!(protocol.has_writer_feature(&TableFeature::AppendOnly));
+        assert!(protocol.has_writer_feature(&TableFeature::Invariants));
         Ok(())
     }
 
     #[test]
-    fn protocol_for_create_classic_policy_does_not_activate_v2_checkpoint() -> DeltaResult<()> {
-        let mut config = HashMap::new();
-        config.insert("delta.checkpointPolicy".to_string(), "classic".to_string());
-        let protocol =
-            protocol_for_create(false, false, false, false, false, false, false, &config)?;
-        assert_eq!(protocol.min_reader_version(), 1);
-        assert_eq!(protocol.min_writer_version(), 2);
-        assert!(!protocol.has_reader_feature(&TableFeature::V2Checkpoint));
-        assert!(!protocol.has_writer_feature(&TableFeature::V2Checkpoint));
+    fn protocol_for_create_non_v2_checkpoint_policy_does_not_activate_v2_checkpoint()
+    -> DeltaResult<()> {
+        for checkpoint_policy in ["classic", "V2"] {
+            let configuration = HashMap::from([(
+                "delta.checkpointPolicy".to_string(),
+                checkpoint_policy.to_string(),
+            )]);
+            let protocol = protocol_for_create(
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                &configuration,
+            )?;
+
+            assert_eq!(protocol.min_reader_version(), 1, "{checkpoint_policy}");
+            assert_eq!(protocol.min_writer_version(), 2, "{checkpoint_policy}");
+            assert_eq!(protocol.reader_features(), None, "{checkpoint_policy}");
+            assert_eq!(protocol.writer_features(), None, "{checkpoint_policy}");
+            assert!(!protocol.has_reader_feature(&TableFeature::V2Checkpoint));
+            assert!(!protocol.has_writer_feature(&TableFeature::V2Checkpoint));
+        }
         Ok(())
     }
 

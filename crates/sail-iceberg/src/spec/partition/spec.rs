@@ -25,7 +25,6 @@ use crate::spec::schema::Schema;
 use crate::spec::transform::Transform;
 use crate::spec::types::{NestedField, StructType};
 
-#[expect(unused)]
 pub(crate) const UNPARTITIONED_LAST_ASSIGNED_ID: i32 = 999;
 pub(crate) const DEFAULT_PARTITION_SPEC_ID: i32 = 0;
 
@@ -135,14 +134,9 @@ impl PartitionSpec {
                 .field_by_id(source_id)
                 .ok_or_else(|| format!("Cannot find source field with id {source_id}"))?;
 
-            // Prefer logical date type for Day transform to align with Iceberg writers
-            let result_type = if matches!(partition_field.transform, Transform::Day) {
-                crate::spec::types::Type::Primitive(crate::spec::types::PrimitiveType::Date)
-            } else {
-                partition_field
-                    .transform
-                    .result_type(&source_field.field_type)?
-            };
+            let result_type = partition_field
+                .transform
+                .result_type(&source_field.field_type)?;
 
             let nested_field = NestedField::new(
                 partition_field.field_id,
@@ -165,6 +159,12 @@ impl PartitionSpec {
     /// Get the highest field id in the partition spec.
     pub fn highest_field_id(&self) -> Option<i32> {
         self.fields.iter().map(|f| f.field_id).max()
+    }
+
+    /// Return the Iceberg table metadata `last-partition-id` value for this spec.
+    pub fn last_assigned_field_id(&self) -> i32 {
+        self.highest_field_id()
+            .unwrap_or(UNPARTITIONED_LAST_ASSIGNED_ID)
     }
 
     /// Check if the partition spec has sequential field ids starting from 1000.

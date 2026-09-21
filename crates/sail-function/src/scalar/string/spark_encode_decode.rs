@@ -4,9 +4,9 @@ use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, BinaryArrayType, BinaryBuilder, GenericBinaryBuilder,
     GenericStringBuilder, LargeBinaryBuilder, OffsetSizeTrait, StringArrayType,
 };
-use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
-use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err, internal_err};
+use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, Volatility};
 
@@ -38,18 +38,39 @@ impl ScalarUDFImpl for SparkEncode {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if matches!(arg_types[0], DataType::Null) || matches!(arg_types[1], DataType::Null) {
-            Ok(DataType::Binary)
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `Encode` is `RuntimeReplaceable`; its `StaticInvoke` replacement leaves
+    /// `returnNullable` at its `true` default, and `StaticInvoke.nullable` is
+    /// `needNullCheck || returnNullable`.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/objects/objects.scala#L334>
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        // Also reached from plan building, where the coercion analyzer has not run yet, so
+        // the arity check in `coerce_types` has not gated anything: this must not index blindly.
+        let [value, charset] = args.arg_fields else {
+            return exec_err!(
+                "Spark `encode` function requires 2 arguments, got {}",
+                args.arg_fields.len()
+            );
+        };
+        let data_type = if matches!(charset.data_type(), DataType::Null) {
+            DataType::Binary
         } else {
-            match &arg_types[0] {
-                DataType::Null | DataType::Utf8 | DataType::Utf8View => Ok(DataType::Binary),
-                DataType::LargeUtf8 => Ok(DataType::LargeBinary),
+            match value.data_type() {
+                DataType::Null | DataType::Utf8 | DataType::Utf8View => DataType::Binary,
+                DataType::LargeUtf8 => DataType::LargeBinary,
                 other => {
-                    exec_err!("Spark `encode` function: Expected a STRING type, got {other:?}")
+                    return exec_err!(
+                        "Spark `encode` function: Expected a STRING type, got {other:?}"
+                    );
                 }
             }
-        }
+        };
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -271,23 +292,44 @@ impl ScalarUDFImpl for SparkDecode {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if matches!(arg_types[0], DataType::Null) || matches!(arg_types[1], DataType::Null) {
-            Ok(DataType::Utf8)
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `StringDecode` is `RuntimeReplaceable`; its `StaticInvoke` replacement leaves
+    /// `returnNullable` at its `true` default, and `StaticInvoke.nullable` is
+    /// `needNullCheck || returnNullable`.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/objects/objects.scala#L334>
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        // Also reached from plan building, where the coercion analyzer has not run yet, so
+        // the arity check in `coerce_types` has not gated anything: this must not index blindly.
+        let [value, charset] = args.arg_fields else {
+            return exec_err!(
+                "Spark `decode` function requires 2 arguments, got {}",
+                args.arg_fields.len()
+            );
+        };
+        let data_type = if matches!(charset.data_type(), DataType::Null) {
+            DataType::Utf8
         } else {
-            match &arg_types[0] {
+            match value.data_type() {
                 DataType::Null
                 | DataType::Binary
                 | DataType::FixedSizeBinary(_)
                 | DataType::BinaryView
                 | DataType::Utf8
-                | DataType::Utf8View => Ok(DataType::Utf8),
-                DataType::LargeUtf8 | DataType::LargeBinary => Ok(DataType::LargeUtf8),
+                | DataType::Utf8View => DataType::Utf8,
+                DataType::LargeUtf8 | DataType::LargeBinary => DataType::LargeUtf8,
                 other => {
-                    exec_err!("Spark `decode` function: Expected a BINARY type, got {other:?}")
+                    return exec_err!(
+                        "Spark `decode` function: Expected a BINARY type, got {other:?}"
+                    );
                 }
             }
-        }
+        };
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

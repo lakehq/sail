@@ -15,8 +15,7 @@ Feature: array_remove with an argument coming from a column
         | result       |
         | [1, 2, NULL] |
 
-    # Sail rejects the column: Sail errors: Invalid argument error: Column '#4' is declared as non-nullable but contains null values
-    @function(columnargs) @sail-bug
+    @function(columnargs)
     Scenario: array_remove takes argument 2 from a column containing NULL
       When query
         """
@@ -77,7 +76,6 @@ Feature: array_remove with an argument coming from a column
          |    |-- element: integer (containsNull = true)
         """
 
-    @sail-bug
     Scenario: nullable input elements propagate to the element nullability
       When query
         """
