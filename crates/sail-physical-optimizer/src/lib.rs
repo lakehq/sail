@@ -22,8 +22,8 @@ use datafusion::physical_optimizer::window_topn::WindowTopN;
 use crate::barrier::EnforceBarrierPartitioning;
 use crate::collect_left::RewriteCollectLeftHashJoin;
 use crate::explicit_repartition::RewriteExplicitRepartition;
-use crate::join_reorder::JoinReorder;
 pub use crate::join_reorder::JoinReorderOptions;
+use crate::join_reorder::{JoinReorder, PropagateJoinFilters};
 use crate::projection_pushdown::LambdaSafeProjectionPushdown;
 
 mod barrier;
@@ -69,6 +69,9 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(PushdownSort::new()));
     rules.push(Arc::new(EnsureCooperative::new()));
     rules.push(Arc::new(FilterPushdown::new_post_optimization()));
+    if options.enable_join_reorder {
+        rules.push(Arc::new(PropagateJoinFilters));
+    }
     rules.push(Arc::new(RewriteExplicitRepartition::new()));
     rules.push(Arc::new(RewriteCollectLeftHashJoin::new()));
     rules.push(Arc::new(EnforceBarrierPartitioning::new()));
@@ -85,20 +88,31 @@ mod tests {
 
     #[test]
     fn test_optimizer_rules() -> datafusion::common::Result<()> {
-        let optimizers = get_physical_optimizers(Default::default());
         let datafusion_optimizers = PhysicalOptimizer::default().rules;
 
         let datafusion_optimizer_names: Vec<&str> =
             datafusion_optimizers.iter().map(|opt| opt.name()).collect();
-        let actual_datafusion_optimizer_names: Vec<&str> = optimizers
-            .iter()
-            .map(|opt| opt.name())
-            .filter(|name| datafusion_optimizer_names.contains(name))
-            .collect();
-        assert_eq!(
-            datafusion_optimizer_names, actual_datafusion_optimizer_names,
-            "the custom physical optimizer rules should include all the default DataFusion optimizer rules in the same order"
-        );
+        for enable_join_reorder in [false, true] {
+            let optimizers = get_physical_optimizers(PhysicalOptimizerOptions {
+                enable_join_reorder,
+                ..Default::default()
+            });
+            let actual_datafusion_optimizer_names: Vec<&str> = optimizers
+                .iter()
+                .map(|opt| opt.name())
+                .filter(|name| datafusion_optimizer_names.contains(name))
+                .collect();
+            assert_eq!(
+                datafusion_optimizer_names, actual_datafusion_optimizer_names,
+                "the custom physical optimizer rules should include all the default DataFusion optimizer rules in the same order"
+            );
+            assert_eq!(
+                optimizers
+                    .iter()
+                    .any(|opt| opt.name() == "PropagateJoinFilters"),
+                enable_join_reorder,
+            );
+        }
 
         Ok(())
     }
