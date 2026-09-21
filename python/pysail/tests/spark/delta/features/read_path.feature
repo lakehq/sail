@@ -54,6 +54,27 @@ Feature: Delta Lake read path (driver vs metadata-as-data)
         | 100 |
         | 200 |
         | 300 |
+      When query
+        """
+        EXPLAIN SELECT p, q, v FROM typed_partition_filters WHERE p > q AND v > 0 ORDER BY v
+        """
+      Then query plan matches snapshot
+      When query
+        """
+        EXPLAIN SELECT p, COUNT(*) AS n FROM typed_partition_filters
+        WHERE NOT (p <= q) GROUP BY p ORDER BY p
+        """
+      Then query plan matches snapshot
+      When query
+        """
+        EXPLAIN SELECT COUNT(*) AS n FROM typed_partition_filters WHERE p NOT IN (1, NULL)
+        """
+      Then query plan matches snapshot
+      When query
+        """
+        EXPLAIN SELECT v FROM typed_partition_filters WHERE p > q OR v = 200 ORDER BY v
+        """
+      Then query plan matches snapshot
 
       Examples:
         | metadata_as_data |

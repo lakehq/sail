@@ -6,6 +6,8 @@ import pytest
 from pyspark.sql import Row
 from pyspark.sql.types import IntegerType, LongType, StringType, StructField, StructType
 
+from pysail.testing.spark.steps.plan import normalize_plan_text
+
 
 def _write_partitioned_table(path, files, mapping_mode="none", p_type=None):
     path.mkdir()
@@ -119,9 +121,10 @@ def test_metadata_grouping_reads_only_residual_files(spark, tmp_path, metadata_a
         spark.catalog.dropTempView("metadata_group_aliases")
 
 
+@pytest.mark.yamlsnapshot(group="plan")
 @pytest.mark.parametrize("metadata_as_data", ["false", "true"])
 @pytest.mark.parametrize("files", [[], [("a", 1, [], True)], [("a", 1, [], False)]])
-def test_metadata_grouping_empty_inputs(spark, tmp_path, metadata_as_data, files):
+def test_metadata_grouping_empty_inputs(spark, tmp_path, snapshot, metadata_as_data, files):
     path = tmp_path / "empty_metadata_groups"
     for data_file in _write_partitioned_table(path, files):
         data_file.unlink()
@@ -129,10 +132,16 @@ def test_metadata_grouping_empty_inputs(spark, tmp_path, metadata_as_data, files
     assert frame.count() == 0
     assert frame.groupBy("p").count().collect() == []
     assert frame.select("p").distinct().collect() == []
+    assert {
+        "count": normalize_plan_text(frame.selectExpr("COUNT(*)")._explain_string()),  # noqa: SLF001
+        "group": normalize_plan_text(frame.groupBy("p").count()._explain_string()),  # noqa: SLF001
+        "distinct": normalize_plan_text(frame.select("p").distinct()._explain_string()),  # noqa: SLF001
+    } == snapshot
 
 
+@pytest.mark.yamlsnapshot(group="plan")
 @pytest.mark.parametrize("metadata_as_data", ["false", "true"])
-def test_metadata_grouping_single_compressed_file(spark, tmp_path, metadata_as_data):
+def test_metadata_grouping_single_compressed_file(spark, tmp_path, snapshot, metadata_as_data):
     path = tmp_path / "single_metadata_group"
     rows = 100_000
     for data_file in _write_partitioned_table(path, [("x" * 50, 1, [7] * rows, True)]):
@@ -140,6 +149,83 @@ def test_metadata_grouping_single_compressed_file(spark, tmp_path, metadata_as_d
     frame = spark.read.format("delta").option("metadataAsDataRead", metadata_as_data).load(str(path))
     assert frame.groupBy("p").count().collect() == [Row("x" * 50, rows)]
     assert frame.select("p").distinct().collect() == [Row("x" * 50)]
+    assert {
+        "group": normalize_plan_text(frame.groupBy("p").count()._explain_string()),  # noqa: SLF001
+        "distinct": normalize_plan_text(frame.select("p").distinct()._explain_string()),  # noqa: SLF001
+    } == snapshot
+
+
+@pytest.mark.yamlsnapshot(group="plan")
+@pytest.mark.parametrize("metadata_as_data", ["false", "true"])
+def test_metadata_grouping_residual_and_fallback_plans(spark, tmp_path, snapshot, metadata_as_data):
+    path = tmp_path / "metadata_plan_inputs"
+    _write_partitioned_table(
+        path,
+        [("a", 1, [7] * 10_000, True), ("a", 1, [None, 8, 9], False), ("b", 2, [7], True), (None, 3, [5], True)],
+    )
+    frame = spark.read.format("delta").option("metadataAsDataRead", metadata_as_data).load(str(path))
+    frame.createOrReplaceTempView("metadata_plan_inputs")
+    queries = {
+        "global_count": ("SELECT COUNT(*) FROM metadata_plan_inputs", [(10_005,)]),
+        "partition_group": (
+            "SELECT p, q, COUNT(*) FROM metadata_plan_inputs GROUP BY p, q",
+            [(None, 3, 1), ("a", 1, 10_003), ("b", 2, 1)],
+        ),
+        "partition_distinct": ("SELECT DISTINCT q, p FROM metadata_plan_inputs", [(3, None), (1, "a"), (2, "b")]),
+        "data_group": (
+            "SELECT v, COUNT(*) FROM metadata_plan_inputs GROUP BY v",
+            [(None, 1), (5, 1), (7, 10_001), (8, 1), (9, 1)],
+        ),
+        "filtered_count": ("SELECT COUNT(*) FROM metadata_plan_inputs WHERE p = 'a' OR p IS NULL", [(10_004,)]),
+        "filtered_group": (
+            "SELECT p, COUNT(*) FROM metadata_plan_inputs WHERE p = 'a' OR p IS NULL GROUP BY p",
+            [(None, 1), ("a", 10_003)],
+        ),
+        "filtered_distinct": (
+            "SELECT DISTINCT p FROM metadata_plan_inputs WHERE p = 'a' OR p IS NULL",
+            [(None,), ("a",)],
+        ),
+        "data_filter_group": ("SELECT p, COUNT(*) FROM metadata_plan_inputs WHERE v > 7 GROUP BY p", [("a", 2)]),
+        "data_filter_distinct": ("SELECT DISTINCT p FROM metadata_plan_inputs WHERE v > 7", [("a",)]),
+        "nullable_count": ("SELECT COUNT(v) FROM metadata_plan_inputs", [(10_004,)]),
+        "limited_group": (
+            "SELECT p, COUNT(*) FROM (SELECT p FROM metadata_plan_inputs WHERE p = 'a' LIMIT 2) GROUP BY p",
+            [("a", 2)],
+        ),
+        "data_distinct": ("SELECT DISTINCT v FROM metadata_plan_inputs", [(None,), (5,), (7,), (8,), (9,)]),
+    }
+    plans = {}
+    try:
+        for name, (query, expected) in queries.items():
+            result = spark.sql(query)
+            assert sorted(map(tuple, result.collect()), key=repr) == sorted(expected, key=repr), name
+            plans[name] = normalize_plan_text(result._explain_string())  # noqa: SLF001
+        assert plans == snapshot
+    finally:
+        spark.catalog.dropTempView("metadata_plan_inputs")
+
+
+@pytest.mark.yamlsnapshot(group="plan")
+@pytest.mark.parametrize("metadata_as_data", ["false", "true"])
+def test_metadata_grouping_missing_row_count_plans(spark, tmp_path, snapshot, metadata_as_data):
+    path = tmp_path / "missing_row_count_plans"
+    _write_partitioned_table(path, [("a", 1, [1, 2], False)])
+    log = path / "_delta_log" / "00000000000000000000.json"
+    actions = [json.loads(line) for line in log.read_text().splitlines()]
+    actions[-1]["add"]["stats"] = json.dumps({"minValues": {"v": 1}, "maxValues": {"v": 2}})
+    log.write_text("".join(json.dumps(action) + "\n" for action in actions))
+    frame = spark.read.format("delta").option("metadataAsDataRead", metadata_as_data).load(str(path))
+    queries = {
+        "count": (frame.selectExpr("COUNT(*)"), [Row(2)]),
+        "group": (frame.groupBy("p").count(), [Row("a", 2)]),
+        "filtered_group": (frame.where("v > 1").groupBy("p").count(), [Row("a", 1)]),
+        "extrema": (frame.selectExpr("MIN(v)", "MAX(v)"), [Row(1, 2)]),
+    }
+    plans = {}
+    for name, (query, expected) in queries.items():
+        assert query.collect() == expected, name
+        plans[name] = normalize_plan_text(query._explain_string())  # noqa: SLF001
+    assert plans == snapshot
 
 
 @pytest.mark.parametrize("metadata_as_data", ["false", "true"])
@@ -155,8 +241,9 @@ def test_metadata_grouping_preserves_filters_limits_and_nullable_counts(spark, t
     assert frame.select("v").distinct().orderBy("v").collect() == [Row(None), Row(1), Row(2), Row(3), Row(4)]
 
 
+@pytest.mark.yamlsnapshot(group="plan")
 @pytest.mark.parametrize("mapping_mode", ["none", "name", "id"])
-def test_partition_filtered_exact_aggregates_do_not_read_files(spark, tmp_path, mapping_mode):
+def test_partition_filtered_exact_aggregates_do_not_read_files(spark, tmp_path, snapshot, mapping_mode):
     path = tmp_path / "partition_filtered_aggregates"
     for data_file in _write_partitioned_table(
         path, [("a", 1, [None, 2, 4], True), ("b", 2, [7, 8], True), (None, 3, [9], True)], mapping_mode
@@ -164,23 +251,34 @@ def test_partition_filtered_exact_aggregates_do_not_read_files(spark, tmp_path, 
         data_file.unlink()
     frame = spark.read.format("delta").load(str(path))
     frame.selectExpr("p AS part", "q AS key", "v AS value").createOrReplaceTempView("filtered_metadata_alias")
-    try:
-        assert spark.sql(
+    queries = {
+        "filtered": (
             "SELECT COUNT(*), COUNT(value), MIN(value), MAX(value) "
-            "FROM filtered_metadata_alias WHERE part = 'a' OR part IS NULL"
-        ).collect() == [Row(4, 3, 2, 9)]
-        assert spark.sql(
-            "SELECT COUNT(*), MIN(value), MAX(value) FROM filtered_metadata_alias WHERE key > key"
-        ).collect() == [Row(0, None, None)]
-        assert spark.sql(
-            "SELECT COUNT(*), MIN(value), MAX(value) FROM filtered_metadata_alias WHERE part = 'absent'"
-        ).collect() == [Row(0, None, None)]
+            "FROM filtered_metadata_alias WHERE part = 'a' OR part IS NULL",
+            [Row(4, 3, 2, 9)],
+        ),
+        "contradiction": (
+            "SELECT COUNT(*), MIN(value), MAX(value) FROM filtered_metadata_alias WHERE key > key",
+            [Row(0, None, None)],
+        ),
+        "absent_partition": (
+            "SELECT COUNT(*), MIN(value), MAX(value) FROM filtered_metadata_alias WHERE part = 'absent'",
+            [Row(0, None, None)],
+        ),
+    }
+    plans = {}
+    try:
+        for name, (query, expected) in queries.items():
+            result = spark.sql(query)
+            assert result.collect() == expected, name
+            plans[name] = normalize_plan_text(result._explain_string())  # noqa: SLF001
     finally:
         spark.catalog.dropTempView("filtered_metadata_alias")
     # Spark Connect 3.5's isEmpty() retains columns unless explicitly projected away.
     assert frame.where("p = 'a'").select().isEmpty() is False
     assert frame.where("p = 'absent'").select().isEmpty() is True
     assert frame.where("q IN (1, 3)").select().limit(2).collect() == [(), ()]
+    assert plans == snapshot
 
 
 @pytest.mark.parametrize("metadata_as_data", ["false", "true"])
@@ -220,9 +318,10 @@ def test_metadata_partition_filters_compare_columns_exactly(spark, tmp_path, met
     assert frame.where("NOT (p <= q)").groupBy("p").count().orderBy("p").collect() == [Row(3, 1), Row(10, 1)]
 
 
+@pytest.mark.yamlsnapshot(group="plan")
 @pytest.mark.parametrize("metadata_as_data", ["false", "true"])
 @pytest.mark.parametrize("mapping_mode", ["none", "name", "id"])
-def test_partition_filters_use_requested_schema(spark, tmp_path, metadata_as_data, mapping_mode):
+def test_partition_filters_use_requested_schema(spark, tmp_path, snapshot, metadata_as_data, mapping_mode):
     path = tmp_path / "partition_schema_override"
     _write_partitioned_table(
         path,
@@ -241,6 +340,11 @@ def test_partition_filters_use_requested_schema(spark, tmp_path, metadata_as_dat
         assert [row.v for row in selected.orderBy("v").collect()] == expected
         assert selected.count() == len(expected)
     assert frame.where("p < 'abc'").count() == 4  # noqa: PLR2004
+    selected = frame.where("p < '2'")
+    assert {
+        "rows": normalize_plan_text(selected._explain_string()),  # noqa: SLF001
+        "count": normalize_plan_text(selected.selectExpr("COUNT(*)")._explain_string()),  # noqa: SLF001
+    } == snapshot
 
 
 @pytest.mark.parametrize("metadata_as_data", ["false", "true"])
@@ -264,9 +368,10 @@ def test_partition_filters_preserve_unknown_with_residual_files(spark, tmp_path,
     assert frame.where("p > q OR v = 2").orderBy("v").collect() == [Row(p=2, q=10, v=2), Row(p=10, q=2, v=10)]
 
 
+@pytest.mark.yamlsnapshot(group="plan")
 @pytest.mark.parametrize("metadata_as_data", ["false", "true"])
 @pytest.mark.parametrize("mapping_mode", ["none", "name", "id"])
-def test_empty_partition_encoding_is_null(spark, tmp_path, metadata_as_data, mapping_mode):
+def test_empty_partition_encoding_is_null(spark, tmp_path, snapshot, metadata_as_data, mapping_mode):
     path = tmp_path / "empty_partition_encoding"
     hive_marker = "__HIVE_DEFAULT_PARTITION__"
     _write_partitioned_table(
@@ -302,8 +407,15 @@ def test_empty_partition_encoding_is_null(spark, tmp_path, metadata_as_data, map
         .orderBy("v")
         .collect()
     ] == [-4, 1, 2]
+    assert {
+        "null_group": normalize_plan_text(frame.where("p IS NULL").groupBy("p").count()._explain_string()),  # noqa: SLF001
+        "mixed_predicate": normalize_plan_text(
+            frame.where("(p IS NULL AND v > 0) OR (p = '__HIVE_DEFAULT_PARTITION__' AND v < 0)")._explain_string()  # noqa: SLF001
+        ),
+    } == snapshot
 
 
+@pytest.mark.yamlsnapshot(group="plan")
 @pytest.mark.parametrize("mapping_mode", ["none", "name", "id"])
 @pytest.mark.parametrize(
     ("predicate", "removed_files", "remaining_values"),
@@ -314,7 +426,7 @@ def test_empty_partition_encoding_is_null(spark, tmp_path, metadata_as_data, map
     ids=["null-partitions", "literal-hive-marker"],
 )
 def test_partition_delete_distinguishes_null_from_hive_marker(
-    spark, tmp_path, mapping_mode, predicate, removed_files, remaining_values
+    spark, tmp_path, snapshot, mapping_mode, predicate, removed_files, remaining_values
 ):
     path = tmp_path / "delete_partition_encodings"
     _write_partitioned_table(
@@ -322,11 +434,14 @@ def test_partition_delete_distinguishes_null_from_hive_marker(
         [("__HIVE_DEFAULT_PARTITION__", 1, [1], True), (None, 2, [2], True), ("", 3, [3], True), ("a", 4, [4], True)],
         mapping_mode,
     )
-    spark.sql(f"DELETE FROM delta.`{path}` WHERE {predicate}").collect()  # noqa: S608
+    statement = f"DELETE FROM delta.`{path}` WHERE {predicate}"  # noqa: S608
+    plan = spark.sql(f"EXPLAIN {statement}").collect()[0][0]
+    spark.sql(statement).collect()
     latest = sorted((path / "_delta_log").glob("*.json"))[-1]
     actions = [json.loads(line) for line in latest.read_text().splitlines()]
     assert {action["remove"]["path"] for action in actions if "remove" in action} == removed_files
     assert [row.v for row in spark.read.format("delta").load(str(path)).orderBy("v").collect()] == remaining_values
+    assert normalize_plan_text(plan) == snapshot
 
 
 @pytest.mark.parametrize("metadata_as_data", ["false", "true"])
@@ -345,8 +460,9 @@ def test_metadata_grouping_without_num_records_scans_file(spark, tmp_path, metad
     assert frame.selectExpr("MIN(v)", "MAX(v)").collect() == [Row(1, 2)]
 
 
+@pytest.mark.yamlsnapshot(group="plan")
 @pytest.mark.parametrize("metadata_as_data", ["false", "true"])
-def test_metadata_grouping_uses_deletion_vector_cardinality(spark, tmp_path, metadata_as_data):
+def test_metadata_grouping_uses_deletion_vector_cardinality(spark, tmp_path, snapshot, metadata_as_data):
     path = tmp_path / "deleted_metadata_groups"
     (
         spark.createDataFrame([(1, "a"), (2, "a"), (3, "a"), (4, "b"), (5, "b"), (6, None)], "id INT, p STRING")
@@ -366,10 +482,14 @@ def test_metadata_grouping_uses_deletion_vector_cardinality(spark, tmp_path, met
         Row(id=5, p="b"),
         Row(id=6, p=None),
     ]
-    limited = spark.read.format("delta").load(str(path)).limit(3).collect()
-    assert sorted(row.id for row in limited) == [3, 5, 6]
+    limited = spark.read.format("delta").load(str(path)).limit(3)
+    assert sorted(row.id for row in limited.collect()) == [3, 5, 6]
     frame = spark.read.format("delta").option("metadataAsDataRead", metadata_as_data).load(str(path))
     assert frame.groupBy("id").count().orderBy("id").collect() == [Row(3, 1), Row(5, 1), Row(6, 1)]
+    plans = {
+        "data_group": normalize_plan_text(frame.groupBy("id").count()._explain_string()),  # noqa: SLF001
+        "limited_rows": normalize_plan_text(limited._explain_string()),  # noqa: SLF001
+    }
     for data_file in path.rglob("*.parquet"):
         data_file.unlink()
     for vector_file in path.rglob("deletion_vector_*.bin"):
@@ -380,6 +500,15 @@ def test_metadata_grouping_uses_deletion_vector_cardinality(spark, tmp_path, met
     assert frame.select("p").distinct().orderBy("p").collect() == [Row(None), Row("a"), Row("b")]
     assert frame.where("p = 'a'").count() == 1
     assert frame.where("p = 'a'").groupBy("p").count().collect() == [Row("a", 1)]
+    plans.update(
+        {
+            "count": normalize_plan_text(frame.selectExpr("COUNT(*)")._explain_string()),  # noqa: SLF001
+            "partition_group": normalize_plan_text(frame.groupBy("p").count()._explain_string()),  # noqa: SLF001
+            "partition_distinct": normalize_plan_text(frame.select("p").distinct()._explain_string()),  # noqa: SLF001
+            "filtered_count": normalize_plan_text(frame.where("p = 'a'").selectExpr("COUNT(*)")._explain_string()),  # noqa: SLF001
+        }
+    )
     if metadata_as_data == "false":
         assert frame.where("p = 'a'").select().isEmpty() is False
         assert frame.select().limit(4).collect() == [(), (), ()]
+    assert plans == snapshot

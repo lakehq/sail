@@ -299,6 +299,11 @@ Feature: Delta Lake Delete
         INSERT INTO delta_delete_numeric_partitions VALUES
           (10, 2, 100), (2, 10, 200), (3, 2, 300), (NULL, 2, 400)
         """
+      When query
+        """
+        EXPLAIN DELETE FROM delta_delete_numeric_partitions WHERE p > q
+        """
+      Then query plan matches snapshot
       Given statement
         """
         DELETE FROM delta_delete_numeric_partitions WHERE p > q
