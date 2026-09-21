@@ -1,3 +1,4 @@
+use std::io::Cursor;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -6,9 +7,11 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::compute::{CastOptions, can_cast_types, cast_with_options};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::ipc::reader::StreamReader;
+use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion::common::{DataFusionError, Result, ScalarValue, exec_err};
+use datafusion::common::{DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion::functions::core::getfield::GetFieldFunc;
 use datafusion::parquet::arrow::{PARQUET_FIELD_ID_META_KEY, RowNumber};
 use datafusion::physical_expr::expressions::{self, CastExpr, Column, Literal};
@@ -20,6 +23,168 @@ use parquet_variant_compute::{VariantArray, unshred_variant};
 
 use crate::array::record_batch::cast_array_recursively;
 use crate::variant::{is_binary_variant_field, is_variant_arrow_field, is_variant_storage_type};
+
+pub const FIELD_DEFAULT_METADATA_KEY: &str = "sail.schema_evolution.default";
+pub const FIELD_ALIASES_METADATA_KEY: &str = "sail.schema_evolution.aliases";
+
+/// Preserve the Arrow type and value of a missing-field default across plan serialization.
+pub fn encode_field_default(value: &ScalarValue) -> Result<String> {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        value.data_type(),
+        true,
+    )]));
+    let batch = RecordBatch::try_new(schema.clone(), vec![value.to_array_of_size(1)?])?;
+    let mut bytes = Vec::new();
+    {
+        let mut writer = StreamWriter::try_new(&mut bytes, &schema)?;
+        writer.write(&batch)?;
+        writer.finish()?;
+    }
+    serde_json::to_string(&bytes).map_err(|error| DataFusionError::External(Box::new(error)))
+}
+
+pub fn field_default_array(field: &Field, rows: usize) -> Result<Option<ArrayRef>> {
+    let Some(encoded) = field.metadata().get(FIELD_DEFAULT_METADATA_KEY) else {
+        return Ok(None);
+    };
+    let value = decode_field_default_array(encoded)?;
+    let value = cast_array_with_schema_evolution(
+        &value,
+        field,
+        &DEFAULT_CAST_OPTIONS,
+        StructFieldMatching::Name,
+    )?;
+    let indices = datafusion::arrow::array::UInt32Array::from(vec![0; rows]);
+    Ok(Some(datafusion::arrow::compute::take(
+        value.as_ref(),
+        &indices,
+        None,
+    )?))
+}
+
+fn decode_field_default_array(encoded: &str) -> Result<ArrayRef> {
+    let bytes: Vec<u8> = serde_json::from_str(encoded)
+        .map_err(|error| DataFusionError::External(Box::new(error)))?;
+    let mut reader = StreamReader::try_new(Cursor::new(bytes), None)?;
+    let batch = reader
+        .next()
+        .transpose()?
+        .ok_or_else(|| exec_datafusion_err!("Missing encoded field default"))?;
+    if batch.num_rows() != 1 || batch.num_columns() != 1 || reader.next().is_some() {
+        return exec_err!("Invalid encoded field default");
+    }
+    Ok(batch.column(0).clone())
+}
+
+pub fn decode_field_default(encoded: &str) -> Result<ScalarValue> {
+    default_array_to_scalar(decode_field_default_array(encoded)?)
+}
+
+pub fn field_default(field: &Field) -> Result<Option<ScalarValue>> {
+    let Some(value) = field_default_array(field, 1)? else {
+        return Ok(None);
+    };
+    default_array_to_scalar(value).map(Some)
+}
+
+fn default_array_to_scalar(value: ArrayRef) -> Result<ScalarValue> {
+    // ScalarValue::try_from_array reconstructs list fields without their metadata.
+    let scalar = match value.data_type() {
+        DataType::List(_) => ScalarValue::List(Arc::new(
+            value
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .ok_or_else(|| exec_datafusion_err!("Expected list default"))?
+                .clone(),
+        )),
+        DataType::LargeList(_) => ScalarValue::LargeList(Arc::new(
+            value
+                .as_any()
+                .downcast_ref::<LargeListArray>()
+                .ok_or_else(|| exec_datafusion_err!("Expected large-list default"))?
+                .clone(),
+        )),
+        DataType::FixedSizeList(_, _) => ScalarValue::FixedSizeList(Arc::new(
+            value
+                .as_any()
+                .downcast_ref::<FixedSizeListArray>()
+                .ok_or_else(|| exec_datafusion_err!("Expected fixed-list default"))?
+                .clone(),
+        )),
+        _ => ScalarValue::try_from_array(&value, 0)?,
+    };
+    Ok(scalar)
+}
+
+/// A typed missing-field default whose nested field metadata survives constant folding.
+#[derive(Debug, Clone)]
+pub struct SchemaEvolutionDefaultExpr {
+    field: Arc<Field>,
+    value: ArrayRef,
+}
+
+impl SchemaEvolutionDefaultExpr {
+    pub fn try_new(field: Arc<Field>) -> Result<Self> {
+        let value = field_default_array(&field, 1)?
+            .ok_or_else(|| exec_datafusion_err!("Missing default for '{}'", field.name()))?;
+        Ok(Self { field, value })
+    }
+    pub fn field(&self) -> &Arc<Field> {
+        &self.field
+    }
+}
+
+impl PartialEq for SchemaEvolutionDefaultExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.field == other.field
+    }
+}
+impl Eq for SchemaEvolutionDefaultExpr {}
+impl std::hash::Hash for SchemaEvolutionDefaultExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.field.hash(state);
+    }
+}
+impl std::fmt::Display for SchemaEvolutionDefaultExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SCHEMA_EVOLUTION_DEFAULT({})", self.field.name())
+    }
+}
+impl PhysicalExpr for SchemaEvolutionDefaultExpr {
+    fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+    fn data_type(&self, _input: &Schema) -> Result<DataType> {
+        Ok(self.field.data_type().clone())
+    }
+    fn nullable(&self, _input: &Schema) -> Result<bool> {
+        Ok(self.field.is_nullable())
+    }
+    fn return_field(&self, _input: &Schema) -> Result<Arc<Field>> {
+        Ok(self.field.clone())
+    }
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+        vec![]
+    }
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        if !children.is_empty() {
+            return exec_err!("SchemaEvolutionDefaultExpr has no children");
+        }
+        Ok(self)
+    }
+    fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        let indices = datafusion::arrow::array::UInt32Array::from(vec![0; batch.num_rows()]);
+        Ok(ColumnarValue::Array(datafusion::arrow::compute::take(
+            self.value.as_ref(),
+            &indices,
+            None,
+        )?))
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum StructFieldMatching {
@@ -98,7 +263,7 @@ fn create_schema_evolution_adapter(
     timezone_mode: SchemaEvolutionTimezoneMode,
 ) -> Result<Arc<dyn PhysicalExprAdapter>> {
     let (column_mapping, default_values) =
-        create_column_mapping(&logical_file_schema, &physical_file_schema, matching);
+        create_column_mapping(&logical_file_schema, &physical_file_schema, matching)?;
 
     Ok(Arc::new(SchemaEvolutionPhysicalExprAdapter {
         logical_file_schema,
@@ -110,11 +275,13 @@ fn create_schema_evolution_adapter(
     }))
 }
 
+type ColumnMapping = (Vec<Option<usize>>, Vec<Option<ScalarValue>>);
+
 fn create_column_mapping(
     logical_schema: &Schema,
     physical_schema: &Schema,
     matching: StructFieldMatching,
-) -> (Vec<Option<usize>>, Vec<Option<ScalarValue>>) {
+) -> Result<ColumnMapping> {
     let mut column_mapping = Vec::with_capacity(logical_schema.fields().len());
     let mut default_values = Vec::with_capacity(logical_schema.fields().len());
 
@@ -131,7 +298,7 @@ fn create_column_mapping(
                         && field.try_extension_type::<RowNumber>().is_ok()
                 })
         } else {
-            find_matching_struct_field(physical_schema.fields(), logical_field, matching)
+            find_matching_struct_field(physical_schema.fields(), logical_field, matching)?
         };
         match physical_field {
             Some((physical_index, _)) => {
@@ -140,11 +307,15 @@ fn create_column_mapping(
             }
             None => {
                 column_mapping.push(None);
-                let default_value = if logical_field.is_nullable() {
+                let default_value = if let Some(value) = field_default(logical_field)? {
+                    Some(value)
+                } else if logical_field.is_nullable() {
                     Some(
                         ScalarValue::try_from(logical_field.data_type())
                             .unwrap_or(ScalarValue::Null),
                     )
+                } else if matching == StructFieldMatching::FieldId {
+                    None
                 } else {
                     Some(
                         ScalarValue::new_zero(logical_field.data_type())
@@ -156,7 +327,7 @@ fn create_column_mapping(
         }
     }
 
-    (column_mapping, default_values)
+    Ok((column_mapping, default_values))
 }
 
 #[derive(Debug, Clone)]
@@ -265,12 +436,22 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
             Some(field) => field,
             None => return Ok(None),
         };
-        if find_matching_struct_field(physical_struct_fields, logical_struct_field, self.matching)
+        if find_matching_struct_field(physical_struct_fields, logical_struct_field, self.matching)?
             .is_some()
         {
             return Ok(None);
         }
 
+        // The structural cast also preserves null parents when a child has a default.
+        if field_default(logical_struct_field)?.is_some() {
+            return Ok(None);
+        }
+        if !logical_struct_field.is_nullable() && self.matching == StructFieldMatching::FieldId {
+            return exec_err!(
+                "Required field '{}' is missing and has no default",
+                logical_struct_field.name()
+            );
+        }
         let null_value = ScalarValue::Null.cast_to(logical_struct_field.data_type())?;
         Ok(Some(Arc::new(Literal::new(null_value))))
     }
@@ -313,6 +494,15 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
             }
             Some(None) => {
                 if let Some(Some(default_value)) = self.default_values.get(logical_field_index) {
+                    if logical_field.data_type().is_nested()
+                        && logical_field
+                            .metadata()
+                            .contains_key(FIELD_DEFAULT_METADATA_KEY)
+                    {
+                        return Ok(Transformed::yes(Arc::new(
+                            SchemaEvolutionDefaultExpr::try_new(Arc::new(logical_field.clone()))?,
+                        )));
+                    }
                     Ok(Transformed::yes(Arc::new(Literal::new(
                         default_value.clone(),
                     ))))
@@ -516,8 +706,8 @@ fn find_matching_struct_field<'a>(
     source_fields: &'a [Arc<Field>],
     target_field: &Field,
     matching: StructFieldMatching,
-) -> Option<(usize, &'a Arc<Field>)> {
-    match matching {
+) -> Result<Option<(usize, &'a Arc<Field>)>> {
+    Ok(match matching {
         StructFieldMatching::Name => source_fields
             .iter()
             .enumerate()
@@ -527,20 +717,49 @@ fn find_matching_struct_field<'a>(
             // actual Delta struct fields with physicalName metadata reach this branch.
             let physical_name = target_field
                 .metadata()
-                .get(DELTA_COLUMN_MAPPING_PHYSICAL_NAME_METADATA_KEY)?;
+                .get(DELTA_COLUMN_MAPPING_PHYSICAL_NAME_METADATA_KEY);
+            let Some(physical_name) = physical_name else {
+                return Ok(None);
+            };
             source_fields
                 .iter()
                 .enumerate()
                 .find(|(_, source)| source.name() == physical_name)
         }
         StructFieldMatching::FieldId => {
-            let target_id = struct_field_id(target_field)?;
-            source_fields
+            let Some(target_id) = struct_field_id(target_field) else {
+                return Ok(None);
+            };
+            let mut identified = source_fields
                 .iter()
                 .enumerate()
-                .find(|(_, source)| struct_field_id(source) == Some(target_id))
+                .filter(|(_, source)| struct_field_id(source) == Some(target_id));
+            if let Some(found) = identified.next() {
+                if identified.next().is_some() {
+                    return exec_err!("Multiple physical fields match field ID {target_id}");
+                }
+                return Ok(Some(found));
+            }
+            let aliases: Vec<String> = target_field
+                .metadata()
+                .get(FIELD_ALIASES_METADATA_KEY)
+                .map(|value| serde_json::from_str(value))
+                .transpose()
+                .map_err(|error| DataFusionError::External(Box::new(error)))?
+                .unwrap_or_default();
+            let mut matches = source_fields.iter().enumerate().filter(|(_, source)| {
+                match struct_field_id(source) {
+                    Some(_) => false,
+                    None => aliases.contains(source.name()),
+                }
+            });
+            let found = matches.next();
+            if matches.next().is_some() {
+                return exec_err!("Multiple physical fields match field ID {target_id}");
+            }
+            found
         }
-    }
+    })
 }
 
 fn validate_struct_compatibility_with_variant(
@@ -549,9 +768,10 @@ fn validate_struct_compatibility_with_variant(
     matching: StructFieldMatching,
 ) -> Result<()> {
     if matching == StructFieldMatching::Name
-        && !target_fields
-            .iter()
-            .any(|target| find_matching_struct_field(source_fields, target, matching).is_some())
+        && !target_fields.iter().any(|target| {
+            find_matching_struct_field(source_fields, target, matching)
+                .is_ok_and(|field| field.is_some())
+        })
     {
         return exec_err!(
             "Cannot cast struct with {} fields to {} fields because there is no field name overlap",
@@ -561,7 +781,7 @@ fn validate_struct_compatibility_with_variant(
     }
 
     for target_field in target_fields {
-        match find_matching_struct_field(source_fields, target_field, matching) {
+        match find_matching_struct_field(source_fields, target_field, matching)? {
             Some((_, source_field)) => {
                 if !can_cast_field_with_schema_evolution(source_field, target_field, matching)? {
                     return exec_err!(
@@ -573,6 +793,7 @@ fn validate_struct_compatibility_with_variant(
                 }
             }
             None if target_field.is_nullable() => {}
+            None if field_default(target_field)?.is_some_and(|value| !value.is_null()) => {}
             None => {
                 return exec_err!(
                     "Cannot cast struct: target field '{}' is non-nullable but missing from source. \
@@ -1080,7 +1301,7 @@ fn cast_struct_array_to_fields(
 
     for target_child in target_fields {
         fields.push(Arc::clone(target_child));
-        match find_matching_struct_field(source_struct.fields(), target_child, matching) {
+        match find_matching_struct_field(source_struct.fields(), target_child, matching)? {
             Some((source_index, _)) => {
                 arrays.push(cast_array_with_schema_evolution_inner(
                     source_struct.column(source_index),
@@ -1090,7 +1311,10 @@ fn cast_struct_array_to_fields(
                     relaxed_timezone,
                 )?);
             }
-            None => arrays.push(new_null_array(target_child.data_type(), num_rows)),
+            None => arrays.push(match field_default_array(target_child, num_rows)? {
+                Some(value) => value,
+                None => new_null_array(target_child.data_type(), num_rows),
+            }),
         }
     }
 
@@ -1115,6 +1339,145 @@ mod tests {
     use parquet_variant_compute::{VariantType, json_to_variant, shred_variant, variant_to_json};
 
     use super::*;
+
+    #[test]
+    fn missing_defaults_and_aliases_preserve_field_identity() -> Result<()> {
+        let mut metadata = std::collections::HashMap::from([
+            (PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string()),
+            (
+                FIELD_ALIASES_METADATA_KEY.to_string(),
+                "[\"legacy\"]".to_string(),
+            ),
+            (
+                FIELD_DEFAULT_METADATA_KEY.to_string(),
+                encode_field_default(&ScalarValue::Int64(Some(42)))?,
+            ),
+        ]);
+        let logical = Arc::new(Schema::new(vec![
+            Field::new("current", DataType::Int64, false).with_metadata(metadata.clone()),
+        ]));
+        let legacy = Arc::new(Schema::new(vec![Field::new(
+            "legacy",
+            DataType::Int64,
+            true,
+        )]));
+        let adapter = create_schema_evolution_adapter(
+            logical.clone(),
+            legacy,
+            StructFieldMatching::FieldId,
+            SchemaEvolutionTimezoneMode::Strict,
+        )?;
+        assert!(
+            adapter
+                .rewrite(Arc::new(Column::new("current", 0)))?
+                .downcast_ref::<Column>()
+                .is_some()
+        );
+        let identified = Arc::new(Schema::new(vec![
+            Arc::new(Field::new("legacy", DataType::Int64, true)),
+            field_with_id("renamed", PARQUET_FIELD_ID_META_KEY, 1),
+        ]));
+        let adapter = create_schema_evolution_adapter(
+            logical.clone(),
+            identified,
+            StructFieldMatching::FieldId,
+            SchemaEvolutionTimezoneMode::Strict,
+        )?;
+        assert_eq!(
+            adapter
+                .rewrite(Arc::new(Column::new("current", 0)))?
+                .downcast_ref::<Column>()
+                .unwrap()
+                .index(),
+            1
+        );
+        let reused = Arc::new(Schema::new(vec![field_with_id(
+            "legacy",
+            PARQUET_FIELD_ID_META_KEY,
+            2,
+        )]));
+        let adapter = create_schema_evolution_adapter(
+            logical,
+            reused,
+            StructFieldMatching::FieldId,
+            SchemaEvolutionTimezoneMode::Strict,
+        )?;
+        assert_eq!(
+            adapter
+                .rewrite(Arc::new(Column::new("current", 0)))?
+                .downcast_ref::<Literal>()
+                .unwrap()
+                .value(),
+            &ScalarValue::Int64(Some(42))
+        );
+        metadata.remove(FIELD_DEFAULT_METADATA_KEY);
+        let required = Arc::new(Schema::new(vec![
+            Field::new("current", DataType::Int64, false).with_metadata(metadata),
+        ]));
+        let adapter = create_schema_evolution_adapter(
+            required,
+            Arc::new(Schema::empty()),
+            StructFieldMatching::FieldId,
+            SchemaEvolutionTimezoneMode::Strict,
+        )?;
+        assert!(
+            adapter
+                .rewrite(Arc::new(Column::new("current", 0)))
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn list_default_projection_preserves_element_metadata() -> Result<()> {
+        let element = field_with_id("item", PARQUET_FIELD_ID_META_KEY, 2);
+        let values = Arc::new(Int64Array::from(vec![7, 9])) as ArrayRef;
+        let array = Arc::new(ListArray::new(
+            element.clone(),
+            OffsetBuffer::new(vec![0i32, 2].into()),
+            values,
+            None,
+        ));
+        let default = ScalarValue::List(array);
+        let target = Field::new("values", DataType::List(element), true).with_metadata(
+            std::collections::HashMap::from([
+                (PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string()),
+                (
+                    FIELD_DEFAULT_METADATA_KEY.to_string(),
+                    encode_field_default(&default)?,
+                ),
+            ]),
+        );
+        let logical = Arc::new(Schema::new(vec![target.clone()]));
+        let physical = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+        let adapter = create_schema_evolution_adapter(
+            logical,
+            physical.clone(),
+            StructFieldMatching::FieldId,
+            SchemaEvolutionTimezoneMode::Strict,
+        )?;
+        let batch = RecordBatch::try_new(physical, vec![Arc::new(Int64Array::from(vec![1, 2]))])?;
+        let expression = adapter.rewrite(Arc::new(Column::new("values", 0)))?;
+        let expression = datafusion::physical_expr::simplifier::PhysicalExprSimplifier::new(
+            batch.schema().as_ref(),
+        )
+        .simplify(expression)?;
+        let values = expression.evaluate(&batch)?.into_array(2)?;
+        assert_eq!(values.data_type(), target.data_type());
+        assert_eq!(
+            values
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .unwrap()
+                .value(1)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values(),
+            &[7, 9]
+        );
+        Ok(())
+    }
 
     #[test]
     fn virtual_row_numbers_survive_column_mapping() -> Result<()> {
