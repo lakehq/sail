@@ -211,3 +211,34 @@ Feature: unary minus (negative) honors ANSI overflow semantics
         root
          |-- result: integer (nullable = true)
         """
+
+    Scenario: a non-null string input is nullable, because Spark casts it to DOUBLE
+      When query
+        """
+        SELECT negative('13') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: double (nullable = true)
+        """
+
+  @function(nullability)
+  Rule: Nullability through Spark's implicit casts
+  # String -> * is force-nullable (Cast.scala:458)
+
+    Scenario Outline: negative loses non-nullability through Spark's implicit cast: <case>
+      When query
+        """
+        SELECT negative(<input>) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: <type> (nullable = <nullable>)
+        """
+
+      Examples:
+        | case             | input | type    | nullable |
+        | no cast          | 5     | integer | false    |
+        | STRING -> DOUBLE | '5'   | double  | true     |

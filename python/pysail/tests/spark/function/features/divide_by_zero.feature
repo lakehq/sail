@@ -184,3 +184,139 @@ Feature: Division by zero behavior
       Then query result
         | result |
         | 5.0    |
+
+  Rule: Per-row division by zero in a multi-row batch, both ANSI modes
+    # A batch where only some rows have a zero divisor: ANSI off nulls exactly the
+    # offending rows (per element) and computes the rest; ANSI on raises for the
+    # whole batch.
+    Scenario: mixed integer divisors null only the zero rows under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT a / b AS result FROM VALUES (6, 2), (1, 0), (8, 4) AS t(a, b)
+        """
+      Then query result ordered
+        | result |
+        | 3.0    |
+        | NULL   |
+        | 2.0    |
+
+    Scenario: mixed integer divisors raise for the whole batch under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT a / b AS result FROM VALUES (6, 2), (1, 0), (8, 4) AS t(a, b)
+        """
+      Then query error (?i)division by zero
+
+    @sail-bug
+    Scenario: mixed decimal divisors null only the zero rows under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(a AS DECIMAL(10,2)) / CAST(b AS DECIMAL(10,2)) AS result
+        FROM VALUES (6, 2), (1, 0), (8, 4) AS t(a, b)
+        """
+      Then query result ordered
+        | result          |
+        | 3.0000000000000 |
+        | NULL            |
+        | 2.0000000000000 |
+
+    Scenario: mixed decimal divisors raise for the whole batch under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST(a AS DECIMAL(10,2)) / CAST(b AS DECIMAL(10,2)) AS result
+        FROM VALUES (6, 2), (1, 0), (8, 4) AS t(a, b)
+        """
+      Then query error (?i)division by zero
+
+  Rule: Interval division by zero
+    # Year-month intervals (Spark's DivideYMInterval) throw INTERVAL_DIVIDED_BY_ZERO
+    # on a zero divisor in BOTH ANSI modes; only try_divide tolerates it as NULL.
+    @sail-bug
+    Scenario: year-month interval divided by zero raises under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT make_ym_interval(1, 6) / 0 AS result
+        """
+      Then query error (?i)division by zero
+
+    @sail-bug
+    Scenario: year-month interval divided by zero also raises under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT make_ym_interval(1, 6) / 0 AS result
+        """
+      Then query error (?i)division by zero
+
+    # make_interval produces Spark's legacy CalendarInterval, whose divide throws
+    # only under ANSI and returns NULL otherwise. @spark-4: the PySpark 3.5 client
+    # sends this as the `calendar_interval` type, which Sail rejects at analysis
+    # ("Unsupported data type calendar_interval") before the divide runs; 4.x
+    # clients send `month_day_nano_interval` and reach the divide-by-zero path.
+    @sail-bug
+    @spark-4
+    Scenario: calendar interval divided by zero raises under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT make_interval(0, 0, 0, 1, 0, 0, 0) / 0 AS result
+        """
+      Then query error (?i)division by zero
+
+    @spark-4
+    Scenario: calendar interval divided by zero returns NULL under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT make_interval(0, 0, 0, 1, 0, 0, 0) / 0 AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+  Rule: try_divide tolerates interval division by zero as NULL in both ANSI modes
+    Scenario: try_divide year-month interval by zero is NULL under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT try_divide(make_ym_interval(1, 6), 0) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: try_divide year-month interval by zero is NULL under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT try_divide(make_ym_interval(1, 6), 0) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+  Rule: Day-time interval division by zero raises in both ANSI modes
+    # Spark's DivideDTInterval throws INTERVAL_DIVIDED_BY_ZERO unconditionally,
+    # unlike numeric division which nulls under ANSI off.
+    @sail-bug
+    Scenario: day-time interval divided by zero raises under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT INTERVAL '1' DAY / 0 AS result
+        """
+      Then query error (?i)division by zero
+
+    @sail-bug
+    Scenario: day-time interval divided by zero also raises under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT INTERVAL '1' DAY / 0 AS result
+        """
+      Then query error (?i)division by zero

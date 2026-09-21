@@ -86,3 +86,142 @@ Feature: elt output schema
         root
          |-- elt(1, 10, 20): string (nullable = true)
         """
+
+  Rule: Basic usage
+
+    Scenario: select first element
+      When query
+        """
+        SELECT elt(1, 'hello', 'world') AS result
+        """
+      Then query result
+        | result |
+        | hello  |
+
+    Scenario: select second element
+      When query
+        """
+        SELECT elt(2, 'hello', 'world') AS result
+        """
+      Then query result
+        | result |
+        | world  |
+
+    Scenario: select from multiple arguments
+      When query
+        """
+        SELECT elt(3, 'a', 'b', 'c', 'd') AS result
+        """
+      Then query result
+        | result |
+        | c      |
+
+  Rule: Null handling
+
+    Scenario: null index returns null
+      When query
+        """
+        SELECT elt(CAST(NULL AS INT), 'hello', 'world') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: null value at selected index returns null
+      When query
+        """
+        SELECT elt(1, CAST(NULL AS STRING), 'world') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: null value at non-selected index returns non-null
+      When query
+        """
+        SELECT elt(2, CAST(NULL AS STRING), 'world') AS result
+        """
+      Then query result
+        | result |
+        | world  |
+
+  Rule: Out-of-range index returns null (non-ANSI mode)
+
+    Scenario: index zero returns null in non-ANSI mode
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT elt(0, 'hello', 'world') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: negative index returns null in non-ANSI mode
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT elt(-1, 'hello', 'world') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: index beyond argument count returns null in non-ANSI mode
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT elt(5, 'a', 'b', 'c') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+  Rule: Out-of-range index raises error (ANSI mode, Spark 4.x default)
+
+    @sail-bug
+    Scenario: index zero raises error in ANSI mode
+      When query
+        """
+        SELECT elt(0, 'hello', 'world') AS result
+        """
+      Then query error (?i)invalid.*index|out.*bound
+
+    @sail-bug
+    Scenario: negative index raises error in ANSI mode
+      When query
+        """
+        SELECT elt(-1, 'hello', 'world') AS result
+        """
+      Then query error (?i)invalid.*index|out.*bound
+
+    @sail-bug
+    Scenario: index beyond count raises error in ANSI mode
+      When query
+        """
+        SELECT elt(5, 'a', 'b', 'c') AS result
+        """
+      Then query error (?i)invalid.*index|out.*bound
+
+  Rule: Column expressions
+
+    Scenario: elt on column values
+      When query
+        """
+        SELECT elt(idx, v1, v2) AS result
+        FROM VALUES (1, 'a', 'x'), (2, 'b', 'y'), (1, 'c', 'z') AS t(idx, v1, v2)
+        """
+      Then query result
+        | result |
+        | a      |
+        | y      |
+        | c      |
+
+    Scenario: elt with integer values casts to string
+      When query
+        """
+        SELECT elt(1, 42) AS result
+        """
+      Then query result
+        | result |
+        | 42     |

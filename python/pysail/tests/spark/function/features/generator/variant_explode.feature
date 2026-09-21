@@ -328,3 +328,35 @@ Feature: variant_explode and variant_explode_outer
         | 5  | NULL | NULL | NULL  |
         | 6  | NULL | NULL | NULL  |
         | 7  | NULL | NULL | NULL  |
+
+  Rule: variant_explode_outer ignores null or non-container input
+
+  Rule: variant_explode_outer with empty containers returns one null row
+
+  Rule: variant_explode key ordering and types
+
+  Rule: variant_explode with null values inside collections
+
+  Rule: variant_explode with named argument syntax
+
+  Rule: variant_explode with unicode keys
+
+  Rule: variant_explode with deeply nested values
+
+  Rule: variant_explode_outer with parse_json(NULL) input
+
+  Rule: variant_explode_outer column types
+
+  Rule: variant_explode_outer with named argument syntax
+
+  Rule: variant_explode_outer key ordering
+
+  Rule: variant_explode_outer with null values inside containers
+
+  Rule: variant_explode_outer with nested values
+
+  Rule: variant_explode_outer with CAST on non-string types
+
+  Rule: variant_explode_outer multi-row lateral join with mixed values
+
+  Rule: variant_explode_outer value rendering and edge cases

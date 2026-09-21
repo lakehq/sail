@@ -529,3 +529,111 @@ Feature: sequence() over DATE returns expected arrays
       Then query result
         | ancient                                                         | future                                                          |
         | [1000-01-01 00:00:00, 1000-01-02 00:00:00, 1000-01-03 00:00:00] | [2500-01-01 00:00:00, 2500-01-02 00:00:00, 2500-01-03 00:00:00] |
+
+  Scenario: sequence with month step across year boundary
+    When query
+    """
+    SELECT sequence(date '2024-11-15', date '2025-03-15', INTERVAL '1' MONTH) AS seq
+    """
+    Then query result ordered
+    | seq |
+    | [2024-11-15, 2024-12-15, 2025-01-15, 2025-02-15, 2025-03-15] |
+
+  Scenario: sequence with descending dates and negative month step
+    When query
+    """
+    SELECT sequence(date '2025-03-15', date '2024-11-15', INTERVAL '-1' MONTH) AS seq
+    """
+    Then query result ordered
+    | seq |
+    | [2025-03-15, 2025-02-15, 2025-01-15, 2024-12-15, 2024-11-15] |
+
+  Scenario: sequence with descending dates uses default step of -1 day
+    When query
+    """
+    SELECT sequence(date '2024-01-05', date '2024-01-01') AS seq
+    """
+    Then query result ordered
+    | seq |
+    | [2024-01-05, 2024-01-04, 2024-01-03, 2024-01-02, 2024-01-01] |
+
+  Rule: Mixed-sign interval steps are accepted (measured on Spark 4.2)
+
+  Scenario: sequence with net-positive mixed interval (2 months -1 day) produces a sequence
+    When query
+    """
+    SELECT sequence(date '2024-01-01', date '2024-06-01', make_interval(0, 2, 0, -1, 0, 0, 0)) AS seq
+    """
+    Then query result
+      | seq                                    |
+      | [2024-01-01, 2024-02-29, 2024-04-29] |
+
+  Scenario: sequence with net-negative mixed interval (-2 months +1 day) produces a sequence
+    When query
+    """
+    SELECT sequence(date '2024-06-01', date '2024-01-01', make_interval(0, -2, 0, 1, 0, 0, 0)) AS seq
+    """
+    Then query result
+      | seq                                    |
+      | [2024-06-01, 2024-04-02, 2024-02-03] |
+
+  Rule: Date sequences anchored at the start across calendar edges
+
+    # Spark 4.2.0 collectionOperations.scala (TemporalSequenceImpl): element i is start + i * step,
+    # so a yearly step from a leap day comes back to Feb 29 instead of staying clamped at Feb 28.
+    Scenario Outline: date sequence edge: <case>
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT sequence(<args>) AS seq
+        """
+      Then query result
+        | seq   |
+        | <seq> |
+
+      Examples:
+        | case                                 | args                                                        | seq                                                          |
+        | yearly step from a leap day          | DATE '2024-02-29', DATE '2028-02-29', INTERVAL 1 YEAR       | [2024-02-29, 2025-02-28, 2026-02-28, 2027-02-28, 2028-02-29] |
+        | daily step past the maximum date     | DATE '9999-12-30', DATE '+10000-01-02'                      | [9999-12-30, 9999-12-31, +10000-01-01, +10000-01-02]         |
+        | descending into year 0               | DATE '0001-01-02', DATE '0000-12-30'                        | [0001-01-02, 0001-01-01, 0000-12-31, 0000-12-30]             |
+        | negative day step over a leap day    | DATE '2024-03-01', DATE '2024-02-27', INTERVAL -1 DAY       | [2024-03-01, 2024-02-29, 2024-02-28, 2024-02-27]             |
+        | day-time step rounds by elapsed time | DATE '2024-01-01', DATE '2024-01-10', INTERVAL '2 12:00:00' DAY TO SECOND | [2024-01-01, 2024-01-03, 2024-01-06, 2024-01-08] |
+
+  # Spark 4.2.0 collectionOperations.scala TemporalSequenceImpl adds i * step through
+  # timestampAddInterval in the session zone, so day-sized steps keep the local wall clock.
+  Rule: Timestamp sequences with an interval step in the session time zone
+
+    Scenario Outline: timestamp sequence in a non-UTC zone: <case>
+      Given config spark.sql.session.timeZone = <zone>
+      When query
+        """
+        SELECT sequence(<start>, <stop>, <step>) AS seq
+        """
+      Then query result
+        | seq   |
+        | <seq> |
+
+      Examples:
+        | case                               | zone                | start                               | stop                                | step                 | seq                                                                                      |
+        | LA daily over the gap              | America/Los_Angeles | TIMESTAMP '2024-03-09 12:00:00'     | TIMESTAMP '2024-03-11 12:00:00'     | INTERVAL '1' DAY     | [2024-03-09 12:00:00, 2024-03-10 12:00:00, 2024-03-11 12:00:00]                          |
+        | LA 24-hourly over the gap          | America/Los_Angeles | TIMESTAMP '2024-03-09 12:00:00'     | TIMESTAMP '2024-03-11 12:00:00'     | INTERVAL '24' HOUR   | [2024-03-09 12:00:00, 2024-03-10 12:00:00, 2024-03-11 12:00:00]                          |
+        | LA 24-hourly over the overlap      | America/Los_Angeles | TIMESTAMP '2024-11-02 12:00:00'     | TIMESTAMP '2024-11-04 12:00:00'     | INTERVAL '24' HOUR   | [2024-11-02 12:00:00, 2024-11-03 12:00:00, 2024-11-04 12:00:00]                          |
+        | LA monthly from Jan 31 at 02:30    | America/Los_Angeles | TIMESTAMP '2024-01-31 02:30:00'     | TIMESTAMP '2024-04-30 02:30:00'     | INTERVAL '1' MONTH   | [2024-01-31 02:30:00, 2024-02-29 02:30:00, 2024-03-31 02:30:00, 2024-04-30 02:30:00]     |
+        | LA NTZ 24-hourly over the gap      | America/Los_Angeles | TIMESTAMP_NTZ '2024-03-09 12:00:00' | TIMESTAMP_NTZ '2024-03-11 12:00:00' | INTERVAL '24' HOUR   | [2024-03-09 12:00:00, 2024-03-10 12:00:00, 2024-03-11 12:00:00]                          |
+        | Chatham 24-hourly over fall-back   | Pacific/Chatham     | TIMESTAMP '2024-04-06 12:00:00'     | TIMESTAMP '2024-04-08 12:00:00'     | INTERVAL '24' HOUR   | [2024-04-06 12:00:00, 2024-04-07 12:00:00, 2024-04-08 12:00:00]                          |
+        | Kolkata monthly at a late hour     | Asia/Kolkata        | TIMESTAMP '2024-01-31 23:00:00'     | TIMESTAMP '2024-03-31 23:00:00'     | INTERVAL '1' MONTH   | [2024-01-31 23:00:00, 2024-02-29 23:00:00, 2024-03-31 23:00:00]                          |
+        | Pago Pago monthly at a late hour   | Pacific/Pago_Pago   | TIMESTAMP '2024-01-31 20:00:00'     | TIMESTAMP '2024-03-31 20:00:00'     | INTERVAL '1' MONTH   | [2024-01-31 20:00:00, 2024-02-29 20:00:00, 2024-03-31 20:00:00]                          |
+
+    Scenario: timestamp sequence reads each row in Los Angeles
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT sequence(s, e, INTERVAL '1' DAY) AS seq
+        FROM VALUES (1, TIMESTAMP '2024-03-09 12:00:00', TIMESTAMP '2024-03-11 12:00:00'),
+          (2, TIMESTAMP '2024-11-02 12:00:00', TIMESTAMP '2024-11-03 12:00:00') AS t(i, s, e)
+        ORDER BY i
+        """
+      Then query result ordered
+        | seq                                                             |
+        | [2024-03-09 12:00:00, 2024-03-10 12:00:00, 2024-03-11 12:00:00] |
+        | [2024-11-02 12:00:00, 2024-11-03 12:00:00]                      |

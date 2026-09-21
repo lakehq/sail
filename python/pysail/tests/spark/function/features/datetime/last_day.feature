@@ -566,3 +566,93 @@ Feature: last_day comprehensive tests
         root
          |-- result: date (nullable = true)
         """
+
+    Scenario: a non-null string input is nullable, because Spark casts it to DATE
+      When query
+        """
+        SELECT last_day('2024-01-15') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: date (nullable = true)
+        """
+
+  @function(nullability)
+  Rule: Nullability through Spark's implicit casts
+  # String -> * is force-nullable (Cast.scala:458)
+
+    @sail-bug
+    Scenario Outline: last_day without an implicit cast keeps its non-nullable schema
+      When query
+        """
+        SELECT last_day(<input>'2024-01-15') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: date (nullable = false)
+        """
+
+      Examples:
+        | case    | input |
+        | no cast | DATE  |
+
+    Scenario Outline: last_day through a force-nullable implicit cast: <case>
+      When query
+        """
+        SELECT last_day(<input>'2024-01-15') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: date (nullable = true)
+        """
+
+      Examples:
+        | case           | input |
+        | STRING -> DATE |       |
+
+  # Spark 4.2.0 DateTimeUtils.getLastDayOfMonth: LocalDate.lengthOfMonth on the proleptic Gregorian
+  # calendar, so years 0, -1 and 10000 follow the same leap rules as any other year.
+  Rule: last_day outside the literal year range
+
+    Scenario Outline: last_day edge: <case>
+      When query
+        """
+        SELECT last_day(<date>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                                      | date                           | result       |
+        | year 10000 is a leap year                 | DATE '+10000-02-01'            | +10000-02-29 |
+        | year 0 is a leap year                     | DATE '0000-02-01'              | 0000-02-29   |
+        | year -1 is a common year                  | DATE '-0001-02-01'             | -0001-02-28  |
+        | Julian cutover month                      | DATE '1582-10-04'              | 1582-10-31   |
+        | date pushed past 9999 by date_add         | date_add(DATE '9999-12-31', 40) | +10000-02-29 |
+
+    Scenario: last_day reads each row's month and year
+      When query
+        """
+        SELECT last_day(d) AS result FROM VALUES (1, DATE '9999-12-15'), (2, DATE '0001-02-10'), (3, DATE '2100-02-10'), (4, DATE '2000-02-10') AS t(i, d) ORDER BY i
+        """
+      Then query result ordered
+        | result     |
+        | 9999-12-31 |
+        | 0001-02-28 |
+        | 2100-02-28 |
+        | 2000-02-29 |
+
+    @sail-bug
+    Scenario: last_day of an invalid date string is NULL under ANSI false
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT last_day('2024-02-30') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |

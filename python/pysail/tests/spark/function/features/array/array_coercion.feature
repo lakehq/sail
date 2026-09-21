@@ -87,3 +87,61 @@ Feature: array() type coercion with mixed element types
         SELECT array('a', 1, NULL, 1.0) AS result
         """
       Then query error \[CAST_INVALID_INPUT\] The value 'a' of the type "STRING" cannot be cast to "DECIMAL\(21,1\)"
+
+  Rule: A logical type does not mix with its storage type
+
+    # Spark types GEOMETRY and BINARY as different types, so `array` rejects them together
+    # (`DATA_DIFF_TYPES`). Sail carries GEOMETRY as BINARY plus field metadata; when the arguments'
+    # metadata disagree `array` drops it and accepts the call as `array<binary>`.
+    @sail-bug @spark-4.2
+    Scenario: array rejects mixing GEOMETRY with BINARY
+      When query
+        """
+        SELECT array(st_geomfromwkb(w), CAST(NULL AS BINARY)) AS result
+        FROM VALUES (X'0101000000000000000000F03F0000000000000040') AS t(w)
+        """
+      Then query error DATA_DIFF_TYPES
+
+  Rule: A logical type survives an argument folded to a literal
+
+    # `array` promises the element field the metadata that carries the Spark logical type, but a
+    # call whose arguments are all literals is folded before execution and the folded value comes
+    # back without it, so the promise and the result disagree. The same call over a column keeps
+    # the type. A release build has the assertion off and loses the type in silence instead.
+    @spark-4
+    Scenario: array keeps the VARIANT type of a literal element
+      When query
+        """
+        SELECT to_json(array(parse_json('1'))[0]) AS result
+        """
+      Then query result
+        | result |
+        | 1      |
+
+    @sail-bug
+    @spark-4
+    Scenario: array declares an element of VARIANT type for a literal element
+      When query
+        """
+        SELECT array(parse_json('1')) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = false)
+         |    |-- element: variant (containsNull = false)
+        """
+
+    @sail-bug
+    @spark-4.2
+    Scenario: array keeps the GEOMETRY type of a literal element
+      When query
+        """
+        SELECT array(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040')) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = false)
+         |    |-- element: geometry (containsNull = false)
+        """

@@ -21,6 +21,60 @@ Feature: transform higher-order function
         | Transform integers multiplied by zero   | array(5, 10, 15)     | x * 0   | [0, 0, 0]       |
         | Transform single-element array          | array(42)            | x + 1   | [43]            |
 
+    Scenario: Transform integers by multiplying by 2
+      When query
+        """
+        SELECT transform(array(1, 2, 3), x -> x * 2) AS result
+        """
+      Then query result
+        | result    |
+        | [2, 4, 6] |
+
+    Scenario: Transform integers by adding a constant
+      When query
+        """
+        SELECT transform(array(10, 20, 30), x -> x + 100) AS result
+        """
+      Then query result
+        | result            |
+        | [110, 120, 130]   |
+
+    Scenario: Transform integers by negating
+      When query
+        """
+        SELECT transform(array(1, 2, 3), x -> -x) AS result
+        """
+      Then query result
+        | result       |
+        | [-1, -2, -3] |
+
+    Scenario: Transform integers with modulo
+      When query
+        """
+        SELECT transform(array(1, 2, 3, 4, 5), x -> x % 3) AS result
+        """
+      Then query result
+        | result         |
+        | [1, 2, 0, 1, 2] |
+
+    Scenario: Transform integers multiplied by zero
+      When query
+        """
+        SELECT transform(array(5, 10, 15), x -> x * 0) AS result
+        """
+      Then query result
+        | result      |
+        | [0, 0, 0]   |
+
+    Scenario: Transform single-element array
+      When query
+        """
+        SELECT transform(array(42), x -> x + 1) AS result
+        """
+      Then query result
+        | result |
+        | [43]   |
+
   Rule: Basic 2-param transform — element and index
 
     Scenario Outline: 2-param: <case>
@@ -39,6 +93,51 @@ Feature: transform higher-order function
         | Transform with index — return index only (0-based)             | array(100, 200, 300) | i           | [0, 1, 2]         |
         | Transform with index from sequence — multiply element by index | sequence(1, 5)       | x * i       | [0, 2, 6, 12, 20] |
         | Transform with index from sequence — return index only         | sequence(1, 3)       | i           | [0, 1, 2]         |
+
+    Scenario: Transform with index — add index to element
+      When query
+        """
+        SELECT transform(array(10, 20, 30), (x, i) -> x + i) AS result
+        """
+      Then query result
+        | result       |
+        | [10, 21, 32] |
+
+    Scenario: Transform with index — multiply element by index plus one
+      When query
+        """
+        SELECT transform(array(10, 20, 30), (x, i) -> x * (i + 1)) AS result
+        """
+      Then query result
+        | result       |
+        | [10, 40, 90] |
+
+    Scenario: Transform with index — return index only (0-based)
+      When query
+        """
+        SELECT transform(array(100, 200, 300), (x, i) -> i) AS result
+        """
+      Then query result
+        | result    |
+        | [0, 1, 2] |
+
+    Scenario: Transform with index from sequence — multiply element by index
+      When query
+        """
+        SELECT transform(sequence(1, 5), (x, i) -> x * i) AS result
+        """
+      Then query result
+        | result              |
+        | [0, 2, 6, 12, 20]  |
+
+    Scenario: Transform with index from sequence — return index only
+      When query
+        """
+        SELECT transform(sequence(1, 3), (x, i) -> i) AS result
+        """
+      Then query result
+        | result    |
+        | [0, 1, 2] |
 
   Rule: Type coercion — different output types
 
@@ -59,6 +158,60 @@ Feature: transform higher-order function
         | Transform integers to booleans using comparison | array(1, 2, 3, 4)        | x > 2                          | [false, false, true, true] |
         | Transform booleans by negation                  | array(true, false, true) | NOT x                          | [false, true, false]       |
         | Transform booleans to integers                  | array(true, false, true) | cast(x as int)                 | [1, 0, 1]                  |
+
+    Scenario: Transform integers to strings via cast
+      When query
+        """
+        SELECT transform(array(1, 2, 3), x -> cast(x as string)) AS result
+        """
+      Then query result
+        | result    |
+        | [1, 2, 3] |
+
+    Scenario: Transform integers to bigint
+      When query
+        """
+        SELECT transform(array(1, 2, 3), x -> cast(x as bigint)) AS result
+        """
+      Then query result
+        | result    |
+        | [1, 2, 3] |
+
+    Scenario: Transform integers to double
+      When query
+        """
+        SELECT transform(array(1, 2, 3), x -> cast(x as double)) AS result
+        """
+      Then query result
+        | result          |
+        | [1.0, 2.0, 3.0] |
+
+    Scenario: Transform integers to booleans using comparison
+      When query
+        """
+        SELECT transform(array(1, 2, 3, 4), x -> x > 2) AS result
+        """
+      Then query result
+        | result                     |
+        | [false, false, true, true] |
+
+    Scenario: Transform booleans by negation
+      When query
+        """
+        SELECT transform(array(true, false, true), x -> NOT x) AS result
+        """
+      Then query result
+        | result              |
+        | [false, true, false] |
+
+    Scenario: Transform booleans to integers
+      When query
+        """
+        SELECT transform(array(true, false, true), x -> cast(x as int)) AS result
+        """
+      Then query result
+        | result    |
+        | [1, 0, 1] |
 
   Rule: String transformations
 
@@ -89,6 +242,56 @@ Feature: transform higher-order function
         | result |
         | 1      |
 
+    Scenario: Transform string array to uppercase
+      When query
+        """
+        SELECT transform(arr, x -> upper(x)) AS result
+        FROM VALUES (array("hello", "world")) AS t(arr)
+        """
+      Then query result
+        | result          |
+        | [HELLO, WORLD]  |
+
+    Scenario: Transform string array to length of each string
+      When query
+        """
+        SELECT transform(arr, x -> length(x)) AS result
+        FROM VALUES (array("a", "bb", "ccc")) AS t(arr)
+        """
+      Then query result
+        | result    |
+        | [1, 2, 3] |
+
+    Scenario: Transform string array with index — concat element and index
+      When query
+        """
+        SELECT transform(arr, (x, i) -> concat(x, cast(i as string))) AS result
+        FROM VALUES (array("a", "b", "c")) AS t(arr)
+        """
+      Then query result
+        | result          |
+        | [a0, b1, c2]    |
+
+    Scenario: Transform string array with index — concat longer strings and index
+      When query
+        """
+        SELECT transform(arr, (x, i) -> concat(x, cast(i as string))) AS result
+        FROM VALUES (array("apple", "banana")) AS t(arr)
+        """
+      Then query result
+        | result            |
+        | [apple0, banana1] |
+
+    Scenario: Transform empty string array
+      When query
+        """
+        SELECT transform(arr, x -> upper(x)) AS result
+        FROM VALUES (array("")) AS t(arr)
+        """
+      Then query result
+        | result |
+        | []     |
+
   Rule: Null handling
 
     Scenario Outline: Null handling: <case>
@@ -109,6 +312,69 @@ Feature: transform higher-order function
         | Transform single-null element array                                  | array(NULL)                 | x -> x + 1           | [NULL]         |
         | Transform null array itself returns null                             | CAST(NULL AS ARRAY<INT>)    | x -> x * 2           | NULL           |
         | Transform typed null array of strings returns null                   | CAST(NULL AS ARRAY<STRING>) | x -> upper(x)        | NULL           |
+
+    Scenario: Transform array containing null — null propagates through arithmetic
+      When query
+        """
+        SELECT transform(array(1, NULL, 3), x -> x * 2) AS result
+        """
+      Then query result
+        | result       |
+        | [2, NULL, 6] |
+
+    Scenario: Transform array with null — null plus constant propagates
+      When query
+        """
+        SELECT transform(array(1, NULL, 3), x -> x + 10) AS result
+        """
+      Then query result
+        | result          |
+        | [11, NULL, 13]  |
+
+    Scenario: Transform null elements with coalesce — substitute null with default
+      When query
+        """
+        SELECT transform(array(1, NULL, 3), x -> coalesce(x, -1)) AS result
+        """
+      Then query result
+        | result     |
+        | [1, -1, 3] |
+
+    Scenario: Transform all-null array — all elements remain null
+      When query
+        """
+        SELECT transform(array(NULL, NULL), x -> x * 2) AS result
+        """
+      Then query result
+        | result       |
+        | [NULL, NULL] |
+
+    Scenario: Transform single-null element array
+      When query
+        """
+        SELECT transform(array(NULL), x -> x + 1) AS result
+        """
+      Then query result
+        | result |
+        | [NULL] |
+
+    Scenario: Transform null array itself returns null
+      When query
+        """
+        SELECT transform(CAST(NULL AS ARRAY<INT>), x -> x * 2) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: Transform typed null array of strings returns null
+      When query
+        """
+        SELECT transform(CAST(NULL AS ARRAY<STRING>), x -> upper(x)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
 
   Rule: Empty array
 
@@ -186,6 +452,33 @@ Feature: transform higher-order function
         | Transform array of arrays — return inner array size  | array(array(1, 2), array(3, 4)) | x -> size(x)                                | [2, 2]                   |
         | Transform array of arrays — inner size plus constant | array(array(1, 2), array(3, 4)) | x -> size(x) + 10                           | [12, 12]                 |
         | Nested transform — transform within transform        | array(1, 2, 3)                  | x -> transform(array(x, x + 1), y -> y * 2) | [[2, 4], [4, 6], [6, 8]] |
+
+    Scenario: Transform array of arrays — return inner array size
+      When query
+        """
+        SELECT transform(array(array(1, 2), array(3, 4)), x -> size(x)) AS result
+        """
+      Then query result
+        | result |
+        | [2, 2] |
+
+    Scenario: Transform array of arrays — inner size plus constant
+      When query
+        """
+        SELECT transform(array(array(1, 2), array(3, 4)), x -> size(x) + 10) AS result
+        """
+      Then query result
+        | result    |
+        | [12, 12]  |
+
+    Scenario: Nested transform — transform within transform
+      When query
+        """
+        SELECT transform(array(1, 2, 3), x -> transform(array(x, x + 1), y -> y * 2)) AS result
+        """
+      Then query result
+        | result                     |
+        | [[2, 4], [4, 6], [6, 8]]   |
 
   Rule: Struct output from lambda
 
@@ -398,3 +691,217 @@ Feature: transform higher-order function
       Then query result
         | result          |
         | [3.0, 5.0, 7.0] |
+
+  Rule: Non-lambda expression in place of the lambda
+
+    @sail-bug
+    Scenario Outline: Non-lambda body: <case>
+      When query
+        """
+        SELECT transform(<args>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                                              | args                            | result       |
+        | a constant integer replaces every element         | array(1, 2), 9                  | [9, 9]       |
+        | a constant string replaces every element          | array(1, 2), 'x'                | [x, x]       |
+        | a constant NULL replaces every element            | array(1, 2), CAST(NULL AS INT)  | [NULL, NULL] |
+        | a constant boolean is accepted (body unconstrained) | array(1, 2), true             | [true, true] |
+        | a constant body over an empty array               | array(), 9                      | []           |
+        | a constant body over a NULL array                 | CAST(NULL AS ARRAY<INT>), 9     | NULL         |
+
+    @sail-bug
+    Scenario: A body that only references an outer column
+      When query
+        """
+        SELECT transform(array(1, 2), v) AS result FROM (SELECT 7 AS v) t
+        """
+      Then query result
+        | result |
+        | [7, 7] |
+
+    @sail-bug
+    Scenario: A constant body over an array column resolves per row
+      When query
+        """
+        SELECT transform(c, 9) AS result
+        FROM VALUES (array(1, 2)), (array()), (CAST(NULL AS ARRAY<INT>)) AS t(c)
+        """
+      Then query result ordered
+        | result |
+        | [9, 9] |
+        | []     |
+        | NULL   |
+
+  Rule: Non-deterministic non-lambda body is evaluated per element
+    # The wrapped non-lambda body must run once per element, not be folded to a
+    # single value and broadcast. Asserted through deterministic properties
+    # because the values themselves are random.
+
+    @sail-bug
+    Scenario: A rand() body produces a distinct value per element
+      When query
+        """
+        SELECT size(array_distinct(transform(array(1, 2, 3, 4, 5), rand()))) > 1 AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    @sail-bug
+    Scenario: A uuid() body produces a distinct value per element
+      When query
+        """
+        SELECT size(array_distinct(transform(array(1, 2, 3, 4, 5), uuid()))) = 5 AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    @sail-bug
+    Scenario: A randn() body produces a distinct value per element
+      When query
+        """
+        SELECT size(array_distinct(transform(array(1, 2, 3, 4, 5), randn()))) > 1 AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    @sail-bug
+    Scenario: Every rand() element falls within the unit interval
+      When query
+        """
+        SELECT forall(transform(array(1, 2, 3, 4, 5), rand()), v -> v >= 0 AND v < 1) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+  @function(nullability)
+  Rule: Output schema
+
+    # Spark forces the CAST result nullable (`Cast.forceNullable`,
+    # fractional→integral), so the transformed element is nullable. Sail's
+    # expression nullability does not reproduce `Cast.forceNullable`, so it
+    # under-reports `containsNull` here. Schema-only under ANSI (the CAST throws
+    # rather than producing NULL); the root fix belongs in the cast resolver.
+    @sail-bug
+    Scenario: a Cast.forceNullable body under-reports element containsNull
+      When query
+        """
+        SELECT transform(array(1.5, 2.5), x -> CAST(x AS INT)) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: array (nullable = false)
+         |    |-- element: integer (containsNull = true)
+        """
+
+  Rule: Untyped NULL body
+
+    Scenario: An untyped NULL lambda body
+      When query
+        """
+        SELECT transform(array(1, 2), x -> NULL) AS result
+        """
+      Then query result
+        | result       |
+        | [NULL, NULL] |
+
+    @sail-bug
+    Scenario: An untyped NULL in place of the lambda
+      When query
+        """
+        SELECT transform(array(1, 2), NULL) AS result
+        """
+      Then query result
+        | result       |
+        | [NULL, NULL] |
+
+  Rule: Non-lambda wrapping must not capture outer lambda variables
+
+    # `__wrapped_lambda_param_N` is the exact name Sail generates for a wrapped
+    # lambda's hidden parameters, so a user variable spelled that way is the
+    # adversarial case: the collision loop must skip it for the inner wrapped
+    # lambda, or the inner body would rebind to the inner element instead of the
+    # captured outer one (which would flip [[1]] to [[2]]).
+    @sail-bug
+    Scenario: a user variable spelled like the generated placeholder is not shadowed
+      When query
+        """
+        SELECT transform(array(1), `__wrapped_lambda_param_0` -> transform(array(2), `__wrapped_lambda_param_0`)) AS result
+        """
+      Then query result
+        | result |
+        | [[1]]  |
+
+    @sail-bug
+    Scenario: a placeholder-shaped name that is not the generated one is used verbatim
+      When query
+        """
+        SELECT transform(array(1), `__wrapped_lambda_param_1` -> transform(array(2), `__wrapped_lambda_param_1`)) AS result
+        """
+      Then query result
+        | result |
+        | [[1]]  |
+
+    @sail-bug
+    Scenario: the captured value is preserved not the inner element
+      When query
+        """
+        SELECT transform(array(5), `__wrapped_lambda_param_0` -> transform(array(2), `__wrapped_lambda_param_0`)) AS result
+        """
+      Then query result
+        | result |
+        | [[5]]  |
+
+    @sail-bug
+    Scenario: a captured variable inside a wrapped filter predicate is not shadowed
+      When query
+        """
+        SELECT transform(array(1), `__wrapped_lambda_param_0` -> filter(array(2), `__wrapped_lambda_param_0` > 1)) AS result
+        """
+      Then query result
+        | result |
+        | [[]]   |
+
+    @sail-bug
+    Scenario: a captured variable inside a wrapped exists predicate is not shadowed
+      When query
+        """
+        SELECT transform(array(1), `__wrapped_lambda_param_0` -> exists(array(2), `__wrapped_lambda_param_0` > 0)) AS result
+        """
+      Then query result
+        | result  |
+        | [true]  |
+
+  Rule: Subquery expressions are rejected anywhere in the call
+
+    @sail-bug
+    Scenario: a subquery in the array argument is rejected
+      When query
+        """
+        SELECT transform((SELECT array(1)), 9) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions
+
+    @sail-bug
+    Scenario: a subquery in the array argument with a real lambda is rejected
+      When query
+        """
+        SELECT transform((SELECT array(1, 2)), x -> x + 1) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions
+
+    @sail-bug
+    Scenario: a subquery in the lambda body is rejected
+      When query
+        """
+        SELECT transform(array(1, 2), x -> (SELECT 9)) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions

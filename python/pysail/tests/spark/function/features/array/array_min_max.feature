@@ -89,6 +89,16 @@ Feature: array_min and array_max functions
         | min_val                 | max_val                |
         | -1.7976931348623157e308 | 1.7976931348623157e308 |
 
+    @sail-bug
+    Scenario: array_min and array_max with extreme double values
+      When query
+        """
+        SELECT array_min(array(1.7976931348623157E308, -1.7976931348623157E308, 0.0)) AS min_val, array_max(array(1.7976931348623157E308, -1.7976931348623157E308, 0.0)) AS max_val
+        """
+      Then query result
+        | min_val                 | max_val                |
+        | -1.7976931348623157E308 | 1.7976931348623157E308 |
+
   Rule: Boolean arrays
 
     Scenario: array_min and array_max with booleans

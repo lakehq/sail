@@ -158,7 +158,10 @@ Feature: sum
         | total |
         | 3.0   |
 
-    Scenario: ANSI grouped distinct sum filters malformed strings before casting
+    @sail-bug
+    # With DISTINCT, Spark casts BEFORE applying the FILTER, so a malformed
+    # string in an EXCLUDED row still raises. Sail masks first. Measured on 4.2.0.
+    Scenario: ANSI grouped distinct sum casts malformed strings before filtering
       Given config spark.sql.ansi.enabled = true
       When query
         """
@@ -174,10 +177,7 @@ Feature: sum
         GROUP BY group_name
         ORDER BY group_name
         """
-      Then query result ordered
-        | group_name | total |
-        | a          | 3.0   |
-        | b          | 4.0   |
+      Then query error \[CAST_INVALID_INPUT\]
 
   Rule: Numeric inputs retain their Spark sum type
 
@@ -190,3 +190,13 @@ Feature: sum
       Then query result
         | result_type | total |
         | bigint      | 6     |
+
+  Rule: Non-deterministic arguments are rejected
+
+    @sail-bug
+    Scenario: sum over rand is rejected
+      When query
+        """
+        SELECT sum(rand()) FROM range(6)
+        """
+      Then query error AGGREGATE_FUNCTION_WITH_NONDETERMINISTIC_EXPRESSION
