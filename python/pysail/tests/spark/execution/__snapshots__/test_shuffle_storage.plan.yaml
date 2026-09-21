@@ -11,7 +11,7 @@ data:
     Sort: #13 ASC NULLS FIRST
       Projection: #12 AS #13, count(Int64(1)) AS count AS #14, sum(#10) AS s1 AS #15, sum(#11) AS s2 AS #16
         Aggregate: groupBy=[[#12]], aggr=[[count(Int64(1)), sum(#10), sum(#11)]]
-          Projection: #8 AS #9, #2 AS #10, #5 AS #11, #8 % CASE WHEN Int32(4) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(4) END AS #12
+          Projection: #8 AS #9, #2 AS #10, #5 AS #11, #8 % CASE WHEN Int32(4) = Int32(0) THEN raise_error(Utf8("[REMAINDER_BY_ZERO] Remainder by zero.")) ELSE Int32(4) END AS #12
             Projection: #8, #2, #5
               Projection: #1 AS #8, #1 AS #6, #2, #4 AS #7, #5
                 Inner Join: #1 = #4
@@ -32,7 +32,7 @@ data:
     Sort: #13 ASC NULLS FIRST
       Projection: #12 AS #13, count(Int64(1)) AS count AS #14, sum(#10) AS s1 AS #15, sum(#11) AS s2 AS #16
         Aggregate: groupBy=[[#12]], aggr=[[count(Int64(1)), sum(#10), sum(#11)]]
-          Projection: #8 AS #9, #2 AS #10, #5 AS #11, #8 % CAST(CASE WHEN Int32(4) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(4) END AS Int64) AS #12
+          Projection: #8 AS #9, #2 AS #10, #5 AS #11, #8 % CAST(CASE WHEN Int32(4) = Int32(0) THEN CAST(raise_error(Utf8("[REMAINDER_BY_ZERO] Remainder by zero.")) AS Int32) ELSE Int32(4) END AS Int64) AS #12
             Projection: #8, #2, #5
               Projection: #1 AS #8, #1 AS #6, #2, #4 AS #7, #5
                 Inner Join: #1 = #4
