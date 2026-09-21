@@ -11,6 +11,7 @@ mod session;
 pub mod session_manager;
 mod streaming;
 
+pub use error::{SparkError, SparkResult};
 pub use proto::data_type_json::JsonDataType;
 
 pub mod spark {
