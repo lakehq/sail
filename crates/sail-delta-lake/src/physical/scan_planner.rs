@@ -407,8 +407,20 @@ fn build_eager_adds_input(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let partition_count = target_partitions.max(1).min(adds.len().max(1));
     let mut actions = vec![Vec::new(); partition_count];
-    for (index, add) in adds.iter().cloned().enumerate() {
-        actions[index % partition_count].push(Action::Add(add));
+    let mut queue = (0..partition_count)
+        .map(|partition| std::cmp::Reverse((0u64, partition)))
+        .collect::<std::collections::BinaryHeap<_>>();
+    let mut files = adds.iter().collect::<Vec<_>>();
+    files.sort_by_key(|add| std::cmp::Reverse(add.size));
+    for add in files {
+        let Some(std::cmp::Reverse((bytes, partition))) = queue.pop() else {
+            return Err(DataFusionError::Internal(
+                "Delta scan has no file partitions".into(),
+            ));
+        };
+        let cost = (add.size.max(0) as u64).saturating_add(4 * 1024 * 1024);
+        actions[partition].push(Action::Add(add.clone()));
+        queue.push(std::cmp::Reverse((bytes.saturating_add(cost), partition)));
     }
     const EAGER_ADD_BATCH_FILES: usize = 1024;
     let partitions = actions

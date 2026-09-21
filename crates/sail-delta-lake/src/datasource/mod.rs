@@ -35,6 +35,7 @@ pub const COMMIT_VERSION_COLUMN: &str = "_commit_version";
 pub const COMMIT_TIMESTAMP_COLUMN: &str = "_commit_timestamp";
 
 pub mod actions;
+pub(crate) mod deletion_vector;
 pub mod expressions;
 pub mod pruning;
 pub mod scan;
@@ -239,6 +240,7 @@ impl DeltaScanConfigBuilder {
         Ok(DeltaScanConfig {
             file_column_name,
             row_index_column_name: None,
+            hash_partition_files: false,
             wrap_partition_values: self.wrap_partition_values,
             enable_parquet_pushdown: self.enable_parquet_pushdown,
             schema: self.schema.clone(),
@@ -256,6 +258,8 @@ pub struct DeltaScanConfig {
     pub file_column_name: Option<String>,
     /// Include the file-local row index for each record.
     pub row_index_column_name: Option<String>,
+    /// Require file metadata to be hash partitioned by its decoded path before scanning.
+    pub hash_partition_files: bool,
     /// Wrap partition values in a dictionary encoding
     pub wrap_partition_values: bool,
     /// Allow pushdown of the scan filter
