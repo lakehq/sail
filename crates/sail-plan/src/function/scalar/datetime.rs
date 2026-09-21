@@ -982,6 +982,11 @@ fn make_timestamp(input: ScalarFunctionInput, is_try: bool) -> PlanResult<Expr> 
     }
 }
 
+fn make_ym_interval(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ansi_mode = input.function_context.plan_config.ansi_mode;
+    Ok(ScalarUDF::from(SparkMakeYmInterval::new(ansi_mode)).call(input.arguments))
+}
+
 fn date_part(part: Expr, date: Expr) -> Expr {
     ScalarUDF::from(SparkDatePart::new()).call(vec![part, date])
 }
@@ -1332,7 +1337,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             "make_timestamp_ntz",
             F::custom(|input| make_timestamp_ntz(input.arguments, false)),
         ),
-        ("make_ym_interval", F::udf(SparkMakeYmInterval::new())),
+        ("make_ym_interval", F::custom(make_ym_interval)),
         ("minute", F::unary(|arg| integer_part(arg, "MINUTE"))),
         ("month", F::unary(|arg| integer_part(arg, "MONTH"))),
         (

@@ -85,7 +85,7 @@ fn parse_string_values<'a>(values: impl Iterator<Item = Option<&'a str>>) -> Int
         .collect()
 }
 
-fn parse_spark_legacy_string_to_i32(value: &str) -> Option<i32> {
+pub(crate) fn parse_spark_legacy_string_to_i32(value: &str) -> Option<i32> {
     let bytes = value.as_bytes();
     let mut offset = 0;
     while offset < bytes.len() && is_spark_trim_byte(bytes[offset]) {

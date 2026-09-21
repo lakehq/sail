@@ -2,11 +2,13 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{DFSchema, DFSchemaRef};
+use datafusion_common::{DFSchema, DFSchemaRef, ScalarValue};
 use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Projection, cast};
 use sail_common::spec;
+use sail_common_datafusion::interval::IntervalRange;
 
 use crate::error::{PlanError, PlanResult};
+use crate::function::interval::with_interval_range;
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
@@ -25,6 +27,7 @@ impl PlanResolver<'_> {
             }
             let _nan_column_indices = Self::resolve_values_nan_types(&mut results, &schema)?;
             let _map_column_indices = Self::resolve_values_map_types(&mut results, &schema)?;
+            Self::resolve_values_interval_ranges(&mut results, &schema)?;
             Ok::<_, PlanError>(results)
         }
         .await?;
@@ -42,6 +45,55 @@ impl PlanResolver<'_> {
             expr,
             Arc::new(plan),
         )?))
+    }
+
+    /// An interval literal carries its Spark range in its field metadata, and DataFusion requires
+    /// the rows of a VALUES column to agree on it. A column whose rows disagree -- a NULL beside an
+    /// interval, or intervals of different ranges -- takes the range that covers them all.
+    fn resolve_values_interval_ranges(
+        values: &mut [Vec<Expr>],
+        schema: &DFSchemaRef,
+    ) -> PlanResult<()> {
+        let Some(n_cols) = values.first().map(|row| row.len()) else {
+            return Ok(());
+        };
+        for j in 0..n_cols {
+            let mut fields = Vec::with_capacity(values.len());
+            for row in values.iter() {
+                fields.push(row[j].to_field(schema)?.1);
+            }
+            if fields
+                .windows(2)
+                .all(|w| w[0].metadata() == w[1].metadata())
+            {
+                continue;
+            }
+            let ranges = fields
+                .iter()
+                .filter(|f| {
+                    f.metadata()
+                        .contains_key(spec::SAIL_SPARK_INTERVAL_METADATA_KEY)
+                })
+                .filter_map(|f| IntervalRange::from_field(f).map(|r| (r, f.data_type().clone())))
+                .collect::<Vec<_>>();
+            let Some((first, data_type)) = ranges.first().cloned() else {
+                continue;
+            };
+            if ranges.iter().any(|(_, t)| t != &data_type) {
+                continue;
+            }
+            let range = ranges.iter().fold(first, |acc, (r, _)| acc.widen(*r));
+            for row in values.iter_mut() {
+                let value = std::mem::replace(&mut row[j], Expr::Literal(ScalarValue::Null, None));
+                let value = if value.get_type(schema)? == DataType::Null {
+                    cast(value, data_type.clone())
+                } else {
+                    value
+                };
+                row[j] = with_interval_range(value, range, schema)?;
+            }
+        }
+        Ok(())
     }
 
     fn resolve_values_nan_types(

@@ -4,8 +4,10 @@ use arrow::array::timezone::Tz;
 use arrow::datatypes::Date32Type;
 use chrono::{NaiveTime, Timelike};
 use datafusion_expr::expr;
+use datafusion_expr::expr::FieldMetadata;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::interval::IntervalRange;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 use sail_sql_analyzer::parser::{parse_date, parse_time, parse_timestamp};
@@ -13,7 +15,6 @@ use sail_sql_analyzer::parser::{parse_date, parse_time, parse_timestamp};
 use crate::config::DefaultTimestampType;
 use crate::error::PlanResult;
 use crate::resolver::PlanResolver;
-use crate::resolver::data_type::interval_field_metadata;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 
@@ -24,28 +25,39 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         // The interval fields are part of the Spark type but not of the Arrow type, so they are
-        // carried in the field metadata of the projected column.
-        let metadata = match &literal {
+        // carried in the field metadata of the literal itself.
+        let range = match &literal {
             spec::Literal::IntervalYearMonth {
                 months: _,
                 start_field,
                 end_field,
-            }
-            | spec::Literal::DurationMicrosecond {
+            } => IntervalRange::from_declared(
+                spec::IntervalUnit::YearMonth,
+                *start_field,
+                *end_field,
+            ),
+            spec::Literal::DurationMicrosecond {
                 microseconds: _,
                 start_field,
                 end_field,
-            } => interval_field_metadata(*start_field, *end_field)?
-                .map(|x| vec![(spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(), x)])
-                .unwrap_or_default(),
-            _ => vec![],
+            } => {
+                IntervalRange::from_declared(spec::IntervalUnit::DayTime, *start_field, *end_field)
+            }
+            _ => None,
         };
+        let metadata = range
+            .map(|x| x.to_metadata())
+            .transpose()?
+            .map(FieldMetadata::from);
         let literal = self.resolve_literal(literal, state)?;
         let service = self.ctx.extension::<PlanService>()?;
         let name = service
             .plan_formatter()
             .literal_to_string(&literal, &self.config.session_timezone)?;
-        Ok(NamedExpr::new(vec![name], expr::Expr::Literal(literal, None)).with_metadata(metadata))
+        Ok(NamedExpr::new(
+            vec![name],
+            expr::Expr::Literal(literal, metadata),
+        ))
     }
 
     pub(super) fn resolve_expression_date(

@@ -33,6 +33,7 @@ use crate::formatter::{
     Time64NanosecondFormatter, TimestampMicrosecondFormatter, TimestampMillisecondFormatter,
     TimestampNanosecondFormatter, TimestampSecondFormatter,
 };
+use crate::interval::{DayTimeIntervalFormatter, IntervalRange, YearMonthIntervalFormatter};
 use crate::variant::is_marked_variant_storage_type;
 
 /// Format for displaying datetime values
@@ -80,6 +81,8 @@ pub struct FormatOptions<'a> {
     time_format: TimeFormat<'a>,
     /// Duration format
     duration_format: DurationFormat,
+    /// The Spark interval range of the formatted interval array, when it is known
+    interval_range: Option<IntervalRange>,
 }
 
 impl Default for FormatOptions<'_> {
@@ -99,6 +102,7 @@ impl<'a> FormatOptions<'a> {
             timestamp_tz_format: TimeFormat::Spark,
             time_format: TimeFormat::Spark,
             duration_format: DurationFormat::Spark,
+            interval_range: None,
         }
     }
 
@@ -158,6 +162,14 @@ impl<'a> FormatOptions<'a> {
     pub const fn with_duration_format(self, duration_format: DurationFormat) -> Self {
         Self {
             duration_format,
+            ..self
+        }
+    }
+    /// Writes a day-time or year-month interval array with the fields of its Spark range.
+    /// Without a range, the default range of the interval type is written.
+    pub const fn with_interval_range(self, interval_range: Option<IntervalRange>) -> Self {
+        Self {
+            interval_range,
             ..self
         }
     }
@@ -730,20 +742,44 @@ duration_display!(
     duration_ms_to_maybe_duration,
     DurationMillisecondFormatter,
 );
-duration_display!(
-    DurationMicrosecondType,
-    duration_us_to_duration,
-    DurationMicrosecondFormatter,
-);
+impl<'a> DisplayIndexState<'a> for &'a PrimitiveArray<DurationMicrosecondType> {
+    type State = (DurationFormat, Option<IntervalRange>);
+
+    fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
+        Ok((options.duration_format, options.interval_range))
+    }
+
+    fn write(&self, state: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
+        let v = self.value(idx);
+        match state {
+            (DurationFormat::Iso8601, _) => write!(f, "{}", duration_us_to_duration(v))?,
+            (DurationFormat::Spark, None) => write!(f, "{}", DurationMicrosecondFormatter(v))?,
+            (DurationFormat::Spark, Some(range)) => {
+                write!(f, "{}", DayTimeIntervalFormatter(v, *range))?
+            }
+        }
+        Ok(())
+    }
+}
 duration_display!(
     DurationNanosecondType,
     duration_ns_to_duration,
     DurationNanosecondFormatter,
 );
 
-impl DisplayIndex for &PrimitiveArray<IntervalYearMonthType> {
-    fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
-        write!(f, "{}", IntervalYearMonthFormatter(self.value(idx),))?;
+impl<'a> DisplayIndexState<'a> for &'a PrimitiveArray<IntervalYearMonthType> {
+    type State = Option<IntervalRange>;
+
+    fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
+        Ok(options.interval_range)
+    }
+
+    fn write(&self, state: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
+        let v = self.value(idx);
+        match state {
+            None => write!(f, "{}", IntervalYearMonthFormatter(v))?,
+            Some(range) => write!(f, "{}", YearMonthIntervalFormatter(v, *range))?,
+        }
         Ok(())
     }
 }

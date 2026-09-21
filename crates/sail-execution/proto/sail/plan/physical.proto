@@ -231,6 +231,8 @@ message ExtendedScalarUdf {
     SparkMapFromEntriesUdf spark_map_from_entries = 38;
     StrToMapUdf str_to_map = 39;
     SparkSequenceUdf spark_sequence = 40;
+    // 41 and 42 are left for the calendar interval scaling UDFs of `poc/aritmetic_reject`.
+    SparkMakeYmIntervalUdf spark_make_ym_interval = 43;
   }
 }
 
@@ -380,6 +382,10 @@ message SparkWindowBucketsUdf {
 }
 
 message SparkAbsUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkMakeYmIntervalUdf {
   bool ansi_mode = 1;
 }
 

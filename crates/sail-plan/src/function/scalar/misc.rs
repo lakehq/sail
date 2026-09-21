@@ -8,6 +8,7 @@ use datafusion_spark::function::bitmap::expr_fn as bitmap_fn;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::interval::IntervalRange;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::misc::hll_sketch::{HllSketchEstimateFunction, HllUnionFunction};
@@ -96,13 +97,17 @@ fn type_of(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         function_context,
     } = input;
     let expr = arguments.one()?;
-    let data_type = expr.get_type(function_context.schema)?;
+    let (_, field) = expr.to_field(function_context.schema)?;
+    // The range of an interval lives in the field metadata, not in the Arrow type.
+    if let Some(range) = IntervalRange::from_field(&field) {
+        return Ok(lit(range.type_name()));
+    }
     let service = function_context
         .session_context
         .extension::<PlanService>()?;
     let type_of = service
         .plan_formatter()
-        .data_type_to_simple_string(&data_type)?;
+        .data_type_to_simple_string(field.data_type())?;
     Ok(lit(type_of))
 }
 

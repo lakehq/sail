@@ -3067,6 +3067,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkAbs(r#gen::SparkAbsUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkAbs::new(ansi_mode))));
             }
+            UdfKind::SparkMakeYmInterval(r#gen::SparkMakeYmIntervalUdf { ansi_mode }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkMakeYmInterval::new(
+                    ansi_mode,
+                ))));
+            }
             UdfKind::SparkBin(r#gen::SparkBinUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkBin::new(ansi_mode))));
             }
@@ -3239,9 +3244,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_make_interval" | "make_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeInterval::new())))
             }
-            "spark_make_ym_interval" | "make_ym_interval" => {
-                Ok(Arc::new(ScalarUDF::from(SparkMakeYmInterval::new())))
-            }
             "spark_make_time" | "make_time" => Ok(Arc::new(ScalarUDF::from(SparkMakeTime::new()))),
             "date_trunc" => Ok(Arc::new(ScalarUDF::from(SparkDateTrunc::new()))),
             "spark_time_diff" | "time_diff" => Ok(Arc::new(ScalarUDF::from(SparkTimeDiff::new()))),
@@ -3384,7 +3386,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkMakeTime>()
             || node_inner.is::<SparkTimeDiff>()
             || node_inner.is::<SparkTimeTrunc>()
-            || node_inner.is::<SparkMakeYmInterval>()
             || node_inner.is::<SparkMask>()
             || node_inner.is::<SparkConcatWs>()
             || node_inner.is::<SparkMurmur3Hash>()
@@ -3592,6 +3593,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<SparkAbs>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkAbs(r#gen::SparkAbsUdf { ansi_mode })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkMakeYmInterval>() {
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkMakeYmInterval(r#gen::SparkMakeYmIntervalUdf { ansi_mode })
         } else if let Some(func) = node.inner().downcast_ref::<SparkBin>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkBin(r#gen::SparkBinUdf { ansi_mode })

@@ -11,6 +11,7 @@ use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use educe::Educe;
 use sail_common::utils::string::escape_meta_characters;
 use sail_common_datafusion::display::{ArrayFormatter, FormatOptions};
+use sail_common_datafusion::interval::IntervalRange;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 fn truncate_string(s: &str, n: usize) -> String {
@@ -60,11 +61,16 @@ impl ShowStringFormat {
     }
 
     fn get_formatters<'a>(&'a self, batch: &'a RecordBatch) -> Result<Vec<ArrayFormatter<'a>>> {
-        let options = FormatOptions::default();
+        let schema = batch.schema_ref();
         Ok(batch
             .columns()
             .iter()
-            .map(|c| ArrayFormatter::try_new(c.as_ref(), &options))
+            .zip(schema.fields())
+            .map(|(c, f)| {
+                let options =
+                    FormatOptions::default().with_interval_range(IntervalRange::from_field(f));
+                ArrayFormatter::try_new(c.as_ref(), &options)
+            })
             .collect::<std::result::Result<Vec<_>, _>>()?)
     }
 

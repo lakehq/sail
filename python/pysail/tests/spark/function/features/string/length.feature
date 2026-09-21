@@ -245,7 +245,6 @@ Feature: length() returns character length for strings and byte length for binar
         | big | small |
         | 6   | 6     |
 
-    @sail-bug
     Scenario: an interval is measured as Spark renders it
       When query
         """

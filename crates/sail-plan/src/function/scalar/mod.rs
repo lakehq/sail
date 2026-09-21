@@ -11,6 +11,7 @@ mod csv;
 mod datetime;
 mod geo;
 mod hash;
+mod interval_arithmetic;
 mod json;
 mod lambda;
 mod map;

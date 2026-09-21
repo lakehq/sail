@@ -188,7 +188,6 @@ Feature: Leading and trailing fields of the interval types
         | to minute         | 1 02:03:04  | MINUTE | 1 day, 2:03:00    |
         | negative to hour  | -1 02:03:04 | HOUR   | -2 days, 22:00:00 |
 
-    @sail-bug
     Scenario Outline: Cast truncates a year-month value: <case>
       When query
         """
@@ -203,6 +202,24 @@ Feature: Leading and trailing fields of the interval types
         | to year          | 10-8  | YEAR  | INTERVAL '10' YEAR  |
         | negative to year | -10-8 | YEAR  | INTERVAL '-10' YEAR |
         | to month         | 10-8  | MONTH | INTERVAL '128' MONTH |
+
+    # The rendering above cannot tell a truncated value from an untruncated one: 128 months is also
+    # written '10' YEAR. Reading the value back, comparing it and adding to it can.
+    Scenario Outline: Cast to a year interval drops the months: <case>
+      When query
+        """
+        SELECT <expression> AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case               | expression                                                                            | result                         |
+        | read back          | CAST(CAST(INTERVAL '10-8' YEAR TO MONTH AS INTERVAL YEAR) AS INTERVAL YEAR TO MONTH)  | INTERVAL '10-0' YEAR TO MONTH  |
+        | negative read back | CAST(CAST(INTERVAL '-10-8' YEAR TO MONTH AS INTERVAL YEAR) AS INTERVAL YEAR TO MONTH) | INTERVAL '-10-0' YEAR TO MONTH |
+        | compared           | CAST(INTERVAL '10-8' YEAR TO MONTH AS INTERVAL YEAR) = INTERVAL '10' YEAR             | true                           |
+        | plus a month       | CAST(INTERVAL '10-8' YEAR TO MONTH AS INTERVAL YEAR) + INTERVAL '1' MONTH             | INTERVAL '10-1' YEAR TO MONTH  |
 
   @function(nullability)
   Rule: A multi-unit interval takes its family from the units written, not from its value
@@ -260,7 +277,6 @@ Feature: Leading and trailing fields of the interval types
   @function(nullability)
   Rule: The interval qualifier survives the expressions that produce interval values
 
-    @sail-bug
     Scenario Outline: Qualifier of a derived interval: <case>
       When query
         """
@@ -273,14 +289,31 @@ Feature: Leading and trailing fields of the interval types
         """
 
       Examples:
-        | case             | expr                                                            | fields      |
-        | negate year      | -INTERVAL '1' YEAR                                              | year        |
-        | negate hour      | -INTERVAL '3' HOUR                                              | hour        |
-        | add same year    | INTERVAL '1' YEAR + INTERVAL '2' YEAR                           | year        |
-        | add day and hour | INTERVAL '1' DAY + INTERVAL '2' HOUR                            | day to hour |
-        | coalesce hour    | coalesce(INTERVAL '3' HOUR)                                     | hour        |
-        | case when hour   | CASE WHEN true THEN INTERVAL '3' HOUR ELSE INTERVAL '4' HOUR END | hour        |
-        | explode month    | explode(array(INTERVAL '1' MONTH))                              | month       |
+        | case             | expr                                  | fields      |
+        | negate year      | -INTERVAL '1' YEAR                    | year        |
+        | negate hour      | -INTERVAL '3' HOUR                    | hour        |
+        | add same year    | INTERVAL '1' YEAR + INTERVAL '2' YEAR | year        |
+        | add day and hour | INTERVAL '1' DAY + INTERVAL '2' HOUR  | day to hour |
+
+    # A generic expression (`coalesce`, `CASE`, a generator) builds its result field anew, so the
+    # range of its input does not reach it yet.
+    @sail-bug
+    Scenario Outline: Qualifier of an interval through a generic expression: <case>
+      When query
+        """
+        SELECT <expr> AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: interval <fields> (nullable = false)
+        """
+
+      Examples:
+        | case           | expr                                                             | fields |
+        | coalesce hour  | coalesce(INTERVAL '3' HOUR)                                      | hour   |
+        | case when hour | CASE WHEN true THEN INTERVAL '3' HOUR ELSE INTERVAL '4' HOUR END | hour   |
+        | explode month  | explode(array(INTERVAL '1' MONTH))                               | month  |
 
     Scenario: Adding a month and a year interval widens to year to month
       When query
@@ -293,7 +326,6 @@ Feature: Leading and trailing fields of the interval types
          |-- result: interval year to month (nullable = false)
         """
 
-    @sail-bug
     Scenario Outline: Qualifier of an interval column: <case>
       When query
         """
@@ -375,7 +407,6 @@ Feature: Leading and trailing fields of the interval types
 
   Rule: An interval renders with the fields it is declared with
 
-    @sail-bug
     Scenario Outline: Rendering of a single-field interval: <case>
       When query
         """

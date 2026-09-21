@@ -8,6 +8,7 @@ use datafusion::common::Result;
 use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr::ScalarFunctionArgs;
 use sail_common_datafusion::display::{ArrayFormatter, FormatOptions};
+use sail_common_datafusion::interval::IntervalRange;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 macro_rules! define_to_string_udf {
@@ -47,10 +48,18 @@ macro_rules! define_to_string_udf {
             }
 
             fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-                let ScalarFunctionArgs { args, .. } = args;
+                let ScalarFunctionArgs {
+                    args, arg_fields, ..
+                } = args;
+                // An interval is written with the fields of its Spark range, which only the
+                // argument field carries.
+                let interval_range = arg_fields
+                    .first()
+                    .and_then(|f| IntervalRange::from_field(f));
+                let options = self.options.clone().with_interval_range(interval_range);
                 let args = ColumnarValue::values_to_arrays(&args)?;
                 let arg = args.one()?;
-                let array = $func(&arg, &self.options)?;
+                let array = $func(&arg, &options)?;
                 Ok(ColumnarValue::Array(array))
             }
         }
