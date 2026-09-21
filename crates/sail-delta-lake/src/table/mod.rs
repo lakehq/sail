@@ -789,6 +789,7 @@ async fn load_delta_read_state(
     let scan_config = DeltaScanConfig {
         file_column_name: None,
         row_index_column_name: None,
+        hash_partition_files: false,
         wrap_partition_values: false,
         enable_parquet_pushdown: true,
         schema: match schema {
