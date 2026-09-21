@@ -513,3 +513,102 @@ def test_dataframe_negation_of_a_udt_is_rejected(spark, ansi_enabled):
             df.select(-F.col("a")).collect()
     finally:
         spark.conf.set("spark.sql.ansi.enabled", previous)
+
+
+@pytest.fixture
+def udt_scalar_view(spark):
+    # A UDT stored as a DOUBLE is a numeric by its Arrow type, so only its identity keeps it out of
+    # arithmetic -- a STRUCT-backed UDT would be refused by its storage alone and prove nothing.
+    schema = StructType().add("a", DoubleStoragePythonUDT())
+    spark.createDataFrame(data=[], schema=schema).createOrReplaceTempView("udt_scalar")
+    return "udt_scalar"
+
+
+# TODO: the arithmetic guards recognise a UDT operand by a hand-written list of expression shapes
+#   that return their input (`operand_udt_field` in `function/scalar/math.rs`). A value that crosses
+#   a projection boundary -- a scalar subquery, a generator -- reaches the guard as a column whose
+#   field no longer carries `SAIL::spark::udt`, so a DOUBLE storage is a numeric and Sail computes
+#   where Spark refuses (`Expression.scala:840`, `DATATYPE_MISMATCH`). Closing this needs the UDT
+#   identity to travel in the output field of the subquery and the generator, not another shape.
+@pytest.mark.xfail(
+    not is_jvm_spark(),
+    strict=True,
+    reason="a UDT a scalar subquery returns is its storage type",
+)
+@pytest.mark.parametrize(
+    "form",
+    [
+        pytest.param("(SELECT max(a) FROM udt_scalar) + 1", id="scalar_subquery"),
+    ],
+)
+def test_udt_through_an_unrecognised_shape_is_refused(spark, udt_scalar_view, form):
+    with pytest.raises(AnalysisException, match=r"(?i)cannot resolve"):
+        _ = spark.sql(f"SELECT {form} FROM {udt_scalar_view}").schema  # noqa: S608
+
+
+@pytest.mark.xfail(
+    not is_jvm_spark(),
+    strict=True,
+    reason="a UDT a generator produces is its storage type",
+)
+@pytest.mark.parametrize("generator", ["explode", "posexplode"])
+def test_udt_from_a_generator_is_refused(spark, udt_scalar_view, generator):
+    column = "e" if generator == "explode" else "col"
+    alias = " AS e" if generator == "explode" else ""
+    with pytest.raises(AnalysisException, match=r"(?i)cannot resolve"):
+        _ = spark.sql(
+            f"SELECT {column} + 1 FROM (SELECT {generator}(array(a)){alias} FROM {udt_scalar_view})"  # noqa: S608
+        ).schema
+
+
+# The shapes the guard does recognise: kept green so a change to the list cannot drop one silently.
+@pytest.mark.parametrize(
+    "form",
+    [
+        pytest.param("transform(array(a), x -> x)[0] + 1", id="transform"),
+        pytest.param("element_at(array(a), 1) + 1", id="element_at"),
+        pytest.param("greatest(a, a) + 1", id="greatest"),
+        pytest.param("nullif(a, a) + 1", id="nullif"),
+        pytest.param("lag(a) OVER (ORDER BY a) + 1", id="lag"),
+        pytest.param("collect_list(a)[0] + 1", id="collect_list"),
+        pytest.param("abs(a) + 1", id="abs"),
+        pytest.param("slice(array(a), 1, 1)[0] + 1", id="slice"),
+        pytest.param("-slice(array(a), 1, 1)[0]", id="slice-unary-minus"),
+        pytest.param("reverse(array(a))[0] * 2", id="reverse"),
+        pytest.param("element_at(reverse(array(a)), 1) + 1", id="reverse-element_at"),
+        pytest.param("sort_array(array(a))[0] + 1", id="sort_array"),
+        pytest.param("array_sort(array(a))[0] + 1", id="array_sort"),
+        pytest.param("flatten(array(array(a)))[0] + 1", id="flatten"),
+        pytest.param("concat(array(a), array(a))[0] + 1", id="concat"),
+        pytest.param("array_distinct(array(a))[0] + 1", id="array_distinct"),
+        pytest.param("filter(array(a), x -> true)[0] + 1", id="filter"),
+        pytest.param("map_values(map('k', a))[0] + 1", id="map_values"),
+        pytest.param("map('k', a)['k'] + 1", id="map-index"),
+        pytest.param("element_at(map('k', a), 'k') + 1", id="map-element_at"),
+    ],
+)
+def test_udt_through_a_recognised_shape_is_refused(spark, udt_scalar_view, form):
+    with pytest.raises(AnalysisException, match=r"(?i)cannot resolve"):
+        _ = spark.sql(f"SELECT {form} FROM {udt_scalar_view}").schema  # noqa: S608
+
+
+# The same shapes over a plain DOUBLE stay operands, so recognising them cannot refuse more than Spark.
+@pytest.mark.parametrize(
+    "form",
+    [
+        pytest.param("abs(-1.0D) + 1", id="abs"),
+        pytest.param("slice(array(1.0D), 1, 1)[0] + 1", id="slice"),
+        pytest.param("reverse(array(1.0D))[0] * 2", id="reverse"),
+        pytest.param("sort_array(array(1.0D))[0] + 1", id="sort_array"),
+        pytest.param("array_sort(array(1.0D))[0] + 1", id="array_sort"),
+        pytest.param("flatten(array(array(1.0D)))[0] + 1", id="flatten"),
+        pytest.param("concat(array(1.0D), array(2.0D))[0] + 1", id="concat"),
+        pytest.param("array_distinct(array(1.0D))[0] + 1", id="array_distinct"),
+        pytest.param("filter(array(1.0D), x -> true)[0] + 1", id="filter"),
+        pytest.param("map_values(map('k', 1.0D))[0] + 1", id="map_values"),
+        pytest.param("map('k', 1.0D)['k'] + 1", id="map-index"),
+        pytest.param("element_at(map('k', 1.0D), 'k') + 1", id="map-element_at"),
+    ],
+)
+def test_plain_double_through_a_recognised_shape_resolves(spark, udt_scalar_view, form):
+    assert spark.sql(f"SELECT {form} AS r FROM {udt_scalar_view}").collect() == []  # noqa: S608

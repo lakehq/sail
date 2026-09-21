@@ -46,3 +46,23 @@ Feature: the common type of the branches of a CASE or an IF
       Then query result
         | kept |
         | true |
+
+  Rule: branches with no common type are refused
+
+    # TODO: `CaseWhenCoercion` finds no wider type for an INT beside a DATE or an ARRAY, so Spark
+    #  refuses with `DATA_DIFF_TYPES` (`TypeCoercion.scala`). Sail resolves the expression and types
+    #  it by its first branch. The numeric widening this PR added does not reach these pairs, which
+    #  have no numeric common type; they need the rest of `findWiderCommonType`.
+    @sail-bug
+    Scenario Outline: <case> is refused
+      When query
+        """
+        SELECT <expression> AS v
+        """
+      Then query error (?i)cannot resolve
+
+      Examples:
+        | case                       | expression                                        |
+        | a CASE of an INT and a DATE | CASE WHEN true THEN 1 ELSE DATE'2024-01-01' END  |
+        | a CASE of an INT and an ARRAY | CASE WHEN true THEN 1 ELSE array(1) END        |
+        | an IF of an INT and a DATE  | if(true, 1, DATE'2024-01-01')                     |

@@ -1829,6 +1829,11 @@ fn operand_udt_field(expr: &Expr, schema: &DFSchemaRef) -> Option<FieldRef> {
                 .args
                 .first()
                 .and_then(|arg| operand_udt_field(arg, schema)),
+            // `abs(a)` keeps the type of `a`.
+            "spark_abs" => function
+                .args
+                .first()
+                .and_then(|arg| operand_udt_field(arg, schema)),
             // `named_struct('x', a).x` is `a`.
             "get_field" => struct_field_udt_field(&function.args, schema),
             // `explode(arr)` yields the array's elements, and `explode(map)` is not a UDT operand.
@@ -1839,6 +1844,82 @@ fn operand_udt_field(expr: &Expr, schema: &DFSchemaRef) -> Option<FieldRef> {
             _ => None,
         },
         _ => None,
+    }
+}
+
+/// The UDT element field of the arrays an array holds, for `flatten`.
+fn nested_collection_element_udt_field(
+    collection: &Expr,
+    schema: &DFSchemaRef,
+) -> Option<FieldRef> {
+    match collection {
+        Expr::Cast(cast) if casts_only_nullability(&cast.expr, cast.field.data_type(), schema) => {
+            nested_collection_element_udt_field(&cast.expr, schema)
+        }
+        Expr::ScalarFunction(function)
+            if matches!(function.func.name(), "array" | "make_array" | "spark_array") =>
+        {
+            function
+                .args
+                .iter()
+                .find_map(|array| collection_element_udt_field(array, schema))
+        }
+        _ => match collection.get_type(schema).ok()? {
+            DataType::List(outer) | DataType::LargeList(outer) => match outer.data_type() {
+                DataType::List(inner) | DataType::LargeList(inner) => {
+                    Some(Arc::clone(inner)).filter(|field| is_spark_udt_field(field))
+                }
+                _ => None,
+            },
+            _ => None,
+        },
+    }
+}
+
+/// The UDT value field of a map, looking through `map(...)`, which the resolver builds with
+/// `map_from_arrays` over arrays built in place.
+fn map_value_udt_field(map: &Expr, schema: &DFSchemaRef) -> Option<FieldRef> {
+    match map {
+        Expr::Cast(cast) if casts_only_nullability(&cast.expr, cast.field.data_type(), schema) => {
+            map_value_udt_field(&cast.expr, schema)
+        }
+        Expr::ScalarFunction(function) if function.func.name() == "map_from_arrays" => function
+            .args
+            .get(1)
+            .and_then(|values| collection_element_udt_field(values, schema)),
+        _ => match map.get_type(schema).ok()? {
+            DataType::Map(entries, _) => match entries.data_type() {
+                DataType::Struct(fields) if fields.len() == 2 => {
+                    Some(Arc::clone(&fields[1])).filter(|field| is_spark_udt_field(field))
+                }
+                _ => None,
+            },
+            _ => None,
+        },
+    }
+}
+
+/// Whether casting `expr` to `target` changes nothing but the nullability of nested fields.
+fn casts_only_nullability(expr: &Expr, target: &DataType, schema: &DFSchemaRef) -> bool {
+    expr.get_type(schema)
+        .is_ok_and(|source| same_type_ignoring_nullability(&source, target))
+}
+
+fn same_type_ignoring_nullability(left: &DataType, right: &DataType) -> bool {
+    match (left, right) {
+        (DataType::List(l), DataType::List(r))
+        | (DataType::LargeList(l), DataType::LargeList(r))
+        | (DataType::Map(l, _), DataType::Map(r, _)) => {
+            same_type_ignoring_nullability(l.data_type(), r.data_type())
+        }
+        (DataType::Struct(l), DataType::Struct(r)) => {
+            l.len() == r.len()
+                && l.iter().zip(r.iter()).all(|(l, r)| {
+                    l.name() == r.name()
+                        && same_type_ignoring_nullability(l.data_type(), r.data_type())
+                })
+        }
+        _ => left == right,
     }
 }
 
@@ -1877,6 +1958,58 @@ fn struct_field_udt_field(args: &[Expr], schema: &DFSchemaRef) -> Option<FieldRe
 /// array built in place with `array(...)` does not, so its elements are looked at instead.
 fn collection_element_udt_field(collection: &Expr, schema: &DFSchemaRef) -> Option<FieldRef> {
     match collection {
+        // The resolver wraps some array functions in a cast that only changes nullability, which
+        // drops the element metadata. A user cast of a UDT array never gets here: Spark refuses to
+        // cast a UDT to its storage type (`Cast.canCast`).
+        Expr::Cast(cast) if casts_only_nullability(&cast.expr, cast.field.data_type(), schema) => {
+            return collection_element_udt_field(&cast.expr, schema);
+        }
+        // `flatten` is guarded by a `CASE` that yields it or NULL.
+        Expr::Case(case) => {
+            return case
+                .when_then_expr
+                .iter()
+                .map(|(_, then)| then.as_ref())
+                .chain(case.else_expr.as_deref())
+                .find_map(|branch| collection_element_udt_field(branch, schema));
+        }
+        // The functions that return a subset or a reordering of their input array's elements.
+        Expr::ScalarFunction(function)
+            if matches!(
+                function.func.name(),
+                "array_slice" | "spark_reverse" | "array_sort" | "array_distinct"
+            ) =>
+        {
+            return function
+                .args
+                .first()
+                .and_then(|array| collection_element_udt_field(array, schema));
+        }
+        Expr::ScalarFunction(function) if function.func.name() == "spark_concat" => {
+            return function
+                .args
+                .iter()
+                .find_map(|array| collection_element_udt_field(array, schema));
+        }
+        // `flatten(arr)` yields the elements of the arrays `arr` holds.
+        Expr::ScalarFunction(function) if function.func.name() == "flatten" => {
+            return function
+                .args
+                .first()
+                .and_then(|array| nested_collection_element_udt_field(array, schema));
+        }
+        Expr::ScalarFunction(function) if function.func.name() == "map_values" => {
+            return function
+                .args
+                .first()
+                .and_then(|map| map_value_udt_field(map, schema));
+        }
+        Expr::HigherOrderFunction(function) if function.func.name() == "filter" => {
+            return function
+                .args
+                .first()
+                .and_then(|array| collection_element_udt_field(array, schema));
+        }
         // `collect_list(a)` is an array of `a`, wrapped in `coalesce(..., [])` by the resolver.
         Expr::AggregateFunction(function) if function.func.name() == "array_agg" => {
             return function
@@ -1916,15 +2049,10 @@ fn collection_element_udt_field(collection: &Expr, schema: &DFSchemaRef) -> Opti
     if let Expr::ScalarFunction(function) = collection
         && function.func.name() == "map_extract"
     {
-        return match function.args.first()?.get_type(schema).ok()? {
-            DataType::Map(entries, _) => match entries.data_type() {
-                DataType::Struct(fields) if fields.len() == 2 => {
-                    Some(Arc::clone(&fields[1])).filter(|field| is_spark_udt_field(field))
-                }
-                _ => None,
-            },
-            _ => None,
-        };
+        return function
+            .args
+            .first()
+            .and_then(|map| map_value_udt_field(map, schema));
     }
     match collection.get_type(schema).ok()? {
         DataType::List(field)

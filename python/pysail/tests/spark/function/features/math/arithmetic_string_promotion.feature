@@ -134,7 +134,9 @@ Feature: a STRING operand of arithmetic, vs Spark 4.2.0
     # TODO: when that expression still has its own arguments to cast (`coalesce(NULL, '...')`,
     #   `concat('...', 16)`), the SQL analyzer promotes it to DOUBLE first and refuses the pair, while
     #   the DataFrame API and `element_at` resolve it -- a rule-ordering accident Sail does not model,
-    #   so Sail resolves all of them rather than refuse a query Spark answers.
+    #   so Sail resolves all of them rather than refuse a query Spark answers. `md5('x')` and
+    #   `base64('x')` are the same case: their argument takes an implicit cast to BINARY, while
+    #   `hex('x')` and `upper(...)` take a STRING as it is and resolve in both engines.
     @sail-bug
     Scenario Outline: <operand> minus a date is refused with ANSI off
       Given config spark.sql.ansi.enabled = false
@@ -153,6 +155,8 @@ Feature: a STRING operand of arithmetic, vs Spark 4.2.0
         | if(true, '2024-01-16', NULL)                      |
         | CASE WHEN true THEN NULL ELSE '2024-01-16' END    |
         | nvl2(NULL, '2024-01-16', NULL)                    |
+        | md5('x')                                          |
+        | base64('x')                                       |
         | nullif('2', NULL)                                 |
         | least(NULL, '2024-01-16')                         |
         | greatest('2024-01-16', NULL)                      |

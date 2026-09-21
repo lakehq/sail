@@ -15,13 +15,9 @@ Feature: arithmetic operand pairs Spark resolves (+ - * / %) vs Spark 4.2.0
   # Only a JVM oracle sweep against a pre-4.1 Spark would see the difference; the rows are
   # left ungated because they assert resolution, not the type, and because 4.2 is the target.
   #
-  # Same 28-token alphabet as the rejection file. The 413 `@sail-bug` rows are pairs Spark
-  # resolves and Sail does not; they cannot detect over-rejection (a pair Sail already
-  # rejects cannot become over-rejected) but they inventory the Spark functions Sail has
-  # not implemented, and announce themselves the day one lands. Verified cell by cell:
-  # none is rejected by a plan-time guard, so none is a regression this change introduces.
-  # By cause: string promotion 177 | year-month interval * and / 162 | calendar interval
-  # * and / 38 | untyped NULL with a datetime 18 | TIME +- interval 18.
+  # Same 28-token alphabet as the rejection file. Every pair Spark resolves, Sail resolves
+  # too; the few `@sail-bug` scenarios at the end pin a value or a name, or a pair Sail
+  # accepts and Spark refuses, each with its cause next to it.
 
   Rule: `+` operand pairs that resolve (ANSI off)
 
@@ -2339,10 +2335,10 @@ Feature: arithmetic operand pairs Spark resolves (+ - * / %) vs Spark 4.2.0
         | datediff  | datediff(DATE'2024-01-10', DATE'2024-01-01')  | int |
         | date_diff | date_diff(DATE'2024-01-10', DATE'2024-01-01') | int |
 
-    # `date - date` now yields a day-time interval, the class Spark yields, but Sail has one single
-    # spelling for it: `Duration(Microsecond)` renders as `interval day to second` whatever the
-    # fields were. Carrying the declared field range needs the interval metadata work of
-    # `fix/interval`; until then only the range diverges, not the class.
+    # TODO: Spark's `date - date` is a `DayTimeIntervalType(DAY)` (`datetimeExpressions.scala:3616`).
+    #  Sail answers an INT day count, because an Arrow `Duration` carries no field range and a
+    #  `Duration` is read by seconds downstream (`CAST(date - date AS INT)` would answer 1209600).
+    #  Carrying the range needs the interval metadata work of `fix/interval`.
     @sail-bug
     Scenario: a difference of two dates has Spark's declared field range
       When query

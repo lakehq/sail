@@ -280,3 +280,21 @@ Feature: Set operations (INTERSECT, EXCEPT)
         | v |
         | 1 |
         | 2 |
+
+  Rule: set operations whose columns have no common type are refused
+
+    # TODO: `WidenSetOperationTypes` finds no wider type for an INT beside a DATE or an ARRAY, so
+    #  Spark refuses with `INCOMPATIBLE_COLUMN_TYPE` (`TypeCoercionBase.scala:190-222`). Sail keeps
+    #  the left input's type; the numeric widening this PR added does not reach these pairs.
+    @sail-bug
+    Scenario Outline: a UNION of <case> is refused
+      When query
+        """
+        SELECT <query>
+        """
+      Then query error (?i)INCOMPATIBLE_COLUMN_TYPE|can only be performed
+
+      Examples:
+        | case              | query                                            |
+        | an INT and a DATE  | 1 AS v UNION ALL SELECT DATE'2024-01-01' AS v    |
+        | an INT and an ARRAY | 1 AS v UNION ALL SELECT array(1) AS v          |

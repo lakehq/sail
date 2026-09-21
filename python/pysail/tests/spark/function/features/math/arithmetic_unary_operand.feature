@@ -259,6 +259,17 @@ Feature: unary + and - operand types vs Spark 4.2.0
         | v |
         | 7 |
 
+    # TODO: the same rule holds for GROUP BY (`TryExtractOrdinal.scala:30-34`): a BIGINT literal is a
+    #  constant, so `x` is neither grouped nor aggregated and Spark refuses with
+    #  `MISSING_AGGREGATION`. Sail reads `1L` as the first column and groups by it.
+    @sail-bug
+    Scenario: GROUP BY a BIGINT literal groups by a constant, not by a position
+      When query
+        """
+        SELECT x, count(*) AS c FROM VALUES (1), (2) AS t(x) GROUP BY 1L
+        """
+      Then query error (?i)non-aggregating
+
     Scenario Outline: ORDER BY <position> sorts by a constant, not by a position
       When query
         """

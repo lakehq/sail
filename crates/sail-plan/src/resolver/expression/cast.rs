@@ -26,7 +26,7 @@ use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf
 
 use crate::coercion::{build_rename_target_type, needs_struct_field_rename};
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{is_spark_udt_field, spark_type_name};
+use crate::function::common::is_spark_udt_field;
 use crate::function::is_spark_compatible_arrow_fixed_offset;
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
@@ -222,30 +222,12 @@ impl PlanResolver<'_> {
             (_, DataType::Utf8View, _) if override_string_cast => {
                 ScalarUDF::new_from_impl(SparkToUtf8View::new()).call(vec![expr])
             }
-            // Spark has no cast from a numeric to DATE in either mode (`Cast.scala:223-255` and
-            // `:92-122`), and takes an INTEGRAL to BINARY only in the non-ANSI `canCast`
-            // (`Cast.scala:234`). `TRY_CAST` is governed by `canAnsiCast` whatever the mode, so it
-            // never takes one. Sail casts the underlying integer, which answers a DATE or a BINARY
-            // for a query Spark refuses at analysis.
-            // TODO: Spark picks the `DATATYPE_MISMATCH` subclass per pair -- `CAST_WITH_FUNC_SUGGESTION`
-            //  for a numeric to DATE, `CAST_WITH_CONF_SUGGESTION` for an integral to BINARY under ANSI,
-            //  `CAST_WITHOUT_SUGGESTION` otherwise -- which Sail has no error-class framework to carry.
-            (from, to @ (DataType::Date32 | DataType::Date64), _) if from.is_numeric() => {
-                return Err(PlanError::analysis(format!(
-                    "cannot cast {} to {}",
-                    spark_type_name(&from),
-                    spark_type_name(&to)
-                )));
-            }
-            (from, to @ DataType::Binary, is_try)
-                if from.is_numeric() && (is_try || self.config.ansi_mode || !from.is_integer()) =>
-            {
-                return Err(PlanError::analysis(format!(
-                    "cannot cast {} to {}",
-                    spark_type_name(&from),
-                    spark_type_name(&to)
-                )));
-            }
+            // TODO: Spark has no cast from a numeric to DATE in either mode (`Cast.scala:223-255` and
+            //  `:92-122`), and takes an INTEGRAL to BINARY only in the non-ANSI `canCast`
+            //  (`Cast.scala:234`), never through `TRY_CAST`. Sail casts the underlying integer and
+            //  answers. That is an ACCEPT-more gap, and it is left open on purpose: refusing it broke
+            //  existing users of the cast -- the ClickBench fixture reads `EventDate` with
+            //  `cast("int").cast("date")`. `cast.feature` pins both directions.
             // `castToBoolean` is `value != 0` for every numeric (`Cast.scala:840-847`), and
             // `canAnsiCast` admits the whole family (`Cast.scala:105`). Arrow has no DECIMAL to
             // BOOLEAN kernel, so the comparison is spelled out here rather than refused.
