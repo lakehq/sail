@@ -1,3 +1,6 @@
+# The PySpark 3.5 client renders every interval type as a bare `interval`, without its
+# leading and trailing fields, so these schema assertions only hold from PySpark 4.
+@spark-4
 Feature: Leading and trailing fields of the interval types
 
   @function(nullability)
