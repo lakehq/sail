@@ -193,7 +193,7 @@ Feature: Join reorder propagates selective dimension keys before fact joins
       | 1 | 10    |
       | 1 | 10    |
 
-  Scenario: Reordering removes a generated reduction adjacent to the original dimension join
+  Scenario: Inner joins in the same reorder region as the dimension get no early reduction
     Given statement template
       """
       INSERT OVERWRITE DIRECTORY {{ facts.sql }} USING parquet
@@ -249,6 +249,74 @@ Feature: Join reorder propagates selective dimension keys before fact joins
     Then query result collected
       | total | n  |
       | 20    | 20 |
+
+  Scenario Outline: A semi join that only filters by a scan is not a reduction boundary
+    When query
+      """
+      EXPLAIN
+      SELECT a.ticket
+      FROM early_filter_facts a
+      LEFT SEMI JOIN (
+        SELECT <key> AS k FROM early_filter_dimension WHERE color = 'blue' OR color = 'red'
+      ) s ON a.k = s.k
+      JOIN early_filter_dimension d ON a.k = d.k
+      WHERE d.color = 'red'
+      """
+    Then query plan matches snapshot
+    When query
+      """
+      SELECT SUM(a.amount) AS total, COUNT(*) AS n
+      FROM early_filter_facts a
+      LEFT SEMI JOIN (
+        SELECT <key> AS k FROM early_filter_dimension WHERE color = 'blue' OR color = 'red'
+      ) s ON a.k = s.k
+      JOIN early_filter_dimension d ON a.k = d.k
+      WHERE d.color = 'red'
+      """
+    Then query result collected
+      | total | n  |
+      | 20    | 20 |
+
+    Examples:
+      | key   |
+      | k     |
+      | k + 0 |
+
+  Scenario: Selective keys reach the fact inputs below a semi join filtered by an aggregate
+    When query
+      """
+      EXPLAIN
+      SELECT d.k, f.ticket
+      FROM early_filter_dimension d
+      JOIN (
+        SELECT a.k, a.ticket
+        FROM early_filter_facts a
+        JOIN early_filter_facts b ON a.k = b.k AND a.ticket = b.ticket
+        LEFT SEMI JOIN (
+          SELECT k FROM early_filter_facts GROUP BY k HAVING COUNT(*) > 5
+        ) g ON a.k = g.k
+      ) f ON d.k = f.k
+      WHERE d.color = 'red'
+      """
+    Then query plan matches snapshot
+    When query
+      """
+      SELECT d.k, COUNT(*) AS n
+      FROM early_filter_dimension d
+      JOIN (
+        SELECT a.k, a.ticket
+        FROM early_filter_facts a
+        JOIN early_filter_facts b ON a.k = b.k AND a.ticket = b.ticket
+        LEFT SEMI JOIN (
+          SELECT k FROM early_filter_facts GROUP BY k HAVING COUNT(*) > 5
+        ) g ON a.k = g.k
+      ) f ON d.k = f.k
+      WHERE d.color = 'red'
+      GROUP BY d.k
+      """
+    Then query result collected
+      | k | n  |
+      | 1 | 20 |
 
   Scenario: Early filters propagate through semi joins without multiplying fact rows
     When query
