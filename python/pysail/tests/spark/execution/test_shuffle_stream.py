@@ -64,7 +64,7 @@ def test_shuffle_preserves_rows_across_multiple_batches(spark):
         "empty",
     ],
 )
-def test_shuffle_coalesces_batches_in_channel_order(spark, input_sizes, partitions, completed_sizes):
+def test_shuffle_reader_coalesces_batches_in_channel_order(spark, input_sizes, partitions, completed_sizes):
     def make_batches(batches):
         for _ in batches:
             offset = 0
@@ -97,3 +97,29 @@ def test_shuffle_coalesces_batches_in_channel_order(spark, input_sizes, partitio
             batches.append(ids[offset:])
         expected.append(batches)
     assert sorted(row.batches for row in result) == sorted(expected)
+
+
+@pytest.mark.timeout(30)
+def test_shuffle_reader_coalesces_batches_across_producers(spark):
+    def make_batches(batches):
+        for batch in batches:
+            for producer in batch.column(0).to_pylist():
+                start = producer * 130
+                yield pa.record_batch([pa.array(range(start, start + 130), type=pa.int64())], names=["id"])
+
+    def observe_batches(batches):
+        rows = [batch.column(0).to_pylist() for batch in batches]
+        yield pa.record_batch([pa.array([rows], type=pa.list_(pa.list_(pa.int64())))], names=["batches"])
+
+    result = (
+        spark.range(4, numPartitions=4)
+        .mapInArrow(make_batches, "id long")
+        .repartition(2)
+        .mapInArrow(observe_batches, "batches array<array<long>>")
+        .collect()
+    )
+
+    # Each producer contributes only 65 rows per destination. A 256-row batch
+    # therefore requires combining producers after the reader merges them.
+    assert sorted([len(batch) for batch in row.batches] for row in result) == [[256, 4], [256, 4]]
+    assert sorted(value for row in result for batch in row.batches for value in batch) == list(range(520))
