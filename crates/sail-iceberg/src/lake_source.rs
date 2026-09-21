@@ -63,9 +63,10 @@ use crate::schema_evolution::SchemaEvolver;
 use crate::spec::{FormatVersion, MetadataLog, PartitionSpec, Schema, Snapshot, TableMetadata};
 use crate::table::metadata_loader::{
     encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
-    metadata_file_version_from_path, metadata_location_to_object_path_string, write_version_hint,
+    metadata_file_version_from_path, write_version_hint,
 };
 use crate::table::{Table, find_latest_metadata_file};
+use crate::utils::location_to_object_path;
 use crate::utils::metadata::metadata_files_for_version;
 use crate::utils::partition_transform::{
     catalog_partition_field_from_iceberg, format_partition_expr, format_partition_exprs,
@@ -339,10 +340,7 @@ impl LakeSource for IcebergLakeSource {
             )
             .await?
         };
-        let metadata_location = table_url
-            .join(&bootstrap.metadata_file)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?
-            .to_string();
+        let metadata_location = table_metadata_location(&table_url, &bootstrap.metadata_file)?;
 
         Ok(LakeSourceCreateTableResult {
             properties: vec![(
@@ -516,7 +514,7 @@ pub(crate) async fn plan_iceberg_write(
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let exists_res = match metadata_location.as_deref() {
         Some(location) if catalog_managed_table => {
-            metadata_location_to_object_path_string(location)
+            location_to_object_path(location).map(String::from)
         }
         _ => find_latest_metadata_file(&store, &table_url).await,
     };
@@ -1069,26 +1067,26 @@ pub(crate) fn table_metadata_location(table_url: &Url, metadata_file: &str) -> R
     }
 
     let relative_metadata_file = relative_metadata_file(table_url, metadata_file)?;
-    Ok(table_url
-        .join(&relative_metadata_file)
-        .map_err(|e| DataFusionError::External(Box::new(e)))?
-        .to_string())
+    Ok(format!(
+        "{}{relative_metadata_file}",
+        crate::utils::url_to_location(table_url)?
+    ))
 }
 
-fn relative_metadata_file(table_url: &Url, metadata_file: &str) -> Result<String> {
-    let base_path = crate::utils::url_to_object_path(table_url)?.to_string();
+fn relative_metadata_file<'a>(table_url: &Url, metadata_file: &'a str) -> Result<&'a str> {
+    let base_path = crate::utils::url_to_object_path(table_url)?;
     let metadata_file = metadata_file.trim_start_matches('/');
 
-    if let Some(relative) = strip_path_prefix(metadata_file, &base_path) {
-        return Ok(relative.to_string());
+    if let Some(relative) = strip_path_prefix(metadata_file, base_path.as_ref()) {
+        return Ok(relative);
     }
     if table_url.scheme() == "file"
-        && let Some(base_without_drive) = strip_windows_drive_prefix(&base_path)
+        && let Some(base_without_drive) = strip_windows_drive_prefix(base_path.as_ref())
         && let Some(relative) = strip_path_prefix(metadata_file, base_without_drive)
     {
-        return Ok(relative.to_string());
+        return Ok(relative);
     }
-    Ok(metadata_file.to_string())
+    Ok(metadata_file)
 }
 
 fn strip_path_prefix<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {

@@ -77,7 +77,10 @@ pub(crate) async fn write_delete_parquet_file(
         .put(&path, object_store::PutPayload::from(bytes))
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let delete_file_path = write_location::manifest_file_path(data_url, &relative_path);
+    let delete_file_path = format!(
+        "{}{relative_path}",
+        crate::utils::url_to_location(data_url)?
+    );
 
     DataFileWriter::new(partition_spec_id, delete_file_path, partition)
         .finish_without_bounds(meta)

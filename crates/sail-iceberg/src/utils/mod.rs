@@ -23,6 +23,7 @@ use std::sync::Arc;
 use datafusion::catalog::Session;
 use datafusion::execution::context::TaskContext;
 use datafusion_common::{DataFusionError, Result};
+use object_store::path::Path as ObjectPath;
 use url::Url;
 
 pub const WRITE_RELATIVE_PROP: &str = "sail.iceberg.write_relative_paths";
@@ -44,10 +45,10 @@ impl WritePathMode {
     }
 }
 
-pub fn join_table_uri(table_uri: &str, rel: &str, mode: &WritePathMode) -> String {
+pub fn join_table_location(table_url: &Url, rel: &str, mode: &WritePathMode) -> Result<String> {
     match mode {
-        WritePathMode::Absolute => format!("{}{}", table_uri, rel),
-        WritePathMode::Relative => rel.to_string(),
+        WritePathMode::Absolute => Ok(format!("{}{rel}", url_to_location(table_url)?)),
+        WritePathMode::Relative => Ok(rel.to_string()),
     }
 }
 
@@ -62,40 +63,77 @@ pub fn file_url_from_absolute_path(path: &str) -> Option<Url> {
     windows_drive_path_to_file_url(path)
 }
 
-fn windows_drive_path_to_file_url(path: &str) -> Option<Url> {
+fn is_windows_drive_path(path: &str) -> bool {
     let bytes = path.as_bytes();
-    if bytes.len() < 3
-        || !bytes[0].is_ascii_alphabetic()
-        || bytes[1] != b':'
-        || !matches!(bytes[2], b'/' | b'\\')
-    {
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\')
+}
+
+fn windows_drive_path_to_file_url(path: &str) -> Option<Url> {
+    if !is_windows_drive_path(path) {
         return None;
     }
 
     let path = path.replace('\\', "/");
-    Url::parse(&format!("file:///{path}")).ok()
+    let mut url = Url::parse("file:///").ok()?;
+    url.path_segments_mut().ok()?.extend(path.split('/'));
+    Some(url)
 }
 
-pub fn url_to_object_path(url: &Url) -> Result<object_store::path::Path> {
-    let is_file = url.scheme() == "file";
-    let p = if is_file {
-        if cfg!(windows) {
-            // On Windows, decode percent-encoding and normalize drive-letter file URLs.
-            url.to_file_path()
-                .map(|path| path.to_string_lossy().into_owned())
-                .unwrap_or_else(|_| url.path().to_string())
+/// Resolve a normalized table or writer URL, undoing its URI encoding once.
+pub fn url_to_object_path(url: &Url) -> Result<ObjectPath> {
+    if cfg!(windows)
+        && url.scheme() == "file"
+        && let Ok(path) = url.to_file_path()
+    {
+        return ObjectPath::parse(path.to_string_lossy().replace('\\', "/"))
+            .map_err(|error| DataFusionError::External(Box::new(error)));
+    }
+    ObjectPath::from_url_path(url.path())
+        .map_err(|error| DataFusionError::External(Box::new(error)))
+}
+
+/// Iceberg locations carry physical path characters, including literal percent escapes.
+pub fn location_to_object_path(location: &str) -> Result<ObjectPath> {
+    if let Some(path) = absolute_location_to_object_path(location)? {
+        return Ok(path);
+    }
+    ObjectPath::parse(location.replace('\\', "/"))
+        .map_err(|error| DataFusionError::External(Box::new(error)))
+}
+
+pub(crate) fn absolute_location_to_object_path(location: &str) -> Result<Option<ObjectPath>> {
+    let path = if Path::new(location).is_absolute() || is_windows_drive_path(location) {
+        location
+    } else if let Some((_, path)) = location
+        .split_once(':')
+        .filter(|_| parse_absolute_url(location).is_some())
+    {
+        if let Some(authority_and_path) = path.strip_prefix("//") {
+            authority_and_path
+                .find('/')
+                .map_or("", |start| &authority_and_path[start..])
         } else {
-            // On Unix, keep raw URL path to avoid decoding partition literals like `%3A`.
-            url.path().to_string()
+            path
         }
     } else {
-        url.path().to_string()
+        return Ok(None);
     };
-    // object_store::path::Path requires slash-delimited paths.
-    let p = p.replace('\\', "/");
-    let path_no_leading = p.strip_prefix('/').unwrap_or(&p);
-    object_store::path::Path::parse(path_no_leading)
-        .map_err(|e| DataFusionError::External(Box::new(e)))
+    ObjectPath::parse(path.replace('\\', "/"))
+        .map(Some)
+        .map_err(|error| DataFusionError::External(Box::new(error)))
+}
+
+/// Convert an internal URL to the path representation persisted in Iceberg metadata.
+pub fn url_to_location(url: &Url) -> Result<String> {
+    let path = url_to_object_path(url)?;
+    let mut location = format!("{}/{}", &url[..url::Position::BeforePath], path);
+    if url.path().ends_with('/') && !location.ends_with('/') {
+        location.push('/');
+    }
+    Ok(location)
 }
 
 pub fn get_object_store_from_context(
@@ -118,4 +156,39 @@ pub fn get_object_store_from_session(
         .object_store_registry
         .get_store(table_url)
         .map_err(|e| DataFusionError::External(Box::new(e)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalized_urls_and_metadata_locations_resolve_the_same_physical_path()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for scheme in ["file", "s3"] {
+            let authority = if scheme == "file" { "" } else { "bucket" };
+            let url = Url::parse(&format!(
+                "{scheme}://{authority}/C:/table%20%2520+%23%3F%E4%B8%AD/"
+            ))?;
+            let path = ObjectPath::parse("C:/table %20+#?中")?;
+            assert_eq!(url_to_object_path(&url)?, path);
+            let location = url_to_location(&url)?;
+            assert_eq!(
+                location,
+                format!("{scheme}://{authority}/C:/table %20+#?中/")
+            );
+            assert_eq!(location_to_object_path(&location)?, path);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn windows_paths_encode_literal_percent_when_converted_to_urls()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let url = file_url_from_absolute_path("C:\\table %20\\data")
+            .ok_or("expected Windows file URL")?;
+        assert_eq!(url.as_str(), "file:///C:/table%20%2520/data");
+        assert_eq!(url_to_object_path(&url)?.as_ref(), "C:/table %20/data");
+        Ok(())
+    }
 }
