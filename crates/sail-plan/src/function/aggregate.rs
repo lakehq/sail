@@ -27,7 +27,7 @@ use sail_function::aggregate::grouping_id::GroupingIdFunction;
 use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
 use sail_function::aggregate::hll_sketch::{HllSketchAggFunction, HllUnionAggFunction};
 use sail_function::aggregate::kurtosis::KurtosisFunction;
-use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
+use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction, check_max_min_by_k};
 use sail_function::aggregate::mode::ModeFunction;
 use sail_function::aggregate::percentile::PercentileFunction;
 use sail_function::aggregate::percentile_disc::percentile_disc_udaf;
@@ -303,7 +303,46 @@ fn product(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
+/// Rejects what Spark rejects in analysis for `max_by`/`min_by`, before DataFusion sees the call.
+///
+/// `FunctionResolution` rejects `IGNORE NULLS` and `WITHIN GROUP` on functions that do not
+/// support them. `MaxMinByK.checkInputDataTypes` checks the range of `k` in analysis too, so a
+/// grouped query whose groups are all filtered away still fails; DataFusion builds grouped
+/// accumulators lazily and would never reach the accumulator's own check. Only a `k` that is
+/// already a literal is judged here: a foldable expression is still unevaluated, and the
+/// accumulator validates it once the optimizer has folded it.
+pub(crate) fn check_max_min_by_call(
+    function_name: &str,
+    ignore_nulls: Option<bool>,
+    order_by: &[expr::Sort],
+    arguments: &[expr::Expr],
+) -> PlanResult<()> {
+    if ignore_nulls == Some(true) {
+        return Err(PlanError::AnalysisError(format!(
+            "[INVALID_SQL_SYNTAX.FUNCTION_WITH_UNSUPPORTED_SYNTAX] Invalid SQL syntax: The function `{function_name}` does not support IGNORE NULLS."
+        )));
+    }
+    if !order_by.is_empty() {
+        return Err(PlanError::AnalysisError(format!(
+            "[INVALID_SQL_SYNTAX.FUNCTION_WITH_UNSUPPORTED_SYNTAX] Invalid SQL syntax: The function `{function_name}` does not support WITHIN GROUP (ORDER BY ...)."
+        )));
+    }
+    if let Some(expr::Expr::Literal(k, _)) = arguments.get(2)
+        && let Ok(ScalarValue::Int32(k)) = k.cast_to(&DataType::Int32)
+    {
+        check_max_min_by_k(function_name, k)
+            .map_err(|e| PlanError::AnalysisError(e.message().to_string()))?;
+    }
+    Ok(())
+}
+
 fn max_by(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    check_max_min_by_call(
+        "max_by",
+        input.ignore_nulls,
+        &input.order_by,
+        &input.arguments,
+    )?;
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(MaxByFunction::new())),
         params: AggregateFunctionParams {
@@ -317,6 +356,12 @@ fn max_by(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn min_by(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    check_max_min_by_call(
+        "min_by",
+        input.ignore_nulls,
+        &input.order_by,
+        &input.arguments,
+    )?;
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(MinByFunction::new())),
         params: AggregateFunctionParams {

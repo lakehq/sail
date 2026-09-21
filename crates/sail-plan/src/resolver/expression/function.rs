@@ -73,10 +73,19 @@ impl PlanResolver<'_> {
 
         let canonical_function_name = function_name.to_ascii_lowercase();
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
-        if let Some(udf) = catalog_manager.get_function(&canonical_function_name)?
+        let catalog_function = catalog_manager.get_function(&canonical_function_name)?;
+        if let Some(udf) = &catalog_function
             && udf.inner().is::<PySparkUnresolvedUDF>()
         {
             state.config_mut().arrow_allow_large_var_types = true;
+        }
+        // An unknown function keeps reporting itself as unknown rather than as named-argument misuse.
+        if catalog_function.is_none()
+            && kwarg_names.iter().any(Option::is_some)
+            && (get_built_in_function(&canonical_function_name).is_ok()
+                || get_built_in_aggregate_function(&canonical_function_name).is_ok())
+        {
+            check_named_arguments_supported(&canonical_function_name)?;
         }
 
         // For functions that accept a date-part keyword as the first argument
@@ -110,6 +119,8 @@ impl PlanResolver<'_> {
         };
 
         let has_lambda_argument = arguments.iter().any(|x| matches!(x, expr::Expr::Lambda(_)));
+        // Spark names an aggregate with its FILTER clause, e.g. `count(x) FILTER (WHERE (y > 1))`.
+        let mut filter_display_name = None;
 
         // FIXME: `is_user_defined_function` is always false,
         //   so we need to check UDFs before built-in functions.
@@ -174,9 +185,13 @@ impl PlanResolver<'_> {
                         match get_built_in_aggregate_function(&canonical_function_name) {
                             Ok(func) => {
                                 let filter = match filter {
-                                    Some(x) => Some(Box::new(
-                                        self.resolve_expression(*x, schema, state).await?,
-                                    )),
+                                    Some(x) => {
+                                        let NamedExpr { name, expr, .. } = self
+                                            .resolve_named_expression(*x, schema, state)
+                                            .await?;
+                                        filter_display_name = Some(name.one()?);
+                                        Some(Box::new(expr))
+                                    }
                                     None => None,
                                 };
                                 let order_by = match order_by {
@@ -277,6 +292,10 @@ impl PlanResolver<'_> {
             argument_display_names.iter().map(|x| x.as_str()).collect(),
             is_distinct,
         )?;
+        let name = match filter_display_name {
+            Some(filter) => format!("{name} FILTER (WHERE {filter})"),
+            None => name,
+        };
 
         // Extract metadata from UDF if it implements return_field_from_args
         let metadata = if let expr::Expr::ScalarFunction(ScalarFunction {
@@ -532,4 +551,37 @@ fn extract_metadata_from_udf(
             .collect()),
         _ => Ok(vec![]),
     }
+}
+
+/// The built-in functions that declare a `functionSignature` in Spark 4.2 and therefore accept
+/// named arguments (`FunctionRegistry.rearrangeExpressions`).
+const NAMED_ARGUMENT_FUNCTIONS: &[&str] = &[
+    "count_min_sketch",
+    "explode",
+    "explode_outer",
+    "inline",
+    "inline_outer",
+    "mask",
+    "posexplode",
+    "posexplode_outer",
+    "tuple_sketch_agg_double",
+    "tuple_sketch_agg_integer",
+    "tuple_union_agg_double",
+    "tuple_union_agg_integer",
+    "tuple_union_double",
+    "tuple_union_integer",
+    "tuple_union_theta_double",
+    "tuple_union_theta_integer",
+    "variant_explode",
+    "variant_explode_outer",
+];
+
+/// Spark rejects named arguments for every other built-in function in analysis.
+pub(crate) fn check_named_arguments_supported(function_name: &str) -> PlanResult<()> {
+    if NAMED_ARGUMENT_FUNCTIONS.contains(&function_name) {
+        return Ok(());
+    }
+    Err(PlanError::AnalysisError(format!(
+        "[NAMED_PARAMETERS_NOT_SUPPORTED] Named parameters are not supported for function `{function_name}`; please retry the query with positional arguments to the function call instead."
+    )))
 }

@@ -7608,6 +7608,7 @@ dependencies = [
  "datafusion-expr",
  "either",
  "futures",
+ "half",
  "lexical-core",
  "parquet-variant",
  "parquet-variant-compute",
