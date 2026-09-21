@@ -7,8 +7,13 @@ use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
 
+use crate::coercion::{
+    build_rename_target_type, needs_struct_field_rename, spark_wider_numeric_type_of,
+    spark_wider_type,
+};
 use crate::error::PlanResult;
 use crate::function::common::{FunctionContextInput, ScalarFunction, ScalarFunctionInput};
 
@@ -34,6 +39,7 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         }
     }
     let branch_values = coerce_string_temporal_values(branch_values, &function_context)?;
+    let branch_values = widen_numeric_values(branch_values, &function_context)?;
     let when_then_expr = conditions
         .into_iter()
         .zip(branch_values)
@@ -52,8 +58,11 @@ fn if_expr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         function_context,
     } = input;
     let (when_expr, then_expr, else_expr) = arguments.three()?;
-    let (then_expr, else_expr) =
-        coerce_string_temporal_values(vec![then_expr, else_expr], &function_context)?.two()?;
+    let (then_expr, else_expr) = widen_numeric_values(
+        coerce_string_temporal_values(vec![then_expr, else_expr], &function_context)?,
+        &function_context,
+    )?
+    .two()?;
     Ok(expr::Expr::Case(expr::Case {
         expr: None,
         when_then_expr: vec![(Box::new(when_expr), Box::new(then_expr))],
@@ -90,10 +99,30 @@ fn nvl(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         )
     };
     if is_container(&left) || is_container(&right) {
-        // TODO: `coalesce` cannot widen two containers whose leaves need a string or datetime
-        //  promotion (`array<int>` beside `array<string>`, `array<date>` beside `array<timestamp>`,
-        //  `TypeCoercionHelper.scala:141`): it fails at analysis or at runtime, or panics. Such a
-        //  pair keeps DataFusion's `nvl`, which answers a STRING, until `coalesce` widens it.
+        // `coalesce` alone cannot type two containers whose leaves differ -- an array of structs
+        // whose leaves widen, a map whose values need a promotion, two structs whose field names
+        // differ only by case -- so the common type is computed the way `findWiderTypeForTwo` does
+        // and both sides are cast to it first (`TypeCoercionHelper.scala:141`).
+        if let (Some(left_type), Some(right_type)) = (&left_type, &right_type)
+            && left_type != right_type
+            && let Some(common) = spark_wider_type(left_type, right_type)
+        {
+            let to_common = |expr: expr::Expr, from: &DataType| {
+                let expr = if needs_struct_field_rename(from, &common) {
+                    ScalarUDF::new_from_impl(SparkStructRename::new(build_rename_target_type(
+                        from, &common,
+                    )))
+                    .call(vec![expr])
+                } else {
+                    expr
+                };
+                cast(expr, common.clone())
+            };
+            return Ok(expr_fn::coalesce(vec![
+                to_common(left, left_type),
+                to_common(right, right_type),
+            ]));
+        }
         let widens = match (&left_type, &right_type) {
             (Some(left_type), Some(right_type)) => coalesce_widens_leaves(left_type, right_type),
             _ => true,
@@ -187,6 +216,44 @@ fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     let arguments = coerce_string_temporal_values(arguments, &function_context)?;
     Ok(expr_fn::coalesce(arguments))
+}
+
+/// Widens the branches of a `CASE`/`IF` to their common numeric type, the way
+/// `CaseWhenCoercion` does (`TypeCoercion.scala`, `findWiderCommonType`; the pairwise rule lives in
+/// [`spark_wider_numeric_type_of`]). DataFusion types the
+/// expression by its FIRST branch, so `CASE WHEN false THEN -2147483648 ELSE 3000000000L END`
+/// declared an INT while carrying a BIGINT value: the rows were right, and the schema lied, which
+/// broke `toArrow` and `CREATE TABLE AS SELECT`. Only an all-numeric set is widened here; a string
+/// or a datetime beside it is the business of `coerce_string_temporal_values`, and a container has
+/// no numeric common type to find.
+fn widen_numeric_values(
+    arguments: Vec<expr::Expr>,
+    function_context: &FunctionContextInput<'_>,
+) -> PlanResult<Vec<expr::Expr>> {
+    let data_types = arguments
+        .iter()
+        .map(|arg| arg.get_type(function_context.schema))
+        .collect::<Result<Vec<_>, _>>()?;
+    if data_types.len() < 2
+        || !data_types.iter().all(DataType::is_numeric)
+        || data_types.windows(2).all(|pair| pair[0] == pair[1])
+    {
+        return Ok(arguments);
+    }
+    let Some(common) = spark_wider_numeric_type_of(&data_types) else {
+        return Ok(arguments);
+    };
+    Ok(arguments
+        .into_iter()
+        .zip(data_types)
+        .map(|(argument, data_type)| {
+            if data_type == common {
+                argument
+            } else {
+                cast(argument, common.clone())
+            }
+        })
+        .collect())
 }
 
 fn coerce_string_temporal_values(

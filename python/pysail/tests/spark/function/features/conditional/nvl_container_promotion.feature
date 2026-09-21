@@ -40,10 +40,9 @@ Feature: nvl over containers whose leaves need a promotion
         | a date and a string map  | false | nvl    | map('k', DATE'2024-01-01')            | map('k', '2024-01-02')                |
         | a date and a string map  | true  | ifnull | map('k', DATE'2024-01-01')            | map('k', '2024-01-02')                |
 
-    # TODO: neither `coalesce` nor DataFusion's `nvl` types a list of structs whose leaves widen, nor
-    #  structs whose field names differ only by case; Spark widens the leaves inside the list and
-    #  matches struct fields case-insensitively.
-    @sail-bug
+    # `findWiderTypeForTwo` recurses into a list and a struct, widening leaf by leaf and keeping the
+    # left side's field names (`TypeCoercionHelper.scala:141`), so a list of structs whose leaves
+    # widen and two structs whose names differ only by case both type.
     Scenario Outline: nvl of <case> is answered with ANSI <ansi> despite the structs
       Given config spark.sql.ansi.enabled = <ansi>
       When query

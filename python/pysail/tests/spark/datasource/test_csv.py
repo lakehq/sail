@@ -814,3 +814,22 @@ def test_csv_null_value_keeps_comment_handling_of_a_string_read(spark, tmp_path,
     df = spark.read.option("header", True).option("comment", "#").option("nullValue", "NA").csv(str(path))
     expected = {b"a,b\n1,x\n#tail": [Row(a="1", b="x")], b"a,b\r1,x\r#c\r2,y\r": [Row(a="1", b="x"), Row(a="2", b="y")]}
     assert df.collect() == expected[content]
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        pytest.param({}, id="no-null-value"),
+        pytest.param({"nullValue": "NA"}, id="null-value"),
+        pytest.param({"nullValue": ""}, id="empty-null-value"),
+    ],
+)
+def test_csv_all_null_column_is_inferred_as_a_string(spark, tmp_path, options):
+    # A column whose every value is null has no type to infer, and `toStructFields` reads that as a
+    # STRING (`CSVInferSchema.scala:105-109`). Arrow infers `Null`, and a `void` column breaks a
+    # write or a join downstream.
+    path = tmp_path / "all_null.csv"
+    path.write_text("a,b\n,\n,\n")
+    frame = spark.read.options(header=True, inferSchema=True, **options).csv(str(path))
+    assert frame.schema.simpleString() == "struct<a:string,b:string>"
+    assert frame.collect() == [Row(a=None, b=None), Row(a=None, b=None)]

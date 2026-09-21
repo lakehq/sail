@@ -53,9 +53,9 @@ RESULT_TYPES = {
     "3 | 5": {"spark": "int", "sail": "int"},
     "4 >> 1": {"spark": "int", "sail": "int"},
     "4 >>> 1": {"spark": "int", "sail": "int"},
-    "CASE WHEN 1 < 0 THEN 1 WHEN 2 < 0 THEN 2.0 END": {"spark": "decimal(11,1)", "sail": "int"},
-    "CASE WHEN 1 < 0 THEN 1 WHEN 2 > 0 THEN 2.0 ELSE 1.2 END": {"spark": "decimal(11,1)", "sail": "int"},
-    "CASE WHEN 1 > 0 THEN 1 WHEN 2 > 0 THEN 2.0 ELSE 1.2 END": {"spark": "decimal(11,1)", "sail": "int"},
+    "CASE WHEN 1 < 0 THEN 1 WHEN 2 < 0 THEN 2.0 END": {"spark": "decimal(11,1)", "sail": "decimal(11,1)"},
+    "CASE WHEN 1 < 0 THEN 1 WHEN 2 > 0 THEN 2.0 ELSE 1.2 END": {"spark": "decimal(11,1)", "sail": "decimal(11,1)"},
+    "CASE WHEN 1 > 0 THEN 1 WHEN 2 > 0 THEN 2.0 ELSE 1.2 END": {"spark": "decimal(11,1)", "sail": "decimal(11,1)"},
     "CASE col1 WHEN 1 THEN 'one' WHEN 2 THEN 'two' ELSE '?' END FROM VALUES 1, 2, 3": {
         "spark": "<error>",
         "sail": "<error>",

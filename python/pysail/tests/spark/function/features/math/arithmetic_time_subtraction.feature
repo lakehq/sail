@@ -122,10 +122,9 @@ Feature: TIME subtraction result parity
       | a TIME difference        | true  | TIME '23:00:00' + (TIME '12:00:00' - TIME '01:00:00') |
       | the interval first       | true  | INTERVAL '2' HOUR + TIME '23:30:00'                   |
 
-  # Spark's `TypeOf` reports the type without evaluating the expression; Sail's evaluates it, so a
-  # runtime failure escapes from a query that only asked what the type would be. This is why the
-  # overflow guard above cannot be added without moving the resolution matrix's probe too.
-  @sail-bug
+  # Spark's `TypeOf` reports the type without evaluating the expression. Sail's evaluates it, which
+  # is why a division by zero used to escape from a query that only asked what the type would be;
+  # the divisor is no longer refused at analysis, so the plan answers the type like Spark's.
   Scenario: typeof reports the type without evaluating the expression
     Given config spark.sql.ansi.enabled = true
     When query

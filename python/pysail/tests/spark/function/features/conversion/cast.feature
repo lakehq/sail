@@ -156,3 +156,138 @@ Feature: CAST expressions
         | 0  | 100    |
         | 1  | NULL   |
         | 2  | NULL   |
+
+  Rule: a numeric cast to BOOLEAN is the value compared with zero
+
+    # `canAnsiCast` takes every numeric to BOOLEAN (`Cast.scala:105`, and `canCast:239` with ANSI
+    # off), and `Cast.castToBoolean` is `value != 0` (`Cast.scala:840-847`). Arrow has no DECIMAL to
+    # BOOLEAN kernel, so the comparison is spelled out; the other widths already had one.
+    Scenario Outline: <case> cast to BOOLEAN is <result>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT CAST(<value> AS BOOLEAN) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                  | ansi  | value                          | result |
+        | a negative decimal    | false | -1.5                           | true   |
+        | a negative decimal    | true  | -1.5                           | true   |
+        | a positive decimal    | true  | 1.5                            | true   |
+        | a zero decimal        | true  | CAST(0.00 AS DECIMAL(10,2))    | false  |
+        | a negative zero       | true  | CAST(-0.0 AS DECIMAL(10,2))    | false  |
+        | a BD literal          | true  | -1.0BD                         | true   |
+        | a wide decimal        | true  | CAST(1 AS DECIMAL(38,0))       | true   |
+        | a NULL decimal        | true  | CAST(NULL AS DECIMAL(10,2))    | NULL   |
+        | a double              | true  | -1.5D                          | true   |
+        | an int                | true  | -1                             | true   |
+
+    Scenario: try_cast of a decimal to BOOLEAN is the same comparison
+      When query
+        """
+        SELECT TRY_CAST(-1.5 AS BOOLEAN) AS a, TRY_CAST(CAST(0.0 AS DECIMAL(10,2)) AS BOOLEAN) AS b
+        """
+      Then query result
+        | a    | b     |
+        | true | false |
+
+    Scenario: a decimal column cast to BOOLEAN keeps every row
+      When query
+        """
+        SELECT CAST(d AS BOOLEAN) AS result
+        FROM VALUES (CAST(-1.5 AS DECIMAL(10,2))), (CAST(0.00 AS DECIMAL(10,2))), (CAST(NULL AS DECIMAL(10,2))) AS t(d)
+        """
+      Then query result
+        | result |
+        | true   |
+        | false  |
+        | NULL   |
+
+  Rule: Spark refuses a numeric cast to DATE, and to BINARY unless it is a plain integral CAST
+
+    # `canCast` has no arm from a numeric to DATE (`Cast.scala:223-255`) and neither has
+    # `canAnsiCast`, so it is refused whatever the mode and whatever the spelling.
+    Scenario Outline: <expression> is refused with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT <expression> AS result
+        """
+      Then query error (?i)cannot cast
+
+      Examples:
+        | expression                | ansi  |
+        | CAST(-1 AS DATE)          | false |
+        | CAST(-1 AS DATE)          | true  |
+        | TRY_CAST(-1 AS DATE)      | false |
+        | TRY_CAST(-1 AS DATE)      | true  |
+        | -1::DATE                  | false |
+        | CAST(1.5 AS DATE)         | true  |
+        | CAST(-1L AS DATE)         | false |
+
+    # `canCast` takes an integral to BINARY (`Cast.scala:234`) but `canAnsiCast` does not
+    # (`Cast.scala:92-122`), and `TRY_CAST` is governed by `canAnsiCast` in both modes, so only a
+    # plain `CAST` of an INTEGRAL with ANSI off is accepted. A FLOAT or a DECIMAL never is.
+    Scenario Outline: <expression> is refused with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT <expression> AS result
+        """
+      Then query error (?i)cannot cast
+
+      Examples:
+        | expression                | ansi  |
+        | CAST(-1 AS BINARY)        | true  |
+        | CAST(-1L AS BINARY)       | true  |
+        | TRY_CAST(-1 AS BINARY)    | false |
+        | TRY_CAST(-1 AS BINARY)    | true  |
+        | CAST(-1.5D AS BINARY)     | false |
+        | CAST(-1.5 AS BINARY)      | false |
+        | -1::BINARY                | true  |
+
+    Scenario Outline: an integral CAST to BINARY is accepted with ANSI off: <expression>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT hex(<expression>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | expression         | result   |
+        | CAST(-1 AS BINARY) | FFFFFFFF |
+        | -1::BINARY         | FFFFFFFF |
+
+    # TODO: `Cast.castToBinary` writes the integer BIG-endian (`Cast.scala`, `NumberConverter`),
+    #  and Sail writes Arrow's native little-endian order, so only a symmetric value agrees.
+    #  Pre-existing: `main` answers `01000000` for `CAST(1 AS BINARY)` too.
+    @sail-bug
+    Scenario Outline: an integral CAST to BINARY keeps Spark's byte order: <expression>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT hex(<expression>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | expression         | result           |
+        | CAST(1 AS BINARY)  | 00000001         |
+        | CAST(1L AS BINARY) | 0000000000000001 |
+
+    Scenario: a string to BINARY is not touched by the guard
+      When query
+        """
+        SELECT hex(CAST('a' AS BINARY)) AS a, hex(TRY_CAST('a' AS BINARY)) AS b
+        """
+      Then query result
+        | a  | b  |
+        | 61 | 61 |

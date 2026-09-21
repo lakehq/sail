@@ -168,3 +168,15 @@ def test_a_time_column_is_refused_even_when_the_projection_drops_it(spark, tmp_p
         pytest.raises(AnalysisException, match=r"(?i)the data type TIME is not supported"),
     ):
         spark.read.parquet(location).selectExpr("1 AS x").collect()
+
+
+def test_time_type_disabled_is_refused_at_execution_not_at_analysis(spark):
+    """Spark writes the refusal when it builds the Arrow batches, so the schema answers first."""
+    previous = spark.conf.get("spark.sql.timeType.enabled")
+    spark.conf.set("spark.sql.timeType.enabled", "false")
+    try:
+        assert spark.sql("SELECT TIME '12:00:00' AS v").schema.simpleString() == "struct<v:time(6)>"
+        with pytest.raises(Exception, match=r"(?i)time"):
+            spark.sql("SELECT TIME '12:00:00' AS v").collect()
+    finally:
+        spark.conf.set("spark.sql.timeType.enabled", previous)

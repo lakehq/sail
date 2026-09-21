@@ -4,10 +4,11 @@ use datafusion_common::{Column, JoinType, NullEquality, ScalarValue};
 use datafusion_expr::builder::project;
 use datafusion_expr::expr::WindowFunctionParams;
 use datafusion_expr::{
-    Expr, LogicalPlan, LogicalPlanBuilder, WindowFrame, WindowFunctionDefinition, expr,
+    Expr, LogicalPlan, LogicalPlanBuilder, WindowFrame, WindowFunctionDefinition, cast, expr,
 };
 use sail_common::spec;
 
+use crate::coercion::spark_wider_numeric_type;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
@@ -31,7 +32,10 @@ impl PlanResolver<'_> {
         let left = self.resolve_query_plan(*left, state).await?;
         let right = self.resolve_query_plan(*right, state).await?;
         match set_op_type {
-            SetOpType::Intersect => Ok(LogicalPlanBuilder::intersect(left, right, is_all)?),
+            SetOpType::Intersect => {
+                let (left, right) = Self::widen_numeric_columns(left, right)?;
+                Ok(LogicalPlanBuilder::intersect(left, right, is_all)?)
+            }
             SetOpType::Union => {
                 let (left, right) = if by_name {
                     let left_names = Self::get_field_names(left.schema(), state)?;
@@ -104,6 +108,7 @@ impl PlanResolver<'_> {
                 } else {
                     (left, right)
                 };
+                let (left, right) = Self::widen_numeric_columns(left, right)?;
                 if is_all {
                     Ok(LogicalPlanBuilder::new(left).union(right)?.build()?)
                 } else {
@@ -113,6 +118,7 @@ impl PlanResolver<'_> {
                 }
             }
             SetOpType::Except => {
+                let (left, right) = Self::widen_numeric_columns(left, right)?;
                 let left_len = left.schema().fields().len();
                 let right_len = right.schema().fields().len();
 
@@ -215,5 +221,54 @@ impl PlanResolver<'_> {
                 Ok(plan)
             }
         }
+    }
+
+    /// Widens each positional pair of NUMERIC columns of a set operation to their common type, the
+    /// way `WidenSetOperationTypes` does -- `Except` (`TypeCoercionBase.scala:194`), `Intersect`
+    /// (`:208`) and `Union` (`:222`) alike. The plan is built from the LEFT
+    /// input's schema, so `SELECT -2147483648 UNION ALL SELECT 3000000000L` declared an INT while
+    /// carrying a BIGINT value: the rows were right and the schema lied, which broke `toArrow`.
+    /// Only numeric pairs are widened here; everything else is left to DataFusion.
+    fn widen_numeric_columns(
+        left: LogicalPlan,
+        right: LogicalPlan,
+    ) -> PlanResult<(LogicalPlan, LogicalPlan)> {
+        let left_fields = left.schema().fields();
+        let right_fields = right.schema().fields();
+        if left_fields.len() != right_fields.len() {
+            return Ok((left, right));
+        }
+        let common = left_fields
+            .iter()
+            .zip(right_fields.iter())
+            .map(|(left_field, right_field)| {
+                let (left_type, right_type) = (left_field.data_type(), right_field.data_type());
+                if left_type == right_type || !left_type.is_numeric() || !right_type.is_numeric() {
+                    return None;
+                }
+                spark_wider_numeric_type(left_type, right_type)
+            })
+            .collect::<Vec<_>>();
+        if common.iter().all(Option::is_none) {
+            return Ok((left, right));
+        }
+        let project_widened = |plan: LogicalPlan| -> PlanResult<LogicalPlan> {
+            let columns = plan
+                .schema()
+                .iter()
+                .zip(common.iter())
+                .map(|((qualifier, field), common)| {
+                    let column = Expr::Column(Column::from((qualifier, field)));
+                    match common {
+                        Some(data_type) if field.data_type() != data_type => {
+                            cast(column, data_type.clone()).alias(field.name().to_string())
+                        }
+                        _ => column,
+                    }
+                })
+                .collect::<Vec<_>>();
+            Ok(project(plan, columns)?)
+        };
+        Ok((project_widened(left)?, project_widened(right)?))
     }
 }

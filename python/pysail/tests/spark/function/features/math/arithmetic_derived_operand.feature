@@ -243,20 +243,28 @@ Feature: arithmetic operands whose type is derived, vs Spark 4.2.0
         """
       Then query error (?i)cannot resolve
 
-    # The other direction, and the worse one: Sail REFUSED what Spark answers. It resolves now --
-    # `date - date` yields an interval, so the outer `+` has two intervals to add -- and what is
-    # left is the rendering: Sail prints `INTERVAL '16 00:00:00' DAY TO SECOND`, because
-    # `Duration(Microsecond)` has one single spelling and the declared field range is not carried.
-    # That is the interval metadata work of `fix/interval`, so the row stays tagged for the text.
+    # TODO: the other direction, and the worse one: Sail REFUSES what Spark answers. `SubtractDates`
+    #  yields a `DayTimeIntervalType(DAY)` (`datetimeExpressions.scala:3616`), so the outer operator
+    #  has two intervals; Sail's difference is an INT day count, and an INT beside an interval is
+    #  refused. Making it a `Duration` would fix the verdict and break the VALUE its consumers read:
+    #  `Duration` carries no field range, so `CAST(d1 - d2 AS INT)` would answer seconds instead of
+    #  days. Closing it needs the interval field metadata of `fix/interval`, so the two rows below
+    #  are pinned rather than traded for a wrong value. This is the only arithmetic pair left where
+    #  Sail refuses what Spark accepts.
     @sail-bug
-    Scenario: a date difference plus an interval resolves
+    Scenario Outline: <case> resolves
       When query
         """
-        SELECT CAST((DATE'2024-01-15' - DATE'2024-01-01') + INTERVAL '2' DAY AS STRING) AS result
+        SELECT CAST(<expression> AS STRING) AS result
         """
       Then query result
-        | result            |
-        | INTERVAL '16' DAY |
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                              | expression                                                        | result                          |
+        | a date difference plus an interval | (DATE'2024-01-15' - DATE'2024-01-01') + INTERVAL '2' DAY          | INTERVAL '16' DAY               |
+        | a timestamp plus a date difference | TIMESTAMP'2024-01-01 00:00:00' + (DATE'2024-01-15' - DATE'2024-01-01') | 2024-01-15 00:00:00        |
 
   Rule: a date difference keeps the day count its consumers read
 

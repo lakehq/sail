@@ -142,7 +142,7 @@ impl PlanResolver<'_> {
     ///
     /// Reference:
     ///   org.apache.spark.sql.connect.execution.SparkConnectPlanExecution#processAsArrowBatches
-    pub(super) fn check_time_type_in_schema(&self, schema: &DFSchema) -> PlanResult<()> {
+    pub(crate) fn check_time_type_in_schema(&self, schema: &DFSchema) -> PlanResult<()> {
         if self.config.time_type_enabled {
             return Ok(());
         }

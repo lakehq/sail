@@ -156,30 +156,100 @@ Feature: unary + and - operand types vs Spark 4.2.0
 
   Rule: a negative number written as a literal keeps its literal type
 
-    # TODO: Spark folds the sign before a postfix `::` (`-1::BOOLEAN` is `CAST(-1 AS BOOLEAN)`); Sail
-    #  parses `-(1::BOOLEAN)` and refuses the unary minus. Already so on `main`.
-    @sail-bug
-    Scenario: a signed literal is cast as a whole
+    # The minus belongs to the NUMBER (`number: MINUS? INTEGER_VALUE`), so a postfix `::` casts the
+    # SIGNED literal: `-1::BOOLEAN` is `CAST(-1 AS BOOLEAN)`. Parsing it as `-(1::BOOLEAN)` refused a
+    # query Spark answers, and for a STRING it answered a DOUBLE instead of the cast.
+    Scenario Outline: a signed literal is cast as a whole: <case>
       When query
         """
-        SELECT -1::BOOLEAN AS result
+        SELECT <expression> AS result
         """
       Then query result
-        | result |
-        | true   |
+        | result   |
+        | <result> |
 
-    # TODO: Sail refuses `ORDER BY -1` like Spark, but leaks the `Debug` of the sort order instead of
-    #  `ORDER_BY_POS_OUT_OF_RANGE` (`AstBuilder.scala:7591`).
-    @sail-bug
-    Scenario: ORDER BY -1 names the position out of range
+      Examples:
+        | case                     | expression              | result |
+        | a boolean                | -1::BOOLEAN             | true   |
+        | a boolean from zero      | -0::BOOLEAN             | false  |
+        | a boolean from a bigint  | -1L::BOOLEAN            | true   |
+        | a boolean from a decimal | -1.5::BOOLEAN           | true   |
+        | a string                 | -1::STRING              | -1     |
+        | a chain of casts         | -1::INT::STRING         | -1     |
+        | a timestamp              | -1::TIMESTAMP = CAST(-1 AS TIMESTAMP) | true |
+
+    Scenario: the cast of a signed literal keeps the target type
       When query
         """
-        SELECT x FROM VALUES (1), (2) AS t(x) ORDER BY -1
+        SELECT typeof(-1::STRING) AS t, typeof(-1::BOOLEAN) AS b
+        """
+      Then query result
+        | t      | b       |
+        | string | boolean |
+
+    # The sign is folded by the GRAMMAR, so only a minus written right before the number counts: a
+    # parenthesized operand, a unary plus, or anything that is not a plain literal keeps the unary
+    # operator, and Spark refuses the ones whose operand is not numeric.
+    Scenario Outline: <case> is not folded into the literal
+      When query
+        """
+        SELECT <expression> AS result
+        """
+      Then query error (?i)cannot resolve
+
+      Examples:
+        | case             | expression      |
+        | a parenthesized 1 | -(1::BOOLEAN)  |
+        | a unary plus      | +1::BOOLEAN    |
+
+    Scenario: an operand that is not a literal keeps the unary minus
+      When query
+        """
+        SELECT -CAST(1 AS INT)::STRING AS a, 2 -1::STRING AS b
+        """
+      Then query result
+        | a    | b |
+        | -1.0 | 1 |
+
+    # Every INT literal is an ordinal (`SubstituteUnresolvedOrdinals`), and `Analyzer.scala:2157-2161`
+    # takes it only when `index > 0 && index <= child.output.size`; otherwise
+    # `orderByPositionRangeError` names the index it READ, sign included
+    # (`QueryCompilationErrors.scala:698-705`). Folding the sign into the literal is what brings a
+    # negative one down this path, so the position has to keep its sign to be named.
+    Scenario Outline: ORDER BY <position> names the position out of range
+      When query
+        """
+        SELECT x, x + 1 AS y FROM VALUES (1), (2) AS t(x) ORDER BY <position>
+        """
+      Then query error ORDER BY position <position> is not in select list
+
+      Examples:
+        | position |
+        | -1       |
+        | -2       |
+        | 0        |
+        | 3        |
+
+    Scenario: SORT BY a negative position names it the same way
+      When query
+        """
+        SELECT x, x + 1 AS y FROM VALUES (1), (2) AS t(x) SORT BY -1
         """
       Then query error ORDER BY position -1 is not in select list
 
-    # `number: MINUS? BIGINT_LITERAL` makes `-1L` one BIGINT literal, and only an INT literal is an
-    # ORDER BY ordinal (`AstBuilder.scala:7591`), so this sorts by a constant.
+    Scenario: a position in range still sorts by that column
+      When query
+        """
+        SELECT x, 10 - x AS y FROM VALUES (1), (2) AS t(x) ORDER BY 2
+        """
+      Then query result ordered
+        | x | y |
+        | 2 | 8 |
+        | 1 | 9 |
+
+    # Only an INT literal is an ordinal (`TryExtractOrdinal.scala:30-34`, `AstBuilder.scala:7591`),
+    # so a BIGINT is a constant to sort by: it neither picks a column nor names a position out of
+    # range, whatever its value.
     Scenario: ORDER BY a negative BIGINT literal sorts by a constant
       When query
         """
@@ -188,3 +258,19 @@ Feature: unary + and - operand types vs Spark 4.2.0
       Then query result
         | v |
         | 7 |
+
+    Scenario Outline: ORDER BY <position> sorts by a constant, not by a position
+      When query
+        """
+        SELECT x FROM VALUES (2), (1) AS t(x) ORDER BY <position>
+        """
+      Then query result ordered
+        | x |
+        | 2 |
+        | 1 |
+
+      Examples:
+        | position   |
+        | 1L         |
+        | 5L         |
+        | 2147483648 |

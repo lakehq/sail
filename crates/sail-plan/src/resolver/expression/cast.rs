@@ -1,7 +1,7 @@
 use std::ops::{Div, Mul};
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
+use arrow::datatypes::{DataType, IntervalUnit, TimeUnit, i256};
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast};
 use sail_common::spec;
@@ -24,8 +24,9 @@ use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
 use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
 
+use crate::coercion::{build_rename_target_type, needs_struct_field_rename};
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::is_spark_udt_field;
+use crate::function::common::{is_spark_udt_field, spark_type_name};
 use crate::function::is_spark_compatible_arrow_fixed_offset;
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
@@ -221,6 +222,39 @@ impl PlanResolver<'_> {
             (_, DataType::Utf8View, _) if override_string_cast => {
                 ScalarUDF::new_from_impl(SparkToUtf8View::new()).call(vec![expr])
             }
+            // Spark has no cast from a numeric to DATE in either mode (`Cast.scala:223-255` and
+            // `:92-122`), and takes an INTEGRAL to BINARY only in the non-ANSI `canCast`
+            // (`Cast.scala:234`). `TRY_CAST` is governed by `canAnsiCast` whatever the mode, so it
+            // never takes one. Sail casts the underlying integer, which answers a DATE or a BINARY
+            // for a query Spark refuses at analysis.
+            // TODO: Spark picks the `DATATYPE_MISMATCH` subclass per pair -- `CAST_WITH_FUNC_SUGGESTION`
+            //  for a numeric to DATE, `CAST_WITH_CONF_SUGGESTION` for an integral to BINARY under ANSI,
+            //  `CAST_WITHOUT_SUGGESTION` otherwise -- which Sail has no error-class framework to carry.
+            (from, to @ (DataType::Date32 | DataType::Date64), _) if from.is_numeric() => {
+                return Err(PlanError::analysis(format!(
+                    "cannot cast {} to {}",
+                    spark_type_name(&from),
+                    spark_type_name(&to)
+                )));
+            }
+            (from, to @ DataType::Binary, is_try)
+                if from.is_numeric() && (is_try || self.config.ansi_mode || !from.is_integer()) =>
+            {
+                return Err(PlanError::analysis(format!(
+                    "cannot cast {} to {}",
+                    spark_type_name(&from),
+                    spark_type_name(&to)
+                )));
+            }
+            // `castToBoolean` is `value != 0` for every numeric (`Cast.scala:840-847`), and
+            // `canAnsiCast` admits the whole family (`Cast.scala:105`). Arrow has no DECIMAL to
+            // BOOLEAN kernel, so the comparison is spelled out here rather than refused.
+            (DataType::Decimal128(precision, scale), DataType::Boolean, _) => {
+                expr.not_eq(lit(ScalarValue::Decimal128(Some(0), precision, scale)))
+            }
+            (DataType::Decimal256(precision, scale), DataType::Boolean, _) => expr.not_eq(lit(
+                ScalarValue::Decimal256(Some(i256::ZERO), precision, scale),
+            )),
             (DataType::Date32 | DataType::Date64, to, _)
                 if to.is_numeric() || matches!(to, DataType::Boolean) =>
             {
@@ -249,100 +283,6 @@ impl PlanResolver<'_> {
             (_, to, _) => cast(expr, to),
         };
         Ok(NamedExpr::new(name, expr))
-    }
-}
-
-/// Returns true if the cast from `from` to `to` involves a Struct
-/// (possibly nested in a List/LargeList/FixedSizeList/Map) whose field names
-/// don't share enough overlap for DataFusion's struct cast validator.
-fn needs_struct_field_rename(from: &DataType, to: &DataType) -> bool {
-    match (from, to) {
-        (DataType::Struct(a), DataType::Struct(b)) => {
-            a.len() == b.len()
-                && a.iter()
-                    .zip(b.iter())
-                    .any(|(fa, fb)| fa.name() != fb.name())
-        }
-        (DataType::List(a), DataType::List(b))
-        | (DataType::LargeList(a), DataType::LargeList(b)) => {
-            needs_struct_field_rename(a.data_type(), b.data_type())
-        }
-        (DataType::FixedSizeList(a, sa), DataType::FixedSizeList(b, sb)) if sa == sb => {
-            needs_struct_field_rename(a.data_type(), b.data_type())
-        }
-        (DataType::Map(a, _), DataType::Map(b, _)) => {
-            needs_struct_field_rename(a.data_type(), b.data_type())
-        }
-        _ => false,
-    }
-}
-
-/// Build a target type that has the names from `to` but the data types from
-/// `from`. The result is what `SparkStructRename` produces; the subsequent
-/// regular CAST then handles any leaf-type conversion.
-fn build_rename_target_type(from: &DataType, to: &DataType) -> DataType {
-    match (from, to) {
-        (DataType::Struct(src_fields), DataType::Struct(tgt_fields))
-            if src_fields.len() == tgt_fields.len() =>
-        {
-            let fields: Fields = src_fields
-                .iter()
-                .zip(tgt_fields.iter())
-                .map(|(src, tgt)| {
-                    Arc::new(
-                        Field::new(
-                            tgt.name(),
-                            build_rename_target_type(src.data_type(), tgt.data_type()),
-                            src.is_nullable(),
-                        )
-                        .with_metadata(src.metadata().clone()),
-                    )
-                })
-                .collect();
-            DataType::Struct(fields)
-        }
-        (DataType::List(src), DataType::List(tgt)) => DataType::List(Arc::new(
-            Field::new(
-                tgt.name(),
-                build_rename_target_type(src.data_type(), tgt.data_type()),
-                src.is_nullable(),
-            )
-            .with_metadata(src.metadata().clone()),
-        )),
-        (DataType::LargeList(src), DataType::LargeList(tgt)) => DataType::LargeList(Arc::new(
-            Field::new(
-                tgt.name(),
-                build_rename_target_type(src.data_type(), tgt.data_type()),
-                src.is_nullable(),
-            )
-            .with_metadata(src.metadata().clone()),
-        )),
-        (DataType::FixedSizeList(src, sa), DataType::FixedSizeList(tgt, _)) => {
-            DataType::FixedSizeList(
-                Arc::new(
-                    Field::new(
-                        tgt.name(),
-                        build_rename_target_type(src.data_type(), tgt.data_type()),
-                        src.is_nullable(),
-                    )
-                    .with_metadata(src.metadata().clone()),
-                ),
-                *sa,
-            )
-        }
-        (DataType::Map(src, sorted), DataType::Map(tgt, _)) => DataType::Map(
-            Arc::new(
-                Field::new(
-                    tgt.name(),
-                    build_rename_target_type(src.data_type(), tgt.data_type()),
-                    src.is_nullable(),
-                )
-                .with_metadata(src.metadata().clone()),
-            ),
-            *sorted,
-        ),
-        // Leaves: keep the source data type unchanged.
-        _ => from.clone(),
     }
 }
 

@@ -244,6 +244,10 @@ impl PlanResolver<'_> {
             .await;
         match sort_expr {
             Ok(sort_expr) => Ok(sort_expr),
+            // An ordinal is a position in THIS plan's output, so no child plan can resolve it.
+            // Recursing only to fail in every child is what replaced the out-of-range message with
+            // a `Debug` dump of the sort order.
+            Err(error) if matches!(sort.child.as_ref(), spec::Expr::Literal(_)) => Err(error),
             Err(_) => {
                 let mut sorts = Vec::with_capacity(plan.inputs().len());
                 for input_plan in plan.inputs() {

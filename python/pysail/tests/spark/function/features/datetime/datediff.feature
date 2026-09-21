@@ -40,9 +40,8 @@ Feature: datediff output schema
 
   Rule: a CASE, IF or UNION with an INT branch beside a BIGINT one is a BIGINT
 
-    # TODO: a CASE, IF or UNION is typed by its first branch, so an INT branch beside a BIGINT one
-    #  reports INT; `datediff` is an INT now and meets it (`TypeCoercion.scala:168`).
-    @sail-bug
+    # `CaseWhenCoercion` and `WidenSetOperationTypes` widen every branch to the common type, so an
+    # INT branch beside a BIGINT one is a BIGINT; `datediff` is an INT now and meets it.
     Scenario Outline: <expression> is a BIGINT
       When query
         """

@@ -211,3 +211,72 @@ Feature: Set operations (INTERSECT, EXCEPT)
         """
       Then query result
         | id |
+
+  Rule: a set operation widens its numeric columns to the common type
+
+    # `WidenSetOperationTypes` widens each positional pair to their common type
+    # (`TypeCoercion.scala`), so an INT branch beside a BIGINT one is a BIGINT. Sail built the plan
+    # from the LEFT input's schema, so the column declared INT while carrying a BIGINT value: the
+    # rows came back right and the schema lied, which broke `toArrow` and `CREATE TABLE AS SELECT`.
+    Scenario Outline: <case> is <type>
+      When query
+        """
+        SELECT typeof(v) AS t FROM (<query>) LIMIT 1
+        """
+      Then query result
+        | t      |
+        | <type> |
+
+      Examples:
+        | case                     | query                                                              | type   |
+        | an int beside a bigint   | SELECT -2147483648 AS v UNION ALL SELECT 3000000000L AS v          | bigint |
+        | a bigint beside an int   | SELECT 3000000000L AS v UNION ALL SELECT -2147483648 AS v          | bigint |
+        | an int beside a double   | SELECT 1 AS v UNION ALL SELECT CAST(1.5 AS DOUBLE) AS v            | double |
+        | an int beside a decimal  | SELECT 1 AS v UNION ALL SELECT CAST(1.5 AS DECIMAL(10,2)) AS v     | decimal(12,2) |
+        | a distinct union         | SELECT -2147483648 AS v UNION SELECT 3000000000L AS v              | bigint |
+
+    Scenario: every row of a widened union survives
+      When query
+        """
+        SELECT v FROM (SELECT -2147483648 AS v UNION ALL SELECT 3000000000L AS v) ORDER BY v
+        """
+      Then query result ordered
+        | v           |
+        | -2147483648 |
+        | 3000000000  |
+
+    # `WidenSetOperationTypes` covers `Except` (`TypeCoercionBase.scala:194`) and `Intersect`
+    # (`:208`), not only `Union` (`:222`).
+    Scenario Outline: <case> widens too
+      When query
+        """
+        SELECT typeof(v) AS t FROM (<query>) LIMIT 1
+        """
+      Then query result
+        | t      |
+        | <type> |
+
+      Examples:
+        | case                    | query                                                                  | type          |
+        | an except with a decimal | SELECT 1 AS v EXCEPT SELECT CAST(0.5 AS DECIMAL(10,1)) AS v            | decimal(11,1) |
+        | an intersect with a bigint | SELECT 1 AS v INTERSECT SELECT 1L AS v                                | bigint        |
+        | an intersect with a decimal | SELECT CAST(1.0 AS DECIMAL(10,1)) AS v INTERSECT SELECT 1 AS v      | decimal(11,1) |
+
+    Scenario: an except keeps the widened value
+      When query
+        """
+        SELECT v FROM (SELECT 1 AS v EXCEPT SELECT CAST(0.5 AS DECIMAL(10,1)) AS v)
+        """
+      Then query result
+        | v   |
+        | 1.0 |
+
+    Scenario: a union of the same type is not rewritten
+      When query
+        """
+        SELECT v FROM (SELECT 1 AS v UNION ALL SELECT 2 AS v) ORDER BY v
+        """
+      Then query result ordered
+        | v |
+        | 1 |
+        | 2 |

@@ -858,3 +858,83 @@ def test_parquet_binary_substring_feeds_string_functions(spark, tmp_path):
         assert row == [Row(h="61626364", t="ab", r=" zb", i="Xabcd")]
     finally:
         spark.catalog.dropTempView("parquet_binary_substring")
+
+
+# TODO: Spark's reader widens every unsigned Parquet width to the next signed one and reads a
+#   dictionary-encoded column as its value type (`ParquetSchemaConverter.scala:290-296,311-317`).
+#   Sail hands the Arrow type through, so a file written by anything other than Spark yields a
+#   column no client can convert and no operator can take. The fix belongs with the Parquet reader,
+#   not with the arithmetic guards, so it is pinned here and deferred.
+WIDENED_PARQUET_XFAIL = pytest.mark.xfail(
+    not is_jvm_spark(),
+    strict=True,
+    reason="Sail reads an unsigned or dictionary Parquet column as its Arrow type",
+)
+
+
+@pytest.fixture
+def widened_parquet_path(tmp_path):
+    """A Parquet file written outside Spark, carrying the Arrow types no SQL literal can spell."""
+    path = tmp_path / "widened.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "u8": pa.array([1, 2], type=pa.uint8()),
+                "u16": pa.array([1, 2], type=pa.uint16()),
+                "u32": pa.array([1, 2], type=pa.uint32()),
+                "u64": pa.array([1, 2], type=pa.uint64()),
+                "dict": pa.array(["a", "b"]).dictionary_encode(),
+                "nested": pa.array([{"u": 1}, {"u": 2}], type=pa.struct([pa.field("u", pa.uint16())])),
+                "lst": pa.array([[1], [2]], type=pa.list_(pa.uint32())),
+            }
+        ),
+        path,
+    )
+    return str(path)
+
+
+@WIDENED_PARQUET_XFAIL
+@pytest.mark.parametrize(
+    ("column", "spark_type"),
+    [
+        # `ParquetSchemaConverter.scala:290-296,311-317`: Spark has no unsigned type, so its reader
+        # widens each width to the next signed one, and UINT_64 to a decimal that holds it.
+        ("u8", "smallint"),
+        ("u16", "int"),
+        ("u32", "bigint"),
+        ("u64", "decimal(20,0)"),
+        # Spark has no dictionary type either: a dictionary-encoded column is its value type.
+        ("dict", "string"),
+        ("nested", "struct<u:int>"),
+        ("lst", "array<bigint>"),
+    ],
+)
+def test_parquet_unsigned_and_dictionary_columns_are_widened_like_spark(
+    spark, widened_parquet_path, column, spark_type
+):
+    assert spark.read.parquet(widened_parquet_path).schema[column].dataType.simpleString() == spark_type
+
+
+@WIDENED_PARQUET_XFAIL
+def test_parquet_widened_columns_are_arithmetic_operands_and_reach_the_client(spark, widened_parquet_path):
+    # Handing the Arrow type through left a column no client can convert and no operator can take:
+    # `-u8` raised `Not supported datatype for Spark negative(): UInt8` where Spark answers.
+    df = spark.read.parquet(widened_parquet_path)
+    assert [r[0] for r in df.selectExpr("-u8 AS v").collect()] == [-1, -2]
+    assert [r[0] for r in df.selectExpr("-u32 AS v").collect()] == [-1, -2]
+    assert [r[0] for r in df.selectExpr("u8 * u8 AS v").collect()] == [1, 4]
+    assert [r[0] for r in df.selectExpr("upper(dict) AS v").collect()] == ["A", "B"]
+    assert [r[0] for r in df.selectExpr("nested.u + 1 AS v").collect()] == [2, 3]
+    assert [r[0] for r in df.select("u8").collect()] == [1, 2]
+
+
+def test_parquet_widened_unsigned_follows_sparks_date_offset_rule(spark, widened_parquet_path):
+    # `DateAdd` takes TINYINT/SMALLINT/INT, so the widened UINT_8 is an offset and the widened
+    # UINT_32, a BIGINT, is not.
+    df = spark.read.parquet(widened_parquet_path)
+    assert [str(r[0]) for r in df.selectExpr("DATE'2024-01-01' + u8 AS v").collect()] == [
+        "2024-01-02",
+        "2024-01-03",
+    ]
+    with pytest.raises(AnalysisException, match=r"(?i)cannot resolve"):
+        df.selectExpr("DATE'2024-01-01' + u32 AS v").collect()

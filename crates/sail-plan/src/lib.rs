@@ -16,6 +16,7 @@ use crate::resolver::plan::NamedPlan;
 use crate::streaming::rewriter::{is_streaming_plan, rewrite_streaming_plan};
 
 pub mod catalog;
+mod coercion;
 pub mod config;
 pub mod error;
 pub mod explain;
@@ -39,6 +40,10 @@ pub async fn resolve_and_execute_plan(
     let mut info = vec![];
     let resolver = PlanResolver::new(ctx, config);
     let NamedPlan { plan, fields } = resolver.resolve_named_plan(plan).await?;
+    // Spark refuses a TIME the config disables when it writes the Arrow batches
+    // (`SparkConnectPlanExecution.processAsArrowBatches`), not at analysis: `df.schema` answers
+    // there and only the execution fails. Checking it while resolving refused a plan Spark resolves.
+    resolver.check_time_type_in_schema(plan.schema())?;
     info.push(plan.to_stringified(PlanType::InitialLogicalPlan));
     let df = execute_logical_plan(ctx, plan).await?;
     let (session_state, plan) = df.into_parts();

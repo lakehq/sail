@@ -3,7 +3,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use datafusion::arrow::array::AsArray;
 use datafusion::arrow::csv::ReaderBuilder;
-use datafusion::arrow::datatypes::{DataType, Field, Int64Type, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, Fields, Int64Type, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion_common::config::CsvOptions;
@@ -108,6 +108,23 @@ impl ReadFormat for CsvReadFormat {
             schema = self
                 .narrow_integer_columns(ctx, files, &options, schema)
                 .await?;
+            // A column whose every value is null has no type to infer, and `toStructFields` reads
+            // that as a STRING (`CSVInferSchema.scala:105-109`). Arrow infers `Null`, which is a
+            // `void` column: it is not Spark's type and it breaks a write or a join downstream.
+            schema = Schema::new_with_metadata(
+                schema
+                    .fields()
+                    .iter()
+                    .map(|field| {
+                        if field.data_type().is_null() {
+                            Arc::new(Field::new(field.name(), DataType::Utf8, true))
+                        } else {
+                            Arc::clone(field)
+                        }
+                    })
+                    .collect::<Fields>(),
+                schema.metadata().clone(),
+            );
         }
         schema = super::rename_default_csv_columns(schema);
 

@@ -262,6 +262,34 @@ fn is_decimal_zero(literal: &NumberLiteral) -> bool {
     decimal && literal.value.chars().all(|c| matches!(c, '0' | '.'))
 }
 
+/// Whether a minus written right before this expression belongs to a NUMBER: the literal itself, or
+/// a literal under the postfix `::` casts applied to it. A parenthesized operand is
+/// `AtomExpr::Nested` and anything else is not a literal, so neither folds.
+fn minus_folds_into_number(expr: &Expr) -> bool {
+    match expr {
+        Expr::Atom(AtomExpr::NumberLiteral(literal)) => !is_decimal_zero(literal),
+        Expr::Cast(inner, _, _) => minus_folds_into_number(inner),
+        _ => false,
+    }
+}
+
+/// Moves that minus into the literal, keeping the casts around it: the grammar reads
+/// `-1::BOOLEAN` as `CAST(-1 AS BOOLEAN)`, not as a negation of `1::BOOLEAN`.
+fn fold_minus_into_number(expr: Expr) -> Expr {
+    match expr {
+        Expr::Atom(AtomExpr::NumberLiteral(literal)) => {
+            Expr::Atom(AtomExpr::NumberLiteral(NumberLiteral {
+                value: format!("-{}", literal.value),
+                ..literal
+            }))
+        }
+        Expr::Cast(inner, colon, data_type) => {
+            Expr::Cast(Box::new(fold_minus_into_number(*inner)), colon, data_type)
+        }
+        expr => expr,
+    }
+}
+
 pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
     match expr {
         Expr::Atom(atom) => from_ast_atom_expression(atom),
@@ -272,17 +300,8 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
         // is a date offset Spark accepts and Sail then refused, refused `-128Y` outright, and named
         // the column `(- 1)`. A parenthesized number is `AtomExpr::Nested`, so `-(2147483648)` is not
         // folded and stays a BIGINT negation, as in Spark.
-        Expr::UnaryOperator(UnaryOperator::Minus(_), expr)
-            if matches!(&*expr, Expr::Atom(AtomExpr::NumberLiteral(literal))
-                if !is_decimal_zero(literal)) =>
-        {
-            let Expr::Atom(AtomExpr::NumberLiteral(literal)) = *expr else {
-                return Err(SqlError::invalid("expected a number literal"));
-            };
-            from_ast_number_literal(NumberLiteral {
-                value: format!("-{}", literal.value),
-                ..literal
-            })
+        Expr::UnaryOperator(UnaryOperator::Minus(_), expr) if minus_folds_into_number(&expr) => {
+            from_ast_expression(fold_minus_into_number(*expr))
         }
         Expr::UnaryOperator(op, expr) => {
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
