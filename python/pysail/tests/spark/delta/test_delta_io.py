@@ -456,14 +456,14 @@ def test_delta_io_conditional_overwrite_rejects_nondeterministic_predicates(spar
         files_before = {
             file.relative_to(delta_path): file.read_bytes() for file in delta_path.rglob("*") if file.is_file()
         }
-        with pytest.raises(
-            AnalysisException, match="Non-deterministic expressions are not allowed in OVERWRITE conditions"
-        ):
-            if api == "replace_where":
+        error_message = "Non-deterministic expressions are not allowed in OVERWRITE conditions"
+        if api == "replace_where":
+            with pytest.raises(AnalysisException, match=error_message):
                 replacement.write.format("delta").mode("overwrite").option("replaceWhere", predicate).save(
                     str(delta_path)
                 )
-            else:
+        else:
+            with pytest.raises(AnalysisException, match=error_message):
                 replacement.writeTo(table_name).overwrite(F.expr(predicate))
         assert spark.read.format("delta").load(str(delta_path)).select("p", "v").orderBy("v").collect() == data
         assert {
