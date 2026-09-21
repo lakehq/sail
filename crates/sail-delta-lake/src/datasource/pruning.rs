@@ -35,7 +35,6 @@ use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, DataFusionError};
 
-use crate::conversion::scalar::NULL_PARTITION_VALUE_DATA_PATH;
 use crate::conversion::{ScalarConverter, parse_optional_partition_value};
 use crate::schema::arrow_field_physical_name;
 use crate::spec::statistics::Stats;
@@ -415,11 +414,9 @@ impl<'adds> AddStatsPruningStatistics<'adds> {
             .adds
             .iter()
             .map(|add| {
-                add.partition_values.get(&storage_name).map(|value| {
-                    value.as_deref().filter(|value| {
-                        !value.is_empty() && *value != NULL_PARTITION_VALUE_DATA_PATH
-                    })
-                })
+                add.partition_values
+                    .get(&storage_name)
+                    .map(|value| value.as_deref().filter(|value| !value.is_empty()))
             })
             .collect();
         let values = values?;
@@ -571,10 +568,7 @@ impl<'adds> AddStatsPruningStatistics<'adds> {
         let storage_name = self.storage_name_for(column)?;
         self.build_count_array(column, |a, s| {
             if let Some(pv) = a.partition_values.get(&storage_name) {
-                if pv
-                    .as_deref()
-                    .is_none_or(|value| value.is_empty() || value == NULL_PARTITION_VALUE_DATA_PATH)
-                {
+                if pv.as_deref().is_none_or(str::is_empty) {
                     return s.map(|s| s.num_records.max(0) as u64);
                 }
                 return Some(0);
@@ -873,21 +867,23 @@ mod tests {
         let counts = stats
             .null_counts(&column)
             .ok_or_else(|| DataFusionError::Internal("missing counts".into()))?;
-        for index in 0..3 {
+        for index in 0..2 {
             assert!(bounds.is_null(index));
             assert_eq!(
                 ScalarValue::try_from_array(&counts, index)?,
                 ScalarValue::UInt64(Some(3))
             );
         }
-        assert_eq!(
-            ScalarValue::try_from_array(&bounds, 3)?,
-            ScalarValue::Utf8(Some("a".into()))
-        );
-        assert_eq!(
-            ScalarValue::try_from_array(&counts, 3)?,
-            ScalarValue::UInt64(Some(0))
-        );
+        for (index, value) in [(2, "__HIVE_DEFAULT_PARTITION__"), (3, "a")] {
+            assert_eq!(
+                ScalarValue::try_from_array(&bounds, index)?,
+                ScalarValue::Utf8(Some(value.into()))
+            );
+            assert_eq!(
+                ScalarValue::try_from_array(&counts, index)?,
+                ScalarValue::UInt64(Some(0))
+            );
+        }
         Ok(())
     }
 

@@ -15,7 +15,6 @@ use datafusion::logical_expr::{Expr, Operator, lit};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::filter::FilterExec;
 
-use crate::conversion::scalar::NULL_PARTITION_VALUE_DATA_PATH;
 use crate::datasource::simplify_expr;
 use crate::physical_plan::DeltaMetadataStatsExec;
 use crate::schema::{logical_to_physical_arrow_paths, make_physical_arrow_schema};
@@ -79,7 +78,7 @@ fn type_partition_columns(
                 .field_with_name(&column.name)?
                 .data_type()
                 .clone();
-            let value = nullif(nullif(expr, lit("")), lit(NULL_PARTITION_VALUE_DATA_PATH));
+            let value = nullif(expr, lit(""));
             Ok(Transformed::yes(Expr::Cast(Cast::new(
                 Box::new(value),
                 data_type,
@@ -636,10 +635,10 @@ mod tests {
             (
                 "p",
                 Arc::new(StringArray::from(vec![
-                    "10",
-                    "2",
-                    "",
-                    "__HIVE_DEFAULT_PARTITION__",
+                    Some("10"),
+                    Some("2"),
+                    Some(""),
+                    None,
                 ])) as Arc<_>,
             ),
             (

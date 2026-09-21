@@ -77,6 +77,7 @@ def _write_partitioned_table(path, files, mapping_mode="none", p_type=None):
 @pytest.mark.parametrize("mapping_mode", ["none", "name", "id"])
 def test_metadata_grouping_reads_only_residual_files(spark, tmp_path, metadata_as_data, mapping_mode):
     path = tmp_path / "metadata_groups"
+    hive_marker = "__HIVE_DEFAULT_PARTITION__"
     known_files = _write_partitioned_table(
         path,
         [
@@ -86,6 +87,8 @@ def test_metadata_grouping_reads_only_residual_files(spark, tmp_path, metadata_a
             ("empty", 3, [], True),
             ("empty-unknown", 3, [], False),
             ("a", None, [5] * 2, True),
+            (hive_marker, 4, [7] * 3, True),
+            (hive_marker, 4, [8, 9], False),
         ],
         mapping_mode,
     )
@@ -95,21 +98,23 @@ def test_metadata_grouping_reads_only_residual_files(spark, tmp_path, metadata_a
     frame = spark.read.format("delta").option("metadataAsDataRead", metadata_as_data).load(str(path))
     assert frame.groupBy("p", "q").count().orderBy("p", "q").collect() == [
         Row(p=None, q=2, count=3),
+        Row(p=hive_marker, q=4, count=5),
         Row(p="a", q=None, count=2),
         Row(p="a", q=1, count=10_002),
     ]
     assert frame.select("q", "p").distinct().orderBy("p", "q").collect() == [
         Row(q=2, p=None),
+        Row(q=4, p=hive_marker),
         Row(q=None, p="a"),
         Row(q=1, p="a"),
     ]
-    assert frame.groupBy("v").count().orderBy("v").collect() == [Row(5, 2), Row(7, 10_003), Row(8, 1), Row(9, 1)]
-    assert frame.count() == 10_007  # noqa: PLR2004
+    assert frame.groupBy("v").count().orderBy("v").collect() == [Row(5, 2), Row(7, 10_006), Row(8, 2), Row(9, 2)]
+    assert frame.count() == 10_012  # noqa: PLR2004
     frame.selectExpr("q AS second", "p AS first").createOrReplaceTempView("metadata_group_aliases")
     try:
         assert spark.sql(
             "SELECT first, second, COUNT(*) AS n FROM metadata_group_aliases GROUP BY first, second ORDER BY first, second"
-        ).collect() == [Row(None, 2, 3), Row("a", None, 2), Row("a", 1, 10_002)]
+        ).collect() == [Row(None, 2, 3), Row(hive_marker, 4, 5), Row("a", None, 2), Row("a", 1, 10_002)]
     finally:
         spark.catalog.dropTempView("metadata_group_aliases")
 
@@ -263,12 +268,65 @@ def test_partition_filters_preserve_unknown_with_residual_files(spark, tmp_path,
 @pytest.mark.parametrize("mapping_mode", ["none", "name", "id"])
 def test_empty_partition_encoding_is_null(spark, tmp_path, metadata_as_data, mapping_mode):
     path = tmp_path / "empty_partition_encoding"
-    _write_partitioned_table(path, [("", 1, [1, -1], True), (None, 2, [2], False), ("a", 3, [3], True)], mapping_mode)
+    hive_marker = "__HIVE_DEFAULT_PARTITION__"
+    _write_partitioned_table(
+        path,
+        [
+            ("", 1, [1, -1], True),
+            (None, 2, [2], False),
+            ("a", 3, [3], True),
+            (hive_marker, 4, [4, -4], True),
+            (hive_marker, 5, [5], False),
+        ],
+        mapping_mode,
+    )
     frame = spark.read.format("delta").option("metadataAsDataRead", metadata_as_data).load(str(path))
+    assert frame.select("p", "v").orderBy("v").collect() == [
+        Row(hive_marker, -4),
+        Row(None, -1),
+        Row(None, 1),
+        Row(None, 2),
+        Row("a", 3),
+        Row(hive_marker, 4),
+        Row(hive_marker, 5),
+    ]
     assert [row.v for row in frame.where("p IS NULL").orderBy("v").collect()] == [-1, 1, 2]
     assert [row.v for row in frame.where("p IS NULL AND v > 0").orderBy("v").collect()] == [1, 2]
     assert [row.v for row in frame.where("p = ''").collect()] == []
     assert frame.where("p IS NULL").groupBy("p").count().collect() == [Row(None, 3)]
+    assert frame.where(frame.p == hive_marker).groupBy("p").count().collect() == [Row(hive_marker, 3)]
+    assert [row.v for row in frame.where((frame.p == hive_marker) & (frame.v > 0)).orderBy("v").collect()] == [4, 5]
+    assert [
+        row.v
+        for row in frame.where("(p IS NULL AND v > 0) OR (p = '__HIVE_DEFAULT_PARTITION__' AND v < 0)")
+        .orderBy("v")
+        .collect()
+    ] == [-4, 1, 2]
+
+
+@pytest.mark.parametrize("mapping_mode", ["none", "name", "id"])
+@pytest.mark.parametrize(
+    ("predicate", "removed_files", "remaining_values"),
+    [
+        ("p IS NULL", {"part-1.parquet", "part-2.parquet"}, [1, 4]),
+        ("p = '__HIVE_DEFAULT_PARTITION__'", {"part-0.parquet"}, [2, 3, 4]),
+    ],
+    ids=["null-partitions", "literal-hive-marker"],
+)
+def test_partition_delete_distinguishes_null_from_hive_marker(
+    spark, tmp_path, mapping_mode, predicate, removed_files, remaining_values
+):
+    path = tmp_path / "delete_partition_encodings"
+    _write_partitioned_table(
+        path,
+        [("__HIVE_DEFAULT_PARTITION__", 1, [1], True), (None, 2, [2], True), ("", 3, [3], True), ("a", 4, [4], True)],
+        mapping_mode,
+    )
+    spark.sql(f"DELETE FROM delta.`{path}` WHERE {predicate}").collect()  # noqa: S608
+    latest = sorted((path / "_delta_log").glob("*.json"))[-1]
+    actions = [json.loads(line) for line in latest.read_text().splitlines()]
+    assert {action["remove"]["path"] for action in actions if "remove" in action} == removed_files
+    assert [row.v for row in spark.read.format("delta").load(str(path)).orderBy("v").collect()] == remaining_values
 
 
 @pytest.mark.parametrize("metadata_as_data", ["false", "true"])
