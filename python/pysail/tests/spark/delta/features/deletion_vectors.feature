@@ -406,6 +406,29 @@ Feature: Delta Lake Deletion Vectors (Merge-on-Read)
         | 3  |
         | 4  |
 
+    Scenario: EXPLAIN projected replay DV scan retains an unprojected predicate column
+      Given statement
+        """
+        DELETE FROM delta_dv_read_metadata WHERE id = 2
+        """
+      Then delta log latest commit info contains
+        | path                                     | value |
+        | operationMetrics.numDeletionVectorsAdded | 1     |
+      When query
+        """
+        SELECT name FROM delta_dv_read_metadata WHERE id >= 2
+        """
+      Then query result collected
+        | name  |
+        | Gamma |
+        | Delta |
+      When query
+        """
+        EXPLAIN
+        SELECT name FROM delta_dv_read_metadata WHERE id >= 2
+        """
+      Then query plan matches snapshot
+
   Rule: EXPLAIN plans for DV-enabled tables
     Background:
       Given variable location for temporary directory dv_explain
@@ -426,6 +449,116 @@ Feature: Delta Lake Deletion Vectors (Merge-on-Read)
           (3, 'Charlie', 300)
         AS t(id, name, value)
         """
+
+    Scenario: EXPLAIN DV-enabled table without deleted rows retains the direct Parquet scan
+      When query
+        """
+        SELECT name FROM delta_dv_explain WHERE value >= 200
+        """
+      Then query result collected
+        | name    |
+        | Bob     |
+        | Charlie |
+      When query
+        """
+        EXPLAIN
+        SELECT name FROM delta_dv_explain WHERE value >= 200
+        """
+      Then query plan matches snapshot
+
+    Scenario: EXPLAIN projected eager DV scan retains an unprojected predicate column
+      Given statement
+        """
+        DELETE FROM delta_dv_explain WHERE id = 2
+        """
+      Then delta log latest commit info contains
+        | path                                     | value |
+        | operationMetrics.numDeletionVectorsAdded | 1     |
+      When query
+        """
+        SELECT name FROM delta_dv_explain WHERE value >= 200
+        """
+      Then query result collected
+        | name    |
+        | Charlie |
+      When query
+        """
+        EXPLAIN
+        SELECT name FROM delta_dv_explain WHERE value >= 200
+        """
+      Then query plan matches snapshot
+
+    Scenario: EXPLAIN filtered DV existence retains the predicate below the limit
+      Given statement
+        """
+        DELETE FROM delta_dv_explain WHERE id = 2
+        """
+      When query
+        """
+        SELECT 1 AS present FROM delta_dv_explain WHERE id = 2 LIMIT 1
+        """
+      Then query result collected
+        | present |
+      When query
+        """
+        EXPLAIN
+        SELECT 1 AS present FROM delta_dv_explain WHERE id = 2 LIMIT 1
+        """
+      Then query plan matches snapshot
+
+    Scenario: EXPLAIN DELETE with an existing DV projects a non-leading predicate column
+      Given statement
+        """
+        DELETE FROM delta_dv_explain WHERE id = 1
+        """
+      Given statement
+        """
+        DELETE FROM delta_dv_explain WHERE value = 200
+        """
+      Then delta log latest commit info contains
+        | path                                       | value |
+        | operationMetrics.numDeletedRows            | 1     |
+        | operationMetrics.numDeletionVectorsUpdated | 1     |
+      Then data files in location count is 1
+      When query
+        """
+        SELECT * FROM delta_dv_explain
+        """
+      Then query result collected
+        | id | name    | value |
+        | 3  | Charlie | 300   |
+      When query
+        """
+        EXPLAIN
+        DELETE FROM delta_dv_explain WHERE value = 300
+        """
+      Then query plan matches snapshot
+
+    Scenario: EXPLAIN DELETE deduplicates and rebinds multiple predicate columns
+      Given statement
+        """
+        DELETE FROM delta_dv_explain
+        WHERE (name = 'Bob' AND value >= 200) OR value = 300
+        """
+      Then delta log latest commit info contains
+        | path                                     | value |
+        | operationMetrics.numDeletedRows          | 2     |
+        | operationMetrics.numDeletionVectorsAdded | 1     |
+      Then data files in location count is 1
+      When query
+        """
+        SELECT * FROM delta_dv_explain
+        """
+      Then query result collected
+        | id | name  | value |
+        | 1  | Alice | 100   |
+      When query
+        """
+        EXPLAIN
+        DELETE FROM delta_dv_explain
+        WHERE (name = 'Alice' AND value >= 100) OR value = 300
+        """
+      Then query plan matches snapshot
 
     Scenario: EXPLAIN DELETE on DV table uses shared scan and row-level DV writer
       When query

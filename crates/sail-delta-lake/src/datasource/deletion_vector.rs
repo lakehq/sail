@@ -6,7 +6,9 @@ use datafusion::arrow::buffer::BooleanBuffer;
 use datafusion::arrow::compute::filter_record_batch;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::parquet::ParquetRowSelection;
-use datafusion::datasource::physical_plan::{FileOpener, FileScanConfig, FileSource};
+use datafusion::datasource::physical_plan::{
+    FileOpener, FileScanConfig, FileSource, ParquetSource,
+};
 use datafusion::datasource::table_schema::TableSchema;
 use datafusion::physical_plan::apply_expression_roots;
 use datafusion::physical_plan::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder};
@@ -42,6 +44,7 @@ type BitmapCache = Cache<(String, i32, i64), Arc<DeletionVectorBitmap>>;
 #[derive(Clone)]
 pub(crate) struct DeltaParquetSource {
     parquet: Arc<dyn FileSource>,
+    position_parquet: Arc<dyn FileSource>,
     projection: ProjectionExprs,
     row_index: usize,
     table_url: Url,
@@ -49,7 +52,7 @@ pub(crate) struct DeltaParquetSource {
 }
 
 impl DeltaParquetSource {
-    pub fn new(parquet: Arc<dyn FileSource>, row_index: usize, table_url: Url) -> Self {
+    pub fn new(parquet: ParquetSource, row_index: usize, table_url: Url) -> Self {
         let schema = parquet.table_schema().table_schema();
         let projection =
             ProjectionExprs::from_indices(&(0..schema.fields().len()).collect::<Vec<_>>(), schema);
@@ -67,7 +70,10 @@ impl DeltaParquetSource {
             )
             .build();
         Self {
-            parquet,
+            // Row predicates must not evaluate values in deleted rows. The
+            // position path retains pruning and leaves row filtering above the scan.
+            position_parquet: Arc::new(parquet.clone().with_pushdown_filters(false)),
+            parquet: Arc::new(parquet),
             projection,
             row_index,
             table_url,
@@ -96,9 +102,10 @@ impl FileSource for DeltaParquetSource {
         // FileStream applies the fetch after DV filtering. A decoder-level fetch
         // would let deleted rows consume the quota on the position-filter path.
         reader_config.limit = None;
-        let make_reader = |projection: &ProjectionExprs| -> Result<Arc<dyn Morselizer>> {
-            let source = self
-                .parquet
+        let make_reader = |parquet: &dyn FileSource,
+                           projection: &ProjectionExprs|
+         -> Result<Arc<dyn Morselizer>> {
+            let source = parquet
                 .try_pushdown_projection(projection)?
                 .ok_or_else(|| {
                     DataFusionError::Internal("Parquet projection was rejected".into())
@@ -109,7 +116,7 @@ impl FileSource for DeltaParquetSource {
                 partition,
             )?))
         };
-        let reader = make_reader(&self.projection)?;
+        let reader = make_reader(self.parquet.as_ref(), &self.projection)?;
         // Append a private physical row number only on the bitmap-filter path.
         // Projection after filtering also preserves zero-column batch row counts.
         let output_columns = self.projection.iter().count();
@@ -119,7 +126,7 @@ impl FileSource for DeltaParquetSource {
                 Arc::new(Column::new(field.name(), self.row_index)),
                 field.name(),
             )]));
-        let position_reader = make_reader(&position_projection)?;
+        let position_reader = make_reader(self.position_parquet.as_ref(), &position_projection)?;
         let allow_selection = self.filter().is_none_or(|filter| {
             !DynamicFilterTracking::classify(&filter).contains_dynamic_filter()
         });
@@ -142,6 +149,7 @@ impl FileSource for DeltaParquetSource {
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
         let mut source = self.clone();
         source.parquet = self.parquet.with_batch_size(batch_size);
+        source.position_parquet = self.position_parquet.with_batch_size(batch_size);
         Arc::new(source)
     }
 
@@ -440,10 +448,14 @@ mod tests {
     };
     use datafusion::datasource::source::DataSourceExec;
     use datafusion::logical_expr::Operator;
-    use datafusion::physical_plan::collect;
+    use datafusion::physical_plan::filter::FilterExec;
+    use datafusion::physical_plan::limit::GlobalLimitExec;
     use datafusion::physical_plan::metrics::{MetricValue, MetricsSet};
+    use datafusion::physical_plan::projection::ProjectionExec;
+    use datafusion::physical_plan::{ExecutionPlan, collect};
     use datafusion::prelude::SessionContext;
     use datafusion_physical_expr::expressions::{BinaryExpr, lit};
+    use datafusion_physical_expr::utils::reassign_expr_columns;
     use object_store::ObjectStoreExt;
     use object_store::memory::InMemory;
     use object_store::path::Path;
@@ -517,7 +529,7 @@ mod tests {
                 Field::new("row_index", DataType::Int64, false).with_extension_type(RowNumber),
             )])
             .build();
-        let predicate = Arc::new(BinaryExpr::new(
+        let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
             Arc::new(BinaryExpr::new(
                 Arc::new(Column::new("id", 0)),
                 Operator::GtEq,
@@ -534,9 +546,9 @@ mod tests {
         options.global.pushdown_filters = true;
         let parquet = ParquetSource::new(table_schema)
             .with_table_parquet_options(options)
-            .with_predicate(predicate);
+            .with_predicate(Arc::clone(&predicate));
         let source = Arc::new(DeltaParquetSource::new(
-            Arc::new(parquet),
+            parquet,
             1,
             Url::parse("memory://dv/table/").map_err(|e| DataFusionError::External(Box::new(e)))?,
         ));
@@ -556,12 +568,30 @@ mod tests {
         let store_url = ObjectStoreUrl::parse("memory://dv")?;
         let ctx = SessionContext::new();
         ctx.register_object_store(store_url.as_ref(), store);
+        let mut scan_projection = projection.clone();
+        if !scan_projection.contains(&0) {
+            scan_projection.push(0);
+        }
         let config = FileScanConfigBuilder::new(store_url, source)
             .with_file_groups(groups)
-            .with_projection_indices(Some(projection))?
-            .with_limit(limit)
+            .with_projection_indices(Some(scan_projection))?
             .build();
-        let batches = collect(DataSourceExec::from_data_source(config), ctx.task_ctx()).await?;
+        let scan = DataSourceExec::from_data_source(config);
+        let predicate = reassign_expr_columns(predicate, &scan.schema())?;
+        let filtered: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(predicate, scan)?);
+        let projections = (0..projection.len())
+            .map(|index| {
+                let name = filtered.schema().field(index).name().clone();
+                (Arc::new(Column::new(&name, index)) as _, name)
+            })
+            .collect::<Vec<_>>();
+        let projected = Arc::new(ProjectionExec::try_new(projections, filtered)?);
+        let plan: Arc<dyn ExecutionPlan> = if limit.is_some() {
+            Arc::new(GlobalLimitExec::new(projected, 0, limit))
+        } else {
+            projected
+        };
+        let batches = collect(plan, ctx.task_ctx()).await?;
         Ok((batches, metrics.clone_inner()))
     }
 
@@ -608,11 +638,20 @@ mod tests {
             assert!(
                 matches!(metrics.sum_by_name("row_groups_pruned_statistics"), Some(MetricValue::PruningMetrics { pruning_metrics, .. }) if pruning_metrics.pruned() > 0)
             );
-            assert!(
-                metrics
-                    .sum_by_name("pushdown_rows_pruned")
-                    .is_some_and(|value| value.as_usize() > 0)
-            );
+            let rows_pruned = metrics
+                .sum_by_name("pushdown_rows_pruned")
+                .map(|value| value.as_usize())
+                .unwrap_or_default();
+            if physical_rows.is_some() {
+                assert!(rows_pruned > 0);
+            } else {
+                assert_eq!(rows_pruned, 0);
+                assert!(
+                    metrics
+                        .sum_by_name("dv_rows_filtered")
+                        .is_some_and(|value| value.as_usize() > 0)
+                );
+            }
         }
         Ok(())
     }

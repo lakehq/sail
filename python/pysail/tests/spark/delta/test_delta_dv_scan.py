@@ -6,6 +6,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from pysail.testing.spark.session import spark_connect_server, spark_session_factory
+
 
 def _write_delta_with_row_groups(path, column_mapping, include_stats):
     path.mkdir()
@@ -118,3 +120,37 @@ def test_dv_scan_pruning_projection_and_repeated_dml(spark, tmp_path, metadata_a
     ]
     assert read().count() == len(live)
     assert spark.read.format("delta").option("versionAsOf", 0).load(str(path)).count() == 4352
+
+
+@pytest.mark.parametrize("metadata_as_data", [False, True])
+def test_fragmented_dv_excludes_deleted_values_before_predicate_evaluation(tmp_path, metadata_as_data):
+    path = tmp_path / "fragmented_dv"
+    with (
+        spark_connect_server(envs={"SAIL_PARQUET__PUSHDOWN_FILTERS": "true"}) as server,
+        spark_session_factory(server.remote) as sessions,
+    ):
+        spark = sessions.create()
+        (
+            spark.range(10000, numPartitions=1)
+            .selectExpr("id", "CASE WHEN id % 2 = 0 THEN 'bad' ELSE '10' END AS value")
+            .coalesce(1)
+            .write.format("delta")
+            .option("delta.enableDeletionVectors", "true")
+            .save(str(path))
+        )
+        spark.sql(f"DELETE FROM delta.`{path}` WHERE id % 2 = 0")  # noqa: S608
+        actions = [
+            json.loads(line) for line in (path / "_delta_log" / "00000000000000000001.json").read_text().splitlines()
+        ]
+        adds = [action["add"] for action in actions if "add" in action]
+        assert len(adds) == 1
+        assert adds[0]["deletionVector"]["cardinality"] == 5000
+        frame = (
+            spark.read.format("delta")
+            .option("metadataAsDataRead", str(metadata_as_data).lower())
+            .load(str(path))
+            .where("CAST(value AS BIGINT) > 0")
+            .select("id")
+        )
+        assert sorted(row.id for row in frame.collect()) == list(range(1, 10000, 2))
+        assert frame.limit(1).first().id % 2 == 1

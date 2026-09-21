@@ -426,15 +426,16 @@ pub fn build_file_scan_config(
         parquet_source = parquet_source.with_predicate(predicate);
     }
 
-    let mut file_source: Arc<dyn datafusion::datasource::physical_plan::FileSource> =
-        Arc::new(parquet_source);
-    if has_deletion_vectors {
-        file_source = Arc::new(DeltaParquetSource::new(
-            file_source,
-            row_index,
-            log_store.config().location.clone(),
-        ));
-    }
+    let file_source: Arc<dyn datafusion::datasource::physical_plan::FileSource> =
+        if has_deletion_vectors {
+            Arc::new(DeltaParquetSource::new(
+                parquet_source,
+                row_index,
+                log_store.config().location.clone(),
+            ))
+        } else {
+            Arc::new(parquet_source)
+        };
 
     // Build the final FileScanConfig
     let object_store_url = create_object_store_url(&log_store.config().location)?;
