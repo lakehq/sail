@@ -115,10 +115,9 @@ use sail_data_source::listing::delete::FileDeleteExec;
 use sail_data_source::options::r#gen::RateReadOptions;
 use sail_delta_lake::physical_plan::{
     DeletionVectorRowOperationMode, DeletionVectorRowsWriterConfig, DeletionVectorRowsWriterExec,
-    DeletionVectorWriterExec, DeltaCommitContext, DeltaCommitExec, DeltaDecodePath,
-    DeltaDiscoveryExec, DeltaLogReplayExec, DeltaLogReplayMode, DeltaMetadataStatsExec,
-    DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaSnapshotContext, DeltaWriteContext,
-    DeltaWriterExec,
+    DeltaCommitContext, DeltaCommitExec, DeltaDecodePath, DeltaDiscoveryExec, DeltaLogReplayExec,
+    DeltaLogReplayMode, DeltaMetadataStatsExec, DeltaRemoveActionsExec, DeltaScanByAddsExec,
+    DeltaSnapshotContext, DeltaWriteContext, DeltaWriterExec,
 };
 use sail_delta_lake::schema::PhysicalPartitionColumn;
 use sail_delta_lake::spec::{
@@ -1421,50 +1420,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?,
                 usize::try_from(output_partitions).map_err(|e| plan_datafusion_err!("{e}"))?,
             ))),
-            NodeKind::DeletionVectorWriter(r#gen::DeletionVectorWriterExecNode {
-                input,
-                table_url,
-                condition,
-                table_schema,
-                version,
-                operation_json,
-                partition_value_columns_json,
-            }) => {
-                let input =
-                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
-                let table_url = Url::parse(&table_url)
-                    .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
-                let table_schema = Arc::new(try_decode_schema(&table_schema)?);
-                let condition = try_decode_physical_expr_with_converter(
-                    ctx,
-                    self,
-                    proto_converter,
-                    &condition,
-                    &table_schema,
-                )?;
-                let operation = if let Some(s) = operation_json.as_ref() {
-                    Some(
-                        serde_json::from_str::<DeltaOperation>(s)
-                            .map_err(|e| plan_datafusion_err!("{e}"))?,
-                    )
-                } else {
-                    None
-                };
-                let partition_value_columns = partition_value_columns_json
-                    .as_deref()
-                    .map(serde_json::from_str::<Vec<PhysicalPartitionColumn>>)
-                    .transpose()
-                    .map_err(|e| plan_datafusion_err!("{e}"))?;
-                Ok(Arc::new(DeletionVectorWriterExec::new(
-                    input,
-                    table_url,
-                    condition,
-                    table_schema,
-                    version,
-                    partition_value_columns,
-                    operation,
-                )?))
-            }
             NodeKind::DeletionVectorRowsWriter(r#gen::DeletionVectorRowsWriterExecNode {
                 input,
                 adds_input,
@@ -2648,36 +2603,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::Coalesce(r#gen::CoalesceExecNode {
                 input,
                 output_partitions: u64::try_from(coalesce.output_partitions())
-                    .map_err(|e| plan_datafusion_err!("{e}"))?,
-            })
-        } else if let Some(dv_writer_exec) = node.downcast_ref::<DeletionVectorWriterExec>() {
-            let input = try_encode_physical_plan_with_converter(
-                self,
-                proto_converter,
-                dv_writer_exec.input().clone(),
-            )?;
-            let condition = try_encode_physical_expr_with_converter(
-                self,
-                proto_converter,
-                dv_writer_exec.condition(),
-            )?;
-            let table_schema = try_encode_schema(dv_writer_exec.table_schema())?;
-            let operation_json = if let Some(op) = dv_writer_exec.operation() {
-                Some(serde_json::to_string(op).map_err(|e| plan_datafusion_err!("{e}"))?)
-            } else {
-                None
-            };
-            NodeKind::DeletionVectorWriter(r#gen::DeletionVectorWriterExecNode {
-                input,
-                table_url: dv_writer_exec.table_url().to_string(),
-                condition,
-                table_schema,
-                version: dv_writer_exec.version(),
-                operation_json,
-                partition_value_columns_json: dv_writer_exec
-                    .partition_value_columns()
-                    .map(serde_json::to_string)
-                    .transpose()
                     .map_err(|e| plan_datafusion_err!("{e}"))?,
             })
         } else if let Some(dv_rows_writer_exec) =

@@ -13,7 +13,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::{DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion::functions::core::getfield::GetFieldFunc;
-use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+use datafusion::parquet::arrow::{PARQUET_FIELD_ID_META_KEY, RowNumber};
 use datafusion::physical_expr::expressions::{self, CastExpr, Column, Literal};
 use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use datafusion::physical_expr_adapter::{PhysicalExprAdapter, PhysicalExprAdapterFactory};
@@ -286,7 +286,21 @@ fn create_column_mapping(
     let mut default_values = Vec::with_capacity(logical_schema.fields().len());
 
     for logical_field in logical_schema.fields() {
-        match find_matching_struct_field(physical_schema.fields(), logical_field, matching)? {
+        // Reader-generated positions have no Delta physical name or field ID.
+        // Match their typed virtual fields before applying persisted-column rules.
+        let physical_field = if logical_field.try_extension_type::<RowNumber>().is_ok() {
+            physical_schema
+                .fields()
+                .iter()
+                .enumerate()
+                .find(|(_, field)| {
+                    field.name() == logical_field.name()
+                        && field.try_extension_type::<RowNumber>().is_ok()
+                })
+        } else {
+            find_matching_struct_field(physical_schema.fields(), logical_field, matching)?
+        };
+        match physical_field {
             Some((physical_index, _)) => {
                 column_mapping.push(Some(physical_index));
                 default_values.push(None);
@@ -1462,6 +1476,45 @@ mod tests {
                 .values(),
             &[7, 9]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn virtual_row_numbers_survive_column_mapping() -> Result<()> {
+        let row_number =
+            Arc::new(Field::new("position", DataType::Int64, false).with_extension_type(RowNumber));
+        let logical = Arc::new(Schema::new(vec![Arc::clone(&row_number)]));
+        let physical = Arc::new(Schema::new(vec![
+            Arc::new(Field::new("data", DataType::Int64, true)),
+            row_number,
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&physical),
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2])),
+                Arc::new(Int64Array::from(vec![10, 100])),
+            ],
+        )?;
+        for matching in [
+            StructFieldMatching::PhysicalName,
+            StructFieldMatching::FieldId,
+        ] {
+            let adapter = create_schema_evolution_adapter(
+                Arc::clone(&logical),
+                Arc::clone(&physical),
+                matching,
+                SchemaEvolutionTimezoneMode::Strict,
+            )?;
+            let expr = adapter.rewrite(Arc::new(Column::new("position", 0)))?;
+            assert!(
+                expr.downcast_ref::<Column>()
+                    .is_some_and(|column| column.index() == 1)
+            );
+            assert_eq!(
+                expr.evaluate(&batch)?.into_array(2)?.as_ref(),
+                batch.column(1).as_ref()
+            );
+        }
         Ok(())
     }
 

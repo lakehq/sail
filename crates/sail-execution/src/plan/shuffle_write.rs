@@ -10,6 +10,7 @@ use datafusion::physical_expr::expressions::UnKnownColumn;
 use datafusion::physical_expr::{
     EquivalenceProperties, Partitioning, PhysicalExpr, RangePartitioning,
 };
+use datafusion::physical_plan::coalesce::LimitedBatchCoalescer;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::repartition::BatchPartitioner;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -20,7 +21,7 @@ use datafusion::physical_plan::{
 use futures::StreamExt;
 use sail_physical_plan::repartition::RowRoundRobinPartitioner;
 
-use crate::stream::writer::{TaskStreamWriteState, TaskStreamWriter};
+use crate::stream::writer::{TaskStreamSink, TaskStreamWriteState, TaskStreamWriter};
 
 enum ShufflePartitioner {
     Batch(BatchPartitioner),
@@ -213,6 +214,10 @@ impl ExecutionPlan for ShuffleWriteExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let writer = self.writer.clone();
+        // Unbounded inputs must not wait indefinitely for a full output batch.
+        // Inspect the child: the shuffle writer itself advertises unboundedness.
+        let batch_size = (!self.plan.boundedness().is_unbounded())
+            .then(|| context.session_config().batch_size());
         let stream = self.plan.execute(partition, context)?;
         // TODO: Support metrics in batch partitioner
         let num_input_partitions = self
@@ -252,7 +257,7 @@ impl ExecutionPlan for ShuffleWriteExec {
         let empty = RecordBatch::new_empty(self.schema());
         let channels = self.partitioning.partition_count();
         let output = futures::stream::once(async move {
-            shuffle_write(writer, stream, partition, channels, partitioner).await?;
+            shuffle_write(writer, stream, partition, channels, partitioner, batch_size).await?;
             Ok(empty)
         });
         Ok(Box::pin(RecordBatchStreamAdapter::new(
@@ -262,24 +267,95 @@ impl ExecutionPlan for ShuffleWriteExec {
     }
 }
 
+/// One independent buffer for each destination of a shuffle task. In contrast
+/// to RepartitionExec, buffers cannot be shared across distributed input tasks.
+struct ShuffleBatchCoalescer {
+    channels: Vec<Option<LimitedBatchCoalescer>>,
+    batch_size: usize,
+}
+
+impl ShuffleBatchCoalescer {
+    fn new(channels: usize, batch_size: usize) -> Self {
+        Self {
+            channels: (0..channels).map(|_| None).collect(),
+            batch_size,
+        }
+    }
+
+    fn push(&mut self, partition: usize, batch: RecordBatch) -> Result<()> {
+        // Allocate lazily so empty destinations need no Arrow buffers.
+        let coalescer = self.channels[partition].get_or_insert_with(|| {
+            LimitedBatchCoalescer::new(batch.schema(), self.batch_size, None)
+        });
+        coalescer.push_batch(batch)?;
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<()> {
+        for coalescer in self.channels.iter_mut().flatten() {
+            coalescer.finish()?;
+        }
+        Ok(())
+    }
+
+    async fn write_ready(&mut self, sink: &mut dyn TaskStreamSink) -> Result<TaskStreamWriteState> {
+        loop {
+            let batches: Vec<_> = self
+                .channels
+                .iter_mut()
+                .map(|coalescer| {
+                    coalescer
+                        .as_mut()
+                        .and_then(LimitedBatchCoalescer::next_completed_batch)
+                })
+                .collect();
+            if batches.iter().all(Option::is_none) {
+                return Ok(TaskStreamWriteState::Active);
+            }
+            // A push may complete multiple batches. Drain them FIFO, keeping
+            // concurrent writes across channels but ordered writes within each.
+            if sink.write(batches).await? == TaskStreamWriteState::Closed {
+                return Ok(TaskStreamWriteState::Closed);
+            }
+        }
+    }
+}
+
 async fn shuffle_write(
     writer: Arc<dyn TaskStreamWriter>,
     mut stream: SendableRecordBatchStream,
     partition: usize,
     channels: usize,
     mut partitioner: ShufflePartitioner,
+    batch_size: Option<usize>,
 ) -> Result<()> {
     let mut sink = writer.open(partition).await?;
+    let mut coalescer = batch_size.map(|size| ShuffleBatchCoalescer::new(channels, size));
     let result = async {
         while let Some(batch) = stream.next().await {
             let batch = batch?;
-            let mut partitions: Vec<Option<RecordBatch>> = vec![None; channels];
-            partitioner.partition(batch, |p, batch| {
-                partitions[p] = Some(batch);
-                Ok(())
-            })?;
-            if sink.write(partitions).await? == TaskStreamWriteState::Closed {
+            if batch.num_rows() == 0 {
+                continue;
+            }
+            let state = if let Some(coalescer) = &mut coalescer {
+                partitioner.partition(batch, |p, batch| coalescer.push(p, batch))?;
+                coalescer.write_ready(sink.as_mut()).await?
+            } else {
+                let mut partitions: Vec<Option<RecordBatch>> = vec![None; channels];
+                partitioner.partition(batch, |p, batch| {
+                    partitions[p] = Some(batch);
+                    Ok(())
+                })?;
+                sink.write(partitions).await?
+            };
+            if state == TaskStreamWriteState::Closed {
                 return Ok::<_, datafusion::error::DataFusionError>(false);
+            }
+        }
+        if let Some(coalescer) = &mut coalescer {
+            coalescer.finish()?;
+            if coalescer.write_ready(sink.as_mut()).await? == TaskStreamWriteState::Closed {
+                return Ok(false);
             }
         }
         Ok(true)
