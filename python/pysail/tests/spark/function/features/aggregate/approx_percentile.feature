@@ -288,28 +288,11 @@ Feature: approx_percentile / percentile_approx aggregate function
         """
       Then query error The accuracy must be between \(0, 2147483647\]
 
-    @sail-bug
-    Scenario: percentile_approx with accuracy above the int range errors
-      When query
-        """
-        SELECT percentile_approx(v, 0.5, 3000000000) AS r
-        FROM VALUES (0), (1), (2) AS t(v)
-        """
-      Then query error The accuracy must be between \(0, 2147483647\]
-
-    # The bound is `accuracy > Int.MaxValue` on a value read as a Long, so the
-    # int maximum itself is still accepted. Pairs with the scenario above: an
-    # off-by-one in that comparison changes exactly this row and nothing else.
-    @sail-bug
-    Scenario: the int maximum is still an accepted accuracy
-      When query
-        """
-        SELECT percentile_approx(v, 0.5, 2147483647) AS r
-        FROM VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9), (10) AS t(v)
-        """
-      Then query result
-        | r |
-        | 5 |
+    # Not pinned here on purpose: Spark rejects an accuracy above Int.MaxValue and bounds the
+    # digest it builds for the maximum itself. Sail passes the accuracy straight to DataFusion's
+    # TDigest as `max_size`, which runs `Vec::with_capacity(max_size)`: 3000000000 asks for ~48 GB
+    # and 2147483647 for ~34 GB. On Linux the allocation fails and aborts the whole process, so a
+    # scenario cannot hold this bug as an xfail. Re-add both once the accuracy is validated.
 
     @sail-bug
     Scenario: percentile_approx with percentage out of range errors
