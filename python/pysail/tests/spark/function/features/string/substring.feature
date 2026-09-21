@@ -79,6 +79,70 @@ Feature: substring() and substr() extract substrings
         | result          |
         | abcdefghijklmno |
 
+  Rule: Literal prefixes on string columns
+
+    Scenario Outline: Literal prefixes preserve mixed string columns with length <length>
+      When query
+        """
+        SELECT substring(v, 1, <length>) AS prefix,
+               substr(v, 0, <length>) AS zero_prefix,
+               substr(substring(v, 1, 20), 1, <length>) AS nested_prefix
+        FROM VALUES
+          (1, 'abcdefghijklmnopqrstu'),
+          (2, 'é🙂漢abcdef'),
+          (3, 'éclair'),
+          (4, 'x'),
+          (5, '🙂'),
+          (6, ''),
+          (7, CAST(NULL AS STRING))
+        AS t(id, v)
+        ORDER BY id
+        """
+      Then query result collected ordered
+        | prefix      | zero_prefix | nested_prefix |
+        | <ascii>     | <ascii>     | <ascii>       |
+        | <unicode>   | <unicode>   | <unicode>     |
+        | <combining> | <combining> | <combining>   |
+        | <short>     | <short>     | <short>       |
+        | <emoji>     | <emoji>     | <emoji>       |
+        |             |             |               |
+        | NULL        | NULL        | NULL          |
+      Then query schema
+        """
+        root
+         |-- prefix: string (nullable = true)
+         |-- zero_prefix: string (nullable = true)
+         |-- nested_prefix: string (nullable = true)
+        """
+
+      Examples:
+        | length | ascii                | unicode     | combining | short | emoji |
+        | 0      |                      |             |           |       |       |
+        | 2      | ab                   | é🙂         | é        | x     | 🙂    |
+        | 5      | abcde                | é🙂漢ab     | écla     | x     | 🙂    |
+        | 20     | abcdefghijklmnopqrst | é🙂漢abcdef | éclair   | x     | 🙂    |
+
+    Scenario: Positive non-prefix positions preserve character boundaries
+      When query
+        """
+        SELECT substring(v, 2, 2) AS result, substr(v, 2, 2) AS alias_result
+        FROM VALUES
+          (1, 'abcdef'),
+          (2, 'é🙂漢abc'),
+          (3, 'x'),
+          (4, ''),
+          (5, CAST(NULL AS STRING))
+        AS t(id, v)
+        ORDER BY id
+        """
+      Then query result collected ordered
+        | result | alias_result |
+        | bc     | bc           |
+        | 🙂漢   | 🙂漢         |
+        |        |              |
+        |        |              |
+        | NULL   | NULL         |
+
   @function(nullability)
   Rule: Output schema
 

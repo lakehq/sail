@@ -242,6 +242,7 @@ use sail_function::scalar::string::spark_regexp_extract_all::{
 };
 use sail_function::scalar::string::spark_sentences::SparkSentences;
 use sail_function::scalar::string::spark_split::SparkSplit;
+use sail_function::scalar::string::spark_string_prefix::SparkStringPrefix;
 use sail_function::scalar::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
 use sail_function::scalar::string::spark_to_char::SparkToChar;
 use sail_function::scalar::string::spark_to_number::SparkToNumber;
@@ -3217,6 +3218,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "format_number" => Ok(Arc::new(ScalarUDF::from(FormatNumber::new()))),
             "soundex" => Ok(Arc::new(ScalarUDF::from(Soundex::new()))),
             "quote" => Ok(Arc::new(ScalarUDF::from(SparkQuote::new()))),
+            "spark_string_prefix" => Ok(Arc::new(ScalarUDF::from(SparkStringPrefix::new()))),
             "st_asbinary" => Ok(Arc::new(ScalarUDF::from(StAsBinary::new()))),
             "st_geomfromwkb" => Ok(Arc::new(ScalarUDF::from(StGeomFromWKB::new()))),
             "st_geogfromwkb" => Ok(Arc::new(ScalarUDF::from(StGeogFromWKB::new()))),
@@ -3394,6 +3396,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<Randstr>()
             || node_inner.is::<Soundex>()
             || node_inner.is::<SparkQuote>()
+            || node_inner.is::<SparkStringPrefix>()
             || node_inner.is::<StAsBinary>()
             || node_inner.is::<StGeomFromWKB>()
             || node_inner.is::<StGeogFromWKB>()
