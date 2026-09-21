@@ -101,6 +101,24 @@ where
     }
 }
 
+/// Identifies a task attempt within a stage.
+#[derive(Debug, Copy, Clone, Eq, Hash, PartialEq)]
+pub struct TaskAttempt {
+    pub partition: usize,
+    pub attempt: usize,
+}
+
+impl TaskAttempt {
+    pub fn task_key(&self, job_id: JobId, stage: usize) -> TaskKey {
+        TaskKey {
+            job_id,
+            stage,
+            partition: self.partition,
+            attempt: self.attempt,
+        }
+    }
+}
+
 /// Uniquely identifies a task attempt within a job by stage, partition, and attempt number.
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub struct TaskKey {
