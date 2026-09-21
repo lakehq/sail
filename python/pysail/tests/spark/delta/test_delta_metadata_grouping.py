@@ -7,12 +7,12 @@ from pyspark.sql import Row
 from pyspark.sql.types import IntegerType, LongType, StringType, StructField, StructType
 
 
-def _write_partitioned_table(path, files, mapping_mode="none"):
+def _write_partitioned_table(path, files, mapping_mode="none", p_type=None):
     path.mkdir()
     names = ["p", "q", "v"]
     physical_names = names if mapping_mode == "none" else [f"col-{name}" for name in names]
     fields = []
-    for index, (name, dtype) in enumerate(zip(names, [StringType(), IntegerType(), LongType()], strict=True)):
+    for index, (name, dtype) in enumerate(zip(names, [p_type or StringType(), IntegerType(), LongType()], strict=True)):
         metadata = (
             {}
             if mapping_mode == "none"
@@ -47,7 +47,10 @@ def _write_partitioned_table(path, files, mapping_mode="none"):
         pq.write_table(table, data_file)
         add = {
             "path": data_file.name,
-            "partitionValues": {physical_names[0]: p, physical_names[1]: None if q is None else str(q)},
+            "partitionValues": {
+                physical_names[0]: None if p is None else str(p),
+                physical_names[1]: None if q is None else str(q),
+            },
             "size": data_file.stat().st_size,
             "modificationTime": 0,
             "dataChange": True,
@@ -198,7 +201,7 @@ def test_partition_filtered_grouping_reads_only_residual_files(spark, tmp_path, 
 def test_metadata_partition_filters_compare_columns_exactly(spark, tmp_path, metadata_as_data):
     path = tmp_path / "partition_column_comparison"
     (
-        spark.createDataFrame([(1, 2, 10), (3, 2, 20), (3, 2, 21), (None, 2, 30)], "p INT, q INT, v INT")
+        spark.createDataFrame([(2, 10, 10), (10, 2, 20), (3, 2, 21), (None, 2, 30)], "p INT, q INT, v INT")
         .repartition(1)
         .write.format("delta")
         .partitionBy("p", "q")
@@ -209,7 +212,79 @@ def test_metadata_partition_filters_compare_columns_exactly(spark, tmp_path, met
     for data_file in path.rglob("*.parquet"):
         data_file.unlink()
     assert frame.where("p > q").count() == 2  # noqa: PLR2004
-    assert frame.where("NOT (p <= q)").groupBy("p").count().collect() == [Row(3, 2)]
+    assert frame.where("NOT (p <= q)").groupBy("p").count().orderBy("p").collect() == [Row(3, 1), Row(10, 1)]
+
+
+@pytest.mark.parametrize("metadata_as_data", ["false", "true"])
+@pytest.mark.parametrize("mapping_mode", ["none", "name", "id"])
+def test_partition_filters_use_requested_schema(spark, tmp_path, metadata_as_data, mapping_mode):
+    path = tmp_path / "partition_schema_override"
+    _write_partitioned_table(
+        path,
+        [(1, 2, [1], True), (2, 10, [2], True), (3, 2, [3], True), (10, 2, [10], True)],
+        mapping_mode,
+        p_type=IntegerType(),
+    )
+    frame = (
+        spark.read.format("delta")
+        .option("metadataAsDataRead", metadata_as_data)
+        .schema("p STRING, q INT, v BIGINT")
+        .load(str(path))
+    )
+    for predicate, expected in [("p < '2'", [1, 10]), ("p < '20'", [1, 2, 10]), ("p > '20'", [3])]:
+        selected = frame.where(predicate)
+        assert [row.v for row in selected.orderBy("v").collect()] == expected
+        assert selected.count() == len(expected)
+    assert frame.where("p < 'abc'").count() == 4  # noqa: PLR2004
+
+
+@pytest.mark.parametrize("metadata_as_data", ["false", "true"])
+@pytest.mark.parametrize("mapping_mode", ["none", "name", "id"])
+def test_partition_filters_preserve_unknown_with_residual_files(spark, tmp_path, metadata_as_data, mapping_mode):
+    path = tmp_path / "unknown_partition_predicate"
+    _write_partitioned_table(
+        path,
+        [(1, 2, [1], True), (2, 10, [2], False), (10, 2, [10], True), (None, 2, [3], False)],
+        mapping_mode,
+        p_type=IntegerType(),
+    )
+    frame = spark.read.format("delta").option("metadataAsDataRead", metadata_as_data).load(str(path))
+    for predicate in ["p NOT IN (1, NULL)", "p > q AND CAST(NULL AS BOOLEAN)"]:
+        selected = frame.where(predicate)
+        assert selected.collect() == []
+        assert selected.select().limit(1).collect() == []
+        assert selected.count() == 0
+        assert selected.groupBy("p").count().collect() == []
+    assert frame.where("p > q AND v > 0").collect() == [Row(p=10, q=2, v=10)]
+    assert frame.where("p > q OR v = 2").orderBy("v").collect() == [Row(p=2, q=10, v=2), Row(p=10, q=2, v=10)]
+
+
+@pytest.mark.parametrize("metadata_as_data", ["false", "true"])
+@pytest.mark.parametrize("mapping_mode", ["none", "name", "id"])
+def test_empty_partition_encoding_is_null(spark, tmp_path, metadata_as_data, mapping_mode):
+    path = tmp_path / "empty_partition_encoding"
+    _write_partitioned_table(path, [("", 1, [1, -1], True), (None, 2, [2], False), ("a", 3, [3], True)], mapping_mode)
+    frame = spark.read.format("delta").option("metadataAsDataRead", metadata_as_data).load(str(path))
+    assert [row.v for row in frame.where("p IS NULL").orderBy("v").collect()] == [-1, 1, 2]
+    assert [row.v for row in frame.where("p IS NULL AND v > 0").orderBy("v").collect()] == [1, 2]
+    assert [row.v for row in frame.where("p = ''").collect()] == []
+    assert frame.where("p IS NULL").groupBy("p").count().collect() == [Row(None, 3)]
+
+
+@pytest.mark.parametrize("metadata_as_data", ["false", "true"])
+@pytest.mark.parametrize("stats", [{}, {"minValues": {"v": 1}, "maxValues": {"v": 2}}, {"numRecords": None}])
+def test_metadata_grouping_without_num_records_scans_file(spark, tmp_path, metadata_as_data, stats):
+    path = tmp_path / "partial_file_stats"
+    _write_partitioned_table(path, [("a", 1, [1, 2], False)])
+    log = path / "_delta_log" / "00000000000000000000.json"
+    actions = [json.loads(line) for line in log.read_text().splitlines()]
+    actions[-1]["add"]["stats"] = json.dumps(stats)
+    log.write_text("".join(json.dumps(action) + "\n" for action in actions))
+    frame = spark.read.format("delta").option("metadataAsDataRead", metadata_as_data).load(str(path))
+    assert frame.count() == 2  # noqa: PLR2004
+    assert frame.groupBy("p").count().collect() == [Row("a", 2)]
+    assert frame.where("v > 1").groupBy("p").count().collect() == [Row("a", 1)]
+    assert frame.selectExpr("MIN(v)", "MAX(v)").collect() == [Row(1, 2)]
 
 
 @pytest.mark.parametrize("metadata_as_data", ["false", "true"])

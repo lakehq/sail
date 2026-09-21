@@ -201,7 +201,13 @@ impl<'a> DeltaAggregateInput<'a> {
         if indices.is_empty() {
             return Ok(Some(indices));
         }
-        let values = partition_filter_mask(session, snapshot, snapshot.adds(), predicate)?;
+        let values = partition_filter_mask(
+            session,
+            snapshot,
+            snapshot.schema(),
+            snapshot.adds(),
+            predicate,
+        )?;
         Ok(Some(
             indices
                 .into_iter()

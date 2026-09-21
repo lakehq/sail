@@ -150,15 +150,14 @@ pub(crate) async fn plan_delta_scan(
         .iter()
         .all(|pushdown| *pushdown == datafusion::logical_expr::TableProviderFilterPushDown::Exact);
 
-    let mut pruning_filters = Vec::new();
+    let mut partition_filters = Vec::new();
     let mut parquet_pushdown_filters = Vec::new();
     for (filter, pushdown) in filters.iter().zip(pushdown_filters) {
         match pushdown {
             datafusion::logical_expr::TableProviderFilterPushDown::Exact => {
-                pruning_filters.push(filter.clone());
+                partition_filters.push(filter.clone());
             }
             datafusion::logical_expr::TableProviderFilterPushDown::Inexact => {
-                pruning_filters.push(filter.clone());
                 parquet_pushdown_filters.push(filter.clone());
             }
             datafusion::logical_expr::TableProviderFilterPushDown::Unsupported => {}
@@ -167,49 +166,60 @@ pub(crate) async fn plan_delta_scan(
 
     let stats_source_schema = Arc::new(snapshot.schema().clone());
 
-    let pruning_expr = conjunction(pruning_filters);
-    let pruning_predicate = if let Some(expr) = pruning_expr.as_ref() {
+    let pruning_expr = conjunction(
+        partition_filters
+            .iter()
+            .chain(&parquet_pushdown_filters)
+            .cloned(),
+    );
+    let partition_predicate = conjunction(partition_filters);
+    let pruning_predicate = if let Some(expr) = conjunction(parquet_pushdown_filters.clone()) {
         let df_schema = logical_schema.clone().to_dfschema()?;
-        Some(
-            simplify_expr(session, &df_schema, expr.clone()).map_err(|e| {
-                datafusion::common::DataFusionError::Plan(format!(
-                    "failed to simplify scan pruning filter: {e}"
-                ))
-            })?,
-        )
+        Some(simplify_expr(session, &df_schema, expr).map_err(|e| {
+            datafusion::common::DataFusionError::Plan(format!(
+                "failed to simplify scan pruning filter: {e}"
+            ))
+        })?)
     } else {
         None
     };
 
     let file_source = match file_source {
         DeltaFileSource::Eager(files) => {
+            let files = if let Some(predicate) = partition_predicate {
+                let values =
+                    partition_filter_mask(session, snapshot, &logical_schema, &files, predicate)?;
+                Arc::new(
+                    files
+                        .iter()
+                        .enumerate()
+                        .filter(|(index, _)| values.is_valid(*index) && values.value(*index))
+                        .map(|(_, add)| add.clone())
+                        .collect::<Vec<_>>(),
+                )
+            } else {
+                files
+            };
             if let Some(predicate) = pruning_predicate.as_ref() {
-                let pruning_mask = if exact_filters {
-                    let values = partition_filter_mask(
-                        session,
-                        snapshot,
-                        &files,
-                        pruning_expr.clone().ok_or_else(|| {
-                            DataFusionError::Internal("missing Delta partition predicate".into())
-                        })?,
-                    )?;
-                    (0..values.len())
-                        .map(|index| values.is_valid(index) && values.value(index))
-                        .collect()
-                } else {
-                    crate::datasource::pruning::prune_adds_by_physical_predicate(
-                        files.as_ref(),
-                        Arc::clone(&logical_schema),
-                        Arc::clone(predicate),
-                        kmode,
-                    )?
+                let pruning_mask = crate::datasource::pruning::prune_adds_by_physical_predicate(
+                    files.as_ref(),
+                    Arc::clone(&logical_schema),
+                    Arc::clone(predicate),
+                    kmode,
+                )?;
+                let pruned_files = match Arc::try_unwrap(files) {
+                    Ok(files) => files
+                        .into_iter()
+                        .zip(pruning_mask)
+                        .filter_map(|(add, keep)| keep.then_some(add))
+                        .collect(),
+                    Err(files) => files
+                        .iter()
+                        .zip(pruning_mask)
+                        .filter(|(_, keep)| *keep)
+                        .map(|(add, _)| add.clone())
+                        .collect(),
                 };
-                let pruned_files = files
-                    .iter()
-                    .zip(pruning_mask.iter().copied())
-                    .filter(|(_, keep)| *keep)
-                    .map(|(add, _)| add.clone())
-                    .collect::<Vec<_>>();
                 DeltaFileSource::Eager(Arc::new(pruned_files))
             } else {
                 DeltaFileSource::Eager(files)
@@ -261,14 +271,7 @@ pub(crate) async fn plan_delta_scan(
     // The parquet scan resolves predicate columns against the physical file schema,
     // so column-mapped tables need the predicate rewritten from logical to physical names.
     let pushdown_filter = pushdown_filter
-        .map(|expr| {
-            rewrite_predicate_for_column_mapping(
-                expr,
-                snapshot.schema(),
-                kmode,
-                &table_partition_cols,
-            )
-        })
+        .map(|expr| rewrite_predicate_for_column_mapping(expr, snapshot.schema(), kmode))
         .transpose()?;
 
     let row_index_projected = config
@@ -461,7 +464,16 @@ async fn build_replayed_adds_input(
     )
     .await?;
     let meta_scan = if let Some(predicate) = pruning_expr {
-        build_metadata_filter(session, meta_scan, snapshot, predicate)?
+        build_metadata_filter(
+            session,
+            meta_scan,
+            snapshot,
+            config
+                .schema
+                .as_deref()
+                .unwrap_or_else(|| snapshot.schema()),
+            predicate,
+        )?
     } else {
         meta_scan
     };

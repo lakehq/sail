@@ -1,5 +1,65 @@
 Feature: Delta Lake read path (driver vs metadata-as-data)
 
+  Rule: Exact partition filters preserve logical types and three-valued logic
+    Background:
+      Given variable location for temporary directory typed_partition_filters
+      Given final statement
+        """
+        DROP TABLE IF EXISTS typed_partition_filters
+        """
+
+    Scenario Outline: Partition and data filters compose without losing exact conditions
+      Given statement template
+        """
+        CREATE TABLE typed_partition_filters (p INT, q INT, v INT)
+        USING DELTA PARTITIONED BY (p, q) LOCATION {{ location.sql }}
+        OPTIONS (metadataAsDataRead '<metadata_as_data>')
+        """
+      Given statement
+        """
+        INSERT INTO typed_partition_filters VALUES
+          (10, 2, 100), (10, 2, -1), (2, 10, 200), (3, 2, 300), (1, 1, 1), (NULL, 2, 400)
+        """
+      When query
+        """
+        SELECT p, q, v FROM typed_partition_filters WHERE p > q AND v > 0 ORDER BY v
+        """
+      Then query result collected ordered
+        | p  | q | v   |
+        | 10 | 2 | 100 |
+        | 3  | 2 | 300 |
+      When query
+        """
+        SELECT p, COUNT(*) AS n FROM typed_partition_filters
+        WHERE NOT (p <= q) GROUP BY p ORDER BY p
+        """
+      Then query result collected ordered
+        | p  | n |
+        | 3  | 1 |
+        | 10 | 2 |
+      When query
+        """
+        SELECT COUNT(*) AS n FROM typed_partition_filters WHERE p NOT IN (1, NULL)
+        """
+      Then query result collected
+        | n |
+        | 0 |
+      When query
+        """
+        SELECT v FROM typed_partition_filters WHERE p > q OR v = 200 ORDER BY v
+        """
+      Then query result collected ordered
+        | v   |
+        | -1  |
+        | 100 |
+        | 200 |
+        | 300 |
+
+      Examples:
+        | metadata_as_data |
+        | false            |
+        | true             |
+
   Rule: Partition metadata aggregation works through view aliases
     Background:
       Given variable location for temporary directory delta_metadata_grouping

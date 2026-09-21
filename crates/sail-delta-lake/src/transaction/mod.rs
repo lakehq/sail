@@ -2836,7 +2836,13 @@ mod tests {
                 "missing numRecords",
                 Some(r#"{"tightBounds":true}"#),
                 1,
-                Some("invalid stats.numRecords"),
+                Some("requires stats.numRecords"),
+            ),
+            (
+                "null numRecords",
+                Some(r#"{"numRecords":null}"#),
+                1,
+                Some("requires stats.numRecords"),
             ),
             (
                 "negative numRecords",

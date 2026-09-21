@@ -26,6 +26,7 @@ use datafusion::arrow::array::{
     new_empty_array,
 };
 use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef, TimeUnit};
+use datafusion::arrow::record_batch::RecordBatchOptions;
 use datafusion::catalog::Session;
 use datafusion::common::{Result, ToDFSchema};
 use datafusion::logical_expr::Expr;
@@ -34,6 +35,7 @@ use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, DataFusionError};
 
+use crate::conversion::scalar::NULL_PARTITION_VALUE_DATA_PATH;
 use crate::conversion::{ScalarConverter, parse_optional_partition_value};
 use crate::schema::arrow_field_physical_name;
 use crate::spec::statistics::Stats;
@@ -152,15 +154,22 @@ pub(crate) fn select_files_for_limit(adds: &[Add], limit: usize) -> Vec<Add> {
 pub(crate) fn partition_filter_mask(
     session: &dyn Session,
     snapshot: &DeltaSnapshot,
+    logical_schema: &Schema,
     adds: &[Add],
     predicate: Expr,
 ) -> Result<BooleanArray> {
     let mut fields = Vec::new();
     let mut columns = Vec::new();
+    let referenced_columns = predicate.column_refs();
     for name in snapshot.metadata().partition_columns() {
-        let field = snapshot.schema().field_with_name(name)?;
-        let physical_name =
-            arrow_field_physical_name(field, snapshot.effective_column_mapping_mode());
+        if !referenced_columns.iter().any(|column| column.name == *name) {
+            continue;
+        }
+        let field = logical_schema.field_with_name(name)?;
+        let physical_name = arrow_field_physical_name(
+            snapshot.schema().field_with_name(name)?,
+            snapshot.effective_column_mapping_mode(),
+        );
         let values = adds
             .iter()
             .map(|add| {
@@ -179,7 +188,11 @@ pub(crate) fn partition_filter_mask(
         fields.push(field.clone().with_nullable(true));
         columns.push(column);
     }
-    let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)?;
+    let batch = RecordBatch::try_new_with_options(
+        Arc::new(Schema::new(fields)),
+        columns,
+        &RecordBatchOptions::new().with_row_count(Some(adds.len())),
+    )?;
     let predicate = session.create_physical_expr(predicate, &batch.schema().to_dfschema()?)?;
     let values = predicate.evaluate(&batch)?.into_array(batch.num_rows())?;
     values
@@ -402,9 +415,11 @@ impl<'adds> AddStatsPruningStatistics<'adds> {
             .adds
             .iter()
             .map(|add| {
-                add.partition_values
-                    .get(&storage_name)
-                    .map(|value| value.as_deref())
+                add.partition_values.get(&storage_name).map(|value| {
+                    value.as_deref().filter(|value| {
+                        !value.is_empty() && *value != NULL_PARTITION_VALUE_DATA_PATH
+                    })
+                })
             })
             .collect();
         let values = values?;
@@ -556,7 +571,10 @@ impl<'adds> AddStatsPruningStatistics<'adds> {
         let storage_name = self.storage_name_for(column)?;
         self.build_count_array(column, |a, s| {
             if let Some(pv) = a.partition_values.get(&storage_name) {
-                if pv.is_none() {
+                if pv
+                    .as_deref()
+                    .is_none_or(|value| value.is_empty() || value == NULL_PARTITION_VALUE_DATA_PATH)
+                {
                     return s.map(|s| s.num_records.max(0) as u64);
                 }
                 return Some(0);
@@ -824,6 +842,52 @@ mod tests {
             .ok_or_else(|| DataFusionError::Internal("array should be Int32".to_string()))?;
         assert_eq!(values.value(0), 10);
         assert_eq!(values.value(1), 20);
+        Ok(())
+    }
+
+    #[test]
+    fn empty_partition_values_have_null_bounds_and_null_counts() -> Result<()> {
+        let table_schema = Arc::new(Schema::new(vec![Field::new("p", DataType::Utf8, true)]));
+        let adds = [
+            Some(""),
+            None,
+            Some("__HIVE_DEFAULT_PARTITION__"),
+            Some("a"),
+        ]
+        .into_iter()
+        .map(|value| Add {
+            stats: Some(r#"{"numRecords":3}"#.to_string()),
+            ..add_with_partition_value("p", value)
+        })
+        .collect::<Vec<_>>();
+        let stats = AddStatsPruningStatistics::try_new(
+            table_schema,
+            &adds,
+            HashSet::from(["p".to_string()]),
+            ColumnMappingMode::None,
+        )?;
+        let column = Column::from_name("p");
+        let bounds = stats
+            .min_values(&column)
+            .ok_or_else(|| DataFusionError::Internal("missing bounds".into()))?;
+        let counts = stats
+            .null_counts(&column)
+            .ok_or_else(|| DataFusionError::Internal("missing counts".into()))?;
+        for index in 0..3 {
+            assert!(bounds.is_null(index));
+            assert_eq!(
+                ScalarValue::try_from_array(&counts, index)?,
+                ScalarValue::UInt64(Some(3))
+            );
+        }
+        assert_eq!(
+            ScalarValue::try_from_array(&bounds, 3)?,
+            ScalarValue::Utf8(Some("a".into()))
+        );
+        assert_eq!(
+            ScalarValue::try_from_array(&counts, 3)?,
+            ScalarValue::UInt64(Some(0))
+        );
         Ok(())
     }
 
