@@ -30,6 +30,7 @@ pub fn expand_update_node(mut info: UpdateInfo) -> Result<LogicalPlan> {
             requirements,
             MERGE_FILE_COLUMN,
             row_index_column,
+            &[],
         )?),
     }))
 }

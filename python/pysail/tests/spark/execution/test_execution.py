@@ -399,6 +399,22 @@ def test_coalesce_preserves_data_in_cluster_mode(spark):
     assert_frame_equal(actual, expected)
 
 
+@pytest.mark.parametrize(
+    ("left_input_partitions", "left_output_partitions", "right_input_partitions", "right_output_partitions"),
+    [(4, 2, 4, 2), (5, 3, 7, 2)],
+)
+def test_union_of_coalesced_inputs_preserves_data_in_cluster_mode(
+    spark, left_input_partitions, left_output_partitions, right_input_partitions, right_output_partitions
+):
+    left = spark.range(0, 40, numPartitions=left_input_partitions).coalesce(left_output_partitions)
+    right = spark.range(100, 140, numPartitions=right_input_partitions).coalesce(right_output_partitions)
+
+    # Collect the union directly so a downstream sort or aggregation cannot hide
+    # its branch-local partition mapping. Check every row, including duplicates.
+    actual = sorted(row.id for row in left.unionAll(right).collect())
+    assert actual == [*range(40), *range(100, 140)]
+
+
 def test_coalesce_to_one_partition_in_cluster_mode(spark):
     df = spark.range(0, 20, 1, 4)
     coalesced = df.coalesce(1)
