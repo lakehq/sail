@@ -36,6 +36,7 @@ impl Actor for WorkerActor {
                 host: options.driver_host.clone(),
                 port: options.driver_port,
             },
+            options.shuffle_backend.flight_connection_count(),
         );
         let metrics_client = driver_client_set.core.clone();
         set_metric_sender(move |metrics| {

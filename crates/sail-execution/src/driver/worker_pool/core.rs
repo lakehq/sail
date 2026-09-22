@@ -474,12 +474,13 @@ impl WorkerPool {
                 host, port, client, ..
             } => {
                 let client = client.get_or_insert_with(|| {
+                    let flight_connection_count = options.shuffle_backend.flight_connection_count();
                     let options = ClientOptions {
                         enable_tls: options.enable_tls,
                         host: host.clone(),
                         port: *port,
                     };
-                    WorkerClientSet::new(options)
+                    WorkerClientSet::new(options, flight_connection_count)
                 });
                 Ok(client.clone())
             }

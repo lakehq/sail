@@ -264,7 +264,16 @@ impl KubernetesWorkerService {
                 value_from: None,
             },
         ];
-        if let ShuffleBackendKind::Flight { compression } = &shuffle_backend {
+        if let ShuffleBackendKind::Flight {
+            compression,
+            connection_count,
+        } = &shuffle_backend
+        {
+            env.push(EnvVar {
+                name: ClusterConfigEnv::SHUFFLE_BACKEND__FLIGHT__CONNECTION_COUNT.to_string(),
+                value: Some(connection_count.to_string()),
+                value_from: None,
+            });
             env.push(EnvVar {
                 name: ClusterConfigEnv::SHUFFLE_BACKEND__FLIGHT__COMPRESSION.to_string(),
                 value: Some(compression.to_string()),

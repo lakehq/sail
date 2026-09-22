@@ -322,6 +322,16 @@
     before running dependent stages.
   experimental: true
 
+- key: cluster.shuffle_backend.flight.connection_count
+  type: number
+  default: "1"
+  description: |
+    The number of connections in each Flight shuffle client's pool for a remote driver or worker.
+    Connections are opened lazily and reused across tasks. New streams are assigned
+    to connections in round-robin order. Each stream uses one connection.
+    The value must be greater than zero.
+  experimental: true
+
 - key: cluster.shuffle_backend.flight.compression
   type: string
   default: "zstd"

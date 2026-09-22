@@ -15,13 +15,20 @@ def shuffle_read_coalescing(request):
     return request.param
 
 
+@pytest.fixture(scope="module", params=[None, 4], ids=["connections-default", "connections-4"])
+def flight_connection_count(request):
+    return request.param
+
+
 @pytest.fixture(scope="module", params=[None, "none", "lz4", "zstd"], ids=["default", "none", "lz4", "zstd"])
-def remote(request, shuffle_read_coalescing):
+def remote(request, shuffle_read_coalescing, flight_connection_count):
     envs = {
         "SAIL_MODE": "local-cluster",
         "SAIL_CLUSTER__TASK_STREAM_BUFFER": "1",
         "SAIL_EXECUTION__BATCH_SIZE": "256",
     }
+    if flight_connection_count is not None:
+        envs["SAIL_CLUSTER__SHUFFLE_BACKEND__FLIGHT__CONNECTION_COUNT"] = str(flight_connection_count)
     if shuffle_read_coalescing is not None:
         envs["SAIL_CLUSTER__ENABLE_SHUFFLE_READ_COALESCING"] = str(shuffle_read_coalescing).lower()
     if request.param is not None:

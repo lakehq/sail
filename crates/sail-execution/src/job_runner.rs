@@ -52,6 +52,7 @@ impl JobRunner for LocalJobRunner {
         explain_job_graph(
             plan,
             ShuffleBackendKind::Flight {
+                connection_count: std::num::NonZeroUsize::MIN,
                 compression: crate::shuffle::ShuffleCompression::None,
             },
         )

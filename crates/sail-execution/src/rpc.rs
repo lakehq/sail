@@ -1,5 +1,7 @@
 use std::future::Future;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use arrow_flight::flight_service_client::FlightServiceClient;
 use sail_common::telemetry::{TracingClientLayer, TracingClientService};
@@ -158,5 +160,86 @@ impl<T: ClientBuilder + Clone> ClientHandle<T> {
             .get_or_try_init(|| T::connect(&options))
             .await
             .cloned()
+    }
+}
+
+/// A lazily connected pool with round-robin selection shared across clones.
+#[derive(Debug, Clone)]
+pub struct ClientPool<T> {
+    inner: Arc<ClientPoolInner<T>>,
+}
+
+#[derive(Debug)]
+struct ClientPoolInner<T> {
+    clients: Vec<ClientHandle<T>>,
+    next: AtomicUsize,
+}
+
+impl<T: ClientBuilder + Clone> ClientPool<T> {
+    pub fn new(options: ClientOptions, connection_count: NonZeroUsize) -> Self {
+        Self {
+            inner: Arc::new(ClientPoolInner {
+                // Construct independent handles: cloning a handle would reuse one connection.
+                clients: (0..connection_count.get())
+                    .map(|_| ClientHandle::new(options.clone()))
+                    .collect(),
+                next: AtomicUsize::new(0),
+            }),
+        }
+    }
+
+    pub async fn get(&self) -> ExecutionResult<T> {
+        let index = self.inner.next.fetch_add(1, Ordering::Relaxed) % self.inner.clients.len();
+        self.inner.clients[index].get().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Clone)]
+    struct TestClient(Arc<()>);
+
+    #[tonic::async_trait]
+    impl ClientBuilder for TestClient {
+        async fn connect(_: &ClientOptions) -> ExecutionResult<Self> {
+            tokio::task::yield_now().await;
+            Ok(Self(Arc::new(())))
+        }
+    }
+
+    #[tokio::test]
+    async fn client_pool_shares_connections_and_selection_across_concurrent_clones()
+    -> ExecutionResult<()> {
+        let pool = ClientPool::<TestClient>::new(
+            ClientOptions {
+                enable_tls: false,
+                host: "localhost".into(),
+                port: 0,
+            },
+            NonZeroUsize::new(3).ok_or_else(|| {
+                ExecutionError::InternalError("invalid test connection count".into())
+            })?,
+        );
+        assert!(
+            pool.inner
+                .clients
+                .iter()
+                .all(|client| client.inner.get().is_none())
+        );
+        let clients = futures::future::try_join_all((0..12).map(|_| {
+            let pool = pool.clone();
+            async move { pool.get().await }
+        }))
+        .await?;
+        for (index, client) in clients.iter().enumerate() {
+            assert!(Arc::ptr_eq(&client.0, &clients[index % 3].0));
+        }
+        assert!(!Arc::ptr_eq(&clients[0].0, &clients[1].0));
+        assert!(!Arc::ptr_eq(&clients[1].0, &clients[2].0));
+        assert!(!Arc::ptr_eq(&clients[0].0, &clients[2].0));
+        assert!(Arc::ptr_eq(&pool.get().await?.0, &clients[0].0));
+        Ok(())
     }
 }
