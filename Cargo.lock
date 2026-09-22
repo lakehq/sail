@@ -7690,6 +7690,7 @@ dependencies = [
  "crc32fast",
  "datafusion",
  "datafusion-common",
+ "datafusion-datasource",
  "datafusion-expr",
  "datafusion-functions-nested",
  "datafusion-physical-expr",
