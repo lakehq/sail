@@ -20,6 +20,7 @@ impl Actor for TaskRunnerActor {
             session_id,
             signals: Default::default(),
             tasks: Default::default(),
+            broadcasts: Default::default(),
             extensions,
             placement,
         }
@@ -57,10 +58,9 @@ impl Actor for TaskRunnerActor {
             }
             TaskRunnerMessage::CreateLocalStream {
                 key,
-                replicas,
-                schema,
+                context,
                 result,
-            } => self.handle_create_local_stream(key, replicas, schema, result),
+            } => self.handle_create_local_stream(key, context, result),
             TaskRunnerMessage::CreateStorageStream {
                 key,
                 schema,
@@ -74,6 +74,12 @@ impl Actor for TaskRunnerActor {
                 schema,
                 result,
             } => self.handle_create_celeborn_stream(ctx, key, mappers, channels, schema, result),
+            TaskRunnerMessage::FetchBroadcastStream {
+                key,
+                fetch,
+                context,
+                result,
+            } => self.handle_fetch_broadcast_stream(ctx, key, fetch, context, result),
             TaskRunnerMessage::FetchDriverStream {
                 key,
                 schema,

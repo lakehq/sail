@@ -671,7 +671,7 @@ impl JobScheduler {
             .iter()
             .map(|input| TaskInputBuilder::try_new(job, key, input, assignments)?.build())
             .collect::<ExecutionResult<Vec<_>>>()?;
-        let output = TaskOutputBuilder::new(job, key, stage, self.codec.as_ref()).build()?;
+        let output = TaskOutputBuilder::new(stage, self.codec.as_ref()).build()?;
         let definition = TaskDefinition {
             plan: Arc::from(plan),
             inputs,
@@ -797,6 +797,7 @@ impl<'a> TaskInputBuilder<'a> {
         };
         Ok(TaskInput {
             stage: self.input.stage,
+            broadcast: matches!(self.input.mode, InputMode::Broadcast | InputMode::Merge),
             locator: Arc::new(locator),
         })
     }
@@ -864,7 +865,12 @@ impl<'a> TaskInputBuilder<'a> {
                 )));
             }
         };
-        Ok(TaskInputLocator::ShuffleService { channels })
+        Ok(TaskInputLocator::ShuffleService {
+            channels,
+            attempts: (0..self.producer.plan.output_partitioning().partition_count())
+                .map(|partition| self.latest_attempt(partition))
+                .collect::<ExecutionResult<Vec<_>>>()?,
+        })
     }
 
     fn assignment(&self, key: &TaskInputKey) -> Option<&TaskAssignment> {
@@ -996,25 +1002,13 @@ impl<'a> TaskInputBuilder<'a> {
 }
 
 struct TaskOutputBuilder<'a> {
-    job: &'a JobDescriptor,
-    key: &'a TaskKey,
     stage: &'a Stage,
     codec: &'a dyn PhysicalExtensionCodec,
 }
 
 impl<'a> TaskOutputBuilder<'a> {
-    fn new(
-        job: &'a JobDescriptor,
-        key: &'a TaskKey,
-        stage: &'a Stage,
-        codec: &'a dyn PhysicalExtensionCodec,
-    ) -> Self {
-        Self {
-            job,
-            key,
-            stage,
-            codec,
-        }
+    fn new(stage: &'a Stage, codec: &'a dyn PhysicalExtensionCodec) -> Self {
+        Self { stage, codec }
     }
 
     fn build(&self) -> ExecutionResult<TaskOutput> {
@@ -1055,9 +1049,7 @@ impl<'a> TaskOutputBuilder<'a> {
             }
         };
         let locator = match self.stage.mode {
-            OutputMode::Pipelined => TaskOutputLocator::Pipelined {
-                replicas: self.job.graph.replicas(self.key.stage),
-            },
+            OutputMode::Pipelined => TaskOutputLocator::Pipelined,
             OutputMode::Blocking => TaskOutputLocator::Blocking,
         };
         Ok(TaskOutput {

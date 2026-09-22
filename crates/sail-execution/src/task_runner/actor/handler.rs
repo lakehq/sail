@@ -4,6 +4,7 @@ use datafusion::arrow::datatypes::Schema;
 use datafusion::common::DataFusionError;
 use datafusion::execution::TaskContext;
 use datafusion_proto::protobuf::PhysicalPlanNode;
+use futures::future::BoxFuture;
 use log::{error, warn};
 use prost::Message;
 use sail_common::actor::{ActorAction, ActorContext};
@@ -13,6 +14,7 @@ use tokio::sync::oneshot;
 use crate::driver::{DriverMessage, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskAttempt, TaskKey, TaskStreamKey, WorkerId};
+use crate::stream::broadcast::BroadcastStreamKey;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{TaskStreamChannelSink, TaskStreamSink};
 use crate::task::definition::TaskDefinition;
@@ -94,6 +96,7 @@ impl TaskRunnerActor {
     pub(super) fn handle_close_job(&mut self, job_id: JobId) -> ActorAction {
         self.tasks.close_job(job_id);
         self.extensions.local_streams.remove_streams(job_id, None);
+        self.broadcasts.remove_streams(job_id, None);
         self.signals.retain(|key, _| key.job_id != job_id);
         ActorAction::Continue
     }
@@ -174,8 +177,7 @@ impl TaskRunnerActor {
     pub(super) fn handle_create_local_stream(
         &mut self,
         key: TaskStreamKey,
-        replicas: usize,
-        schema: Arc<Schema>,
+        context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
     ) -> ActorAction {
         if self.tasks.is_job_closed(key.job_id)
@@ -186,11 +188,7 @@ impl TaskRunnerActor {
             )));
             return ActorAction::Continue;
         }
-        let _ = result.send(
-            self.extensions
-                .local_streams
-                .create_stream(key, replicas, schema),
-        );
+        let _ = result.send(self.extensions.local_streams.create_stream(key, &context));
         ActorAction::Continue
     }
 
@@ -245,6 +243,31 @@ impl TaskRunnerActor {
         let _ = result.send(Err(ExecutionError::InternalError(
             "Celeborn stream requested without a Celeborn shuffle backend".to_string(),
         )));
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_fetch_broadcast_stream(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        key: BroadcastStreamKey,
+        fetch: BoxFuture<'static, ExecutionResult<TaskStreamSource>>,
+        context: Arc<TaskContext>,
+        result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
+    ) -> ActorAction {
+        if self.tasks.is_job_closed(key.job_id) {
+            let _ = result.send(Err(ExecutionError::InvalidArgument(
+                "job has been canceled".into(),
+            )));
+            return ActorAction::Continue;
+        }
+        let output = self.broadcasts.fetch_stream(
+            ctx,
+            key,
+            fetch,
+            &context,
+            self.extensions.local_streams.buffer(),
+        );
+        let _ = result.send(output);
         ActorAction::Continue
     }
 
@@ -395,6 +418,7 @@ impl TaskRunnerActor {
         stage: Option<usize>,
     ) -> ActorAction {
         self.extensions.local_streams.remove_streams(job_id, stage);
+        self.broadcasts.remove_streams(job_id, stage);
         ActorAction::Continue
     }
 

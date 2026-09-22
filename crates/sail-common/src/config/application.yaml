@@ -228,7 +228,9 @@
 - key: cluster.task_stream_buffer
   type: number
   default: "16"
-  description: The number of batches to buffer in the task stream.
+  description: |
+    The number of batches to keep in memory for each local or shared broadcast task stream.
+    Additional batches are spilled to disk so that writers do not wait for readers.
   experimental: true
 
 - key: cluster.task_stream_creation_timeout_secs

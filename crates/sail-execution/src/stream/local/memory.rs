@@ -1,161 +1,236 @@
-use std::collections::VecDeque;
+use std::io::{Cursor, Read, Seek, SeekFrom, Write};
+use std::sync::Arc;
 
 use datafusion::arrow::array::RecordBatch;
-use datafusion::common::Result;
-use futures::future::join_all;
-use log::debug;
-use tokio::sync::mpsc;
-use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
+use datafusion::arrow::ipc::reader::StreamReader;
+use datafusion::arrow::ipc::writer::StreamWriter;
+use datafusion::common::{DataFusionError, Result};
+use datafusion::execution::disk_manager::DiskManager;
+use datafusion::execution::spill_file::{SpillFile, SpillWriter};
+use futures::stream;
+use tokio::sync::watch;
 
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::stream::error::TaskStreamResult;
+use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{TaskStreamChannelSink, TaskStreamWriteState};
 
-/// A memory stream that can be read multiple times.
-/// It maintains multiple replicas of the stream internally.
-/// Since [`Arc`] is used inside the record batch, it is relatively cheap
-/// to clone the data in multiple replicas.
+/// A replayable stream with a bounded in-memory prefix and an append-only spill file.
+/// Readers have independent cursors, so neither writes nor commit wait for readers.
+/// Keeping a receiver in the manager allows tasks to subscribe after the writer finishes.
 pub(crate) struct MemoryStream {
-    sender: Option<MemoryStreamReplicaSender>,
-    receivers: Vec<mpsc::Receiver<TaskStreamResult<RecordBatch>>>,
+    receiver: watch::Receiver<StreamState>,
+    sender: Option<watch::Sender<StreamState>>,
+    buffer: usize,
+}
+
+#[derive(Default)]
+struct StreamState {
+    batches: Vec<RecordBatch>,
+    spill: Option<Arc<dyn SpillFile>>,
+    spilled_bytes: u64,
+    terminal: Option<Result<(), TaskStreamError>>,
 }
 
 impl MemoryStream {
-    pub fn new(
-        buffer: usize,
-        replicas: usize,
-        senders: Vec<mpsc::Sender<TaskStreamResult<RecordBatch>>>,
-    ) -> Self {
-        let replicas = replicas.max(senders.len());
-        let diff = replicas - senders.len();
-        let mut senders = senders.into_iter().map(Some).collect::<Vec<_>>();
-        senders.reserve(diff);
-        let mut receivers = Vec::with_capacity(diff);
-        for _ in 0..diff {
-            let (tx, rx) = mpsc::channel(buffer);
-            senders.push(Some(tx));
-            receivers.push(rx);
-        }
-        let overflow = vec![VecDeque::new(); senders.len()];
+    pub fn new(buffer: usize) -> Self {
+        let (sender, receiver) = watch::channel(StreamState::default());
         Self {
-            sender: Some(MemoryStreamReplicaSender { senders, overflow }),
-            receivers,
+            receiver,
+            sender: Some(sender),
+            buffer,
         }
     }
 
-    pub(crate) fn publish(&mut self) -> ExecutionResult<Box<dyn TaskStreamChannelSink>> {
+    pub fn publish(&mut self, disk: Arc<DiskManager>) -> ExecutionResult<MemoryStreamWriter> {
         let sender = self.sender.take().ok_or_else(|| {
-            ExecutionError::InternalError("memory stream can only be written once".to_string())
+            ExecutionError::InternalError("memory stream can only be written once".into())
         })?;
-        Ok(Box::new(sender))
-    }
-
-    pub(crate) fn subscribe(&mut self) -> ExecutionResult<TaskStreamSource> {
-        let rx = self.receivers.pop().ok_or_else(|| {
-            ExecutionError::InternalError("memory stream has exhausted all replica(s)".to_string())
-        })?;
-        Ok(Box::pin(ReceiverStream::new(rx)))
-    }
-}
-
-struct MemoryStreamReplicaSender {
-    senders: Vec<Option<mpsc::Sender<TaskStreamResult<RecordBatch>>>>,
-    /// An overflow buffer for each sender to avoid blocking sending for slow senders.
-    /// This also avoids deadlock situations where the task stream buffer size is small.
-    // TODO: More investigation is needed to understand deadlocks during writes when
-    //   task stream buffers are bounded, and whether unbounded overflow can be avoided.
-    //   Concurrent finalization fixes commit deadlocks but does not remove this need.
-    overflow: Vec<VecDeque<TaskStreamResult<RecordBatch>>>,
-}
-
-#[tonic::async_trait]
-impl TaskStreamChannelSink for MemoryStreamReplicaSender {
-    async fn write(&mut self, batch: RecordBatch) -> Result<TaskStreamWriteState> {
-        let mut active = false;
-        for (i, sender) in self.senders.iter_mut().enumerate() {
-            if sender.is_none() {
-                continue;
-            }
-
-            let overflow = &mut self.overflow[i];
-            let mut dropped = false;
-
-            if let Some(tx) = sender.as_ref() {
-                // Try to flush overflow first
-                while let Some(item) = overflow.pop_front() {
-                    match tx.try_send(item) {
-                        Ok(_) => {}
-                        Err(mpsc::error::TrySendError::Full(x)) => {
-                            overflow.push_front(x);
-                            break;
-                        }
-                        Err(mpsc::error::TrySendError::Closed(_)) => {
-                            dropped = true;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            // A dropped receiver can happen under normal operation when the receiver no longer
-            // needs more data (e.g., after a LIMIT operator has received enough rows).
-
-            if dropped {
-                debug!("memory stream replica receiver has been dropped");
-                *sender = None;
-                overflow.clear();
-                continue;
-            }
-
-            if let Some(tx) = sender.as_ref() {
-                if overflow.is_empty() {
-                    match tx.try_send(Ok(batch.clone())) {
-                        Ok(_) => {}
-                        Err(mpsc::error::TrySendError::Full(x)) => {
-                            overflow.push_back(x);
-                        }
-                        Err(mpsc::error::TrySendError::Closed(_)) => {
-                            dropped = true;
-                        }
-                    }
-                } else {
-                    overflow.push_back(Ok(batch.clone()));
-                }
-            }
-
-            if dropped {
-                debug!("memory stream replica receiver has been dropped");
-                *sender = None;
-                overflow.clear();
-            } else {
-                active = true;
-            }
-        }
-        Ok(if active {
-            TaskStreamWriteState::Active
-        } else {
-            TaskStreamWriteState::Closed
+        Ok(MemoryStreamWriter {
+            sender,
+            disk,
+            writer: None,
+            buffer: self.buffer,
         })
     }
 
-    async fn commit(self: Box<Self>) -> Result<()> {
-        // Replicas can be consumed at different times or left unread entirely.
-        // Flush them independently, dropping each sender as soon as it finishes
-        // so that its consumer sees EOF without waiting for the other replicas.
-        join_all(self.senders.into_iter().zip(self.overflow).map(
-            |(sender, overflow)| async move {
-                if let Some(tx) = sender {
-                    for item in overflow {
-                        if tx.send(item).await.is_err() {
-                            break;
-                        }
+    pub fn fail(&mut self, error: TaskStreamError) {
+        if let Some(sender) = self.sender.take() {
+            sender.send_modify(|state| state.terminal = Some(Err(error)));
+        }
+    }
+
+    pub fn is_failed(&self) -> bool {
+        self.receiver
+            .borrow()
+            .terminal
+            .as_ref()
+            .is_some_and(Result::is_err)
+    }
+
+    pub fn subscribe(&self) -> TaskStreamSource {
+        let receiver = self.receiver.clone();
+        Box::pin(stream::unfold(
+            (receiver, 0, 0, false),
+            |(mut receiver, mut index, mut offset, done)| async move {
+                if done {
+                    return None;
+                }
+                loop {
+                    let (batch, spill, terminal) = {
+                        let state = receiver.borrow_and_update();
+                        (
+                            state.batches.get(index).cloned(),
+                            (offset < state.spilled_bytes)
+                                .then(|| state.spill.clone())
+                                .flatten(),
+                            state.terminal.clone(),
+                        )
+                    };
+                    if let Some(batch) = batch {
+                        index += 1;
+                        return Some((Ok(batch), (receiver, index, offset, false)));
+                    }
+                    if let Some(spill) = spill {
+                        let result = tokio::task::spawn_blocking(move || -> Result<_> {
+                            let path = spill.path().ok_or_else(|| {
+                                DataFusionError::Execution(
+                                    "shuffle replay requires a local spill file".into(),
+                                )
+                            })?;
+                            let mut file = std::fs::File::open(path)?;
+                            file.seek(SeekFrom::Start(offset))?;
+                            let mut size = [0; 8];
+                            file.read_exact(&mut size)?;
+                            let size = u64::from_le_bytes(size);
+                            let mut reader = StreamReader::try_new(file.take(size), None)?;
+                            let batch = reader.next().transpose()?.ok_or_else(|| {
+                                DataFusionError::Execution("empty shuffle spill frame".into())
+                            })?;
+                            Ok((batch, offset + 8 + size))
+                        })
+                        .await
+                        .map_err(|e| TaskStreamError::External(Arc::new(e)))
+                        .and_then(|x| x.map_err(|e| TaskStreamError::External(Arc::new(e))));
+                        return match result {
+                            Ok((batch, next)) => {
+                                offset = next;
+                                Some((Ok(batch), (receiver, index, offset, false)))
+                            }
+                            Err(error) => Some((Err(error), (receiver, index, offset, true))),
+                        };
+                    }
+                    if let Some(terminal) = terminal {
+                        return terminal
+                            .err()
+                            .map(|error| (Err(error), (receiver, index, offset, true)));
+                    }
+                    if receiver.changed().await.is_err() {
+                        return Some((
+                            Err(TaskStreamError::Unknown(
+                                "memory stream writer dropped before commit".into(),
+                            )),
+                            (receiver, index, offset, true),
+                        ));
                     }
                 }
             },
         ))
-        .await;
-        Ok(())
+    }
+}
+
+pub(crate) struct MemoryStreamWriter {
+    sender: watch::Sender<StreamState>,
+    disk: Arc<DiskManager>,
+    writer: Option<Box<dyn SpillWriter>>,
+    buffer: usize,
+}
+
+impl MemoryStreamWriter {
+    pub fn fail(&mut self, error: TaskStreamError) {
+        self.sender
+            .send_modify(|state| state.terminal = Some(Err(error)));
+    }
+}
+
+impl Drop for MemoryStreamWriter {
+    fn drop(&mut self) {
+        self.sender.send_modify(|state| {
+            if state.terminal.is_none() {
+                // Task failures are reported by the task monitor. Abort also handles
+                // successful early stops, so do not mask the task's cause with a
+                // generic stream error when its writer is dropped.
+                state.terminal = Some(Ok(()));
+            }
+        });
+    }
+}
+
+#[tonic::async_trait]
+impl TaskStreamChannelSink for MemoryStreamWriter {
+    async fn write(&mut self, batch: RecordBatch) -> Result<TaskStreamWriteState> {
+        if self.sender.is_closed() {
+            return Ok(TaskStreamWriteState::Closed);
+        }
+        if self.sender.borrow().batches.len() < self.buffer {
+            self.sender.send_modify(|state| state.batches.push(batch));
+            return Ok(TaskStreamWriteState::Active);
+        }
+        let disk = self.disk.clone();
+        let writer = self.writer.take();
+        let (writer, spill, size) = tokio::task::spawn_blocking(move || -> Result<_> {
+            let (mut writer, spill) = match writer {
+                Some(writer) => (writer, None),
+                None => {
+                    let spill = disk.create_tmp_file("spilling a task stream")?;
+                    if spill.path().is_none() {
+                        return Err(DataFusionError::Execution(
+                            "shuffle replay requires a local spill file".into(),
+                        ));
+                    }
+                    (spill.open_writer()?, Some(spill))
+                }
+            };
+            let mut encoded = Cursor::new(Vec::new());
+            let mut ipc = StreamWriter::try_new(&mut encoded, &batch.schema())?;
+            ipc.write(&batch)?;
+            ipc.finish()?;
+            let bytes = encoded.into_inner();
+            let size = bytes.len() as u64;
+            writer.write_all(&size.to_le_bytes())?;
+            writer.write_all(&bytes)?;
+            writer.flush()?;
+            Ok((writer, spill, size + 8))
+        })
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))??;
+        self.writer = Some(writer);
+        self.sender.send_modify(|state| {
+            if let Some(spill) = spill {
+                state.spill = Some(spill);
+            }
+            state.spilled_bytes += size;
+        });
+        Ok(TaskStreamWriteState::Active)
+    }
+
+    async fn commit(mut self: Box<Self>) -> Result<()> {
+        let result = match self.writer.take() {
+            Some(mut writer) => tokio::task::spawn_blocking(move || writer.finish())
+                .await
+                .map_err(|error| DataFusionError::External(Box::new(error)))
+                .and_then(|result| result),
+            None => Ok(()),
+        };
+        self.sender.send_modify(|state| {
+            state.terminal = Some(
+                result
+                    .as_ref()
+                    .map(|_| ())
+                    .map_err(|error| TaskStreamError::Unknown(error.to_string())),
+            );
+        });
+        result
     }
 
     async fn abort(self: Box<Self>) -> Result<()> {

@@ -22,6 +22,8 @@ pub struct TaskDefinition {
 pub struct TaskInput {
     pub stage: usize,
     pub locator: Arc<TaskInputLocator>,
+    /// Whether this input is replayed across tasks and should be fetched once per worker.
+    pub broadcast: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -37,10 +39,12 @@ pub enum TaskInputLocator {
     },
     ShuffleService {
         channels: Vec<Vec<usize>>,
+        /// Producer attempt numbers indexed by mapper partition.
+        attempts: Vec<usize>,
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TaskInputKey {
     pub partition: usize,
     pub attempt: usize,
@@ -85,7 +89,7 @@ pub enum TaskOutputDistribution {
 
 #[derive(Debug, Clone)]
 pub enum TaskOutputLocator {
-    Pipelined { replicas: usize },
+    Pipelined,
     Blocking,
 }
 
@@ -131,9 +135,14 @@ impl TryFrom<r#gen::TaskDefinition> for TaskDefinition {
 
 impl From<TaskInput> for r#gen::TaskInput {
     fn from(value: TaskInput) -> Self {
-        let TaskInput { stage, locator } = value;
+        let TaskInput {
+            stage,
+            locator,
+            broadcast,
+        } = value;
         r#gen::TaskInput {
             stage: stage as u64,
+            broadcast,
             locator: Some(locator.as_ref().clone().into()),
         }
     }
@@ -153,6 +162,7 @@ impl TryFrom<r#gen::TaskInput> for TaskInput {
         };
         Ok(TaskInput {
             stage: value.stage as usize,
+            broadcast: value.broadcast,
             locator: Arc::new(locator),
         })
     }
@@ -176,9 +186,10 @@ impl From<TaskInputLocator> for r#gen::TaskInputLocator {
                     keys: keys.into_iter().map(|x| x.into()).collect(),
                 })
             }
-            TaskInputLocator::ShuffleService { channels } => {
+            TaskInputLocator::ShuffleService { channels, attempts } => {
                 r#gen::task_input_locator::Kind::ShuffleService(
                     r#gen::TaskInputShuffleServiceLocator {
+                        attempts: attempts.into_iter().map(|x| x as u64).collect(),
                         channels: channels
                             .into_iter()
                             .map(|channels| r#gen::TaskInputChannelList {
@@ -226,8 +237,9 @@ impl TryFrom<r#gen::TaskInputLocator> for TaskInputLocator {
                 Ok(TaskInputLocator::Storage { keys })
             }
             Some(r#gen::task_input_locator::Kind::ShuffleService(
-                r#gen::TaskInputShuffleServiceLocator { channels },
+                r#gen::TaskInputShuffleServiceLocator { channels, attempts },
             )) => Ok(TaskInputLocator::ShuffleService {
+                attempts: attempts.into_iter().map(|x| x as usize).collect(),
                 channels: channels
                     .into_iter()
                     .map(|x| x.channels.into_iter().map(|x| x as usize).collect())
@@ -503,10 +515,8 @@ impl TryFrom<r#gen::TaskOutputDistribution> for TaskOutputDistribution {
 impl From<TaskOutputLocator> for r#gen::TaskOutputLocator {
     fn from(value: TaskOutputLocator) -> Self {
         let kind = match value {
-            TaskOutputLocator::Pipelined { replicas } => {
-                r#gen::task_output_locator::Kind::Pipelined(r#gen::TaskOutputPipelinedLocator {
-                    replicas: replicas as u64,
-                })
+            TaskOutputLocator::Pipelined => {
+                r#gen::task_output_locator::Kind::Pipelined(r#gen::TaskOutputPipelinedLocator {})
             }
             TaskOutputLocator::Blocking => {
                 r#gen::task_output_locator::Kind::Blocking(r#gen::TaskOutputBlockingLocator {})
@@ -522,10 +532,8 @@ impl TryFrom<r#gen::TaskOutputLocator> for TaskOutputLocator {
     fn try_from(value: r#gen::TaskOutputLocator) -> Result<Self, Self::Error> {
         match value.kind {
             Some(r#gen::task_output_locator::Kind::Pipelined(
-                r#gen::TaskOutputPipelinedLocator { replicas },
-            )) => Ok(TaskOutputLocator::Pipelined {
-                replicas: replicas as usize,
-            }),
+                r#gen::TaskOutputPipelinedLocator {},
+            )) => Ok(TaskOutputLocator::Pipelined),
             Some(r#gen::task_output_locator::Kind::Blocking(_)) => Ok(TaskOutputLocator::Blocking),
             None => Err(ExecutionError::InvalidArgument(
                 "cannot decode empty task output locator".to_string(),
