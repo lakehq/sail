@@ -41,6 +41,7 @@ pub enum TaskRunnerMessage {
     },
     CreateLocalStream {
         key: TaskStreamKey,
+        replayable: bool,
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
     },

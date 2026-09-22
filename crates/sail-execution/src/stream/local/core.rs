@@ -1,18 +1,33 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::sync::Arc;
 
 use datafusion::execution::TaskContext;
+use futures::TryStreamExt;
 use sail_common::actor::ActorContext;
+use tokio::sync::oneshot;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskStreamKey, TaskStreamKeyDisplay};
 use crate::stream::error::TaskStreamError;
+use crate::stream::local::channel::ChannelStreamWriter;
 use crate::stream::local::memory::MemoryStream;
 use crate::stream::local::options::LocalStreamManagerOptions;
-use crate::stream::local::{LocalStreamManager, LocalStreamState};
+use crate::stream::local::{LocalStream, LocalStreamManager, LocalStreamState};
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::TaskStreamChannelSink;
 use crate::task_runner::{TaskRunnerActor, TaskRunnerMessage};
+
+impl LocalStream {
+    fn subscribe(&mut self) -> ExecutionResult<TaskStreamSource> {
+        match self {
+            Self::Replayable(stream) => Ok(stream.subscribe()),
+            Self::Single(source) => source.take().ok_or_else(|| {
+                ExecutionError::InternalError("local stream already has a consumer".into())
+            }),
+        }
+    }
+}
 
 impl LocalStreamManager {
     pub fn new(options: LocalStreamManagerOptions) -> Self {
@@ -29,27 +44,36 @@ impl LocalStreamManager {
     pub fn create_stream(
         &mut self,
         key: TaskStreamKey,
+        replayable: bool,
         context: &TaskContext,
     ) -> ExecutionResult<Box<dyn TaskStreamChannelSink>> {
         let state = self
             .streams
             .entry(key.clone())
-            .or_insert_with(|| LocalStreamState {
-                stream: MemoryStream::new(self.options.task_stream_buffer),
-                pending: true,
+            .or_insert_with(|| LocalStreamState::Pending {
+                subscribers: vec![],
             });
-        if !state.pending {
+        let LocalStreamState::Pending { subscribers } = state else {
             return Err(ExecutionError::InternalError(format!(
                 "local stream {} is already created or failed",
                 TaskStreamKeyDisplay(&key)
             )));
+        };
+        let (mut stream, sink): (_, Box<dyn TaskStreamChannelSink>) = if replayable {
+            let mut stream = MemoryStream::new(self.options.task_stream_buffer);
+            let sink = stream.publish(context.runtime_env().disk_manager.clone())?;
+            (LocalStream::Replayable(stream), Box::new(sink))
+        } else {
+            let (sink, source) = ChannelStreamWriter::new();
+            (LocalStream::Single(Some(source)), Box::new(sink))
+        };
+        for subscriber in subscribers.drain(..) {
+            if !subscriber.is_closed() {
+                let _ = subscriber.send(stream.subscribe());
+            }
         }
-        state.pending = false;
-        Ok(Box::new(
-            state
-                .stream
-                .publish(context.runtime_env().disk_manager.clone())?,
-        ))
+        *state = LocalStreamState::Created(stream);
+        Ok(sink)
     }
 
     pub fn fetch_stream(
@@ -64,13 +88,28 @@ impl LocalStreamManager {
                     TaskRunnerMessage::ProbePendingLocalStream { key: key.clone() },
                     self.options.task_stream_creation_timeout,
                 );
-                entry.insert(LocalStreamState {
-                    stream: MemoryStream::new(self.options.task_stream_buffer),
-                    pending: true,
+                entry.insert(LocalStreamState::Pending {
+                    subscribers: vec![],
                 })
             }
         };
-        Ok(state.stream.subscribe())
+        match state {
+            LocalStreamState::Created(stream) => stream.subscribe(),
+            LocalStreamState::Pending { subscribers } => {
+                let (sender, receiver) = oneshot::channel();
+                subscribers.push(sender);
+                Ok(Box::pin(
+                    futures::stream::once(async move {
+                        receiver
+                            .await
+                            .map_err(|error| TaskStreamError::External(Arc::new(error)))?
+                            .map_err(|error| TaskStreamError::External(Arc::new(error)))
+                    })
+                    .try_flatten(),
+                ))
+            }
+            LocalStreamState::Failed => Err(Self::creation_timeout()),
+        }
     }
 
     pub fn remove_streams(&mut self, job_id: JobId, stage: Option<usize>) {
@@ -80,12 +119,16 @@ impl LocalStreamManager {
 
     pub fn fail_stream_if_pending(&mut self, key: &TaskStreamKey) {
         if let Some(state) = self.streams.get_mut(key)
-            && state.pending
+            && let LocalStreamState::Pending { subscribers } = state
         {
-            state.pending = false;
-            state.stream.fail(TaskStreamError::Unknown(
-                "local stream is not created within the expected time".into(),
-            ));
+            for subscriber in subscribers.drain(..) {
+                let _ = subscriber.send(Err(Self::creation_timeout()));
+            }
+            *state = LocalStreamState::Failed;
         }
+    }
+
+    fn creation_timeout() -> ExecutionError {
+        ExecutionError::InternalError("local stream is not created within the expected time".into())
     }
 }

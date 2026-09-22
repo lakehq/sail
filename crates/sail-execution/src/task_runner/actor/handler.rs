@@ -177,6 +177,7 @@ impl TaskRunnerActor {
     pub(super) fn handle_create_local_stream(
         &mut self,
         key: TaskStreamKey,
+        replayable: bool,
         context: Arc<TaskContext>,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamChannelSink>>>,
     ) -> ActorAction {
@@ -188,7 +189,11 @@ impl TaskRunnerActor {
             )));
             return ActorAction::Continue;
         }
-        let _ = result.send(self.extensions.local_streams.create_stream(key, &context));
+        let _ = result.send(
+            self.extensions
+                .local_streams
+                .create_stream(key, replayable, &context),
+        );
         ActorAction::Continue
     }
 

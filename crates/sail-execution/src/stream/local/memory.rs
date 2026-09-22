@@ -54,12 +54,6 @@ impl MemoryStream {
         })
     }
 
-    pub fn fail(&mut self, error: TaskStreamError) {
-        if let Some(sender) = self.sender.take() {
-            sender.send_modify(|state| state.terminal = Some(Err(error)));
-        }
-    }
-
     pub fn is_failed(&self) -> bool {
         self.receiver
             .borrow()

@@ -229,8 +229,9 @@
   type: number
   default: "16"
   description: |
-    The number of batches to keep in memory for each local or shared broadcast task stream.
+    The number of batches to keep in memory for each replayable local or shared broadcast task stream.
     Additional batches are spilled to disk so that writers do not wait for readers.
+    Non-replayable streams buffer only unread batches in memory and do not spill to disk.
   experimental: true
 
 - key: cluster.task_stream_creation_timeout_secs

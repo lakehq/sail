@@ -89,7 +89,7 @@ pub enum TaskOutputDistribution {
 
 #[derive(Debug, Clone)]
 pub enum TaskOutputLocator {
-    Pipelined,
+    Pipelined { replayable: bool },
     Blocking,
 }
 
@@ -515,8 +515,10 @@ impl TryFrom<r#gen::TaskOutputDistribution> for TaskOutputDistribution {
 impl From<TaskOutputLocator> for r#gen::TaskOutputLocator {
     fn from(value: TaskOutputLocator) -> Self {
         let kind = match value {
-            TaskOutputLocator::Pipelined => {
-                r#gen::task_output_locator::Kind::Pipelined(r#gen::TaskOutputPipelinedLocator {})
+            TaskOutputLocator::Pipelined { replayable } => {
+                r#gen::task_output_locator::Kind::Pipelined(r#gen::TaskOutputPipelinedLocator {
+                    replayable,
+                })
             }
             TaskOutputLocator::Blocking => {
                 r#gen::task_output_locator::Kind::Blocking(r#gen::TaskOutputBlockingLocator {})
@@ -532,8 +534,8 @@ impl TryFrom<r#gen::TaskOutputLocator> for TaskOutputLocator {
     fn try_from(value: r#gen::TaskOutputLocator) -> Result<Self, Self::Error> {
         match value.kind {
             Some(r#gen::task_output_locator::Kind::Pipelined(
-                r#gen::TaskOutputPipelinedLocator {},
-            )) => Ok(TaskOutputLocator::Pipelined),
+                r#gen::TaskOutputPipelinedLocator { replayable },
+            )) => Ok(TaskOutputLocator::Pipelined { replayable }),
             Some(r#gen::task_output_locator::Kind::Blocking(_)) => Ok(TaskOutputLocator::Blocking),
             None => Err(ExecutionError::InvalidArgument(
                 "cannot decode empty task output locator".to_string(),

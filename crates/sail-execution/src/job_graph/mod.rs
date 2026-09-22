@@ -43,6 +43,26 @@ impl JobGraph {
     pub(crate) fn shuffle_backend(&self) -> &ShuffleBackendKind {
         &self.options.shuffle_backend
     }
+
+    /// Whether output streams need to support consumers that subscribe independently.
+    pub fn is_replayable(&self, stage: usize) -> bool {
+        self.stages
+            .iter()
+            .flat_map(|consumer| {
+                consumer
+                    .inputs
+                    .iter()
+                    .filter(|input| input.stage == stage)
+                    .map(|input| match input.mode {
+                        InputMode::Broadcast | InputMode::Merge => {
+                            consumer.plan.output_partitioning().partition_count()
+                        }
+                        InputMode::Forward | InputMode::Shuffle | InputMode::Rescale { .. } => 1,
+                    })
+            })
+            .sum::<usize>()
+            > 1
+    }
 }
 
 impl fmt::Display for JobGraph {

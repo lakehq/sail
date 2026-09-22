@@ -671,7 +671,8 @@ impl JobScheduler {
             .iter()
             .map(|input| TaskInputBuilder::try_new(job, key, input, assignments)?.build())
             .collect::<ExecutionResult<Vec<_>>>()?;
-        let output = TaskOutputBuilder::new(stage, self.codec.as_ref()).build()?;
+        let output = TaskOutputBuilder::new(stage, self.codec.as_ref())
+            .build(job.graph.is_replayable(key.stage))?;
         let definition = TaskDefinition {
             plan: Arc::from(plan),
             inputs,
@@ -797,7 +798,8 @@ impl<'a> TaskInputBuilder<'a> {
         };
         Ok(TaskInput {
             stage: self.input.stage,
-            broadcast: matches!(self.input.mode, InputMode::Broadcast | InputMode::Merge),
+            broadcast: matches!(self.input.mode, InputMode::Broadcast | InputMode::Merge)
+                && self.consumer.plan.output_partitioning().partition_count() > 1,
             locator: Arc::new(locator),
         })
     }
@@ -1011,7 +1013,7 @@ impl<'a> TaskOutputBuilder<'a> {
         Self { stage, codec }
     }
 
-    fn build(&self) -> ExecutionResult<TaskOutput> {
+    fn build(&self, replayable: bool) -> ExecutionResult<TaskOutput> {
         let distribution = match &self.stage.distribution {
             OutputDistribution::Hash { keys, channels } => {
                 let keys = keys
@@ -1049,7 +1051,7 @@ impl<'a> TaskOutputBuilder<'a> {
             }
         };
         let locator = match self.stage.mode {
-            OutputMode::Pipelined => TaskOutputLocator::Pipelined,
+            OutputMode::Pipelined => TaskOutputLocator::Pipelined { replayable },
             OutputMode::Blocking => TaskOutputLocator::Blocking,
         };
         Ok(TaskOutput {

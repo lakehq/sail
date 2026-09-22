@@ -58,9 +58,10 @@ impl Actor for TaskRunnerActor {
             }
             TaskRunnerMessage::CreateLocalStream {
                 key,
+                replayable,
                 context,
                 result,
-            } => self.handle_create_local_stream(key, context, result),
+            } => self.handle_create_local_stream(key, replayable, context, result),
             TaskRunnerMessage::CreateStorageStream {
                 key,
                 schema,

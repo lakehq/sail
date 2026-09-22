@@ -116,6 +116,7 @@ message TaskOutputLocator {
 
 message TaskOutputPipelinedLocator {
   reserved 1;
+  bool replayable = 2;
 }
 
 message TaskOutputBlockingLocator {
