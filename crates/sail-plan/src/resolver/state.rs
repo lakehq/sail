@@ -76,6 +76,8 @@ pub(super) struct PlanResolverState {
     outer_query_schema: Option<DFSchemaRef>,
     /// The type-checking schema and ordered name-resolution schemas for a filter.
     filter_resolution: Option<(DFSchemaRef, Vec<DFSchemaRef>)>,
+    /// Outputs whose descendants contain names from outside this resolver state.
+    filter_input_boundaries: Vec<DFSchemaRef>,
     /// The aggregate state for the current query.
     aggregate_state: AggregateState,
     /// The CTEs for the current query.
@@ -112,6 +114,7 @@ impl PlanResolverState {
             fields: HashMap::new(),
             outer_query_schema: None,
             filter_resolution: None,
+            filter_input_boundaries: vec![],
             aggregate_state: AggregateState::default(),
             ctes: HashMap::new(),
             subquery_references: HashMap::new(),
@@ -211,6 +214,19 @@ impl PlanResolverState {
             .as_ref()
             .filter(|(input, _)| Arc::ptr_eq(input, schema))
             .map(|(_, schemas)| schemas.as_slice())
+    }
+
+    pub fn register_filter_input_boundary(&mut self, schema: DFSchemaRef) {
+        // Empty outputs have no IDs distinguishing them from unrelated projections.
+        // Their imported descendants already end at an empty alias or table scan.
+        if !schema.fields().is_empty() {
+            self.filter_input_boundaries.push(schema);
+        }
+    }
+
+    pub fn is_filter_input_boundary(&self, schema: &DFSchemaRef) -> bool {
+        // Rewriters can rebuild a projection's schema while preserving its field IDs.
+        self.filter_input_boundaries.contains(schema)
     }
 
     pub fn enter_filter_scope(

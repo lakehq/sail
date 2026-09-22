@@ -1,3 +1,4 @@
+import pandas as pd
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pyspark.errors import AnalysisException
@@ -271,3 +272,137 @@ def test_filter_missing_attribute_through_dataframe_distinct(filter_source):
 def test_filter_missing_grouping_attribute(filter_source):
     result = filter_source.groupBy("regionality").count().select("count").where(F.col("regionality") == "INTRA")
     assert result.collect() == [Row(count=1)]
+
+
+@pytest.fixture(params=["local", "global"])
+def filter_temp_view(spark, filter_source, request):
+    projected = filter_source.select("key", "regionality")
+    name = "filter_projected_view"
+    if request.param == "global":
+        projected.createOrReplaceGlobalTempView(name)
+        try:
+            yield f"global_temp.{name}"
+        finally:
+            spark.catalog.dropGlobalTempView(name)
+    else:
+        projected.createOrReplaceTempView(name)
+        try:
+            yield name
+        finally:
+            spark.catalog.dropTempView(name)
+
+
+def test_filter_temp_view_rejects_attribute_removed_before_registration(spark, filter_temp_view):
+    with pytest.raises(AnalysisException):
+        spark.table(filter_temp_view).where(F.col("value") == 2).collect()
+
+
+def test_filter_temp_view_recovers_attribute_removed_after_read(spark, filter_temp_view):
+    result = spark.table(filter_temp_view).select("key").where(F.col("regionality") != "DOMESTIC")
+    assert result.collect() == [Row(key="b")]
+
+
+@pytest.mark.parametrize("reference", ["alias", "cte"])
+def test_filter_temp_view_visible_qualified_attributes(spark, filter_temp_view, reference):
+    if reference == "alias":
+        query = f"SELECT v.key FROM {filter_temp_view} v WHERE v.regionality = 'INTRA'"
+    else:
+        query = f"""
+            WITH visible AS (SELECT key, regionality FROM {filter_temp_view})
+            SELECT visible.key FROM visible WHERE visible.regionality = 'INTRA'
+        """
+    assert spark.sql(query).collect() == [Row(key="b")]
+
+
+@pytest.mark.parametrize("subquery", ["scalar", "exists"])
+def test_filter_temp_views_preserve_correlated_attributes(spark, subquery):
+    # Match the pandas-backed registrations used by the TPC-H tests. Their 16/9-column layouts
+    # reproduce the stored lineitem/part column identity collision without external data.
+    lineitem = spark.createDataFrame(
+        pd.DataFrame(
+            [
+                (10, 1, 1, 1, 1.0, 70.0, 0.0, 0.0, "N", "O", "1996-01-01", "1996-01-01", "1996-01-01", "", "", ""),
+                (11, 1, 1, 1, 100.0, 700.0, 0.0, 0.0, "N", "O", "1996-01-01", "1996-01-01", "1996-01-01", "", "", ""),
+            ],
+            columns="""
+                l_orderkey l_partkey l_suppkey l_linenumber l_quantity l_extendedprice l_discount l_tax
+                l_returnflag l_linestatus l_shipdate l_commitdate l_receiptdate l_shipinstruct l_shipmode l_comment
+            """.split(),
+        )
+    )
+    part = spark.createDataFrame(
+        pd.DataFrame(
+            [(1, "part", "manufacturer", "Brand#42", "type", 1, "LG BAG", 1.0, "")],
+            columns="p_partkey p_name p_mfgr p_brand p_type p_size p_container p_retailprice p_comment".split(),
+        )
+    )
+    lineitem.createOrReplaceTempView("filter_lineitem")
+    part.createOrReplaceTempView("filter_part")
+    if subquery == "scalar":
+        predicate = """
+            l_quantity < (
+                SELECT 0.2 * AVG(l_quantity) FROM filter_lineitem WHERE l_partkey = p_partkey
+            )
+        """
+    else:
+        predicate = """
+            l_quantity = 1 AND EXISTS (
+                SELECT 1 FROM filter_lineitem WHERE l_partkey = p_partkey AND l_quantity > 50
+            )
+        """
+    try:
+        result = spark.sql(f"""
+            SELECT SUM(l_extendedprice) / 7.0 AS avg_yearly
+            FROM filter_lineitem, filter_part
+            WHERE p_partkey = l_partkey AND p_brand = 'Brand#42' AND p_container = 'LG BAG'
+                AND {predicate}
+        """)
+        assert result.collect() == [Row(avg_yearly=10.0)]
+    finally:
+        spark.catalog.dropTempView("filter_lineitem")
+        spark.catalog.dropTempView("filter_part")
+
+
+@pytest.mark.parametrize("reference", ["outer-unqualified", "outer-qualified", "visible"])
+def test_filter_physical_column_name_preserves_correlated_scope(spark, tmp_path, reference):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    path = tmp_path / "part.parquet"
+    pq.write_table(pa.table({"#0": [2]}), path)
+    outer = "range(1) outer_t" if reference == "outer-qualified" else "range(1)"
+    predicates = {"outer-unqualified": "id = 0", "outer-qualified": "outer_t.id = 0", "visible": "`#0` = 2"}
+    result = spark.sql(f"""
+        SELECT id FROM {outer}
+        WHERE EXISTS (SELECT 1 FROM parquet.`{path}` WHERE {predicates[reference]})
+    """)
+    assert result.collect() == [Row(id=0)]
+
+
+@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.exists requires PySpark 4+")
+@pytest.mark.parametrize("with_window", [False, True], ids=["sorted-view", "window-over-sorted-view"])
+def test_filter_temp_view_boundary_survives_window_rewrite(spark, with_window):
+    name = "filter_sorted_physical_view"
+    spark.createDataFrame(pd.DataFrame({"#0": [2]})).orderBy("#0").createOrReplaceTempView(name)
+    try:
+        inner = spark.table(name)
+        if with_window:
+            inner = inner.withColumn("rn", F.row_number().over(Window.orderBy("#0")))
+        # A window can rebuild the stored sort and its enclosing projections. The
+        # filter must still resolve id from the outer range, not the stored #0 field.
+        inner = inner.where(F.col("id").outer() == 0)
+        assert spark.range(1).where(inner.exists()).collect() == [Row(id=0)]
+    finally:
+        spark.catalog.dropTempView(name)
+
+
+def test_filter_empty_view_does_not_hide_unrelated_missing_attribute(spark):
+    name = "filter_empty_boundary_view"
+    spark.range(1).select().createOrReplaceTempView(name)
+    try:
+        right = spark.range(1).select().where(F.col("id") == 0)
+        result = spark.table(name).crossJoin(right)
+        assert result.count() == 1
+        assert result.columns == []
+    finally:
+        spark.catalog.dropTempView(name)

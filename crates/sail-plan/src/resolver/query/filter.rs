@@ -27,7 +27,7 @@ impl PlanResolver<'_> {
         let output_schema = Arc::clone(input.schema());
         let mut schemas = vec![Arc::clone(&output_schema)];
         let mut plan = &input;
-        while let Some(child) = Self::filter_missing_input_child(plan) {
+        while let Some(child) = Self::filter_missing_input_child(plan, state) {
             schemas.push(Arc::clone(child.schema()));
             plan = child;
         }
@@ -70,7 +70,7 @@ impl PlanResolver<'_> {
             }
             Ok(TreeNodeRecursion::Continue)
         })?;
-        let input = Self::add_filter_missing_inputs(input, &columns)?;
+        let input = Self::add_filter_missing_inputs(input, &columns, state)?;
         let restore_output = input.schema() != &output_schema;
         let filter = LogicalPlan::Filter(Filter::try_new(predicate, Arc::new(input))?);
         if restore_output {
@@ -90,7 +90,13 @@ impl PlanResolver<'_> {
 
     /// Only cross operators that can carry additional columns without changing
     /// their semantics. Spark also stops at aliases and multi-input operators.
-    fn filter_missing_input_child(plan: &LogicalPlan) -> Option<&LogicalPlan> {
+    fn filter_missing_input_child<'a>(
+        plan: &'a LogicalPlan,
+        state: &PlanResolverState,
+    ) -> Option<&'a LogicalPlan> {
+        if state.is_filter_input_boundary(plan.schema()) {
+            return None;
+        }
         let transparent = match plan {
             LogicalPlan::Projection(_)
             | LogicalPlan::Filter(_)
@@ -120,6 +126,7 @@ impl PlanResolver<'_> {
     fn add_filter_missing_inputs(
         plan: LogicalPlan,
         columns: &HashSet<&Column>,
+        state: &PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let missing = columns
             .iter()
@@ -129,9 +136,9 @@ impl PlanResolver<'_> {
         if missing.is_empty() {
             return Ok(plan);
         }
-        let child = Self::filter_missing_input_child(&plan)
+        let child = Self::filter_missing_input_child(&plan, state)
             .ok_or_else(|| PlanError::internal("missing filter input at resolution boundary"))?;
-        let child = Self::add_filter_missing_inputs(child.clone(), &missing)?;
+        let child = Self::add_filter_missing_inputs(child.clone(), &missing, state)?;
         if let LogicalPlan::Projection(mut projection) = plan {
             projection.expr.extend(
                 child
