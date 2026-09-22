@@ -979,7 +979,10 @@ mod tests {
             let (_, _, commit_meta) =
                 decode_actions_and_meta_from_batch(&batch).expect("commit metadata");
             assert_eq!(
-                commit_meta.expect("commit metadata action").requirements,
+                commit_meta
+                    .first()
+                    .expect("commit metadata action")
+                    .requirements,
                 expected_requirements
             );
 

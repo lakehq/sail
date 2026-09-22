@@ -84,6 +84,7 @@ pub async fn build_delete_plan(
         ctx.session(),
         meta_scan_w,
         snapshot_state,
+        snapshot_state.schema(),
         condition_expr.clone(),
     )?;
     let find_files_writer: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::new(
@@ -96,8 +97,13 @@ pub async fn build_delete_plan(
 
     let meta_scan_r: Arc<dyn ExecutionPlan> =
         build_log_replay_pipeline_with_options(ctx, snapshot_state, log_replay_options).await?;
-    let meta_scan_r: Arc<dyn ExecutionPlan> =
-        build_metadata_filter(ctx.session(), meta_scan_r, snapshot_state, condition_expr)?;
+    let meta_scan_r: Arc<dyn ExecutionPlan> = build_metadata_filter(
+        ctx.session(),
+        meta_scan_r,
+        snapshot_state,
+        snapshot_state.schema(),
+        condition_expr,
+    )?;
     let find_files_remove: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::new(
         meta_scan_r,
         ctx.table_url().clone(),
@@ -235,6 +241,7 @@ pub async fn build_delete_plan_mor(
         ctx.session(),
         meta_scan,
         snapshot_state,
+        snapshot_state.schema(),
         condition_expr.clone(),
     )?;
     let find_files: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::new(
@@ -280,7 +287,6 @@ pub async fn build_delete_plan_mor(
         Arc::clone(&physical_condition),
         &table_schema,
         snapshot_state.effective_column_mapping_mode(),
-        &partition_columns,
     )?;
     let scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaScanByAddsExec::new(
         find_files,
@@ -313,7 +319,13 @@ pub async fn build_delete_plan_mor(
     // The writer consumes metadata and matching rows independently across workers.
     let metadata =
         build_log_replay_pipeline_with_options(ctx, snapshot_state, log_replay_options).await?;
-    let metadata = build_metadata_filter(ctx.session(), metadata, snapshot_state, condition_expr)?;
+    let metadata = build_metadata_filter(
+        ctx.session(),
+        metadata,
+        snapshot_state,
+        snapshot_state.schema(),
+        condition_expr,
+    )?;
     let metadata_path = DeltaDecodePath::expression(PATH_COLUMN, &metadata.schema())?;
     let metadata = Arc::new(RepartitionExec::try_new(
         metadata,

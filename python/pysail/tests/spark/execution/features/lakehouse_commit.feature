@@ -24,12 +24,19 @@ Feature: Lakehouse commits in distributed execution
       Then query plan matches snapshot
 
     Scenario: Delta file writing remains parallel on workers
-      Given statement
+      When query
         """
         INSERT INTO distributed_delta_commit
         SELECT id FROM range(0, 400, 1, 4)
         """
+      Then query result collected
+        | count |
+        | 400   |
       Then data files in location count is 4
+      Then delta log latest commit info contains
+        | path                           | value |
+        | operationMetrics.numFiles      | 4     |
+        | operationMetrics.numOutputRows | 400   |
       When query
         """
         SELECT COUNT(*) AS count FROM distributed_delta_commit
@@ -62,11 +69,14 @@ Feature: Lakehouse commits in distributed execution
       Then query plan matches snapshot
 
     Scenario: Iceberg file writing remains parallel on workers
-      Given statement
+      When query
         """
         INSERT INTO distributed_iceberg_commit
         SELECT id FROM range(0, 400, 1, 4)
         """
+      Then query result collected
+        | count |
+        | 400   |
       Then data files in location count is 4
       When query
         """
