@@ -19,7 +19,6 @@ use datafusion::arrow::array::{Array, BooleanArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::catalog::Session;
-use datafusion::catalog::memory::DataSourceExec;
 use datafusion::common::scalar::ScalarValue;
 use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
 use datafusion::common::{Result, ToDFSchema, plan_err};
@@ -45,11 +44,13 @@ use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_datasource::file_scan_config::output_partitioning_from_partition_fields;
 use object_store::ObjectMeta;
 use sail_common_datafusion::schema_evolution::{
-    SchemaEvolutionPhysicalExprAdapterFactoryWithMatching, StructFieldMatching,
+    SchemaEvolutionCastColumnExpr, SchemaEvolutionPhysicalExprAdapterFactoryWithMatching,
+    StructFieldMatching,
 };
 use url::Url;
 
 use crate::datasource::expressions::simplify_expr;
+use crate::datasource::partition_defaults::{IdentityPartitionDefaults, create_data_scan};
 use crate::datasource::pruning::{
     prune_data_files_by_partition_values, prune_files, prune_manifests_by_partition_summaries,
 };
@@ -82,10 +83,14 @@ fn iceberg_schema_evolution_adapter() -> Arc<dyn PhysicalExprAdapterFactory> {
 /// Iceberg table provider for DataFusion
 #[derive(Debug, Clone)]
 pub struct IcebergTableProvider {
+    pub(crate) row_level_options: crate::logical::row_level::IcebergRowLevelOptions,
     /// The table location (URI)
     table_uri: String,
     /// The current schema of the table
     schema: Schema,
+    schema_history: Vec<Schema>,
+    name_mapping: Option<crate::spec::name_mapping::NameMapping>,
+    format_version: crate::spec::FormatVersion,
     /// The current snapshot of the table
     snapshot: Option<Snapshot>,
     /// All partition specs referenced by the table
@@ -100,13 +105,32 @@ pub struct IcebergTableProvider {
     file_column_name: Option<String>,
     /// Optional file-local row-index metadata column for row-level write planning.
     row_index_column_name: Option<String>,
+    /// Candidate-file selection only; never a row filter on the rewrite input.
+    copy_on_write_predicate: Option<Expr>,
     /// Whether to use the metadata-as-data read path (lazy manifest scanning)
     metadata_as_data_read: bool,
 }
 
 impl IcebergTableProvider {
-    fn statistic_scalar(&self, field_id: i32, datum: &Datum) -> Option<ScalarValue> {
+    fn statistic_scalar(
+        &self,
+        data_file: &DataFile,
+        field_id: i32,
+        datum: &Datum,
+    ) -> Option<ScalarValue> {
         let field = self.schema.field_by_id(field_id)?;
+        // Iceberg bounds exclude NaNs. They cannot prove a floating column is
+        // constant unless the file explicitly records that there are no NaNs.
+        if matches!(
+            field.field_type.as_ref(),
+            crate::spec::types::Type::Primitive(
+                crate::spec::types::PrimitiveType::Float
+                    | crate::spec::types::PrimitiveType::Double
+            )
+        ) && data_file.nan_value_counts().get(&field_id) != Some(&0)
+        {
+            return None;
+        }
         to_scalar(
             &Literal::Primitive(datum.literal.clone()),
             field.field_type.as_ref(),
@@ -147,7 +171,11 @@ impl IcebergTableProvider {
         );
 
         Ok(Self {
+            row_level_options: Default::default(),
             table_uri: table_uri_str,
+            schema_history: vec![schema.clone()],
+            name_mapping: None,
+            format_version: crate::spec::FormatVersion::V2,
             schema,
             snapshot: Some(snapshot),
             partition_specs,
@@ -156,6 +184,7 @@ impl IcebergTableProvider {
             arrow_schema,
             file_column_name: None,
             row_index_column_name: None,
+            copy_on_write_predicate: None,
             metadata_as_data_read: false,
         })
     }
@@ -183,7 +212,11 @@ impl IcebergTableProvider {
         ));
 
         Ok(Self {
+            row_level_options: Default::default(),
             table_uri: table_uri_str,
+            schema_history: vec![schema.clone()],
+            name_mapping: None,
+            format_version: crate::spec::FormatVersion::V2,
             schema,
             snapshot: None,
             partition_specs,
@@ -192,6 +225,7 @@ impl IcebergTableProvider {
             arrow_schema,
             file_column_name: None,
             row_index_column_name: None,
+            copy_on_write_predicate: None,
             metadata_as_data_read: false,
         })
     }
@@ -200,6 +234,33 @@ impl IcebergTableProvider {
     pub fn with_metadata_as_data_read(mut self, enabled: bool) -> Self {
         self.metadata_as_data_read = enabled;
         self
+    }
+
+    pub(crate) fn set_table_metadata(
+        &mut self,
+        metadata: &crate::spec::TableMetadata,
+    ) -> Result<()> {
+        self.schema_history = metadata.schemas.clone();
+        self.format_version = metadata.format_version;
+        self.row_level_options = metadata.into();
+        self.name_mapping = metadata
+            .properties
+            .get(crate::spec::name_mapping::DEFAULT_SCHEMA_NAME_MAPPING)
+            .map(|value| serde_json::from_str(value))
+            .transpose()
+            .map_err(|error| {
+                datafusion::common::DataFusionError::Plan(format!(
+                    "Invalid Iceberg name mapping: {error}"
+                ))
+            })?;
+        if let Some(mapping) = &self.name_mapping {
+            self.arrow_schema = Arc::new(crate::datasource::type_converter::apply_name_mapping(
+                &self.arrow_schema,
+                mapping,
+            )?);
+            self.output_schema = self.arrow_schema.clone();
+        }
+        Ok(())
     }
 
     pub fn file_column_name(&self) -> Option<&str> {
@@ -222,6 +283,10 @@ impl IcebergTableProvider {
         Ok(self)
     }
 
+    pub(crate) fn has_row_lineage(&self) -> bool {
+        self.format_version == crate::spec::FormatVersion::V3
+    }
+
     fn rebuild_output_schema(&mut self) -> Result<()> {
         let metadata_columns = RowLevelMetadataColumns::new(
             self.file_column_name.as_deref(),
@@ -232,8 +297,12 @@ impl IcebergTableProvider {
         } else {
             metadata_columns
         };
-        self.output_schema =
-            Arc::new(metadata_columns.append_to_schema(self.arrow_schema.as_ref())?);
+        let data_schema = if self.has_row_lineage() && self.file_column_name.is_some() {
+            crate::row_lineage::append_lineage_fields(self.arrow_schema.as_ref())?
+        } else {
+            self.arrow_schema.as_ref().clone()
+        };
+        self.output_schema = Arc::new(metadata_columns.append_to_schema(&data_schema)?);
         Ok(())
     }
 
@@ -305,6 +374,46 @@ impl IcebergTableProvider {
     /// Get the current snapshot
     pub fn current_snapshot(&self) -> Option<&Snapshot> {
         self.snapshot.as_ref()
+    }
+
+    pub(crate) fn select_copy_on_write_candidates(mut self, predicate: Expr) -> Self {
+        self.copy_on_write_predicate = Some(predicate);
+        self
+    }
+
+    pub(crate) async fn metadata_delete_paths(
+        &self,
+        session: &dyn Session,
+    ) -> Result<Option<Vec<String>>> {
+        let Some(predicate) = &self.copy_on_write_predicate else {
+            return Ok(None);
+        };
+        if self.snapshot.is_none() {
+            return Ok(Some(Vec::new()));
+        }
+        let table_url = Url::parse(&self.table_uri)
+            .map_err(|error| datafusion::common::DataFusionError::External(Box::new(error)))?;
+        let object_store = get_object_store_from_session(session, &table_url)?;
+        let store_ctx = StoreContext::new(object_store, &table_url)?;
+        let manifests = self.load_manifest_list(&store_ctx).await?;
+        let files = self
+            .load_data_files_with_seq(session, &[], &store_ctx, &manifests)
+            .await?;
+        let selected = crate::datasource::copy_on_write::select_copy_on_write_files(
+            session,
+            predicate,
+            Arc::clone(&self.arrow_schema),
+            &self.schema,
+            &self.partition_specs,
+            files,
+        )?;
+        Ok(selected.all_rows_match.then(|| {
+            selected
+                .candidates
+                .into_iter()
+                .map(|(file, _)| file.file_path)
+                .collect()
+        }))
     }
 
     pub(crate) async fn predicate_overwrite_paths(
@@ -459,8 +568,34 @@ impl IcebergTableProvider {
             .iter()
             .map(|s| (s.spec_id(), s.clone()))
             .collect();
-        let manifest_files =
-            prune_manifests_by_partition_summaries(manifest_list, &self.schema, &spec_map, filters);
+        let candidate_filters = self.copy_on_write_predicate.as_ref().map(|predicate| {
+            datafusion_expr::utils::split_conjunction(predicate)
+                .into_iter()
+                .filter(|expr| {
+                    crate::datasource::copy_on_write::can_prune(expr)
+                        && expr.column_refs().iter().all(|column| {
+                            self.schema
+                                .field_by_name(&column.name)
+                                .is_some_and(|field| {
+                                    !matches!(
+                                        field.field_type.as_ref(),
+                                        crate::spec::types::Type::Primitive(
+                                            crate::spec::types::PrimitiveType::Float
+                                                | crate::spec::types::PrimitiveType::Double
+                                        )
+                                    )
+                                })
+                        })
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        });
+        let manifest_files = prune_manifests_by_partition_summaries(
+            manifest_list,
+            &self.schema,
+            &spec_map,
+            candidate_filters.as_deref().unwrap_or(filters),
+        );
 
         let mut out: Vec<(DataFile, i64)> = Vec::new();
         for manifest_file in manifest_files {
@@ -490,9 +625,16 @@ impl IcebergTableProvider {
                 df.partition_spec_id = partition_spec_id;
                 if df.first_row_id.is_none() {
                     df.first_row_id = inherited_next_row_id;
-                }
-                if let Some(next_row_id) = &mut inherited_next_row_id {
-                    *next_row_id += df.record_count as i64;
+                    if let Some(next_row_id) = &mut inherited_next_row_id {
+                        let count = i64::try_from(df.record_count).map_err(|error| {
+                            datafusion_common::plan_datafusion_err!(
+                                "Iceberg row count overflow: {error}"
+                            )
+                        })?;
+                        *next_row_id = next_row_id.checked_add(count).ok_or_else(|| {
+                            datafusion_common::plan_datafusion_err!("Iceberg row ID overflow")
+                        })?;
+                    }
                 }
                 let seq = entry.sequence_number.unwrap_or(parent_seq);
                 manifest_pairs.push((df, seq));
@@ -580,8 +722,7 @@ impl IcebergTableProvider {
                     partition_spec_id,
                     is_unpartitioned_spec: is_unpartitioned,
                 };
-                // TODO(V3): Implement Puffin metadata parsing and RoaringBitmap delete application.
-                // Guard: reject v3 deletion vectors explicitly. Silently skipping would corrupt read results.
+                // TODO: Read and apply v3 Puffin deletion vectors before enabling DV tables.
                 if file_ref.is_deletion_vector() {
                     return plan_err!(
                         "Iceberg v3 deletion vectors are not yet supported \
@@ -638,7 +779,7 @@ impl IcebergTableProvider {
                 })
                 .collect();
 
-            let partitioned_file = PartitionedFile {
+            let mut partitioned_file = PartitionedFile {
                 object_meta,
                 partition_values,
                 range: None,
@@ -649,6 +790,13 @@ impl IcebergTableProvider {
                 table_reference: None,
                 arrow_schema: None,
             };
+            partitioned_file
+                .extensions
+                .insert(IdentityPartitionDefaults::from_file(
+                    &data_file,
+                    &self.partition_specs,
+                    &self.schema,
+                )?);
 
             partitioned_files.push(partitioned_file);
         }
@@ -708,6 +856,64 @@ impl IcebergTableProvider {
             .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
         ObjectStoreUrl::parse(&table_url[..url::Position::BeforePath])
             .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))
+    }
+
+    fn equality_scan_provider(&self, deletes: &[DeleteFileRef]) -> Result<Self> {
+        let mut provider = self.clone();
+        provider.schema = crate::equality_schema::equality_read_schema(
+            &self.schema,
+            &self.schema_history,
+            deletes
+                .iter()
+                .flat_map(|delete| delete.data_file.equality_ids.iter().copied()),
+        )?;
+        let schema = iceberg_schema_to_arrow(&provider.schema)?;
+        let schema = Self::reorder_arrow_schema_for_identity_partitions(
+            &provider.schema,
+            &self.partition_specs,
+            self.default_spec_id,
+            &schema,
+        );
+        provider.arrow_schema = Arc::new(match &self.name_mapping {
+            Some(mapping) => {
+                crate::datasource::type_converter::apply_name_mapping(&schema, mapping)?
+            }
+            None => schema,
+        });
+        provider.rebuild_output_schema()?;
+        Ok(provider)
+    }
+
+    fn project_scan_schema(
+        &self,
+        input: Arc<dyn ExecutionPlan>,
+        target: &Arc<ArrowSchema>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let schema = input.schema();
+        if &schema == target {
+            return Ok(input);
+        }
+        let expressions = target
+            .fields()
+            .iter()
+            .map(|field| {
+                let index = schema.index_of(field.name())?;
+                let column: Arc<dyn PhysicalExpr> = Arc::new(Column::new(field.name(), index));
+                let column = if schema.field(index).data_type() == field.data_type() {
+                    column
+                } else {
+                    Arc::new(SchemaEvolutionCastColumnExpr::new_with_matching(
+                        column,
+                        schema.fields()[index].clone(),
+                        field.clone(),
+                        None,
+                        StructFieldMatching::FieldId,
+                    ))
+                };
+                Ok((column, field.name().clone()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Arc::new(ProjectionExec::try_new(expressions, input)?))
     }
 
     fn build_parquet_source(
@@ -803,6 +1009,9 @@ impl IcebergTableProvider {
         let mut max_scalars: Vec<Option<ScalarValue>> =
             vec![None; self.arrow_schema.fields().len()];
         let mut null_counts: Vec<usize> = vec![0; self.arrow_schema.fields().len()];
+        let mut missing_min = vec![false; field_ids.len()];
+        let mut missing_max = vec![false; field_ids.len()];
+        let mut missing_null_count = vec![false; field_ids.len()];
 
         for df in data_files {
             total_rows = total_rows.saturating_add(df.record_count() as usize);
@@ -810,16 +1019,21 @@ impl IcebergTableProvider {
 
             for (col_idx, field_id) in field_ids.iter().enumerate() {
                 let Some(field_id) = field_id else {
+                    missing_min[col_idx] = true;
+                    missing_max[col_idx] = true;
+                    missing_null_count[col_idx] = true;
                     continue;
                 };
                 // null counts
                 if let Some(c) = df.null_value_counts().get(field_id) {
                     null_counts[col_idx] = null_counts[col_idx].saturating_add(*c as usize);
+                } else {
+                    missing_null_count[col_idx] = true;
                 }
 
                 // min
                 if let Some(d) = df.lower_bounds().get(field_id)
-                    && let Some(sv) = self.statistic_scalar(*field_id, d)
+                    && let Some(sv) = self.statistic_scalar(df, *field_id, d)
                 {
                     min_scalars[col_idx] = match (&min_scalars[col_idx], &sv) {
                         (None, s) => Some(s.clone()),
@@ -829,11 +1043,13 @@ impl IcebergTableProvider {
                             existing.clone()
                         }),
                     };
+                } else {
+                    missing_min[col_idx] = true;
                 }
 
                 // max
                 if let Some(d) = df.upper_bounds().get(field_id)
-                    && let Some(sv) = self.statistic_scalar(*field_id, d)
+                    && let Some(sv) = self.statistic_scalar(df, *field_id, d)
                 {
                     max_scalars[col_idx] = match (&max_scalars[col_idx], &sv) {
                         (None, s) => Some(s.clone()),
@@ -843,20 +1059,28 @@ impl IcebergTableProvider {
                             existing.clone()
                         }),
                     };
+                } else {
+                    missing_max[col_idx] = true;
                 }
             }
         }
 
         let column_statistics = (0..self.arrow_schema.fields().len())
             .map(|i| ColumnStatistics {
-                null_count: Precision::Exact(null_counts[i]),
+                null_count: if missing_null_count[i] {
+                    Precision::Absent
+                } else {
+                    Precision::Exact(null_counts[i])
+                },
                 max_value: max_scalars[i]
                     .clone()
-                    .map(Precision::Exact)
+                    .filter(|_| !missing_max[i])
+                    .map(Self::bound_precision)
                     .unwrap_or(Precision::Absent),
                 min_value: min_scalars[i]
                     .clone()
-                    .map(Precision::Exact)
+                    .filter(|_| !missing_min[i])
+                    .map(Self::bound_precision)
                     .unwrap_or(Precision::Absent),
                 distinct_count: Precision::Absent,
                 sum_value: Precision::Absent,
@@ -897,15 +1121,15 @@ impl IcebergTableProvider {
                 let min_value = data_file
                     .lower_bounds()
                     .get(&field_id)
-                    .and_then(|datum| self.statistic_scalar(field_id, datum))
-                    .map(Precision::Exact)
+                    .and_then(|datum| self.statistic_scalar(data_file, field_id, datum))
+                    .map(Self::bound_precision)
                     .unwrap_or(Precision::Absent);
 
                 let max_value = data_file
                     .upper_bounds()
                     .get(&field_id)
-                    .and_then(|datum| self.statistic_scalar(field_id, datum))
-                    .map(Precision::Exact)
+                    .and_then(|datum| self.statistic_scalar(data_file, field_id, datum))
+                    .map(Self::bound_precision)
                     .unwrap_or(Precision::Absent);
 
                 ColumnStatistics {
@@ -923,6 +1147,23 @@ impl IcebergTableProvider {
             num_rows,
             total_byte_size,
             column_statistics,
+        }
+    }
+
+    fn bound_precision(value: ScalarValue) -> Precision<ScalarValue> {
+        // Bounds from older files may be truncated regardless of the current metrics mode.
+        if matches!(
+            value.data_type(),
+            DataType::Utf8
+                | DataType::LargeUtf8
+                | DataType::Utf8View
+                | DataType::Binary
+                | DataType::LargeBinary
+                | DataType::BinaryView
+        ) {
+            Precision::Inexact(value)
+        } else {
+            Precision::Exact(value)
         }
     }
 }
@@ -966,7 +1207,15 @@ impl TableProvider for IcebergTableProvider {
                 .await;
         }
 
-        if self.metadata_as_data_read {
+        // The streaming manifest path does not carry partition tuples. Use the
+        // manifest-aware scan when missing columns may need identity constants.
+        if self.metadata_as_data_read
+            && !self.partition_specs.iter().any(|spec| {
+                spec.fields()
+                    .iter()
+                    .any(|field| field.transform == Transform::Identity)
+            })
+        {
             return self
                 .scan_metadata_as_data(session, projection, filters, limit)
                 .await;
@@ -994,7 +1243,14 @@ impl TableProvider for IcebergTableProvider {
         // Build filter conjunction and run DataFusion-based pruning on Iceberg metrics.
         // Preserve per-file sequence numbers through the prune.
         let filter_expr = conjunction(pruning_filters.iter().cloned());
-        if filter_expr.is_some() || limit.is_some() {
+        let file_limit = limit.filter(|_| {
+            filters.is_empty()
+                && !manifest_list
+                    .entries()
+                    .iter()
+                    .any(|manifest| manifest.content == ManifestContentType::Deletes)
+        });
+        if filter_expr.is_some() || file_limit.is_some() {
             let (files_only, seqs_only): (Vec<DataFile>, Vec<i64>) =
                 data_files_with_seq.iter().cloned().unzip();
             let seq_by_path: HashMap<String, i64> = files_only
@@ -1005,7 +1261,7 @@ impl TableProvider for IcebergTableProvider {
             let (kept, _mask) = prune_files(
                 session,
                 &pruning_filters,
-                limit,
+                file_limit,
                 self.rebuild_logical_schema_for_filters(projection, filters),
                 files_only,
                 &self.schema,
@@ -1082,7 +1338,7 @@ impl TableProvider for IcebergTableProvider {
                 .with_limit(limit)
                 .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                 .build();
-            return Ok(DataSourceExec::from_data_source(file_scan_config));
+            return create_data_scan(file_scan_config);
         }
 
         // Delete-aware path: build clean + per-dirty-file branches. We apply
@@ -1110,14 +1366,17 @@ impl TableProvider for IcebergTableProvider {
                     .with_file_groups(file_groups)
                     .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                     .build();
-            branches.push(DataSourceExec::from_data_source(file_scan_config));
+            branches.push(create_data_scan(file_scan_config)?);
         }
 
         // Branch B: one branch per dirty file.
         for (df, pos_deletes, eq_deletes) in dirty_units {
-            let partitioned = self.create_partitioned_files(&store_ctx, vec![df.clone()])?;
+            let scan_provider = self.equality_scan_provider(&eq_deletes)?;
+            let partitioned =
+                scan_provider.create_partitioned_files(&store_ctx, vec![df.clone()])?;
             // Single-file, single-partition scan — preserves row order for positional deletes.
-            let parquet_source = self.build_parquet_source(session, None, &[], &[], false)?;
+            let parquet_source =
+                scan_provider.build_parquet_source(session, None, &[], &[], false)?;
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(vec![FileGroup::from(partitioned)])
@@ -1126,8 +1385,7 @@ impl TableProvider for IcebergTableProvider {
                     .with_preserve_order(true)
                     .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                     .build();
-            let data_scan: Arc<dyn ExecutionPlan> =
-                DataSourceExec::from_data_source(file_scan_config);
+            let data_scan: Arc<dyn ExecutionPlan> = create_data_scan(file_scan_config)?;
             let data_file_raw_path = df.file_path().to_string();
             // Wrap with DeleteApply.
             let apply: Arc<dyn ExecutionPlan> = Arc::new(IcebergDeleteApplyExec::new(
@@ -1136,9 +1394,9 @@ impl TableProvider for IcebergTableProvider {
                 pos_deletes,
                 eq_deletes,
                 self.table_uri.clone(),
-                self.schema.clone(),
+                scan_provider.schema.clone(),
             ));
-            branches.push(apply);
+            branches.push(self.project_scan_schema(apply, &self.arrow_schema)?);
         }
 
         // Union the branches.
@@ -1238,8 +1496,27 @@ impl IcebergTableProvider {
             .load_data_files_with_seq(session, &pruning_filters, &store_ctx, &manifest_list)
             .await?;
 
+        if let Some(predicate) = &self.copy_on_write_predicate {
+            data_files_with_seq = crate::datasource::copy_on_write::select_copy_on_write_files(
+                session,
+                predicate,
+                Arc::clone(&self.arrow_schema),
+                &self.schema,
+                &self.partition_specs,
+                data_files_with_seq,
+            )?
+            .candidates;
+        }
+
         let filter_expr = conjunction(pruning_filters.iter().cloned());
-        if filter_expr.is_some() || limit.is_some() {
+        let file_limit = limit.filter(|_| {
+            filters.is_empty()
+                && !manifest_list
+                    .entries()
+                    .iter()
+                    .any(|manifest| manifest.content == ManifestContentType::Deletes)
+        });
+        if filter_expr.is_some() || file_limit.is_some() {
             let (files_only, seqs_only): (Vec<DataFile>, Vec<i64>) =
                 data_files_with_seq.iter().cloned().unzip();
             let seq_by_path: HashMap<String, i64> = files_only
@@ -1250,7 +1527,7 @@ impl IcebergTableProvider {
             let (kept, _mask) = prune_files(
                 session,
                 &pruning_filters,
-                limit,
+                file_limit,
                 self.rebuild_logical_schema_for_filters(None, filters),
                 files_only,
                 &self.schema,
@@ -1280,14 +1557,29 @@ impl IcebergTableProvider {
             )
         })?;
         let mut clean_files = Vec::new();
+        let mut file_lineage = HashMap::new();
         let mut dirty_units = Vec::new();
 
         for (data_file, sequence_number) in data_files_with_seq {
             let matched = delete_index.for_data_file(&data_file, sequence_number);
             if matched.is_empty() {
+                if self.has_row_lineage() {
+                    file_lineage.insert(
+                        data_file.file_path.clone(),
+                        crate::row_lineage::RowLineage {
+                            first_row_id: data_file.first_row_id,
+                            data_sequence_number: sequence_number,
+                        },
+                    );
+                }
                 clean_files.push(data_file);
             } else {
-                dirty_units.push((data_file, matched.positional, matched.equality));
+                dirty_units.push((
+                    data_file,
+                    sequence_number,
+                    matched.positional,
+                    matched.equality,
+                ));
             }
         }
 
@@ -1300,8 +1592,14 @@ impl IcebergTableProvider {
                 .into_iter()
                 .map(|file| FileGroup::from(vec![file]))
                 .collect::<Vec<_>>();
+            let mut scan_provider = self.clone();
+            if self.has_row_lineage() {
+                scan_provider.arrow_schema = Arc::new(crate::row_lineage::append_lineage_fields(
+                    &self.arrow_schema,
+                )?);
+            }
             let parquet_source =
-                self.build_merge_parquet_source(session, file_column_name.as_str());
+                scan_provider.build_merge_parquet_source(session, file_column_name.as_str());
             let output_partitioning = output_partitioning_from_partition_fields(
                 parquet_source.table_schema().table_schema(),
                 parquet_source.table_schema().table_partition_cols(),
@@ -1318,19 +1616,34 @@ impl IcebergTableProvider {
                     .with_preserve_order(true)
                     .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                     .build();
-            let data_scan = DataSourceExec::from_data_source(file_scan_config);
+            let data_scan = create_data_scan(file_scan_config)?;
             branches.push(Arc::new(
                 IcebergMergeMetadataExec::try_new_partitioned_files(
                     data_scan,
                     file_column_name.clone(),
                     self.row_index_column_name.clone(),
+                    file_lineage,
                 )?,
             ));
         }
 
-        for (df, positional_deletes, equality_deletes) in dirty_units {
-            let partitioned = self.create_partitioned_files(&store_ctx, vec![df.clone()])?;
-            let parquet_source = self.build_parquet_source(session, None, &[], &[], false)?;
+        for (df, sequence_number, positional_deletes, equality_deletes) in dirty_units {
+            let mut scan_provider = self.equality_scan_provider(&equality_deletes)?;
+            let row_lineage = self
+                .has_row_lineage()
+                .then_some(crate::row_lineage::RowLineage {
+                    first_row_id: df.first_row_id,
+                    data_sequence_number: sequence_number,
+                });
+            if row_lineage.is_some() {
+                scan_provider.arrow_schema = Arc::new(crate::row_lineage::append_lineage_fields(
+                    &scan_provider.arrow_schema,
+                )?);
+            }
+            let partitioned =
+                scan_provider.create_partitioned_files(&store_ctx, vec![df.clone()])?;
+            let parquet_source =
+                scan_provider.build_parquet_source(session, None, &[], &[], false)?;
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(vec![FileGroup::from(partitioned)])
@@ -1340,8 +1653,7 @@ impl IcebergTableProvider {
                     .with_preserve_order(true)
                     .with_expr_adapter(Some(iceberg_schema_evolution_adapter()))
                     .build();
-            let data_scan: Arc<dyn ExecutionPlan> =
-                DataSourceExec::from_data_source(file_scan_config);
+            let data_scan: Arc<dyn ExecutionPlan> = create_data_scan(file_scan_config)?;
             let with_metadata: Arc<dyn ExecutionPlan> =
                 Arc::new(IcebergMergeMetadataExec::try_new(
                     data_scan,
@@ -1352,16 +1664,18 @@ impl IcebergTableProvider {
                     })?,
                     self.file_column_name.clone(),
                     self.row_index_column_name.clone(),
+                    row_lineage,
                 )?);
 
-            branches.push(Arc::new(IcebergDeleteApplyExec::new(
+            let apply: Arc<dyn ExecutionPlan> = Arc::new(IcebergDeleteApplyExec::new(
                 with_metadata,
                 df.file_path.clone(),
                 positional_deletes,
                 equality_deletes,
                 self.table_uri.clone(),
-                self.schema.clone(),
-            )));
+                scan_provider.schema.clone(),
+            ));
+            branches.push(self.project_scan_schema(apply, &self.output_schema)?);
         }
 
         let unioned: Arc<dyn ExecutionPlan> = if branches.len() == 1 {
@@ -1417,9 +1731,8 @@ impl IcebergTableProvider {
 
     fn classify_pushdown_for_expr(&self, expr: &Expr) -> TableProviderFilterPushDown {
         use TableProviderFilterPushDown as FP;
-        // Identity partition columns can satisfy Eq/IN at partition level. Transformed
-        // partition source columns are useful for pruning but remain inexact because the
-        // original row predicate must still be evaluated.
+        // Partition pruning is inclusive. Keep the row predicate for nulls,
+        // missing metrics, and historical specs without the partition field.
         match expr {
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 let (l, r) = (Self::strip_expr(left), Self::strip_expr(right));
@@ -1508,7 +1821,6 @@ impl IcebergTableProvider {
 
     fn strip_expr(expr: &Expr) -> &Expr {
         match expr {
-            Expr::Cast(c) => Self::strip_expr(&c.expr),
             Expr::Alias(a) => Self::strip_expr(&a.expr),
             _ => expr,
         }
@@ -1529,12 +1841,8 @@ impl IcebergTableProvider {
         &self,
         col_name: &str,
     ) -> Option<TableProviderFilterPushDown> {
-        let only_identity = self.partition_source_col_only_uses_identity(col_name)?;
-        if only_identity {
-            Some(TableProviderFilterPushDown::Exact)
-        } else {
-            Some(TableProviderFilterPushDown::Inexact)
-        }
+        self.partition_source_col_only_uses_identity(col_name)
+            .map(|_| TableProviderFilterPushDown::Inexact)
     }
 
     fn is_partition_source_col(&self, col_name: &str) -> bool {
@@ -1631,14 +1939,13 @@ impl IcebergTableProvider {
             );
         }
 
-        if projection.is_some() || !filters.is_empty() || limit.is_some() {
+        if !filters.is_empty() || limit.is_some() {
             log::debug!(
-                "metadata-as-data scan does not push down projection/filters/limit \
-                 (projection_provided={}, num_filters={}, limit={:?}); relying on \
+                "metadata-as-data scan does not push down filters/limit \
+                 (num_filters={}, limit={:?}); relying on \
                  the planner to apply them above the scan. Note: \
                  `supports_filters_pushdown` returns Unsupported in this mode so \
                  the planner does NOT drop filters from the outer plan.",
-                projection.is_some(),
                 filters.len(),
                 limit,
             );
@@ -1662,7 +1969,7 @@ impl IcebergTableProvider {
             false, // full data file scan, not partition-only
         )?);
 
-        let scan_exec = Arc::new(
+        let scan_exec: Arc<dyn ExecutionPlan> = Arc::new(
             crate::physical_plan::scan_by_data_files_exec::IcebergScanByDataFilesExec::new(
                 discovery,
                 self.table_uri.clone(),
@@ -1670,6 +1977,92 @@ impl IcebergTableProvider {
             ),
         );
 
-        Ok(scan_exec)
+        self.project_scan_schema(scan_exec, &self.projected_arrow_schema(projection)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::spec::types::{NestedField, PrimitiveLiteral, PrimitiveType, Type};
+
+    fn statistics_fixture() -> Result<(IcebergTableProvider, DataFile)> {
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields([
+                Arc::new(NestedField::optional(
+                    1,
+                    "id",
+                    Type::Primitive(PrimitiveType::Int),
+                )),
+                Arc::new(NestedField::optional(
+                    2,
+                    "score",
+                    Type::Primitive(PrimitiveType::Double),
+                )),
+            ])
+            .build()
+            .map_err(|error| datafusion_common::plan_datafusion_err!("{error}"))?;
+        let provider = IcebergTableProvider::new_empty(
+            "file:///tmp/statistics/",
+            schema,
+            vec![PartitionSpec::unpartitioned_spec()],
+            0,
+        )?;
+        let mut file: DataFile = serde_json::from_value(serde_json::json!({
+            "content": "DATA", "file_path": "data.parquet", "file_format": "PARQUET",
+            "partition": [], "record_count": 2, "file_size_in_bytes": 100, "partition_spec_id": 0
+        }))
+        .map_err(|error| datafusion_common::plan_datafusion_err!("{error}"))?;
+        file.lower_bounds = HashMap::from([
+            (1, Datum::new(PrimitiveType::Int, PrimitiveLiteral::Int(2))),
+            (
+                2,
+                Datum::new(PrimitiveType::Double, PrimitiveLiteral::Double(2.5.into())),
+            ),
+        ]);
+        file.upper_bounds = file.lower_bounds.clone();
+        file.null_value_counts = HashMap::from([(1, 0), (2, 0)]);
+        Ok((provider, file))
+    }
+
+    #[test]
+    fn floating_bounds_require_a_known_zero_nan_count() -> Result<()> {
+        let (provider, mut file) = statistics_fixture()?;
+        for nan_count in [None, Some(1), Some(0)] {
+            file.nan_value_counts = nan_count.map(|count| (2, count)).into_iter().collect();
+            let expected = if nan_count == Some(0) {
+                Precision::Exact(ScalarValue::Float64(Some(2.5)))
+            } else {
+                Precision::Absent
+            };
+            for stats in [
+                provider.create_file_statistics(&file),
+                provider.aggregate_statistics(&[file.clone()]),
+            ] {
+                assert_eq!(stats.column_statistics[1].min_value, expected);
+                assert_eq!(stats.column_statistics[1].max_value, expected);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn aggregate_statistics_require_complete_optional_metrics() -> Result<()> {
+        let (provider, file) = statistics_fixture()?;
+        let mut missing = file.clone();
+        missing.lower_bounds.clear();
+        missing.upper_bounds.clear();
+        missing.null_value_counts.clear();
+        for files in [[file.clone(), missing.clone()], [missing, file]] {
+            let stats = provider.aggregate_statistics(&files);
+            assert_eq!(stats.num_rows, Precision::Exact(4));
+            for column in stats.column_statistics {
+                assert_eq!(column.null_count, Precision::Absent);
+                assert_eq!(column.min_value, Precision::Absent);
+                assert_eq!(column.max_value, Precision::Absent);
+            }
+        }
+        Ok(())
     }
 }

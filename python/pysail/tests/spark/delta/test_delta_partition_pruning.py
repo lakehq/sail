@@ -178,6 +178,7 @@ def test_delta_pruning_with_null_string_partition_round_trips_as_null(spark, tmp
         Row(id=2, region=None, payload="b"),
         Row(id=3, region="eu", payload="c"),
         Row(id=4, region=None, payload="d"),
+        Row(id=5, region="__HIVE_DEFAULT_PARTITION__", payload="e"),
     ]
     df = spark.createDataFrame(partition_data)
     df.write.format("delta").mode("overwrite").partitionBy("region").save(str(delta_path))
@@ -188,6 +189,7 @@ def test_delta_pruning_with_null_string_partition_round_trips_as_null(spark, tmp
         {"id": 2, "region": None, "payload": "b"},
         {"id": 3, "region": "eu", "payload": "c"},
         {"id": 4, "region": None, "payload": "d"},
+        {"id": 5, "region": "__HIVE_DEFAULT_PARTITION__", "payload": "e"},
     ]
 
     filtered_df = spark.read.format("delta").load(delta_table_path).filter("region IS NULL")
@@ -196,10 +198,9 @@ def test_delta_pruning_with_null_string_partition_round_trips_as_null(spark, tmp
         Row(id=4, payload="d", region=None),
     ]
 
-    sentinel_count = (
-        spark.read.format("delta").load(delta_table_path).filter("region = '__HIVE_DEFAULT_PARTITION__'").count()
-    )
-    assert sentinel_count == 0
+    assert (
+        spark.read.format("delta").load(delta_table_path).filter("region = '__HIVE_DEFAULT_PARTITION__'").collect()
+    ) == [Row(id=5, payload="e", region="__HIVE_DEFAULT_PARTITION__")]
 
 
 def test_delta_pruning_with_complex_expressions(spark, tmp_path):

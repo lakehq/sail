@@ -35,6 +35,7 @@ pub const COMMIT_VERSION_COLUMN: &str = "_commit_version";
 pub const COMMIT_TIMESTAMP_COLUMN: &str = "_commit_timestamp";
 
 pub mod actions;
+pub(crate) mod deletion_vector;
 pub mod expressions;
 pub mod pruning;
 pub mod scan;
@@ -46,7 +47,6 @@ pub use expressions::{
     PredicateProperties, collect_physical_columns, get_pushdown_filters,
     rewrite_predicate_for_column_mapping, simplify_expr,
 };
-pub use pruning::{PruningResult, prune_files};
 pub use scan::build_file_scan_config;
 pub use schema::df_logical_schema;
 
@@ -239,12 +239,14 @@ impl DeltaScanConfigBuilder {
         Ok(DeltaScanConfig {
             file_column_name,
             row_index_column_name: None,
+            hash_partition_files: false,
             wrap_partition_values: self.wrap_partition_values,
             enable_parquet_pushdown: self.enable_parquet_pushdown,
             schema: self.schema.clone(),
             commit_version_column_name,
             commit_timestamp_column_name,
             delta_log_replay_strategy: self.delta_log_replay_strategy,
+            metadata_aggregate: None,
         })
     }
 }
@@ -256,6 +258,8 @@ pub struct DeltaScanConfig {
     pub file_column_name: Option<String>,
     /// Include the file-local row index for each record.
     pub row_index_column_name: Option<String>,
+    /// Require file metadata to be hash partitioned by its decoded path before scanning.
+    pub hash_partition_files: bool,
     /// Wrap partition values in a dictionary encoding
     pub wrap_partition_values: bool,
     /// Allow pushdown of the scan filter
@@ -269,4 +273,11 @@ pub struct DeltaScanConfig {
     /// Strategy for log replay planning.
     #[serde(default)]
     pub delta_log_replay_strategy: DeltaLogReplayStrategy,
+    /// Emit file-level group values and row-count weights for metadata aggregation.
+    pub metadata_aggregate: Option<DeltaMetadataAggregateConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeltaMetadataAggregateConfig {
+    pub group_columns: Vec<String>,
 }
