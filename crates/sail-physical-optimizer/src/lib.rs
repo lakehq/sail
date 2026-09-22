@@ -44,6 +44,8 @@ pub fn get_physical_optimizers(
     let mut rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = vec![];
 
     rules.push(Arc::new(OutputRequirements::new_add_mode()));
+    // FIXME: DataFusion's CAST statistics can retain invalid exact bounds/null
+    // counts. Fix their propagation for non-order-preserving and fallible casts.
     rules.push(Arc::new(AggregateStatistics::new()));
     if options.enable_join_reorder {
         rules.push(Arc::new(JoinReorder::new(options.join_reorder)));

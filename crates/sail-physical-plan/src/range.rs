@@ -116,6 +116,40 @@ impl ExecutionPlan for RangeExec {
         Ok(self)
     }
 
+    fn statistics_from_inputs(
+        &self,
+        _input_stats: &[Arc<datafusion_common::Statistics>],
+        args: &datafusion::physical_plan::statistics::StatisticsArgs,
+    ) -> Result<Arc<datafusion_common::Statistics>> {
+        use datafusion_common::stats::Precision;
+        let count = |partition| {
+            let range = self.range.partition(partition, self.num_partitions);
+            let distance = i128::from(range.end) - i128::from(range.start);
+            let step = i128::from(range.step);
+            if step == 0 {
+                return None;
+            }
+            let rows = if distance.signum() == step.signum() {
+                (distance.abs() + step.abs() - 1) / step.abs()
+            } else {
+                0
+            };
+            usize::try_from(rows).ok()
+        };
+        let rows = match args.partition() {
+            Some(partition) => count(partition),
+            None => (0..self.num_partitions).try_fold(0usize, |rows, partition| {
+                rows.checked_add(count(partition)?)
+            }),
+        };
+        let mut statistics = datafusion_common::Statistics::new_unknown(&self.projected_schema);
+        statistics.num_rows = rows.map(Precision::Exact).unwrap_or(Precision::Absent);
+        for column in &mut statistics.column_statistics {
+            column.null_count = Precision::Exact(0);
+        }
+        Ok(Arc::new(statistics))
+    }
+
     fn execute(
         &self,
         partition: usize,
@@ -158,5 +192,76 @@ impl ExecutionPlan for RangeExec {
             self.projected_schema.clone(),
             stream,
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::physical_plan::statistics::{StatisticsArgs, StatisticsContext};
+    use datafusion_common::stats::Precision;
+    use futures::TryStreamExt;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn exact_row_counts_match_execution_for_each_partition() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+        for range in [
+            Range {
+                start: -7,
+                end: 12,
+                step: 3,
+            },
+            Range {
+                start: 12,
+                end: -7,
+                step: -3,
+            },
+            Range {
+                start: 1,
+                end: 1,
+                step: 1,
+            },
+            Range {
+                start: 9,
+                end: 1,
+                step: 1,
+            },
+            Range {
+                start: i64::MAX - 10,
+                end: i64::MAX,
+                step: 2,
+            },
+            Range {
+                start: i64::MIN + 10,
+                end: i64::MIN,
+                step: -2,
+            },
+        ] {
+            for partitions in [1, 2, 8] {
+                for projection in [vec![], vec![0]] {
+                    let plan =
+                        RangeExec::try_new(range.clone(), partitions, schema.clone(), projection)?;
+                    let mut total = 0;
+                    for partition in 0..partitions {
+                        let batches = plan
+                            .execute(partition, Arc::new(TaskContext::default()))?
+                            .try_collect::<Vec<_>>()
+                            .await?;
+                        let rows = batches.iter().map(RecordBatch::num_rows).sum::<usize>();
+                        total += rows;
+                        let stats = plan.statistics_from_inputs(
+                            &[],
+                            &StatisticsArgs::new().with_partition(Some(partition)),
+                        )?;
+                        assert_eq!(stats.num_rows, Precision::Exact(rows));
+                    }
+                    let stats = StatisticsContext::new().compute(&plan, &StatisticsArgs::new())?;
+                    assert_eq!(stats.num_rows, Precision::Exact(total));
+                }
+            }
+        }
+        Ok(())
     }
 }
