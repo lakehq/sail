@@ -353,6 +353,10 @@ impl PlanResolver<'_> {
                 spec::Expr::UnresolvedExtractValue { extraction, .. } => {
                     match extraction.as_ref() {
                         spec::Expr::Literal(spec::Literal::Utf8 { value }) => value.clone(),
+                        spec::Expr::UnresolvedAttribute { name, .. } => match name.parts() {
+                            [field] => Some(field.as_ref().to_string()),
+                            _ => None,
+                        },
                         _ => None,
                     }
                 }

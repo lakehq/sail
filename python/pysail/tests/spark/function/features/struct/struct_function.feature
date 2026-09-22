@@ -25,6 +25,33 @@ Feature: struct function
 
   Rule: Struct field names
 
+    Scenario Outline: struct preserves names extracted from computed structs
+      Given config spark.sql.caseSensitive = false
+      When query
+        """
+        SELECT to_json(struct(<argument>)) AS result
+        """
+      Then query result
+        | result     |
+        | <expected> |
+
+      Examples:
+        | argument                                              | expected          |
+        | named_struct('Temperature', 1).Temperature              | {"Temperature":1} |
+        | named_struct('Temperature', 1).TEMPERATURE              | {"TEMPERATURE":1} |
+        | named_struct('Temperature', 1).TEMPERATURE AS renamed   | {"renamed":1}     |
+
+    Scenario: struct preserves computed field reference spelling in a lambda
+      Given config spark.sql.caseSensitive = false
+      When query
+        """
+        SELECT to_json(transform(array(-1, 2), reading ->
+          struct(named_struct('Temperature', reading).TEMPERATURE))) AS result
+        """
+      Then query result
+        | result                                |
+        | [{"TEMPERATURE":-1},{"TEMPERATURE":2}] |
+
     Scenario Outline: struct preserves <case> in HAVING
       Given config spark.sql.caseSensitive = false
       When query
