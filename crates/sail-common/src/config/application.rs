@@ -216,6 +216,7 @@ pub struct ClusterConfig {
     pub task_stream_creation_timeout_secs: u64,
     pub task_max_attempts: usize,
     pub rpc_retry_strategy: RetryStrategy,
+    pub enable_shuffle_read_coalescing: bool,
     pub shuffle_backend: ShuffleBackend,
 }
 
@@ -1019,6 +1020,7 @@ impl ClusterConfigEnv {
         TASK_STREAM_BUFFER,
         TASK_STREAM_CREATION_TIMEOUT_SECS,
         RPC_RETRY_STRATEGY,
+        ENABLE_SHUFFLE_READ_COALESCING,
         SHUFFLE_BACKEND__TYPE,
         SHUFFLE_BACKEND__FLIGHT__COMPRESSION,
         SHUFFLE_BACKEND__STORAGE__PATH,

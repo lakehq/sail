@@ -32,6 +32,7 @@ pub(super) struct TaskPreparation {
     pub session_id: String,
     pub handle: ActorHandle<TaskRunnerActor>,
     pub celeborn: bool,
+    pub enable_shuffle_read_coalescing: bool,
 }
 
 impl TaskPreparation {
@@ -146,6 +147,7 @@ impl TaskPreparation {
                     return Ok(Transformed::yes(Arc::new(ShuffleReadExec::new(
                         streams.reader(key.clone(), input.clone(), placeholder.schema()),
                         placeholder.properties().clone(),
+                        self.enable_shuffle_read_coalescing,
                     ))));
                 }
                 Ok(Transformed::no(node))

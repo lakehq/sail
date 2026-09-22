@@ -71,6 +71,7 @@ impl TaskRunnerActor {
                 session_id: self.session_id.clone(),
                 handle: ctx.handle().clone(),
                 celeborn: self.extensions.celeborn_streams.is_some(),
+                enable_shuffle_read_coalescing: self.enable_shuffle_read_coalescing,
             }
             .stream(
                 key.clone(),

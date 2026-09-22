@@ -16,11 +16,20 @@ use crate::stream::reader::TaskStreamReader;
 pub struct ShuffleReadExec {
     properties: Arc<PlanProperties>,
     reader: Arc<dyn TaskStreamReader>,
+    coalesce_batches: bool,
 }
 
 impl ShuffleReadExec {
-    pub fn new(reader: Arc<dyn TaskStreamReader>, properties: Arc<PlanProperties>) -> Self {
-        Self { properties, reader }
+    pub fn new(
+        reader: Arc<dyn TaskStreamReader>,
+        properties: Arc<PlanProperties>,
+        coalesce_batches: bool,
+    ) -> Self {
+        Self {
+            properties,
+            reader,
+            coalesce_batches,
+        }
     }
 }
 
@@ -89,7 +98,7 @@ impl ExecutionPlan for ShuffleReadExec {
         let output: SendableRecordBatchStream =
             Box::pin(RecordBatchStreamAdapter::new(self.schema(), output));
         // Unbounded inputs must emit partial batches promptly.
-        if self.properties.boundedness.is_unbounded() {
+        if !self.coalesce_batches || self.properties.boundedness.is_unbounded() {
             return Ok(output);
         }
         // The reader has merged the producers for this partition. Share one

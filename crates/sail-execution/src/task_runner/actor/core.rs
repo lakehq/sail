@@ -13,11 +13,13 @@ impl Actor for TaskRunnerActor {
     fn new(options: Self::Options) -> Self {
         let TaskRunnerComponents {
             session_id,
+            enable_shuffle_read_coalescing,
             extensions,
             placement,
         } = options;
         Self {
             session_id,
+            enable_shuffle_read_coalescing,
             signals: Default::default(),
             tasks: Default::default(),
             broadcasts: Default::default(),

@@ -303,6 +303,15 @@
     when using the `exponential_backoff` retry strategy.
   experimental: true
 
+- key: cluster.enable_shuffle_read_coalescing
+  type: boolean
+  default: "true"
+  description: |
+    Whether to coalesce small batches from shuffle reads toward `execution.batch_size`.
+    This applies to all shuffle backends. Unbounded inputs bypass coalescing so that
+    partial batches are emitted promptly.
+  experimental: true
+
 - key: cluster.shuffle_backend.type
   type: string
   default: "flight"

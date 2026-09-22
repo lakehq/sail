@@ -23,6 +23,7 @@ pub struct WorkerPoolOptions {
     pub task_stream_buffer: usize,
     pub task_stream_creation_timeout: Duration,
     pub rpc_retry_strategy: RetryStrategy,
+    pub enable_shuffle_read_coalescing: bool,
     pub shuffle_backend: ShuffleBackendKind,
 }
 
@@ -43,6 +44,7 @@ impl From<&DriverOptions> for WorkerPoolOptions {
             task_stream_buffer: options.task_stream_buffer,
             task_stream_creation_timeout: options.task_stream_creation_timeout,
             rpc_retry_strategy: options.rpc_retry_strategy.clone(),
+            enable_shuffle_read_coalescing: options.enable_shuffle_read_coalescing,
             shuffle_backend: options.shuffle_backend.clone(),
         }
     }

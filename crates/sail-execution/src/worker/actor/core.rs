@@ -93,6 +93,7 @@ impl Actor for WorkerActor {
             .children_mut()
             .spawn::<TaskRunnerActor>(TaskRunnerComponents {
                 session_id: self.options.session_id.clone(),
+                enable_shuffle_read_coalescing: self.options.enable_shuffle_read_coalescing,
                 extensions: TaskRunnerExtensions {
                     local_streams,
                     storage_streams,

@@ -31,6 +31,7 @@ pub struct DriverOptions {
     pub task_stream_buffer: usize,
     pub task_stream_creation_timeout: Duration,
     pub task_max_attempts: usize,
+    pub enable_shuffle_read_coalescing: bool,
     pub shuffle_backend: ShuffleBackendKind,
     pub rpc_retry_strategy: RetryStrategy,
     pub runtime: RuntimeHandle,
@@ -81,6 +82,7 @@ impl DriverOptions {
                 config.cluster.task_stream_creation_timeout_secs,
             ),
             task_max_attempts: config.cluster.task_max_attempts,
+            enable_shuffle_read_coalescing: config.cluster.enable_shuffle_read_coalescing,
             shuffle_backend: (&config.cluster.shuffle_backend).into(),
             runtime,
         })

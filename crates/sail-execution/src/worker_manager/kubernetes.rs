@@ -138,6 +138,7 @@ impl KubernetesWorkerService {
             task_stream_buffer,
             task_stream_creation_timeout,
             rpc_retry_strategy,
+            enable_shuffle_read_coalescing,
             shuffle_backend,
         } = options;
         let w3c_traceparent =
@@ -243,6 +244,11 @@ impl KubernetesWorkerService {
             EnvVar {
                 name: ClusterConfigEnv::RPC_RETRY_STRATEGY.to_string(),
                 value: Some(rpc_retry_strategy),
+                value_from: None,
+            },
+            EnvVar {
+                name: ClusterConfigEnv::ENABLE_SHUFFLE_READ_COALESCING.to_string(),
+                value: Some(enable_shuffle_read_coalescing.to_string()),
                 value_from: None,
             },
             EnvVar {

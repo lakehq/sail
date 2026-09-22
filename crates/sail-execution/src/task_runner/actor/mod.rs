@@ -15,6 +15,7 @@ use crate::task_runner::registry::TaskRegistry;
 
 pub struct TaskRunnerActor {
     session_id: String,
+    enable_shuffle_read_coalescing: bool,
     signals: HashMap<TaskKey, oneshot::Sender<()>>,
     tasks: TaskRegistry,
     broadcasts: BroadcastStreamManager,
