@@ -14,7 +14,8 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::array::Int64Array;
+use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::context::TaskContext;
@@ -27,10 +28,10 @@ use datafusion::physical_plan::{
     PlanProperties, SendableRecordBatchStream, apply_expression_roots, execute_stream,
 };
 use datafusion_common::tree_node::TreeNodeRecursion;
-use datafusion_common::{DataFusionError, Result, Statistics, internal_err};
+use datafusion_common::{DataFusionError, Result, ScalarValue, Statistics, internal_err};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
-use futures::stream::{self, TryStreamExt};
+use futures::stream::{self, StreamExt, TryStreamExt};
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
@@ -45,7 +46,7 @@ use crate::delta_log::LogStoreRef;
 use crate::physical_plan::{COL_ACTION, DeltaDecodePath, decode_adds_from_batch, meta_adds};
 use crate::schema::{arrow_field_physical_name, get_physical_schema, restore_logical_record_batch};
 use crate::session_extension::{DeltaTableCache, load_table_uncached, load_table_with_config};
-use crate::snapshot::{CatalogManagedCommitSet, DeltaSnapshotConfig};
+use crate::snapshot::{CatalogManagedCommitSet, DeltaSnapshotConfig, GroupedCountMetadataRow};
 use crate::spec::StructType;
 use crate::table::DeltaSnapshot;
 
@@ -60,6 +61,7 @@ struct ScanByAddsStreamState {
     table_url: Url,
     table_version: i64,
     output_schema: SchemaRef,
+    scan_schema: SchemaRef,
     scan_config: DeltaScanConfig,
     lakehouse_table: Option<LakehouseExecutionContext>,
     catalog_managed_commits: Option<CatalogManagedCommitSet>,
@@ -99,12 +101,24 @@ impl ScanByAddsStreamState {
         scan_parallelism: usize,
         scan_metrics: ScanMetrics,
     ) -> Self {
+        let scan_schema = match &scan_config.metadata_aggregate {
+            Some(aggregate) => Arc::new(Schema::new(
+                output_schema
+                    .fields()
+                    .iter()
+                    .zip(&aggregate.group_columns)
+                    .map(|(field, name)| Arc::new(field.as_ref().clone().with_name(name)))
+                    .collect::<Vec<_>>(),
+            )),
+            None => Arc::clone(&output_schema),
+        };
         Self {
             input,
             context,
             table_url,
             table_version,
             output_schema,
+            scan_schema,
             scan_config,
             lakehouse_table,
             catalog_managed_commits,
@@ -270,18 +284,59 @@ impl ScanByAddsStreamState {
                 take
             })
             .count();
-        let adds = self.pending_adds.drain(..chunk_len).collect::<Vec<_>>();
-        let scan = self.build_bulk_scan(snapshot, log_store, session_state, &adds, file_schema)?;
+        let mut adds = self.pending_adds.drain(..chunk_len).collect::<Vec<_>>();
+        let mut metadata_batches = Vec::new();
+        if let Some(aggregate) = &self.scan_config.metadata_aggregate
+            && let Some(metadata) = snapshot.summarize_metadata_files(
+                &adds,
+                &aggregate.group_columns,
+                ADD_SCAN_CHUNK_FILES,
+            )
+        {
+            metadata_batches = metadata_record_batches(
+                &metadata.rows,
+                &self.output_schema,
+                self.context.session_config().batch_size(),
+            )?;
+            let mut residual = metadata.residual_file_indices.into_iter().peekable();
+            adds = adds
+                .into_iter()
+                .enumerate()
+                .filter_map(|(index, add)| {
+                    if residual.peek() == Some(&index) {
+                        residual.next();
+                        Some(add)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+        }
+        let scan = if adds.is_empty() {
+            None
+        } else {
+            Some(self.build_bulk_scan(snapshot, log_store, session_state, &adds, file_schema)?)
+        };
 
+        let scan_schema = Arc::clone(&self.scan_schema);
         let output_schema = Arc::clone(&self.output_schema);
-        let combined = scan.and_then(move |batch| {
+        let weighted = self.scan_config.metadata_aggregate.is_some();
+        let scanned = stream::iter(scan).flatten().and_then(move |batch| {
+            let scan_schema = Arc::clone(&scan_schema);
             let output_schema = Arc::clone(&output_schema);
             async move {
-                let casted =
-                    restore_logical_record_batch(&batch, &output_schema, column_mapping_mode)?;
-                Ok(casted)
+                let batch =
+                    restore_logical_record_batch(&batch, &scan_schema, column_mapping_mode)?;
+                if weighted {
+                    let mut columns = batch.columns().to_vec();
+                    columns.push(Arc::new(Int64Array::from_value(1, batch.num_rows())));
+                    Ok(RecordBatch::try_new(output_schema, columns)?)
+                } else {
+                    Ok(batch)
+                }
             }
         });
+        let combined = stream::iter(metadata_batches.into_iter().map(Ok)).chain(scanned);
         self.current_scan = Some(Box::pin(RecordBatchStreamAdapter::new(
             Arc::clone(&self.output_schema),
             combined,
@@ -298,7 +353,7 @@ impl ScanByAddsStreamState {
         file_schema: SchemaRef,
     ) -> Result<SendableRecordBatchStream> {
         let scan_config = &self.scan_config;
-        let file_output_schema = &self.output_schema;
+        let file_output_schema = &self.scan_schema;
         let file_projection = file_scan_projection_for_schema(
             snapshot,
             scan_config,
@@ -383,6 +438,46 @@ impl ScanByAddsStreamState {
             Some(&partition_value_columns),
         )
     }
+}
+
+/// Materialize metadata groups without scaling buffers by their row-count weights.
+fn metadata_record_batches(
+    rows: &[GroupedCountMetadataRow],
+    schema: &SchemaRef,
+    batch_size: usize,
+) -> Result<Vec<RecordBatch>> {
+    const MAX_BATCH_BYTES: usize = 16 * 1024 * 1024;
+    let mut batches = Vec::new();
+    let mut start = 0;
+    while start < rows.len() {
+        let mut end = start;
+        let mut bytes = 0usize;
+        while end < rows.len() && end - start < batch_size.max(1) {
+            let row_bytes = rows[end]
+                .group_values
+                .iter()
+                .map(ScalarValue::size)
+                .sum::<usize>()
+                .saturating_add(std::mem::size_of::<i64>());
+            if end > start && bytes.saturating_add(row_bytes) > MAX_BATCH_BYTES {
+                break;
+            }
+            bytes = bytes.saturating_add(row_bytes);
+            end += 1;
+        }
+        let chunk = &rows[start..end];
+        let mut columns = (0..schema.fields().len() - 1)
+            .map(|index| {
+                ScalarValue::iter_to_array(chunk.iter().map(|row| row.group_values[index].clone()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        columns.push(Arc::new(Int64Array::from_iter_values(
+            chunk.iter().map(|row| row.count),
+        )));
+        batches.push(RecordBatch::try_new(Arc::clone(schema), columns)?);
+        start = end;
+    }
+    Ok(batches)
 }
 
 /// Physical execution node that scans Delta data files based on Add actions from upstream.
@@ -600,6 +695,23 @@ impl ExecutionPlan for DeltaScanByAddsExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        if let Some(aggregate) = &self.scan_config.metadata_aggregate {
+            if self.output_schema.fields().len() != aggregate.group_columns.len() + 1
+                || self
+                    .output_schema
+                    .fields()
+                    .last()
+                    .map(|field| field.data_type())
+                    != Some(&DataType::Int64)
+            {
+                return internal_err!(
+                    "Delta metadata aggregation requires group columns and an Int64 weight"
+                );
+            }
+            for name in &aggregate.group_columns {
+                self.table_schema.field_with_name(name)?;
+            }
+        }
         let input_stream = self.input.execute(partition, Arc::clone(&context))?;
         let table_url = self.table_url.clone();
         let table_version = self.version;
@@ -779,7 +891,11 @@ impl DisplayAs for DeltaScanByAddsExec {
                     self.pushdown_filter.is_some()
                 )
             }
+        }?;
+        if let Some(aggregate) = &self.scan_config.metadata_aggregate {
+            write!(f, ", metadata_groups={:?}", aggregate.group_columns)?;
         }
+        Ok(())
     }
 }
 
@@ -794,8 +910,47 @@ mod tests {
     use datafusion_common::{DataFusionError, Result, ScalarValue};
     use url::Url;
 
-    use super::DeltaScanByAddsExec;
+    use super::{DeltaScanByAddsExec, metadata_record_batches};
     use crate::datasource::scan::map_statistics_to_schema;
+    use crate::snapshot::GroupedCountMetadataRow;
+
+    #[test]
+    fn metadata_batches_bound_rows_without_expanding_count_weights() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("group", DataType::Utf8, true),
+            Field::new("weight", DataType::Int64, false),
+        ]));
+        let rows = (0..3)
+            .map(|_| GroupedCountMetadataRow {
+                group_values: vec![ScalarValue::Utf8(Some("x".repeat(50)))],
+                count: 43_000_000,
+            })
+            .collect::<Vec<_>>();
+        let batches = metadata_record_batches(&rows, &schema, 2)?;
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].num_rows(), 2);
+        assert_eq!(batches[1].num_rows(), 1);
+        assert_eq!(
+            ScalarValue::try_from_array(batches[0].column(1), 0)?,
+            ScalarValue::Int64(Some(43_000_000))
+        );
+        assert!(
+            batches
+                .iter()
+                .all(|batch| batch.get_array_memory_size() < 4096)
+        );
+
+        let wide_rows = (0..3)
+            .map(|_| GroupedCountMetadataRow {
+                group_values: vec![ScalarValue::Utf8(Some("x".repeat(8 * 1024 * 1024)))],
+                count: 1,
+            })
+            .collect::<Vec<_>>();
+        let batches = metadata_record_batches(&wide_rows, &schema, 8192)?;
+        assert_eq!(batches.len(), 3);
+        assert!(batches.iter().all(|batch| batch.num_rows() == 1));
+        Ok(())
+    }
 
     #[test]
     fn scan_preserves_only_decoded_file_path_hash_partitioning() -> Result<()> {
