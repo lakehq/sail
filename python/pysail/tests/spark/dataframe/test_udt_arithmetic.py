@@ -1,6 +1,13 @@
 import pytest
 from pyspark.errors import AnalysisException
-from pyspark.sql.types import ArrayType, MapType, StringType, StructType, UserDefinedType
+from pyspark.sql.types import (
+    ArrayType,
+    DoubleType,
+    MapType,
+    StringType,
+    StructType,
+    UserDefinedType,
+)
 
 from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.tests.spark.dataframe.udt import (
@@ -519,7 +526,8 @@ def test_dataframe_negation_of_a_udt_is_rejected(spark, ansi_enabled):
 def udt_scalar_view(spark):
     # A UDT stored as a DOUBLE is a numeric by its Arrow type, so only its identity keeps it out of
     # arithmetic -- a STRUCT-backed UDT would be refused by its storage alone and prove nothing.
-    schema = StructType().add("a", DoubleStoragePythonUDT())
+    # `d` is the plain-DOUBLE twin of `a`: every shape refused over `a` must resolve over it.
+    schema = StructType().add("a", DoubleStoragePythonUDT()).add("d", DoubleType())
     spark.createDataFrame(data=[], schema=schema).createOrReplaceTempView("udt_scalar")
     return "udt_scalar"
 
@@ -585,11 +593,50 @@ def test_udt_from_a_generator_is_refused(spark, udt_scalar_view, generator):
         pytest.param("map_values(map('k', a))[0] + 1", id="map_values"),
         pytest.param("map('k', a)['k'] + 1", id="map-index"),
         pytest.param("element_at(map('k', a), 'k') + 1", id="map-element_at"),
+        pytest.param("map_keys(map(a, 1))[0] + 1", id="map_keys"),
+        pytest.param("array_repeat(a, 2)[0] + 1", id="array_repeat"),
+        pytest.param("map_concat(map('k', a), map('j', a))['k'] + 1", id="map_concat"),
+        pytest.param("map_values(map('k', array(a)))[0][0] + 1", id="element-of-an-element"),
+        pytest.param("array(named_struct('f', a))[0].f + 1", id="struct-field-of-an-element"),
     ],
 )
 def test_udt_through_a_recognised_shape_is_refused(spark, udt_scalar_view, form):
     with pytest.raises(AnalysisException, match=r"(?i)cannot resolve"):
         _ = spark.sql(f"SELECT {form} FROM {udt_scalar_view}").schema  # noqa: S608
+
+
+# TODO: Spark has no cast from a UDT to its storage type: `Cast.canCast` only pairs a UDT with a UDT
+#   that accepts it (`Cast.scala:304`), so `CAST(udt AS DOUBLE)` is refused at the cast, before any
+#   arithmetic. Sail casts to the storage and computes. Closing it is a CAST guard, not an arithmetic
+#   one, and a CAST guard is what broke the ClickBench fixture once (`cast("int").cast("date")`), so
+#   it belongs to a PR that can measure the datasource suites for it.
+@pytest.mark.xfail(
+    not is_jvm_spark(),
+    strict=True,
+    reason="Sail casts a UDT to its storage type, which Spark refuses",
+)
+@pytest.mark.parametrize("expression", ["CAST(a AS DOUBLE) + 1", "CAST(a AS BIGINT) * 2", "-CAST(a AS DOUBLE)"])
+def test_udt_cast_to_its_storage_type_is_refused(spark, udt_scalar_view, expression):
+    with pytest.raises(AnalysisException, match=r"(?i)cannot resolve"):
+        _ = spark.sql(f"SELECT {expression} AS r FROM {udt_scalar_view}").schema  # noqa: S608
+
+
+@pytest.mark.parametrize("expression", ["CAST(d AS DOUBLE) + 1", "CAST(d AS BIGINT) * 2", "-CAST(d AS DOUBLE)"])
+def test_a_plain_double_cast_to_its_own_type_resolves(spark, udt_scalar_view, expression):
+    assert spark.sql(f"SELECT {expression} AS r FROM {udt_scalar_view}").collect() == []  # noqa: S608
+
+
+@pytest.mark.parametrize("expression", ["abs(a)", "abs(a) + 1", "-abs(a)"])
+def test_abs_of_a_udt_is_refused(spark, udt_scalar_view, expression):
+    """`Abs` takes NUMERIC or an ANSI interval (`arithmetic.scala:158`), and no coercion rule casts a
+    UDT, so Spark refuses `abs` itself, not only the arithmetic around it."""
+    with pytest.raises(AnalysisException, match=r"(?i)cannot resolve"):
+        _ = spark.sql(f"SELECT {expression} AS r FROM {udt_scalar_view}").schema  # noqa: S608
+
+
+@pytest.mark.parametrize("expression", ["abs(-1.0D)", "abs(d)", "abs(d) + 1", "-abs(d)"])
+def test_abs_of_a_plain_double_resolves(spark, udt_scalar_view, expression):
+    assert spark.sql(f"SELECT {expression} AS r FROM {udt_scalar_view}").collect() == []  # noqa: S608
 
 
 # The same shapes over a plain DOUBLE stay operands, so recognising them cannot refuse more than Spark.
@@ -608,6 +655,11 @@ def test_udt_through_a_recognised_shape_is_refused(spark, udt_scalar_view, form)
         pytest.param("map_values(map('k', 1.0D))[0] + 1", id="map_values"),
         pytest.param("map('k', 1.0D)['k'] + 1", id="map-index"),
         pytest.param("element_at(map('k', 1.0D), 'k') + 1", id="map-element_at"),
+        pytest.param("map_keys(map(1.0D, 1))[0] + 1", id="map_keys"),
+        pytest.param("array_repeat(1.0D, 2)[0] + 1", id="array_repeat"),
+        pytest.param("map_concat(map('k', 1.0D), map('j', 2.0D))['k'] + 1", id="map_concat"),
+        pytest.param("map_values(map('k', array(1.0D)))[0][0] + 1", id="element-of-an-element"),
+        pytest.param("array(named_struct('f', 1.0D))[0].f + 1", id="struct-field-of-an-element"),
     ],
 )
 def test_plain_double_through_a_recognised_shape_resolves(spark, udt_scalar_view, form):

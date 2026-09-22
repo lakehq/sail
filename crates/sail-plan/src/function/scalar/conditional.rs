@@ -155,14 +155,31 @@ fn nvl(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     // DataFusion's `nvl` coerces a DATE or TIMESTAMP to `Utf8`, so a datetime pair goes through
     // `coalesce`, widened first the way Sail's `coalesce` widens it: `nvl(date, '...')` is a DATE
     // with ANSI on and a STRING with it off, as in Spark.
-    // TODO: `coalesce` widens a TIMESTAMP beside a DATE to a nanosecond timestamp, which has no
-    //   Spark type, so that pair stays on `nvl` and is typed STRING where Spark says TIMESTAMP.
     let is_temporal = |t: &Option<DataType>| t.as_ref().is_some_and(is_temporal_type);
     let is_date = |t: &Option<DataType>| t.as_ref().is_some_and(is_date_type);
-    let is_timestamp = |t: &Option<DataType>| matches!(t, Some(DataType::Timestamp(_, _)));
-    let timestamp_beside_date = (is_timestamp(&left_type) && is_date(&right_type))
-        || (is_date(&left_type) && is_timestamp(&right_type));
-    if (is_temporal(&left_type) || is_temporal(&right_type)) && !timestamp_beside_date {
+    // `Coalesce` widens a TIMESTAMP beside a DATE to that TIMESTAMP
+    // (`TypeCoercion.findWiderTypeForTwo`), and Sail reads the DATE as midnight in the session zone.
+    // DataFusion's `coalesce` widens the pair to a NANOSECOND timestamp instead, which has no Spark
+    // type at all, so the DATE is cast to the timestamp's own type first.
+    let timestamp_beside_date = match (&left_type, &right_type) {
+        (Some(timestamp @ DataType::Timestamp(_, _)), date) if is_date(date) => Some(timestamp),
+        (date, Some(timestamp @ DataType::Timestamp(_, _))) if is_date(date) => Some(timestamp),
+        _ => None,
+    };
+    if let Some(DataType::Timestamp(_, zone)) = timestamp_beside_date {
+        // A zoned timestamp is read in the SESSION zone, the way `spark_minus` reads a DATE beside
+        // one; a zone the column carries of its own is not the session's.
+        let target = DataType::Timestamp(
+            TimeUnit::Microsecond,
+            zone.as_ref()
+                .map(|_| Arc::clone(&function_context.plan_config.session_timezone)),
+        );
+        return Ok(expr_fn::coalesce(vec![
+            cast(left, target.clone()),
+            cast(right, target),
+        ]));
+    }
+    if is_temporal(&left_type) || is_temporal(&right_type) {
         let arguments = coerce_string_temporal_values(vec![left, right], &function_context)?;
         return Ok(expr_fn::coalesce(arguments));
     }

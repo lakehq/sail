@@ -223,9 +223,7 @@ Feature: arithmetic operands whose type is derived, vs Spark 4.2.0
     # pinned in `arithmetic_result_type.feature`; these three are that risk made observable.
     #
     # Spark's `date - date` is a day-time interval, so an INT added to it is refused. Sail keeps the
-    # difference an INT day count until a `Duration` carries its field range (see the next Rule), so
-    # it answers.
-    @sail-bug
+    # difference an INT day count (see the next Rules), and refuses it by the interval it stands for.
     Scenario: a date difference plus an INT is refused
       When query
         """
@@ -243,14 +241,30 @@ Feature: arithmetic operands whose type is derived, vs Spark 4.2.0
         """
       Then query error (?i)cannot resolve
 
+    # TODO: same root, and on `main` this one passes -- but only because `main` refused every
+    #  `'2' - DATE`, which Spark answers through `SubtractDates`; the branch answers it, so the
+    #  shifted date (a DATE in Sail, a TIMESTAMP in Spark) now reaches that arm. It cannot be refused
+    #  by shape: Sail spells `INTERVAL '2' DAY` and `INTERVAL '25' HOUR` alike (`Duration`), and with
+    #  a DAY interval the inner value is a DATE and Spark answers. It closes with `fix/interval`.
+    @sail-bug
+    Scenario: a string minus a shifted date is refused with ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT '2' - (DATE'2024-01-15' + INTERVAL '25' HOUR) AS result
+        """
+      Then query error (?i)cannot resolve
+
     # TODO: the other direction, and the worse one: Sail REFUSES what Spark answers. `SubtractDates`
     #  yields a `DayTimeIntervalType(DAY)` (`datetimeExpressions.scala:3616`), so the outer operator
     #  has two intervals; Sail's difference is an INT day count, and an INT beside an interval is
     #  refused. Making it a `Duration` would fix the verdict and break the VALUE its consumers read:
     #  `Duration` carries no field range, so `CAST(d1 - d2 AS INT)` would answer seconds instead of
     #  days. Closing it needs the interval field metadata of `fix/interval`, so the two rows below
-    #  are pinned rather than traded for a wrong value. This is the only arithmetic pair left where
-    #  Sail refuses what Spark accepts.
+    #  are pinned rather than traded for a wrong value. They stand for the whole family: a date
+    #  difference (or `NULL - date`) plus or minus a DAY/HOUR/DAY TO SECOND interval, a TIMESTAMP,
+    #  a TIMESTAMP_NTZ or a TIME, on either side and in both ANSI modes, is refused where Spark
+    #  answers (42 cells measured by the derived-operand lens of the arithmetic branch map).
     @sail-bug
     Scenario Outline: <case> resolves
       When query
@@ -265,6 +279,95 @@ Feature: arithmetic operands whose type is derived, vs Spark 4.2.0
         | case                              | expression                                                        | result                          |
         | a date difference plus an interval | (DATE'2024-01-15' - DATE'2024-01-01') + INTERVAL '2' DAY          | INTERVAL '16' DAY               |
         | a timestamp plus a date difference | TIMESTAMP'2024-01-01 00:00:00' + (DATE'2024-01-15' - DATE'2024-01-01') | 2024-01-15 00:00:00        |
+
+  Rule: the remainder of two untyped NULLs is a DOUBLE offset
+
+    # TODO: `%` gives `BinaryOperator`'s `ExpectsInputTypes` two untyped NULLs, and the conversion
+    #  makes them the default concrete type of NUMERIC, a DOUBLE (`TypeCoercionHelper.scala:571`), so
+    #  Spark refuses it as a date offset -- `DateAdd` takes INT, SMALLINT or TINYINT
+    #  (`datetimeExpressions.scala:324`). Sail makes the pair an INT with ANSI off, so the shift
+    #  resolves; with ANSI on it already refuses it. Already so on `main`.
+    @sail-bug
+    Scenario Outline: a date shifted by the remainder of two untyped NULLs is refused: <case>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT <expression> AS result
+        """
+      Then query error (?i)cannot resolve
+
+      Examples:
+        | case            | expression                        |
+        | offset on the right | DATE'2024-01-15' + (NULL % NULL) |
+        | offset on the left  | (NULL % NULL) + DATE'2024-01-15' |
+
+  Rule: a date difference is refused wherever Spark refuses its INTERVAL DAY
+
+    # Spark types `date - date` (and `NULL - date`) as `DayTimeIntervalType(DAY)`
+    # (`datetimeExpressions.scala:3616`); Sail keeps the day count as an INT (next Rule). The
+    # difference carries that identity in the field metadata of the cast that builds it, and the
+    # arithmetic guards reason on Spark's type to REFUSE: if an INTERVAL DAY in its place is refused,
+    # the difference is refused. They never accept on that basis, so each twin below, a real INT,
+    # keeps resolving.
+    Scenario Outline: a date difference <expression> is refused with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT <expression> AS result
+        """
+      Then query error (?i)cannot resolve
+
+      Examples:
+        | ansi  | expression                                                                |
+        | false | (DATE'2024-01-15' - DATE'2024-01-01') - '2'                               |
+        | true  | (DATE'2024-01-15' - DATE'2024-01-01') - '2'                               |
+        | false | '2' % (DATE'2024-01-15' - DATE'2024-01-01')                               |
+        | true  | '2' % (DATE'2024-01-15' - DATE'2024-01-01')                               |
+        | false | (DATE'2024-01-15' - DATE'2024-01-01') * INTERVAL '1' MONTH                |
+        | true  | (DATE'2024-01-15' - DATE'2024-01-01') * INTERVAL '1' MONTH                |
+        | false | INTERVAL '1' YEAR / (DATE'2024-01-15' - DATE'2024-01-01')                 |
+        | true  | INTERVAL '1' YEAR / (DATE'2024-01-15' - DATE'2024-01-01')                 |
+        | false | (NULL - DATE'2024-01-01') - '2'                                           |
+        | true  | (NULL - DATE'2024-01-01') - '2'                                           |
+        | false | (DATE'2024-01-15' - DATE'2024-01-01') + 1                                 |
+        | true  | (DATE'2024-01-15' - DATE'2024-01-01') % 2                                 |
+
+    Scenario Outline: a real INT beside the same operator resolves: <expression> with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT typeof(<expression>) IS NOT NULL AS resolved
+        """
+      Then query result
+        | resolved |
+        | true     |
+
+      Examples:
+        | ansi  | expression                                                                |
+        | false | (CAST(DATE'2024-01-15' AS INT) - CAST(DATE'2024-01-01' AS INT)) - '2'     |
+        | false | datediff(DATE'2024-01-15', DATE'2024-01-01') - '2'                        |
+        | true  | datediff(DATE'2024-01-15', DATE'2024-01-01') - '2'                        |
+        | false | datediff(DATE'2024-01-15', DATE'2024-01-01') * INTERVAL '1' MONTH         |
+        | true  | datediff(DATE'2024-01-15', DATE'2024-01-01') * INTERVAL '1' MONTH         |
+        | false | CAST(DATE'2024-01-15' - DATE'2024-01-01' AS INT) - '2'                    |
+        | true  | CAST(DATE'2024-01-15' - DATE'2024-01-01' AS INT) - '2'                    |
+        | false | DATE'2024-01-15' + (DATE'2024-01-15' - DATE'2024-01-01')                  |
+        | true  | (DATE'2024-01-15' - DATE'2024-01-01') * 2                                 |
+        | false | (DATE'2024-01-15' - DATE'2024-01-01') / 2                                 |
+        | true  | -(DATE'2024-01-15' - DATE'2024-01-01')                                    |
+
+    # TODO: the identity rides on the cast that builds the difference, so it is only read where
+    #  that cast is the operand. A difference projected by a subquery reaches the operator as a
+    #  column, and a column may also be a user's `CAST(d1 - d2 AS INT)` (which DataFusion's type-only
+    #  cast hands the same metadata), which Spark does accept; refusing columns would refuse that
+    #  too. The whole gap closes once the difference is typed as an interval (`fix/interval`).
+    @sail-bug
+    Scenario: a date difference projected by a subquery is refused as an operand
+      When query
+        """
+        SELECT x - '2' AS result FROM (SELECT DATE'2024-01-15' - DATE'2024-01-01' AS x)
+        """
+      Then query error (?i)cannot resolve
 
   Rule: a date difference keeps the day count its consumers read
 

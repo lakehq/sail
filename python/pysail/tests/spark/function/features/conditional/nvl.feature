@@ -116,9 +116,31 @@ Feature: nvl output schema
         | false |
         | true  |
 
-    # TODO: a TIMESTAMP beside a DATE stays on DataFusion's `nvl`, which makes the pair a STRING;
-    #  Spark widens it to a TIMESTAMP, so the difference below resolves there.
-    @sail-bug
+    # `Coalesce` widens a TIMESTAMP beside a DATE to the TIMESTAMP
+    # (`TypeCoercion.findWiderTypeForTwo`), and the DATE is read as midnight in the session zone.
+    # `coalesce` in DataFusion widens the pair to a NANOSECOND timestamp, which has no Spark type, so
+    # the DATE is cast to the timestamp's own type first.
+    Scenario Outline: nvl of <case> is a <type> with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT typeof(<expression>) AS type, CAST(<expression> AS STRING) AS result
+        """
+      Then query result
+        | type   | result   |
+        | <type> | <result> |
+
+      Examples:
+        | ansi  | case                    | type          | expression                                              | result              |
+        | false | a timestamp and a date  | timestamp     | nvl(TIMESTAMP'2024-01-15 10:00:00', DATE'2024-01-01')   | 2024-01-15 10:00:00 |
+        | true  | a timestamp and a date  | timestamp     | nvl(TIMESTAMP'2024-01-15 10:00:00', DATE'2024-01-01')   | 2024-01-15 10:00:00 |
+        | false | a date and a timestamp  | timestamp     | nvl(DATE'2024-01-01', TIMESTAMP'2024-01-15 10:00:00')   | 2024-01-01 00:00:00 |
+        | false | a NULL timestamp and a date | timestamp | nvl(CAST(NULL AS TIMESTAMP), DATE'2024-01-01')          | 2024-01-01 00:00:00 |
+        | false | an NTZ timestamp and a date | timestamp_ntz | nvl(TIMESTAMP_NTZ'2024-01-15 10:00:00', DATE'2024-01-01') | 2024-01-15 10:00:00 |
+        | true  | an NTZ timestamp and a date | timestamp_ntz | nvl(TIMESTAMP_NTZ'2024-01-15 10:00:00', DATE'2024-01-01') | 2024-01-15 10:00:00 |
+        | false | ifnull of a timestamp and a date | timestamp | ifnull(TIMESTAMP'2024-01-15 10:00:00', DATE'2024-01-01') | 2024-01-15 10:00:00 |
+
     Scenario: nvl of a timestamp and a date is a timestamp operand with ANSI off
       Given config spark.sql.ansi.enabled = false
       When query

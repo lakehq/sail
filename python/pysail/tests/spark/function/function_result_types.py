@@ -1133,7 +1133,7 @@ RESULT_TYPES = {
     "variant_get(parse_json('{\"a\": 1}'), '$.b', 'int')": {"spark": "int", "sail": "int"},
     "vector_cosine_similarity(array(1.0F, 2.0F, 3.0F), array(4.0F, 5.0F, 6.0F))": {"spark": "float", "sail": "float"},
     "vector_inner_product(array(1.0F, 2.0F, 3.0F), array(4.0F, 5.0F, 6.0F))": {"spark": "float", "sail": "float"},
-    "vector_l2_distance(array(1.0F, 2.0F, 3.0F), array(4.0F, 5.0F, 6.0F))": {"spark": "float", "sail": "<error>"},
+    "vector_l2_distance(array(1.0F, 2.0F, 3.0F), array(4.0F, 5.0F, 6.0F))": {"spark": "float", "sail": "float"},
     "vector_norm(array(3.0F, 4.0F), 1.0F)": {"spark": "float", "sail": "<error>"},
     "vector_norm(array(3.0F, 4.0F), 2.0F)": {"spark": "float", "sail": "<error>"},
     "vector_norm(array(3.0F, 4.0F), float('inf'))": {"spark": "float", "sail": "<error>"},

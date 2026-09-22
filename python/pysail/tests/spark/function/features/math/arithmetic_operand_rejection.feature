@@ -6827,3 +6827,30 @@ Feature: arithmetic operand-type REJECTION matrix (+ - * / %) vs Spark 4.2.0
         | date + bigint ansi-on  | true  | +  | DATE'2024-01-15'  | CAST(2 AS BIGINT) |
         | bigint + date ansi-on  | true  | +  | CAST(2 AS BIGINT) | DATE'2024-01-15'  |
         | date - bigint ansi-on  | true  | -  | DATE'2024-01-15'  | CAST(2 AS BIGINT) |
+
+  Rule: an untyped NULL column beside a calendar interval
+
+    # TODO: the only pair in the 7398-cell COLUMN matrix where Spark itself parts from the literal
+    #  form: as literals `NULL + make_interval(...)` resolves (the resolver casts the NULL,
+    #  `BinaryArithmeticWithDatetimeResolver.scala:93`), but a VOID column cannot be cast to the
+    #  TIMESTAMP that arm needs, so Spark answers `CAST_WITHOUT_SUGGESTION`. Sail casts the column
+    #  and answers, on `main` too. It is an accept-more, and closing it needs the VOID column to be
+    #  refused where Spark refuses it, which is a CAST rule rather than an arithmetic one.
+    @sail-bug
+    Scenario Outline: an untyped NULL column <case> a calendar interval column is refused with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT <expression> AS r
+        FROM VALUES (NULL, make_interval(0, 1, 0, 1, 0, 0, 0)) AS t(n, i)
+        """
+      Then query error (?i)cannot resolve
+
+      Examples:
+        | case   | ansi  | expression |
+        | plus   | false | n + i      |
+        | plus   | true  | n + i      |
+        | minus  | false | n - i      |
+        | minus  | true  | n - i      |
+        | after  | false | i + n      |
+        | after  | true  | i + n      |

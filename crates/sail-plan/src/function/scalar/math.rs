@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, FieldRef, IntervalUnit, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, IntervalUnit, TimeUnit};
 use datafusion::functions::expr_fn;
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::{
@@ -44,7 +44,8 @@ use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, Spar
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
-    ScalarFunction, ScalarFunctionInput, is_spark_udt_field, spark_field_type_name, spark_type_name,
+    FunctionContextInput, ScalarFunction, ScalarFunctionInput, is_spark_udt_field,
+    spark_field_type_name, spark_type_name,
 };
 
 /// A string shifted by an interval is read as a TIMESTAMP, shifted, and written back as a string:
@@ -139,6 +140,11 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
         }
         if let Some(error) =
             rejects_binary_string_operand("+", &left, &right, function_context.schema)
+        {
+            return Err(error);
+        }
+        if let Some(error) =
+            rejects_date_difference_operand(spark_plus, &left, &right, &function_context)
         {
             return Err(error);
         }
@@ -307,6 +313,11 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
         {
             return Err(error);
         }
+        if let Some(error) =
+            rejects_date_difference_operand(spark_minus, &left, &right, &function_context)
+        {
+            return Err(error);
+        }
         let (left, right) = promote_string_operands(
             left,
             right,
@@ -414,7 +425,7 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             //  fields (`fix/interval`), the difference stays the day count, typed INT -- the offset
             //  `DateAdd` takes, so `DATE + (date - date)` still resolves.
             (Ok(DataType::Date32), Ok(DataType::Date32)) => {
-                cast(left, DataType::Int32) - cast(right, DataType::Int32)
+                mark_date_difference(cast(left, DataType::Int32) - cast(right, DataType::Int32))
             }
             (Ok(DataType::Date32), Ok(right_type)) if right_type.is_numeric() => {
                 cast(cast(left, DataType::Int32) - right, DataType::Date32)
@@ -452,6 +463,11 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
         return Err(error);
     }
     if let Some(error) = rejects_binary_string_operand("*", &left, &right, function_context.schema)
+    {
+        return Err(error);
+    }
+    if let Some(error) =
+        rejects_date_difference_operand(spark_multiply, &left, &right, &function_context)
     {
         return Err(error);
     }
@@ -588,6 +604,11 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
     }
     if let Some(error) =
         rejects_binary_string_operand("/", &dividend, &divisor, function_context.schema)
+    {
+        return Err(error);
+    }
+    if let Some(error) =
+        rejects_date_difference_operand(spark_divide, &dividend, &divisor, &function_context)
     {
         return Err(error);
     }
@@ -913,6 +934,11 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
     {
         return Err(error);
     }
+    if let Some(error) =
+        rejects_date_difference_operand(spark_modulo, &dividend, &divisor, &function_context)
+    {
+        return Err(error);
+    }
     let (dividend, divisor) = promote_string_operands(
         dividend,
         divisor,
@@ -958,9 +984,23 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
 }
 
 fn spark_abs(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    let ansi_mode = input.function_context.plan_config.ansi_mode;
-    let udf = ScalarUDF::from(SparkAbs::new(ansi_mode));
-    Ok(udf.call(input.arguments))
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    // `Abs` takes NUMERIC or an ANSI interval (`arithmetic.scala:158`) and no coercion rule casts a
+    // UDT, so Spark refuses `abs(udt)` itself, not only an arithmetic around it. Its storage is a
+    // numeric, so without this Sail computed on it.
+    if let Some(argument) = arguments.first()
+        && let Some(field) = operand_udt_field(argument, function_context.schema)
+    {
+        return Err(PlanError::analysis(format!(
+            "cannot resolve 'abs' with operand type {}",
+            spark_field_type_name(&field)
+        )));
+    }
+    let udf = ScalarUDF::from(SparkAbs::new(function_context.plan_config.ansi_mode));
+    Ok(udf.call(arguments))
 }
 
 fn spark_bin(input: ScalarFunctionInput) -> PlanResult<Expr> {
@@ -1856,6 +1896,8 @@ fn nested_collection_element_udt_field(
         Expr::Cast(cast) if casts_only_nullability(&cast.expr, cast.field.data_type(), schema) => {
             nested_collection_element_udt_field(&cast.expr, schema)
         }
+        Expr::Case(case) => case_branches(case)
+            .find_map(|branch| nested_collection_element_udt_field(branch, schema)),
         Expr::ScalarFunction(function)
             if matches!(function.func.name(), "array" | "make_array" | "spark_array") =>
         {
@@ -1863,6 +1905,15 @@ fn nested_collection_element_udt_field(
                 .args
                 .iter()
                 .find_map(|array| collection_element_udt_field(array, schema))
+        }
+        // The values of a map, or the value a map index pulls out, when they are collections.
+        Expr::ScalarFunction(function)
+            if matches!(function.func.name(), "map_values" | "map_extract") =>
+        {
+            function
+                .args
+                .first()
+                .and_then(|map| map_value_collection_element_udt_field(map, schema))
         }
         _ => match collection.get_type(schema).ok()? {
             DataType::List(outer) | DataType::LargeList(outer) => match outer.data_type() {
@@ -1883,6 +1934,10 @@ fn map_value_udt_field(map: &Expr, schema: &DFSchemaRef) -> Option<FieldRef> {
         Expr::Cast(cast) if casts_only_nullability(&cast.expr, cast.field.data_type(), schema) => {
             map_value_udt_field(&cast.expr, schema)
         }
+        // `map_concat` is a `CASE` that yields NULL or the concatenated map.
+        Expr::Case(case) => {
+            case_branches(case).find_map(|branch| map_value_udt_field(branch, schema))
+        }
         Expr::ScalarFunction(function) if function.func.name() == "map_from_arrays" => function
             .args
             .get(1)
@@ -1897,6 +1952,91 @@ fn map_value_udt_field(map: &Expr, schema: &DFSchemaRef) -> Option<FieldRef> {
             _ => None,
         },
     }
+}
+
+/// The UDT key field of a map, looking through `map(...)` the way `map_value_udt_field` does.
+fn map_key_udt_field(map: &Expr, schema: &DFSchemaRef) -> Option<FieldRef> {
+    match map {
+        Expr::Cast(cast) if casts_only_nullability(&cast.expr, cast.field.data_type(), schema) => {
+            map_key_udt_field(&cast.expr, schema)
+        }
+        Expr::Case(case) => {
+            case_branches(case).find_map(|branch| map_key_udt_field(branch, schema))
+        }
+        Expr::ScalarFunction(function) if function.func.name() == "map_from_arrays" => function
+            .args
+            .first()
+            .and_then(|keys| collection_element_udt_field(keys, schema)),
+        _ => match map.get_type(schema).ok()? {
+            DataType::Map(entries, _) => match entries.data_type() {
+                DataType::Struct(fields) if fields.len() == 2 => {
+                    Some(Arc::clone(&fields[0])).filter(|field| is_spark_udt_field(field))
+                }
+                _ => None,
+            },
+            _ => None,
+        },
+    }
+}
+
+/// The UDT element field of the collections a map holds as values.
+fn map_value_collection_element_udt_field(map: &Expr, schema: &DFSchemaRef) -> Option<FieldRef> {
+    match map {
+        Expr::Cast(cast) if casts_only_nullability(&cast.expr, cast.field.data_type(), schema) => {
+            map_value_collection_element_udt_field(&cast.expr, schema)
+        }
+        Expr::Case(case) => case_branches(case)
+            .find_map(|branch| map_value_collection_element_udt_field(branch, schema)),
+        Expr::ScalarFunction(function) if function.func.name() == "map_from_arrays" => function
+            .args
+            .get(1)
+            .and_then(|values| nested_collection_element_udt_field(values, schema)),
+        _ => match map.get_type(schema).ok()? {
+            DataType::Map(entries, _) => match entries.data_type() {
+                DataType::Struct(fields) if fields.len() == 2 => match fields[1].data_type() {
+                    DataType::List(element) | DataType::LargeList(element) => {
+                        Some(Arc::clone(element)).filter(|field| is_spark_udt_field(field))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        },
+    }
+}
+
+/// The value `array_repeat` repeats, under the `CASE WHEN true THEN CAST(...) END` the resolver
+/// builds around it. The cast keeps the value's own type, so it is looked through; a user cast of a
+/// UDT to its storage type is refused by Spark at the cast (`Cast.canCast`), so refusing it here
+/// refuses nothing Spark accepts.
+fn peel_repeated_value<'a>(value: &'a Expr, schema: &DFSchemaRef) -> &'a Expr {
+    match value {
+        Expr::Case(case)
+            if case.expr.is_none()
+                && case.else_expr.is_none()
+                && matches!(
+                    case.when_then_expr.as_slice(),
+                    [(when, _)] if matches!(when.as_ref(), Expr::Literal(ScalarValue::Boolean(Some(true)), _))
+                ) =>
+        {
+            case.when_then_expr
+                .first()
+                .map_or(value, |(_, then)| peel_repeated_value(then, schema))
+        }
+        Expr::Cast(cast) if casts_only_nullability(&cast.expr, cast.field.data_type(), schema) => {
+            peel_repeated_value(&cast.expr, schema)
+        }
+        _ => value,
+    }
+}
+
+/// The branches a `CASE` can yield.
+fn case_branches(case: &datafusion_expr::expr::Case) -> impl Iterator<Item = &Expr> {
+    case.when_then_expr
+        .iter()
+        .map(|(_, then)| then.as_ref())
+        .chain(case.else_expr.as_deref())
 }
 
 /// Whether casting `expr` to `target` changes nothing but the nullability of nested fields.
@@ -1935,22 +2075,56 @@ fn returns_its_input(name: &str) -> bool {
 /// The UDT field `get_field` reads out of a struct built in place with `named_struct`, whose own
 /// field does not carry the UDT metadata of the value it was built from.
 fn struct_field_udt_field(args: &[Expr], schema: &DFSchemaRef) -> Option<FieldRef> {
-    let [
-        Expr::ScalarFunction(constructor),
-        Expr::Literal(ScalarValue::Utf8(Some(name)), _),
-    ] = args
-    else {
+    let [base, Expr::Literal(ScalarValue::Utf8(Some(name)), _)] = args else {
         return None;
     };
-    if constructor.func.name() != "named_struct" {
-        return None;
+    named_struct_field_udt_field(base, name, schema)
+}
+
+/// The UDT field `name` of a struct built in place with `named_struct`, reached directly, through
+/// the `CASE` of an array index, or as an element of an array built in place.
+fn named_struct_field_udt_field(base: &Expr, name: &str, schema: &DFSchemaRef) -> Option<FieldRef> {
+    match base {
+        Expr::ScalarFunction(function) if function.func.name() == "named_struct" => {
+            function.args.chunks(2).find_map(|pair| match pair {
+                [Expr::Literal(ScalarValue::Utf8(Some(key)), _), value] if key == name => {
+                    operand_udt_field(value, schema)
+                }
+                _ => None,
+            })
+        }
+        Expr::Case(case) => case_branches(case)
+            .find_map(|branch| named_struct_field_udt_field(branch, name, schema)),
+        Expr::Cast(cast) if casts_only_nullability(&cast.expr, cast.field.data_type(), schema) => {
+            named_struct_field_udt_field(&cast.expr, name, schema)
+        }
+        Expr::ScalarFunction(function) if function.func.name() == "array_element" => function
+            .args
+            .first()
+            .and_then(|array| element_struct_field_udt_field(array, name, schema)),
+        _ => None,
     }
-    constructor.args.chunks(2).find_map(|pair| match pair {
-        [Expr::Literal(ScalarValue::Utf8(Some(key)), _), value] if key == name => {
-            operand_udt_field(value, schema)
+}
+
+fn element_struct_field_udt_field(
+    array: &Expr,
+    name: &str,
+    schema: &DFSchemaRef,
+) -> Option<FieldRef> {
+    match array {
+        Expr::ScalarFunction(function)
+            if matches!(function.func.name(), "array" | "make_array" | "spark_array") =>
+        {
+            function
+                .args
+                .iter()
+                .find_map(|element| named_struct_field_udt_field(element, name, schema))
+        }
+        Expr::Cast(cast) if casts_only_nullability(&cast.expr, cast.field.data_type(), schema) => {
+            element_struct_field_udt_field(&cast.expr, name, schema)
         }
         _ => None,
-    })
+    }
 }
 
 /// The UDT element field of an array, or of the value list `map_extract` pulls out of a map. The
@@ -1966,11 +2140,7 @@ fn collection_element_udt_field(collection: &Expr, schema: &DFSchemaRef) -> Opti
         }
         // `flatten` is guarded by a `CASE` that yields it or NULL.
         Expr::Case(case) => {
-            return case
-                .when_then_expr
-                .iter()
-                .map(|(_, then)| then.as_ref())
-                .chain(case.else_expr.as_deref())
+            return case_branches(case)
                 .find_map(|branch| collection_element_udt_field(branch, schema));
         }
         // The functions that return a subset or a reordering of their input array's elements.
@@ -1985,11 +2155,34 @@ fn collection_element_udt_field(collection: &Expr, schema: &DFSchemaRef) -> Opti
                 .first()
                 .and_then(|array| collection_element_udt_field(array, schema));
         }
-        Expr::ScalarFunction(function) if function.func.name() == "spark_concat" => {
+        Expr::ScalarFunction(function)
+            if matches!(function.func.name(), "spark_concat" | "array_concat") =>
+        {
             return function
                 .args
                 .iter()
                 .find_map(|array| collection_element_udt_field(array, schema));
+        }
+        Expr::ScalarFunction(function) if function.func.name() == "map_keys" => {
+            return function
+                .args
+                .first()
+                .and_then(|map| map_key_udt_field(map, schema));
+        }
+        // `array_repeat(a, n)` repeats `a`, which the resolver wraps in `CASE WHEN true THEN
+        // CAST(a AS <its own type>) END`.
+        Expr::ScalarFunction(function) if function.func.name() == "array_repeat" => {
+            return function
+                .args
+                .first()
+                .and_then(|value| operand_udt_field(peel_repeated_value(value, schema), schema));
+        }
+        // `arr[i]` whose elements are themselves collections yields their elements.
+        Expr::ScalarFunction(function) if function.func.name() == "array_element" => {
+            return function
+                .args
+                .first()
+                .and_then(|outer| nested_collection_element_udt_field(outer, schema));
         }
         // `flatten(arr)` yields the elements of the arrays `arr` holds.
         Expr::ScalarFunction(function) if function.func.name() == "flatten" => {
@@ -2101,6 +2294,80 @@ fn rejects_unary_operand(op: &str, arg: &Expr, schema: &DFSchemaRef) -> Option<P
 /// `BINARY_OP_WRONG_TYPE` or `UNEXPECTED_INPUT_TYPE` -- always with SQLSTATE `42K09`, plus the
 /// rewritten expression text and query context. Emit them once Sail has structured analysis
 /// errors; `arithmetic_error_metadata.feature` pins the gap.
+/// Sail-internal field metadata that marks the INT day count `date - date` is typed with as what
+/// Spark types it: `DayTimeIntervalType(DAY)` (`datetimeExpressions.scala:3616`). The `SAIL::`
+/// prefix keeps it off the wire (`sail-spark-connect/src/schema.rs`).
+const SAIL_DATE_DIFFERENCE_METADATA_KEY: &str = "SAIL::spark::date_difference";
+
+/// Wraps the day count in a cast to its own type whose target field carries the marker. Only the
+/// target field of this very cast is trusted: DataFusion hands the source metadata on through a
+/// type-only cast, so a user's `CAST(d1 - d2 AS INT)` inherits it, and Spark accepts that INT.
+fn mark_date_difference(day_count: Expr) -> Expr {
+    let field = Field::new("", DataType::Int32, true).with_metadata(
+        [(
+            SAIL_DATE_DIFFERENCE_METADATA_KEY.to_string(),
+            "true".to_string(),
+        )]
+        .into(),
+    );
+    Expr::Cast(expr::Cast::new_from_field(
+        Box::new(day_count),
+        Arc::new(field),
+    ))
+}
+
+fn is_date_difference(expr: &Expr) -> bool {
+    match expr {
+        Expr::Alias(alias) => is_date_difference(&alias.expr),
+        Expr::Cast(cast) => cast
+            .field
+            .metadata()
+            .contains_key(SAIL_DATE_DIFFERENCE_METADATA_KEY),
+        _ => false,
+    }
+}
+
+/// Refuses an arithmetic whose operand is a date difference when Spark, which types it as an
+/// INTERVAL DAY, refuses it. The operator is resolved again with a day-time interval (a typed NULL
+/// `Duration`, Sail's spelling of one) in place of the difference, and only a refusal by the
+/// arithmetic guards counts: that one is Spark's verdict for an interval operand. It never accepts
+/// on that basis, so what the INT resolves today and Spark answers is left alone.
+// TODO: remove once `date - date` is typed as an interval that keeps its field range
+//  (`fix/interval`); then the operator sees Spark's type directly.
+fn rejects_date_difference_operand(
+    operator: fn(ScalarFunctionInput) -> PlanResult<Expr>,
+    left: &Expr,
+    right: &Expr,
+    function_context: &FunctionContextInput,
+) -> Option<PlanError> {
+    let (left_is, right_is) = (is_date_difference(left), is_date_difference(right));
+    if !left_is && !right_is {
+        return None;
+    }
+    let interval = || Expr::Literal(ScalarValue::DurationMicrosecond(None), None);
+    let arguments = vec![
+        if left_is { interval() } else { left.clone() },
+        if right_is { interval() } else { right.clone() },
+    ];
+    let input = ScalarFunctionInput {
+        arguments,
+        function_context: FunctionContextInput {
+            argument_display_names: function_context.argument_display_names,
+            plan_config: function_context.plan_config,
+            session_context: function_context.session_context,
+            schema: function_context.schema,
+        },
+    };
+    match operator(input) {
+        Err(PlanError::AnalysisError(message))
+            if message.starts_with("cannot resolve arithmetic") =>
+        {
+            Some(PlanError::AnalysisError(message))
+        }
+        _ => None,
+    }
+}
+
 fn arithmetic_operand_error(op: &str, left: &DataType, right: &DataType) -> PlanError {
     PlanError::analysis(format!(
         "cannot resolve arithmetic '{op}' with operand types {} and {}",
