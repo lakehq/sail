@@ -292,6 +292,49 @@ def test_spark_creates_sail_reads_delta_datasource_table(
     assert [(row.id, row.name) for row in sail_rows] == [(1, "alice"), (2, "bob")]
 
 
+def test_spark_creates_sail_reads_column_mapped_delta_table(
+    jvm_spark: SparkSession,
+    spark: SparkSession,
+    hms_s3_database: str,
+) -> None:
+    """Sail plans aggregates and map projections over a column-mapped Delta table from HMS.
+
+    The HMS-derived schema carries neither Delta column-mapping metadata nor
+    Delta's map entry field names, so the logical schema must be reconciled with
+    the Delta snapshot schema used by the physical scan.
+    """
+    table_fqn = f"{hms_s3_database}.roundtrip_column_mapped_delta"
+
+    jvm_spark.sql(
+        f"""
+        CREATE TABLE {table_fqn}
+        USING DELTA
+        TBLPROPERTIES ('delta.columnMapping.mode' = 'name')
+        AS
+        SELECT 'event-a' AS file_name, map('dag_id', 'dag-a') AS properties
+        UNION ALL
+        SELECT 'event-a' AS file_name, map('dag_id', 'dag-a') AS properties
+        UNION ALL
+        SELECT 'event-b' AS file_name, map('dag_id', 'dag-b') AS properties
+        """
+    )
+
+    df = spark.table(table_fqn)
+    assert sorted(row.file_name for row in df.select("file_name").collect()) == ["event-a", "event-a", "event-b"]
+    assert sorted(row.file_name for row in df.select("file_name").dropDuplicates(["file_name"]).collect()) == [
+        "event-a",
+        "event-b",
+    ]
+    assert sorted(row.properties["dag_id"] for row in df.select("properties").collect()) == ["dag-a", "dag-a", "dag-b"]
+    rows = df.dropDuplicates(["file_name"]).orderBy("file_name").collect()
+    assert [(row.file_name, row.properties) for row in rows] == [
+        ("event-a", {"dag_id": "dag-a"}),
+        ("event-b", {"dag_id": "dag-b"}),
+    ]
+    counts = spark.sql(f"SELECT file_name, count(*) AS n FROM {table_fqn} GROUP BY file_name ORDER BY file_name")
+    assert [(row.file_name, row.n) for row in counts.collect()] == [("event-a", 2), ("event-b", 1)]
+
+
 def test_spark_catalog_api_creates_table_sail_reads_external_table(
     jvm_spark: SparkSession,
     spark: SparkSession,
