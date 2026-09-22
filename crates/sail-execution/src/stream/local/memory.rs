@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::common::Result;
+use futures::future::join_all;
 use log::debug;
 use tokio::sync::mpsc;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
@@ -62,8 +63,9 @@ struct MemoryStreamReplicaSender {
     senders: Vec<Option<mpsc::Sender<TaskStreamResult<RecordBatch>>>>,
     /// An overflow buffer for each sender to avoid blocking sending for slow senders.
     /// This also avoids deadlock situations where the task stream buffer size is small.
-    // TODO: More investigation is needed to understand why deadlocks might happen among stages
-    //   when the task stream buffer is of a limited size.
+    // TODO: More investigation is needed to understand deadlocks during writes when
+    //   task stream buffers are bounded, and whether unbounded overflow can be avoided.
+    //   Concurrent finalization fixes commit deadlocks but does not remove this need.
     overflow: Vec<VecDeque<TaskStreamResult<RecordBatch>>>,
 }
 
@@ -137,30 +139,22 @@ impl TaskStreamChannelSink for MemoryStreamReplicaSender {
         })
     }
 
-    async fn commit(mut self: Box<Self>) -> Result<()> {
-        for (i, sender) in self.senders.iter_mut().enumerate() {
-            if sender.is_none() {
-                continue;
-            }
-
-            let overflow = &mut self.overflow[i];
-            let mut dropped = false;
-            while let Some(item) = overflow.pop_front() {
-                if let Some(tx) = sender.as_ref() {
-                    // TODO: `send` here is blocking and may introduce deadlocks among tasks.
-                    //   This is low-risk empirically though.
-                    if tx.send(item).await.is_err() {
-                        dropped = true;
-                        break;
+    async fn commit(self: Box<Self>) -> Result<()> {
+        // Replicas can be consumed at different times or left unread entirely.
+        // Flush them independently, dropping each sender as soon as it finishes
+        // so that its consumer sees EOF without waiting for the other replicas.
+        join_all(self.senders.into_iter().zip(self.overflow).map(
+            |(sender, overflow)| async move {
+                if let Some(tx) = sender {
+                    for item in overflow {
+                        if tx.send(item).await.is_err() {
+                            break;
+                        }
                     }
                 }
-            }
-
-            if dropped {
-                *sender = None;
-                overflow.clear();
-            }
-        }
+            },
+        ))
+        .await;
         Ok(())
     }
 

@@ -59,18 +59,17 @@ message ExtendedPhysicalPlanNode {
     CatalogCommandExecNode catalog_command = 44;
     BarrierExecNode barrier = 45;
     SparkPartitionIdExecNode spark_partition_id = 46;
-    DeletionVectorWriterExecNode deletion_vector_writer = 47;
-    DeletionVectorRowsWriterExecNode deletion_vector_rows_writer = 48;
-    CoalesceExecNode coalesce = 49;
-    FileDeleteExecNode file_delete = 50;
-    NoopSinkExecNode noop_sink = 51;
-    CsvExecNode csv = 52;
-    ParquetExecNode parquet = 53;
-    RemoteCheckpointWriteExecNode remote_checkpoint_write = 54;
-    RemoteCheckpointCommitExecNode remote_checkpoint_commit = 55;
-    IcebergMergeMetadataExecNode iceberg_merge_metadata = 56;
-    IcebergEqualityDeleteWriterExecNode iceberg_equality_delete_writer = 57;
-    PartitionedTopKExecNode partitioned_top_k = 58;
+    DeletionVectorRowsWriterExecNode deletion_vector_rows_writer = 47;
+    CoalesceExecNode coalesce = 48;
+    FileDeleteExecNode file_delete = 49;
+    NoopSinkExecNode noop_sink = 50;
+    CsvExecNode csv = 51;
+    ParquetExecNode parquet = 52;
+    RemoteCheckpointWriteExecNode remote_checkpoint_write = 53;
+    RemoteCheckpointCommitExecNode remote_checkpoint_commit = 54;
+    IcebergMergeMetadataExecNode iceberg_merge_metadata = 55;
+    IcebergEqualityDeleteWriterExecNode iceberg_equality_delete_writer = 56;
+    PartitionedTopKExecNode partitioned_top_k = 57;
   }
 }
 
@@ -99,7 +98,12 @@ message ExtendedPhysicalExprNode {
     LambdaExprNode lambda = 3;
     LambdaVariableExprNode lambda_variable = 4;
     IcebergPartitionTransformExprNode iceberg_partition_transform = 5;
+    SchemaEvolutionDefaultExprNode schema_evolution_default = 6;
   }
+}
+
+message SchemaEvolutionDefaultExprNode {
+  bytes field = 1;
 }
 
 message IcebergPartitionTransformExprNode {
@@ -997,6 +1001,11 @@ message CatalogPartitionFieldNode {
   uint32 transform_value = 3;
 }
 
+enum IcebergRowLevelWriteMode {
+  ICEBERG_ROW_LEVEL_WRITE_MODE_COPY_ON_WRITE = 0;
+  ICEBERG_ROW_LEVEL_WRITE_MODE_MERGE_ON_READ = 1;
+}
+
 message IcebergWriterExecNode {
   bytes input = 1;
   string table_url = 2;
@@ -1006,7 +1015,7 @@ message IcebergWriterExecNode {
   string options = 6;
   string write_context_json = 7;
   string lakehouse_table_json = 8;
-  bool merge_row_intents = 9;
+  optional IcebergRowLevelWriteMode row_level_mode = 9;
 }
 
 enum IcebergSnapshotUpdateKind {
@@ -1015,6 +1024,7 @@ enum IcebergSnapshotUpdateKind {
   ICEBERG_SNAPSHOT_UPDATE_KIND_FULL_OVERWRITE = 2;
   ICEBERG_SNAPSHOT_UPDATE_KIND_ROW_DELTA = 3;
   ICEBERG_SNAPSHOT_UPDATE_KIND_COPY_ON_WRITE = 4;
+  ICEBERG_SNAPSHOT_UPDATE_KIND_ROW_LEVEL_REWRITE = 5;
 }
 
 message IcebergCommitExecNode {
@@ -1058,6 +1068,11 @@ message IcebergDeleteApplyExecNode {
   string iceberg_schema_json = 6;
 }
 
+message IcebergRowLineage {
+  optional int64 first_row_id = 1;
+  int64 data_sequence_number = 2;
+}
+
 message IcebergMergeMetadataExecNode {
   bytes input = 1;
   string data_file_path = 2;
@@ -1065,6 +1080,8 @@ message IcebergMergeMetadataExecNode {
   optional string row_index_column_name = 4;
   optional int32 data_file_partition_spec_id = 5;
   optional string data_file_partition_json = 6;
+  IcebergRowLineage row_lineage = 7;
+  map<string, IcebergRowLineage> file_lineage = 8;
 }
 
 message IcebergEqualityDeleteWriterExecNode {
@@ -1092,16 +1109,6 @@ message DeltaLogReplayExecNode {
     DeltaLogReplayHashInputs hash_inputs = 6;
     bytes hash_commits_input = 7;
   }
-}
-
-message DeletionVectorWriterExecNode {
-  bytes input = 1;
-  string table_url = 2;
-  bytes condition = 3;
-  bytes table_schema = 4;
-  int64 version = 5;
-  optional string operation_json = 6;
-  optional string partition_value_columns_json = 7;
 }
 
 enum DeletionVectorRowOperationMode {

@@ -303,6 +303,24 @@ fn ascii(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     in_str_out_i32(expr_fn::ascii)(input)
 }
 
+fn btrim(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let arguments = input
+        .arguments
+        .into_iter()
+        .map(|arg| {
+            // Spark implicitly casts either numeric argument to string in both ANSI modes.
+            if arg.get_type(input.function_context.schema)?.is_numeric() {
+                // TODO: Match Spark's scientific notation for floats and non-ANSI decimals
+                //  once the shared numeric formatter supports it.
+                Ok(ScalarUDF::from(SparkToUtf8::new()).call(vec![arg]))
+            } else {
+                Ok(arg)
+            }
+        })
+        .collect::<PlanResult<Vec<_>>>()?;
+    Ok(expr_fn::btrim(arguments))
+}
+
 fn cast_to_logical_string_or_try(
     arg: expr::Expr,
     schema: &DFSchema,
@@ -425,7 +443,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("ascii", F::custom(ascii)),
         ("base64", F::udf(SparkBase64::new())),
         ("bit_length", F::custom(bit_length)),
-        ("btrim", F::var_arg(expr_fn::btrim)),
+        ("btrim", F::custom(btrim)),
         ("char", F::unary(expr_fn::chr)),
         ("char_length", F::custom(length)),
         ("character_length", F::custom(length)),

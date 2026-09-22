@@ -96,7 +96,7 @@ data:
           DeltaRemoveActionsExec
             CoalescePartitionsExec
               DeltaDiscoveryExec(table_path=file://<tmp>/delta_merge_target_exactly_once/)
-                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, deletionVector@7]
+                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, delta_decode_path(__sail_file_path@0))], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, deletionVector@7]
                   CoalescePartitionsExec
                     AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
                       RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4
@@ -855,7 +855,7 @@ data:
           DeltaRemoveActionsExec
             DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
               ProjectionExec: expr=[__sail_file_path@1 as __sail_file_path, size_bytes@2 as size_bytes, modification_time@3 as modification_time, _commit_version@4 as _commit_version, _commit_timestamp@5 as _commit_timestamp, stats_json@6 as stats_json, deletionVector@7 as deletionVector]
-                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)]
+                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, delta_decode_path(__sail_file_path@0))]
                   ProjectionExec: expr=[__sail_file_path@0 as __sail_file_path]
                     AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
                       AggregateExec: mode=Partial, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
@@ -969,7 +969,7 @@ data:
           DeltaRemoveActionsExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
             DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:)]]
               ProjectionExec: expr=[__sail_file_path@1 as __sail_file_path, size_bytes@2 as size_bytes, modification_time@3 as modification_time, _commit_version@4 as _commit_version, _commit_timestamp@5 as _commit_timestamp, stats_json@6 as stats_json, deletionVector@7 as deletionVector], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:)]]
-                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:)]]
+                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, delta_decode_path(__sail_file_path@0))], statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:)]]
                   ProjectionExec: expr=[__sail_file_path@0 as __sail_file_path], statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]:)]]
                     AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[], statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]:)]]
                       AggregateExec: mode=Partial, gby=[__sail_file_path@0 as __sail_file_path], aggr=[], statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]:)]]
@@ -1083,7 +1083,7 @@ data:
           DeltaRemoveActionsExec, schema=[action:Union(Dense, 0: ("add": non-null Struct("path": non-null Utf8, "partitionValues": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "size": non-null Int64, "modificationTime": non-null Int64, "dataChange": non-null Boolean, "stats": Utf8, "tags": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "deletionVector": Struct("storageType": non-null Utf8, "pathOrInlineDv": non-null Utf8, "offset": Int32, "sizeInBytes": non-null Int32, "cardinality": non-null Int64), "baseRowId": Int64, "defaultRowCommitVersion": Int64, "clusteringProvider": Utf8)), 1: ("remove": non-null Struct("path": non-null Utf8, "dataChange": non-null Boolean, "deletionTimestamp": Int64, "extendedFileMetadata": Boolean, "partitionValues": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "size": Int64, "stats": Utf8, "tags": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "deletionVector": Struct("storageType": non-null Utf8, "pathOrInlineDv": non-null Utf8, "offset": Int32, "sizeInBytes": non-null Int32, "cardinality": non-null Int64), "baseRowId": Int64, "defaultRowCommitVersion": Int64)), 2: ("protocol": non-null Struct("minReaderVersion": non-null Int32, "minWriterVersion": non-null Int32, "readerFeatures": List(Utf8, field: 'element'), "writerFeatures": List(Utf8, field: 'element'))), 3: ("metadata": non-null Struct("id": non-null Utf8, "name": Utf8, "description": Utf8, "format": non-null Struct("provider": non-null Utf8, "options": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted)), "schemaString": non-null Utf8, "partitionColumns": non-null List(Utf8, field: 'element'), "createdTime": Int64, "configuration": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted))), 4: ("commit_meta": non-null Struct("commit_row_count": non-null UInt64, "operation_json": Utf8, "operation_metrics_json": Utf8)))]
             DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/), schema=[__sail_file_path:Utf8;N, size_bytes:Int64, modification_time:Int64, _commit_version:Int64;N, _commit_timestamp:Int64;N, stats_json:Utf8;N, deletionVector:Struct("storageType": non-null Utf8, "pathOrInlineDv": non-null Utf8, "offset": Int32, "sizeInBytes": non-null Int32, "cardinality": non-null Int64);N, partition_scan:Boolean]
               ProjectionExec: expr=[__sail_file_path@1 as __sail_file_path, size_bytes@2 as size_bytes, modification_time@3 as modification_time, _commit_version@4 as _commit_version, _commit_timestamp@5 as _commit_timestamp, stats_json@6 as stats_json, deletionVector@7 as deletionVector], schema=[__sail_file_path:Utf8;N, size_bytes:Int64, modification_time:Int64, _commit_version:Int64;N, _commit_timestamp:Int64;N, stats_json:Utf8;N, deletionVector:Struct("storageType": non-null Utf8, "pathOrInlineDv": non-null Utf8, "offset": Int32, "sizeInBytes": non-null Int32, "cardinality": non-null Int64);N]
-                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], schema=[__sail_file_path:Utf8;N, __sail_file_path:Utf8;N, size_bytes:Int64, modification_time:Int64, _commit_version:Int64;N, _commit_timestamp:Int64;N, stats_json:Utf8;N, deletionVector:Struct("storageType": non-null Utf8, "pathOrInlineDv": non-null Utf8, "offset": Int32, "sizeInBytes": non-null Int32, "cardinality": non-null Int64);N]
+                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, delta_decode_path(__sail_file_path@0))], schema=[__sail_file_path:Utf8;N, __sail_file_path:Utf8;N, size_bytes:Int64, modification_time:Int64, _commit_version:Int64;N, _commit_timestamp:Int64;N, stats_json:Utf8;N, deletionVector:Struct("storageType": non-null Utf8, "pathOrInlineDv": non-null Utf8, "offset": Int32, "sizeInBytes": non-null Int32, "cardinality": non-null Int64);N]
                   ProjectionExec: expr=[__sail_file_path@0 as __sail_file_path], schema=[__sail_file_path:Utf8;N]
                     AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[], schema=[__sail_file_path:Utf8;N]
                       AggregateExec: mode=Partial, gby=[__sail_file_path@0 as __sail_file_path], aggr=[], schema=[__sail_file_path:Utf8;N]
@@ -1198,7 +1198,7 @@ data:
             DeltaRemoveActionsExec
               DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                 ProjectionExec: expr=[__sail_file_path@1 as __sail_file_path, size_bytes@2 as size_bytes, modification_time@3 as modification_time, _commit_version@4 as _commit_version, _commit_timestamp@5 as _commit_timestamp, stats_json@6 as stats_json, deletionVector@7 as deletionVector]
-                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)]
+                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, delta_decode_path(__sail_file_path@0))]
                     ProjectionExec: expr=[__sail_file_path@0 as __sail_file_path]
                       AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
                         AggregateExec: mode=Partial, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
@@ -1319,7 +1319,7 @@ data:
             DeltaRemoveActionsExec
               DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                 ProjectionExec: expr=[__sail_file_path@1 as __sail_file_path, size_bytes@2 as size_bytes, modification_time@3 as modification_time, _commit_version@4 as _commit_version, _commit_timestamp@5 as _commit_timestamp, stats_json@6 as stats_json, deletionVector@7 as deletionVector]
-                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)]
+                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, delta_decode_path(__sail_file_path@0))]
                     ProjectionExec: expr=[__sail_file_path@0 as __sail_file_path]
                       AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
                         AggregateExec: mode=Partial, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
@@ -1441,7 +1441,7 @@ data:
             DeltaRemoveActionsExec
               DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                 ProjectionExec: expr=[__sail_file_path@1 as __sail_file_path, size_bytes@2 as size_bytes, modification_time@3 as modification_time, _commit_version@4 as _commit_version, _commit_timestamp@5 as _commit_timestamp, stats_json@6 as stats_json, deletionVector@7 as deletionVector]
-                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)]
+                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, delta_decode_path(__sail_file_path@0))]
                     ProjectionExec: expr=[__sail_file_path@0 as __sail_file_path]
                       AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
                         AggregateExec: mode=Partial, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
@@ -1573,7 +1573,7 @@ data:
               CoalescePartitionsExec
                 DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
                   ProjectionExec: expr=[__sail_file_path@1 as __sail_file_path, size_bytes@2 as size_bytes, modification_time@3 as modification_time, _commit_version@4 as _commit_version, _commit_timestamp@5 as _commit_timestamp, stats_json@6 as stats_json, deletionVector@7 as deletionVector]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, delta_decode_path(__sail_file_path@0))]
                       CoalescePartitionsExec
                         ProjectionExec: expr=[__sail_file_path@0 as __sail_file_path]
                           AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
@@ -1683,7 +1683,7 @@ data:
             DeltaRemoveActionsExec
               CoalescePartitionsExec
                 DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
-                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, deletionVector@7]
+                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, delta_decode_path(__sail_file_path@0))], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, deletionVector@7]
                     CoalescePartitionsExec
                       AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
                         RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4
@@ -1778,7 +1778,7 @@ data:
           DeltaRemoveActionsExec
             CoalescePartitionsExec
               DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
-                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, deletionVector@7]
+                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, delta_decode_path(__sail_file_path@0))], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, deletionVector@7]
                   CoalescePartitionsExec
                     AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
                       RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4
@@ -1900,7 +1900,7 @@ data:
           DeltaRemoveActionsExec
             CoalescePartitionsExec
               DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
-                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, deletionVector@7]
+                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, delta_decode_path(__sail_file_path@0))], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, deletionVector@7]
                   CoalescePartitionsExec
                     AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
                       RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4
@@ -2004,7 +2004,7 @@ data:
           DeltaRemoveActionsExec
             CoalescePartitionsExec
               DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
-                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, deletionVector@7]
+                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, delta_decode_path(__sail_file_path@0))], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, deletionVector@7]
                   CoalescePartitionsExec
                     AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
                       RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4
@@ -2099,7 +2099,7 @@ data:
           DeltaRemoveActionsExec
             CoalescePartitionsExec
               DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
-                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, deletionVector@7]
+                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, delta_decode_path(__sail_file_path@0))], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, deletionVector@7]
                   CoalescePartitionsExec
                     AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
                       RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4
@@ -2336,7 +2336,7 @@ data:
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
     DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/)
-      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, deletionVector@7]
+      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, delta_decode_path(__sail_file_path@0))], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, deletionVector@7]
         StageInputExec: input=0, partitioning=UnknownPartitioning(1)
         DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=1, mode=sort)
           SortExec: expr=[__sail_delta_replay_path@7 ASC NULLS LAST, __sail_delta_log_version@9 DESC NULLS LAST, __sail_delta_is_remove@8 ASC NULLS LAST], preserve_partitioning=[true]
@@ -2556,7 +2556,7 @@ data:
               Projection: t.#0 AS id, t.__sail_file_path AS __sail_file_path
                 SubqueryAlias: t
                   Projection: delta_merge_cardinality_skip.id AS #0, delta_merge_cardinality_skip.__sail_file_path AS __sail_file_path
-                    TableScan: delta_merge_cardinality_skip projection=[id, __sail_file_path], partial_filters=[Boolean(true)]
+                    TableScan: delta_merge_cardinality_skip projection=[id, __sail_file_path], full_filters=[Boolean(true)]
               Projection: s.#2 AS __sail_src_id
                 SubqueryAlias: s
                   Projection: src_merge_cardinality_skip.#4 AS #2
@@ -2602,16 +2602,16 @@ data:
                   AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
                     RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4
                       AggregateExec: mode=Partial, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
-                        HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(__sail_src_id@0, id@0), (__sail_src_id@0, id@0)], projection=[__sail_file_path@1]
-                          CoalescePartitionsExec
-                            ProjectionExec: expr=[#2@0 as __sail_src_id]
-                              AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[]
-                                RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
-                                  AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[]
-                                    ProjectionExec: expr=[column1@0 as #2]
-                                      DataSourceExec: partitions=1, partition_sizes=[1]
-                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                            DataSourceExec: file_groups={1 group: [[<tmp>/merge_cardinality_skip/part-<id>.snappy.parquet]]}, projection=[id, __sail_file_path], file_type=parquet, predicate=true AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                          HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(__sail_src_id@0, id@0), (__sail_src_id@0, id@0)], projection=[__sail_file_path@1]
+                            CoalescePartitionsExec
+                              ProjectionExec: expr=[#2@0 as __sail_src_id]
+                                AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[]
+                                  RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
+                                    AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[]
+                                      ProjectionExec: expr=[column1@0 as #2]
+                                        DataSourceExec: partitions=1, partition_sizes=[1]
+                            DataSourceExec: file_groups={1 group: [[<tmp>/merge_cardinality_skip/part-<id>.snappy.parquet]]}, projection=[id, __sail_file_path], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
                 UnionExec
                   ProjectionExec: expr=[CASE WHEN __common_expr_1@0 THEN __sail_src_id@6 ELSE id@3 END as id, CASE WHEN __common_expr_2@1 THEN __sail_src_value@7 WHEN __common_expr_1@0 THEN __sail_src_value@7 ELSE value@4 END as value, __sail_file_path@5 as __sail_file_path, CASE WHEN __common_expr_2@1 THEN 6 WHEN __common_expr_1@0 THEN 3 WHEN __common_expr_3@2 THEN 4 ELSE 0 END as __sail_operation_type, NULL as __sail_merge_source_metric]
                     ProjectionExec: expr=[(__common_expr_4@0 AND __sail_merge_source_row_present@7 IS NOT NULL) IS NOT DISTINCT FROM true as __common_expr_1, (__sail_merge_target_row_present@4 IS NOT NULL AND __sail_merge_source_row_present@7 IS NOT NULL) IS NOT DISTINCT FROM true as __common_expr_2, __common_expr_4@0 as __common_expr_3, id@1 as id, value@2 as value, __sail_file_path@3 as __sail_file_path, __sail_src_id@5 as __sail_src_id, __sail_src_value@6 as __sail_src_value]
@@ -2638,21 +2638,21 @@ data:
           DeltaRemoveActionsExec
             CoalescePartitionsExec
               DeltaDiscoveryExec(table_path=file://<tmp>/merge_cardinality_skip/)
-                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, deletionVector@7]
+                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, delta_decode_path(__sail_file_path@0))], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, deletionVector@7]
                   CoalescePartitionsExec
                     AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
                       RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4
                         AggregateExec: mode=Partial, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
-                          HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(__sail_src_id@0, id@0), (__sail_src_id@0, id@0)], projection=[__sail_file_path@1]
-                            CoalescePartitionsExec
-                              ProjectionExec: expr=[#2@0 as __sail_src_id]
-                                AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[]
-                                  RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
-                                    AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[]
-                                      ProjectionExec: expr=[column1@0 as #2]
-                                        DataSourceExec: partitions=1, partition_sizes=[1]
-                            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                              DataSourceExec: file_groups={1 group: [[<tmp>/merge_cardinality_skip/part-<id>.snappy.parquet]]}, projection=[id, __sail_file_path], file_type=parquet, predicate=true AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                            HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(__sail_src_id@0, id@0), (__sail_src_id@0, id@0)], projection=[__sail_file_path@1]
+                              CoalescePartitionsExec
+                                ProjectionExec: expr=[#2@0 as __sail_src_id]
+                                  AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[]
+                                    RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
+                                      AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[]
+                                        ProjectionExec: expr=[column1@0 as #2]
+                                          DataSourceExec: partitions=1, partition_sizes=[1]
+                              DataSourceExec: file_groups={1 group: [[<tmp>/merge_cardinality_skip/part-<id>.snappy.parquet]]}, projection=[id, __sail_file_path], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
                   DeltaLogReplayExec(table_path=file://<tmp>/merge_cardinality_skip/, version=1, mode=sort)
                     SortExec: expr=[__sail_delta_replay_path@7 ASC NULLS LAST, __sail_delta_log_version@9 DESC NULLS LAST, __sail_delta_is_remove@8 ASC NULLS LAST], preserve_partitioning=[true]
                       ProjectionExec: expr=[CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, path) END as __sail_file_path, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, size) END ELSE 0 END as size_bytes, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, modificationTime) END ELSE 0 END as modification_time, NULL as _commit_version, NULL as _commit_timestamp, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, stats) END as stats_json, CASE WHEN add@0 IS NOT NULL THEN get_field(add@0, deletionVector) END as deletionVector, CASE WHEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END IS NOT NULL THEN CASE WHEN add@0 IS NOT NULL THEN concat(CAST(octet_length(get_field(add@0, path)) AS Utf8), :, get_field(add@0, path), :, CASE WHEN add@0 IS NOT NULL AND get_field(add@0, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(add@0, deletionVector, storageType), get_field(add@0, deletionVector, pathOrInlineDv), CASE WHEN get_field(add@0, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(add@0, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END ELSE CASE WHEN remove@1 IS NOT NULL THEN concat(CAST(octet_length(get_field(remove@1, path)) AS Utf8), :, get_field(remove@1, path), :, CASE WHEN remove@1 IS NOT NULL AND get_field(remove@1, deletionVector) IS NOT NULL THEN concat(1:, concat(get_field(remove@1, deletionVector, storageType), get_field(remove@1, deletionVector, pathOrInlineDv), CASE WHEN get_field(remove@1, deletionVector, offset) IS NOT NULL THEN concat(@, CAST(get_field(remove@1, deletionVector, offset) AS Utf8)) ELSE  END)) ELSE 0 END) END END as __sail_delta_replay_path, remove@1 IS NOT NULL AND add@0 IS NULL as __sail_delta_is_remove, __sail_delta_log_version@2 as __sail_delta_log_version]
@@ -2847,9 +2847,9 @@ data:
                                   DataSourceExec: partitions=1, partition_sizes=[1]
                             ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_value, column3@2 as __sail_src_flag, true as __sail_merge_source_row_present]
                               DataSourceExec: partitions=1, partition_sizes=[1]
-            RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4
+            RepartitionExec: partitioning=Hash([delta_decode_path(__sail_file_path@0)], 4), input_partitions=4
               DeltaDiscoveryExec(table_path=file://<tmp>/merge_dv/)
-                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, tags@7, baseRowId@8, defaultRowCommitVersion@9, clusteringProvider@10, deletionVector@11]
+                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, delta_decode_path(__sail_file_path@0))], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, tags@7, baseRowId@8, defaultRowCommitVersion@9, clusteringProvider@10, deletionVector@11]
                   CoalescePartitionsExec
                     AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
                       RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4
@@ -2906,9 +2906,9 @@ data:
                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                           DeltaScanByAddsExec(table_path=file://<tmp>/merge_dv/, version=0, projection=Some([0, 3, 4]), limit=None, pushdown=true)
                             DataSourceExec: partitions=1, partition_sizes=[1]
-            RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4
+            RepartitionExec: partitioning=Hash([delta_decode_path(__sail_file_path@0)], 4), input_partitions=4
               DeltaDiscoveryExec(table_path=file://<tmp>/merge_dv/)
-                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, tags@7, baseRowId@8, defaultRowCommitVersion@9, clusteringProvider@10, deletionVector@11]
+                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, delta_decode_path(__sail_file_path@0))], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, tags@7, baseRowId@8, defaultRowCommitVersion@9, clusteringProvider@10, deletionVector@11]
                   CoalescePartitionsExec
                     AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
                       RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4
@@ -2985,7 +2985,7 @@ data:
           DeltaRemoveActionsExec
             CoalescePartitionsExec
               DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_partition_pushdown/)
-                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, year@6, stats_json@7, deletionVector@8]
+                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, delta_decode_path(__sail_file_path@0))], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, year@6, stats_json@7, deletionVector@8]
                   CoalescePartitionsExec
                     AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
                       RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4
@@ -3061,7 +3061,7 @@ data:
           DeltaRemoveActionsExec
             CoalescePartitionsExec
               DeltaDiscoveryExec(table_path=file://<tmp>/delta_merge_matched_only_cow/)
-                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, deletionVector@7]
+                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, delta_decode_path(__sail_file_path@0))], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, deletionVector@7]
                   CoalescePartitionsExec
                     AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
                       RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4
@@ -3112,9 +3112,9 @@ data:
                     ProjectionExec: expr=[id@0 as id, __sail_file_path@1 as __sail_file_path, __sail_file_row_index@2 as __sail_file_row_index]
                       DeltaScanByAddsExec(table_path=file://<tmp>/merge_dv_partition_pruning/, version=1, projection=Some([0, 3, 4, 1]), limit=None, pushdown=false)
                         DataSourceExec: partitions=1, partition_sizes=[1]
-            RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4
+            RepartitionExec: partitioning=Hash([delta_decode_path(__sail_file_path@0)], 4), input_partitions=4
               DeltaDiscoveryExec(table_path=file://<tmp>/merge_dv_partition_pruning/)
-                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, year@6, stats_json@7, tags@8, baseRowId@9, defaultRowCommitVersion@10, clusteringProvider@11, deletionVector@12]
+                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, delta_decode_path(__sail_file_path@0))], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, year@6, stats_json@7, tags@8, baseRowId@9, defaultRowCommitVersion@10, clusteringProvider@11, deletionVector@12]
                   CoalescePartitionsExec
                     AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
                       RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4
@@ -3193,7 +3193,7 @@ data:
           DeltaRemoveActionsExec
             CoalescePartitionsExec
               DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_partition_pushdown/)
-                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, year@6, stats_json@7, deletionVector@8]
+                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, delta_decode_path(__sail_file_path@0))], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, year@6, stats_json@7, deletionVector@8]
                   CoalescePartitionsExec
                     AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
                       RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4
@@ -3277,7 +3277,7 @@ data:
           DeltaRemoveActionsExec
             CoalescePartitionsExec
               DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_partition_pushdown/)
-                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, year@6, stats_json@7, deletionVector@8]
+                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, delta_decode_path(__sail_file_path@0))], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, year@6, stats_json@7, deletionVector@8]
                   CoalescePartitionsExec
                     AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
                       RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4
@@ -3377,9 +3377,9 @@ data:
                                   DataSourceExec: partitions=1, partition_sizes=[1]
                             ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_value, column3@2 as __sail_src_flag, true as __sail_merge_source_row_present]
                               DataSourceExec: partitions=1, partition_sizes=[1]
-            RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4
+            RepartitionExec: partitioning=Hash([delta_decode_path(__sail_file_path@0)], 4), input_partitions=4
               DeltaDiscoveryExec(table_path=file://<tmp>/merge_dv/)
-                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, tags@7, baseRowId@8, defaultRowCommitVersion@9, clusteringProvider@10, deletionVector@11]
+                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, delta_decode_path(__sail_file_path@0))], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, tags@7, baseRowId@8, defaultRowCommitVersion@9, clusteringProvider@10, deletionVector@11]
                   CoalescePartitionsExec
                     AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
                       RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4
@@ -3486,9 +3486,9 @@ data:
                                     DataSourceExec: partitions=1, partition_sizes=[1]
                               ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_value, column3@2 as __sail_src_flag, true as __sail_merge_source_row_present]
                                 DataSourceExec: partitions=1, partition_sizes=[1]
-            RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4
+            RepartitionExec: partitioning=Hash([delta_decode_path(__sail_file_path@0)], 4), input_partitions=4
               DeltaDiscoveryExec(table_path=file://<tmp>/merge_dv/)
-                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, tags@7, baseRowId@8, defaultRowCommitVersion@9, clusteringProvider@10, deletionVector@11]
+                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, delta_decode_path(__sail_file_path@0))], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, tags@7, baseRowId@8, defaultRowCommitVersion@9, clusteringProvider@10, deletionVector@11]
                   CoalescePartitionsExec
                     AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
                       RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4
@@ -3641,9 +3641,9 @@ data:
                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                           DeltaScanByAddsExec(table_path=file://<tmp>/merge_dv/, version=0, projection=Some([0, 3, 4]), limit=None, pushdown=true)
                             DataSourceExec: partitions=1, partition_sizes=[1]
-            RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4
+            RepartitionExec: partitioning=Hash([delta_decode_path(__sail_file_path@0)], 4), input_partitions=4
               DeltaDiscoveryExec(table_path=file://<tmp>/merge_dv/)
-                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@0)], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, tags@7, baseRowId@8, defaultRowCommitVersion@9, clusteringProvider@10, deletionVector@11]
+                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, delta_decode_path(__sail_file_path@0))], projection=[__sail_file_path@1, size_bytes@2, modification_time@3, _commit_version@4, _commit_timestamp@5, stats_json@6, tags@7, baseRowId@8, defaultRowCommitVersion@9, clusteringProvider@10, deletionVector@11]
                   CoalescePartitionsExec
                     AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
                       RepartitionExec: partitioning=Hash([__sail_file_path@0], 4), input_partitions=4

@@ -175,6 +175,13 @@ def test_overwrite_with_different_partition_and_schema_overwrite_succeeds(spark,
     df_initial = spark.createDataFrame(initial_data)
     df_initial.write.format("iceberg").mode("overwrite").partitionBy("category").save(iceberg_path)
 
+    original_meta = json.loads(
+        max(
+            table_path.joinpath("metadata").glob("v*.metadata.json"), key=lambda p: int(p.name.split(".")[0][1:])
+        ).read_text()
+    )
+    original_specs = original_meta["partition-specs"]
+
     # Overwrite with different partition column with overwriteSchema=true
     # Keep compatible columns to avoid schema incompatibility issues
     overwrite_data = [
@@ -204,6 +211,13 @@ def test_overwrite_with_different_partition_and_schema_overwrite_succeeds(spark,
     default_spec = next(spec for spec in meta["partition-specs"] if spec["spec-id"] == default_spec_id)
     partition_names = [field["name"] for field in default_spec.get("fields", [])]
     assert partition_names == ["region"], f"Expected default partition spec to be ['region'], got {partition_names}"
+    for original_spec in original_specs:
+        assert (
+            next(spec for spec in meta["partition-specs"] if spec["spec-id"] == original_spec["spec-id"])
+            == original_spec
+        )
+    assert default_spec_id > max(spec["spec-id"] for spec in original_specs)
+    assert default_spec["fields"][0]["field-id"] > original_meta["last-partition-id"]
 
 
 def test_append_to_unpartitioned_table_with_partitioning_raises_error(spark, tmp_path):

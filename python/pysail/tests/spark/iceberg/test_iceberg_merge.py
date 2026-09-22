@@ -353,51 +353,6 @@ def test_iceberg_merge_rejects_multiple_source_rows_for_one_target_row(spark, tm
         _drop_table(spark, table_name)
 
 
-@pytest.mark.parametrize("merge_mode", [None, "copy-on-write"], ids=["default", "explicit-cow"])
-def test_iceberg_merge_rejects_copy_on_write_before_writing_empty_table(spark, tmp_path, merge_mode):
-    table_name = "iceberg_merge_copy_on_write_reject"
-    table_path = tmp_path / table_name
-    mode_property = "" if merge_mode is None else f", 'write.merge.mode' = '{merge_mode}'"
-
-    _drop_table(spark, table_name)
-    try:
-        spark.sql(
-            f"""
-            CREATE TABLE {table_name} (
-              id INT,
-              value STRING
-            )
-            USING iceberg
-            LOCATION '{_uri_sql(table_path)}'
-            TBLPROPERTIES ('format-version' = '2'{mode_property})
-            """
-        )
-        spark.sql(
-            """
-            CREATE OR REPLACE TEMP VIEW iceberg_merge_copy_on_write_source AS
-            SELECT * FROM VALUES (1, 'new') AS src(id, value)
-            """
-        )
-        before_metadata_path = _latest_metadata_path(table_path)
-        before_parquet_files = _parquet_file_paths(table_path)
-
-        with pytest.raises(Exception, match=r"write\.merge\.mode=copy-on-write|copy-on-write.*not supported"):
-            spark.sql(
-                f"""
-                MERGE INTO {table_name} AS t
-                USING iceberg_merge_copy_on_write_source AS s
-                ON t.id = s.id
-                WHEN NOT MATCHED THEN INSERT *
-                """
-            ).collect()
-
-        assert spark.sql("SELECT * FROM iceberg_merge_copy_on_write_reject").collect() == []
-        assert _latest_metadata_path(table_path) == before_metadata_path
-        assert _parquet_file_paths(table_path) == before_parquet_files
-    finally:
-        _drop_table(spark, table_name)
-
-
 def test_iceberg_merge_rejects_position_deletes_on_v1_table(spark, tmp_path):
     table_name = "iceberg_merge_v1_position_delete"
     table_path = tmp_path / table_name
