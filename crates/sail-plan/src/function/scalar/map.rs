@@ -5,6 +5,7 @@ use datafusion::functions_nested::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit};
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::map::map_entries::SparkMapEntries;
 use sail_function::scalar::map::map_from::{SparkMapFromArrays, SparkMapFromEntries};
 use sail_function::scalar::map::str_to_map::StrToMap;
@@ -34,8 +35,10 @@ fn map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         Ok::<_, PlanError>(nullable || value.nullable(schema.as_ref())?)
     })?;
 
-    let keys = expr_fn::make_array(keys);
-    let values = expr_fn::make_array(values);
+    // A map literal cannot be NULL (`CreateMap.nullable`), and it takes that from the arrays of
+    // its keys and values, which `SparkArray` builds as not nullable.
+    let keys = ScalarUDF::from(SparkArray::new()).call(keys);
+    let values = ScalarUDF::from(SparkArray::new()).call(values);
     let values = cast_list_value_nullability(values, schema, true)?;
     let last_value_wins =
         input.function_context.plan_config.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;

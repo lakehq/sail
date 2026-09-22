@@ -214,7 +214,6 @@ Feature: Set operations (INTERSECT, EXCEPT)
 
   Rule: A set operation reconciles the column types of both sides
 
-    @sail-bug
     Scenario: the wider type of the two sides is the type of the result
       When query
         """
@@ -261,11 +260,7 @@ Feature: Set operations (INTERSECT, EXCEPT)
         | a map of maps    | map('a', map('b', 1)) | map('c', map('d', 2)) | MAP<STRING, MAP<STRING, INT>> |
         | an array of maps | array(map('a', 1))    | array(map('b', 2))    | ARRAY<MAP<STRING, INT>>       |
 
-    @sail-bug
-    # The rendering is right; what differs is the schema behind it. Spark builds the fields of a
-    # struct literal as non-nullable and Sail builds them nullable, so the ` NOT NULL` the type
-    # carries never appears. The cause is pinned on its own in
-    # `test_a_struct_literal_builds_non_nullable_fields`, and both go green together.
+    # A struct literal builds fields that cannot be null, and the type says so with ` NOT NULL`.
     Scenario Outline: the type of <case> says which of its fields cannot be null
       When query
         """

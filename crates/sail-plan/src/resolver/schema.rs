@@ -7,6 +7,7 @@ use sail_common::utils::string::{equals_ignore_case, to_lowercase};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_common_datafusion::variant::is_marked_variant_storage_type;
 use sail_sql_analyzer::parser::parse_attribute_name;
 
 use crate::error::{PlanError, PlanResult};
@@ -34,6 +35,10 @@ impl PlanResolver<'_> {
                 "ARRAY<{}>",
                 self.spark_type_name(field.data_type())?
             )),
+            // A variant is stored as a struct that Spark never shows.
+            DataType::Struct(_) if is_marked_variant_storage_type(data_type) => {
+                Ok("VARIANT".to_string())
+            }
             DataType::Struct(fields) => {
                 let fields = fields
                     .iter()

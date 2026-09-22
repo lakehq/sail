@@ -182,6 +182,16 @@ impl PlanResolver<'_> {
             .collect()
     }
 
+    /// Whether a projection holds an aggregate, which turns it into an aggregation without
+    /// grouping (`GlobalAggregates`).
+    pub(super) fn contains_aggregate(expr: &[NamedExpr]) -> bool {
+        expr.iter().any(|e| {
+            e.expr
+                .exists(|e| Ok(matches!(e, Expr::AggregateFunction(_))))
+                .unwrap_or(false)
+        })
+    }
+
     pub(super) fn rewrite_aggregate(
         &self,
         input: LogicalPlan,
@@ -192,6 +202,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let grouping = self.resolve_grouping_positions(grouping, &projections)?;
+        let has_grouping = !grouping.is_empty();
         let group_exprs = grouping.iter().map(|x| x.expr.clone()).collect::<Vec<_>>();
         let has_grouping_set = Self::has_grouping_set(&group_exprs);
         let grouping_exprs = Self::distinct_grouping_expressions_from_exprs(&group_exprs);
@@ -274,6 +285,22 @@ impl PlanResolver<'_> {
                 })
             })
             .collect::<PlanResult<Vec<_>>>()?;
+        // Without grouping every column has to be read inside an aggregate (`CheckAnalysis`,
+        // `MISSING_GROUP_BY`), and one that is not is left pointing at the input.
+        if !has_grouping
+            && projections.iter().any(|x| {
+                x.expr
+                    .column_refs()
+                    .iter()
+                    .any(|column| !plan.schema().has_column(column))
+            })
+        {
+            return Err(PlanError::AnalysisError(
+                "[MISSING_GROUP_BY] The query does not include a GROUP BY clause. Add GROUP BY \
+                 or turn it into the window functions using OVER clauses."
+                    .to_string(),
+            ));
+        }
         let plan = match having {
             Some(having) => {
                 let having =

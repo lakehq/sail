@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{Column, DFSchemaRef, TableReference};
+use datafusion_common::{Column, DFSchemaRef, ScalarValue, TableReference};
 use datafusion_expr::expr::{LambdaVariable, ScalarFunction};
-use datafusion_expr::{ScalarUDF, UNNAMED_TABLE, col, expr, lit};
+use datafusion_expr::{LogicalPlan, ScalarUDF, UNNAMED_TABLE, col, expr, lit};
 use datafusion_functions::core::get_field;
 use sail_common::spec;
 use sail_function::scalar::array_struct_field::ArrayStructField;
@@ -288,42 +288,6 @@ pub(in crate::resolver) fn unresolved_column_error(
         .iter()
         .map(|x| quote_if_needed(x.as_ref()))
         .collect::<Vec<_>>()
-        .join(".");
-    let proposal = order_candidates_by_similarity(name, &base, candidates)
-        .into_iter()
-        .take(5)
-        .collect::<Vec<_>>();
-    let name = quote_identifier(name);
-    if proposal.is_empty() {
-        PlanError::AnalysisError(format!(
-            "[UNRESOLVED_COLUMN.WITHOUT_SUGGESTION] A column, variable, or function parameter \
-             with name {name} cannot be resolved."
-        ))
-    } else {
-        PlanError::AnalysisError(format!(
-            "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with \
-             name {name} cannot be resolved. Did you mean one of the following? [{}].",
-            proposal.join(", ")
-        ))
-    }
-}
-
-/// Builds the unresolved column error for a name matched against a flat list of column names.
-pub(in crate::resolver) fn unresolved_column_name_error(
-    name: &spec::ObjectName,
-    candidates: &[&str],
-) -> PlanError {
-    let candidates = candidates
-        .iter()
-        .map(|x| vec![x.to_string()])
-        .collect::<Vec<_>>();
-    // `Project.reorderFields` measures the distance against the raw field name instead, so the
-    // back quotes of a name that would need them do not count towards it.
-    let base = name
-        .parts()
-        .iter()
-        .map(|x| x.as_ref())
-        .collect::<Vec<&str>>()
         .join(".");
     let proposal = order_candidates_by_similarity(name, &base, candidates)
         .into_iter()
@@ -680,7 +644,85 @@ impl PlanResolver<'_> {
         Ok(candidates.pop())
     }
 
-    fn resolve_hidden_field(
+    /// Resolves a column given by name, the way `Dataset.resolve` does for the names that
+    /// `DataFrameNaFunctions` receives. The name is resolved in full before anything decides what
+    /// to do with it: the longest qualifier is tried first, a field it walks into is reached, and
+    /// a key a join hid is still reachable through its qualifier (`LogicalPlan.resolve` falls back
+    /// to the metadata output).
+    pub(in crate::resolver) fn resolve_column_reference(
+        &self,
+        name: &spec::ObjectName,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Option<(String, expr::Expr)>> {
+        if let Some(found) = self.resolve_field_or_nested_field(name, None, schema, state)? {
+            return Ok(Some(found));
+        }
+        self.resolve_hidden_field(name, None, schema, state)
+    }
+
+    /// The fields a bare name matches when it matches more than one of them and they are all the
+    /// same attribute, which is what selecting the same column twice gives. Spark removes
+    /// duplicate candidates before it looks for an ambiguity (`AttributeSeq.resolve`), so those
+    /// are one attribute rather than an ambiguous name, while two expressions given the same name
+    /// are two attributes and the name is ambiguous.
+    pub(in crate::resolver) fn resolve_repeated_column(
+        &self,
+        name: &spec::ObjectName,
+        plan: &LogicalPlan,
+        state: &PlanResolverState,
+    ) -> PlanResult<Option<Vec<String>>> {
+        let [identifier] = name.parts() else {
+            return Ok(None);
+        };
+        let mut ids = Vec::new();
+        for (_, field) in plan.schema().iter() {
+            let info = state.get_field_info(field.name())?;
+            if !info.is_hidden() && self.match_field(info, identifier.as_ref(), None) {
+                ids.push(field.name().to_string());
+            }
+        }
+        let roots = ids
+            .iter()
+            .map(|id| Self::root_attribute(plan, id))
+            .collect::<Vec<_>>();
+        let one_attribute = roots.windows(2).all(|pair| pair[0] == pair[1]);
+        Ok((ids.len() > 1 && one_attribute).then_some(ids))
+    }
+
+    /// The field an output field is a bare reference to, followed through the projections that
+    /// only pass it on under another name and through the operators that pass their input
+    /// through. Selecting a column twice gives two outputs that lead to the same field, where
+    /// Spark sees one attribute (`Project [a#1, a#1]`); an expression given a name is a new
+    /// attribute, so it leads to itself. A join is not walked into, so the two sides stay two.
+    fn root_attribute(plan: &LogicalPlan, id: &str) -> String {
+        match plan {
+            LogicalPlan::Projection(projection) => {
+                let defined = projection.expr.iter().find_map(|expr| match expr {
+                    expr::Expr::Alias(alias) if alias.name == id => Some(alias.expr.as_ref()),
+                    expr::Expr::Column(column) if column.name == id => Some(expr),
+                    _ => None,
+                });
+                match defined {
+                    Some(expr::Expr::Column(column)) => {
+                        Self::root_attribute(&projection.input, &column.name)
+                    }
+                    _ => id.to_string(),
+                }
+            }
+            LogicalPlan::Filter(_)
+            | LogicalPlan::Sort(_)
+            | LogicalPlan::Limit(_)
+            | LogicalPlan::SubqueryAlias(_)
+            | LogicalPlan::Repartition(_) => match plan.inputs().as_slice() {
+                [input] => Self::root_attribute(input, id),
+                _ => id.to_string(),
+            },
+            _ => id.to_string(),
+        }
+    }
+
+    pub(in crate::resolver) fn resolve_hidden_field(
         &self,
         name: &spec::ObjectName,
         plan_id: Option<i64>,
@@ -790,6 +832,9 @@ impl PlanResolver<'_> {
         match inner {
             [] => Ok(Some(expr)),
             [name, remaining @ ..] => match data_type {
+                // Reading a field of a NULL base is NULL rather than an error, however far the path
+                // goes on (`ExtractValue.applyOrNull`).
+                DataType::Null => Ok(Some(lit(ScalarValue::Null))),
                 DataType::Struct(fields) => {
                     let Some(field) = self.resolve_struct_field(fields, name.as_ref())? else {
                         return Ok(None);

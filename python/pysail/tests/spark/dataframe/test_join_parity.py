@@ -39,6 +39,8 @@ QUERIES = {
     "on/CROSS": "SELECT * FROM (SELECT * FROM VALUES (1,'x'),(2,'y'),(NULL,'z') AS t(k, lv)) AS l CROSS JOIN (SELECT * FROM VALUES (1,'p'),(3,'q'),(NULL,'r') AS t(k, rv)) AS r ON l.k = r.k",
     "using/CROSS": "SELECT * FROM (SELECT * FROM VALUES (1,'x'),(2,'y'),(NULL,'z') AS t(k, lv)) AS l CROSS JOIN (SELECT * FROM VALUES (1,'p'),(3,'q'),(NULL,'r') AS t(k, rv)) AS r USING (k)",
     "natural/CROSS": "SELECT * FROM (SELECT * FROM VALUES (1,'x'),(2,'y'),(NULL,'z') AS t(k, lv)) AS l NATURAL CROSS JOIN (SELECT * FROM VALUES (1,'p'),(3,'q'),(NULL,'r') AS t(k, rv)) AS r",
+    # The join types are checked when the query is parsed, before any table is looked up.
+    "natural/CROSS over a missing table": "SELECT * FROM join_parity_missing NATURAL CROSS JOIN VALUES (1) AS t(a)",
     "key/two keys": "SELECT * FROM (SELECT 1 AS a, 2 AS b, 3 AS c) AS l JOIN (SELECT 1 AS a, 2 AS b, 4 AS d) AS r USING (a, b)",
     "key/key repeated in the clause": "SELECT * FROM (SELECT * FROM VALUES (1,'x'),(2,'y'),(NULL,'z') AS t(k, lv)) AS l JOIN (SELECT * FROM VALUES (1,'p'),(3,'q'),(NULL,'r') AS t(k, rv)) AS r USING (k, k)",
     "key/key differing in case": "SELECT * FROM (SELECT 1 AS a, 'p' AS b) AS l JOIN (SELECT 1 AS A, 'q' AS c) AS r USING (A)",
@@ -324,45 +326,33 @@ RESULTS = [
         "struct<k:int,lv:string>",
         ["{'k': 2, 'lv': 'y'}", "{'k': None, 'lv': 'z'}"],
     ),
-    pytest.param(
-        *(
-            "on/CROSS",
-            "false",
-            ["k", "lv", "k", "rv"],
-            "struct<k:int,lv:string,k:int,rv:string>",
-            ["{'k#1': 1, 'lv': 'x', 'k#2': 1, 'rv': 'p'}"],
-        ),
-        marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
+    (
+        "on/CROSS",
+        "false",
+        ["k", "lv", "k", "rv"],
+        "struct<k:int,lv:string,k:int,rv:string>",
+        ["{'k#1': 1, 'lv': 'x', 'k#2': 1, 'rv': 'p'}"],
     ),
-    pytest.param(
-        *(
-            "on/CROSS",
-            "true",
-            ["k", "lv", "k", "rv"],
-            "struct<k:int,lv:string,k:int,rv:string>",
-            ["{'k#1': 1, 'lv': 'x', 'k#2': 1, 'rv': 'p'}"],
-        ),
-        marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
+    (
+        "on/CROSS",
+        "true",
+        ["k", "lv", "k", "rv"],
+        "struct<k:int,lv:string,k:int,rv:string>",
+        ["{'k#1': 1, 'lv': 'x', 'k#2': 1, 'rv': 'p'}"],
     ),
-    pytest.param(
-        *(
-            "using/CROSS",
-            "false",
-            ["k", "lv", "rv"],
-            "struct<k:int,lv:string,rv:string>",
-            ["{'k': 1, 'lv': 'x', 'rv': 'p'}"],
-        ),
-        marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
+    (
+        "using/CROSS",
+        "false",
+        ["k", "lv", "rv"],
+        "struct<k:int,lv:string,rv:string>",
+        ["{'k': 1, 'lv': 'x', 'rv': 'p'}"],
     ),
-    pytest.param(
-        *(
-            "using/CROSS",
-            "true",
-            ["k", "lv", "rv"],
-            "struct<k:int,lv:string,rv:string>",
-            ["{'k': 1, 'lv': 'x', 'rv': 'p'}"],
-        ),
-        marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
+    (
+        "using/CROSS",
+        "true",
+        ["k", "lv", "rv"],
+        "struct<k:int,lv:string,rv:string>",
+        ["{'k': 1, 'lv': 'x', 'rv': 'p'}"],
     ),
     (
         "key/two keys",
@@ -551,14 +541,9 @@ ERRORS = [
     ("natural/LEFT SEMI", "true", r"Unsupported natural join type LeftSemi"),
     ("natural/LEFT ANTI", "false", r"Unsupported natural join type LeftAnti"),
     ("natural/LEFT ANTI", "true", r"Unsupported natural join type LeftAnti"),
-    pytest.param(
-        *("natural/CROSS", "false", "INCOMPATIBLE_JOIN_TYPES"),
-        marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
-    ),
-    pytest.param(
-        *("natural/CROSS", "true", "INCOMPATIBLE_JOIN_TYPES"),
-        marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
-    ),
+    ("natural/CROSS", "false", "INCOMPATIBLE_JOIN_TYPES"),
+    ("natural/CROSS", "true", "INCOMPATIBLE_JOIN_TYPES"),
+    ("natural/CROSS over a missing table", "false", "INCOMPATIBLE_JOIN_TYPES"),
     ("key/key differing in case", "true", "UNRESOLVED_USING_COLUMN_FOR_JOIN"),
     # `NATURAL` does not fail when it finds no common name: it degrades to a cross join, which is
     # the divergence this file was written for, so the two settings differ in the column list.
@@ -635,3 +620,13 @@ def test_join_error(spark, case, case_sensitive, condition):
             _ = spark.sql(QUERIES[case]).collect()
     finally:
         _unconfigure(spark)
+
+
+@pytest.mark.parametrize("using", [False, True])
+def test_a_cross_join_of_data_frames_with_a_condition_is_an_inner_join(spark, using):
+    # `DataFrame.join(other, on, "cross")` builds the same `Join(Cross, condition)` as SQL.
+    left = spark.sql("SELECT * FROM VALUES (1, 'x'), (2, 'y') AS t(k, lv)")
+    right = spark.sql("SELECT * FROM VALUES (1, 'p'), (3, 'q') AS t(k, rv)")
+
+    joined = left.join(right, "k" if using else left["k"] == right["k"], "cross")
+    assert [tuple(row) for row in joined.collect()] == ([(1, "x", "p")] if using else [(1, "x", 1, "p")])

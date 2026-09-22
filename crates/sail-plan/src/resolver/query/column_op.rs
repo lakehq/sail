@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use datafusion_common::{Column, DFSchemaRef, ExprSchema, ScalarValue};
+use datafusion_common::{Column, DFSchemaRef};
 use datafusion_expr::{
     Expr, ExprSchemable, LogicalPlan, Projection, SubqueryAlias, cast, col, lit,
 };
@@ -14,7 +14,7 @@ use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::expression::attribute::{
     invalid_attribute_name_error, quote_identifier_name, replace_nested_column_error,
-    unresolved_column_fields_error, unresolved_column_name_error, utf16_key,
+    unresolved_column_fields_error, utf16_key,
 };
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::explode::ExplodeRewriter;
@@ -63,66 +63,21 @@ impl PlanResolver<'_> {
         let mut projected_exprs = Vec::new();
         for target_field in target_schema.fields() {
             let target_name = target_field.name();
-            let mut matches = input_names
+            let input_idx = input_names
                 .iter()
-                .enumerate()
-                .filter(|(_, input_name)| self.match_identifier(input_name, target_name));
-            let Some((input_idx, _)) = matches.next() else {
-                // A target field that matches no input column is filled with NULL when it is
-                // nullable, and is only rejected otherwise.
-                if !target_field.is_nullable() {
-                    let candidates = input_names.iter().map(|x| x.as_str()).collect::<Vec<_>>();
-                    return Err(unresolved_column_name_error(
-                        &spec::ObjectName::bare(target_name.as_str()),
-                        &candidates,
-                    ));
-                }
-                let field_id = state.register_field_name(target_name.clone());
-                projected_exprs.push(
-                    cast(lit(ScalarValue::Null), target_field.data_type().clone()).alias(field_id),
-                );
-                continue;
-            };
-            if matches.next().is_some() {
-                return Err(PlanError::AnalysisError(format!(
-                    "[AMBIGUOUS_COLUMN_OR_FIELD] Column or field `{}` is ambiguous and has {} \
-                     matches.",
-                    target_name.replace('`', "``"),
-                    2 + matches.count()
-                )));
-            }
+                .position(|input_name| input_name.eq_ignore_ascii_case(target_name))
+                .ok_or_else(|| {
+                    PlanError::invalid(format!("field not found in input schema: {target_name}"))
+                })?;
             let (input_qualifier, input_field) = input.schema().qualified_field(input_idx);
-            // TODO: the reconciliation refuses to narrow a column that can be null to a field
-            // that cannot, before it looks at the type, and applies the same rule to the fields
-            // of a struct it walks into, naming the whole path. The check cannot be turned on
-            // while nullability is computed more loosely here than in Spark: `upper('x')`, a
-            // `named_struct`, a `map` and a `CASE` are all reported nullable here and
-            // non-nullable there, so the rule would refuse what Spark answers. See
-            // `test_to_schema_accepts_a_column_spark_considers_non_nullable`.
-            let column = Expr::Column(Column::from((input_qualifier, input_field)));
+            let expr = Expr::Column(Column::from((input_qualifier, input_field)));
             let expr = if input_field.data_type() == target_field.data_type() {
-                column
+                expr
             } else {
-                column.cast_to(target_field.data_type(), &input.schema())?
+                expr.cast_to(target_field.data_type(), &input.schema())?
+                    .alias_qualified(input_qualifier.cloned(), input_field.name())
             };
-            // The column takes the name of the target field but keeps its plan IDs, so a
-            // `df["col"]` reference still resolves on the output.
-            //
-            // TODO: Spark drops that identity for a column it rebuilds, and withholding the IDs is
-            // not the fix either. See `test_to_schema_drops_the_identity_of_a_column_it_has_to_cast`.
-            let plan_ids = state.get_field_info(input_field.name())?.plan_ids();
-            let field_id = state.register_field_name(target_name.clone());
-            for plan_id in plan_ids {
-                state.register_plan_id_for_field(&field_id, plan_id)?;
-            }
-            // An attribute the reconciliation leaves alone keeps the qualifier it was read
-            // through, so a reference such as `df.alias("t").to(schema).select("t.a")` still
-            // resolves. A cast or a rebuilt container is a new expression instead.
-            let qualifier = match &expr {
-                Expr::Column(_) if !input_field.data_type().is_nested() => input_qualifier.cloned(),
-                _ => None,
-            };
-            projected_exprs.push(expr.alias_qualified(qualifier, field_id));
+            projected_exprs.push(expr);
         }
         let projected_plan =
             LogicalPlan::Projection(Projection::try_new(projected_exprs, Arc::new(input))?);
@@ -343,8 +298,14 @@ impl PlanResolver<'_> {
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<WindowRewriter>(input, expr, state)?;
         let expr = self.rewrite_multi_expr(expr)?;
-        let expr = self.rewrite_named_expressions(expr, input.schema(), state)?;
-        let result = LogicalPlan::Projection(Projection::try_new(expr, Arc::new(input))?);
+        // An aggregate turns the projection into an aggregation without grouping, as it does for
+        // `select`, so the columns passed through are refused there unless they are aggregated.
+        let result = if Self::contains_aggregate(&expr) {
+            self.rewrite_aggregate(input, expr, vec![], None, false, state)?
+        } else {
+            let expr = self.rewrite_named_expressions(expr, input.schema(), state)?;
+            LogicalPlan::Projection(Projection::try_new(expr, Arc::new(input))?)
+        };
         if let Some(alias) = input_alias {
             Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
                 Arc::new(result),
@@ -394,7 +355,12 @@ impl PlanResolver<'_> {
         replacements: Vec<spec::Replacement>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_query_plan(input, state).await?;
+        // A qualified name is resolved before the fields a join hid are removed, so that it can
+        // still reach a key the join hid.
+        let hidden = self
+            .resolve_query_plan_with_hidden_fields(input, state)
+            .await?;
+        let input = self.remove_hidden_fields(hidden.clone(), state)?;
         let schema = input.schema();
         let cols_to_change: Vec<String> = columns
             .into_iter()
@@ -418,14 +384,19 @@ impl PlanResolver<'_> {
                     col((qualifier, field)),
                     field.data_type(),
                     field_info.name().to_string(),
+                    field.name().to_string(),
                 ))
             })
             .collect::<Result<Vec<_>, _>>()?;
 
         // The column name is resolved as an attribute reference, so an ambiguous name is an error.
-        // Only a column whose name matches exactly is replaced, though, because the resolver
-        // renames the attribute to the requested name, so an attribute resolved from a name that
-        // differs in case is no longer equal to the one in the output of the plan.
+        // Spark then keeps the output attributes the resolved ones are EQUAL to
+        // (`DataFrameNaFunctions.replace0`), and that equality takes both the identity of the
+        // attribute and its name. The identity is what picks one side of a join for `l.a`. The name
+        // is why a name that differs in case replaces nothing: the resolver renames the attribute
+        // to the requested name, so it is no longer equal to the one in the output of the plan.
+        // Each name therefore yields the identity of the column it resolves to, and only when the
+        // requested name is exactly the name of that column.
         let resolved_names = cols_to_change
             .iter()
             .map(|name| {
@@ -433,45 +404,75 @@ impl PlanResolver<'_> {
                 // rather than a column that could not be found.
                 let object =
                     parse_attribute_name(name).ok_or_else(|| invalid_attribute_name_error(name))?;
+                let unresolved = || {
+                    let candidates = existing_cols_info
+                        .iter()
+                        .map(|(_, _, name, _)| name.as_str())
+                        .collect::<Vec<_>>();
+                    unresolved_column_fields_error(&object, &candidates)
+                };
+                // The same column selected twice is one attribute under two outputs, so every
+                // one of them is replaced, with the same equality: a name that differs in case
+                // from the column replaces none of its outputs.
+                if let Some(ids) = self.resolve_repeated_column(&object, &input, state)? {
+                    let requested = object.parts().last().map(|x| x.as_ref());
+                    let mut exact = Vec::new();
+                    for id in ids {
+                        if Some(state.get_field_info(&id)?.name()) == requested {
+                            exact.push(id);
+                        }
+                    }
+                    return Ok(exact);
+                }
                 let [leading, rest @ ..] = object.parts() else {
                     return Err(invalid_attribute_name_error(name));
                 };
-                let column = self.resolve_optional_column(schema, leading.as_ref(), None, state)?;
-                // Only a top-level column can be replaced, so a name that walks into one is
-                // rejected on its own condition. A walk that does not resolve falls through, since
-                // reporting the missing field is a separate gap.
-                if let Some(column) = &column
-                    && !rest.is_empty()
-                    && let Ok(field) = schema.field_from_column(column)
-                    && self
-                        .resolve_potentially_nested_field(
-                            Expr::Column(column.clone()),
-                            field.data_type(),
-                            rest,
-                        )?
-                        .is_some()
-                {
-                    return Err(replace_nested_column_error(&object));
+                if rest.is_empty() {
+                    let Some(column) =
+                        self.resolve_optional_column(schema, leading.as_ref(), None, state)?
+                    else {
+                        return Err(unresolved());
+                    };
+                    let exact = state.get_field_info(column.name())?.name() == leading.as_ref();
+                    return Ok(if exact {
+                        vec![column.name().to_string()]
+                    } else {
+                        vec![]
+                    });
                 }
-                if column.is_none() || !rest.is_empty() {
-                    let candidates = existing_cols_info
-                        .iter()
-                        .map(|(_, _, name)| name.as_str())
-                        .collect::<Vec<_>>();
-                    return Err(unresolved_column_fields_error(&object, &candidates));
+                // A longer name is resolved in full before anything decides what to do with it,
+                // so the leading part is tried as a qualifier before it is tried as a column. Only
+                // a top-level column can be replaced, so a name that reaches anything else is
+                // rejected on its own condition.
+                match self.resolve_column_reference(&object, hidden.schema(), state)? {
+                    Some((_, Expr::Column(column))) => {
+                        let info = state.get_field_info(column.name())?;
+                        // A key a join hid is not in the output `replace0` goes over, so it is
+                        // reached but nothing is replaced.
+                        let requested = rest.last().map(|x| x.as_ref()).unwrap_or_default();
+                        Ok(if !info.is_hidden() && info.name() == requested {
+                            vec![column.name().to_string()]
+                        } else {
+                            vec![]
+                        })
+                    }
+                    Some(_) => Err(replace_nested_column_error(&object)),
+                    None => Err(unresolved()),
                 }
-                Ok(leading.as_ref().to_string())
             })
             .collect::<PlanResult<Vec<_>>>()?;
 
-        let cols_to_change_set: HashSet<&str> =
-            resolved_names.iter().map(|name| name.as_str()).collect();
+        let cols_to_change_set: HashSet<&str> = resolved_names
+            .iter()
+            .flatten()
+            .map(|id| id.as_str())
+            .collect();
 
         let replace_exprs = existing_cols_info
             .into_iter()
-            .map(|(column_expr, column_type, column_name)| {
+            .map(|(column_expr, column_type, column_name, column_id)| {
                 let expr = if cols_to_change.is_empty()
-                    || cols_to_change_set.contains(column_name.as_str())
+                    || cols_to_change_set.contains(column_id.as_str())
                 {
                     let when_then_expr = replacements
                         .iter()

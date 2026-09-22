@@ -31,11 +31,34 @@ fn r#struct(input: ScalarFunctionInput) -> PlanResult<Expr> {
     }))
 }
 
+/// `named_struct` is `struct` with the names given, so it is built the same way when every name is
+/// a string literal, which reports the struct as not nullable and each field as nullable where its
+/// value is (`CreateNamedStruct`). Any other argument list goes to DataFusion, which rejects it.
+fn named_struct(args: Vec<Expr>) -> Expr {
+    let names = args
+        .chunks(2)
+        .map(|pair| match pair {
+            [Expr::Literal(name, _), _] => name.try_as_str().flatten().map(|name| name.to_string()),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>();
+    match names {
+        Some(names) if !names.is_empty() => {
+            let values = args.into_iter().skip(1).step_by(2).collect();
+            Expr::ScalarFunction(expr::ScalarFunction {
+                func: Arc::new(ScalarUDF::from(StructFunction::new(names))),
+                args: values,
+            })
+        }
+        _ => expr_fn::named_struct(args),
+    }
+}
+
 pub(super) fn list_built_in_struct_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
-        ("named_struct", F::var_arg(expr_fn::named_struct)),
+        ("named_struct", F::var_arg(named_struct)),
         ("struct", F::custom(r#struct)),
     ]
 }

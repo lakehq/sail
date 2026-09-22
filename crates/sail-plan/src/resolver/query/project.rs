@@ -42,15 +42,7 @@ impl PlanResolver<'_> {
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<WindowRewriter>(input, expr, state)?;
         let expr = self.rewrite_multi_expr(expr)?;
-        let has_aggregate = expr.iter().any(|e| {
-            e.expr
-                .exists(|e| match e {
-                    Expr::AggregateFunction(_) => Ok(true),
-                    _ => Ok(false),
-                })
-                .unwrap_or(false)
-        });
-        if has_aggregate {
+        if Self::contains_aggregate(&expr) {
             self.rewrite_aggregate(input, expr, vec![], None, false, state)
         } else {
             let (input, expr) = self.rewrite_projection::<ExistsRewriter>(input, expr, state)?;

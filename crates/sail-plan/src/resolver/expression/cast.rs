@@ -9,7 +9,7 @@ use sail_common::utils::datetime::time_unit_to_multiplier;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_common_datafusion::variant::is_variant_storage_field;
+use sail_common_datafusion::variant::{is_marked_variant_storage_type, is_variant_storage_field};
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_interval::{
@@ -71,8 +71,6 @@ impl PlanResolver<'_> {
         let NamedExpr { expr, name, .. } =
             self.resolve_named_expression(expr, schema, state).await?;
         let expr_field = expr.to_field(schema)?.1;
-        let expr_type = expr_field.data_type().clone();
-        let expr_is_variant = is_variant_storage_field(expr_field.as_ref());
         let name = if need_rename_cast(&expr) {
             let service = self.ctx.extension::<PlanService>()?;
             let data_type_string = service
@@ -87,6 +85,37 @@ impl PlanResolver<'_> {
         } else {
             name
         };
+        let expr = self.cast_to_spark_type(
+            expr,
+            &expr_field,
+            cast_to_type,
+            is_try,
+            day_time_interval_field,
+        )?;
+        Ok(NamedExpr::new(name, expr))
+    }
+
+    /// Casts a resolved expression the way a Spark `Cast` does, for ANSI mode and the types
+    /// whose Arrow cast differs from Spark's.
+    ///
+    /// TODO: a Spark cast is nullable where its input is or where the cast can turn a value into
+    ///   NULL (`Cast.nullable`, `Cast.forceNullable`), so `CAST('1' AS DECIMAL(2,0))` is nullable.
+    ///   A DataFusion cast keeps the nullability of its input. Set operations declare it with a
+    ///   `CASE` (`cast_force_nullable` in `query/set_op.rs`); doing it here would add that `CASE`
+    ///   to every cast in every plan, so it is left to its own change.
+    ///
+    /// TODO: with ANSI mode a string that is not a number fails with DataFusion's own message
+    ///   (`Cannot cast string 'abc' to value of Int64 type`) rather than `CAST_INVALID_INPUT`.
+    pub(in crate::resolver) fn cast_to_spark_type(
+        &self,
+        expr: expr::Expr,
+        expr_field: &Field,
+        cast_to_type: DataType,
+        is_try: bool,
+        day_time_interval_field: Option<spec::IntervalFieldType>,
+    ) -> PlanResult<expr::Expr> {
+        let expr_type = expr_field.data_type().clone();
+        let expr_is_variant = is_variant_storage_field(expr_field);
         let override_string_cast = matches!(
             expr_type,
             DataType::Date32
@@ -105,6 +134,10 @@ impl PlanResolver<'_> {
                 | DataType::Map(_, _)
         );
         let expr = match (expr_type, cast_to_type.clone(), is_try) {
+            // A variant is stored as a struct, which only its own conversion can build.
+            (_, to, _) if !expr_is_variant && is_marked_variant_storage_type(&to) => {
+                ScalarUDF::new_from_impl(SparkCastToVariant::new()).call(vec![expr])
+            }
             (
                 DataType::Timestamp(_, None),
                 DataType::Timestamp(TimeUnit::Microsecond, Some(timezone)),
@@ -238,7 +271,7 @@ impl PlanResolver<'_> {
             (_, to, true) => try_cast(expr, to),
             (_, to, _) => cast(expr, to),
         };
-        Ok(NamedExpr::new(name, expr))
+        Ok(expr)
     }
 }
 
@@ -247,11 +280,14 @@ impl PlanResolver<'_> {
 /// don't share enough overlap for DataFusion's struct cast validator.
 fn needs_struct_field_rename(from: &DataType, to: &DataType) -> bool {
     match (from, to) {
+        // Spark casts a struct by position at every level, so a field whose own type needs a
+        // rename counts as well.
         (DataType::Struct(a), DataType::Struct(b)) => {
             a.len() == b.len()
-                && a.iter()
-                    .zip(b.iter())
-                    .any(|(fa, fb)| fa.name() != fb.name())
+                && a.iter().zip(b.iter()).any(|(fa, fb)| {
+                    fa.name() != fb.name()
+                        || needs_struct_field_rename(fa.data_type(), fb.data_type())
+                })
         }
         (DataType::List(a), DataType::List(b))
         | (DataType::LargeList(a), DataType::LargeList(b)) => {

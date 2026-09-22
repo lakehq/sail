@@ -1,9 +1,11 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, FixedSizeListArray, StructArray};
-use datafusion::arrow::datatypes::{DataType, Field, Fields};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use datafusion_common::{Result, exec_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 /// Spark-compatible "rename struct fields by position".
 ///
@@ -48,6 +50,16 @@ impl ScalarUDFImpl for SparkStructRename {
         Ok(self.target_type.clone())
     }
 
+    // Renaming never makes NULL, so the result is NULL only where the input is.
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args.arg_fields.iter().any(|x| x.is_nullable());
+        Ok(Arc::new(Field::new(
+            self.name(),
+            self.target_type.clone(),
+            nullable,
+        )))
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         if args.args.len() != 1 {
             return exec_err!("spark_struct_rename expects exactly one argument");
@@ -66,7 +78,9 @@ impl ScalarUDFImpl for SparkStructRename {
 }
 
 /// Recursively rebuild `arr` so that any `Struct` field names match those in
-/// `target_type` positionally. Leaf data types must already match.
+/// `target_type` positionally. Leaf data types must already match. The nested fields take the
+/// nullability of `target_type`, which is the type promised at planning time, rather than the
+/// one of the array, which can be narrower.
 fn rename_positionally(arr: &ArrayRef, target_type: &DataType) -> Result<ArrayRef> {
     match (arr.data_type(), target_type) {
         (DataType::Struct(src_fields), DataType::Struct(tgt_fields)) => {
@@ -90,7 +104,7 @@ fn rename_positionally(arr: &ArrayRef, target_type: &DataType) -> Result<ArrayRe
                 .zip(new_columns.iter())
                 .map(|((tgt, src), col)| {
                     Arc::new(
-                        Field::new(tgt.name(), col.data_type().clone(), src.is_nullable())
+                        Field::new(tgt.name(), col.data_type().clone(), tgt.is_nullable())
                             .with_metadata(src.metadata().clone()),
                     )
                 })
@@ -105,7 +119,7 @@ fn rename_positionally(arr: &ArrayRef, target_type: &DataType) -> Result<ArrayRe
                 Field::new(
                     tgt_field.name(),
                     new_values.data_type().clone(),
-                    src_field.is_nullable(),
+                    tgt_field.is_nullable(),
                 )
                 .with_metadata(src_field.metadata().clone()),
             );
@@ -124,7 +138,7 @@ fn rename_positionally(arr: &ArrayRef, target_type: &DataType) -> Result<ArrayRe
                 Field::new(
                     tgt_field.name(),
                     new_values.data_type().clone(),
-                    src_field.is_nullable(),
+                    tgt_field.is_nullable(),
                 )
                 .with_metadata(src_field.metadata().clone()),
             );
@@ -160,7 +174,7 @@ fn rename_positionally(arr: &ArrayRef, target_type: &DataType) -> Result<ArrayRe
                 Field::new(
                     tgt_field.name(),
                     new_values.data_type().clone(),
-                    src_field.is_nullable(),
+                    tgt_field.is_nullable(),
                 )
                 .with_metadata(src_field.metadata().clone()),
             );
@@ -199,7 +213,7 @@ fn rename_positionally(arr: &ArrayRef, target_type: &DataType) -> Result<ArrayRe
                 Field::new(
                     tgt_entry.name(),
                     new_entries_struct.data_type().clone(),
-                    src_entry.is_nullable(),
+                    tgt_entry.is_nullable(),
                 )
                 .with_metadata(src_entry.metadata().clone()),
             );

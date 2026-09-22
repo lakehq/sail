@@ -7,7 +7,7 @@ from pyspark.sql import Row
 from pyspark.sql.functions import col, count, expr, first, lit, row_number, struct
 from pyspark.sql.functions import max as spark_max
 from pyspark.sql.functions import transform as spark_transform
-from pyspark.sql.types import IntegerType, LongType, MapType, StringType, StructField, StructType
+from pyspark.sql.types import IntegerType, StructField, StructType
 from pyspark.sql.window import Window
 
 from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
@@ -750,332 +750,6 @@ def test_the_schema_of_an_expression_is_available_before_it_is_evaluated(spark):
         df.select(expr("1/0")).collect()
 
 
-def test_to_schema_matches_name_like_the_analyzer(spark):
-    src = spark.sql("SELECT 1 AS `Ä`, 2 AS b")
-    target = StructType([StructField("b", IntegerType()), StructField("ä", IntegerType())])
-    # `DataFrame.to` caches the requested schema on the client, so reading `.schema` straight
-    # after it answers from that cache and measures nothing. The cache has to go first.
-    out = src.to(target)
-    out._cached_schema = None  # noqa: SLF001
-
-    assert out.schema.names == ["b", "ä"]
-    assert [r.asDict() for r in out.collect()] == [{"b": 2, "ä": 1}]
-
-
-def test_to_schema_keeps_the_qualifier_of_an_unchanged_column(spark):
-    # `Project.reorderFields` keeps an unchanged scalar attribute as it is, so the alias it was
-    # read through still qualifies it afterwards.
-    df = spark.sql("SELECT 1 AS a, 2 AS b").alias("t")
-    reconciled = df.to(df.schema)
-
-    assert reconciled.select("t.a").collect() == [Row(a=1)]
-    assert [tuple(row) for row in reconciled.select("t.*").collect()] == [(1, 2)]
-
-
-def test_to_schema_keeps_the_qualifier_of_a_column_it_only_reorders(spark):
-    # Reordering the fields does not rebuild them, so both keep the alias they were read through.
-    df = spark.sql("SELECT 1 AS a, 'x' AS b").alias("t")
-    target = StructType([StructField("b", StringType()), StructField("a", IntegerType())])
-
-    reconciled = df.to(target)
-
-    assert reconciled.select("t.a").collect() == [Row(a=1)]
-    assert reconciled.select("t.b").collect() == [Row(b="x")]
-
-
-def test_to_schema_drops_the_qualifier_only_of_the_column_it_rebuilds(spark):
-    # A column that has to be cast is a new expression, so the alias no longer qualifies it, while
-    # the column beside it is untouched and still does. Both in the same frame is what tells the
-    # rule apart from "the alias survives" and from "the alias is lost".
-    df = spark.sql("SELECT 1 AS a, 'x' AS b").alias("t")
-    target = StructType([StructField("a", StringType()), StructField("b", StringType())])
-
-    reconciled = df.to(target)
-
-    assert reconciled.select("t.b").collect() == [Row(b="x")]
-    with pytest.raises(Exception, match=re.escape("`t`.`a`")):
-        reconciled.select("t.a").collect()
-
-
-def test_to_schema_gives_no_qualifier_to_a_column_it_fills_with_null(spark):
-    # A target field that matches nothing is filled with a literal, which `createNewColumn` wraps
-    # in an alias rather than keeping an attribute, so the frame alias does not reach it. The
-    # column beside it is untouched and still carries the alias.
-    df = spark.sql("SELECT 1 AS a, 'x' AS b").alias("t")
-    target = StructType(
-        [StructField("a", IntegerType()), StructField("b", StringType()), StructField("c", IntegerType(), True)]
-    )
-
-    reconciled = df.to(target)
-
-    assert reconciled.select("c").collect() == [Row(c=None)]
-    assert reconciled.select("t.a").collect() == [Row(a=1)]
-    with pytest.raises(Exception, match=re.escape("`t`.`c`")):
-        reconciled.select("t.c").collect()
-
-
-def test_to_schema_keeps_the_qualifier_of_a_column_it_only_renames(spark):
-    # `createNewColumn` renames the attribute rather than rebuilding it, so the alias still
-    # qualifies it under the name the target asked for, and under the one it had.
-    df = spark.sql("SELECT 1 AS a, 'x' AS b").alias("t")
-    target = StructType([StructField("A", IntegerType()), StructField("b", StringType())])
-
-    reconciled = df.to(target)
-
-    assert reconciled.select("t.A").collect() == [Row(A=1)]
-    assert reconciled.select("t.a").collect() == [Row(a=1)]
-
-
-@pytest.mark.parametrize(
-    ("expression", "target"),
-    [
-        ("1", StructType([StructField("a", LongType())])),
-        ("named_struct('x', 1)", None),
-    ],
-)
-def test_to_schema_does_not_qualify_a_column_it_rebuilds(spark, expression, target):
-    # A cast or a rebuilt container is a new expression rather than the attribute that was read,
-    # so the qualifier does not survive it.
-    df = spark.sql(f"SELECT {expression} AS a").alias("t")
-    reconciled = df.to(df.schema if target is None else target)
-
-    with pytest.raises(Exception, match=re.escape("[UNRESOLVED_COLUMN.WITH_SUGGESTION]")):
-        reconciled.select("t.a").collect()
-
-
-def test_to_schema_fills_missing_nullable_field(spark):
-    # `Project.reorderFields` only rejects a missing target field when it is non-nullable.
-    # A nullable one is filled with a NULL literal of the target type.
-    src = spark.sql("SELECT 1 AS a")
-    target = StructType([StructField("a", IntegerType()), StructField("zz", StringType(), True)])
-
-    assert src.to(target).columns == ["a", "zz"]
-    assert src.to(target).collect() == [Row(a=1, zz=None)]
-
-
-def test_to_schema_rejects_ambiguous_name(spark):
-    # The target name is matched against every input column, and more than one match is an error
-    # rather than a silent pick of the first one.
-    src = spark.sql("SELECT 1 AS a, 2 AS A")
-    target = StructType([StructField("a", IntegerType())])
-
-    with pytest.raises(Exception, match="AMBIGUOUS_COLUMN_OR_FIELD"):
-        src.to(target).collect()
-
-
-def test_to_schema_keeps_the_dataframe_column_identity(spark):
-    # `createNewColumn` renames the attribute through `withName`, which keeps its `exprId`, and
-    # that id is the identity a `df["col"]` reference resolves against. It only gets there while
-    # the column is still an attribute, which `reconcileColumnType` leaves alone for a scalar whose
-    # type already matches -- a rename included, since `withName` keeps the id either way.
-    df = spark.createDataFrame([(1, 2)], "a int, b int")
-    target = StructType([StructField("a", IntegerType()), StructField("b", IntegerType())])
-
-    assert df.to(target).select(df["a"]).collect() == [Row(a=1)]
-    assert df.to(target).filter(df["a"] == 1).count() == 1
-    assert df.to(target).withColumn("z", df["b"]).collect() == [Row(a=1, b=2, z=2)]
-
-    renamed = StructType([StructField("A", IntegerType()), StructField("b", IntegerType())])
-    assert df.to(renamed).select(df["a"]).collect() == [Row(A=1)]
-
-
-@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
-def test_to_schema_drops_the_identity_of_a_column_it_has_to_cast(spark):
-    # A type that has to be reconciled reaches `Alias(other, name)()` instead, which mints a fresh
-    # `exprId`, so the reference stops resolving. The untouched sibling still resolves, which is
-    # what makes this about the rebuilt column rather than about `to` dropping every id.
-    df = spark.createDataFrame([(1, 2)], "a int, b int")
-    widened = StructType([StructField("a", LongType()), StructField("b", IntegerType())])
-
-    with pytest.raises(Exception, match="CANNOT_RESOLVE_DATAFRAME_COLUMN"):
-        df.to(widened).select(df["a"]).collect()
-
-    # A join condition does not pull the attribute up either: `resolveExprsAndAddMissingAttrs`
-    # descends only through a `UnaryNode`, and `Join` is binary.
-    other = spark.createDataFrame([(1,)], "k int")
-    with pytest.raises(Exception, match="CANNOT_RESOLVE_DATAFRAME_COLUMN"):
-        df.to(widened).join(other, df["a"] == other["k"]).count()
-
-    assert df.to(widened).select(df["b"]).collect() == [Row(b=2)]
-
-
-def test_to_schema_keeps_a_rebuilt_column_reachable_from_filter_and_sort(spark):
-    # Spark resolves a `df["col"]` reference against the plan node tagged with the id rather than
-    # against the output, and `Filter` and `Sort` then pull the missing attribute up from below the
-    # projection. So these two keep working on a column that `select` can no longer reach, and
-    # withholding the plan IDs to make `select` agree would reject them -- which is why the
-    # narrowing was rejected, and nothing else asserts it. The two engines land on the same answer
-    # here only because widening preserves value and order; which column each one actually reads is
-    # `test_to_schema_reads_the_reconciled_column_in_filter_and_sort`.
-    df = spark.createDataFrame([(1, 2)], "a int, b int")
-    widened = StructType([StructField("a", LongType()), StructField("b", IntegerType())])
-    out = df.to(widened)
-
-    assert out.filter(df["a"] == 1).count() == 1
-    assert out.sort(df["a"]).count() == 1
-
-
-@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
-def test_to_schema_reads_the_reconciled_column_in_filter_and_sort(spark):
-    # `Filter` and `Sort` resolve the reference to the attribute below the projection, which is the
-    # column as it was before `reconcileColumnType` touched it. Sail resolves it to the reconciled
-    # output column instead, so the two agree only while the reconciliation preserves value and
-    # order, and diverge without either engine raising when it does not.
-    df = spark.createDataFrame([(9.0,), (10.0,)], "a double")
-    ordered = df.to(StructType([StructField("a", StringType())]))
-
-    # Ordered by the original double, not by the string the cast produced.
-    assert [r.a for r in ordered.sort(df["a"]).collect()] == ["9.0", "10.0"]
-
-    narrowed = spark.createDataFrame([(1.5,)], "a double")
-    rounded = narrowed.to(StructType([StructField("a", IntegerType())]))
-    before_the_cast, after_the_cast = 1.5, 1.0
-
-    assert rounded.filter(narrowed["a"] == before_the_cast).count() == 1
-    assert rounded.filter(narrowed["a"] == after_the_cast).count() == 0
-
-
-@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
-@pytest.mark.parametrize("expression", ["named_struct('n', 1)", "array(1, 2)", "map('a', 1)"])
-def test_to_schema_rebuilds_a_container_even_when_the_schema_is_identical(spark, expression):
-    # A struct, an array and a map each reach an arm of `reconcileColumnType` that rebuilds them
-    # rather than handing the column back, so the attribute never survives and the identity goes
-    # even though the schema is the one the frame already has.
-    df = spark.sql(f"SELECT {expression} AS s, 1 AS k")
-
-    with pytest.raises(Exception, match="CANNOT_RESOLVE_DATAFRAME_COLUMN"):
-        df.to(df.schema).select(df["s"]).collect()
-
-    assert df.to(df.schema).select(df["k"]).collect() == [Row(k=1)]
-
-
-def test_to_schema_suggests_by_distance_to_the_raw_field_name(spark):
-    # `Project.reorderFields` measures the edit distance against the raw `StructField.name`, unlike
-    # the analyzer, which measures it against the name it renders. A target name that needs quoting
-    # is what tells the two apart: counting the back quotes moves `c` away from the name asked for.
-    src = spark.sql("SELECT 1 AS c, 2 AS abc, 3 AS aaa, 4 AS zzzz, 5 AS cc, 6 AS ccc")
-    target = StructType([StructField("a b", IntegerType(), nullable=False)])
-
-    with pytest.raises(Exception, match=re.escape("[`c`, `abc`, `aaa`, `cc`, `ccc`]")):
-        src.to(target).collect()
-
-
-def test_to_schema_suggests_the_same_order_for_a_plain_name(spark):
-    # The control for the case above: a plain identifier renders to itself, so both bases agree and
-    # the order must come out the same whichever one is measured against.
-    src = spark.sql("SELECT 1 AS c, 2 AS abc, 3 AS aaa, 4 AS zzzz, 5 AS cc, 6 AS ccc")
-    target = StructType([StructField("abd", IntegerType(), nullable=False)])
-
-    with pytest.raises(Exception, match=re.escape("[`c`, `abc`, `aaa`, `cc`, `ccc`]")):
-        src.to(target).collect()
-
-
-@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
-def test_to_schema_reorders_nested_struct_fields(spark):
-    # The reconciliation recurses into structs, so the nested fields are matched by name, not by
-    # position, and they take the name of the target field.
-    src = spark.sql("SELECT named_struct('x', 1, 'y', 'a') AS s")
-    nested = StructType([StructField("Y", StringType()), StructField("X", IntegerType())])
-    target = StructType([StructField("s", nested)])
-
-    assert src.to(target).schema.simpleString() == "struct<s:struct<Y:string,X:int>>"
-    assert src.to(target).collect() == [Row(s=Row(Y="a", X=1))]
-
-
-def test_to_schema_accepts_a_column_spark_considers_non_nullable(spark):
-    # Spark reports these four as non-nullable and Sail reports them nullable, so a check that
-    # narrows on Sail's own flag would refuse a target Spark answers. Each one is a different
-    # branch of that gap: a plain function, a struct literal, a map literal and a `CASE`.
-    cases = [
-        ("upper('x')", StringType()),
-        ("named_struct('a', 1)", StructType([StructField("a", IntegerType(), True)])),
-        ("map('k', 1)", MapType(StringType(), IntegerType(), True)),
-        ("CASE WHEN 1 > 0 THEN 'x' ELSE 'y' END", StringType()),
-    ]
-    for expression, data_type in cases:
-        source = spark.sql(f"SELECT {expression} AS a")
-        target = StructType([StructField("a", data_type, False)])
-
-        assert len(source.to(target).collect()) == 1
-
-
-@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
-def test_to_schema_rejects_nullable_column_for_non_nullable_field(spark):
-    # A nullable input column cannot be narrowed to a non-nullable target field.
-    src = spark.sql("SELECT CAST(NULL AS INT) AS a")
-    target = StructType([StructField("a", IntegerType(), False)])
-
-    with pytest.raises(
-        Exception,
-        match=re.escape(
-            "[NULLABLE_COLUMN_OR_FIELD] Column or field `a` is nullable while it's required to be non-nullable."
-        ),
-    ):
-        src.to(target).collect()
-
-
-@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
-def test_to_schema_checks_nullability_before_it_fills_a_missing_field(spark):
-    # `reconcileColumnType` refuses the narrowing of a column it matched whatever the fields
-    # around it are, so a target that also adds a column to fill does not get to return rows with
-    # a schema that claims the column cannot be null. A source that is already non-nullable is
-    # the other side of the rule, and it must still go through.
-    target = StructType([StructField("a", IntegerType(), False), StructField("z", StringType(), True)])
-    nullable = spark.createDataFrame([(1,)], "a int")
-    non_nullable = spark.sql("SELECT 1 AS a")
-
-    assert nullable.schema["a"].nullable is True
-    with pytest.raises(Exception, match=re.escape("[NULLABLE_COLUMN_OR_FIELD]")):
-        nullable.to(target).collect()
-
-    assert non_nullable.schema["a"].nullable is False
-    assert [tuple(row) for row in non_nullable.to(target).collect()] == [(1, None)]
-
-
-@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
-def test_to_schema_rejects_a_nested_field_narrowed_to_non_nullable(spark):
-    # The reconciliation walks into a struct and applies the same rule there, naming the whole
-    # path it walked. Sail rebuilds a nested target with a cast instead of field by field, so the
-    # check never reaches the field.
-    src = spark.sql("SELECT named_struct('b', CAST(NULL AS INT)) AS a")
-    target = StructType([StructField("a", StructType([StructField("b", IntegerType(), False)]), True)])
-
-    with pytest.raises(
-        Exception,
-        match=re.escape(
-            "[NULLABLE_COLUMN_OR_FIELD] Column or field `a`.`b` is nullable while it's required to be non-nullable."
-        ),
-    ):
-        src.to(target).collect()
-
-
-@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
-def test_to_schema_keeps_the_metadata_of_the_target_field(spark):
-    # `DataFrame.to` caches the requested schema on the client, so reading `.schema` straight after
-    # it answers from that cache and measures nothing. The cache has to go first.
-    src = spark.sql("SELECT CAST(1 AS INT) AS a, CAST('x' AS STRING) AS b").withMetadata("a", {"j": "w"})
-    target = StructType([StructField("a", IntegerType(), True, {"k": "v"}), StructField("b", StringType(), True)])
-
-    out = src.to(target)
-    out._cached_schema = None  # noqa: SLF001
-
-    # The target's metadata is merged over the column's own, the target winning per key.
-    assert [dict(field.metadata) for field in out.schema.fields] == [{"j": "w", "k": "v"}, {}]
-
-
-@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
-def test_to_schema_keeps_the_metadata_of_a_filled_field(spark):
-    # A field the input does not have is filled with NULL, and the target's metadata is the only
-    # metadata such a column can carry.
-    src = spark.sql("SELECT CAST(1 AS INT) AS a")
-    target = StructType([StructField("a", IntegerType(), True), StructField("c", IntegerType(), True, {"k": "v"})])
-
-    out = src.to(target)
-    out._cached_schema = None  # noqa: SLF001
-
-    assert [dict(field.metadata) for field in out.schema.fields] == [{}, {"k": "v"}]
-
-
 def test_fillna_rejects_a_nested_subset_name_that_matches_nothing(spark):
     # A dotted name is resolved like any other column reference, so one that matches nothing is an
     # error rather than a name to skip.
@@ -1177,6 +851,202 @@ def test_fillna_rejects_a_nested_name_given_among_several(spark):
         df.na.fill({"s.a": 1, "b": 2}).collect()
 
 
+def test_a_subset_name_is_resolved_with_its_qualifier(spark):
+    # A subset name is resolved as a column reference, and the leading part of one can be the
+    # qualifier of a relation rather than a column. `t.s` is the column `s` of `t`, and `t.s.a`
+    # walks into it; neither is an unresolved column.
+    df = spark.sql("SELECT named_struct('a', CAST(NULL AS INT)) AS s, CAST(NULL AS INT) AS a").alias("t")
+
+    # `fill(value, subset)` keeps only the names that resolve to an attribute, so a struct and a
+    # nested field are both left alone.
+    for subset in ["t.s", "t.s.a"]:
+        assert [tuple(row) for row in df.fillna(9, subset=[subset]).collect()] == [(Row(a=None), None)]
+
+    # A qualified name that resolves to nothing is still an error.
+    with pytest.raises(Exception, match=re.escape("[UNRESOLVED_COLUMN.WITH_SUGGESTION]")):
+        df.fillna(9, subset=["t.nope"]).collect()
+
+    # `fill(map)` with two entries resolves every name, so it refuses the nested one.
+    with pytest.raises(Exception, match=re.escape("[UNSUPPORTED_FEATURE.REPLACE_NESTED_COLUMN]")):
+        df.na.fill({"t.s.a": 1, "a": 2}).collect()
+
+    # `dropna` uses a qualified name as a key like any other.
+    nulls = spark.sql("SELECT CAST(NULL AS INT) AS a, 1 AS b").alias("t")
+    assert nulls.dropna(subset=["t.a"]).collect() == []
+
+
+def test_fillna_fills_a_qualified_attribute(spark):
+    # `t.a` resolves to the column `a`, so `fill(value, subset)` fills it: Spark fills the
+    # attributes the names resolve to (`fillValue` compares them with `semanticEquals`), and a
+    # qualified name is not the name of any column.
+    df = spark.sql("SELECT CAST(NULL AS INT) AS a").alias("t")
+
+    assert df.fillna(9, subset=["t.a"]).collect() == [Row(a=9)]
+
+    # The same root through `fill(map)`, where `t` is also a struct column: the qualifier wins, so
+    # the key names the column `a` and fills it. (Two keys that both resolve to `a` are not used
+    # here: which value wins then depends on the iteration order of an `AttributeMap`.)
+    shadowed = spark.sql("SELECT named_struct('x', 1) AS t, CAST(NULL AS INT) AS a, 1 AS b").alias("t")
+    assert [tuple(row)[1] for row in shadowed.na.fill({"t.a": 9, "b": 8}).collect()] == [9]
+
+
+def test_replace_resolves_a_subset_name_with_its_qualifier(spark):
+    # `replace` resolves every name it is given, and `t.a` resolves to the column `a` of `t`, so
+    # the value is replaced there. The leading part of a name is not necessarily a column.
+    df = spark.sql("SELECT 1 AS a, 1 AS b").alias("t")
+
+    assert [tuple(row) for row in df.na.replace(1, 7, subset=["t.a"]).collect()] == [(7, 1)]
+    with pytest.raises(Exception, match=re.escape("[UNRESOLVED_COLUMN.WITH_SUGGESTION]")):
+        df.na.replace(1, 7, subset=["t.nope"]).collect()
+
+    # A qualified name that walks into a struct is refused as nested, not reported as unresolved.
+    nested = spark.sql("SELECT named_struct('a', 1) AS s, 1 AS a").alias("t")
+    with pytest.raises(Exception, match=re.escape("[UNSUPPORTED_FEATURE.REPLACE_NESTED_COLUMN]")):
+        nested.na.replace(1, 7, subset=["t.s.a"]).collect()
+
+
+def test_a_subset_name_reaches_a_join_key_through_its_qualifier(spark):
+    # A USING join keeps one key in its output and the other only in the metadata output, where a
+    # qualified name still reaches it (`LogicalPlan.resolve` falls back to the metadata output).
+    # So `r.id` names a column Spark resolves, not a missing one.
+    left = spark.sql("SELECT 1 AS id, CAST(NULL AS INT) AS a").alias("l")
+    right = spark.sql("SELECT 1 AS id, 2 AS b").alias("r")
+    joined = left.join(right, "id")
+
+    assert [tuple(row) for row in joined.fillna(0, subset=["r.id"]).collect()] == [(1, None, 2)]
+    assert [tuple(row) for row in joined.na.fill({"r.id": 0, "a": 5}).collect()] == [(1, 5, 2)]
+
+
+def test_a_subset_name_takes_the_qualifier_before_a_column_of_the_same_name(spark):
+    # `t` is both the relation and a struct column in it. Spark tries the longest qualifier first,
+    # so `t.a` is the column `a` of the relation, whether or not the struct has a field `a`, and it
+    # is not a nested field to refuse. The other entry of the map is filled.
+    for shadow in ("named_struct('x', 1)", "named_struct('a', 1)"):
+        df = spark.sql(f"SELECT {shadow} AS t, CAST(NULL AS INT) AS a, CAST(NULL AS INT) AS b").alias("t")
+        assert [tuple(row)[2] for row in df.na.fill({"t.a": 9, "b": 8}).collect()] == [8]
+
+
+@pytest.mark.skipif(
+    is_jvm_spark() and pyspark_version() < (4, 2), reason="Before 4.2 Spark refuses a field of a NULL base"
+)
+def test_a_subset_name_that_walks_through_null_is_not_an_error(spark):
+    # Reading a field of a NULL base is NULL rather than an error (`ExtractValue.applyOrNull`), so
+    # the name resolves to something that is not a column, and is treated as nested.
+    df = spark.sql("SELECT NULL AS n, CAST(NULL AS INT) AS a").alias("t")
+
+    assert [tuple(row) for row in df.fillna(9, subset=["t.n.x"]).collect()] == [(None, None)]
+    assert df.dropna(subset=["t.n.x"]).collect() == []
+    with pytest.raises(Exception, match=re.escape("[UNSUPPORTED_FEATURE.REPLACE_NESTED_COLUMN]")):
+        df.na.replace(1, 7, subset=["t.n.x"]).collect()
+
+
+def test_a_subset_name_over_a_column_selected_twice_is_not_ambiguous(spark):
+    # Selecting the same column twice gives two outputs that are the same attribute, and Spark
+    # removes duplicate candidates before it checks for ambiguity (`AttributeSeq.resolve`), so the
+    # name reaches both.
+    df = spark.sql("SELECT CAST(NULL AS INT) AS a, 1 AS b").select("a", "a", "b")
+
+    assert [tuple(row) for row in df.fillna(9, subset=["a"]).collect()] == [(9, 9, 1)]
+    assert [tuple(row) for row in df.na.fill({"a": 9, "b": 2}).collect()] == [(9, 9, 1)]
+    assert df.dropna(subset=["a"]).collect() == []
+    ones = spark.sql("SELECT 1 AS a").select("a", "a")
+    assert [tuple(row) for row in ones.na.replace(1, 7, subset=["a"]).collect()] == [(7, 7)]
+
+
+def test_a_subset_name_over_two_expressions_of_one_name_is_ambiguous(spark):
+    # Two different expressions given the same name are two attributes, so Spark reports the name
+    # as ambiguous, where the same column selected twice is one attribute and is not.
+    df = spark.sql("SELECT CAST(NULL AS INT) AS a, CAST(NULL AS INT) AS a")
+
+    with pytest.raises(Exception, match=re.escape("[AMBIGUOUS_REFERENCE]")):
+        df.fillna(9, subset=["a"]).collect()
+
+
+def test_a_qualified_subset_name_is_resolved_however_deep_it_walks(spark):
+    # A qualified subset name is resolved in full before any operation decides what to do with it,
+    # so the same three answers as for a bare nested name hold two levels down: `fill(value,
+    # subset)` leaves it alone, `fill(map)` and `replace` refuse it, and `dropna` uses it as a key.
+    df = spark.sql(
+        "SELECT named_struct('inner', named_struct('x', CAST(NULL AS INT))) AS s, CAST(NULL AS INT) AS a"
+    ).alias("t")
+
+    assert [tuple(row) for row in df.fillna(9, subset=["t.s.inner.x"]).collect()] == [(Row(inner=Row(x=None)), None)]
+    for refused in (
+        lambda: df.na.fill({"t.s.inner.x": 1, "a": 2}),
+        lambda: df.na.replace(1, 7, subset=["t.s.inner.x"]),
+    ):
+        with pytest.raises(Exception, match=re.escape("[UNSUPPORTED_FEATURE.REPLACE_NESTED_COLUMN]")):
+            refused().collect()
+    assert df.dropna(subset=["t.s.inner.x"]).collect() == []
+
+    # Resolving it in full is also why a field it walks into that does not exist is a missing
+    # field, even on the path that would have left the name alone.
+    for missing in (lambda: df.fillna(9, subset=["t.s.nope"]), lambda: df.dropna(subset=["t.s.nope"])):
+        with pytest.raises(Exception, match=re.escape("[FIELD_NOT_FOUND] No such struct field `nope` in `inner`.")):
+            missing().collect()
+
+    # Across a join, the qualifier picks the struct of one side.
+    left = spark.sql("SELECT 1 AS id, named_struct('x', CAST(NULL AS INT)) AS s").alias("l")
+    right = spark.sql("SELECT 1 AS id, named_struct('x', 5) AS s").alias("r")
+    joined = left.join(right, "id")
+    assert joined.dropna(subset=["l.s.x"]).collect() == []
+    assert [tuple(row) for row in joined.dropna(subset=["r.s.x"]).collect()] == [(1, Row(x=None), Row(x=5))]
+
+
+def test_replace_and_fill_drop_the_metadata_of_the_columns_they_change(spark):
+    # `replaceCol` and `fillCol` rebuild a column as `.as(name)` over a `CaseKeyWhen` or a
+    # `coalesce`, with no explicit metadata, so a column they change loses what it carried
+    # (`Alias.metadata`). A column they pass through is the attribute itself and keeps it, and so
+    # does one in the subset whose type does not match the value, which they do not change.
+    def meta(df):
+        df._cached_schema = None  # noqa: SLF001
+        return {field.name: dict(field.metadata) for field in df.schema.fields}
+
+    def tagged(sql):
+        return spark.sql(sql).withMetadata("a", {"k": "a"}).withMetadata("b", {"k": "b"}).withMetadata("c", {"k": "c"})
+
+    changed_a = {"a": {}, "b": {"k": "b"}, "c": {"k": "c"}}
+    values = tagged("SELECT 1 AS a, 1 AS b, 'x' AS c")
+    assert meta(values.na.replace(1, 7, subset=["a", "c"])) == changed_a
+    assert meta(values.na.replace(1, 7)) == {"a": {}, "b": {}, "c": {"k": "c"}}
+    # The same holds for a column reached through its qualifier.
+    assert meta(values.alias("t").na.replace(1, 7, subset=["t.a"])) == changed_a
+
+    nulls = tagged("SELECT CAST(NULL AS INT) AS a, CAST(NULL AS INT) AS b, CAST(NULL AS STRING) AS c")
+    assert meta(nulls.fillna(9, subset=["a", "c"])) == changed_a
+    assert meta(nulls.fillna(9)) == {"a": {}, "b": {}, "c": {"k": "c"}}
+    # `dropna` filters rows and rebuilds no column.
+    assert meta(nulls.dropna(subset=["a"])) == {"a": {"k": "a"}, "b": {"k": "b"}, "c": {"k": "c"}}
+
+
+def test_a_qualified_subset_name_reaches_only_the_side_it_names(spark):
+    # With one relation, `t.a` and `a` are the same column, so a qualifier that was thrown away
+    # would pass unnoticed. Across a join both sides have `a`, and the qualifier is what picks one.
+    left = spark.sql("SELECT 1 AS id, 1 AS a").alias("l")
+    right = spark.sql("SELECT 1 AS id, 1 AS a").alias("r")
+    assert [tuple(row) for row in left.join(right, "id").na.replace(1, 7, subset=["l.a"]).collect()] == [(1, 7, 1)]
+
+    left = spark.sql("SELECT 1 AS id, CAST(NULL AS INT) AS a").alias("l")
+    right = spark.sql("SELECT 1 AS id, 5 AS a").alias("r")
+    joined = left.join(right, "id")
+    assert joined.dropna(subset=["l.a"]).collect() == []
+    assert [tuple(row) for row in joined.dropna(subset=["r.a"]).collect()] == [(1, None, 5)]
+
+
+def test_a_qualified_name_reaches_a_subset_but_not_an_operation_that_matches_by_name(spark):
+    # Spark has two rules here. A subset name is resolved as a column reference, so a qualifier
+    # reaches the column. `drop`, `withColumnRenamed` and `withMetadata` compare the name they are
+    # given with the name of each column instead, and `t.a` is not the name of any column, so they
+    # leave the frame alone. Resolving the qualifier in the second group would change what they do.
+    df = spark.sql("SELECT 1 AS a, 2 AS b").alias("t")
+
+    assert df.drop("t.a").schema.names == ["a", "b"]
+    assert df.withColumnRenamed("t.a", "z").schema.names == ["a", "b"]
+    assert df.withMetadata("t.a", {"k": "v"}).schema["a"].metadata == {}
+
+    assert [tuple(row) for row in df.na.replace(1, 7, subset=["t.a"]).collect()] == [(7, 2)]
+
+
 def test_replace_rejects_a_nested_name(spark):
     # `replace` resolves every name it is given and refuses the ones that are not an attribute,
     # with no path that ignores them.
@@ -1267,17 +1137,15 @@ def test_dropna_filters_on_a_nested_subset_name(spark):
     assert df.dropna(subset=["s.x"]).collect() == []
 
 
-@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_union_by_name_rejects_an_extra_column_on_the_right(spark):
-    # Without `allowMissingColumns` the two sides have to name the same columns. Sail unions
-    # them on the names they share and lets the extra one through instead of refusing.
+    # Without `allowMissingColumns` the two sides have to name the same columns: an extra one on
+    # the right is appended to it (`ResolveUnion`), so the two differ in the number of columns.
     left = spark.sql("SELECT 1 AS a")
     right = spark.sql("SELECT 2 AS a, 3 AS b")
     with pytest.raises(Exception, match="NUM_COLUMNS_MISMATCH"):
         left.unionByName(right).collect()
 
 
-@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_array_struct_field_keeps_the_nullability_of_the_array(spark):
     # Extracting a field from an array of structs inherits the array's nullability, and
     # `containsNull` comes from the array and the field, not from a hardcoded `true`.
@@ -1308,7 +1176,6 @@ def test_union_by_name_fills_missing_columns_with_the_right_type(spark):
     assert left.unionByName(right, allowMissingColumns=True).schema.simpleString() == "struct<a:int,b:string,c:int>"
 
 
-@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_union_by_name_rejects_duplicate_names_on_either_side(spark):
     # The names of each side are checked for duplicates before they are matched against each
     # other, so a duplicate on either side is rejected, and the check folds the names.
@@ -1330,22 +1197,20 @@ def test_union_by_name_merges_reordered_nested_struct_fields(spark):
     ]
 
 
-@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_union_by_name_fills_a_missing_nested_struct_field(spark):
     # `allowMissingColumns` reaches into a struct as well, filling the field the other side
-    # does not have. Sail compares the two structs whole, so the union fails to plan.
+    # does not have (`ResolveUnion.addFields`).
     left = spark.sql("SELECT named_struct('x', 1, 'y', 2) AS s")
     right = spark.sql("SELECT named_struct('x', 3) AS s")
-    assert [r.s.asDict() for r in left.unionByName(right, allowMissingColumns=True).collect()] == [
+    rows = left.unionByName(right, allowMissingColumns=True).collect()
+    assert sorted((r.s.asDict() for r in rows), key=lambda x: x["x"]) == [
         {"x": 1, "y": 2},
         {"x": 3, "y": None},
     ]
 
 
-@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_union_by_name_matches_nested_struct_fields_case_insensitively(spark):
-    # The fields of a struct are matched by the resolver, like any other name. Sail compares
-    # them literally, so the two structs are different types and the cast is refused.
+    # The fields of a struct are matched by the resolver, like any other name.
     left = spark.sql("SELECT named_struct('x', 1) AS s")
     right = spark.sql("SELECT named_struct('X', 3) AS s")
     assert [r.s.asDict() for r in left.unionByName(right).collect()] == [{"x": 1}, {"x": 3}]
@@ -1365,21 +1230,6 @@ def test_fillna_skips_a_nested_subset_name(spark):
     df = spark.sql("SELECT named_struct('a', CAST(NULL AS INT)) AS s")
 
     assert df.fillna(0, subset=["s.a"]).collect() == [Row(s=Row(a=None))]
-
-
-def test_to_schema_reports_no_suggestion_when_the_input_has_no_column(spark):
-    # The condition carries the suggestion in a sub-condition, so an input with nothing to
-    # suggest reports the other one instead of an empty list.
-    schema = StructType([StructField("a", IntegerType(), nullable=False)])
-
-    with pytest.raises(
-        Exception,
-        match=re.escape(
-            "[UNRESOLVED_COLUMN.WITHOUT_SUGGESTION] A column, variable, or function parameter "
-            "with name `a` cannot be resolved."
-        ),
-    ):
-        spark.range(1).select().to(schema).collect()
 
 
 def test_ambiguous_column_reference_names_the_way_out(spark):
@@ -1414,7 +1264,6 @@ def test_a_column_of_a_join_of_two_frames_is_an_ambiguous_reference(spark):
         joined.select(joined["name"]).collect()
 
 
-@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_a_union_reports_the_metadata_of_its_first_input_only(spark):
     # `Union.mergeChildOutputs` takes the metadata of the FIRST child verbatim, so a key that only
     # the second one carries does not reach the output. The left side having none is what tells
@@ -1426,6 +1275,602 @@ def test_a_union_reports_the_metadata_of_its_first_input_only(spark):
     union._cached_schema = None  # noqa: SLF001
 
     assert [dict(field.metadata) for field in union.schema.fields] == [{}]
+
+
+@pytest.mark.parametrize("by_name", [False, True])
+def test_a_union_reports_the_metadata_of_the_first_input_after_coercion(spark, by_name):
+    # Spark widens the children of a union first, casting a column whose type is narrower than
+    # the result as `Alias(Cast(...))` (`WidenSetOperationTypes.widenTypes`), and a cast carries no
+    # metadata (`Alias.metadata`). The output takes the metadata of the first child after that, so
+    # what decides is whether the LEFT column was cast, not whether the two sides agree.
+    def union(left, right):
+        result = left.unionByName(right) if by_name else left.union(right)
+        result._cached_schema = None  # noqa: SLF001
+        return result
+
+    # The left column is narrower, so it is cast and its metadata goes with the cast.
+    left = spark.sql("SELECT CAST(1 AS INT) AS a").withMetadata("a", {"side": "L"})
+    right = spark.sql("SELECT CAST(2 AS BIGINT) AS a").withMetadata("a", {})
+    assert union(left, right).schema["a"].metadata == {}
+    assert sorted(tuple(row) for row in union(left, right).collect()) == [(1,), (2,)]
+
+    # Neither side is cast.
+    left = spark.sql("SELECT CAST(1 AS INT) AS a").withMetadata("a", {"side": "L"})
+    right = spark.sql("SELECT CAST(2 AS INT) AS a").withMetadata("a", {"side": "R"})
+    assert union(left, right).schema["a"].metadata == {"side": "L"}
+
+    # The decision is taken per column: in one union, the cast column loses its metadata and the
+    # one beside it keeps it. By name, the right side lists the columns in another order, which
+    # the metadata has to follow.
+    left = (
+        spark.sql("SELECT CAST(1 AS INT) AS a, CAST(1 AS INT) AS b")
+        .withMetadata("a", {"side": "L"})
+        .withMetadata("b", {"side": "L"})
+    )
+    right = spark.sql(
+        "SELECT CAST(2 AS INT) AS b, CAST(2 AS BIGINT) AS a"
+        if by_name
+        else "SELECT CAST(2 AS BIGINT) AS a, CAST(2 AS INT) AS b"
+    )
+    right = right.withMetadata("a", {}).withMetadata("b", {"side": "R"})
+    result = union(left, right)
+    assert result.schema["a"].metadata == {}
+    assert result.schema["b"].metadata == {"side": "L"}
+    assert sorted(tuple(row) for row in result.collect()) == [(1, 1), (2, 2)]
+
+
+@pytest.mark.parametrize("by_name", [False, True])
+def test_a_union_drops_the_metadata_of_a_cast_column_the_right_side_does_not_tag(spark, by_name):
+    # The left column is narrower, so Spark casts it and its metadata goes with the cast, even when
+    # the right side carries none to replace it.
+    left = spark.sql("SELECT CAST(1 AS INT) AS a").withMetadata("a", {"side": "L"})
+    right = spark.sql("SELECT CAST(2 AS BIGINT) AS a")
+
+    result = left.unionByName(right) if by_name else left.union(right)
+    result._cached_schema = None  # noqa: SLF001
+    assert result.schema["a"].metadata == {}
+
+
+def test_an_intersection_drops_the_metadata_of_a_cast_left_column(spark):
+    # `Intersect` and `Except` widen their inputs too, so a narrower left column is cast and loses
+    # its metadata.
+    left = spark.sql("SELECT CAST(1 AS INT) AS a").withMetadata("a", {"side": "L"})
+    right = spark.sql("SELECT CAST(1 AS BIGINT) AS a")
+
+    for result in (left.intersect(right), left.exceptAll(right), left.subtract(right)):
+        result._cached_schema = None  # noqa: SLF001
+        assert result.schema["a"].metadata == {}
+
+
+# Every pair of these types, in both ANSI modes, as Spark answers it. A union widens its inputs
+# first (`WidenSetOperationTypes`) and reports the metadata of the left one only where the left
+# column is not cast (`Alias.metadata`), so each cell is `L` where the metadata is kept, `.` where
+# the left column is cast and loses it, and `x` where Spark refuses the pair with
+# `INCOMPATIBLE_COLUMN_TYPE`. The widening itself depends on the mode: with ANSI a string is cast
+# to the other side and an integral type with FLOAT widens to DOUBLE
+# (`AnsiTypeCoercion.findWiderTypeForTwo`); without it the string wins (`TypeCoercion`).
+# Rows are the left type and columns the right one, in the order of `_UNION_TYPES`.
+_UNION_TYPES = {
+    "null": "NULL",
+    "boolean": "true",
+    "tinyint": "CAST(1 AS TINYINT)",
+    "int": "CAST(1 AS INT)",
+    "bigint": "CAST(1 AS BIGINT)",
+    "float": "CAST(1 AS FLOAT)",
+    "double": "CAST(1 AS DOUBLE)",
+    "decimal(5,2)": "CAST(1 AS DECIMAL(5, 2))",
+    "decimal(20,0)": "CAST(1 AS DECIMAL(20, 0))",
+    "string": "'x'",
+    "binary": "X'01'",
+    "date": "DATE'2020-01-01'",
+    "timestamp": "TIMESTAMP'2020-01-01 00:00:00'",
+    "timestamp_ntz": "TIMESTAMP_NTZ'2020-01-01 00:00:00'",
+    "interval": "INTERVAL '1' DAY",
+}
+_UNION_GRID = {
+    "true": [
+        "L..............",
+        "LLxxxxxxxLxxxxx",
+        "LxL.......xxxxx",
+        "LxLL......xxxxx",
+        "LxLLL....Lxxxxx",
+        "Lx...L....xxxxx",
+        "LxLLLLLLLLxxxxx",
+        "LxL....L..xxxxx",
+        "LxLLL...L.xxxxx",
+        "L........L....x",
+        "LxxxxxxxxLLxxxx",
+        "LxxxxxxxxLxL..x",
+        "LxxxxxxxxLxLLLx",
+        "LxxxxxxxxLxL.Lx",
+        "LxxxxxxxxxxxxxL",
+    ],
+    "false": [
+        "L..............",
+        "LLxxxxxxxxxxxxx",
+        "LxL.......xxxxx",
+        "LxLL......xxxxx",
+        "LxLLL.....xxxxx",
+        "LxLLLL....xxxxx",
+        "LxLLLLLLL.xxxxx",
+        "LxL....L..xxxxx",
+        "LxLLL...L.xxxxx",
+        "LxLLLLLLLLxLLLL",
+        "LxxxxxxxxxLxxxx",
+        "Lxxxxxxxx.xL..x",
+        "Lxxxxxxxx.xLLLx",
+        "Lxxxxxxxx.xL.Lx",
+        "Lxxxxxxxx.xxxxL",
+    ],
+}
+
+
+def _union_cases():
+    for ansi, grid in _UNION_GRID.items():
+        for left, row in zip(_UNION_TYPES, grid, strict=False):
+            for right, cell in zip(_UNION_TYPES, row, strict=False):
+                yield pytest.param(ansi, left, right, cell, id=f"ansi={ansi}-{left}-{right}")
+
+
+@pytest.mark.parametrize(("ansi", "left", "right", "cell"), _union_cases())
+def test_a_union_of_two_types(spark, ansi, left, right, cell):
+    try:
+        spark.conf.set("spark.sql.ansi.enabled", ansi)
+        tagged = spark.sql(f"SELECT {_UNION_TYPES[left]} AS a").withMetadata("a", {"side": "L"})
+        result = tagged.union(spark.sql(f"SELECT {_UNION_TYPES[right]} AS a"))
+        result._cached_schema = None  # noqa: SLF001
+        if cell == "x":
+            with pytest.raises(Exception, match=re.escape("[INCOMPATIBLE_COLUMN_TYPE]")):
+                _ = result.schema
+        else:
+            assert result.schema["a"].metadata == ({"side": "L"} if cell == "L" else {})
+    finally:
+        spark.conf.unset("spark.sql.ansi.enabled")
+
+
+_INCOMPATIBLE = "can only be performed on tables with compatible column types."
+_ANSI_HINT = (
+    "\nTo fix the error, you might need to add explicit type casts. If necessary set "
+    "spark.sql.ansi.enabled to false to bypass this error."
+)
+
+
+def _refused(operator, ordinal, right, left, hint=""):
+    return (
+        f"[INCOMPATIBLE_COLUMN_TYPE] {operator} {_INCOMPATIBLE} The {ordinal} column of the second table is "
+        f'"{right}" type which is not compatible with "{left}" at the same column of the first table.{hint}.'
+    )
+
+
+def _map_refused(name):
+    return (
+        "[UNSUPPORTED_FEATURE.SET_OPERATION_ON_MAP_TYPE] The feature is not supported: Cannot have MAP type "
+        f'columns in DataFrame which calls set operations (INTERSECT, EXCEPT, etc.), but the type of column `{name}` is "MAP<INT, INT>".'
+    )
+
+
+def _mismatched(operator):
+    return (
+        f"[NUM_COLUMNS_MISMATCH] {operator} can only be performed on inputs with the same number of columns, "
+        "but the first input has 2 columns and the second input has 1 columns."
+    )
+
+
+# How each operation checks that the columns of its two inputs are compatible, after it widens
+# them (`CheckAnalysis`, `TypeCoercionValidation.getDataTypesAreCompatibleFn`). A union accepts two
+# types that differ only in the names of what they nest; the other operations check the widening
+# without ANSI mode, and every operation widens a struct only when the names of its fields match.
+# With ANSI mode Spark suggests turning it off when that alone accepts every column. Measured on the
+# Spark JVM; `None` is an operation Spark accepts.
+_SET_OPERATION_CHECKS = [
+    ("union", "true AS a", "1 AS a", _refused("UNION", "first", "INT", "BOOLEAN")),
+    ("union", "1 AS a, true AS b", "1 AS a, 1 AS b", _refused("UNION", "second", "INT", "BOOLEAN")),
+    ("union", "1 a, 2 b, 3 c, 4 d, true e", "1 a, 2 b, 3 c, 4 d, 1 e", _refused("UNION", "5th", "INT", "BOOLEAN")),
+    ("unionByName", "true AS a", "1 AS a", _refused("UNION", "first", "INT", "BOOLEAN")),
+    ("unionAll", "true AS a", "1 AS a", _refused("UNION", "first", "INT", "BOOLEAN")),
+    ("intersect", "true AS a", "1 AS a", _refused("INTERSECT", "first", "INT", "BOOLEAN")),
+    ("intersectAll", "true AS a", "1 AS a", _refused("INTERSECT ALL", "first", "INT", "BOOLEAN")),
+    ("subtract", "true AS a", "1 AS a", _refused("EXCEPT", "first", "INT", "BOOLEAN")),
+    ("exceptAll", "true AS a", "1 AS a", _refused("EXCEPT ALL", "first", "INT", "BOOLEAN")),
+    ("union", "named_struct('x', 1) AS a", "named_struct('y', 1) AS a", None),
+    ("union", "named_struct('x', 1) AS a", "named_struct('X', 1L) AS a", None),
+    (
+        "union",
+        "named_struct('x', 1) AS a",
+        "named_struct('y', 1L) AS a",
+        _refused("UNION", "first", "STRUCT<y: BIGINT NOT NULL>", "STRUCT<x: INT NOT NULL>"),
+    ),
+    (
+        "intersect",
+        "named_struct('x', 1) AS a",
+        "named_struct('y', 1) AS a",
+        _refused("INTERSECT", "first", "STRUCT<y: INT NOT NULL>", "STRUCT<x: INT NOT NULL>"),
+    ),
+    (
+        "union",
+        "named_struct('x', CAST(NULL AS INT)) AS a",
+        "named_struct('y', CAST(NULL AS BIGINT)) AS a",
+        _refused("UNION", "first", "STRUCT<y: BIGINT>", "STRUCT<x: INT>"),
+    ),
+    (
+        "intersect",
+        "named_struct('x', CAST(NULL AS INT)) AS a",
+        "named_struct('y', CAST(NULL AS INT)) AS a",
+        _refused("INTERSECT", "first", "STRUCT<y: INT>", "STRUCT<x: INT>"),
+    ),
+    ("union", "array(1) AS a", "array(true) AS a", _refused("UNION", "first", "ARRAY<BOOLEAN>", "ARRAY<INT>")),
+    ("union", "array(1) AS a", "array('s') AS a", None),
+    ("union", "map(1, 1) AS a", "map(1, true) AS a", _refused("UNION", "first", "MAP<INT, BOOLEAN>", "MAP<INT, INT>")),
+    ("union", "map(1, 1) AS a", "map(1L, 1) AS a", None),
+    ("union", "X'01' AS a", "1 AS a", _refused("UNION", "first", "INT", "BINARY")),
+    # The number of columns is checked before their types.
+    ("union", "1 AS a, 2 AS b", "true AS a", _mismatched("UNION")),
+    ("intersect", "1 AS a, 2 AS b", "true AS a", _mismatched("INTERSECT")),
+    ("subtract", "1 AS a, 2 AS b", "true AS a", _mismatched("EXCEPT")),
+    # A map is looked for after both, and in the output: a NULL column of the first input holds
+    # the map of the second, under its own name.
+    ("intersect", "map(1, 2) AS m, 1 AS x", "map(1, 2) AS m", _mismatched("INTERSECT")),
+    ("intersect", "1 AS a", "map(1, 2) AS m", _refused("INTERSECT", "first", "MAP<INT, INT>", "INT")),
+    ("intersect", "NULL AS a", "map(1, 2) AS m", _map_refused("a")),
+]
+_SET_OPERATION_CHECKS_BY_MODE = {
+    "true": [
+        (
+            "union",
+            "map(1, 1) AS a",
+            "map('s', 1) AS a",
+            _refused("UNION", "first", "MAP<STRING, INT>", "MAP<INT, INT>", _ANSI_HINT),
+        ),
+        ("intersect", "'s' AS a", "true AS a", None),
+        ("subtract", "'s' AS a", "X'01' AS a", None),
+        # The hint judges the columns after ANSI mode widens them, so a string and a boolean count
+        # as accepted, while a column that is refused without ANSI mode too takes the hint away.
+        (
+            "union",
+            "'true' AS a, map('s', 1) AS b",
+            "true AS a, map(1, 1) AS b",
+            _refused("UNION", "second", "MAP<INT, INT>", "MAP<STRING, INT>", _ANSI_HINT),
+        ),
+        (
+            "union",
+            "map('s', 1) AS a, true AS b",
+            "map(1, 1) AS a, 1 AS b",
+            _refused("UNION", "first", "MAP<INT, INT>", "MAP<STRING, INT>"),
+        ),
+    ],
+    "false": [
+        ("union", "map(1, 1) AS a", "map('s', 1) AS a", None),
+        ("intersect", "'s' AS a", "true AS a", _refused("INTERSECT", "first", "BOOLEAN", "STRING")),
+        ("subtract", "'s' AS a", "X'01' AS a", _refused("EXCEPT", "first", "BINARY", "STRING")),
+    ],
+}
+
+
+def _set_operation_check_cases():
+    for ansi in ["true", "false"]:
+        for op, left, right, expected in _SET_OPERATION_CHECKS + _SET_OPERATION_CHECKS_BY_MODE[ansi]:
+            yield pytest.param(ansi, op, left, right, expected, id=f"ansi={ansi}-{op}-{left}-{right}")
+
+
+@pytest.mark.parametrize(("ansi", "op", "left", "right", "expected"), _set_operation_check_cases())
+def test_a_set_operation_checks_that_its_columns_are_compatible(spark, ansi, op, left, right, expected):
+    try:
+        spark.conf.set("spark.sql.ansi.enabled", ansi)
+        result = getattr(spark.sql(f"SELECT {left}"), op)(spark.sql(f"SELECT {right}"))
+        result._cached_schema = None  # noqa: SLF001
+        if expected is None:
+            _ = result.schema
+        else:
+            with pytest.raises(Exception, match=re.escape(expected)):
+                _ = result.schema
+    finally:
+        spark.conf.unset("spark.sql.ansi.enabled")
+
+
+_MISSING_GROUP_BY = (
+    "[MISSING_GROUP_BY] The query does not include a GROUP BY clause. Add GROUP BY or turn it into "
+    "the window functions using OVER clauses."
+)
+
+# A projection that holds an aggregate is an aggregation without grouping (`GlobalAggregates`), so
+# every column it reads outside an aggregate is refused (`CheckAnalysis`). `withColumn` projects
+# every column of its input, and is refused unless the aggregate replaces the only one. A window
+# function is not an aggregate. Measured on the Spark JVM; a list is the rows Spark returns.
+_AGGREGATES_WITHOUT_GROUPING = {
+    "withColumn": (lambda df: df.withColumn("x", expr("sum(a)")), _MISSING_GROUP_BY),
+    "withColumn replacing": (lambda df: df.withColumn("a", expr("sum(a)")), _MISSING_GROUP_BY),
+    "withColumns": (lambda df: df.withColumns({"x": expr("sum(a)")}), _MISSING_GROUP_BY),
+    "withColumn with a column": (lambda df: df.withColumn("x", expr("sum(a) + a")), _MISSING_GROUP_BY),
+    "withColumn replacing the only column": (
+        lambda df: df.select("a").withColumn("a", expr("sum(a)")),
+        [(3,)],
+    ),
+    "withColumn over a window": (
+        lambda df: df.withColumn("x", expr("sum(a) OVER ()")),
+        [(1, "x", 3), (2, "y", 3)],
+    ),
+    "select with a column": (lambda df: df.select("a", expr("sum(a)")), _MISSING_GROUP_BY),
+    "select": (lambda df: df.select(expr("sum(a)"), lit(1)), [(3, 1)]),
+    "selectExpr with a column": (lambda df: df.selectExpr("a", "sum(a)"), _MISSING_GROUP_BY),
+    "sql with a column": (
+        lambda df: df.sparkSession.sql("SELECT a, sum(a) FROM VALUES (1, 'x'), (2, 'y') AS t(a, b)"),
+        _MISSING_GROUP_BY,
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(_AGGREGATES_WITHOUT_GROUPING))
+def test_an_aggregate_without_grouping_reads_no_other_column(spark, case):
+    build, expected = _AGGREGATES_WITHOUT_GROUPING[case]
+    df = spark.sql("SELECT * FROM VALUES (1, 'x'), (2, 'y') AS t(a, b)")
+    if isinstance(expected, list):
+        assert sorted(tuple(row) for row in build(df).collect()) == expected
+    else:
+        # A SQL query is analyzed as soon as it is built.
+        with pytest.raises(Exception, match=re.escape(expected)):
+            build(df).collect()
+
+
+@pytest.mark.skipif(pyspark_version() < (4, 0), reason="VARIANT is a Spark 4.0 type")
+def test_a_set_operation_names_a_nested_variant_as_spark_does(spark):
+    # A variant is stored as a struct, which the type in the message must not show.
+    left = spark.sql("SELECT named_struct('v', CAST(NULL AS VARIANT)) AS a")
+    right = spark.sql("SELECT named_struct('w', CAST(NULL AS VARIANT)) AS a")
+    result = left.intersect(right)
+    result._cached_schema = None  # noqa: SLF001
+    with pytest.raises(
+        Exception, match=re.escape(_refused("INTERSECT", "first", "STRUCT<w: VARIANT>", "STRUCT<v: VARIANT>"))
+    ):
+        _ = result.schema
+
+
+@pytest.mark.parametrize("op", ["intersect", "subtract", "union"])
+def test_a_set_operation_takes_one_binary_type_however_it_is_stored(spark, tmp_path, op):
+    # A binary column read from Parquet is stored as another Arrow type than a binary literal, and
+    # both are the one BINARY type to Spark.
+    path = str(tmp_path / "binary")
+    spark.sql("SELECT X'01' AS a").write.parquet(path)
+    left = spark.read.parquet(path).withMetadata("a", {"side": "L"})
+    right = spark.sql("SELECT X'01' AS a" if op == "intersect" else "SELECT X'02' AS a")
+
+    result = getattr(left, op)(right)
+    result._cached_schema = None  # noqa: SLF001
+    assert result.schema["a"].metadata == {"side": "L"}
+    if op != "union":
+        assert [bytes(row.a) for row in result.collect()] == [b"\x01"]
+
+
+def test_union_by_name_keeps_each_nested_value_under_its_own_name(spark):
+    # Both fields are integers, so a match by position instead of by name swaps the values
+    # without any error.
+    left = spark.createDataFrame([((1, 2),)], "s struct<a:int,b:int>")
+    right = spark.createDataFrame([((20, 10),)], "s struct<b:int,a:int>")
+
+    assert sorted(tuple(row.s) for row in left.unionByName(right).collect()) == [(1, 2), (10, 20)]
+
+
+def test_union_by_name_matches_the_fields_of_a_nested_struct_by_name(spark):
+    # `unionByName` reorders the fields of a nested struct to match the first input.
+    left = spark.sql("SELECT named_struct('a', 1, 'b', 'x') AS s")
+    right = spark.sql("SELECT named_struct('b', 'y', 'a', 2) AS s")
+
+    assert sorted(tuple(row.s) for row in left.unionByName(right).collect()) == [(1, "x"), (2, "y")]
+
+
+# The columns of the first input are matched one at a time, and the first that fails decides the
+# error; a duplicate is reported in order of the names, and a name is quoted part by part. Measured
+# on the Spark JVM.
+_UNION_BY_NAME_ERRORS = [
+    (
+        "SELECT 1 AS a, named_struct('x', 1, 'y', 2) AS s",
+        "SELECT named_struct('x', 1) AS s, 2 AS b",
+        '[UNRESOLVED_COLUMN_AMONG_FIELD_NAMES] Cannot resolve column name "a" among (s, b).',
+    ),
+    (
+        "SELECT 1 AS b, 2 AS b, 3 AS a, 4 AS a",
+        "SELECT 1 AS a, 2 AS b",
+        "[COLUMN_ALREADY_EXISTS] The column `a` already exists.",
+    ),
+    (
+        "SELECT named_struct('a.b', 1, 'c', 2) AS s",
+        "SELECT named_struct('c', 2) AS s",
+        "[FIELD_NOT_FOUND] No such struct field `a`.`b` in `c`.",
+    ),
+]
+
+
+@pytest.mark.parametrize(("left", "right", "message"), _UNION_BY_NAME_ERRORS)
+def test_union_by_name_reports_the_error_spark_reports_first(spark, left, right, message):
+    result = spark.sql(left).unionByName(spark.sql(right))
+    result._cached_schema = None  # noqa: SLF001
+    with pytest.raises(Exception, match=re.escape(message)):
+        _ = result.schema
+
+
+def _field(name, data_type, nullable):
+    return {"metadata": {}, "name": name, "nullable": nullable, "type": data_type}
+
+
+def _struct(*fields):
+    return {"fields": list(fields), "type": "struct"}
+
+
+# A union can hold a NULL wherever either input can, at every level a column nests, and a field
+# read out of a struct that can be NULL can be NULL too. Measured on the Spark JVM.
+_UNION_NESTED_NULLABILITY = [
+    (
+        "SELECT named_struct('a', 1) AS s",
+        "SELECT named_struct('b', CAST(NULL AS INT)) AS s",
+        False,
+        _field("s", _struct(_field("a", "integer", True)), False),
+        ["Row(s=Row(a=1))", "Row(s=Row(a=None))"],
+    ),
+    (
+        "SELECT named_struct('a', CAST(NULL AS INT)) AS s",
+        "SELECT named_struct('b', 1) AS s",
+        False,
+        _field("s", _struct(_field("a", "integer", True)), False),
+        ["Row(s=Row(a=1))", "Row(s=Row(a=None))"],
+    ),
+    (
+        "SELECT array(named_struct('a', 1)) AS s",
+        "SELECT array(named_struct('b', CAST(NULL AS INT))) AS s",
+        False,
+        _field(
+            "s",
+            {"containsNull": False, "elementType": _struct(_field("a", "integer", True)), "type": "array"},
+            False,
+        ),
+        ["Row(s=[Row(a=1)])", "Row(s=[Row(a=None)])"],
+    ),
+    (
+        "SELECT named_struct('x', named_struct('a', 1)) AS s",
+        "SELECT named_struct('x', named_struct('b', 2)) AS s",
+        False,
+        _field("s", _struct(_field("x", _struct(_field("a", "integer", False)), False)), False),
+        ["Row(s=Row(x=Row(a=1)))", "Row(s=Row(x=Row(a=2)))"],
+    ),
+    (
+        "SELECT map(named_struct('x', 1), 1) AS m",
+        "SELECT map(named_struct('x', CAST(NULL AS INT)), 1) AS m",
+        False,
+        _field(
+            "m",
+            {
+                "keyType": _struct(_field("x", "integer", True)),
+                "type": "map",
+                "valueContainsNull": False,
+                "valueType": "integer",
+            },
+            False,
+        ),
+        ["Row(m={Row(x=1): 1})", "Row(m={Row(x=None): 1})"],
+    ),
+    (
+        "SELECT named_struct('a', 1, 'b', 2) AS s",
+        "SELECT IF(rand() < 2, named_struct('b', 3, 'a', 4), NULL) AS s",
+        True,
+        _field("s", _struct(_field("a", "integer", True), _field("b", "integer", True)), True),
+        ["Row(s=Row(a=1, b=2))", "Row(s=Row(a=4, b=3))"],
+    ),
+]
+
+
+@pytest.mark.parametrize(("left", "right", "by_name", "expected", "rows"), _UNION_NESTED_NULLABILITY)
+def test_a_union_can_hold_a_null_wherever_either_input_can(spark, left, right, by_name, expected, rows):
+    left, right = spark.sql(left), spark.sql(right)
+    result = left.unionByName(right) if by_name else left.union(right)
+    result._cached_schema = None  # noqa: SLF001
+    assert result.schema.jsonValue()["fields"] == [expected]
+    assert sorted(repr(row) for row in result.collect()) == rows
+
+
+def test_a_cast_renames_the_fields_of_a_nested_struct(spark):
+    result = spark.sql("SELECT CAST(named_struct('x', named_struct('a', 1)) AS STRUCT<x: STRUCT<b: INT>>) AS s")
+    assert result.schema.jsonValue()["fields"] == [
+        _field("s", _struct(_field("x", _struct(_field("b", "integer", True)), True)), False)
+    ]
+    assert result.collect() == [Row(s=Row(x=Row(b=1)))]
+
+
+# Once one column of a set operation has to be widened, every column whose type is not the wider
+# one is cast, even where only what it can hold NULL in differs, and a cast carries no metadata
+# (`WidenSetOperationTypes.widenTypes`). Measured on the Spark JVM.
+@pytest.mark.parametrize(
+    ("op", "rows"),
+    [("union", [([1], 1), ([None], 1)]), ("exceptAll", [([1], 1)]), ("intersectAll", [])],
+)
+def test_a_set_operation_casts_every_column_once_one_is_widened(spark, op, rows):
+    left = spark.sql("SELECT array(1) AS a, 1 AS b").withMetadata("a", {"side": "L"})
+    right = spark.sql("SELECT array(CAST(NULL AS INT)) AS a, CAST(1 AS BIGINT) AS b")
+
+    result = getattr(left, op)(right)
+    result._cached_schema = None  # noqa: SLF001
+    assert result.schema.simpleString() == "struct<a:array<int>,b:bigint>"
+    assert result.schema["a"].dataType.containsNull
+    assert result.schema["a"].metadata == {}
+    assert sorted(((list(row.a), row.b) for row in result.collect()), key=repr) == sorted(rows, key=repr)
+
+
+def _containing_null(spark, contains_null):
+    from pyspark.sql.types import ArrayType
+
+    schema = StructType([StructField("a", ArrayType(IntegerType(), contains_null), False)])
+    return spark.createDataFrame([([1],)], schema)
+
+
+# A set operation reports the metadata of the first input unless it has to cast that input to the
+# type both widen to, and it casts a container when it casts something the container holds
+# (`WidenSetOperationTypes`). When there is no wider type nothing is cast, and a difference in
+# what a container can hold NULL in is not a cast. Measured on the Spark JVM.
+_CONTAINER_METADATA = [
+    ("union", "array(CAST(1 AS BIGINT))", "array(1)", {"side": "L"}),
+    ("intersect", "array(CAST(1 AS BIGINT))", "array(1)", {"side": "L"}),
+    ("exceptAll", "array(CAST(1 AS BIGINT))", "array(1)", {"side": "L"}),
+    ("union", "array(1)", "array(CAST(1 AS BIGINT))", {}),
+    ("union", "named_struct('x', 1)", "named_struct('x', CAST(1 AS BIGINT))", {}),
+    ("union", "named_struct('x', 1)", "named_struct('y', 1)", {"side": "L"}),
+    ("union", "map(1, CAST(1 AS BIGINT))", "map(1, 1)", {"side": "L"}),
+    ("union", "map(1, 1)", "map(1, CAST(1 AS BIGINT))", {}),
+    ("union", "array containing no NULL", "array containing NULL", {"side": "L"}),
+    ("union", "array containing NULL", "array containing no NULL", {"side": "L"}),
+    ("intersect", "array containing no NULL", "array containing NULL", {"side": "L"}),
+    # Past the maximum precision the wider decimal keeps the integral digits and cuts the fraction.
+    ("union", "CAST(1 AS DECIMAL(38,10))", "CAST(1 AS DECIMAL(38,0))", {}),
+    ("union", "CAST(1 AS DECIMAL(38,0))", "CAST(1 AS DECIMAL(38,10))", {"side": "L"}),
+]
+
+
+def _container_frame(spark, value):
+    if value.startswith("array containing"):
+        return _containing_null(spark, value == "array containing NULL")
+    return spark.sql(f"SELECT {value} AS a")
+
+
+@pytest.mark.parametrize(("op", "left", "right", "expected"), _CONTAINER_METADATA)
+def test_a_set_operation_keeps_the_metadata_of_a_container_it_does_not_cast(spark, op, left, right, expected):
+    tagged = _container_frame(spark, left).withMetadata("a", {"side": "L"})
+    result = getattr(tagged, op)(_container_frame(spark, right))
+    result._cached_schema = None  # noqa: SLF001
+    assert result.schema["a"].metadata == expected
+
+
+def test_a_set_operation_keeps_the_metadata_of_a_struct_that_is_not_cast_without_ansi(spark):
+    # Without ANSI mode a string field wins over an integer one, so the first input is not cast.
+    try:
+        spark.conf.set("spark.sql.ansi.enabled", "false")
+        left = spark.sql("SELECT named_struct('x', CAST(NULL AS STRING)) AS a").withMetadata("a", {"side": "L"})
+        result = left.union(spark.sql("SELECT named_struct('x', 1) AS a"))
+        result._cached_schema = None  # noqa: SLF001
+        assert result.schema["a"].metadata == {"side": "L"}
+    finally:
+        spark.conf.unset("spark.sql.ansi.enabled")
+
+
+@pytest.mark.parametrize("by_name", [False, True])
+def test_a_union_keeps_the_metadata_of_a_left_column_that_is_already_the_wider(spark, by_name):
+    # Only the right column is cast here, so the left one reaches the output unchanged and keeps
+    # its metadata.
+    left = spark.sql("SELECT CAST(1 AS BIGINT) AS a").withMetadata("a", {"side": "L"})
+    right = spark.sql("SELECT CAST(2 AS INT) AS a").withMetadata("a", {})
+
+    result = left.unionByName(right) if by_name else left.union(right)
+    result._cached_schema = None  # noqa: SLF001
+    assert result.schema["a"].metadata == {"side": "L"}
+
+
+def test_an_intersection_and_a_difference_report_the_metadata_of_their_first_input(spark):
+    # `Intersect` and `Except` take their output from the left child, and they widen their inputs
+    # the way a union does (`WidenSetOperationTypes`). With the same type on both sides nothing is
+    # cast, so the metadata of the left side reaches the output unchanged, and Sail agrees because
+    # it takes the fields of the left input for these two. The case where the left side is cast is
+    # `test_an_intersection_drops_the_metadata_of_a_cast_left_column`.
+    left = spark.sql("SELECT 1 AS a").withMetadata("a", {"side": "L"})
+    right = spark.sql("SELECT 1 AS a").withMetadata("a", {"side": "R"})
+
+    for result in (left.intersect(right), left.exceptAll(right), left.subtract(right)):
+        result._cached_schema = None  # noqa: SLF001
+        assert result.schema["a"].metadata == {"side": "L"}
 
 
 @pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
@@ -1981,18 +2426,6 @@ def test_na_subset_reports_an_empty_suggestion(spark):
         ),
     ):
         spark.range(1).select().dropna(subset=["nope"]).collect()
-
-
-def test_to_schema_suggests_the_columns_in_the_order_of_the_plan(spark):
-    # Unlike the suggestion of a name written in a query, this one is not sorted by name first,
-    # so names at the same distance keep the order of the input.
-    schema = StructType([StructField("nope", IntegerType(), nullable=False)])
-
-    with pytest.raises(
-        Exception,
-        match=re.escape("Did you mean one of the following? [`zz`, `aa`, `mm`]."),
-    ):
-        spark.sql("SELECT 1 AS zz, 2 AS aa, 3 AS mm").to(schema).collect()
 
 
 def test_unresolved_column_suggestion_measures_the_quoted_name(spark):

@@ -308,13 +308,7 @@ def test_a_rename_keeps_the_qualifier_of_the_columns_it_did_not_touch(spark):
             None,
             marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
         ),
-        pytest.param(
-            "map('k', 1)",
-            "map<string,int>",
-            False,
-            None,
-            marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
-        ),
+        ("map('k', 1)", "map<string,int>", False, None),
         pytest.param(
             "CASE WHEN a > 1 THEN 'big' ELSE 'small' END",
             "string",
@@ -322,16 +316,9 @@ def test_a_rename_keeps_the_qualifier_of_the_columns_it_did_not_touch(spark):
             None,
             marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
         ),
-        # The containers, whose inner flag `simpleString()` hides as well: the array agrees on both
-        # flags, the struct disagrees on both.
+        # The containers, whose inner flag `simpleString()` hides as well.
         ("array(1, 2)", "array<int>", False, False),
-        pytest.param(
-            "named_struct('n', 1)",
-            "struct<n:int>",
-            False,
-            False,
-            marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
-        ),
+        ("named_struct('n', 1)", "struct<n:int>", False, False),
     ],
 )
 def test_an_added_column_reports_the_nullability_of_its_expression(spark, expression, data_type, nullable, inner):
@@ -688,10 +675,7 @@ COMPOSITION_RESULTS = [
 
 # (case, caseSensitive, error condition)
 COMPOSITION_ERRORS = [
-    pytest.param(
-        *("replaced_then_union", "true", "NUM_COLUMNS_MISMATCH"),
-        marks=[pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)],
-    ),
+    _error_param("replaced_then_union", "true", "NUM_COLUMNS_MISMATCH"),
     _error_param("replaced_then_union_by_name", "true", "UNRESOLVED_COLUMN_AMONG_FIELD_NAMES"),
     # The client decides whether the name carries a plan id, and that is what selects between the
     # two conditions Spark raises, so an older client reaches this through
@@ -1453,18 +1437,9 @@ METADATA_RESULTS = [
 
 # (case, error condition)
 METADATA_ERRORS = [
-    pytest.param(
-        *("expr/aggregate function", "MISSING_GROUP_BY"),
-        marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
-    ),
-    pytest.param(
-        *("expr-replace/aggregate function", "MISSING_GROUP_BY"),
-        marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
-    ),
-    pytest.param(
-        *("expr-meta/aggregate function", "MISSING_GROUP_BY"),
-        marks=pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True),
-    ),
+    ("expr/aggregate function", "MISSING_GROUP_BY"),
+    ("expr-replace/aggregate function", "MISSING_GROUP_BY"),
+    ("expr-meta/aggregate function", "MISSING_GROUP_BY"),
 ]
 
 

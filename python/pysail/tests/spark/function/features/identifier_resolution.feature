@@ -618,6 +618,98 @@ Feature: identifier resolution beyond ASCII
         | b |
         | 2 |
 
+    Scenario: a qualifier is preferred over a struct of the same name in a wildcard target
+      # The target of a wildcard is resolved the same way before it is expanded, so the column `s`
+      # of `t` is the one expanded and the field `s` of the column `t` is never looked at. The
+      # field would expand to `z`, so the result tells the two interpretations apart.
+      When query
+        """
+        SELECT t.s.* FROM (SELECT named_struct('s', named_struct('z', 1)) AS t, named_struct('value', 2) AS s) t
+        """
+      Then query result
+        | value |
+        | 2     |
+
+    Scenario: a qualifier is preferred one level deeper in a wildcard target
+      # The precedence is decided at the qualifier, so it holds however far the path goes on:
+      # `s.inner` of `t` is expanded, never `s.inner` of the column `t`.
+      When query
+        """
+        SELECT t.s.inner.* FROM (SELECT named_struct('s', named_struct('inner', named_struct('z', 1))) AS t, named_struct('inner', named_struct('value', 2)) AS s) t
+        """
+      Then query result
+        | value |
+        | 2     |
+
+    Scenario: a qualifier written in another case is preferred in a wildcard target
+      Given config spark.sql.caseSensitive = false
+      When query
+        """
+        SELECT T.s.inner.* FROM (SELECT named_struct('s', named_struct('inner', named_struct('z', 1))) AS t, named_struct('inner', named_struct('value', 2)) AS s) t
+        """
+      Then query result
+        | value |
+        | 2     |
+
+    Scenario: an interpretation the qualifier shadows is not looked at when it is ambiguous deeper down
+      # The ambiguity sits one level below the shadowed column, `inner` against `INNER`, and it is
+      # still never reached.
+      Given config spark.sql.caseSensitive = false
+      When query
+        """
+        SELECT t.s.inner.* FROM (SELECT named_struct('s', named_struct('inner', 1, 'INNER', 2)) AS t, named_struct('inner', named_struct('value', 2)) AS s) t
+        """
+      Then query result
+        | value |
+        | 2     |
+
+    Scenario: a field under a qualified column that matches two fields is ambiguous
+      # Unlike a shadowed interpretation, this one is the interpretation that won, so resolving it
+      # does reach the two fields.
+      Given config spark.sql.caseSensitive = false
+      When query
+        """
+        SELECT t.s.x.* FROM (SELECT named_struct('x', named_struct('p', 1), 'X', named_struct('q', 2)) AS s) t
+        """
+      Then query error \[AMBIGUOUS_REFERENCE_TO_FIELDS\] Ambiguous reference to the field `x`\. It appears 2 times in the schema\.
+
+    Scenario: a field under a qualified column that is not a struct cannot be star expanded
+      When query
+        """
+        SELECT t.s.x.* FROM (SELECT named_struct('x', 1) AS s) t
+        """
+      Then query error Can only star expand struct data types\. Attribute: `List\(t, s, x\)`\.
+
+    Scenario: a wildcard target two levels down expands the struct it reaches
+      When query
+        """
+        SELECT s.inner.* FROM (SELECT named_struct('inner', named_struct('p', 1, 'q', 2)) AS s)
+        """
+      Then query result
+        | p | q |
+        | 1 | 2 |
+
+    Scenario: a wildcard target that matches two fields is ambiguous
+      # The target is resolved before it is expanded, and resolving a field that two names match
+      # is ambiguous rather than a choice of the first one.
+      Given config spark.sql.caseSensitive = false
+      When query
+        """
+        SELECT s.x.* FROM (SELECT named_struct('x', named_struct('p', 1), 'X', named_struct('q', 2)) AS s)
+        """
+      Then query error \[AMBIGUOUS_REFERENCE_TO_FIELDS\] Ambiguous reference to the field `x`\. It appears 2 times in the schema\.
+
+    Scenario: an interpretation the qualifier shadows is not looked at even when it is ambiguous
+      # The field `s` of the column `t` matches two fields, which is an error only if something
+      # resolves it, and nothing does once the qualifier has matched.
+      When query
+        """
+        SELECT t.s.* FROM (SELECT named_struct('s', 1, 'S', named_struct('ignored', 9)) AS t, named_struct('value', 2) AS s) t
+        """
+      Then query result
+        | value |
+        | 2     |
+
   Rule: A nested field that matches nothing is reported as a missing field
 
     Scenario: a struct field that matches nothing is not an unresolved column

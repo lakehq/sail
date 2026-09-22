@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::DFSchemaRef;
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{
     Expr, ExprSchemable, Filter, LogicalPlan, Projection, TryCast, cast, col, is_false, lit, when,
@@ -17,7 +16,7 @@ use crate::resolver::expression::NamedExpr;
 use crate::resolver::expression::attribute::{
     invalid_attribute_name_error, replace_nested_column_error, unresolved_column_fields_error,
 };
-use crate::resolver::state::PlanResolverState;
+use crate::resolver::state::{FieldInfo, PlanResolverState};
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_fill_na(
@@ -27,13 +26,24 @@ impl PlanResolver<'_> {
         values: Vec<spec::Expr>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        // Each subset entry carries the name it was given and the fields a qualified name reached.
         enum Strategy {
-            All { value: Expr },
-            Columns { columns: Vec<String>, value: Expr },
-            EachColumn { columns: Vec<(String, Expr)> },
+            All {
+                value: Expr,
+            },
+            Columns {
+                columns: Vec<(String, Vec<String>)>,
+                value: Expr,
+            },
+            EachColumn {
+                columns: Vec<(String, Vec<String>, Expr)>,
+            },
         }
 
-        let input = self.resolve_query_plan(input, state).await?;
+        let hidden = self
+            .resolve_query_plan_with_hidden_fields(input, state)
+            .await?;
+        let input = self.remove_hidden_fields(hidden.clone(), state)?;
         let schema = input.schema();
         let values = self.resolve_expressions(values, schema, state).await?;
         let columns: Vec<String> = columns.into_iter().map(|x| x.into()).collect();
@@ -43,9 +53,14 @@ impl PlanResolver<'_> {
         // Spark sends one value per column as soon as there is more than one, and that is the
         // path that refuses a nested name.
         let nested_is_rejected = values.len() > 1;
-        for name in &columns {
-            self.validate_na_column(schema, name, nested_is_rejected, state)?;
-        }
+        let columns = columns
+            .into_iter()
+            .map(|name| {
+                let reached =
+                    self.validate_na_column(&input, &hidden, &name, nested_is_rejected, state)?;
+                Ok((name, reached))
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
 
         if values.is_empty() {
             return Err(PlanError::invalid("missing fill na values"));
@@ -66,28 +81,37 @@ impl PlanResolver<'_> {
                     "fill na number of values does not match number of columns",
                 ));
             }
-            let columns: Vec<(String, Expr)> = columns.into_iter().zip(values).collect();
+            let columns = columns
+                .into_iter()
+                .zip(values)
+                .map(|((name, reached), value)| (name, reached, value))
+                .collect();
             Strategy::EachColumn { columns }
         };
 
+        // A column is filled when an entry names it, or when a qualified entry resolved to it:
+        // Spark fills the attributes the names resolve to (`fillValue` compares them with
+        // `semanticEquals`), and a qualified name is not the name of any column.
+        let targets = |info: &FieldInfo, id: &str, name: &str, reached: &[String]| {
+            Self::na_column_name(name).is_some_and(|name| self.match_field(info, &name, None))
+                || reached.iter().any(|x| x == id)
+        };
         let fill_na_exprs = schema
             .iter()
             .map(|(qualifier, field)| {
                 let info = state.get_field_info(field.name())?;
+                let id = field.name().as_str();
                 let value = match &strategy {
                     Strategy::All { value } => Some(value.clone()),
                     Strategy::Columns { columns, value } => columns
                         .iter()
-                        .any(|col| {
-                            Self::na_column_name(col)
-                                .is_some_and(|col| self.match_field(info, &col, None))
-                        })
+                        .any(|(name, reached)| targets(info, id, name, reached))
                         .then(|| value.clone()),
-                    Strategy::EachColumn { columns } => columns.iter().find_map(|(col, val)| {
-                        Self::na_column_name(col)
-                            .is_some_and(|col| self.match_field(info, &col, None))
-                            .then(|| val.clone())
-                    }),
+                    Strategy::EachColumn { columns } => {
+                        columns.iter().find_map(|(name, reached, value)| {
+                            targets(info, id, name, reached).then(|| value.clone())
+                        })
+                    }
                 };
                 let column_expr = col((qualifier, field));
                 let expr = if let Some(value) = value {
@@ -150,41 +174,64 @@ impl PlanResolver<'_> {
     /// through: `fill(value, subset)` keeps only the names that resolve to an attribute and
     /// silently drops the rest, while `fill(valueMap)`, which Spark takes as soon as there is
     /// more than one value, resolves every name and refuses the ones that are not a column.
+    ///
+    /// `input` is the plan the operation works on, and `hidden` is the same plan before the fields
+    /// a join hid were removed from it: a qualified name is resolved against that one, since it can
+    /// still reach a key the join hid.
     fn validate_na_column(
         &self,
-        schema: &DFSchemaRef,
+        input: &LogicalPlan,
+        hidden: &LogicalPlan,
         name: &str,
         nested_is_rejected: bool,
-        state: &PlanResolverState,
-    ) -> PlanResult<()> {
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Vec<String>> {
+        let schema = input.schema();
         // The name is parsed before it is looked up, so a malformed one is a syntax error rather
         // than a column that could not be found.
         let object =
             parse_attribute_name(name).ok_or_else(|| invalid_attribute_name_error(name))?;
+        // The same column selected twice is one attribute under two outputs, so its name is not
+        // ambiguous, and the operation reaches both.
+        if self
+            .resolve_repeated_column(&object, input, state)?
+            .is_some()
+        {
+            return Ok(vec![]);
+        }
         let [leading, rest @ ..] = object.parts() else {
             self.resolve_one_column(schema, name, state)?;
-            return Ok(());
+            return Ok(vec![]);
         };
-        // Only the leading part names a column; the rest walks into it, and a nested field that
-        // resolves is dropped rather than filled. The name is matched as the part it parses to,
-        // so a column whose own name contains a dot is reachable by quoting it.
+        // A bare name is matched as the part it parses to, so a column whose own name contains a
+        // dot is reachable by quoting it.
         if rest.is_empty() {
             self.resolve_one_column(schema, leading.as_ref(), state)?;
-            return Ok(());
+            return Ok(vec![]);
         }
-        if self
-            .resolve_optional_column(schema, leading.as_ref(), None, state)?
-            .is_none()
-        {
-            return Err(unresolved_column_fields_error(
+        // A longer name is resolved in full before anything decides what to do with it, so the
+        // leading part is tried as a qualifier before it is tried as a column, and a key a join
+        // hid is still reached through its qualifier. What the name reaches decides the rest: an
+        // attribute is a column, and anything else is nested, which `fill(value, subset)` drops
+        // and `fill(valueMap)` refuses. The field an attribute reached is returned, since it is
+        // not named by the name; a key a join hid is left out, as it is not in the output Spark
+        // goes over.
+        match self.resolve_column_reference(&object, hidden.schema(), state)? {
+            Some((_, Expr::Column(column))) => {
+                let hidden = state.get_field_info(column.name())?.is_hidden();
+                Ok(if hidden {
+                    vec![]
+                } else {
+                    vec![column.name().to_string()]
+                })
+            }
+            Some(_) if nested_is_rejected => Err(replace_nested_column_error(&object)),
+            Some(_) => Ok(vec![]),
+            None => Err(unresolved_column_fields_error(
                 &object,
                 &Self::get_field_names(schema, state)?,
-            ));
+            )),
         }
-        if nested_is_rejected {
-            return Err(replace_nested_column_error(&object));
-        }
-        Ok(())
     }
 
     pub(super) async fn resolve_query_drop_na(
@@ -194,12 +241,17 @@ impl PlanResolver<'_> {
         min_non_nulls: Option<usize>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_query_plan(input, state).await?;
+        // The rows are filtered before the fields a join hid are removed, so that a subset name can
+        // still name a key the join hid, which `dropna` uses as a key like any other.
+        let hidden = self
+            .resolve_query_plan_with_hidden_fields(input, state)
+            .await?;
+        let input = self.remove_hidden_fields(hidden.clone(), state)?;
         let schema = input.schema();
         // The names are resolved as attribute references, so a name that matches no column is an
         // error rather than being ignored.
         for name in &columns {
-            self.validate_na_column(schema, name.as_ref(), false, state)?;
+            self.validate_na_column(&input, &hidden, name.as_ref(), false, state)?;
         }
         // The entries are parsed once rather than once per column: the name a subset entry
         // matches by does not depend on the column it is compared against.
@@ -243,11 +295,11 @@ impl PlanResolver<'_> {
                         plan_id: None,
                         is_metadata_column: false,
                     },
-                    schema,
+                    hidden.schema(),
                     state,
                 )
                 .await?;
-            let expr_type = expr.get_type(schema)?;
+            let expr_type = expr.get_type(hidden.schema())?;
             let is_nan = self.is_nan_float(expr.clone(), &expr_type);
             not_null_exprs.push(expr.is_not_null().and(is_false(is_nan)));
         }
@@ -266,10 +318,8 @@ impl PlanResolver<'_> {
                 .ok_or_else(|| PlanError::invalid("No columns specified for drop na."))?,
         };
 
-        Ok(LogicalPlan::Filter(Filter::try_new(
-            filter_expr,
-            Arc::new(input),
-        )?))
+        let filtered = LogicalPlan::Filter(Filter::try_new(filter_expr, Arc::new(hidden))?);
+        self.remove_hidden_fields(filtered, state)
     }
 
     fn is_nan_float(&self, expr: Expr, data_type: &DataType) -> Expr {

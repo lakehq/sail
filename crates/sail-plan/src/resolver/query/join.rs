@@ -87,8 +87,20 @@ impl PlanResolver<'_> {
             spec::JoinType::Cross => None,
         };
 
+        let join_type = match (join_type, &join_criteria) {
+            (None, Some(spec::JoinCriteria::Natural)) => {
+                return Err(PlanError::AnalysisError(
+                    "[INCOMPATIBLE_JOIN_TYPES] The join types NATURAL and CROSS are incompatible."
+                        .to_string(),
+                ));
+            }
+            // A cross join with a condition is an inner join on it (`AstBuilder.withJoinRelations`).
+            (None, Some(_)) => Some(JoinType::Inner),
+            (join_type, _) => join_type,
+        };
         match (join_type, join_criteria) {
-            (None, Some(_)) => Err(PlanError::invalid("cross join with join criteria")),
+            // A cross join with join criteria became an inner join above.
+            (None, Some(_)) => Err(PlanError::internal("cross join with join criteria")),
             // When the join criteria are not specified, any join type has the semantics of a cross join.
             (Some(_), None) | (None, None) => {
                 if join_data_type.is_some() {

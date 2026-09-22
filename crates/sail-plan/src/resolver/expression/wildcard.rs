@@ -4,10 +4,9 @@ use arrow::datatypes::DataType;
 use datafusion_common::{DFSchemaRef, TableReference};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::sql::{Ident, ObjectName, ObjectNamePart};
-use datafusion_expr::{ScalarUDF, col, expr, lit};
+use datafusion_expr::{ExprSchemable, ScalarUDF, col, expr, lit};
 use datafusion_functions::core::get_field;
 use sail_common::spec;
-use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::multi_expr::MultiExpr;
 
 use crate::error::{PlanError, PlanResult};
@@ -117,44 +116,26 @@ impl PlanResolver<'_> {
             }
         }
 
-        let candidates = Self::generate_qualified_wildcard_candidates(name.parts())
-            .into_iter()
-            .flat_map(|(q, name)| match name {
-                [] => vec![],
-                [column, inner @ ..] => schema
-                    .iter()
-                    .filter_map(|(qualifier, field)| {
-                        let Ok(info) = state.get_field_info(field.name()) else {
-                            return None;
-                        };
-                        // A wildcard target that is not a qualifier is resolved as an attribute
-                        // reference to the struct that it expands.
-                        if self.match_attribute_qualifier(q.as_ref(), qualifier)
-                            && self.match_field(info, column.as_ref(), None)
-                        {
-                            self.resolve_nested_field_wildcard(
-                                // The expansion compares the qualifier literally, so the column
-                                // refers to the qualifier in the schema rather than the one that
-                                // the user wrote.
-                                col((qualifier, field)),
-                                field.data_type(),
-                                inner,
-                            )
-                            .transpose()
-                        } else {
-                            None
-                        }
-                    })
-                    .collect(),
-            })
-            .collect::<PlanResult<Vec<_>>>()?;
         // No qualifier matched, so Spark resolves the target as an attribute reference and only
         // then requires what it reached to be a struct. A name that is ambiguous, or that walks
         // into a field the struct does not have, is therefore reported from the resolution, and
         // only a target that resolves to nothing is a star that cannot be expanded
-        // (`UnresolvedStarBase.expandStar`).
+        // (`UnresolvedStarBase.expandStar`). The resolution tries the interpretations from the
+        // longest qualifier down and stops at the first that matches, so an interpretation it
+        // shadows is never looked at, not even to find that it is ambiguous.
         let attribute = self.resolve_field_or_nested_field(name, None, schema, state)?;
-        if attribute.is_some() && candidates.len() != 1 {
+        let expanded = attribute
+            .as_ref()
+            .map(|(_, expr)| {
+                self.resolve_nested_field_wildcard::<String>(
+                    expr.clone(),
+                    &expr.get_type(schema)?,
+                    &[],
+                )
+            })
+            .transpose()?
+            .flatten();
+        if attribute.is_some() && expanded.is_none() {
             return Err(PlanError::AnalysisError(format!(
                 "Can only star expand struct data types. Attribute: `List({})`.",
                 name.parts()
@@ -164,7 +145,7 @@ impl PlanResolver<'_> {
                     .join(", ")
             )));
         }
-        candidates.one().map_err(|_| {
+        expanded.ok_or_else(|| {
             let target = quote_identifier_name(
                 &name
                     .parts()
