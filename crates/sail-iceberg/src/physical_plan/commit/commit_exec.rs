@@ -665,7 +665,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 let (adds, deletes, meta) = decode_actions_and_meta_from_batch(&batch)?;
                 added_data_files.extend(adds);
                 added_delete_files.extend(deletes);
-                if let Some(meta) = meta {
+                for meta in meta {
                     Self::merge_writer_commit_meta(&mut commit_meta, meta)?;
                 }
             }

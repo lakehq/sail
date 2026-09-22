@@ -958,7 +958,7 @@ mod tests {
                     _ => return internal_err!("unexpected action from DV writer"),
                 }
             }
-            if let Some(metadata) = metadata {
+            for metadata in metadata {
                 deleted_rows += metadata.row_count;
             }
         }
