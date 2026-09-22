@@ -292,24 +292,72 @@ def test_spark_creates_sail_reads_delta_datasource_table(
     assert [(row.id, row.name) for row in sail_rows] == [(1, "alice"), (2, "bob")]
 
 
-def test_spark_creates_sail_reads_column_mapped_delta_table(
+def _register_delta_schema_in_hms(jvm_spark: SparkSession, database: str, table: str) -> None:
+    """Store the Delta table schema in the HMS entry.
+
+    Depending on the Delta Lake version and configuration, Spark either leaves
+    the HMS schema of a Delta table empty or stores the columns there. Storing
+    the columns explicitly makes Sail resolve the table through the catalog
+    schema, which lacks Delta column-mapping metadata and uses different map
+    entry field names than the Delta log schema.
+    """
+    session = jvm_spark._jsparkSession  # noqa: SLF001
+    schema = session.table(f"{database}.{table}").schema()
+    session.sessionState().catalog().externalCatalog().alterTableDataSchema(database, table, schema)
+
+
+def test_spark_creates_sail_aggregates_column_mapped_delta_table(
     jvm_spark: SparkSession,
     spark: SparkSession,
     hms_s3_database: str,
 ) -> None:
-    """Sail plans aggregates and map projections over a column-mapped Delta table from HMS.
-
-    The HMS-derived schema carries neither Delta column-mapping metadata nor
-    Delta's map entry field names, so the logical schema must be reconciled with
-    the Delta snapshot schema used by the physical scan.
-    """
-    table_fqn = f"{hms_s3_database}.roundtrip_column_mapped_delta"
+    """Sail plans aggregates over a column-mapped Delta table whose schema is stored in HMS."""
+    table = "roundtrip_column_mapped_delta_scalar"
+    table_fqn = f"{hms_s3_database}.{table}"
 
     jvm_spark.sql(
         f"""
         CREATE TABLE {table_fqn}
         USING DELTA
         TBLPROPERTIES ('delta.columnMapping.mode' = 'name')
+        AS
+        SELECT 'event-a' AS file_name, 1 AS id
+        UNION ALL
+        SELECT 'event-a' AS file_name, 2 AS id
+        UNION ALL
+        SELECT 'event-b' AS file_name, 3 AS id
+        """
+    )
+    _register_delta_schema_in_hms(jvm_spark, hms_s3_database, table)
+
+    df = spark.table(table_fqn)
+    assert sorted(row.file_name for row in df.select("file_name").collect()) == ["event-a", "event-a", "event-b"]
+    assert sorted(row.file_name for row in df.select("file_name").dropDuplicates(["file_name"]).collect()) == [
+        "event-a",
+        "event-b",
+    ]
+    counts = spark.sql(
+        f"SELECT file_name, count(*) AS n, sum(id) AS total FROM {table_fqn} GROUP BY file_name ORDER BY file_name"
+    )
+    assert [(row.file_name, row.n, row.total) for row in counts.collect()] == [("event-a", 2, 3), ("event-b", 1, 3)]
+
+
+@pytest.mark.parametrize("column_mapping_mode", ["none", "name"])
+def test_spark_creates_sail_reads_delta_table_with_map(
+    jvm_spark: SparkSession,
+    spark: SparkSession,
+    hms_s3_database: str,
+    column_mapping_mode: str,
+) -> None:
+    """Sail reads and aggregates a Delta table with a map column whose schema is stored in HMS."""
+    table = f"roundtrip_delta_map_{column_mapping_mode}"
+    table_fqn = f"{hms_s3_database}.{table}"
+
+    jvm_spark.sql(
+        f"""
+        CREATE TABLE {table_fqn}
+        USING DELTA
+        TBLPROPERTIES ('delta.columnMapping.mode' = '{column_mapping_mode}')
         AS
         SELECT 'event-a' AS file_name, map('dag_id', 'dag-a') AS properties
         UNION ALL
@@ -318,9 +366,10 @@ def test_spark_creates_sail_reads_column_mapped_delta_table(
         SELECT 'event-b' AS file_name, map('dag_id', 'dag-b') AS properties
         """
     )
+    _register_delta_schema_in_hms(jvm_spark, hms_s3_database, table)
 
     df = spark.table(table_fqn)
-    assert sorted(row.file_name for row in df.select("file_name").collect()) == ["event-a", "event-a", "event-b"]
+    assert df.schema["properties"].dataType.simpleString() == "map<string,string>"
     assert sorted(row.file_name for row in df.select("file_name").dropDuplicates(["file_name"]).collect()) == [
         "event-a",
         "event-b",
@@ -331,8 +380,8 @@ def test_spark_creates_sail_reads_column_mapped_delta_table(
         ("event-a", {"dag_id": "dag-a"}),
         ("event-b", {"dag_id": "dag-b"}),
     ]
-    counts = spark.sql(f"SELECT file_name, count(*) AS n FROM {table_fqn} GROUP BY file_name ORDER BY file_name")
-    assert [(row.file_name, row.n) for row in counts.collect()] == [("event-a", 2), ("event-b", 1)]
+    filtered = spark.sql(f"SELECT file_name FROM {table_fqn} WHERE properties['dag_id'] = 'dag-b'").collect()
+    assert [row.file_name for row in filtered] == ["event-b"]
 
 
 def test_spark_catalog_api_creates_table_sail_reads_external_table(
