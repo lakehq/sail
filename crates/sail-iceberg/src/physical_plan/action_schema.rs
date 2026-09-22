@@ -580,13 +580,13 @@ pub fn encode_commit_meta(meta: CommitMeta) -> Result<RecordBatch> {
 
 pub fn decode_actions_and_meta_from_batch(
     batch: &RecordBatch,
-) -> Result<(Vec<DataFile>, Vec<DataFile>, Option<CommitMeta>)> {
+) -> Result<(Vec<DataFile>, Vec<DataFile>, Vec<CommitMeta>)> {
     let rows: Vec<ActionRow> = serde_arrow::from_record_batch(batch)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     let mut adds: Vec<DataFile> = Vec::new();
     let mut deletes: Vec<DataFile> = Vec::new();
-    let mut meta: Option<CommitMeta> = None;
+    let mut meta = Vec::new();
 
     for row in rows {
         match row.action {
@@ -617,7 +617,7 @@ pub fn decode_actions_and_meta_from_batch(
                     .map(serde_json::from_str::<PartitionSpec>)
                     .transpose()
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                meta = Some(CommitMeta {
+                meta.push(CommitMeta {
                     table_uri: m.table_uri,
                     row_count: m.row_count,
                     removed_data_file_paths: m.removed_data_file_paths,
@@ -642,6 +642,33 @@ mod tests {
     use datafusion::arrow::compute::concat_batches;
 
     use super::*;
+
+    #[test]
+    fn coalesced_batches_preserve_every_writer_commit_meta() -> Result<()> {
+        let first = CommitMeta {
+            table_uri: "file:///table/".to_string(),
+            row_count: 100,
+            removed_data_file_paths: vec!["data/old.parquet".to_string()],
+            skip_empty_commit: true,
+            ..Default::default()
+        };
+        let empty = CommitMeta {
+            row_count: 0,
+            removed_data_file_paths: vec![],
+            ..first.clone()
+        };
+        for metadata in [vec![first.clone(), empty.clone()], vec![empty, first]] {
+            let batches = metadata
+                .iter()
+                .cloned()
+                .map(encode_commit_meta)
+                .collect::<Result<Vec<_>>>()?;
+            let batch = concat_batches(&iceberg_action_schema()?, &batches)?;
+            let (_, _, decoded) = decode_actions_and_meta_from_batch(&batch)?;
+            assert_eq!(decoded, metadata);
+        }
+        Ok(())
+    }
 
     #[test]
     fn bounds_roundtrip_preserves_empty_partial_and_full_maps() -> Result<()> {
@@ -731,7 +758,7 @@ mod tests {
             deletes[0].referenced_data_file.as_deref(),
             Some(df.file_path.as_str())
         );
-        assert_eq!(decoded_meta, Some(meta));
+        assert_eq!(decoded_meta, vec![meta]);
         Ok(())
     }
 }
