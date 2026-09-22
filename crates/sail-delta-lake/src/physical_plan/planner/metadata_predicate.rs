@@ -3,13 +3,15 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, SchemaRef};
 use datafusion::catalog::Session;
+use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{
     Column as LogicalColumn, DataFusionError, Result, ScalarValue, ToDFSchema,
 };
+use datafusion::functions::core::expr_fn::nullif;
 use datafusion::functions::core::getfield::GetFieldFunc;
 use datafusion::logical_expr::expr::{Between, BinaryExpr, Cast, InList};
 use datafusion::logical_expr::utils::{conjunction, disjunction};
-use datafusion::logical_expr::{Expr, Operator};
+use datafusion::logical_expr::{Expr, Operator, lit};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::filter::FilterExec;
 
@@ -34,6 +36,7 @@ pub(crate) fn build_metadata_filter(
     session: &dyn Session,
     input: Arc<dyn ExecutionPlan>,
     snapshot: &DeltaSnapshot,
+    logical_schema: &ArrowSchema,
     predicate: Expr,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let partition_columns = snapshot.metadata().partition_columns().clone();
@@ -42,25 +45,46 @@ pub(crate) fn build_metadata_filter(
         snapshot.schema(),
         snapshot.effective_column_mapping_mode(),
     );
-    let stats_schema = needs_stats
-        .then(|| build_metadata_stats_schema(snapshot, &predicate))
-        .transpose()?;
-    let rewritten = rewrite_predicate_for_metadata(predicate, &partition_columns, &stats_paths);
-    if !needs_stats {
-        let df_schema = input.schema().to_dfschema()?;
-        let physical_expr = simplify_expr(session, &df_schema, rewritten)?;
-        return Ok(Arc::new(FilterExec::try_new(physical_expr, input)?));
-    }
-
-    let input: Arc<dyn ExecutionPlan> = Arc::new(DeltaMetadataStatsExec::new(
-        input,
-        stats_schema.ok_or_else(|| {
-            DataFusionError::Internal("metadata stats schema was not built".to_string())
-        })?,
-    ));
+    let (input, predicate) = if needs_stats {
+        let stats_schema = build_metadata_stats_schema(snapshot, &predicate)?;
+        (
+            Arc::new(DeltaMetadataStatsExec::new(input, stats_schema)) as Arc<dyn ExecutionPlan>,
+            rewrite_predicate_for_metadata(predicate, &partition_columns, &stats_paths),
+        )
+    } else {
+        (input, predicate)
+    };
+    let predicate = type_partition_columns(predicate, &partition_columns, logical_schema)?;
     let df_schema = input.schema().to_dfschema()?;
-    let physical_expr = simplify_expr(session, &df_schema, rewritten)?;
+    let physical_expr = simplify_expr(session, &df_schema, predicate)?;
     Ok(Arc::new(FilterExec::try_new(physical_expr, input)?))
+}
+
+fn type_partition_columns(
+    predicate: Expr,
+    partition_columns: &[String],
+    logical_schema: &ArrowSchema,
+) -> Result<Expr> {
+    // Replay carries raw strings for Add decoding; only predicate inputs use logical types.
+    predicate
+        .transform_up(|expr| {
+            let Expr::Column(column) = &expr else {
+                return Ok(Transformed::no(expr));
+            };
+            if !partition_columns.contains(&column.name) {
+                return Ok(Transformed::no(expr));
+            }
+            let data_type = logical_schema
+                .field_with_name(&column.name)?
+                .data_type()
+                .clone();
+            let value = nullif(expr, lit(""));
+            Ok(Transformed::yes(Expr::Cast(Cast::new(
+                Box::new(value),
+                data_type,
+            ))))
+        })
+        .map(|transformed| transformed.data)
 }
 
 pub(crate) fn build_metadata_stats_schema(
@@ -138,6 +162,13 @@ struct ExprTemplate {
 
 impl MetadataPredicateRewriter<'_> {
     fn rewrite(&self, expr: Expr) -> Expr {
+        if expr
+            .column_refs()
+            .iter()
+            .all(|column| self.partition_columns.contains(&column.name))
+        {
+            return expr;
+        }
         match expr {
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
                 Operator::And | Operator::Or => Expr::BinaryExpr(BinaryExpr::new(
@@ -596,6 +627,74 @@ mod tests {
         let rewritten =
             rewrite_predicate_for_metadata(expr.clone(), &["p".to_string()], &HashMap::new());
         assert_eq!(rewritten, expr);
+    }
+
+    #[test]
+    fn replay_partition_comparisons_use_logical_types_and_nulls() -> Result<()> {
+        let batch = RecordBatch::try_from_iter(vec![
+            (
+                "p",
+                Arc::new(StringArray::from(vec![
+                    Some("10"),
+                    Some("2"),
+                    Some(""),
+                    None,
+                ])) as Arc<_>,
+            ),
+            (
+                "q",
+                Arc::new(StringArray::from(vec!["2", "10", "2", "2"])) as Arc<_>,
+            ),
+        ])?;
+        let ctx = SessionContext::new();
+        let partition_columns = vec!["p".to_string(), "q".to_string()];
+        for (data_type, expected) in [
+            (
+                ArrowDataType::Int32,
+                vec![Some(true), Some(false), None, None],
+            ),
+            (
+                ArrowDataType::Decimal128(10, 2),
+                vec![Some(true), Some(false), None, None],
+            ),
+            (
+                ArrowDataType::Utf8,
+                vec![Some(false), Some(true), None, None],
+            ),
+        ] {
+            let logical_schema = ArrowSchema::new(vec![
+                Field::new("p", data_type.clone(), true),
+                Field::new("q", data_type, true),
+            ]);
+            let predicate = Expr::Column(LogicalColumn::new_unqualified("p"))
+                .gt(Expr::Column(LogicalColumn::new_unqualified("q")));
+            let predicate = type_partition_columns(predicate, &partition_columns, &logical_schema)?;
+            let physical = simplify_expr(&ctx.state(), &batch.schema().to_dfschema()?, predicate)?;
+            let actual = physical.evaluate(&batch)?.into_array(batch.num_rows())?;
+            assert_eq!(
+                actual.as_ref(),
+                &datafusion::arrow::array::BooleanArray::from(expected)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn mixed_metadata_predicates_preserve_exact_partition_subexpressions() {
+        let p = Expr::Column(LogicalColumn::new_unqualified("p"));
+        let q = Expr::Column(LogicalColumn::new_unqualified("q"));
+        let value = Expr::Column(LogicalColumn::new_unqualified("value"));
+        let exact = p.gt(q);
+        // A data-column comparison has no usable bounds; its OR must retain every file.
+        let unsupported = value.clone().gt(value);
+        for op in [Operator::And, Operator::Or] {
+            let actual = rewrite_predicate_for_metadata(
+                binary(exact.clone(), op, unsupported.clone()),
+                &["p".to_string(), "q".to_string()],
+                &HashMap::new(),
+            );
+            assert_eq!(actual, binary(exact.clone(), op, literal_true()));
+        }
     }
 
     #[test]
