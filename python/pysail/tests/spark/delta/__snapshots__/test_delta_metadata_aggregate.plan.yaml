@@ -423,7 +423,7 @@ data:
         AggregateExec: mode=Final, gby=[], aggr=[min(?table?.#1) as __sail_residual_aggregate_2, max(?table?.#1) as __sail_residual_aggregate_3]
           CoalescePartitionsExec
             AggregateExec: mode=Partial, gby=[], aggr=[min(?table?.#1) as __sail_residual_aggregate_2, max(?table?.#1) as __sail_residual_aggregate_3]
-              DataSourceExec: file_groups={4 groups: [[<tmp>/delta_partition_cast/v=10/part-<id>.snappy.parquet], [<tmp>/delta_partition_cast/v=2/part-<id>.snappy.parquet], [<tmp>/delta_partition_cast/v=3/part-<id>.snappy.parquet], [<tmp>/delta_partition_cast/v=__HIVE_DEFAULT_PARTITION__/part-<id>.snappy.parquet]]}, projection=[CAST(v@1 AS Utf8) as __common_expr_1], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+              DataSourceExec: file_groups={4 groups: [[<tmp>/delta_partition_cast/v=10/part-<id>.snappy.parquet], [<tmp>/delta_partition_cast/v=2/part-<id>.snappy.parquet], [<tmp>/delta_partition_cast/v=3/part-<id>.snappy.parquet], [<tmp>/delta_partition_cast/v=__HIVE_DEFAULT_PARTITION__/part-<id>.snappy.parquet]]}, projection=[CAST(v@1 AS Utf8) as __common_expr_1], file_type=parquet
   extrema: |-
     == Physical Plan ==
     ProjectionExec: expr=[#2@0 as minimum, #3@1 as maximum]
@@ -431,7 +431,7 @@ data:
         AggregateExec: mode=Final, gby=[], aggr=[min(?table?.#1), max(?table?.#1)]
           CoalescePartitionsExec
             AggregateExec: mode=Partial, gby=[], aggr=[min(?table?.#1), max(?table?.#1)]
-              DataSourceExec: file_groups={4 groups: [[<tmp>/delta_partition_cast/v=10/part-<id>.snappy.parquet], [<tmp>/delta_partition_cast/v=2/part-<id>.snappy.parquet], [<tmp>/delta_partition_cast/v=3/part-<id>.snappy.parquet], [<tmp>/delta_partition_cast/v=__HIVE_DEFAULT_PARTITION__/part-<id>.snappy.parquet]]}, projection=[CAST(v@1 AS Utf8) as __common_expr_1], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+              DataSourceExec: file_groups={4 groups: [[<tmp>/delta_partition_cast/v=10/part-<id>.snappy.parquet], [<tmp>/delta_partition_cast/v=2/part-<id>.snappy.parquet], [<tmp>/delta_partition_cast/v=3/part-<id>.snappy.parquet], [<tmp>/delta_partition_cast/v=__HIVE_DEFAULT_PARTITION__/part-<id>.snappy.parquet]]}, projection=[CAST(v@1 AS Utf8) as __common_expr_1], file_type=parquet
 ---
 name: "test_partition_cast_extrema_preserve_lexical_order[metadata]"
 data:
