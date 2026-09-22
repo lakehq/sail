@@ -803,6 +803,7 @@ async fn load_delta_read_state(
         commit_version_column_name: None,
         commit_timestamp_column_name: None,
         delta_log_replay_strategy: options.delta_log_replay_strategy,
+        metadata_aggregate: None,
     };
 
     Ok((snapshot, log_store, scan_config))

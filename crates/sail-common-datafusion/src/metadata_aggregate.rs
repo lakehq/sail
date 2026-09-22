@@ -2,9 +2,9 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::common::stats::{ColumnStatistics, Precision};
-use datafusion::common::tree_node::TreeNode;
+use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{Column, DFSchema, Result, ScalarValue};
 use datafusion::functions::core::getfield::GetFieldFunc;
 use datafusion::functions_aggregate::count::Count;
@@ -73,56 +73,49 @@ pub fn rewrite_aggregate(
     )))
 }
 
-pub enum AggregateInput<'a> {
-    Scan(&'a TableScan),
-    Projection {
-        projection: &'a Projection,
-        scan: &'a TableScan,
-    },
+pub struct AggregateInput<'a> {
+    plan: &'a LogicalPlan,
+    scan: &'a TableScan,
 }
 
 impl<'a> AggregateInput<'a> {
     pub fn try_new(plan: &'a LogicalPlan) -> Option<Self> {
-        match plan {
-            LogicalPlan::TableScan(scan) => Some(Self::Scan(scan)),
-            LogicalPlan::Projection(projection) => match projection.input.as_ref() {
-                LogicalPlan::TableScan(scan) => Some(Self::Projection { projection, scan }),
-                _ => None,
-            },
-            _ => None,
+        let mut input = plan;
+        loop {
+            match input {
+                LogicalPlan::TableScan(scan) => return Some(Self { plan, scan }),
+                LogicalPlan::Projection(projection) => input = projection.input.as_ref(),
+                LogicalPlan::SubqueryAlias(alias) => input = alias.input.as_ref(),
+                _ => return None,
+            }
         }
     }
 
     pub fn scan(&self) -> &'a TableScan {
-        match self {
-            Self::Scan(scan) | Self::Projection { scan, .. } => scan,
-        }
+        self.scan
     }
 
-    pub fn source_column(&self, aggregate_column: &Column) -> Option<String> {
-        let scan_column = match self {
-            Self::Scan(_) => aggregate_column,
-            Self::Projection { projection, .. } => {
-                let index = projection.schema.index_of_column(aggregate_column).ok()?;
-                projected_column(projection.expr.get(index)?)?
+    pub fn source_column(
+        &self,
+        aggregate_column: &Column,
+        source_schema: &Schema,
+    ) -> Option<String> {
+        let expression = resolve_input_expression(
+            self.plan,
+            &Expr::Column(aggregate_column.clone()),
+            source_schema,
+        )?;
+        match expression {
+            SourceExpression::Column { logical_path, .. } if logical_path.len() == 1 => {
+                logical_path.into_iter().next()
             }
-        };
-        let scan = self.scan();
-        let projected_index = scan.projected_schema.index_of_column(scan_column).ok()?;
-        let source_index = match &scan.projection {
-            Some(projection) => *projection.get(projected_index)?,
-            None => projected_index,
-        };
-        scan.source
-            .schema()
-            .fields()
-            .get(source_index)
-            .map(|field| field.name().clone())
+            _ => None,
+        }
     }
 
     pub fn replace_source(&self, source: Arc<dyn TableSource>) -> Result<LogicalPlan> {
         let scan = self.scan();
-        let scan = LogicalPlan::TableScan(
+        let replacement = LogicalPlan::TableScan(
             TableScanBuilder::new(scan.table_name.clone(), source)
                 .with_projection(scan.projection.clone())
                 .with_filters(scan.filters.clone())
@@ -130,16 +123,13 @@ impl<'a> AggregateInput<'a> {
                 .with_statistics_requests(scan.statistics_requests.clone())
                 .build()?,
         );
-        match self {
-            Self::Scan(_) => Ok(scan),
-            Self::Projection { projection, .. } => {
-                Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
-                    projection.expr.clone(),
-                    Arc::new(scan),
-                    Arc::clone(&projection.schema),
-                )?))
-            }
-        }
+        self.plan
+            .clone()
+            .transform_up(|plan| match plan {
+                LogicalPlan::TableScan(_) => Ok(Transformed::yes(replacement.clone())),
+                _ => Ok(Transformed::no(plan)),
+            })
+            .map(|transformed| transformed.data)
     }
 
     fn source_expression(
@@ -147,12 +137,7 @@ impl<'a> AggregateInput<'a> {
         expression: &Expr,
         source: &dyn ExactAggregateStatistics,
     ) -> Option<SourceExpression> {
-        match self {
-            Self::Scan(scan) => resolve_scan_expression(scan, expression, source),
-            Self::Projection { projection, scan } => {
-                resolve_projection_expression(projection, scan, expression, source)
-            }
-        }
+        resolve_input_expression(self.plan, expression, source.schema().as_ref())
     }
 }
 
@@ -177,22 +162,34 @@ struct ValueStatistics {
     max_value: Precision<ScalarValue>,
 }
 
-fn resolve_projection_expression(
-    projection: &Projection,
-    scan: &TableScan,
+fn resolve_input_expression(
+    plan: &LogicalPlan,
     expression: &Expr,
-    source: &dyn ExactAggregateStatistics,
+    source_schema: &Schema,
 ) -> Option<SourceExpression> {
-    resolve_expression(expression, &|column| {
-        let index = projection.schema.index_of_column(column).ok()?;
-        resolve_scan_expression(scan, projection.expr.get(index)?, source)
-    })
+    match plan {
+        LogicalPlan::TableScan(scan) => resolve_scan_expression(scan, expression, source_schema),
+        LogicalPlan::Projection(projection) => resolve_expression(expression, &|column| {
+            let index = projection.schema.index_of_column(column).ok()?;
+            resolve_input_expression(
+                projection.input.as_ref(),
+                projection.expr.get(index)?,
+                source_schema,
+            )
+        }),
+        LogicalPlan::SubqueryAlias(alias) => resolve_expression(expression, &|column| {
+            let index = alias.schema.index_of_column(column).ok()?;
+            let column = alias.input.schema().columns().get(index)?.clone();
+            resolve_input_expression(alias.input.as_ref(), &Expr::Column(column), source_schema)
+        }),
+        _ => None,
+    }
 }
 
 fn resolve_scan_expression(
     scan: &TableScan,
     expression: &Expr,
-    source: &dyn ExactAggregateStatistics,
+    source_schema: &Schema,
 ) -> Option<SourceExpression> {
     resolve_expression(expression, &|column| {
         let projected_index = scan.projected_schema.index_of_column(column).ok()?;
@@ -201,7 +198,6 @@ fn resolve_scan_expression(
             None => projected_index,
         };
         let scan_field = scan.source.schema().fields().get(source_index)?.clone();
-        let source_schema = source.schema();
         let snapshot_field = source_schema
             .fields()
             .iter()
@@ -638,14 +634,6 @@ fn constant_scalar(expression: &Expr) -> Option<ScalarValue> {
             .and_then(|value| value.cast_to(cast.field.data_type()).ok()),
         Expr::TryCast(cast) => constant_scalar(cast.expr.as_ref())
             .and_then(|value| value.cast_to(cast.field.data_type()).ok()),
-        _ => None,
-    }
-}
-
-fn projected_column(expression: &Expr) -> Option<&Column> {
-    match expression {
-        Expr::Column(column) => Some(column),
-        Expr::Alias(alias) => projected_column(alias.expr.as_ref()),
         _ => None,
     }
 }
