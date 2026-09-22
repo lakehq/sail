@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::{Schema, SchemaBuilder};
 use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion::common::{Constraints, Result, Statistics};
 use datafusion::config::ConfigOptions;
@@ -12,6 +13,7 @@ use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::filter::{FilterExec, FilterExecBuilder};
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::union::UnionExec;
+use datafusion::physical_plan::unnest::UnnestExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning, PhysicalExpr};
 use sail_common_datafusion::input_file::{
     InputFileMetadata, InputFileMetadataSource, expression_references_input_file_metadata,
@@ -100,12 +102,15 @@ impl PhysicalOptimizerRule for PushDownInputFileMetadata {
         if !plan_references_input_file_metadata(&plan)? {
             return Ok(plan);
         }
-        let mut plan = plan.transform_up(extract_metadata_projection)?.data;
+        let mut plan = plan;
         loop {
             plan = self.projection_pushdown.optimize(plan, config)?;
-            let pushed = plan.transform_down(push_metadata_through_file_context)?;
+            let extracted = plan.transform_up(extract_metadata_projection)?;
+            let pushed = extracted
+                .data
+                .transform_down(push_metadata_through_file_context)?;
             plan = pushed.data;
-            if !pushed.transformed {
+            if !extracted.transformed && !pushed.transformed {
                 return Ok(plan);
             }
         }
@@ -133,15 +138,25 @@ fn extract_metadata_projection(
     let Some(projection) = plan.downcast_ref::<ProjectionExec>() else {
         return Ok(Transformed::no(plan));
     };
-    if !projection_references_input_file_metadata(projection.projection_expr())
-        || projection.expr().iter().all(|expression| {
-            expression.expr.is::<Column>() || is_metadata_expression(&expression.expr)
-        })
-    {
+    if !projection_references_input_file_metadata(projection.projection_expr()) {
         return Ok(Transformed::no(plan));
     }
-    let (expressions, extracted) = extract_metadata_expressions(projection)?;
+    let contains_lambda = projection
+        .expr()
+        .iter()
+        .try_fold(false, |found, expression| {
+            Ok::<_, datafusion::common::DataFusionError>(
+                found
+                    || expression
+                        .expr
+                        .exists(|expression| Ok(expression.is::<LambdaVariable>()))?,
+            )
+        })?;
+    if !contains_lambda {
+        return Ok(Transformed::no(plan));
+    }
     let schema = projection.input().schema();
+    let (expressions, extracted) = extract_metadata_expressions(projection, &schema)?;
     let identity =
         ProjectionExprs::from_indices(&(0..schema.fields().len()).collect::<Vec<_>>(), &schema);
     let input = Arc::new(ProjectionExec::try_new(
@@ -158,6 +173,7 @@ fn extract_metadata_projection(
 
 fn extract_metadata_expressions(
     projection: &ProjectionExec,
+    target_schema: &Schema,
 ) -> Result<(ProjectionExprs, Vec<ProjectionExpr>)> {
     let schema = projection.input().schema();
     let mut extracted: Vec<ProjectionExpr> = Vec::new();
@@ -180,6 +196,7 @@ fn extract_metadata_expressions(
                             let alias = loop {
                                 let alias = format!("__sail_input_file_metadata_{suffix}");
                                 if schema.field_with_name(&alias).is_err()
+                                    && target_schema.field_with_name(&alias).is_err()
                                     && !extracted.iter().any(|expression| expression.alias == alias)
                                 {
                                     break alias;
@@ -227,8 +244,8 @@ fn push_metadata_through_file_context(
         return Ok(Transformed::no(plan));
     }
     if let Some(filter) = projection.input().downcast_ref::<FilterExec>() {
-        let (expressions, metadata) = extract_metadata_expressions(projection)?;
         let schema = filter.input().schema();
+        let (expressions, metadata) = extract_metadata_expressions(projection, &schema)?;
         let column_count = schema.fields().len();
         let identity =
             ProjectionExprs::from_indices(&(0..column_count).collect::<Vec<_>>(), &schema);
@@ -254,6 +271,39 @@ fn push_metadata_through_file_context(
         let rewritten = ProjectionExec::try_new_with_schema_metadata(
             expressions.iter().cloned(),
             Arc::new(filter),
+            projection.schema().as_ref(),
+        )?;
+        return Ok(Transformed::yes(Arc::new(rewritten)));
+    }
+    if let Some(unnest) = projection.input().downcast_ref::<UnnestExec>() {
+        let schema = unnest.input().schema();
+        let (expressions, metadata) = extract_metadata_expressions(projection, &schema)?;
+        let identity =
+            ProjectionExprs::from_indices(&(0..schema.fields().len()).collect::<Vec<_>>(), &schema);
+        let input = Arc::new(ProjectionExec::try_new(
+            identity.iter().cloned().chain(metadata),
+            Arc::clone(unnest.input()),
+        )?) as Arc<dyn ExecutionPlan>;
+        // Appended metadata columns are repeated with each generated row.
+        let mut output_schema = SchemaBuilder::from(unnest.schema().as_ref());
+        output_schema.extend(
+            input
+                .schema()
+                .fields()
+                .iter()
+                .skip(schema.fields().len())
+                .cloned(),
+        );
+        let unnest = UnnestExec::new(
+            input,
+            unnest.list_column_indices().to_vec(),
+            unnest.struct_column_indices().to_vec(),
+            Arc::new(output_schema.finish()),
+            unnest.options().clone(),
+        )?;
+        let rewritten = ProjectionExec::try_new_with_schema_metadata(
+            expressions.iter().cloned(),
+            Arc::new(unnest),
             projection.schema().as_ref(),
         )?;
         return Ok(Transformed::yes(Arc::new(rewritten)));

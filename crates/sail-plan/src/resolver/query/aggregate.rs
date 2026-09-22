@@ -15,6 +15,7 @@ use datafusion_expr::{
 };
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use sail_common::spec;
+use sail_common_datafusion::input_file::is_input_file_metadata_function;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::scalar::explode::Explode;
@@ -38,8 +39,8 @@ use crate::resolver::tree::window::WindowRewriter;
 /// grouping is materialized), paired with the indices of the deferred projections.
 type ResolvedProjections = (Vec<Option<NamedExpr>>, Vec<usize>);
 
-/// A map from a grouping generator expression to the column that materializes it.
-type GeneratorReplacements = Vec<(Expr, Expr)>;
+/// A map from a grouping expression to the column that materializes it.
+type GroupingReplacements = Vec<(Expr, Expr)>;
 
 /// Returns the name of a volatile (non-deterministic) scalar expression found
 /// in an aggregate context. Catches two Spark CheckAnalysis violations:
@@ -111,15 +112,6 @@ impl PlanResolver<'_> {
             )
             .await?;
 
-        // Spark CheckAnalysis: reject non-deterministic expressions in aggregate context
-        for proj in &projections {
-            if let Some(name) = find_volatile_in_aggregate_context(&proj.expr) {
-                return Err(PlanError::AnalysisError(format!(
-                    "Non-deterministic expression {name} should not appear in an aggregate query",
-                )));
-            }
-        }
-
         // Spark CheckAnalysis: GroupedAgg Pandas/Arrow UDFs cannot be mixed with regular
         // (non-UDF) aggregate functions in the same .agg() call.
         Self::check_no_mixed_grouped_agg_udf(&projections)?;
@@ -131,13 +123,43 @@ impl PlanResolver<'_> {
             });
             let state = scope.state();
             match having {
-                Some(having) => Some(Self::replace_generator_expressions(
+                Some(having) => Some(Self::replace_grouping_expressions(
                     self.resolve_expression(having, schema, state).await?,
                     &generator_replacements,
                 )?),
                 None => None,
             }
         };
+
+        let resolved_grouping = self.resolve_grouping_positions(grouping.clone(), &projections)?;
+        let (input, replacements) =
+            Self::materialize_grouping_input_file_metadata(input, &resolved_grouping, state)?;
+        let rewrite = |named: NamedExpr| -> PlanResult<NamedExpr> {
+            Ok(NamedExpr {
+                expr: Self::replace_grouping_expressions(named.expr, &replacements)?,
+                ..named
+            })
+        };
+        let grouping = grouping
+            .into_iter()
+            .map(rewrite)
+            .collect::<PlanResult<_>>()?;
+        let projections = projections
+            .into_iter()
+            .map(rewrite)
+            .collect::<PlanResult<Vec<_>>>()?;
+        let having = having
+            .map(|expr| Self::replace_grouping_expressions(expr, &replacements))
+            .transpose()?;
+
+        // Grouped metadata now references input columns; other volatile calls remain invalid.
+        for proj in &projections {
+            if let Some(name) = find_volatile_in_aggregate_context(&proj.expr) {
+                return Err(PlanError::AnalysisError(format!(
+                    "Non-deterministic expression {name} should not appear in an aggregate query",
+                )));
+            }
+        }
 
         self.rewrite_aggregate(
             input,
@@ -744,7 +766,7 @@ impl PlanResolver<'_> {
                 })?;
                 Ok(NamedExpr {
                     name,
-                    expr: Self::replace_generator_expressions(expr, generator_replacements)?,
+                    expr: Self::replace_grouping_expressions(expr, generator_replacements)?,
                     metadata,
                 })
             })
@@ -923,7 +945,7 @@ impl PlanResolver<'_> {
         input: LogicalPlan,
         grouping: Vec<NamedExpr>,
         state: &mut PlanResolverState,
-    ) -> PlanResult<(LogicalPlan, Vec<NamedExpr>, GeneratorReplacements)> {
+    ) -> PlanResult<(LogicalPlan, Vec<NamedExpr>, GroupingReplacements)> {
         if !grouping.iter().any(Self::grouping_has_generator) {
             return Ok((input, grouping, vec![]));
         }
@@ -961,12 +983,47 @@ impl PlanResolver<'_> {
             .unwrap_or(false)
     }
 
-    /// Replaces each generator expression with a reference to its materialized
-    /// grouping column, so a re-used generator resolves to the same column.
-    fn replace_generator_expressions(
-        expr: Expr,
-        replacements: &[(Expr, Expr)],
-    ) -> PlanResult<Expr> {
+    fn materialize_grouping_input_file_metadata(
+        input: LogicalPlan,
+        grouping: &[NamedExpr],
+        state: &mut PlanResolverState,
+    ) -> PlanResult<(LogicalPlan, GroupingReplacements)> {
+        let mut metadata = Vec::new();
+        for group in grouping {
+            group.expr.apply(|expr| {
+                if let Expr::ScalarFunction(function) = expr
+                    && is_input_file_metadata_function(&function.func)
+                    && !metadata.contains(expr)
+                {
+                    metadata.push(expr.clone());
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+        }
+        if metadata.is_empty() {
+            return Ok((input, vec![]));
+        }
+
+        let mut projection = input
+            .schema()
+            .columns()
+            .into_iter()
+            .map(Expr::Column)
+            .collect::<Vec<_>>();
+        let replacements = metadata
+            .into_iter()
+            .map(|expr| {
+                let name = state.register_field_name("");
+                projection.push(expr.clone().alias(&name));
+                (expr, Expr::Column(Column::from_name(name)))
+            })
+            .collect();
+        let input = LogicalPlan::Projection(Projection::try_new(projection, Arc::new(input))?);
+        Ok((input, replacements))
+    }
+
+    /// Reuses the input column for each materialized grouping expression.
+    fn replace_grouping_expressions(expr: Expr, replacements: &[(Expr, Expr)]) -> PlanResult<Expr> {
         if replacements.is_empty() {
             return Ok(expr);
         }

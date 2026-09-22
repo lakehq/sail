@@ -1,3 +1,4 @@
+from collections import Counter
 from itertools import pairwise
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -67,6 +68,62 @@ def test_input_file_metadata_inside_lambda(parquet_metadata):
         assert row.nested == [
             [f"{name}{2 * value + row.id}", f"{name}{2 * value + row.id + 1}"] for value in [row.id, row.id + 1]
         ]
+
+
+@pytest.mark.parametrize(
+    "generator", ["explode", "explode_outer", "posexplode", "posexplode_outer", "inline", "inline_outer"]
+)
+@pytest.mark.parametrize("select_after", [False, True])
+def test_input_file_metadata_survives_generators(parquet_metadata, generator, select_after):
+    dataframe, files = parquet_metadata
+    dataframe = dataframe.selectExpr("id", "CASE id WHEN 2 THEN array() WHEN 4 THEN NULL ELSE arr END AS arr")
+    if generator.startswith("inline"):
+        expression = f"{generator}(transform(arr, x -> named_struct('item', cast(x AS BIGINT)))) AS item"
+    elif generator.startswith("posexplode"):
+        expression = f"{generator}(arr) AS (pos, item)"
+    else:
+        expression = f"{generator}(arr) AS item"
+    metadata = [
+        "input_file_name() AS file_name",
+        "input_file_block_start() AS block_start",
+        "input_file_block_length() AS block_length",
+    ]
+    if select_after:
+        dataframe = dataframe.selectExpr("id", expression).selectExpr("*", *metadata)
+    else:
+        dataframe = dataframe.selectExpr("id", expression, *metadata)
+    rows = dataframe.collect()
+
+    expected = [
+        (key, item, *file)
+        for key, file in files.items()
+        for item in ([key, key + 1] if key % 2 else ([None] if generator.endswith("outer") else []))
+    ]
+    assert sorted((row.id, row.item, row.file_name, row.block_start, row.block_length) for row in rows) == expected
+    if generator.startswith("posexplode"):
+        assert sorted((row.id, row.pos) for row in rows) == [
+            (key, position)
+            for key in files
+            for position in ([0, 1] if key % 2 else ([None] if generator.endswith("outer") else []))
+        ]
+
+
+@pytest.mark.parametrize("function", ["input_file_name", "input_file_block_start", "input_file_block_length"])
+@pytest.mark.parametrize("grouping", ["expression", "alias", "ordinal"])
+def test_input_file_metadata_sql_grouping(spark, parquet_metadata, function, grouping):
+    dataframe, files = parquet_metadata
+    index = ["input_file_name", "input_file_block_start", "input_file_block_length"].index(function)
+    expected = Counter(metadata[index] for metadata in files.values())
+    group = {"expression": f"{function}()", "alias": "metadata", "ordinal": "1"}[grouping]
+    dataframe.createOrReplaceTempView("input_file_grouping")
+    try:
+        rows = spark.sql(
+            f"SELECT {function}() AS metadata, count(*) AS n, max({function}()) AS maximum "  # noqa: S608
+            f"FROM input_file_grouping GROUP BY {group}"
+        ).collect()
+        assert sorted(tuple(row) for row in rows) == sorted((value, count, value) for value, count in expected.items())
+    finally:
+        spark.catalog.dropTempView("input_file_grouping")
 
 
 @pytest.mark.parametrize("function", ["input_file_name", "input_file_block_start", "input_file_block_length"])

@@ -37,6 +37,45 @@ Feature: input_file_name
         | 1  | 2        | 2         | 2          |
         | 2  | 3        | 3         | 3          |
 
+  Rule: SQL grouping
+
+    Scenario: Input file metadata is materialized for SQL grouping
+      When query
+        """
+        SELECT length(input_file_name()) AS name_length,
+               input_file_block_start() AS block_start,
+               input_file_block_length() AS block_length,
+               count(*) AS row_count
+        FROM range(3)
+        GROUP BY input_file_name(), input_file_block_start(), input_file_block_length()
+        HAVING length(input_file_name()) = 0
+        """
+      Then query result
+        | name_length | block_start | block_length | row_count |
+        | 0           | -1          | -1           | 3         |
+
+    Scenario Outline: Ungrouped metadata remains invalid inside aggregates
+      When query
+        """
+        SELECT max(<function>()) FROM range(3) GROUP BY id % 2
+        """
+      Then query error Non-deterministic expression
+
+      Examples:
+        | function                |
+        | input_file_name         |
+        | input_file_block_start  |
+        | input_file_block_length |
+
+    Scenario: Grouped metadata does not exempt another volatile aggregate argument
+      When query
+        """
+        SELECT input_file_name(), max(rand(1))
+        FROM range(3)
+        GROUP BY input_file_name()
+        """
+      Then query error Non-deterministic expression
+
   @function(nullability)
   Rule: Output schema
 
