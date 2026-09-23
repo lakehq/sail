@@ -483,9 +483,7 @@ def _cases():
         )
         if key[1:] == ("nullbase", "t.n.x"):
             # Before 4.2 Spark refuses to read a field of a NULL base (`ExtractValue.applyOrNull`).
-            marks.append(
-                pytest.mark.skipif(is_jvm_spark() and pyspark_version() < (4, 2), reason="Spark 4.2 behavior")
-            )
+            marks.append(pytest.mark.skipif(is_jvm_spark() and pyspark_version() < (4, 2), reason="Spark 4.2 behavior"))
         yield pytest.param(*key, id="-".join(key), marks=marks)
 
 

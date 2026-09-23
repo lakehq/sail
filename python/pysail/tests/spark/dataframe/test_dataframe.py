@@ -1687,6 +1687,24 @@ def test_union_by_name_reports_the_error_spark_reports_first(spark, left, right,
         _ = result.schema
 
 
+@pytest.mark.parametrize(
+    ("operation", "rows"),
+    [
+        (lambda d: d.select(spark_max("s")), [Row(**{"max(s)": "B"})]),
+        (lambda d: d.groupBy("id").agg(spark_max("s")), [Row(id=1, **{"max(s)": "A"}), Row(id=2, **{"max(s)": "B"})]),
+        (lambda d: d.select(count("s")), [Row(**{"count(s)": 2})]),
+        (lambda d: d.withMetadata("s", {}).select(spark_max("s")), [Row(**{"max(s)": "B"})]),
+    ],
+)
+def test_an_aggregate_reads_a_column_that_carries_metadata(spark, operation, rows):
+    # The metadata a column carries reaches the plan but not the batch, so an aggregate over it
+    # used to fail with "Physical input schema should be the same as the one converted from
+    # logical input schema" (issue #1568).
+    frame = spark.sql("SELECT * FROM VALUES (1, 'A'), (2, 'B') AS t(id, s)").withMetadata("s", {"foo": "bar"})
+
+    assert sorted(operation(frame).collect(), key=repr) == sorted(rows, key=repr)
+
+
 def _field(name, data_type, nullable):
     return {"metadata": {}, "name": name, "nullable": nullable, "type": data_type}
 

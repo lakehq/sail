@@ -148,6 +148,7 @@ def _cases(spark):
         "with_metadata_unknown_name": lambda: base().withMetadata("nope", {"k": "v"}),
         "with_metadata_non_ascii": lambda: spark.sql("SELECT 1 AS `ä`").withMetadata("Ä", {"k": "v"}),
         "with_metadata_replaces": lambda: base().withMetadata("a", {"k": "v"}).withMetadata("a", {"j": "w"}),
+        "with_metadata_cleared": lambda: base().withMetadata("a", {"k": "v"}).withMetadata("a", {}),
     }
 
 
@@ -212,6 +213,9 @@ RESULTS = [
     ("with_metadata_non_ascii", "false", ["Ä"], ["{'Ä': 1}"], [{"k": "v"}]),
     ("with_metadata_replaces", "false", ["a", "b"], ["{'a': 1, 'b': 2}"], [{"j": "w"}, {}]),
     ("with_metadata_replaces", "true", ["a", "b"], ["{'a': 1, 'b': 2}"], [{"j": "w"}, {}]),
+    # An empty map is how metadata is removed, since `withMetadata` replaces it (issue #1815).
+    ("with_metadata_cleared", "false", ["a", "b"], ["{'a': 1, 'b': 2}"], [{}, {}]),
+    ("with_metadata_cleared", "true", ["a", "b"], ["{'a': 1, 'b': 2}"], [{}, {}]),
 ]
 
 # (case, caseSensitive, error condition)
