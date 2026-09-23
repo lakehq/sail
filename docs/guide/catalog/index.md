@@ -48,7 +48,7 @@ All remote catalog providers (excluding the [Memory catalog](./memory)) support 
 - `database_cache_ttl_secs` (optional): The time-to-live for cached database listings. Set this option in seconds. Set it to `0` to disable expiration.
 - `table_cache_type` (optional): The scope of the table cache, which holds table listings and the tables loaded from the catalog for reads. Valid values are `none`, `global`, and `session`. The default is `none`.
 - `table_cache_size` (optional): The maximum number of entries in the table cache. Set this option to `0` for an unbounded cache.
-- `table_cache_ttl_secs` (optional): The time-to-live for cached table listings and loaded tables. Set this option in seconds. Set it to `0` to disable expiration.
+- `table_cache_ttl_secs` (optional): The time-to-live for cached table listings and loaded tables. Set this option in seconds. Set it to `0` to disable expiration for table listings; loaded tables always expire, after 60 seconds when no time-to-live is set.
 - `view_cache_type` (optional): The scope of the view listing cache. Valid values are `none`, `global`, and `session`. The default is `none`.
 - `view_cache_size` (optional): The maximum number of entries in the view listing cache. Set this option to `0` for an unbounded cache.
 - `view_cache_ttl_secs` (optional): The time-to-live for cached view listings. Set this option in seconds. Set it to `0` to disable expiration.

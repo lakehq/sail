@@ -36,6 +36,10 @@ type TableKey = (Namespace, String);
 /// so it is never handed out with credentials about to lapse.
 const TABLE_ACCESS_EXPIRY_SKEW_MS: i64 = 60_000;
 
+/// The time-to-live of a loaded table when the table cache has no TTL.
+/// A loaded table pins a snapshot of the table, so unlike a listing it always expires.
+const DEFAULT_LOADED_TABLE_TTL_SECS: u64 = 60;
+
 /// Caches what loading a single table returns: the table status, and the resolved
 /// lakehouse table and the table access session for reads. It follows the table
 /// cache settings, so a remote catalog is not asked to load the same table again
@@ -89,14 +93,15 @@ where
     K: std::hash::Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
 {
+    let ttl = ttl_secs
+        .filter(|&t| t > 0)
+        .unwrap_or(DEFAULT_LOADED_TABLE_TTL_SECS);
     let mut builder = Cache::builder()
         .eviction_policy(EvictionPolicy::lru())
-        .support_invalidation_closures();
+        .support_invalidation_closures()
+        .time_to_live(Duration::from_secs(ttl));
     if let Some(size) = size.filter(|&s| s > 0) {
         builder = builder.max_capacity(size as u64);
-    }
-    if let Some(ttl) = ttl_secs.filter(|&t| t > 0) {
-        builder = builder.time_to_live(Duration::from_secs(ttl));
     }
     builder
 }
@@ -1497,6 +1502,22 @@ mod tests {
         read_table(&provider, &ns, "t1").await;
         read_table(&provider, &ns, "t1").await;
         assert_eq!(mock.access_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn test_loaded_table_cache_always_expires() {
+        let default_ttl = Some(Duration::from_secs(DEFAULT_LOADED_TABLE_TTL_SECS));
+        for ttl_secs in [None, Some(0)] {
+            let cache = LoadedTableCache::new(None, ttl_secs);
+            assert_eq!(cache.status.policy().time_to_live(), default_ttl);
+            assert_eq!(cache.resolved.policy().time_to_live(), default_ttl);
+            assert_eq!(cache.access.policy().time_to_live(), default_ttl);
+        }
+        let cache = LoadedTableCache::new(None, Some(3600));
+        assert_eq!(
+            cache.status.policy().time_to_live(),
+            Some(Duration::from_secs(3600))
+        );
     }
 
     #[tokio::test]
