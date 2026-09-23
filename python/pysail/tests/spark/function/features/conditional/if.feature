@@ -84,6 +84,23 @@ Feature: if output schema
          |-- result: long (nullable = true)
         """
 
+  Rule: Nested numeric and STRING branches
+
+    Scenario: IF preserves nested STRING values with ANSI disabled
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT
+          id,
+          if(id = 0, CAST(2 AS BIGINT), if(id = 1, 1, 'x')) AS result
+        FROM VALUES (0), (1), (2) AS t(id)
+        """
+      Then query result
+        | id | result |
+        | 0  | 2      |
+        | 1  | 1      |
+        | 2  | x      |
+
   @function(nullability)
   Rule: Output schema
 

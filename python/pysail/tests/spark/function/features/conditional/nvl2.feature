@@ -16,17 +16,17 @@ Feature: nvl2 output schema
 
   Rule: Result type
 
-    @sail-bug
     Scenario: nvl2 is typed by its result arguments when the tested argument is a widened CASE
       When query
         """
         SELECT
           id,
-          nvl2(CASE WHEN id = 0 THEN 1 ELSE CAST(2 AS BIGINT) END, 1, 0) AS result,
-          typeof(nvl2(CASE WHEN id = 0 THEN 1 ELSE CAST(2 AS BIGINT) END, 1, 0)) AS result_type
-        FROM VALUES (0), (1) AS t(id)
+          nvl2(CASE WHEN id = 0 THEN 1 WHEN id = 1 THEN CAST(2 AS BIGINT) END, 1, 0) AS result,
+          typeof(nvl2(CASE WHEN id = 0 THEN 1 WHEN id = 1 THEN CAST(2 AS BIGINT) END, 1, 0)) AS result_type
+        FROM VALUES (0), (1), (2) AS t(id)
         """
       Then query result
         | id | result | result_type |
         | 0  | 1      | int         |
         | 1  | 1      | int         |
+        | 2  | 0      | int         |

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DECIMAL128_MAX_PRECISION, DataType, TimeUnit};
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
+use datafusion_expr::type_coercion::other::get_coerce_type_for_case_expression;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::spark_date::SparkDate;
@@ -61,6 +62,18 @@ fn if_expr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
+fn nvl2(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let (tested, if_non_null, if_null) = arguments.three()?;
+    if_expr(ScalarFunctionInput {
+        arguments: vec![tested.is_not_null(), if_non_null, if_null],
+        function_context,
+    })
+}
+
 fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
         arguments,
@@ -91,18 +104,34 @@ fn argument_types(
 }
 
 /// Casts numeric values to Spark's wider common type (`findWiderCommonType`).
-/// Values of other types are left unchanged.
-// TODO: Coerce non-numeric values (e.g. string and numeric, or nested types) to
-//  Spark's wider common type as well.
+/// Preserves existing string/numeric coercion with ANSI disabled.
+// TODO: Coerce mixed strings in ANSI mode and nested types to Spark's wider
+//  common type as well.
 fn coerce_numeric_values(
     arguments: Vec<expr::Expr>,
     function_context: &FunctionContextInput<'_>,
 ) -> PlanResult<Vec<expr::Expr>> {
     let data_types = argument_types(&arguments, function_context)?;
     let ansi_mode = function_context.plan_config.ansi_mode;
-    let Some(common_type) = data_types.iter().try_fold(DataType::Null, |left, right| {
+    let common_type = data_types.iter().try_fold(DataType::Null, |left, right| {
         wider_numeric_type(&left, right, ansi_mode)
-    }) else {
+    });
+    let common_type = common_type.or_else(|| {
+        if !ansi_mode
+            && data_types.iter().any(is_string_type)
+            && data_types.iter().any(is_numeric_type)
+            && data_types
+                .iter()
+                .all(|t| t.is_null() || is_numeric_type(t) || is_string_type(t))
+        {
+            // Preserve DataFusion's existing legacy coercion before an enclosing
+            // numeric CASE/IF mistakes this expression's first branch for its type.
+            get_coerce_type_for_case_expression(&data_types, None)
+        } else {
+            None
+        }
+    });
+    let Some(common_type) = common_type else {
         return Ok(arguments);
     };
     arguments
@@ -316,9 +345,7 @@ pub(super) fn list_built_in_conditional_functions() -> Vec<(&'static str, Scalar
         ("nullif", F::binary(expr_fn::nullif)),
         ("nullifzero", F::custom(nullifzero)),
         ("nvl", F::binary(expr_fn::nvl)),
-        // FIXME: Spark types `nvl2` by its last two arguments only,
-        //  but DataFusion coerces the first argument to the result type as well.
-        ("nvl2", F::ternary(expr_fn::nvl2)),
+        ("nvl2", F::custom(nvl2)),
         ("zeroifnull", F::custom(zeroifnull)),
         ("when", F::custom(case)),
         ("case", F::custom(case)),

@@ -364,12 +364,16 @@ fn percentile_cont(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     // Extract the single column expression from ORDER BY (error if multiple)
     let sort = input.order_by.clone().one()?;
     let column = sort.expr;
+    let column = if column.get_type(input.function_context.schema)? == DataType::Float32 {
+        column.cast_to(&DataType::Float64, input.function_context.schema)?
+    } else {
+        column
+    };
 
     // Get the percentile value from arguments
     let percentile = input.arguments.one()?;
 
     // Combine: [column, percentile] as DataFusion expects
-    // FIXME: Spark returns DOUBLE for FLOAT values, but DataFusion returns FLOAT.
     let args = vec![column, percentile];
 
     Ok(expr::Expr::AggregateFunction(AggregateFunction {

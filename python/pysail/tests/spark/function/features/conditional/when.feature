@@ -95,7 +95,22 @@ Feature: when output schema
         | INT then wider DECIMAL      | 1                           | CAST(1 AS DECIMAL(20,0))    | 1             | 1            | decimal(20,0) |
         | BIGINT then DECIMAL         | CAST(3000000000 AS BIGINT)  | CAST(1.25 AS DECIMAL(5,2))  | 3000000000.00 | 1.25         | decimal(22,2) |
         | FLOAT then DECIMAL          | CAST(1.5 AS FLOAT)          | CAST(1.25 AS DECIMAL(5,2))  | 1.5           | 1.25         | double        |
-        | DECIMAL precision overflow  | CAST(1.5 AS DECIMAL(38,10)) | CAST(1 AS DECIMAL(38,0))    | 2             | 1            | decimal(38,0) |
+
+    @spark-4.0
+    Scenario: CASE keeps integral digits when the common DECIMAL precision exceeds the maximum
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT
+          id,
+          CASE WHEN id = 0 THEN CAST(1.5 AS DECIMAL(38,10)) ELSE CAST(1 AS DECIMAL(38,0)) END AS result,
+          typeof(CASE WHEN id = 0 THEN CAST(1.5 AS DECIMAL(38,10)) ELSE CAST(1 AS DECIMAL(38,0)) END) AS result_type
+        FROM VALUES (0), (1) AS t(id)
+        """
+      Then query result
+        | id | result | result_type   |
+        | 0  | 2      | decimal(38,0) |
+        | 1  | 1      | decimal(38,0) |
 
     Scenario: CASE widens integral and FLOAT branches to FLOAT with ANSI disabled
       Given config spark.sql.ansi.enabled = false
@@ -195,9 +210,6 @@ Feature: when output schema
         | ARRAY INT then ARRAY BIGINT  | array(1)                            | array(CAST(2 AS BIGINT))        | array<bigint> |
         | TIMESTAMP_NTZ then TIMESTAMP | TIMESTAMP_NTZ '2024-01-01 00:00:00' | TIMESTAMP '2024-01-01 00:00:00' | timestamp     |
 
-    # The inner CASE is typed by its INT branch while its data is STRING,
-    # so the outer CASE casts the STRING values to BIGINT.
-    @sail-bug
     Scenario: CASE over a CASE with INT and STRING branches keeps STRING values with ANSI disabled
       Given config spark.sql.ansi.enabled = false
       When query
@@ -206,6 +218,24 @@ Feature: when output schema
           id,
           CASE WHEN id = 0 THEN CAST(2 AS BIGINT) ELSE CASE WHEN id = 1 THEN 1 ELSE 'x' END END AS result
         FROM VALUES (0), (1), (2) AS t(id)
+        """
+      Then query result
+        | id | result |
+        | 0  | 2      |
+        | 1  | 1      |
+        | 2  | x      |
+
+    Scenario: CASE preserves STRING values across a projection with ANSI disabled
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT
+          id,
+          CASE WHEN id = 0 THEN CAST(2 AS BIGINT) ELSE v END AS result
+        FROM (
+          SELECT id, CASE WHEN id = 1 THEN 1 ELSE 'x' END AS v
+          FROM VALUES (0), (1), (2) AS t(id)
+        ) AS q
         """
       Then query result
         | id | result |

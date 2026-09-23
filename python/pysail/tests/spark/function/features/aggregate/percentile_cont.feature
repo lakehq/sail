@@ -2,7 +2,6 @@ Feature: percentile_cont output type
 
   Rule: Result type
 
-    @sail-bug
     Scenario: percentile_cont returns DOUBLE over a CASE widened to FLOAT with ANSI disabled
       Given config spark.sql.ansi.enabled = false
       When query
