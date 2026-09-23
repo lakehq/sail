@@ -47,6 +47,7 @@ use crate::function::common::{
     get_null_treatment, hll_args_with_default_lg, hll_union_args_with_default_allow_different_lg,
     theta_args_with_default_lg,
 };
+use crate::function::interval::{common_interval_range, with_interval_range};
 use crate::function::transform_count_star_wildcard_expr;
 
 lazy_static! {
@@ -75,6 +76,20 @@ fn avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
             null_treatment,
         },
     }))
+}
+
+/// An aggregate that declares the CHILD's type keeps its Spark interval range: `Sum.scala:79-80` and
+/// `Max.scala:41` return the child's own interval type. `Average` does not (`Average.scala:70-71`
+/// resets it to the default range), so it is not wrapped.
+fn keep_interval_range(
+    result: expr::Expr,
+    arguments: &[expr::Expr],
+    schema: &DFSchema,
+) -> PlanResult<expr::Expr> {
+    match common_interval_range(arguments, schema) {
+        Some(range) => with_interval_range(result, range, schema),
+        None => Ok(result),
+    }
 }
 
 fn spark_sum(input: AggFunctionInput) -> PlanResult<expr::Expr> {
@@ -106,16 +121,17 @@ fn spark_sum(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         arguments
     };
 
-    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+    let result = expr::Expr::AggregateFunction(AggregateFunction {
         func: sum::sum_udaf(),
         params: AggregateFunctionParams {
-            args: arguments,
+            args: arguments.clone(),
             distinct,
             filter,
             order_by,
             null_treatment: get_null_treatment(ignore_nulls),
         },
-    }))
+    });
+    keep_interval_range(result, &arguments, function_context.schema)
 }
 
 pub(super) fn coerce_string_sum_arguments(
@@ -422,18 +438,25 @@ fn skewness(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn try_sum(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let schema = input.function_context.schema;
     let args = input.arguments;
-
-    Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: Arc::new(AggregateUDF::from(SparkTrySum::new())),
+    // `SparkTrySum` refuses an interval, so the interval families go through the plain sum, which is
+    // what Spark's `TrySum` wraps (`TrySum` differs from `Sum` only in what an OVERFLOW does).
+    let func = match common_interval_range(&args, schema) {
+        Some(_) => sum::sum_udaf(),
+        None => Arc::new(AggregateUDF::from(SparkTrySum::new())),
+    };
+    let result = expr::Expr::AggregateFunction(AggregateFunction {
+        func,
         params: AggregateFunctionParams {
-            args,
+            args: args.clone(),
             distinct: input.distinct,
             filter: input.filter,
             order_by: input.order_by,
             null_treatment: get_null_treatment(input.ignore_nulls),
         },
-    }))
+    });
+    keep_interval_range(result, &args, schema)
 }
 
 fn try_avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
@@ -616,7 +639,9 @@ fn duplicate_agnostic_extreme(
     input: AggFunctionInput,
     function: fn() -> Arc<AggregateUDF>,
 ) -> PlanResult<expr::Expr> {
-    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+    let schema = input.function_context.schema;
+    let arguments = input.arguments.clone();
+    let result = expr::Expr::AggregateFunction(AggregateFunction {
         func: function(),
         params: AggregateFunctionParams {
             args: input.arguments,
@@ -627,7 +652,8 @@ fn duplicate_agnostic_extreme(
             order_by: input.order_by,
             null_treatment: get_null_treatment(input.ignore_nulls),
         },
-    }))
+    });
+    keep_interval_range(result, &arguments, schema)
 }
 
 fn count_if(input: AggFunctionInput) -> PlanResult<expr::Expr> {

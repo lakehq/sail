@@ -249,17 +249,10 @@ Feature: abs comprehensive tests
         | Infinity |
 
   Rule: Interval values
-    # abs preserves the Arrow interval unit, but Sail widens Spark subranges
-    # (DAY, HOUR TO MINUTE, ...) to DAY TO SECOND at the type layer — this
-    # happens even without abs (e.g. SELECT INTERVAL '-5' DAY returns DAY TO
-    # SECOND). The scenarios below are tagged @sail-bug but blocked on the
-    # Sail-wide interval subrange handling, not on abs itself.
-    # Fix path: preserve Spark subrange (DAY, HOUR, DAY TO SECOND, …) as
-    # `Field` metadata when converting Spark→Arrow, restore on the return
-    # trip in `sail-spark-connect`. Also requires analyzer changes in
-    # `sail-sql-analyzer`. Affects every expression returning intervals.
+    # `abs` keeps the Spark field range of its argument, which rides in the field metadata: Spark
+    # declares `Abs` with the child's own type (`arithmetic.scala:158`), so `abs(INTERVAL '-5' DAY)`
+    # is an `INTERVAL DAY` and not the `DAY TO SECOND` the Arrow type alone would give.
 
-    @sail-bug
     Scenario Outline: Interval subrange: <case>
       When query
         """
@@ -366,12 +359,7 @@ Feature: abs comprehensive tests
         | NULL        |
         | -2147483648 |
 
-    @sail-bug
-    # Vectorized abs path is correct — same root cause as the scalar interval
-    # scenarios in `Rule: Interval values`: Sail widens Spark interval subranges
-    # to DAY TO SECOND at the type layer. The vectorized kernel succeeds; the
-    # rendered/expected interval format diverges.
-    # Fix path: preserve subrange in Spark→Arrow Field metadata.
+    # The vectorized path keeps the range too: it rides on the field, not on the rows.
     Scenario: abs INTERVAL DAY column with NULL mix
       When query
         """
@@ -621,7 +609,8 @@ Feature: abs comprehensive tests
   @function(nullability)
   Rule: Output schema
 
-    @sail-bug
+    # `abs` declares its own return field, whose nullability is its argument's, so a non-null input
+    # yields a non-nullable result the way Spark's `Abs` does.
     Scenario: a non-null integer literal yields a non-nullable integer
       When query
         """
@@ -633,7 +622,6 @@ Feature: abs comprehensive tests
          |-- result: integer (nullable = false)
         """
 
-    @sail-bug
     Scenario: a non-null integer column yields a non-nullable integer
       When query
         """

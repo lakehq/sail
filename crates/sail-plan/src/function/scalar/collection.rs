@@ -11,6 +11,7 @@ use sail_function::scalar::misc::raise_error::RaiseError;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+use crate::function::interval::preserve_element_interval_range;
 
 fn size(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let value = input.arguments.one()?;
@@ -37,7 +38,9 @@ fn size(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn element_at(input: ScalarFunctionInput, is_try: bool) -> PlanResult<expr::Expr> {
+    let schema = input.function_context.schema;
     let (collection, element) = input.arguments.two()?;
+    let range_source = collection.clone();
     let (name, null_or_out_of_bounds) = if is_try {
         ("try_element_at", lit(ScalarValue::Null))
     } else {
@@ -49,7 +52,7 @@ fn element_at(input: ScalarFunctionInput, is_try: bool) -> PlanResult<expr::Expr
         )
     };
 
-    Ok(match collection.get_type(input.function_context.schema)? {
+    let result = match collection.get_type(schema)? {
         DataType::List(_)
         | DataType::ListView(_)
         | DataType::FixedSizeList(..)
@@ -68,7 +71,8 @@ fn element_at(input: ScalarFunctionInput, is_try: bool) -> PlanResult<expr::Expr
         wrong_type => ScalarUDF::from(RaiseError::new()).call(vec![lit(format!(
             "{name} expects List or Map type as first argument, got {wrong_type:?}",
         ))]),
-    })
+    };
+    preserve_element_interval_range(result, &range_source, schema)
 }
 
 pub(super) fn list_built_in_collection_functions() -> Vec<(&'static str, ScalarFunction)> {

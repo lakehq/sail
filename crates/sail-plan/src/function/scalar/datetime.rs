@@ -374,7 +374,13 @@ fn datediff(input: ScalarFunctionInput) -> PlanResult<Expr> {
         2 => {
             let [start, end] = <[Expr; 2]>::try_from(args)
                 .map_err(|_| PlanError::invalid("datediff requires 2 or 3 arguments"))?;
-            Ok(date_days_arithmetic(start, end, Operator::Minus))
+            // `DateDiff` declares `IntegerType` (`datetimeExpressions.scala:3490`), unlike the
+            // three-argument `TimestampDiff` form, which is a BIGINT. The subtraction stays in
+            // `Int64` -- the widest date range is 11.7M days -- and only the result narrows.
+            Ok(cast(
+                date_days_arithmetic(start, end, Operator::Minus),
+                DataType::Int32,
+            ))
         }
         3 => {
             let [unit, start, end] = <[Expr; 3]>::try_from(args)

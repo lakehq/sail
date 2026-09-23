@@ -10,13 +10,15 @@ use datafusion::arrow::array::{
     Int64Array, LargeListArray, LargeStringArray, ListArray, MapArray, StringArray, StringBuilder,
     StringViewArray, StructArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
 };
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,
 };
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
+use sail_common_datafusion::display::{ArrayFormatter, FormatOptions};
+use sail_common_datafusion::interval::IntervalRange;
 use serde_json::{Map, Value};
 
 use crate::functions_nested_utils::opt_downcast_arg;
@@ -40,11 +42,24 @@ macro_rules! downcast_and_convert {
 }
 
 /// Options for to_json function
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ToJsonOptions {
     timestamp_format: DateTimeFormat,
     date_format: DateTimeFormat,
     sort_keys: bool,
+    /// The Spark interval range of the value being written, which lives in its FIELD and not in its
+    /// Arrow type, so it is carried down as the writer descends into a struct, a list or a map.
+    interval_range: Option<IntervalRange>,
+}
+
+impl ToJsonOptions {
+    /// The options a nested value is written with: it takes the range its own field declares.
+    fn for_field(&self, field: &Field) -> Self {
+        Self {
+            interval_range: IntervalRange::from_field(field).or(self.interval_range),
+            ..(*self).clone()
+        }
+    }
 }
 
 impl ToJsonOptions {
@@ -88,6 +103,7 @@ impl ToJsonOptions {
             timestamp_format,
             date_format,
             sort_keys,
+            interval_range: None,
         })
     }
 }
@@ -101,6 +117,7 @@ impl Default for ToJsonOptions {
             date_format: DateTimeFormat::for_formatting(Self::DATE_FORMAT_DEFAULT)
                 .expect("default date format should be valid"),
             sort_keys: false,
+            interval_range: None,
         }
     }
 }
@@ -383,6 +400,14 @@ fn array_value_to_json(array: &ArrayRef, index: usize, options: &ToJsonOptions) 
             })?;
             map_to_json(map_array, index, options)
         }
+        // Spark writes an interval as its `toString`, with the fields of its range
+        // (`IntervalUtils.toDayTimeIntervalString` / `toYearMonthIntervalString`), so it goes
+        // through the same renderer as a `CAST(... AS STRING)`.
+        DataType::Duration(_) | DataType::Interval(_) => {
+            let format = FormatOptions::new().with_interval_range(options.interval_range);
+            let formatter = ArrayFormatter::try_new(array.as_ref(), &format)?;
+            Ok(Value::String(formatter.value(index).try_to_string()?))
+        }
         dt => Err(datafusion_common::DataFusionError::NotImplemented(format!(
             "to_json does not support data type: {:?}",
             dt
@@ -417,7 +442,7 @@ fn struct_to_json(
         // NullArray has no validity buffer, so is_null() alone misses untyped NULLs.
         // TODO: Honor the ignoreNullFields option and spark.sql.jsonGenerator.ignoreNullFields.
         if column.data_type() != &DataType::Null && !column.is_null(row_index) {
-            let value = array_value_to_json(column, row_index, options)?;
+            let value = array_value_to_json(column, row_index, &options.for_field(field))?;
             map.insert(field.name().clone(), value);
         }
     }
@@ -428,9 +453,13 @@ fn struct_to_json(
 fn list_to_json(list_array: &ListArray, index: usize, options: &ToJsonOptions) -> Result<Value> {
     let values = list_array.value(index);
     let mut json_values = Vec::with_capacity(values.len());
+    let options = match list_array.data_type() {
+        DataType::List(element) => options.for_field(element),
+        _ => (*options).clone(),
+    };
 
     for i in 0..values.len() {
-        let value = array_value_to_json(&values, i, options)?;
+        let value = array_value_to_json(&values, i, &options)?;
         json_values.push(value);
     }
 
@@ -450,6 +479,11 @@ fn map_to_json(map_array: &MapArray, index: usize, options: &ToJsonOptions) -> R
 
     let keys = struct_array.column(0);
     let values = struct_array.column(1);
+    // The entries' VALUE field is where a map's interval range lives.
+    let options = &match struct_array.data_type() {
+        DataType::Struct(fields) if fields.len() == 2 => options.for_field(&fields[1]),
+        _ => (*options).clone(),
+    };
 
     let mut map = Map::new();
     if options.sort_keys {

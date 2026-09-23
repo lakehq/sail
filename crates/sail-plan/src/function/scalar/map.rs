@@ -12,6 +12,9 @@ use sail_function::scalar::map::str_to_map::StrToMap;
 use crate::config::MapKeyDedupPolicy;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+use crate::function::interval::{
+    common_interval_range, element_interval_range, with_element_interval_range,
+};
 
 fn map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     use crate::function::common::ScalarFunctionBuilder as F;
@@ -34,6 +37,9 @@ fn map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         Ok::<_, PlanError>(nullable || value.nullable(schema.as_ref())?)
     })?;
 
+    // `CreateMap.dataType` takes the value type from the values themselves
+    // (`complexTypeCreator.scala:239-243`), so an interval value keeps its Spark range.
+    let value_range = common_interval_range(&values, schema);
     let keys = expr_fn::make_array(keys);
     let values = expr_fn::make_array(values);
     let values = cast_list_value_nullability(values, schema, true)?;
@@ -43,7 +49,11 @@ fn map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         arguments: vec![keys, values],
         function_context: input.function_context,
     })?;
-    cast_map_value_nullability(expr, schema, value_contains_null)
+    let expr = cast_map_value_nullability(expr, schema, value_contains_null)?;
+    match value_range {
+        Some(range) => with_element_interval_range(expr, range, schema),
+        None => Ok(expr),
+    }
 }
 
 fn map_from_arrays(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -55,6 +65,9 @@ fn map_from_arrays(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         DataType::List(field) | DataType::LargeList(field) => field.is_nullable(),
         _ => true,
     };
+    // `MapFromArrays.dataType` takes the value type from the array's element
+    // (`complexTypeCreator.scala:324-328`).
+    let value_range = element_interval_range(&values, schema);
     let values = cast_list_value_nullability(values, schema, true)?;
     let last_value_wins =
         input.function_context.plan_config.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;
@@ -62,7 +75,11 @@ fn map_from_arrays(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         arguments: vec![keys, values],
         function_context: input.function_context,
     })?;
-    cast_map_value_nullability(expr, schema, value_contains_null)
+    let expr = cast_map_value_nullability(expr, schema, value_contains_null)?;
+    match value_range {
+        Some(range) => with_element_interval_range(expr, range, schema),
+        None => Ok(expr),
+    }
 }
 
 fn map_from_entries(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {

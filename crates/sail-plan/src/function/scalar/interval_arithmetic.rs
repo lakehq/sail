@@ -15,6 +15,9 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::interval::IntervalRange;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_function::scalar::datetime::spark_date::SparkDate;
+use sail_function::scalar::datetime::spark_interval_scale::{
+    SparkDivideYmInterval, SparkMultiplyYmInterval,
+};
 use sail_function::scalar::misc::raise_error::RaiseError;
 
 use crate::error::{PlanError, PlanResult};
@@ -162,6 +165,12 @@ fn subtract_dates(left: Expr, right: Expr, ctx: &FunctionContextInput) -> PlanRe
     )
 }
 
+/// `SubtractTimestamps` is `DayTimeIntervalType(DAY, SECOND)` (`datetimeExpressions.scala:3553`).
+fn subtract_timestamps(left: Expr, right: Expr, ctx: &FunctionContextInput) -> PlanResult<Expr> {
+    let difference = cast(left - right, DataType::Duration(TimeUnit::Microsecond));
+    with_interval_range(difference, IntervalRange::DAY_TIME, ctx.schema)
+}
+
 /// `SubtractTimes` is `DayTimeIntervalType(HOUR, SECOND)` (`timeExpressions.scala:626`).
 fn subtract_times(left: Expr, right: Expr, ctx: &FunctionContextInput) -> PlanResult<Expr> {
     let difference = cast(left - right, DataType::Duration(TimeUnit::Microsecond));
@@ -191,9 +200,78 @@ fn scale_day_time(
     number: Expr,
     number_type: &DataType,
     divide: bool,
+    zero_divisor: ZeroDivisor,
     ctx: &FunctionContextInput,
 ) -> PlanResult<Expr> {
-    let micros = cast(interval, DataType::Int64);
+    let micros = scale_units(
+        cast(interval, DataType::Int64),
+        number,
+        number_type,
+        divide,
+        zero_divisor,
+        ctx,
+    )?;
+    with_interval_range(
+        cast(micros, DataType::Duration(TimeUnit::Microsecond)),
+        IntervalRange::DAY_TIME,
+        ctx.schema,
+    )
+}
+
+/// `MultiplyYMInterval` and `DivideYMInterval` scale the MONTHS and round HALF_UP
+/// (`intervalExpressions.scala:597-656,737-806`); the result is always YEAR TO MONTH, as measured on
+/// the JVM (`INTERVAL '1' YEAR * 1.5` is `INTERVAL '1-6' YEAR TO MONTH`).
+fn scale_year_month(
+    interval: Expr,
+    number: Expr,
+    number_type: &DataType,
+    divide: bool,
+    zero_divisor: ZeroDivisor,
+    ctx: &FunctionContextInput,
+) -> PlanResult<Expr> {
+    // Arrow has no cast between a year-month interval and a number, so the months are scaled by a
+    // kernel: it rounds HALF_UP and raises `[INTERVAL_DIVIDED_BY_ZERO]` on a zero divisor, as Spark
+    // does (`intervalExpressions.scala:597-656,737-806`).
+    let udf = if divide {
+        ScalarUDF::from(SparkDivideYmInterval::new())
+    } else {
+        ScalarUDF::from(SparkMultiplyYmInterval::new())
+    };
+    let (number, number_type) = match number_type {
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View if !ctx.plan_config.ansi_mode => {
+            (try_cast(number, DataType::Float64), DataType::Float64)
+        }
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Null => {
+            (cast(number, DataType::Float64), DataType::Float64)
+        }
+        other => (number, other.clone()),
+    };
+    // The kernel raises on a zero divisor, so `try_divide` hands it a NULL instead and gets the NULL
+    // Spark answers (measured on the JVM: `try_divide(INTERVAL '2' YEAR, 0)` is NULL).
+    let number = if divide && zero_divisor == ZeroDivisor::Null {
+        expr_fn::nullif(number, cast(lit(0_i64), number_type))
+    } else {
+        number
+    };
+    with_interval_range(
+        udf.call(vec![interval, number]),
+        IntervalRange::YEAR_MONTH,
+        ctx.schema,
+    )
+}
+
+/// The unit arithmetic both families share: the number is read the way Spark reads it (an integral
+/// stays integral and divides HALF_UP, a decimal rounds, anything else goes through DOUBLE), and a
+/// zero divisor raises when the ROW is evaluated, never at planning.
+fn scale_units(
+    units: Expr,
+    number: Expr,
+    number_type: &DataType,
+    divide: bool,
+    zero_divisor: ZeroDivisor,
+    ctx: &FunctionContextInput,
+) -> PlanResult<Expr> {
+    let micros = units;
     let (number, zero) = if number_type.is_integer() {
         (cast(number, DataType::Int64), lit(0_i64))
     } else if let DataType::Decimal128(_, _) | DataType::Decimal256(_, _) = number_type {
@@ -241,17 +319,13 @@ fn scale_day_time(
         }
     };
     let scaled = cast(scaled, DataType::Int64);
-    let scaled = if divide {
+    let scaled = if divide && zero_divisor == ZeroDivisor::Raise {
         let raise = ScalarUDF::from(RaiseError::new()).call(vec![lit(INTERVAL_DIVIDED_BY_ZERO)]);
         when(is_zero, raise).otherwise(scaled)?
     } else {
         scaled
     };
-    with_interval_range(
-        cast(scaled, DataType::Duration(TimeUnit::Microsecond)),
-        IntervalRange::DAY_TIME,
-        ctx.schema,
-    )
+    Ok(scaled)
 }
 
 /// `LongMath.divide(a, b, HALF_UP)`: the remainder, not a float quotient, decides the tie.
@@ -268,10 +342,28 @@ fn divide_half_up(a: Expr, b: Expr) -> PlanResult<Expr> {
 
 /// The rewrite for a pair that involves a DATE or TIME difference or a day-time interval, or
 /// `None` to leave the pair to the caller.
+/// What a zero divisor does: `/` raises `[INTERVAL_DIVIDED_BY_ZERO]` and `try_divide` answers NULL
+/// (measured on the JVM: `try_divide(INTERVAL '2' DAY, 0)` is NULL).
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum ZeroDivisor {
+    Raise,
+    Null,
+}
+
 pub(super) fn rewrite(
     op: Operator,
     left: Expr,
     right: Expr,
+    ctx: &FunctionContextInput,
+) -> PlanResult<Result<Expr, (Expr, Expr)>> {
+    rewrite_with(op, left, right, ZeroDivisor::Raise, ctx)
+}
+
+pub(super) fn rewrite_with(
+    op: Operator,
+    left: Expr,
+    right: Expr,
+    zero_divisor: ZeroDivisor,
     ctx: &FunctionContextInput,
 ) -> PlanResult<Result<Expr, (Expr, Expr)>> {
     use Operand::*;
@@ -288,6 +380,18 @@ pub(super) fn rewrite(
         }
         (Operator::Minus, Date, Str) if ansi_mode => {
             subtract_dates(left, string_as_date(right, ansi_mode), ctx)?
+        }
+        // `SubtractTimestamps` takes the pair whenever EITHER side is a timestamp, and that arm comes
+        // before the `SubtractDates` one (`BinaryArithmeticWithDatetimeResolver.scala:139-142`), so a
+        // DATE beside a timestamp is read as one -- midnight in the SESSION zone -- and the result is
+        // DAY TO SECOND (`datetimeExpressions.scala:3539-3553`). Without this the pair fell through to
+        // DataFusion, which answered `Duration(Nanosecond)`: no Spark type at all.
+        (Operator::Minus, Timestamp, Timestamp) => subtract_timestamps(left, right, ctx)?,
+        (Operator::Minus, Timestamp, Date) => {
+            subtract_timestamps(left, date_as_timestamp(right, ctx), ctx)?
+        }
+        (Operator::Minus, Date, Timestamp) => {
+            subtract_timestamps(date_as_timestamp(left, ctx), right, ctx)?
         }
         (Operator::Minus, Time, Time) => subtract_times(left, right, ctx)?,
         (Operator::Minus, Time, Null) => {
@@ -360,13 +464,22 @@ pub(super) fn rewrite(
         }
         (Operator::Plus, DayTime(_), Timestamp) => right + left,
         (Operator::Multiply, DayTime(_), Numeric | Str | Null) => {
-            scale_day_time(left, right, rf.data_type(), false, ctx)?
+            scale_day_time(left, right, rf.data_type(), false, zero_divisor, ctx)?
         }
         (Operator::Multiply, Numeric | Str | Null, DayTime(_)) => {
-            scale_day_time(right, left, lf.data_type(), false, ctx)?
+            scale_day_time(right, left, lf.data_type(), false, zero_divisor, ctx)?
         }
         (Operator::Divide, DayTime(_), Numeric | Str | Null) => {
-            scale_day_time(left, right, rf.data_type(), true, ctx)?
+            scale_day_time(left, right, rf.data_type(), true, zero_divisor, ctx)?
+        }
+        (Operator::Multiply, YearMonth(_), Numeric | Str | Null) => {
+            scale_year_month(left, right, rf.data_type(), false, zero_divisor, ctx)?
+        }
+        (Operator::Multiply, Numeric | Str | Null, YearMonth(_)) => {
+            scale_year_month(right, left, lf.data_type(), false, zero_divisor, ctx)?
+        }
+        (Operator::Divide, YearMonth(_), Numeric | Str | Null) => {
+            scale_year_month(left, right, rf.data_type(), true, zero_divisor, ctx)?
         }
         _ => return Ok(Err((left, right))),
     };
@@ -390,17 +503,38 @@ pub(super) fn widen_interval_result(
     arguments: &[Expr],
     ctx: &FunctionContextInput,
 ) -> PlanResult<Expr> {
-    let [left, right] = arguments else {
-        return Ok(result);
-    };
-    let (_, lf) = left.to_field(ctx.schema)?;
-    let (_, rf) = right.to_field(ctx.schema)?;
-    match (operand(&lf), operand(&rf)) {
-        (Operand::DayTime(a), Operand::DayTime(b))
-        | (Operand::YearMonth(a), Operand::YearMonth(b)) => {
-            with_interval_range(result, a.widen(b), ctx.schema)
-        }
-        _ => Ok(result),
+    preserve_interval_range(result, arguments, ctx)
+}
+
+/// The range of a result that is one of its arguments, or the widest of them: `Abs` and `Coalesce`
+/// declare the child's type, `Greatest`, `Least`, `If` and `CaseWhen` the common one, and
+/// `findWiderTypeForTwo` widens two ranges of one family (`TypeCoercionHelper.scala:141-148`).
+/// Without this the range rides only on the operand and the result comes back DAY TO SECOND or
+/// YEAR TO MONTH. An untyped NULL argument takes the others' range and is skipped; anything that is
+/// not an interval hands the result back untouched.
+pub(super) fn preserve_interval_range(
+    result: Expr,
+    arguments: &[Expr],
+    ctx: &FunctionContextInput,
+) -> PlanResult<Expr> {
+    let mut common: Option<(bool, IntervalRange)> = None;
+    for argument in arguments {
+        let (_, field) = argument.to_field(ctx.schema)?;
+        let (day_time, range) = match operand(&field) {
+            Operand::DayTime(range) => (true, range),
+            Operand::YearMonth(range) => (false, range),
+            Operand::Null => continue,
+            _ => return Ok(result),
+        };
+        common = match common {
+            None => Some((day_time, range)),
+            Some((family, current)) if family == day_time => Some((family, current.widen(range))),
+            Some(_) => return Ok(result),
+        };
+    }
+    match common {
+        Some((_, range)) => with_interval_range(result, range, ctx.schema),
+        None => Ok(result),
     }
 }
 

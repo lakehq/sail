@@ -696,10 +696,38 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
     }))
 }
 
+/// `Greatest` and `Least` declare the common type of their children
+/// (`conditionalExpressions.scala:290,372`), so an interval keeps the range that covers them all.
+fn spark_greatest(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let result = expr_fn::greatest(arguments.clone());
+    interval_arithmetic::preserve_interval_range(result, &arguments, &function_context)
+}
+
+fn spark_least(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let result = expr_fn::least(arguments.clone());
+    interval_arithmetic::preserve_interval_range(result, &arguments, &function_context)
+}
+
 fn spark_abs(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    let ansi_mode = input.function_context.plan_config.ansi_mode;
-    let udf = ScalarUDF::from(SparkAbs::new(ansi_mode));
-    Ok(udf.call(input.arguments))
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let udf = ScalarUDF::from(SparkAbs::new(function_context.plan_config.ansi_mode));
+    let result = udf.call(arguments.clone());
+    // `Abs` declares the child's type (`arithmetic.scala:158`), so an interval keeps its range. The
+    // UDF's own return field declares it too, but that field does not reach the PROJECTION's output
+    // schema -- measured: with only the return field, `typeof` reports `interval day` while the
+    // schema still publishes `interval day to second`. The cast is what carries it all the way out.
+    interval_arithmetic::preserve_interval_range(result, &arguments, &function_context)
 }
 
 fn spark_bin(input: ScalarFunctionInput) -> PlanResult<Expr> {
@@ -775,13 +803,68 @@ fn spark_unary_negate(arg: Expr, ansi_mode: bool, schema: &DFSchemaRef) -> PlanR
 }
 
 /// `try_add` and `try_subtract` of two intervals of one family keep the range that covers both.
+/// The `try_*` functions answer what their operator answers, with NULL instead of an error
+/// (`TryEval`, `arithmetic.scala`), so an interval pair takes the same rewrite as `+ - * /`: the
+/// range is computed the same way and only a zero divisor differs -- it is NULL here, never a raise
+/// (measured: `try_divide(INTERVAL '2' DAY, 0)` is NULL on the JVM).
+fn try_interval_arithmetic(
+    op: IntervalOperator,
+    arguments: &[Expr],
+    function_context: &FunctionContextInput,
+) -> PlanResult<Option<Expr>> {
+    let [left, right] = arguments else {
+        return Ok(None);
+    };
+    match interval_arithmetic::rewrite_with(
+        op,
+        left.clone(),
+        right.clone(),
+        interval_arithmetic::ZeroDivisor::Null,
+        function_context,
+    )? {
+        Ok(expr) => Ok(Some(expr)),
+        Err(_) => Ok(None),
+    }
+}
+
 fn spark_try_add(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let ScalarFunctionInput {
         arguments,
         function_context,
     } = input;
+    if let Some(expr) =
+        try_interval_arithmetic(IntervalOperator::Plus, &arguments, &function_context)?
+    {
+        return Ok(expr);
+    }
     let result = ScalarUDF::from(SparkTryAdd::new()).call(arguments.clone());
     interval_arithmetic::widen_interval_result(result, &arguments, &function_context)
+}
+
+fn spark_try_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    if let Some(expr) =
+        try_interval_arithmetic(IntervalOperator::Multiply, &arguments, &function_context)?
+    {
+        return Ok(expr);
+    }
+    Ok(ScalarUDF::from(SparkTryMult::new()).call(arguments))
+}
+
+fn spark_try_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    if let Some(expr) =
+        try_interval_arithmetic(IntervalOperator::Divide, &arguments, &function_context)?
+    {
+        return Ok(expr);
+    }
+    Ok(ScalarUDF::from(SparkTryDiv::new()).call(arguments))
 }
 
 fn spark_try_subtract(input: ScalarFunctionInput) -> PlanResult<Expr> {
@@ -789,6 +872,11 @@ fn spark_try_subtract(input: ScalarFunctionInput) -> PlanResult<Expr> {
         arguments,
         function_context,
     } = input;
+    if let Some(expr) =
+        try_interval_arithmetic(IntervalOperator::Minus, &arguments, &function_context)?
+    {
+        return Ok(expr);
+    }
     let result = ScalarUDF::from(SparkTrySubtract::new()).call(arguments.clone());
     interval_arithmetic::widen_interval_result(result, &arguments, &function_context)
 }
@@ -840,10 +928,10 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("expm1", F::unary(math_fn::expm1)),
         ("factorial", F::unary(expr_fn::factorial)),
         ("floor", F::custom(|arg| ceil_floor(arg, "floor"))),
-        ("greatest", F::var_arg(expr_fn::greatest)),
+        ("greatest", F::custom(spark_greatest)),
         ("hex", F::unary(math_fn::hex)),
         ("hypot", F::binary(hypot)),
-        ("least", F::var_arg(expr_fn::least)),
+        ("least", F::custom(spark_least)),
         ("ln", F::unary(double(ln))),
         ("log", F::binary(double2(log))),
         ("log10", F::unary(double(log10))),
@@ -872,8 +960,8 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("tan", F::unary(double(expr_fn::tan))),
         ("tanh", F::unary(double(expr_fn::tanh))),
         ("try_add", F::custom(spark_try_add)),
-        ("try_divide", F::udf(SparkTryDiv::new())),
-        ("try_multiply", F::udf(SparkTryMult::new())),
+        ("try_divide", F::custom(spark_try_divide)),
+        ("try_multiply", F::custom(spark_try_multiply)),
         ("try_mod", F::udf(SparkTryMod::new())),
         ("try_subtract", F::custom(spark_try_subtract)),
         ("unhex", F::udf(SparkUnHex::new())),

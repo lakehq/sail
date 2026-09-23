@@ -28,6 +28,10 @@ use sail_function::scalar::misc::raise_error::RaiseError;
 use super::lambda::lambda_with_fresh_parameter;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput, expr_contains_python_udf};
+use crate::function::interval::{
+    common_interval_range, element_interval_range, preserve_element_interval_range,
+    with_element_interval_range,
+};
 use crate::function::is_spark_compatible_arrow_fixed_offset;
 
 fn array_repeat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -99,7 +103,27 @@ fn slice_expr(
     ))
 }
 
+/// `array(...)` and `sort_array(...)` keep the interval range of the values they hold: the metadata
+/// rides on the ELEMENT field, so `typeof(array(INTERVAL '1' DAY))` is `array<interval day>` as in
+/// Spark, and every consumer that renders the array reads it from there.
+fn spark_array(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let result = ScalarUDF::from(SparkArray::new()).call(arguments.clone());
+    match common_interval_range(&arguments, function_context.schema) {
+        Some(range) => with_element_interval_range(result, range, function_context.schema),
+        None => Ok(result),
+    }
+}
+
 fn sort_array(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let schema = input.function_context.schema;
+    let element_range = input
+        .arguments
+        .first()
+        .and_then(|array| element_interval_range(array, schema));
     let (array, asc) = match input.arguments.len() {
         1 => (
             input.arguments.one()?,
@@ -127,7 +151,11 @@ fn sort_array(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             )));
         }
     };
-    Ok(expr_fn::array_sort(array, sort, nulls))
+    let sorted = expr_fn::array_sort(array, sort, nulls);
+    match element_range {
+        Some(range) => with_element_interval_range(sorted, range, schema),
+        None => Ok(sorted),
+    }
 }
 
 fn array_append(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -151,8 +179,11 @@ fn array_prepend(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     .end()?)
 }
 
-fn array_element(array: expr::Expr, element: expr::Expr) -> expr::Expr {
-    expr_fn::array_element(array, element + lit(1_i64))
+fn array_element(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let schema = input.function_context.schema;
+    let (array, element) = input.arguments.two()?;
+    let result = expr_fn::array_element(array.clone(), element + lit(1_i64));
+    preserve_element_interval_range(result, &array, schema)
 }
 
 fn array_contains(array: expr::Expr, element: expr::Expr) -> PlanResult<expr::Expr> {
@@ -502,7 +533,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
     use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
-        ("array", F::udf(SparkArray::new())),
+        ("array", F::custom(spark_array)),
         ("array_append", F::custom(array_append)),
         ("array_compact", F::unary(array_compact)),
         ("array_contains", F::binary(array_contains)),
@@ -526,7 +557,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
         ("arrays_overlap", F::custom(arrays_overlap)),
         ("arrays_zip", F::custom(arrays_zip)),
         ("flatten", F::custom(flatten)),
-        ("get", F::binary(array_element)),
+        ("get", F::custom(array_element)),
         ("sequence", F::custom(sequence)),
         ("shuffle", F::unary(array_fn::shuffle)),
         ("slice", F::custom(slice)),

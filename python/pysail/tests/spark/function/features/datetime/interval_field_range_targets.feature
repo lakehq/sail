@@ -197,6 +197,35 @@ Feature: an interval keeps the field range Spark declares for it
         | a cast to BIGINT     | CAST(DATE'2024-01-15' - DATE'2024-01-01' AS BIGINT)                      | 14         |
         | a date shifted by it | CAST(DATE'2024-01-20' + (DATE'2024-01-15' - DATE'2024-01-01') AS STRING) | 2024-02-03 |
 
+    # These consumers ANSWER on `main`, where the difference is an INT. Turning it into a DAY
+    # interval must not take that away: each one is a regression of this PR until it answers again,
+    # never a tagged divergence. The expected values are the JVM's, measured 2026-09-23.
+    Scenario Outline: a date difference read by <case> answers like Spark
+      When query
+        """
+        SELECT <expression> AS result
+        """
+      Then query result
+        | result  |
+        | <value> |
+
+      Examples:
+        | case     | expression                                                            | value                      |
+        | hash     | hash(DATE'2024-01-15' - DATE'2024-01-01') IS NOT NULL                 | true                       |
+        | try_sum  | try_sum(DATE'2024-01-15' - DATE'2024-01-01') IS NOT NULL              | true                       |
+        | to_json  | to_json(named_struct('d', DATE'2024-01-15' - DATE'2024-01-01'))       | {"d":"INTERVAL '14' DAY"}  |
+
+    # `Abs` keeps the interval's range (`arithmetic.scala:158` takes an ANSI interval and
+    # `ComplexTypeMergingExpression` keeps the child's type); Sail renders DAY TO SECOND.
+    Scenario: abs of a date difference keeps the DAY range
+      When query
+        """
+        SELECT CAST(abs(DATE'2024-01-01' - DATE'2024-01-15') AS STRING) AS result
+        """
+      Then query result
+        | result            |
+        | INTERVAL '14' DAY |
+
   Rule: D -- the arithmetic PR #2526 left refusing, and its consumers (needs B and C)
 
     # The only arithmetic pair where PR #2526 refuses what Spark accepts: with `date - date` an INT,
@@ -277,3 +306,174 @@ Feature: an interval keeps the field range Spark declares for it
       Then query result
         | result            |
         | INTERVAL '3' YEAR |
+
+  Rule: G -- the functions that count days stay INT
+
+    # `DateDiff` declares `IntegerType` (`datetimeExpressions.scala:3490`), so making the OPERATOR an
+    # interval must not turn the FUNCTION into one: `DATE + datediff(...)` only resolves while the
+    # offset is an INT, and `DateAdd` takes INT, SMALLINT or TINYINT (`:331`). Sail answers BIGINT for
+    # both spellings today.
+    Scenario Outline: <case> is an INT
+      When query
+        """
+        SELECT typeof(<expression>) AS t
+        """
+      Then query result
+        | t   |
+        | int |
+
+      Examples:
+        | case        | expression                                    |
+        | datediff    | datediff(DATE'2024-01-15', DATE'2024-01-01')  |
+        | date_diff   | date_diff(DATE'2024-01-15', DATE'2024-01-01') |
+
+    # The three-argument form is a DIFFERENT function: `TimestampDiff` declares `LongType`, so it stays
+    # a BIGINT. Fixing the two-argument one must not take this with it.
+    Scenario Outline: the unit form of <case> stays a BIGINT
+      When query
+        """
+        SELECT typeof(<expression>) AS t
+        """
+      Then query result
+        | t      |
+        | bigint |
+
+      Examples:
+        | case      | expression                                                                      |
+        | datediff  | datediff(DAY, DATE'2024-01-01', DATE'2024-01-15')                               |
+        | date_diff | date_diff(HOUR, TIMESTAMP'2024-01-01 00:00:00', TIMESTAMP'2024-01-02 00:00:00') |
+
+    Scenario: a date shifted by datediff resolves
+      When query
+        """
+        SELECT CAST(DATE'2024-01-20' + datediff(DATE'2024-01-15', DATE'2024-01-01') AS STRING) AS result
+        """
+      Then query result
+        | result     |
+        | 2024-02-03 |
+
+  Rule: H -- a string beside a date shifted past a day (needs E)
+
+    # Once `date + INTERVAL '25' HOUR` is a TIMESTAMP (group E, now closed), a STRING beside it
+    # follows the timestamp rules: with ANSI off `SubtractTimestamps` gets no cast and Spark refuses
+    # at analysis (`AnsiStringPromotionTypeCoercion` is ANSI's alone), and with ANSI on the string is
+    # cast and the query fails at RUNTIME on the value. Sail does neither: it leaks DataFusion's
+    # "Cannot coerce arithmetic expression Utf8 - Timestamp" in both modes, which is a STRING beside
+    # a timestamp and not a range problem, so it stays tagged. On `main` the same queries fail with
+    # `Utf8 - Date32`, so the tag is not laundering a regression of this PR.
+    @sail-bug
+    Scenario Outline: a string <case> a shifted date is refused with ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT <expression> AS result
+        """
+      Then query error (?i)cannot resolve
+
+      Examples:
+        | case   | expression                                     |
+        | minus  | '2' - (DATE'2024-01-15' + INTERVAL '25' HOUR)  |
+        | after  | (DATE'2024-01-15' + INTERVAL '25' HOUR) - '2'  |
+
+    @sail-bug
+    Scenario Outline: a string <case> a shifted date fails on the value with ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT <expression> AS result
+        """
+      Then query error CAST_INVALID_INPUT
+
+      Examples:
+        | case   | expression                                     |
+        | minus  | '2' - (DATE'2024-01-15' + INTERVAL '25' HOUR)  |
+        | after  | (DATE'2024-01-15' + INTERVAL '25' HOUR) - '2'  |
+
+  Rule: I -- the difference through a projection and from a NULL
+
+    # The identity has to travel in the TYPE, not in the shape of the expression: a difference
+    # projected by a subquery reaches the outer operator as a column and must behave the same. PR
+    # #2526 pins this one because its marker only rides on the cast that builds the difference.
+    Scenario: a date difference projected by a subquery keeps resolving with an interval
+      When query
+        """
+        SELECT CAST(x + INTERVAL '2' DAY AS STRING) AS result
+        FROM (SELECT DATE'2024-01-15' - DATE'2024-01-01' AS x)
+        """
+      Then query result
+        | result            |
+        | INTERVAL '16' DAY |
+
+    Scenario: a date difference projected by a subquery is refused beside a string
+      When query
+        """
+        SELECT x - '2' AS result FROM (SELECT DATE'2024-01-15' - DATE'2024-01-01' AS x)
+        """
+      Then query error (?i)cannot resolve
+
+    # `SubtractDates` types an untyped NULL on the left as a DATE, so `NULL - date` is the same
+    # DAY interval and shares every consumer.
+    Scenario: a NULL minus a date is a DAY interval
+      When query
+        """
+        SELECT typeof(NULL - DATE'2024-01-01') AS t
+        """
+      Then query result
+        | t            |
+        | interval day |
+
+    Scenario: a NULL minus a date shifts by an interval
+      When query
+        """
+        SELECT (NULL - DATE'2024-01-01') + INTERVAL '2' DAY IS NULL AS null_result
+        """
+      Then query result
+        | null_result |
+        | true        |
+
+  Rule: J -- summing intervals
+
+    # `Sum.scala:79-80` keeps the child's interval type, so a sum of DAY intervals is a DAY interval.
+    Scenario: a sum of day intervals keeps the range
+      When query
+        """
+        SELECT CAST(sum(i) AS STRING) AS result FROM VALUES (INTERVAL '1' DAY), (INTERVAL '2' DAY) AS t(i)
+        """
+      Then query result
+        | result           |
+        | INTERVAL '3' DAY |
+
+    # `try_sum` of an interval is refused on `main`; it answers here because the interval families go
+    # through the plain sum, which is what Spark's `TrySum` wraps.
+    Scenario: try_sum of day intervals answers
+      When query
+        """
+        SELECT CAST(try_sum(i) AS STRING) AS result FROM VALUES (INTERVAL '1' DAY), (INTERVAL '2' DAY) AS t(i)
+        """
+      Then query result
+        | result           |
+        | INTERVAL '3' DAY |
+
+    # The one corner left: Spark raises `INTERVAL_ARITHMETIC_OVERFLOW` on a sum that overflows and
+    # `try_sum` answers NULL, while Sail's interval sum WRAPS silently. The wrap is `sum`'s own and
+    # is identical on `main` (`INTERVAL '-0 00:00:00.000002' DAY TO SECOND` for the pair below); this
+    # PR only lets `try_sum` reach it. One root, so one test each, both tagged.
+    @sail-bug
+    Scenario: a sum of intervals that overflows raises
+      When query
+        """
+        SELECT CAST(sum(i) AS STRING) AS result
+        FROM VALUES (INTERVAL '106751991 04:00:54.775807' DAY TO SECOND), (INTERVAL '106751991 04:00:54.775807' DAY TO SECOND) AS t(i)
+        """
+      Then query error INTERVAL_ARITHMETIC_OVERFLOW
+
+    @sail-bug
+    Scenario: try_sum of intervals that overflows is NULL
+      When query
+        """
+        SELECT try_sum(i) IS NULL AS result
+        FROM VALUES (INTERVAL '106751991 04:00:54.775807' DAY TO SECOND), (INTERVAL '106751991 04:00:54.775807' DAY TO SECOND) AS t(i)
+        """
+      Then query result
+        | result |
+        | true   |

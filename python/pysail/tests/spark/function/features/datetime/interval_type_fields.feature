@@ -295,9 +295,7 @@ Feature: Leading and trailing fields of the interval types
         | add same year    | INTERVAL '1' YEAR + INTERVAL '2' YEAR | year        |
         | add day and hour | INTERVAL '1' DAY + INTERVAL '2' HOUR  | day to hour |
 
-    # A generic expression (`coalesce`, `CASE`, a generator) builds its result field anew, so the
-    # range of its input does not reach it yet.
-    @sail-bug
+    # A generic expression builds its result field anew, so the range has to be put back on it.
     Scenario Outline: Qualifier of an interval through a generic expression: <case>
       When query
         """
@@ -310,10 +308,37 @@ Feature: Leading and trailing fields of the interval types
         """
 
       Examples:
-        | case           | expr                                                             | fields |
-        | coalesce hour  | coalesce(INTERVAL '3' HOUR)                                      | hour   |
-        | case when hour | CASE WHEN true THEN INTERVAL '3' HOUR ELSE INTERVAL '4' HOUR END | hour   |
-        | explode month  | explode(array(INTERVAL '1' MONTH))                               | month  |
+        | case          | expr                        | fields |
+        | coalesce hour | coalesce(INTERVAL '3' HOUR) | hour   |
+
+    # The range reaches a `CASE` (`typeof` reports `interval hour`), but Sail declares the result of
+    # a `CASE` nullable whatever its branches say, which a plain `CASE WHEN true THEN 3 ELSE 4 END`
+    # shows too. The remaining gap is that nullability, not the range.
+    @sail-bug
+    Scenario: Qualifier of an interval through a CASE
+      When query
+        """
+        SELECT CASE WHEN true THEN INTERVAL '3' HOUR ELSE INTERVAL '4' HOUR END AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: interval hour (nullable = false)
+        """
+
+    # A generator reads the element of its array and reports `interval year to month`: the range of
+    # the element does not travel through `explode`.
+    @sail-bug
+    Scenario: Qualifier of an interval through a generator
+      When query
+        """
+        SELECT explode(array(INTERVAL '1' MONTH)) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: interval month (nullable = false)
+        """
 
     Scenario: Adding a month and a year interval widens to year to month
       When query
@@ -342,7 +367,6 @@ Feature: Leading and trailing fields of the interval types
         | year | INTERVAL '10' YEAR | year   |
         | hour | INTERVAL '3' HOUR  | hour   |
 
-    @sail-bug
     Scenario: The qualifier survives an aggregate
       When query
         """
@@ -354,7 +378,6 @@ Feature: Leading and trailing fields of the interval types
          |-- result: interval year (nullable = true)
         """
 
-    @sail-bug
     Scenario: The qualifier survives an array
       When query
         """
@@ -367,6 +390,9 @@ Feature: Leading and trailing fields of the interval types
          |    |-- element: interval month (containsNull = false)
         """
 
+    # The range reaches both (`typeof` reports `struct<a:interval hour>` and `map<string,interval
+    # hour>`); what is left is that Sail declares a `named_struct` and a `map` nullable, which a
+    # plain `named_struct('a', 3)` shows too.
     @sail-bug
     Scenario: The qualifier survives a struct
       When query

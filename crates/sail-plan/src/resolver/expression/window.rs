@@ -7,7 +7,7 @@ use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
 use datafusion_expr::expr::WindowFunctionParams;
 use datafusion_expr::simplify::SimplifyContextBuilder;
 use datafusion_expr::{
-    AggregateUDF, ExprSchemable, WindowFrame, WindowFrameBound, WindowFrameUnits, expr,
+    AggregateUDF, ExprSchemable, WindowFrame, WindowFrameBound, WindowFrameUnits, cast, expr,
 };
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec::{self};
@@ -23,6 +23,7 @@ use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{FunctionContextInput, WinFunctionInput, get_null_treatment};
 use crate::function::get_built_in_window_function;
+use crate::function::interval::{common_interval_range, with_interval_range};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
@@ -75,6 +76,7 @@ impl PlanResolver<'_> {
                 Some(false)
             })
         };
+        let sorts = order_window_intervals_by_value(sorts, &window_frame, schema)?;
         let (window, function_name, argument_display_names, is_distinct) = match window_function {
             spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
                 function_name,
@@ -266,6 +268,7 @@ impl PlanResolver<'_> {
                 )));
             }
         };
+        let window = keep_window_interval_range(window, &function_name, schema)?;
         let service = self.ctx.extension::<PlanService>()?;
         let name = service.plan_formatter().function_to_string(
             function_name.as_str(),
@@ -525,5 +528,85 @@ impl PlanResolver<'_> {
                 }
             }
         }
+    }
+}
+
+/// A RANGE frame over an interval ORDER BY key is ordered by the VALUE behind it.
+///
+/// A day-time interval is stored as its microseconds and orders exactly like them, but the window
+/// frame's type coercion has no arm for it and refuses the whole window
+/// (`datafusion/optimizer/src/analyzer/type_coercion.rs:1086`), which a `date - date` difference
+/// now reaches. Only a frame whose bounds carry no offset is rewritten: with an offset the bound
+/// itself is an interval, and that pair is left exactly as it was.
+fn order_window_intervals_by_value(
+    sorts: Vec<expr::Sort>,
+    frame: &WindowFrame,
+    schema: &DFSchemaRef,
+) -> PlanResult<Vec<expr::Sort>> {
+    if frame.units != WindowFrameUnits::Range || !is_offsetless(frame) {
+        return Ok(sorts);
+    }
+    sorts
+        .into_iter()
+        .map(|sort| {
+            let data_type = sort.expr.get_type(schema)?;
+            Ok(match data_type {
+                DataType::Duration(_) => expr::Sort {
+                    expr: cast(sort.expr, DataType::Int64),
+                    ..sort
+                },
+                _ => sort,
+            })
+        })
+        .collect()
+}
+
+/// Whether both bounds of a frame are unbounded or the current row, so no arithmetic is done on the
+/// ORDER BY key.
+fn is_offsetless(frame: &WindowFrame) -> bool {
+    let offsetless = |bound: &WindowFrameBound| match bound {
+        WindowFrameBound::CurrentRow => true,
+        WindowFrameBound::Preceding(value) | WindowFrameBound::Following(value) => value.is_null(),
+    };
+    offsetless(&frame.start_bound) && offsetless(&frame.end_bound)
+}
+
+/// The window functions that declare the CHILD's type keep its Spark interval range.
+///
+/// `Sum.scala:79-80` and `Max.scala:41` return the child's own interval type, and an offset function
+/// reports its input's type (`windowExpressions.scala`, `Lead`/`Lag` extend `FrameLessOffsetWindow
+/// Function`, whose `dataType` is the input's). `Average` is NOT here: it resets the range to the
+/// default (`Average.scala:70-71`), and neither is a function whose result is a count or a rank.
+const WINDOW_FUNCTIONS_KEEPING_THE_CHILD_TYPE: &[&str] = &[
+    "sum",
+    "min",
+    "max",
+    "lag",
+    "lead",
+    "first",
+    "first_value",
+    "last",
+    "last_value",
+    "nth_value",
+    "any_value",
+];
+
+fn keep_window_interval_range(
+    window: expr::Expr,
+    function_name: &str,
+    schema: &DFSchemaRef,
+) -> PlanResult<expr::Expr> {
+    if !WINDOW_FUNCTIONS_KEEPING_THE_CHILD_TYPE
+        .contains(&function_name.to_ascii_lowercase().as_str())
+    {
+        return Ok(window);
+    }
+    let expr::Expr::WindowFunction(function) = &window else {
+        return Ok(window);
+    };
+    let arguments = function.params.args.clone();
+    match common_interval_range(&arguments, schema.as_ref()) {
+        Some(range) => with_interval_range(window, range, schema.as_ref()),
+        None => Ok(window),
     }
 }
