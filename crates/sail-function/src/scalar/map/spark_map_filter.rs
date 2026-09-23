@@ -126,6 +126,9 @@ impl HigherOrderUDFImpl for SparkMapFilter {
         let pairs = values.as_struct();
         let key = || Ok(Arc::clone(pairs.column(0)));
         let value = || Ok(Arc::clone(pairs.column(1)));
+        // TODO: Fix shared Boolean CASE short-circuit evaluation so skipped
+        // branches cannot raise errors for map entries (see the Boolean CASE
+        // predicate sail-bug test).
         let predicate = lambda
             .evaluate(&[&key, &value], |arrays| {
                 let indices = list_values_row_number(&entries)?;

@@ -252,6 +252,50 @@ Feature: map_filter with lambda
         | __map_key   |
         | __map_value |
 
+  Rule: Null-typed predicates are coerced without evaluation
+
+    Scenario Outline: Null-typed predicate: <case>
+      When query
+        """
+        SELECT map_filter(map(1, 2), <predicate>) AS result
+        """
+      Then query result
+        | result |
+        | {}     |
+
+      Examples:
+        | case          | predicate                                                     |
+        | ordinary      | raise_error('boom')                                            |
+        | lambda        | (k, v) -> raise_error(CAST(v AS STRING))                        |
+        | nested lambda | (k, v) -> assert_true(exists(array(v), x -> x < 0))             |
+
+    Scenario Outline: Unused null-typed predicate captures are pruned: <case>
+      When query
+        """
+        SELECT map_filter(map(1, 2), <predicate>) AS result
+        FROM (SELECT raise_error('boom') AS err) t
+        """
+      Then query result
+        | result |
+        | {}     |
+
+      Examples:
+        | case     | predicate     |
+        | ordinary | err           |
+        | lambda   | (k, v) -> err |
+
+    Scenario Outline: Boolean-typed errors still raise: <case>
+      When query
+        """
+        SELECT map_filter(map(1, 2), <predicate>) AS result
+        """
+      Then query error boom
+
+      Examples:
+        | case     | predicate                                    |
+        | ordinary | CAST(raise_error('boom') AS BOOLEAN)           |
+        | lambda   | (k, v) -> CAST(raise_error('boom') AS BOOLEAN)  |
+
   Rule: Lambda evaluation respects ANSI mode and null input
 
     Scenario: Division by zero in the predicate raises under ANSI mode
@@ -270,6 +314,23 @@ Feature: map_filter with lambda
       Then query result
         | result   |
         | {b -> 1} |
+
+    # Shared Boolean CASE evaluation can evaluate division in a skipped branch.
+    @sail-bug
+    Scenario: A Boolean CASE predicate skips division for zero-valued entries
+      When query
+        """
+        SELECT id, map_filter(m, (k, v) ->
+          CASE WHEN v = 0 THEN false ELSE 1 / v > 0 END) AS result
+        FROM VALUES
+          (1, map('a', 0, 'b', 2)),
+          (2, CAST(NULL AS MAP<STRING, INT>))
+        AS t(id, m)
+        """
+      Then query result
+        | id | result   |
+        | 1  | {b -> 2} |
+        | 2  | NULL     |
 
     Scenario: Null and empty maps do not evaluate the predicate
       When query
@@ -355,3 +416,6 @@ Feature: map_filter with lambda
         | non-boolean predicate      | map(1, 2), (k, v) -> v            |
         | missing predicate          | map(1, 2)                        |
         | duplicate lambda parameter | map(1, 2), (k, k) -> true         |
+        | wrong arity with null body | map(1, 2), k -> raise_error('boom')           |
+        | bare nested lambda         | map(1, 2), (k, v) -> (x -> NULL)              |
+        | lambda in scalar predicate | map(1, 2), (k, v) -> coalesce(x -> NULL, NULL) |

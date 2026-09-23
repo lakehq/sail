@@ -193,7 +193,7 @@ fn map_filter(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let (mut map, predicate) = input.arguments.two()?;
     // Spark binds an ordinary expression as a hidden lambda whose parameters
     // are unused. Avoid capturing variables from any enclosing lambda.
-    let predicate = if matches!(predicate, expr::Expr::Lambda(_)) {
+    let mut predicate = if matches!(predicate, expr::Expr::Lambda(_)) {
         predicate
     } else {
         // Spark coerces a null map only when the predicate is already resolved.
@@ -215,6 +215,27 @@ fn map_filter(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         expr::Expr::Lambda(Lambda::new(params, predicate))
     };
     expect_lambda_arity("map_filter", &predicate, 2)?;
+    if let expr::Expr::Lambda(lambda) = &mut predicate
+        && lambda.body.get_type(input.function_context.schema)? == DataType::Null
+    {
+        // Preserve validation of lambdas outside higher-order function arguments.
+        let has_bare_lambda = matches!(lambda.body.as_ref(), expr::Expr::Lambda(_))
+            || lambda.body.exists(|expression| {
+                if matches!(expression, expr::Expr::HigherOrderFunction(_)) {
+                    return Ok(false);
+                }
+                let mut has_lambda_child = false;
+                expression.apply_children(|child| {
+                    has_lambda_child |= matches!(child, expr::Expr::Lambda(_));
+                    Ok(TreeNodeRecursion::Continue)
+                })?;
+                Ok(has_lambda_child)
+            })?;
+        if !has_bare_lambda {
+            // Spark replaces NullType predicates with Boolean NULL before evaluation.
+            lambda.body = Box::new(lit(ScalarValue::Boolean(None)));
+        }
+    }
     Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
         Arc::clone(&SPARK_MAP_FILTER_UDF),
         vec![map, predicate],
