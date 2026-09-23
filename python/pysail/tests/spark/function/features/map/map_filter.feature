@@ -182,6 +182,43 @@ Feature: map_filter with lambda
         | false     | {}                    |
         | NULL      | {}                    |
 
+    Scenario Outline: Ordinary predicates coerce null-typed map expressions: <map>
+      When query
+        """
+        SELECT map_filter(<map>, true) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+      Then query schema
+        """
+        root
+         |-- result: map (nullable = true)
+         |    |-- key: void
+         |    |-- value: void (valueContainsNull = true)
+        """
+
+      Examples:
+        | map                 |
+        | NULL                |
+        | raise_error('boom') |
+
+    Scenario: An ordinary predicate accepts a null-typed map column
+      When query
+        """
+        SELECT id, map_filter(m, flag) AS result
+        FROM VALUES
+          (1, NULL, true),
+          (2, NULL, false),
+          (3, NULL, CAST(NULL AS BOOLEAN))
+        AS t(id, m, flag)
+        """
+      Then query result
+        | id | result |
+        | 1  | NULL   |
+        | 2  | NULL   |
+        | 3  | NULL   |
+
     Scenario: An ordinary predicate captures a Boolean column
       When query
         """
@@ -312,6 +349,7 @@ Feature: map_filter with lambda
       Examples:
         | case                       | arguments                         |
         | non-map input              | array(1), (k, v) -> true          |
+        | untyped null with lambda   | NULL, (k, v) -> true              |
         | one lambda parameter       | map(1, 2), k -> true              |
         | three lambda parameters    | map(1, 2), (k, v, i) -> true      |
         | non-boolean predicate      | map(1, 2), (k, v) -> v            |

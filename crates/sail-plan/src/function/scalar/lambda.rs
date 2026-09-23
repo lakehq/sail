@@ -1,10 +1,12 @@
 use std::sync::{Arc, LazyLock};
 
 use datafusion_common::ScalarValue;
-use datafusion_common::arrow::datatypes::FieldRef;
+use datafusion_common::arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_expr::expr::{HigherOrderFunction, Lambda, LambdaVariable};
-use datafusion_expr::{HigherOrderUDF, LambdaParametersProgress, ValueOrLambda, expr, lit};
+use datafusion_expr::{
+    ExprSchemable, HigherOrderUDF, LambdaParametersProgress, ValueOrLambda, expr, lit,
+};
 use datafusion_functions_nested::expr_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::spark_array_aggregate::SparkArrayAggregate;
@@ -14,6 +16,7 @@ use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
 use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
+use sail_function::scalar::map::utils::map_type_from_key_value_types;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -187,12 +190,20 @@ fn filter(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn map_filter(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let (map, predicate) = input.arguments.two()?;
+    let (mut map, predicate) = input.arguments.two()?;
     // Spark binds an ordinary expression as a hidden lambda whose parameters
     // are unused. Avoid capturing variables from any enclosing lambda.
     let predicate = if matches!(predicate, expr::Expr::Lambda(_)) {
         predicate
     } else {
+        // Spark coerces a null map only when the predicate is already resolved.
+        // An explicit lambda remains unresolved and must still reject this input.
+        if map.get_type(input.function_context.schema)? == DataType::Null {
+            map = lit(ScalarValue::try_new_null(&map_type_from_key_value_types(
+                &DataType::Null,
+                &DataType::Null,
+            ))?);
+        }
         let mut params = Vec::with_capacity(2);
         for base in ["__map_key", "__map_value"] {
             let mut name = base.to_string();
