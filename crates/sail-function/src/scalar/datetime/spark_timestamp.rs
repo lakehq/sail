@@ -195,8 +195,8 @@ impl TimestampParser {
 
     fn string_to_microseconds(&self, value: &str, safe: bool) -> Result<Option<i64>> {
         // TODO: Trim Spark whitespace and ISO control characters before `parse_timestamp`
-        // like Spark does for dated strings, then drop the pre-trim for timestamps in
-        // `sequence_cast`, which hides leading whitespace from the time-only `T` rule.
+        // like Spark does for dated strings, then drop the dated timestamp pre-trim
+        // in `sequence_cast`.
         let timestamp = match parse_timestamp(value) {
             Ok(v) => v,
             Err(e) => {

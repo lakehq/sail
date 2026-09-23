@@ -288,14 +288,32 @@ Feature: Time-only strings as timestamps
       | result              |
       | 2020-01-01 01:58:00 |
 
-  @sail-bug
-  Scenario: Sequence rejects whitespace before the time-only marker
+  Scenario Outline: Sequence rejects <whitespace> before the time-only marker
     Given config spark.sql.ansi.enabled = true
     When query
       """
-      SELECT sequence(' T01:58', TIMESTAMP '2100-01-01 00:00:00', INTERVAL '36500' DAY) AS result
+      SELECT sequence(<input>, TIMESTAMP '2100-01-01 00:00:00', INTERVAL '36500' DAY) AS result
       """
     Then query error .*
+
+    Examples:
+      | whitespace | input                     |
+      | space      | ' T01:58'                 |
+      | tab        | concat(chr(9), 'T01:58')   |
+      | DEL        | concat(chr(127), 'T01:58') |
+
+  Scenario: Sequence retains whitespace support for dated timestamp strings
+    Given config spark.sql.ansi.enabled = true
+    When query
+      """
+      SELECT sequence(concat(chr(9), ' 2020-01-01 01:58:00 ', chr(127)),
+                      TIMESTAMP '2020-01-02 01:58:00', INTERVAL 1 DAY) =
+             array(TIMESTAMP '2020-01-01 01:58:00',
+                   TIMESTAMP '2020-01-02 01:58:00') AS result
+      """
+    Then query result
+      | result |
+      | true   |
 
   # TODO: Resolve Java offset and GMT/UT prefix spellings before using Arrow's timezone parser.
   @sail-bug

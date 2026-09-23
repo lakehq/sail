@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion::functions::expr_fn::{btrim, coalesce, nvl};
+use datafusion::functions::regex::expr_fn::regexp_replace;
 use datafusion::functions_nested::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{
@@ -357,8 +358,18 @@ fn sequence_cast(
         (
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
             DataType::Timestamp(TimeUnit::Microsecond, timezone),
-        ) => ScalarUDF::from(SparkTimestamp::try_new(timezone.clone(), ansi_mode, false)?)
-            .call(vec![sequence_trim_string(argument)]),
+        ) => {
+            // Keep whitespace before T so the timestamp parser can reject that marker.
+            // Dated strings retain sequence's existing leading/trailing whitespace support.
+            let argument = regexp_replace(
+                argument,
+                lit(r"\A[\x00-\x20\x7f]+([0-9+-])|[\x00-\x20\x7f]+\z"),
+                lit("${1}"),
+                Some(lit("g")),
+            );
+            ScalarUDF::from(SparkTimestamp::try_new(timezone.clone(), ansi_mode, false)?)
+                .call(vec![argument])
+        }
         (
             DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None),
             DataType::Timestamp(TimeUnit::Microsecond, Some(timezone)),
