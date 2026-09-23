@@ -105,3 +105,64 @@ Feature: regexp_extract() extracts regex capture groups from strings
         root
          |-- result: string (nullable = true)
         """
+
+  Rule: group index validated only on a match (Spark parity)
+
+    # Spark validates the group index PER MATCH: a no-match input returns '' even
+    # for an invalid idx; an invalid idx only errors when the input matches.
+    @sail-bug
+    Scenario: regexp_extract negative idx with no match returns empty string
+      When query
+      """
+      SELECT regexp_extract('abc', r'(\d+)', -1) AS result
+      """
+      Then query result
+      | result |
+      |        |
+
+    Scenario: regexp_extract out-of-range idx with no match returns empty string
+      When query
+      """
+      SELECT regexp_extract('abc', r'(\d+)', 5) AS result
+      """
+      Then query result
+      | result |
+      |        |
+
+    Scenario: regexp_extract negative idx with a match errors
+      When query
+      """
+      SELECT regexp_extract('1a2b', r'(\d+)', -1) AS result
+      """
+      Then query error (?i).*group index.*
+
+    Scenario: regexp_extract out-of-range idx with a match errors
+      When query
+      """
+      SELECT regexp_extract('1a2b', r'(\d+)', 5) AS result
+      """
+      Then query error (?i).*group index.*
+
+  Rule: java.util.regex vs Rust `regex` divergences (@sail-bug)
+
+    # Rust `regex` does not support backreferences (Sail errors, Spark matches).
+    @sail-bug
+    Scenario: regexp_extract backreference
+      When query
+      """
+      SELECT regexp_extract('abcabc', r'(abc)\1', 0) AS result
+      """
+      Then query result
+      | result |
+      | abcabc |
+
+    # Rust `\w` is Unicode-aware; Java `\w` is ASCII-only — 'é' matches in Sail, not Spark.
+    @sail-bug
+    Scenario: regexp_extract word class is ASCII in Spark, Unicode in Sail
+      When query
+      """
+      SELECT regexp_extract('café', r'(\w+)', 1) AS result
+      """
+      Then query result
+      | result |
+      | caf    |

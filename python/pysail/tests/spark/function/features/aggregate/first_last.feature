@@ -30,6 +30,56 @@ Feature: first / last / any_value inherit ordering from an adjacent ORDER BY
         | last      | descending | k DESC | 20     |
         | any_value | ascending  | k      | 20     |
 
+    Scenario: first respects ascending inner ORDER BY
+      When query
+        """
+        SELECT first(v) AS result
+        FROM (SELECT * FROM VALUES (10, 'b'), (20, 'a'), (30, 'd'), (40, 'c') AS t(v, k) ORDER BY k)
+        """
+      Then query result
+        | result |
+        | 20     |
+
+    Scenario: last respects ascending inner ORDER BY
+      When query
+        """
+        SELECT last(v) AS result
+        FROM (SELECT * FROM VALUES (10, 'b'), (20, 'a'), (30, 'd'), (40, 'c') AS t(v, k) ORDER BY k)
+        """
+      Then query result
+        | result |
+        | 30     |
+
+    Scenario: first respects descending inner ORDER BY
+      When query
+        """
+        SELECT first(v) AS result
+        FROM (SELECT * FROM VALUES (10, 'b'), (20, 'a'), (30, 'd'), (40, 'c') AS t(v, k) ORDER BY k DESC)
+        """
+      Then query result
+        | result |
+        | 30     |
+
+    Scenario: last respects descending inner ORDER BY
+      When query
+        """
+        SELECT last(v) AS result
+        FROM (SELECT * FROM VALUES (10, 'b'), (20, 'a'), (30, 'd'), (40, 'c') AS t(v, k) ORDER BY k DESC)
+        """
+      Then query result
+        | result |
+        | 20     |
+
+    Scenario: any_value behaves like first and respects the inner ORDER BY
+      When query
+        """
+        SELECT any_value(v) AS result
+        FROM (SELECT * FROM VALUES (10, 'b'), (20, 'a'), (30, 'd'), (40, 'c') AS t(v, k) ORDER BY k)
+        """
+      Then query result
+        | result |
+        | 20     |
+
   Rule: An aliased derived table behaves identically to an unaliased one
 
     Scenario Outline: <fn> respects the inner ORDER BY through <alias_desc>
@@ -47,6 +97,16 @@ Feature: first / last / any_value inherit ordering from an adjacent ORDER BY
         | first | an aliased derived table              | sub       | 20     |
         | last  | an aliased derived table              | sub       | 30     |
         | first | an aliased derived table with columns | sub(v, k) | 20     |
+
+    Scenario: first respects the inner ORDER BY through an aliased derived table with a column list
+      When query
+        """
+        SELECT first(v) AS result
+        FROM (SELECT * FROM VALUES (10, 'b'), (20, 'a'), (30, 'd'), (40, 'c') AS t(v, k) ORDER BY k) AS sub(v, k)
+        """
+      Then query result
+        | result |
+        | 20     |
 
   Rule: The full multi-key ordering drives the result, not just the leading key
 

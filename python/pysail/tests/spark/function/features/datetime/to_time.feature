@@ -126,3 +126,106 @@ Feature: to_time (strict variant)
         | a fraction wider than the pattern         | '10:30:45.1234'      | 'HH:mm:ss.SSS'                  | (?i)CANNOT_PARSE_TIME\|datetime value does not match format        |
         | an unquoted restricted pattern letter     | '10B30'              | 'HHBmm'                         | (?i)INVALID_DATETIME_PATTERN\|invalid datetime pattern             |
         | a pattern with an unmatched literal quote | '10:30'              | concat('HH', chr(39), 'mm')     | (?i)INVALID_DATETIME_PATTERN\|invalid datetime pattern             |
+
+  # Every expected value below was measured on Spark 4.2.0 (JVM, UTC). `ToTime` lives in
+  # Spark 4.2.0 `timeExpressions.scala`: its input types are STRING only, and without a format
+  # it parses with `DateTimeUtils.stringToTime` (the same lenient rules as CAST to TIME).
+  Rule: Column input and Spark's lenient default parsing
+
+    Scenario: to_time over a column with distinct rows
+      Given config spark.sql.timeType.enabled = true
+      When query
+        """
+        SELECT to_time(s) AS r FROM VALUES
+          ('00:00:00'), ('09:05:03.5'), ('23:59:59.999999'), ('10:30:45.1234567'), (NULL) AS x(s)
+        """
+      Then query schema
+        """
+        root
+         |-- r: time(6) (nullable = true)
+        """
+      And query result
+        | r               |
+        | 00:00:00        |
+        | 09:05:03.5      |
+        | 23:59:59.999999 |
+        | 10:30:45.123456 |
+        | NULL            |
+
+    Scenario: to_time with a per-row format column
+      Given config spark.sql.timeType.enabled = true
+      When query
+        """
+        SELECT to_time(s, f) AS r FROM VALUES
+          ('10-30-45', 'HH-mm-ss'), ('11.31', 'HH.mm'), ('10:30:45 PM', 'hh:mm:ss a'), (NULL, 'HH:mm') AS x(s, f)
+        """
+      Then query result
+        | r        |
+        | 10:30:45 |
+        | 11:31:00 |
+        | 22:30:45 |
+        | NULL     |
+
+    @sail-bug
+    Scenario Outline: to_time without a format accepts <case>
+      Given config spark.sql.timeType.enabled = true
+      When query
+        """
+        SELECT to_time(<value>) AS r
+        """
+      Then query result
+        | r        |
+        | 10:30:45 |
+
+      Examples:
+        | case               | value        |
+        | surrounding spaces | ' 10:30:45 ' |
+        | a leading T        | 'T10:30:45'  |
+
+  Rule: Parse failures raise CANNOT_PARSE_TIME in both ANSI modes
+
+    @sail-bug
+    Scenario Outline: to_time fails to parse <case> (ANSI <ansi>)
+      Given config spark.sql.timeType.enabled = true
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT to_time(<args>) AS r
+        """
+      Then query error CANNOT_PARSE_TIME
+
+      Examples:
+        | case                               | ansi  | args                        |
+        | garbage                            | true  | 'garbage'                   |
+        | garbage                            | false | 'garbage'                   |
+        | the hour 24                        | true  | '24:00:00'                  |
+        | a bare number                      | true  | '12'                        |
+        | a value that misses the format     | true  | '10:30', 'HH-mm'            |
+        | a value that misses the format     | false | '10:30', 'HH-mm'            |
+        | a format that needs a missing year | true  | '10:30:45', 'yyyy HH:mm:ss' |
+
+    @sail-bug
+    Scenario: to_time fails on the first row whose per-row format does not match
+      Given config spark.sql.timeType.enabled = true
+      And config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT to_time(s, f) AS r FROM VALUES ('10-30-45', 'HH-mm-ss'), ('11.31', 'HH-mm') AS x(s, f)
+        """
+      Then query error CANNOT_PARSE_TIME
+
+  Rule: The first argument must be a STRING
+
+    @sail-bug
+    Scenario Outline: to_time rejects a <case> first argument
+      Given config spark.sql.timeType.enabled = true
+      When query
+        """
+        SELECT to_time(<value>) AS r
+        """
+      Then query error UNEXPECTED_INPUT_TYPE
+
+      Examples:
+        | case | value             |
+        | INT  | 10                |
+        | DATE | DATE '2024-01-15' |

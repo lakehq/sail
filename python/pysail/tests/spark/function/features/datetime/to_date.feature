@@ -430,3 +430,356 @@ Feature: to_date with an argument coming from a column
         | 2025-11-02 23:30:45.123456       | 2025-11-02 23:30:45.123456 | 2025-11-02 23:30:45.123456 | 2025-11-02 | 2025-11-02 |
         | 2025-11-02 23:30:45.123456-08:00 | 2025-11-02 23:30:45.123456 | 2025-11-03 07:30:45.123456 | 2025-11-02 | 2025-11-03 |
         | 2025-11-02 23:30:45.123456+01:00 | 2025-11-02 23:30:45.123456 | 2025-11-02 22:30:45.123456 | 2025-11-02 | 2025-11-02 |
+
+  Rule: Valid input parses
+
+    Scenario: ISO date
+      When query
+      """
+      SELECT to_date('2024-01-15') AS result
+      """
+      Then query result
+      | result     |
+      | 2024-01-15 |
+
+    Scenario: With format
+      When query
+      """
+      SELECT to_date('15/01/2024', 'dd/MM/yyyy') AS result
+      """
+      Then query result
+      | result     |
+      | 2024-01-15 |
+
+    Scenario: Cast from timestamp
+      When query
+      """
+      SELECT to_date(TIMESTAMP '2024-01-15 10:30:00') AS result
+      """
+      Then query result
+      | result     |
+      | 2024-01-15 |
+
+    Scenario: Cast from TIMESTAMP_NTZ preserves wall clock
+      When query
+      """
+      SELECT to_date(TIMESTAMP_NTZ '2025-11-02 23:30:45.123456') AS result
+      """
+      Then query result
+      | result     |
+      | 2025-11-02 |
+
+    Scenario: Cast from TIMESTAMP_LTZ in UTC session preserves wall clock
+      When query
+      """
+      SELECT to_date(TIMESTAMP_LTZ '2025-11-02 23:30:45.123456') AS result
+      """
+      Then query result
+      | result     |
+      | 2025-11-02 |
+
+    Scenario: TIMESTAMP_LTZ with offset converts to session timezone
+      When query
+      """
+      SELECT to_date(TIMESTAMP_LTZ '2025-11-02 23:30:45.123456 America/New_York') AS result
+      """
+      Then query result
+      | result     |
+      | 2025-11-03 |
+
+  Rule: Numeric / boolean args coerce to string (like Spark)
+
+    Scenario: Integer with format coerces and parses
+      When query
+      """
+      SELECT to_date(20240115, 'yyyyMMdd') AS result
+      """
+      Then query result
+      | result     |
+      | 2024-01-15 |
+
+  Rule: Invalid input honors ANSI mode
+    # to_date errors on invalid input under ANSI and returns NULL otherwise.
+
+    Scenario: Garbage string under ANSI on errors
+      Given config spark.sql.ansi.enabled = true
+      When query
+      """
+      SELECT to_date('not-a-date') AS result
+      """
+      Then query error .*
+
+    Scenario: Garbage string under ANSI off returns NULL
+      Given config spark.sql.ansi.enabled = false
+      When query
+      """
+      SELECT to_date('not-a-date') AS result
+      """
+      Then query result
+      | result |
+      | NULL   |
+
+    Scenario: Format mismatch under ANSI on errors
+      Given config spark.sql.ansi.enabled = true
+      When query
+      """
+      SELECT to_date('2024-01-15', 'dd/MM/yyyy') AS result
+      """
+      Then query error .*
+
+    Scenario: Format mismatch under ANSI off returns NULL
+      Given config spark.sql.ansi.enabled = false
+      When query
+      """
+      SELECT to_date('2024-01-15', 'dd/MM/yyyy') AS result
+      """
+      Then query result
+      | result |
+      | NULL   |
+
+    Scenario: Numeric invalid under ANSI on errors
+      Given config spark.sql.ansi.enabled = true
+      When query
+      """
+      SELECT to_date(20240115) AS result
+      """
+      Then query error .*
+
+    @sail-bug
+    Scenario: Numeric invalid under ANSI off returns NULL
+      Given config spark.sql.ansi.enabled = false
+      When query
+      """
+      SELECT to_date(20240115) AS result
+      """
+      Then query result
+      | result |
+      | NULL   |
+
+  Rule: NULL input propagates
+
+    Scenario: NULL input returns NULL
+      When query
+      """
+      SELECT to_date(CAST(NULL AS STRING)) AS result
+      """
+      Then query result
+      | result |
+      | NULL   |
+
+    Scenario: NULL format returns NULL
+      When query
+      """
+      SELECT to_date('2024-01-15', NULL) AS result
+      """
+      Then query result
+      | result |
+      | NULL   |
+
+  Rule: Invalid input throws
+
+    Scenario: Garbage string raises error
+      When query
+      """
+      SELECT to_date('not-a-date')
+      """
+      Then query error CAST_INVALID_INPUT|error in SQL parser|cannot be cast
+
+    @sail-bug
+    Scenario: Format mismatch raises error
+      When query
+      """
+      SELECT to_date('2024-01-15', 'dd/MM/yyyy')
+      """
+      Then query error CANNOT_PARSE_TIMESTAMP|invalid characters|CONVERSION_INVALID_INPUT|cannot be parsed
+
+  Rule: Without a format, to_date follows the lenient STRING to DATE cast
+    # Spark 4.2.0 datetimeExpressions.scala: ParseToDate without a format is
+    # Cast(left, DateType, ansi). SparkDateTimeUtils.stringToDate trims every char <= ' ' at both
+    # ends, accepts a signed year of 4 to 7 digits, and ignores anything after the day once a ' '
+    # or 'T' follows it. The DATE range reaches +5881580-07-11.
+
+    @sail-bug
+    Scenario Outline: to_date accepts the lenient cast form <case> with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT to_date(<value>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                    | ansi  | value                         | result         |
+        | surrounding spaces      | true  | '  2024-01-15  '              | 2024-01-15     |
+        | surrounding spaces      | false | '  2024-01-15  '              | 2024-01-15     |
+        | leading newline         | true  | concat(chr(10), '2024-01-16') | 2024-01-16     |
+        | T and a time            | true  | '2024-01-17T10:30'            | 2024-01-17     |
+        | T and garbage           | false | '2024-01-18Tgarbage'          | 2024-01-18     |
+        | T and a zoned time      | true  | '2024-01-19T10:30:45Z'        | 2024-01-19     |
+        | six-digit year          | true  | '294248-01-01'                | +294248-01-01  |
+        | largest date            | false | '5881580-07-11'               | +5881580-07-11 |
+        | negative six-digit year | true  | '-290308-12-21'               | -290308-12-21  |
+
+    @sail-bug
+    Scenario: to_date applies the lenient cast per row with ANSI disabled
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT i, to_date(v) AS result
+        FROM VALUES
+          (1, ' 2024-01-15 '),
+          (2, '2024-01-16T99'),
+          (3, '2024-01-17 garbage'),
+          (4, '294248-01-01'),
+          (5, '2024-1-8'),
+          (6, '2024-02-30')
+          AS x(i, v)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result        |
+        | 1 | 2024-01-15    |
+        | 2 | 2024-01-16    |
+        | 3 | 2024-01-17    |
+        | 4 | +294248-01-01 |
+        | 5 | 2024-01-08    |
+        | 6 | NULL          |
+
+  Rule: A numeric or boolean value is cast to STRING before parsing, never read as a day count
+    # Spark 4.2.0 datetimeExpressions.scala: ParseToDate is ImplicitCastInputTypes over
+    # STRING/DATE/TIMESTAMP/TIMESTAMP_NTZ, so 1 becomes '1' and true becomes 'true', which
+    # stringToDate rejects (fewer than 4 year digits): NULL with ANSI off, CAST_INVALID_INPUT on.
+
+    @sail-bug
+    Scenario Outline: to_date of <case> input returns NULL with ANSI disabled
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT to_date(<value>) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+      Examples:
+        | case    | value |
+        | integer | 1     |
+        | double  | 1.5D  |
+        | boolean | true  |
+
+    @sail-bug
+    Scenario Outline: to_date of <case> input fails the string cast with ANSI enabled
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT to_date(<value>) AS result
+        """
+      Then query error CAST_INVALID_INPUT
+
+      Examples:
+        | case    | value |
+        | integer | 1     |
+        | boolean | true  |
+
+    @sail-bug
+    Scenario: to_date of an integer column returns NULL per row with ANSI disabled
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT i, to_date(v) AS result
+        FROM VALUES (1, 1), (2, 20240115), (3, CAST(NULL AS INT)) AS x(i, v)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result |
+        | 1 | NULL   |
+        | 2 | NULL   |
+        | 3 | NULL   |
+
+    @sail-bug
+    @function(nullability)
+    Scenario: to_date of an integer is nullable with ANSI disabled
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT to_date(1) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: date (nullable = true)
+        """
+
+  @function(nullability)
+  Rule: A literal string with a literal format cannot be NULL with ANSI enabled
+
+    # Spark 4.2.0 datetimeExpressions.scala: ToTimestamp.nullable is
+    # `if (failOnError) children.exists(_.nullable) else true`, and the outer Cast to DATE keeps it.
+    @sail-bug
+    Scenario: to_date of a string literal with a format is not nullable with ANSI enabled
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT to_date('2024-01-15', 'yyyy-MM-dd') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: date (nullable = false)
+        """
+
+  Rule: A TIMESTAMP input takes its date in the session time zone
+
+    Scenario Outline: to_date of an offset timestamp string takes the date in <zone>
+      Given config spark.sql.session.timeZone = <zone>
+      When query
+        """
+        SELECT to_date(to_timestamp('2024-06-15 12:00:00+00:00')) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | zone              | result     |
+        | Pacific/Chatham   | 2024-06-16 |
+        | Pacific/Pago_Pago | 2024-06-15 |
+
+    Scenario: to_date of a timestamp column crosses midnight per row in a 45-minute offset zone
+      Given config spark.sql.session.timeZone = Pacific/Chatham
+      When query
+        """
+        SELECT i, to_date(to_timestamp(s)) AS result
+        FROM VALUES (1, '2024-06-15 11:00:00Z'), (2, '2024-06-15 11:30:00Z') AS x(i, s)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result     |
+        | 1 | 2024-06-15 |
+        | 2 | 2024-06-16 |
+
+    Scenario: to_date with a time format keeps the parsed local date in a 45-minute offset zone
+      Given config spark.sql.session.timeZone = Pacific/Chatham
+      When query
+        """
+        SELECT to_date('2024-06-15 23:30', 'yyyy-MM-dd HH:mm') AS result
+        """
+      Then query result
+        | result     |
+        | 2024-06-15 |
+
+    # timestamp_seconds(1700000000) is 2023-11-14 22:13:20 UTC, already 2023-11-15 in Chatham
+    # (+13:45). Sail keeps the UTC date: the timestamp_seconds result appears to carry a fixed UTC
+    # zone that overrides the session zone, while to_timestamp inputs are converted correctly.
+    @sail-bug
+    Scenario: to_date of a timestamp_seconds value takes the date in a 45-minute offset zone
+      Given config spark.sql.session.timeZone = Pacific/Chatham
+      When query
+        """
+        SELECT to_date(timestamp_seconds(1700000000)) AS result
+        """
+      Then query result
+        | result     |
+        | 2023-11-15 |

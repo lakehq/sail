@@ -688,7 +688,7 @@ Feature: CSV expression functions handle Spark's CSV options
     # the same. `preferDate` and `columnPruning` go through getBool (naming the option); the rest
     # through Scala's toBoolean / toInt (quoting the value).
 
-    Scenario Outline: from_csv rejects a non-boolean <option>
+    Scenario Outline: from_csv rejects a non-boolean inherited <option>
       When query
         """
         SELECT from_csv('1', 'a INT', map('<option>', 'garbage')) AS result
