@@ -311,7 +311,11 @@ def test_spark_creates_sail_aggregates_column_mapped_delta_table(
     spark: SparkSession,
     hms_s3_database: str,
 ) -> None:
-    """Sail plans aggregates over a column-mapped Delta table whose schema is stored in HMS."""
+    """Sail plans aggregates and nested field access over a column-mapped Delta table whose schema is stored in HMS.
+
+    The table has no map columns, so this covers the column mapping metadata on
+    top-level and nested fields separately from the map entry naming.
+    """
     table = "roundtrip_column_mapped_delta_scalar"
     table_fqn = f"{hms_s3_database}.{table}"
 
@@ -321,11 +325,14 @@ def test_spark_creates_sail_aggregates_column_mapped_delta_table(
         USING DELTA
         TBLPROPERTIES ('delta.columnMapping.mode' = 'name')
         AS
-        SELECT 'event-a' AS file_name, 1 AS id
+        SELECT 'event-a' AS file_name, 1 AS id, named_struct('a', 1, 'b', 'x') AS s,
+          array(named_struct('x', 1, 'y', 'p')) AS arr_s
         UNION ALL
-        SELECT 'event-a' AS file_name, 2 AS id
+        SELECT 'event-a' AS file_name, 2 AS id, named_struct('a', 2, 'b', 'y') AS s,
+          array(named_struct('x', 2, 'y', 'q')) AS arr_s
         UNION ALL
-        SELECT 'event-b' AS file_name, 3 AS id
+        SELECT 'event-b' AS file_name, 3 AS id, named_struct('a', 3, 'b', 'z') AS s,
+          array(named_struct('x', 3, 'y', 'r')) AS arr_s
         """
     )
     _register_delta_schema_in_hms(jvm_spark, hms_s3_database, table)
@@ -337,9 +344,19 @@ def test_spark_creates_sail_aggregates_column_mapped_delta_table(
         "event-b",
     ]
     counts = spark.sql(
-        f"SELECT file_name, count(*) AS n, sum(id) AS total FROM {table_fqn} GROUP BY file_name ORDER BY file_name"
+        f"SELECT file_name, count(*) AS n, sum(id) AS total, sum(s.a) AS sa"
+        f" FROM {table_fqn} GROUP BY file_name ORDER BY file_name"
     )
-    assert [(row.file_name, row.n, row.total) for row in counts.collect()] == [("event-a", 2, 3), ("event-b", 1, 3)]
+    assert [(row.file_name, row.n, row.total, row.sa) for row in counts.collect()] == [
+        ("event-a", 2, 3, 3),
+        ("event-b", 1, 3, 3),
+    ]
+    nested = spark.sql(f"SELECT id, s.b, arr_s[0].x AS x, arr_s[0].y AS y FROM {table_fqn} ORDER BY id")
+    assert [(row.id, row.b, row.x, row.y) for row in nested.collect()] == [
+        (1, "x", 1, "p"),
+        (2, "y", 2, "q"),
+        (3, "z", 3, "r"),
+    ]
 
 
 @pytest.mark.parametrize("column_mapping_mode", ["none", "name"])
@@ -382,6 +399,102 @@ def test_spark_creates_sail_reads_delta_table_with_map(
     ]
     filtered = spark.sql(f"SELECT file_name FROM {table_fqn} WHERE properties['dag_id'] = 'dag-b'").collect()
     assert [row.file_name for row in filtered] == ["event-b"]
+
+
+_DELTA_SCHEMA_MATRIX_QUERIES = [
+    "SELECT id, big, dbl, dec, flag, name, dt, CAST(ts AS STRING) AS ts, bin FROM {t} ORDER BY id",
+    "SELECT id, s, arr, arr_s, m, m_s, m_arr, nested FROM {t} ORDER BY id",
+    "SELECT id, s.a, s.b FROM {t} ORDER BY id",
+    "SELECT id, arr[0] AS first, size(arr) AS n, arr_s[0].x AS x, arr_s[0].y AS y FROM {t} ORDER BY id",
+    "SELECT id, m['k1'] AS k1, m_s['k1'].p AS p, m_arr['k1'] AS k1_arr, size(m) AS n FROM {t} ORDER BY id",
+    "SELECT id, map_keys(m) AS keys, map_values(m_s) AS vals FROM {t} ORDER BY id",
+    "SELECT id, nested.inner_map['a'] AS a, nested.inner_arr AS inner_arr FROM {t} ORDER BY id",
+    "SELECT id, explode(arr) AS v FROM {t} ORDER BY id, v",
+    "SELECT id, k, v FROM {t} LATERAL VIEW explode(m) AS k, v ORDER BY id, k",
+    "SELECT DISTINCT name FROM {t} ORDER BY name",
+    "SELECT DISTINCT name, flag FROM {t} ORDER BY name, flag",
+    "SELECT name, count(*) AS n, sum(dec) AS total, max(dbl) AS mx, min(dt) AS first_dt, sum(s.a) AS sa"
+    " FROM {t} GROUP BY name ORDER BY name",
+    "SELECT name, collect_list(id) AS ids FROM (SELECT * FROM {t} ORDER BY id) GROUP BY name ORDER BY name",
+    "SELECT id FROM {t} WHERE s.a > 1 AND m['k1'] IS NOT NULL ORDER BY id",
+    "SELECT id FROM {t} WHERE name = 'b' OR array_contains(arr, 5) ORDER BY id",
+    "SELECT a.id, b.name FROM {t} a JOIN {t} b ON a.id = b.id ORDER BY a.id",
+    "SELECT count(*) AS n FROM (SELECT id, m FROM {t} UNION ALL SELECT id, m FROM {t})",
+    "SELECT id, name, m FROM {t} ORDER BY dbl DESC LIMIT 2",
+]
+
+
+@pytest.mark.parametrize("partitioned", [False, True], ids=["unpartitioned", "partitioned"])
+@pytest.mark.parametrize("column_mapping_mode", ["none", "name"])
+def test_spark_creates_sail_queries_delta_schema_matrix(
+    jvm_spark: SparkSession,
+    spark: SparkSession,
+    hms_s3_database: str,
+    column_mapping_mode: str,
+    partitioned: bool,  # noqa: FBT001
+) -> None:
+    """Sail and Spark agree on queries over scalar and nested Delta columns whose schema is stored in HMS."""
+    table = f"roundtrip_delta_matrix_{column_mapping_mode}_{'part' if partitioned else 'flat'}"
+    table_fqn = f"{hms_s3_database}.{table}"
+    partition_clause = "PARTITIONED BY (name)" if partitioned else ""
+
+    jvm_spark.sql(
+        f"""
+        CREATE TABLE {table_fqn} (
+          id INT,
+          big BIGINT,
+          dbl DOUBLE,
+          dec DECIMAL(10, 2),
+          flag BOOLEAN,
+          name STRING,
+          dt DATE,
+          ts TIMESTAMP,
+          bin BINARY,
+          s STRUCT<a: INT, b: STRING>,
+          arr ARRAY<INT>,
+          arr_s ARRAY<STRUCT<x: INT, y: STRING>>,
+          m MAP<STRING, INT>,
+          m_s MAP<STRING, STRUCT<p: INT>>,
+          m_arr MAP<STRING, ARRAY<INT>>,
+          nested STRUCT<inner_map: MAP<STRING, STRING>, inner_arr: ARRAY<STRING>>
+        )
+        USING DELTA
+        {partition_clause}
+        TBLPROPERTIES ('delta.columnMapping.mode' = '{column_mapping_mode}')
+        """
+    )
+    jvm_spark.sql(
+        f"""
+        INSERT INTO {table_fqn} VALUES
+          (1, 10, 1.5, 1.25, true, 'a', DATE '2024-01-01', TIMESTAMP '2024-01-01 00:00:01', X'01',
+           named_struct('a', 1, 'b', 'x'), array(1, 2), array(named_struct('x', 1, 'y', 'p')),
+           map('k1', 1, 'k2', 2), map('k1', named_struct('p', 1)), map('k1', array(1, 2)),
+           named_struct('inner_map', map('a', 'A'), 'inner_arr', array('i'))),
+          (2, 20, 2.5, 2.50, false, 'a', DATE '2024-01-02', TIMESTAMP '2024-01-02 00:00:02', X'02',
+           named_struct('a', 2, 'b', 'y'), array(3), array(named_struct('x', 2, 'y', 'q')),
+           map('k1', 3), map('k1', named_struct('p', 2)), map('k1', array(3)),
+           named_struct('inner_map', map('a', 'B'), 'inner_arr', array('j', 'k'))),
+          (3, 30, 3.5, 3.75, true, 'b', DATE '2024-01-03', TIMESTAMP '2024-01-03 00:00:03', X'03',
+           named_struct('a', 3, 'b', 'z'), array(5, 6), array(named_struct('x', 3, 'y', 'r')),
+           map('k2', 4), map('k2', named_struct('p', 3)), map('k2', array(4)),
+           named_struct('inner_map', map('b', 'C'), 'inner_arr', array('l'))),
+          (4, NULL, NULL, NULL, NULL, 'c', NULL, NULL, NULL,
+           NULL, NULL, NULL, NULL, NULL, NULL, NULL)
+        """
+    )
+    _register_delta_schema_in_hms(jvm_spark, hms_s3_database, table)
+
+    previous_timezone = spark.conf.get("spark.sql.session.timeZone")
+    spark.conf.set("spark.sql.session.timeZone", "UTC")
+    try:
+        assert spark.table(table_fqn).schema == jvm_spark.table(table_fqn).schema
+        for query in _DELTA_SCHEMA_MATRIX_QUERIES:
+            sql = query.format(t=table_fqn)
+            assert spark.sql(sql).collect() == jvm_spark.sql(sql).collect(), sql
+        deduplicated = spark.table(table_fqn).dropDuplicates(["name"]).select("name").orderBy("name").collect()
+        assert [row.name for row in deduplicated] == ["a", "b", "c"]
+    finally:
+        spark.conf.set("spark.sql.session.timeZone", previous_timezone)
 
 
 def test_spark_catalog_api_creates_table_sail_reads_external_table(
