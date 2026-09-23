@@ -507,6 +507,18 @@ def test_column_mapped_delete(table_pair: _TablePair) -> None:
     table_pair.assert_same()
 
 
+def test_column_mapped_dml_by_struct_value(table_pair: _TablePair) -> None:
+    table_pair.sql(
+        "UPDATE {t} SET name = 'matched' WHERE s = named_struct('a', 1, 'b', 'x',"
+        " 'inner', named_struct('c', 10, 'd', 'inner1'))"
+    )
+    table_pair.assert_same()
+    assert [row.id for row in table_pair.read("mapped").filter("name = 'matched'").collect()] == [1]
+    table_pair.sql("DELETE FROM {t} WHERE s.inner = named_struct('c', 20, 'd', 'inner2')")
+    table_pair.assert_same()
+    assert sorted(row.id for row in table_pair.read("mapped").collect()) == [1, 3, 4, 5, 6, 7, 8]
+
+
 def test_column_mapped_merge(spark: SparkSession, table_pair: _TablePair) -> None:
     source = _load_rows(
         spark,
