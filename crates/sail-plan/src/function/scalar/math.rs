@@ -422,7 +422,7 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             //  consumers read a `Duration` by seconds: `CAST(date - date AS INT)` answered 1209600
             //  where Spark casts by the end field (`IntervalUtils.scala:921-928`) and answers 14, and
             //  `hash`, `to_json`, `try_sum` and `try_avg` refused it. Until the interval keeps its
-            //  fields (`fix/interval`), the difference stays the day count, typed INT -- the offset
+            //  fields (PR #2350), the difference stays the day count, typed INT -- the offset
             //  `DateAdd` takes, so `DATE + (date - date)` still resolves.
             (Ok(DataType::Date32), Ok(DataType::Date32)) => {
                 mark_date_difference(cast(left, DataType::Int32) - cast(right, DataType::Int32))
@@ -998,6 +998,19 @@ fn spark_abs(input: ScalarFunctionInput) -> PlanResult<Expr> {
             "cannot resolve 'abs' with operand type {}",
             spark_field_type_name(&field)
         )));
+    }
+    // `NumericAndAnsiInterval` leaves out the LEGACY calendar interval that `UnaryMinus` accepts
+    // (`arithmetic.scala:158` against `:54`), so `abs(make_interval(...))` is refused where
+    // `abs(INTERVAL '1' DAY)` answers.
+    if let Some(argument) = arguments.first()
+        && matches!(
+            argument.get_type(function_context.schema),
+            Ok(DataType::Interval(IntervalUnit::MonthDayNano))
+        )
+    {
+        return Err(PlanError::analysis(
+            "cannot resolve 'abs' with operand type INTERVAL".to_string(),
+        ));
     }
     let udf = ScalarUDF::from(SparkAbs::new(function_context.plan_config.ansi_mode));
     Ok(udf.call(arguments))
@@ -2333,7 +2346,7 @@ fn is_date_difference(expr: &Expr) -> bool {
 /// arithmetic guards counts: that one is Spark's verdict for an interval operand. It never accepts
 /// on that basis, so what the INT resolves today and Spark answers is left alone.
 // TODO: remove once `date - date` is typed as an interval that keeps its field range
-//  (`fix/interval`); then the operator sees Spark's type directly.
+//  (PR #2350); then the operator sees Spark's type directly.
 fn rejects_date_difference_operand(
     operator: fn(ScalarFunctionInput) -> PlanResult<Expr>,
     left: &Expr,

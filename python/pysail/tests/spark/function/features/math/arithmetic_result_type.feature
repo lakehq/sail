@@ -5,6 +5,9 @@ Feature: arithmetic result types (+ - * / %) vs Spark 4.2.0
   # 4.2.0 over the 1797 rows of that matrix: 1177 return the same type, 225 differ in 33 shapes,
   # and the remaining 395 are the pairs Sail rejects outright, already pinned there. One scenario
   # per root cause rather than per spelling, so 13 rows stand for the 225. None is fixed here -- the
+  # TODO: each `@sail-bug` here is a RESULT TYPE, never an accept/reject, so it belongs to the
+  #   arithmetic coercion work rather than to this PR; the interval field ranges among them need
+  #   PR #2350.
   # operand-rejection work does not touch the coercion contract -- so every one is `@sail-bug`.
 
   Rule: an interval keeps the field range it was declared with
@@ -13,7 +16,7 @@ Feature: arithmetic result types (+ - * / %) vs Spark 4.2.0
     # (`YearMonthIntervalType.scala:50-59`, `DayTimeIntervalType.scala:54-63`) and name the range
     # they were declared with. Sail's Arrow types cannot carry them, so every year-month interval
     # reads YEAR TO MONTH and every day-time one DAY TO SECOND. The metadata that would fix it
-    # exists only on the `fix/interval` branch, so this is the largest family that cannot be
+    # arrives with PR #2350, so this is the largest family that cannot be
     # closed from here: 56 of the 225 cells.
     @sail-bug
     Scenario Outline: <case> keeps its field range
@@ -66,7 +69,7 @@ Feature: arithmetic result types (+ - * / %) vs Spark 4.2.0
     # `SubtractDates` returns `DayTimeIntervalType(DAY)` (`datetimeExpressions.scala:3617`). Sail
     # answers an INT day count: an Arrow `Duration` cannot carry the FIELD RANGE, and without it a
     # `Duration` is read by seconds wherever the difference is consumed (`CAST(... AS INT)` answered
-    # 1209600). That needs the `SAIL::spark::interval` metadata, which lands with `fix/interval`.
+    # 1209600). That needs the `SAIL::spark::interval` metadata, which lands with PR #2350.
     @sail-bug
     Scenario: a date minus a date is an interval with Spark's field range
       When query

@@ -648,3 +648,39 @@ Feature: abs comprehensive tests
         root
          |-- result: integer (nullable = true)
         """
+
+  Rule: abs takes a numeric or an ANSI interval, not a calendar one
+
+    # `Abs` is `ImplicitCastInputTypes` over `NumericAndAnsiInterval` (`arithmetic.scala:158`), which
+    # leaves out the legacy CALENDAR interval `make_interval` builds, so Spark refuses it while it
+    # answers a DAY TO SECOND or a YEAR TO MONTH one.
+    Scenario Outline: abs of a calendar interval is refused with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT abs(make_interval(0, 1, 0, 1, 0, 0, 0)) AS v
+        """
+      Then query error (?i)cannot resolve
+
+      Examples:
+        | ansi  |
+        | false |
+        | true  |
+
+    # The value, not the rendering: Spark keeps the interval's field range in the text
+    # (`INTERVAL '02' HOUR`) and Sail spells every day-time interval DAY TO SECOND, which
+    # `arithmetic_result_type.feature` pins on its own.
+    Scenario Outline: abs of an ANSI interval answers it: <case>
+      When query
+        """
+        SELECT abs(<expression>) = <expected> AS v
+        """
+      Then query result
+        | v    |
+        | true |
+
+      Examples:
+        | case                    | expression           | expected              |
+        | a day-time interval     | INTERVAL '1' DAY     | INTERVAL '1' DAY      |
+        | a negative day-time     | INTERVAL '-2' HOUR   | INTERVAL '2' HOUR     |
+        | a year-month interval   | INTERVAL '-1' MONTH  | INTERVAL '1' MONTH    |

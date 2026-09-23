@@ -231,8 +231,11 @@ Feature: arithmetic operands whose type is derived, vs Spark 4.2.0
         """
       Then query error (?i)cannot resolve
 
-    # The one left: Sail's inner type is DATE where Spark's is TIMESTAMP, so the outer `+` sees a
-    # different operand in each engine and only Spark refuses the INT.
+    # TODO: Sail's inner type is DATE where Spark's is TIMESTAMP, so the outer `+` sees a different
+    #  operand in each engine and only Spark refuses the INT. `date + DT` is a TIMESTAMP unless the
+    #  interval is DAY (`BinaryArithmeticWithDatetimeResolver.scala:68-69`), and Sail spells both
+    #  intervals as `Duration`, so it cannot tell them apart until an interval carries its field
+    #  range (PR #2350). 25 cells of the derived-operand lens share this root.
     @sail-bug
     Scenario: a shifted date plus an INT is refused
       When query
@@ -245,7 +248,7 @@ Feature: arithmetic operands whose type is derived, vs Spark 4.2.0
     #  `'2' - DATE`, which Spark answers through `SubtractDates`; the branch answers it, so the
     #  shifted date (a DATE in Sail, a TIMESTAMP in Spark) now reaches that arm. It cannot be refused
     #  by shape: Sail spells `INTERVAL '2' DAY` and `INTERVAL '25' HOUR` alike (`Duration`), and with
-    #  a DAY interval the inner value is a DATE and Spark answers. It closes with `fix/interval`.
+    #  a DAY interval the inner value is a DATE and Spark answers. It closes with PR #2350.
     @sail-bug
     Scenario: a string minus a shifted date is refused with ANSI off
       Given config spark.sql.ansi.enabled = false
@@ -260,7 +263,7 @@ Feature: arithmetic operands whose type is derived, vs Spark 4.2.0
     #  has two intervals; Sail's difference is an INT day count, and an INT beside an interval is
     #  refused. Making it a `Duration` would fix the verdict and break the VALUE its consumers read:
     #  `Duration` carries no field range, so `CAST(d1 - d2 AS INT)` would answer seconds instead of
-    #  days. Closing it needs the interval field metadata of `fix/interval`, so the two rows below
+    #  days. Closing it needs the interval field metadata of PR #2350, so the two rows below
     #  are pinned rather than traded for a wrong value. They stand for the whole family: a date
     #  difference (or `NULL - date`) plus or minus a DAY/HOUR/DAY TO SECOND interval, a TIMESTAMP,
     #  a TIMESTAMP_NTZ or a TIME, on either side and in both ANSI modes, is refused where Spark
@@ -360,7 +363,7 @@ Feature: arithmetic operands whose type is derived, vs Spark 4.2.0
     #  that cast is the operand. A difference projected by a subquery reaches the operator as a
     #  column, and a column may also be a user's `CAST(d1 - d2 AS INT)` (which DataFusion's type-only
     #  cast hands the same metadata), which Spark does accept; refusing columns would refuse that
-    #  too. The whole gap closes once the difference is typed as an interval (`fix/interval`).
+    #  too. The whole gap closes once the difference is typed as an interval (PR #2350).
     @sail-bug
     Scenario: a date difference projected by a subquery is refused as an operand
       When query
@@ -396,7 +399,7 @@ Feature: arithmetic operands whose type is derived, vs Spark 4.2.0
 
     # TODO: Spark's `date - date` is `DayTimeIntervalType(DAY)`, so it compares, adds and extracts as
     #  an interval. Sail keeps the difference an INT day count until an interval carries its field
-    #  range (`fix/interval`): as a `Duration` it was read by seconds and `CAST(date - date AS INT)`
+    #  range (PR #2350): as a `Duration` it was read by seconds and `CAST(date - date AS INT)`
     #  answered 1209600. Each row below was refused on `main` too.
     @sail-bug
     Scenario Outline: a date difference <case>

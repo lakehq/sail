@@ -3,6 +3,8 @@ Feature: Spark-compatible structured arithmetic errors
   # Spark picks the DATATYPE_MISMATCH subclass per expression: BINARY_OP_WRONG_TYPE,
   # BINARY_OP_DIFF_TYPES or UNEXPECTED_INPUT_TYPE, all with SQLSTATE 42K09. Sail's
   # arithmetic rejects carry neither the subclass nor the SQLSTATE.
+  # TODO: Sail's rejection carries neither Spark's `DATATYPE_MISMATCH` subclass nor its SQLSTATE;
+  #   the verdict matches and the metadata does not. It needs an error-class surface of its own.
   @sail-bug
   @spark-4
   Scenario Outline: rejected arithmetic carries the exact Spark error subclass and SQLSTATE

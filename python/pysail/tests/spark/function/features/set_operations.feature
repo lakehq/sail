@@ -298,3 +298,25 @@ Feature: Set operations (INTERSECT, EXCEPT)
         | case              | query                                            |
         | an INT and a DATE  | 1 AS v UNION ALL SELECT DATE'2024-01-01' AS v    |
         | an INT and an ARRAY | 1 AS v UNION ALL SELECT array(1) AS v          |
+
+  Rule: only ANSI widens an integral beside a FLOAT in a set operation
+
+    # `WidenSetOperationTypes` uses the same `findWiderTypeForTwo` as the branches of a CASE, so the
+    # FLOAT survives with ANSI off (`TypeCoercion.scala:89-92`) and becomes a DOUBLE with it on
+    # (`AnsiTypeCoercion.scala:117-121`).
+    Scenario Outline: <case> is <type> with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT DISTINCT typeof(c) AS t FROM (<query>)
+        """
+      Then query result
+        | t      |
+        | <type> |
+
+      Examples:
+        | case                      | ansi  | query                                                        | type   |
+        | a union of int and float  | false | SELECT CAST(1 AS INT) AS c UNION ALL SELECT CAST(0.1 AS FLOAT) | float  |
+        | a union of int and float  | true  | SELECT CAST(1 AS INT) AS c UNION ALL SELECT CAST(0.1 AS FLOAT) | double |
+        | an except of int and float | false | SELECT CAST(1 AS INT) AS c EXCEPT SELECT CAST(0.1 AS FLOAT)   | float  |
+        | a union of int and bigint | false | SELECT CAST(1 AS INT) AS c UNION ALL SELECT 3000000000L       | bigint |

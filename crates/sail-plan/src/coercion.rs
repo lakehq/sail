@@ -12,11 +12,16 @@ use datafusion_expr::type_coercion::binary::type_union_resolution;
 ///     union resolution answers a DECIMAL that a large DOUBLE overflows;
 ///   - an integral beside a FLOAT is a DOUBLE, "to avoid potential precision loss on converting the
 ///     Integral type as Float type" (`AnsiTypeCoercion.scala:113-123`), where the union resolution
-///     answers FLOAT and `16777217` comes back as `16777216`.
+///     answers FLOAT and `16777217` comes back as `16777216`. That clause is ANSI's alone: the
+///     default mode takes `numericPrecedence` (`TypeCoercion.scala:89-92`) and keeps the FLOAT.
 ///
 /// Returns `None` when the pair is not numeric, or when DataFusion finds no common type: the caller
 /// then leaves the branches as they are.
-pub(crate) fn spark_wider_numeric_type(left: &DataType, right: &DataType) -> Option<DataType> {
+pub(crate) fn spark_wider_numeric_type(
+    left: &DataType,
+    right: &DataType,
+    ansi_mode: bool,
+) -> Option<DataType> {
     if !left.is_numeric() || !right.is_numeric() {
         return None;
     }
@@ -39,17 +44,20 @@ pub(crate) fn spark_wider_numeric_type(left: &DataType, right: &DataType) -> Opt
         return Some(DataType::Float64);
     }
     let wider = type_union_resolution(&[left.clone(), right.clone()])?;
-    if matches!(wider, DataType::Float32 | DataType::Float16) {
+    if ansi_mode && matches!(wider, DataType::Float32 | DataType::Float16) {
         return Some(DataType::Float64);
     }
     Some(wider)
 }
 
 /// The type a whole set of branches widens to, folding [`spark_wider_numeric_type`] over them.
-pub(crate) fn spark_wider_numeric_type_of(data_types: &[DataType]) -> Option<DataType> {
+pub(crate) fn spark_wider_numeric_type_of(
+    data_types: &[DataType],
+    ansi_mode: bool,
+) -> Option<DataType> {
     let mut common = data_types.first()?.clone();
     for data_type in data_types.iter().skip(1) {
-        common = spark_wider_numeric_type(&common, data_type)?;
+        common = spark_wider_numeric_type(&common, data_type, ansi_mode)?;
     }
     Some(common)
 }
@@ -62,7 +70,11 @@ pub(crate) fn spark_wider_numeric_type_of(data_types: &[DataType]) -> Option<Dat
 ///
 /// Returns `None` when there is no common type, when a struct pair has a different number of fields,
 /// or when the pair is one `coalesce` already handles on its own.
-pub(crate) fn spark_wider_type(left: &DataType, right: &DataType) -> Option<DataType> {
+pub(crate) fn spark_wider_type(
+    left: &DataType,
+    right: &DataType,
+    ansi_mode: bool,
+) -> Option<DataType> {
     if left == right {
         return Some(left.clone());
     }
@@ -73,7 +85,7 @@ pub(crate) fn spark_wider_type(left: &DataType, right: &DataType) -> Option<Data
         return Some(left.clone());
     }
     let list_element = |field: &Field, other: &Field| -> Option<Field> {
-        let data_type = spark_wider_type(field.data_type(), other.data_type())?;
+        let data_type = spark_wider_type(field.data_type(), other.data_type(), ansi_mode)?;
         Some(
             Field::new(
                 field.name(),
@@ -99,11 +111,18 @@ pub(crate) fn spark_wider_type(left: &DataType, right: &DataType) -> Option<Data
         (DataType::Map(left, sorted), DataType::Map(right, _)) => {
             Some(DataType::Map(Arc::new(list_element(left, right)?), *sorted))
         }
+        // `findTypeForComplex` pairs struct fields through `SQLConf.get.resolver` and gives up when
+        // a pair of names does not match (`TypeCoercionHelper.scala:164-176`), so Spark refuses the
+        // pair rather than renaming it. The default resolver is case-insensitive.
         (DataType::Struct(left), DataType::Struct(right)) if left.len() == right.len() => {
             let fields = left
                 .iter()
                 .zip(right.iter())
-                .map(|(left, right)| Some(Arc::new(list_element(left, right)?)))
+                .map(|(left, right)| {
+                    left.name()
+                        .eq_ignore_ascii_case(right.name())
+                        .then(|| Some(Arc::new(list_element(left, right)?)))?
+                })
                 .collect::<Option<Fields>>()?;
             Some(DataType::Struct(fields))
         }
@@ -111,7 +130,7 @@ pub(crate) fn spark_wider_type(left: &DataType, right: &DataType) -> Option<Data
         // Only a NUMERIC leaf pair is widened here. A string beside a number is Spark's string
         // promotion, and casting the string side to the number would raise on a value that is not
         // one (`nvl(array(1), array('a'))` answers in Spark); that pair keeps the route it had.
-        (left, right) => spark_wider_numeric_type(left, right),
+        (left, right) => spark_wider_numeric_type(left, right, ansi_mode),
     }
 }
 
@@ -206,5 +225,39 @@ pub(crate) fn build_rename_target_type(from: &DataType, to: &DataType) -> DataTy
         ),
         // Leaves: keep the source data type unchanged.
         _ => from.clone(),
+    }
+}
+
+/// Whether two types are struct pairs Spark refuses to type: `findTypeForComplex` returns `None`
+/// when the two structs have a different number of fields or a pair of names its resolver does not
+/// match (`TypeCoercionHelper.scala:164-176`), and `Coalesce.checkInputDataTypes` then raises
+/// `DATATYPE_MISMATCH.DATA_DIFF_TYPES` (`nullExpressions.scala:78-86`). Recurses into an array and a
+/// map so a list of such structs is refused too.
+pub(crate) fn struct_pair_spark_refuses(left: &DataType, right: &DataType) -> bool {
+    match (left, right) {
+        (
+            DataType::List(left)
+            | DataType::LargeList(left)
+            | DataType::FixedSizeList(left, _)
+            | DataType::ListView(left)
+            | DataType::LargeListView(left),
+            DataType::List(right)
+            | DataType::LargeList(right)
+            | DataType::FixedSizeList(right, _)
+            | DataType::ListView(right)
+            | DataType::LargeListView(right),
+        )
+        | (DataType::Map(left, _), DataType::Map(right, _)) => {
+            struct_pair_spark_refuses(left.data_type(), right.data_type())
+        }
+        (DataType::Struct(left), DataType::Struct(right)) => {
+            left.len() != right.len()
+                || left.iter().zip(right.iter()).any(|(left, right)| {
+                    !left.name().eq_ignore_ascii_case(right.name())
+                        || struct_pair_spark_refuses(left.data_type(), right.data_type())
+                })
+        }
+        (DataType::Struct(_), other) | (other, DataType::Struct(_)) => !other.is_null(),
+        _ => false,
     }
 }

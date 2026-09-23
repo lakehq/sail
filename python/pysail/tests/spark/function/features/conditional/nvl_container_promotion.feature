@@ -70,3 +70,25 @@ Feature: nvl over containers whose leaves need a promotion
         """
       Then query error (?i)cannot resolve
 
+  Rule: two structs type only when their field names match
+
+    # `findTypeForComplex` pairs struct fields through `SQLConf.get.resolver` and returns None when a
+    # pair of names does not match (`TypeCoercionHelper.scala:164-176`), so Spark refuses the pair
+    # instead of renaming it; the resolver is case-insensitive by default, and an extra field is a
+    # mismatch too.
+    Scenario Outline: nvl of <case> is refused with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT <fn>(<left>, <right>) AS v
+        """
+      Then query error (?i)cannot resolve
+
+      Examples:
+        | case                            | ansi  | fn       | left                        | right                                |
+        | structs with different names    | false | nvl      | named_struct('a', 1)        | named_struct('b', 2L)                |
+        | structs with different names    | true  | ifnull   | named_struct('a', 1)        | named_struct('b', 2L)                |
+        | a struct with an extra field    | false | nvl      | named_struct('a', 1)        | named_struct('a', 2L, 'b', 3)        |
+        | lists of structs with different names | false | nvl | array(named_struct('a', 1))  | array(named_struct('b', 2L))         |
+        | lists of structs with different names | true  | nvl | array(named_struct('a', 1))  | array(named_struct('b', 2L))         |
+        | a struct beside an int          | false | nvl      | named_struct('a', 1)        | 2                                    |

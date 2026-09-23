@@ -1,5 +1,8 @@
 Feature: TIME subtraction result parity
 
+  # TODO: the two `@sail-bug` scenarios of this file are a result TYPE and a runtime VALUE, never a
+  #   verdict: the HOUR TO SECOND field range needs PR #2350, and the overflow needs Spark's
+  #   `[DATETIME_OVERFLOW]` on TIME arithmetic, which is its own change.
   # `SubtractTimes` returns `DayTimeIntervalType(HOUR, SECOND)` (`timeExpressions.scala:626`).
   # Sail casts the difference to Arrow `Duration`, which keeps the value and the day-time
   # family but cannot carry the HOUR TO SECOND start/end fields.

@@ -2338,7 +2338,7 @@ Feature: arithmetic operand pairs Spark resolves (+ - * / %) vs Spark 4.2.0
     # TODO: Spark's `date - date` is a `DayTimeIntervalType(DAY)` (`datetimeExpressions.scala:3616`).
     #  Sail answers an INT day count, because an Arrow `Duration` carries no field range and a
     #  `Duration` is read by seconds downstream (`CAST(date - date AS INT)` would answer 1209600).
-    #  Carrying the range needs the interval metadata work of `fix/interval`.
+    #  Carrying the range needs the interval metadata work of PR #2350.
     @sail-bug
     Scenario: a difference of two dates has Spark's declared field range
       When query
@@ -2419,7 +2419,8 @@ Feature: arithmetic operand pairs Spark resolves (+ - * / %) vs Spark 4.2.0
     # What is left is not about the NULL at all: `date - date` is `INTERVAL DAY` and
     # `time - time` is `INTERVAL HOUR TO SECOND`, and Sail spells every day-time interval
     # `DAY TO SECOND` because an Arrow `Duration` carries no declared field range. Same root as
-    # `date - date` itself; it goes with `fix/interval`.
+    # `date - date` itself; it goes with PR #2350.
+    # TODO: the type NAME of the pair, not the verdict; the interval ranges need PR #2350.
     @sail-bug
     Scenario Outline: an untyped NULL beside a <case> is typed <type>, which Sail does not spell
       Given config spark.sql.timeType.enabled = true

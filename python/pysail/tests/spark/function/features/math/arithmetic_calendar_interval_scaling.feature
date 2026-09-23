@@ -173,6 +173,7 @@ Feature: scaling a legacy calendar interval by a number, vs Spark 4.2.0
     # both in an `i64`, so Sail runs out a thousand times sooner -- at about 292 years instead of
     # 292 thousand. This is not a rounding bug and no arithmetic fixes it: the value simply has no
     # representation in `Interval(MonthDayNano)`. Pinned so the limit is a decision on record.
+    # TODO: a VALUE past the nanosecond range, not a verdict: Arrow's MonthDayNano cannot hold it.
     @sail-bug
     Scenario Outline: a calendar interval past the nanosecond range keeps Spark's value: <case>
       Given config spark.sql.ansi.enabled = false

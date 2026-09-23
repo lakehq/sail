@@ -106,7 +106,9 @@ Feature: a STRING operand of arithmetic, vs Spark 4.2.0
 
     # The class matches; the declared field range does not -- Sail spells every day-time interval
     # DAY TO SECOND, because an Arrow `Duration` carries no fields. Same root as `date - date`
-    # itself, and it goes with `fix/interval`.
+    # itself, and it goes with PR #2350.
+    # TODO: the promoted datetime keeps Spark's field range only once an interval carries it
+    #   (PR #2350); the verdict is already Spark's.
     @sail-bug
     Scenario Outline: a string as a datetime keeps Spark's field range: <case> with ANSI <ansi>
       Given config spark.sql.ansi.enabled = <ansi>

@@ -33,7 +33,7 @@ impl PlanResolver<'_> {
         let right = self.resolve_query_plan(*right, state).await?;
         match set_op_type {
             SetOpType::Intersect => {
-                let (left, right) = Self::widen_numeric_columns(left, right)?;
+                let (left, right) = self.widen_numeric_columns(left, right)?;
                 Ok(LogicalPlanBuilder::intersect(left, right, is_all)?)
             }
             SetOpType::Union => {
@@ -108,7 +108,7 @@ impl PlanResolver<'_> {
                 } else {
                     (left, right)
                 };
-                let (left, right) = Self::widen_numeric_columns(left, right)?;
+                let (left, right) = self.widen_numeric_columns(left, right)?;
                 if is_all {
                     Ok(LogicalPlanBuilder::new(left).union(right)?.build()?)
                 } else {
@@ -118,7 +118,7 @@ impl PlanResolver<'_> {
                 }
             }
             SetOpType::Except => {
-                let (left, right) = Self::widen_numeric_columns(left, right)?;
+                let (left, right) = self.widen_numeric_columns(left, right)?;
                 let left_len = left.schema().fields().len();
                 let right_len = right.schema().fields().len();
 
@@ -230,6 +230,7 @@ impl PlanResolver<'_> {
     /// carrying a BIGINT value: the rows were right and the schema lied, which broke `toArrow`.
     /// Only numeric pairs are widened here; everything else is left to DataFusion.
     fn widen_numeric_columns(
+        &self,
         left: LogicalPlan,
         right: LogicalPlan,
     ) -> PlanResult<(LogicalPlan, LogicalPlan)> {
@@ -246,7 +247,7 @@ impl PlanResolver<'_> {
                 if left_type == right_type || !left_type.is_numeric() || !right_type.is_numeric() {
                     return None;
                 }
-                spark_wider_numeric_type(left_type, right_type)
+                spark_wider_numeric_type(left_type, right_type, self.config.ansi_mode)
             })
             .collect::<Vec<_>>();
         if common.iter().all(Option::is_none) {

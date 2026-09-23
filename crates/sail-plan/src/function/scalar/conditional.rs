@@ -12,10 +12,43 @@ use sail_function::scalar::spark_to_string::SparkToUtf8;
 
 use crate::coercion::{
     build_rename_target_type, needs_struct_field_rename, spark_wider_numeric_type_of,
-    spark_wider_type,
+    spark_wider_type, struct_pair_spark_refuses,
 };
-use crate::error::PlanResult;
-use crate::function::common::{FunctionContextInput, ScalarFunction, ScalarFunctionInput};
+use crate::error::{PlanError, PlanResult};
+use crate::function::common::{
+    FunctionContextInput, ScalarFunction, ScalarFunctionInput, spark_type_name,
+};
+
+/// Refuses a branch set Spark refuses to type. `CaseWhenCoercion` and `IfCoercion` take the branches
+/// to `findWiderCommonType`, which pairs struct fields through the resolver and gives up when a name
+/// does not match or the counts differ (`TypeCoercionHelper.scala:164-176`); Spark then raises
+/// `DATATYPE_MISMATCH.DATA_DIFF_TYPES` instead of keeping the first branch's struct.
+fn rejects_struct_branches(
+    name: &str,
+    branch_values: &[expr::Expr],
+    function_context: &FunctionContextInput<'_>,
+) -> Option<PlanError> {
+    let data_types = branch_values
+        .iter()
+        .filter_map(|value| value.get_type(function_context.schema).ok())
+        .collect::<Vec<_>>();
+    data_types
+        .iter()
+        .enumerate()
+        .flat_map(|(index, left)| {
+            data_types[index + 1..]
+                .iter()
+                .map(move |right| (left, right))
+        })
+        .find(|(left, right)| struct_pair_spark_refuses(left, right))
+        .map(|(left, right)| {
+            PlanError::analysis(format!(
+                "cannot resolve '{name}' with branch types {} and {}",
+                spark_type_name(left),
+                spark_type_name(right)
+            ))
+        })
+}
 
 fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
@@ -38,6 +71,9 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             }
         }
     }
+    if let Some(error) = rejects_struct_branches("case", &branch_values, &function_context) {
+        return Err(error);
+    }
     let branch_values = coerce_string_temporal_values(branch_values, &function_context)?;
     let branch_values = widen_numeric_values(branch_values, &function_context)?;
     let when_then_expr = conditions
@@ -58,6 +94,13 @@ fn if_expr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         function_context,
     } = input;
     let (when_expr, then_expr, else_expr) = arguments.three()?;
+    if let Some(error) = rejects_struct_branches(
+        "if",
+        &[then_expr.clone(), else_expr.clone()],
+        &function_context,
+    ) {
+        return Err(error);
+    }
     let (then_expr, else_expr) = widen_numeric_values(
         coerce_string_temporal_values(vec![then_expr, else_expr], &function_context)?,
         &function_context,
@@ -99,13 +142,30 @@ fn nvl(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         )
     };
     if is_container(&left) || is_container(&right) {
+        // A struct pair Spark cannot type is refused, not renamed: `findTypeForComplex` pairs the
+        // fields through its resolver and gives up when a name does not match or the counts differ
+        // (`TypeCoercionHelper.scala:164-176`), and `Coalesce` then raises
+        // `DATATYPE_MISMATCH.DATA_DIFF_TYPES`.
+        if let (Some(left_type), Some(right_type)) = (&left_type, &right_type)
+            && struct_pair_spark_refuses(left_type, right_type)
+        {
+            return Err(PlanError::analysis(format!(
+                "cannot resolve 'nvl' with operand types {} and {}",
+                spark_type_name(left_type),
+                spark_type_name(right_type)
+            )));
+        }
         // `coalesce` alone cannot type two containers whose leaves differ -- an array of structs
         // whose leaves widen, a map whose values need a promotion, two structs whose field names
         // differ only by case -- so the common type is computed the way `findWiderTypeForTwo` does
         // and both sides are cast to it first (`TypeCoercionHelper.scala:141`).
         if let (Some(left_type), Some(right_type)) = (&left_type, &right_type)
             && left_type != right_type
-            && let Some(common) = spark_wider_type(left_type, right_type)
+            && let Some(common) = spark_wider_type(
+                left_type,
+                right_type,
+                function_context.plan_config.ansi_mode,
+            )
         {
             let to_common = |expr: expr::Expr, from: &DataType| {
                 let expr = if needs_struct_field_rename(from, &common) {
@@ -258,7 +318,9 @@ fn widen_numeric_values(
     {
         return Ok(arguments);
     }
-    let Some(common) = spark_wider_numeric_type_of(&data_types) else {
+    let Some(common) =
+        spark_wider_numeric_type_of(&data_types, function_context.plan_config.ansi_mode)
+    else {
         return Ok(arguments);
     };
     Ok(arguments

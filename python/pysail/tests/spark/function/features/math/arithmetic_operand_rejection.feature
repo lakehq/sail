@@ -6743,10 +6743,13 @@ Feature: arithmetic operand-type REJECTION matrix (+ - * / %) vs Spark 4.2.0
 
 
     # Spark names the field range a year-month interval was declared with
+    # TODO: the scenarios of this Rule pin the TYPE NAME the reject message prints, not the
+    #   verdict. The interval ranges need PR #2350; GEOMETRY, GEOGRAPHY and a STRUCT's field
+    #   nullability need `spark_type_name` to receive the `Field` instead of the `DataType`.
     # (`YearMonthIntervalType.scala:50-59`): `INTERVAL YEAR`, `INTERVAL MONTH` or
     # `INTERVAL YEAR TO MONTH`. Sail drops `start_field`/`end_field` when the type becomes Arrow
     # (`resolver/data_type.rs`), so every one of them is named `INTERVAL YEAR TO MONTH`. The
-    # metadata that would carry the range exists only on the `fix/interval` branch, so this is
+    # metadata that would carry the range arrives with PR #2350, so this is
     # pinned rather than fixed here. Day-time intervals cannot diverge in this message: Spark
     # rewrites `x + <day-time>` through the datetime resolver and never names the interval type.
     @sail-bug
@@ -6773,6 +6776,8 @@ Feature: arithmetic operand-type REJECTION matrix (+ - * / %) vs Spark 4.2.0
       Then query error (?i:cannot resolve).*INTERVAL YEAR TO MONTH
 
 
+    # TODO: the type NAME the reject message prints, not the verdict: `spark_type_name` receives a
+    #   `DataType` and the semantic name lives on the `Field`.
     # Sail stores GEOMETRY/GEOGRAPHY as Arrow `Binary` and keeps the extension metadata on
     # the `Field`, while `spark_type_name` only receives a `DataType` -- the semantic name is
     # not recoverable at that signature. Spark names the type and its SRID.
@@ -6796,6 +6801,7 @@ Feature: arithmetic operand-type REJECTION matrix (+ - * / %) vs Spark 4.2.0
 
     # Spark reports the field as NOT NULL because `named_struct` gives it a non-nullable
     # field; Sail declares it nullable. The divergence is in `named_struct`, not in the namer.
+    # TODO: it belongs to `named_struct`'s nullability, not to the reject message.
     @sail-bug
     Scenario: a STRUCT operand carries its field nullability
       When query
